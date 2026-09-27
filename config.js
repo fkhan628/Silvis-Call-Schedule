@@ -356,23 +356,34 @@ const notifPrefsDb = {
 // Writes go through db / authFetch (the user's JWT, a refresh + one retry on a 401): saveSettings upserts the 'main' row;
 // addLog POSTs with return=representation (the surgeon's select policy sees his own new row); updateLog / deleteLog read
 // the matched rows back - 0 rows means refused (RLS filters silently) and answers { error: "0 rows ..." }.
+// A pay read pages at this size (PostgREST caps every answer at max-rows, Supabase default 1000 - loadScheduleDays and the
+// snapshot reader page the same way): the scheduler's year of call-ins could exceed it, and a capped 200 would drop the
+// latest days' call-ins from Totals > Pay and the pay CSV without a word.
+const PAY_PAGE = 1000;
 const payDb = {
   _fresh() {
     let token = null;
     try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
     return !!(token && jwtIsFresh(token));
   },
-  async _read(path) {
+  // _read(path, paged): paged = limit / offset pages of PAY_PAGE until a short page (the path must carry a total order).
+  async _read(path, paged) {
     if (!payDb._fresh()) return { state: "skipped" };
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: dbAuthHeaders() });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        return { state: payReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` };
+      const all = [];
+      for (let offset = 0; ; offset += PAY_PAGE) {
+        const url = paged ? `${path}&limit=${PAY_PAGE}&offset=${offset}` : path;
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${url}`, { headers: dbAuthHeaders() });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return { state: payReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` };
+        }
+        const rows = await res.json();
+        if (!Array.isArray(rows)) return { state: "failed", error: "unexpected response body" };
+        for (const r of rows) all.push(r);
+        if (!paged || rows.length < PAY_PAGE) break;
       }
-      const rows = await res.json();
-      if (!Array.isArray(rows)) return { state: "failed", error: "unexpected response body" };
-      return { state: "ok", rows };
+      return { state: "ok", rows: all };
     } catch (e) {
       return { state: "failed", error: String((e && e.message) || e) };
     }
@@ -387,7 +398,7 @@ const payDb = {
     const iso = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
     if (!iso(o.from) || !iso(o.to)) return { state: "failed", error: "loadLogs needs from / to days" };
     const who = o.personId ? `&person_id=eq.${encodeURIComponent(o.personId)}` : "";
-    return payDb._read(`call_pay_logs?select=*&day=gte.${o.from}&day=lte.${o.to}${who}&order=day.asc,created_at.asc`);
+    return payDb._read(`call_pay_logs?select=*&day=gte.${o.from}&day=lte.${o.to}${who}&order=day.asc,created_at.asc,id.asc`, true);
   },
   async saveSettings(row) {
     return db.upsert("call_pay_settings", row, { onConflict: "id" });

@@ -1070,29 +1070,31 @@ function CallSchedule() {
   const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || (userProfile?.role === "surgeon" && !!mySurgeon));
   const [paySettingsRow, setPaySettingsRow] = useState(null);
   const [payLogRows, setPayLogRows] = useState([]);
-  const [payState, setPayState] = useState({ settings: "unread", logs: "unread", loadedYear: null });
+  const [payState, setPayState] = useState({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false });
   const [payYear, setPayYear] = useState(() => Number(todayCentral().slice(0, 4)));
   const [payBusy, setPayBusy] = useState(false);
   const payToastShownRef = useRef(false);
   const payGenRef = useRef(0);   // bumped when the account changes: a read that started for the previous one is dropped
+  const paySeqRef = useRef(0);   // bumped by every loadPay: only the LATEST request's answer lands (a quick 2026 -> 2025 -> 2026 flip
+                                 // must not end on the late 2025 answer)
   // loadPay(year, explicit): the settings row + the year's call-ins (the scheduler: every row; a surgeon: his own, named
-  // explicitly). "skipped" (no fresh token) keeps what is shown; "failed" keeps the previous rows and toasts ONCE (again only
-  // on an explicit refresh / after a write); "unavailable" never toasts.
+  // explicitly). The state is year-aware (helpers.js payStateBeforeRead / payStateAfterRead / payViewState): a year whose rows
+  // are not held reads "loading" until its answer, then ok / failed / skipped - another year's rows are never shown as this
+  // year's. "failed" keeps the previous rows and toasts ONCE (again only on an explicit refresh / after a write);
+  // "unavailable" never toasts.
   const loadPay = async (year, explicit) => {
     if (!payVisible) return;
     const y = Number(year) || payYear;
     const who = isScheduler ? null : mySurgeon;
     if (!isScheduler && !who) return;
     const gen = payGenRef.current;
+    const seq = ++paySeqRef.current;
+    setPayState(prev => payStateBeforeRead(prev, y));
     const [st, lg] = await Promise.all([payDb.loadSettings(), payDb.loadLogs({ personId: who, from: y + "-01-01", to: y + "-12-31" })]);
-    if (gen !== payGenRef.current) return;
+    if (gen !== payGenRef.current || seq !== paySeqRef.current) return;
     if (st.state === "ok") setPaySettingsRow(st.row);
     if (lg.state === "ok") setPayLogRows(lg.rows);
-    setPayState(prev => ({
-      settings: st.state === "skipped" ? prev.settings : st.state,
-      logs: lg.state === "skipped" ? prev.logs : lg.state,
-      loadedYear: lg.state === "ok" ? y : prev.loadedYear,
-    }));
+    setPayState(prev => payStateAfterRead(prev, y, st, lg));
     if (st.state === "failed" || lg.state === "failed") {
       console.warn("call pay read failed", st.error || "", lg.error || "");
       if (explicit || !payToastShownRef.current) { payToastShownRef.current = true; showToast("Couldn't load the pay data - the last loaded rows are kept. Try Refresh.", "error"); }
@@ -1101,7 +1103,7 @@ function CallSchedule() {
   // Another account on this page (sign-out / sign-in, a role change): drop what the previous one read before anything shows.
   useEffect(() => {
     payGenRef.current++;
-    setPaySettingsRow(null); setPayLogRows([]); setPayState({ settings: "unread", logs: "unread", loadedYear: null }); payToastShownRef.current = false;
+    setPaySettingsRow(null); setPayLogRows([]); setPayState({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false }); payToastShownRef.current = false;
   }, [mySurgeon, isScheduler, payVisible]);
   useEffect(() => {
     if (!payVisible) return;
@@ -1125,6 +1127,7 @@ function CallSchedule() {
   const addPayLog = async (input) => {
     const personId = input && input.personId;
     if (!payMayWrite(personId)) return false;
+    if (payViewState(payState, payYear) !== "ok" && payViewState(payState, payYear) !== "stale") { showToast("The call-ins are still loading - try again in a moment.", "error"); return false; }
     const why = payLogValidate(input, { schedule, personId, today: todayCentral(), logs: payLogRows });
     if (why) { showToast(why, "error"); return false; }
     setPayBusy(true);
@@ -1141,6 +1144,7 @@ function CallSchedule() {
   const updatePayLog = async (prev, patch) => {
     if (!prev || !payMayWrite(prev.person_id)) return false;
     const day = String(prev.day).slice(0, 10);
+    if (payViewState(payState, payYear) !== "ok" && payViewState(payState, payYear) !== "stale") { showToast("The call-ins are still loading - try again in a moment.", "error"); return false; }
     const why = payLogValidate({ day, hours: patch.hours, note: patch.note }, { schedule, personId: prev.person_id, today: todayCentral(), logs: payLogRows, editingId: prev.id });
     if (why) { showToast(why, "error"); return false; }
     setPayBusy(true);
@@ -5785,7 +5789,7 @@ function CallSchedule() {
 
           {/* Call pay (Faraz 9/27): the rates + pay-model flags - the scheduler's only (this whole block is isScheduler) */}
           <Collapsible css={css} ck="setup_pay" defaultOpen={false} title="Pay rates (primary call pay)">
-            <PayRatesCard css={css} dk={dk} row={paySettingsRow} state={payState} busy={payBusy} onSave={savePayRates} showToast={showToast}/>
+            <PayRatesCard css={css} dk={dk} row={paySettingsRow} state={payState} busy={payBusy} onSave={savePayRates} showToast={showToast} onRefresh={() => loadPay(payYear, true)}/>
           </Collapsible>
 
           <Collapsible css={css} ck="setup_east" defaultOpen={false} title="East feed (Davenport, read-only)">
@@ -6354,7 +6358,7 @@ function CallSchedule() {
             </div>
             {/* Call pay (Faraz 9/27): a linked surgeon's own pay; the scheduler's for the person picked above. Never for a
                 coordinator / viewer / follower / ?public=1 (payVisible). */}
-            {payVisible && (pid === mySurgeon || isScheduler) && pid && <PayCard css={css} dk={dk} personId={pid} nameOf={nameOf} isSelf={pid === mySurgeon} schedule={schedule} holidays={holidays} settingsRow={paySettingsRow} logs={payLogRows} state={payState} today={todayStr} year={payYear} onYear={setPayYear} canEdit={isScheduler || pid === mySurgeon} busy={payBusy} onAdd={addPayLog} onUpdate={updatePayLog} onDelete={deletePayLog} onRefresh={() => loadPay(payYear, true)}/>}
+            {payVisible && (pid === mySurgeon || isScheduler) && pid && <PayCard key={pid} css={css} dk={dk} personId={pid} nameOf={nameOf} isSelf={pid === mySurgeon} schedule={schedule} holidays={holidays} settingsRow={paySettingsRow} logs={payLogRows} state={payState} today={todayStr} year={payYear} onYear={setPayYear} canEdit={isScheduler || pid === mySurgeon} busy={payBusy} onAdd={addPayLog} onUpdate={updatePayLog} onDelete={deletePayLog} onRefresh={() => loadPay(payYear, true)}/>}
             <div style={css.card} data-testid="mine-offers">
               {(() => {
                 // Prompt 14 part 3a: the person's own future offers, as saved (the painter is where they change).
@@ -6600,7 +6604,7 @@ function CallSchedule() {
 
         {/* ================ TOTALS (Prompt 6 Slice F) - counts only, never $ ================ */}
         {view==="totals" && !isPublicMode && (
-          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} payVisible={payVisible} isScheduler={isScheduler} payData={{ settingsRow: paySettingsRow, logs: payLogRows, state: payState }} holidays={holidays} payYear={payYear} onPayYear={setPayYear} loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>
+          <TotalsCard css={css} dk={dk} roster={surgeons} schedule={schedule} ctx={rulesCtx} surgeonRules={surgeonRules} preview={previewGen} today={todayStr} nameOf={nameOf} Badge={Badge} showToast={showToast} ytdFloors={TOTALS_YTD_FLOORS} payVisible={payVisible} isScheduler={isScheduler} payData={{ settingsRow: paySettingsRow, logs: payLogRows, state: payState }} holidays={holidays} payYear={payYear} onPayYear={setPayYear} onPayRefresh={() => loadPay(payYear, true)} loaded={loaded} eastDetailsVisible={eastDetailsVisible}/>
         )}
 
         {/* ================ SETTINGS ================ */}
@@ -8353,7 +8357,7 @@ const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 // The year-to-date floor per year (the published schedule starts 2026-09-14): the Totals card's YTD range and the
 // Item C trade suggestions' running yearly tally both read it.
 const TOTALS_YTD_FLOORS = { "2026": "2026-09-14" };
-function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, isScheduler, payData, holidays, payYear, onPayYear, loaded, eastDetailsVisible }) {
+function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, isScheduler, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, eastDetailsVisible }) {
   const T = THEME[dk ? "dark" : "light"];
   const now = parse(today);
   const [mode, setMode] = useState("month"); // month | ytd | rolling | fairness | pay
@@ -8500,7 +8504,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       </div>
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets{eastDetailsVisible ? ", holiday units and East days" : " and holiday units"} show as '-' until the setup loads.</div>}
       {modeEff === "pay" ? (
-        <PayTotalsPanel css={css} dk={dk} roster={roster} schedule={schedule} holidays={holidays} settingsRow={payData && payData.settingsRow} logs={payData ? payData.logs : []} state={payData && payData.state} today={today} year={year} month0={month0} Badge={Badge} showToast={showToast}/>
+        <PayTotalsPanel css={css} dk={dk} roster={roster} schedule={schedule} holidays={holidays} settingsRow={payData && payData.settingsRow} logs={payData ? payData.logs : []} state={payData && payData.state} today={today} year={year} month0={month0} Badge={Badge} showToast={showToast} onRefresh={onPayRefresh}/>
       ) : modeEff !== "fairness" ? (
         <div className="table-wrap" style={css.tableWrap}>
           <table data-testid="totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
@@ -8603,9 +8607,21 @@ function SuCheck({ label, checked, onChange, title, testid }) {
 // sql/migrations/2026-09-27-call-pay.sql is applied every card says PAY_UNAVAILABLE_TEXT (state "unavailable").
 // Colours are THEME tokens only (test/pay.test.js pins no hex literal between PayCard and the end marker).
 const PAY_KIND_WORD = { weekday: "Weekday", weekend: "Weekend", holiday: "Holiday" };
-function payStateNote(state, T) {
+function payStateNote(state, T, year) {
   if (state === "unavailable") return <div data-testid="pay-unavailable" style={{ fontSize: 12.5, color: T.muted, background: T.raised, border: "1px solid " + T.border, borderRadius: 6, padding: "8px 10px" }}>{PAY_UNAVAILABLE_TEXT}</div>;
+  if (state === "failed") return <div data-testid="pay-failed" style={{ fontSize: 12.5, color: T.open }}>Couldn't load the {year} call-ins - no figures rather than a year without call-ins. Tap Refresh to try again.</div>;
+  if (state === "skipped") return <div data-testid="pay-skipped" style={{ fontSize: 12.5, color: T.open }}>The {year} call-ins were not read - your session needs a fresh sign-in. Sign in again, then tap Refresh.</div>;
+  if (state === "loading") return <div data-testid="pay-loading" style={{ fontSize: 12.5, color: T.muted }}>Loading pay{year ? " for " + year : ""}...</div>;
   return null;
+}
+// payRatesNote(view, T, forCard): the rates line above the figures - a failed / pending rates read is never "not set yet".
+function payRatesNote(view, T, forCard) {
+  if (view === "set") return null;
+  const text = view === "failed" ? "Couldn't load the pay rates - amounts show '-' until they load. Tap Refresh to try again."
+    : view === "loading" ? "Loading the pay rates..."
+    : view === "unset" ? PAY_RATES_UNSET_TEXT
+    : "Some rates are not set yet - amounts that need them show '-'." + (forCard ? " The scheduler enters them in Setup > Pay rates." : "");
+  return <div data-testid={view === "failed" ? "pay-rates-failed" : "pay-rates-unset"} style={{ fontSize: 12, color: view === "failed" ? T.open : T.accentText, marginBottom: 8 }}>{text}</div>;
 }
 function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settingsRow, logs, state, today, year, onYear, canEdit, busy, onAdd, onUpdate, onDelete, onRefresh }) {
   const T = THEME[dk ? "dark" : "light"];
@@ -8635,9 +8651,10 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
   if (unavailable) return <div style={css.card} data-testid="pay-card" data-state="unavailable">{header}{payStateNote("unavailable", T)}</div>;
-  const neverLoaded = logsState === "failed" && !(logs && logs.length) && !state.loadedYear;
-  if (neverLoaded) return <div style={css.card} data-testid="pay-card" data-state="failed">{header}<div style={{ fontSize: 12.5, color: T.open }}>Couldn't load the call-ins - nothing is shown rather than an empty month. Tap Refresh to try again.</div></div>;
-  if (!state || (logsState === "unread" && setState === "unread")) return <div style={css.card} data-testid="pay-card" data-state="loading">{header}<div style={muted}>Loading pay...</div></div>;
+  // payViewState: figures only when the call-ins held ARE this year's - another year's rows would read "not called in" everywhere
+  const vs = payViewState(state, year);
+  if (vs === "failed" || vs === "skipped" || vs === "loading") return <div style={css.card} data-testid="pay-card" data-state={vs}>{header}{payStateNote(vs, T, year)}</div>;
+  const ratesView = payRatesView(state, settingsRow);
   const save = async () => {
     const input = { personId, day: formDay, hours: draft.hours, note: draft.note };
     const ok = editing ? await onUpdate(editing, { hours: draft.hours, note: draft.note }) : await onAdd(input);
@@ -8652,10 +8669,10 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
   return (
-    <div style={css.card} data-testid="pay-card" data-state={logsState === "failed" ? "stale" : "ok"}>
+    <div style={css.card} data-testid="pay-card" data-state={vs}>
       {header}
-      {logsState === "failed" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the call-ins - showing the last ones loaded.</div>}
-      {settings.state !== "set" && <div data-testid="pay-rates-unset" style={{ fontSize: 12, color: T.accentText, marginBottom: 8 }}>{settings.state === "unset" ? PAY_RATES_UNSET_TEXT : "Some rates are not set yet - amounts that need them show '-'. The scheduler enters them in Setup > Pay rates."}</div>}
+      {vs === "stale" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the {year} call-ins - showing the last ones loaded.</div>}
+      {payRatesNote(ratesView, T, true)}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         {sumLine(pm.month, TOTALS_MON[month0] + " " + year, "pay-total-month")}
         {sumLine(pm.ytd, "Year to date (through " + TOTALS_MON[month0] + ")", "pay-total-ytd")}
@@ -8707,7 +8724,7 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
               <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11, color: T.muted }}>{formKind === "weekday" ? "After-hours hours" : "Hours worked"}
                 <input data-testid="pay-log-hours" type="number" inputMode="decimal" step="0.25" min="0" max="24" value={draft.hours} disabled={busy} onChange={e => setDraft(d => ({ ...d, hours: e.target.value }))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12, width: 90 }}/>
               </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11, color: T.muted, flex: "1 1 160px" }}>Note (optional, no contact details)
+              <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11, color: T.muted, flex: "1 1 160px" }}>Note (optional - no patient or contact details)
                 <input data-testid="pay-log-note" type="text" maxLength={200} value={draft.note} disabled={busy} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}/>
               </label>
               <button data-testid="pay-log-save" disabled={busy || !formDay} onClick={save} style={{ ...css.btn(true), padding: "6px 14px", fontSize: 12 }}>{busy ? "Saving..." : editing ? "Save changes" : "Log call-in"}</button>
@@ -8719,7 +8736,7 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
     </div>
   );
 }
-function PayRatesCard({ css, dk, row, state, busy, onSave, showToast }) {
+function PayRatesCard({ css, dk, row, state, busy, onSave, showToast, onRefresh }) {
   const T = THEME[dk ? "dark" : "light"];
   const toDraft = (r) => { const s = paySettingsFromRow(r); const d = { ...s, rateText: {} }; PAY_RATE_KEYS.forEach(k => { d.rateText[k] = s.rates[k] === null ? "" : String(s.rates[k]); }); return d; };
   const [draft, setDraft] = React.useState(() => toDraft(row));
@@ -8743,6 +8760,9 @@ function PayRatesCard({ css, dk, row, state, busy, onSave, showToast }) {
         <>
           <p style={{ fontSize: 12, color: T.muted, margin: "0 0 10px", lineHeight: 1.5 }}>Primary call pay, per 24-hour call day (07:00 to 07:00): the stipend every primary day; the call-in rate when the primary is called in (weekday, or weekend / holiday); the activation rate for the hours worked (weekday: after-hours hours; weekend / holiday: all hours) or per call-in. Backup is never paid. The rates live only in the database (signed-in scheduler and linked surgeons read them) - never in the repo, the seed or the public data. Empty = not set.</p>
           {state && state.settings === "failed" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't load the saved rates - reload before saving, or you may overwrite them.</div>}
+          {state && state.settings === "skipped" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>The saved rates were not read - your session needs a fresh sign-in. Sign in again, then tap Refresh.</div>}
+          {(!state || state.settings === "unread") && <div style={{ fontSize: 12, color: T.muted, marginBottom: 8 }}>Loading the saved rates...</div>}
+          {!loaded && onRefresh && <button data-testid="pay-rates-refresh" onClick={onRefresh} disabled={busy} style={{ ...css.mini(false), marginBottom: 8 }}>Refresh</button>}
           <fieldset disabled={busy || !loaded} style={{ border: "none", padding: 0, margin: 0 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
               {PAY_RATE_KEYS.map(k => (
@@ -8776,12 +8796,15 @@ function PayRatesCard({ css, dk, row, state, busy, onSave, showToast }) {
     </div>
   );
 }
-function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs, state, today, year, month0, Badge, showToast }) {
+function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs, state, today, year, month0, Badge, showToast, onRefresh }) {
   const T = THEME[dk ? "dark" : "light"];
-  if (state && (state.logs === "unavailable" || state.settings === "unavailable")) return <div data-testid="pay-totals" data-state="unavailable">{payStateNote("unavailable", T)}</div>;
-  if (state && state.logs === "failed" && !state.loadedYear) return <div data-testid="pay-totals" data-state="failed" style={{ fontSize: 12.5, color: T.open }}>Couldn't load the call-ins - no pay totals rather than empty ones.</div>;
-  if (!state || state.logs === "unread") return <div data-testid="pay-totals" data-state="loading" style={{ fontSize: 12.5, color: T.muted }}>Loading pay...</div>;
+  // payViewState: totals (and the pay CSV) only when the call-ins held ARE this year's - never another year's rows as none
+  const vs = payViewState(state, year);
+  const refreshBtn = onRefresh ? <button data-testid="pay-totals-refresh" onClick={onRefresh} style={{ ...css.mini(false), marginLeft: 8 }}>Refresh</button> : null;
+  if (vs === "unavailable") return <div data-testid="pay-totals" data-state="unavailable">{payStateNote("unavailable", T)}</div>;
+  if (vs === "failed" || vs === "skipped" || vs === "loading") return <div data-testid="pay-totals" data-state={vs} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>{payStateNote(vs, T, year)}{refreshBtn}</div>;
   const settings = paySettingsFromRow(settingsRow);
+  const ratesView = payRatesView(state, settingsRow);
   const rows = payTotalsRows(roster || [], year, month0, { schedule: schedule || {}, holidays, logs: logs || [], settings, today });
   const exportPay = () => {
     try {
@@ -8794,20 +8817,20 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
   const thL = { ...th, textAlign: "left" };
   const td = { padding: "6px 8px", fontFamily: mono, fontSize: 12.5, textAlign: "right", color: T.text, whiteSpace: "nowrap" };
   return (
-    <div data-testid="pay-totals" data-state={state.logs === "failed" ? "stale" : "ok"}>
+    <div data-testid="pay-totals" data-state={vs}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: T.muted }}>Primary call pay, {TOTALS_MON[month0]} {year} and year to date (through {TOTALS_MON[month0]}). Earned = days up to today; projected = later days (the stipend only). Visible to the scheduler only.</span>
-        <button data-testid="pay-csv" onClick={exportPay} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export pay CSV</button>
+        <button data-testid="pay-csv" onClick={exportPay} disabled={state.loadedYear !== Number(year)} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export pay CSV</button>
       </div>
-      {state.logs === "failed" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the call-ins - showing the last ones loaded.</div>}
-      {settings.state !== "set" && <div data-testid="pay-rates-unset" style={{ fontSize: 12, color: T.accentText, marginBottom: 8 }}>{settings.state === "unset" ? PAY_RATES_UNSET_TEXT : "Some rates are not set yet - amounts that need them show '-'."}</div>}
+      {vs === "stale" && <div style={{ fontSize: 12, color: T.open, marginBottom: 8 }}>Couldn't refresh the {year} call-ins - showing the last ones loaded.{refreshBtn}</div>}
+      {payRatesNote(ratesView, T, false)}
       <div className="table-wrap" style={css.tableWrap}>
         <table data-testid="pay-totals-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
           <thead><tr><th style={thL}>Surgeon</th><th style={th}>Primary days</th><th style={th}>Called in</th><th style={th}>Hours</th><th style={th}>Earned</th><th style={th}>Projected</th><th style={th}>YTD earned</th><th style={th}>YTD projected</th></tr></thead>
           <tbody>
             {rows.map(r => (
               <tr key={r.id} data-testid={"pay-row-" + r.id} data-earned={r.month.earnedCents === null ? "" : r.month.earnedCents} style={{ borderTop: "1px solid " + T.border }}>
-                <td style={{ ...td, textAlign: "left", fontFamily: font }}><Badge id={r.id}/>{r.orphans > 0 && <span title="call-ins on days no longer this surgeon's primary (not counted)" style={{ fontSize: 10, color: T.accentText, marginLeft: 6 }}>{r.orphans} not counted</span>}</td>
+                <td style={{ ...td, textAlign: "left", fontFamily: font }}><Badge id={r.id}/>{r.inactive && <span data-testid="pay-row-inactive" style={{ fontSize: 10, color: T.muted, marginLeft: 6 }}>inactive</span>}{r.orphans > 0 && <span title="call-ins on days no longer this surgeon's primary (not counted)" style={{ fontSize: 10, color: T.accentText, marginLeft: 6 }}>{r.orphans} not counted</span>}</td>
                 <td style={td}>{r.month.primaryDays}</td><td style={td}>{r.month.calledInDays}</td><td style={td}>{r.month.hours}</td>
                 <td style={{ ...td, fontWeight: 700 }}>{payMoney(r.month.earnedCents)}</td><td style={td}>{payMoney(r.month.projectedCents)}</td>
                 <td style={td}>{payMoney(r.ytd.earnedCents)}</td><td style={td}>{payMoney(r.ytd.projectedCents)}</td>

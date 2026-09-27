@@ -3369,15 +3369,22 @@ function payForMonth(personId, year, month0, opts) {
   });
   return { from: from, to: to, ytdFrom: ytdFrom, days: days, orphanLogs: orphanLogs, month: paySummary(days), ytd: paySummary(all) };
 }
-// payTotalsRows(roster, year, month0, opts) -> [{ id, name, code, month, ytd, orphans }] - one row per active pool surgeon
-// (not an outside surgeon), roster order - for Totals > Pay (scheduler only).
+// payTotalsRows(roster, year, month0, opts) -> [{ id, name, code, inactive, month, ytd, orphans }] - roster order, for Totals >
+// Pay (scheduler only): every active pool surgeon, plus an INACTIVE one who has a primary day or a call-in in that year (pay he
+// earned before he was set inactive stays in the month / YTD totals and the payroll CSV). Outside surgeons are never listed.
 function payTotalsRows(roster, year, month0, opts) {
   if (!Array.isArray(roster)) return [];
   var o = opts || {};
   var shared = Object.assign({}, o, { settings: paySettingsNorm(o.settings), holidaySet: o.holidaySet || payHolidaySet(o.holidays), today: todayOrCentral(o.today) });
-  return roster.filter(function (r) { return r && r.id && r.active !== false && r.type !== "external"; }).map(function (r) {
+  var y = String(Number(year));
+  var logs = Array.isArray(o.logs) ? o.logs : [];
+  return roster.filter(function (r) {
+    if (!r || !r.id || r.type === "external") return false;
+    if (r.active !== false) return true;
+    return payPrimaryDays(o.schedule, r.id, y + "-01-01", y + "-12-31").length > 0 || logs.some(function (l) { return l && l.person_id === r.id && payLogDay(l).slice(0, 4) === y; });
+  }).map(function (r) {
     var pm = payForMonth(r.id, year, month0, shared);
-    return { id: r.id, name: r.name || r.id, code: r.code || "", month: pm.month, ytd: pm.ytd, orphans: pm.orphanLogs.length };
+    return { id: r.id, name: r.name || r.id, code: r.code || "", inactive: r.active === false, month: pm.month, ytd: pm.ytd, orphans: pm.orphanLogs.length };
   });
 }
 function payCsvAmount(c) { return c === null || c === undefined ? "" : (c / 100).toFixed(2); }
@@ -3387,7 +3394,7 @@ function payCsv(rows, year, month0) {
   var ym = Number(year) + "-" + String(Number(month0) + 1).padStart(2, "0");
   var headers = ["Month", "Surgeon", "Code", "Primary days", "Called-in days", "Hours", "Earned (month)", "Projected (month)", "YTD earned", "YTD projected"];
   var body = (rows || []).map(function (r) {
-    return [ym, r.name, r.code, r.month.primaryDays, r.month.calledInDays, r.month.hours, payCsvAmount(r.month.earnedCents), payCsvAmount(r.month.projectedCents), payCsvAmount(r.ytd.earnedCents), payCsvAmount(r.ytd.projectedCents)];
+    return [ym, r.name + (r.inactive ? " (inactive)" : ""), r.code, r.month.primaryDays, r.month.calledInDays, r.month.hours, payCsvAmount(r.month.earnedCents), payCsvAmount(r.month.projectedCents), payCsvAmount(r.ytd.earnedCents), payCsvAmount(r.ytd.projectedCents)];
   });
   return { name: "silvis-pay-" + ym + ".csv", text: ttCsvText(headers, body) };
 }
@@ -3419,11 +3426,71 @@ function payLogValidate(input, opts) {
   if (PAY_NOTE_CONTACT_RE.test(note)) return "Refused: the note looks like contact data (an @ or a phone number).";
   return null;
 }
-// payReadFailureState(status, bodyText) -> "unavailable" when the table does not exist yet (the migration is not applied:
-// PostgREST 404 PGRST205 on 12.2+, 404 / 400 42P01 or "... does not exist" on older versions), else "failed".
+// payReadFailureState(status, bodyText) -> "unavailable" ONLY when a pay TABLE does not exist yet (the migration is not
+// applied): PostgREST 404 PGRST205 (12.2+), or a 404 / 400 whose error code is 42P01, or `relation "...call_pay_..." does not
+// exist` (older versions). Anything else is "failed" - a missing COLUMN (400 42703 after a partial apply or a schema the client
+// does not match) is a real failure, never "available after the next database update".
+// (written call[_]pay[_] so the table names stay in config.js payDb alone - test/pay.test.js [J])
+var PAY_MISSING_RELATION_RE = /relation \\?"(public\.)?call[_]pay[_][a-z_]+\\?" does not exist/;
 function payReadFailureState(status, bodyText) {
   var st = Number(status), t = String(bodyText || "");
-  return (st === 404 || st === 400) && /PGRST205|42P01|Could not find the table|does not exist/.test(t) ? "unavailable" : "failed";
+  var code = null;
+  try { var j = JSON.parse(t); code = j && typeof j.code === "string" ? j.code : null; } catch (e) { code = null; }
+  if (st === 404 && (code === "PGRST205" || (code === null && /PGRST205/.test(t)))) return "unavailable";
+  if ((st === 404 || st === 400) && (code === "42P01" || ((code === null || code === "42P01") && PAY_MISSING_RELATION_RE.test(t)))) return "unavailable";
+  return "failed";
+}
+// payViewState(state, year) -> what a pay card may show for `year`, from CallSchedule's payState { settings, logs,
+// loadedYear, attemptYear } (see payStateBeforeRead / payStateAfterRead):
+//   "unavailable"  a pay table does not exist yet (the migration)       -> PAY_UNAVAILABLE_TEXT
+//   "ok"           the call-ins held ARE that year's                     -> figures
+//   "stale"        that year's call-ins held, the last refresh failed    -> figures + "couldn't refresh"
+//   "failed"       that year's call-ins were never read, the read failed -> no figures (never "not called in")
+//   "skipped"      that year's call-ins were never read, no fresh token  -> no figures, "sign in again"
+//   "loading"      that year's read is in flight / not started           -> no figures
+// The rows held for another year are never shown as this year's: with them every past day would read "not called in".
+function payViewState(state, year) {
+  if (!state || typeof state !== "object") return "loading";
+  if (state.logs === "unavailable" || state.settings === "unavailable") return "unavailable";
+  var y = Number(year);
+  if (state.loadedYear === y) return state.logs === "failed" && state.attemptYear === y ? "stale" : "ok";
+  if (state.attemptYear === y && state.logs === "failed") return "failed";
+  if (state.attemptYear === y && state.logs === "skipped") return "skipped";
+  return "loading";
+}
+// payStateBeforeRead(prev, year) -> the payState to set when a read of `year` starts: a year whose rows are not held becomes
+// "unread" (loading) - never a carried-over "ok" from another year.
+function payStateBeforeRead(prev, year) {
+  var p = prev || {}, y = Number(year);
+  var out = Object.assign({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false }, p, { attemptYear: y });
+  if (p.logs === "unavailable") return out;
+  if (p.loadedYear === y) { out.logs = p.attemptYear === y ? p.logs : "ok"; return out; }
+  out.logs = "unread";
+  return out;
+}
+// payStateAfterRead(prev, year, settingsAnswer, logsAnswer) -> the payState after the read of `year` answered (the caller has
+// already dropped an answer that is not the LATEST request - CallSchedule's paySeqRef). "skipped" (no fresh token) keeps what
+// is held for the same year and marks another year "skipped" (not read), never "ok".
+function payStateAfterRead(prev, year, st, lg) {
+  var p = Object.assign({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false }, prev || {});
+  var y = Number(year), ss = (st && st.state) || "failed", ls = (lg && lg.state) || "failed";
+  return {
+    settings: ss === "skipped" ? (p.settingsLoaded ? p.settings : "skipped") : ss,
+    settingsLoaded: p.settingsLoaded || ss === "ok",
+    logs: ls === "skipped" ? (p.loadedYear === y ? (p.logs === "unread" ? "ok" : p.logs) : "skipped") : ls,
+    loadedYear: ls === "ok" ? y : p.loadedYear,
+    attemptYear: y,
+  };
+}
+// payRatesView(state, settings) -> "loading" | "failed" | "unset" | "partial" | "set": a rates read that never succeeded is
+// "failed" (or "loading"), never "rates not set yet" - a failed read must not look like an empty setting.
+function payRatesView(state, settings) {
+  var s = paySettingsNorm(settings);
+  if (state && typeof state === "object" && !state.settingsLoaded) {
+    if (state.settings === "failed" || state.settings === "skipped") return "failed";
+    if (state.settings === "unread") return "loading";
+  }
+  return s.state;
 }
 // payErrorText(err) -> human words for a refused pay write (the guard's tokens / errcodes, RLS, a 0-row answer).
 function payErrorText(err) {
@@ -3434,7 +3501,7 @@ function payErrorText(err) {
   if (/23514|check constraint/.test(t)) return "Refused: hours must be quarter hours from 0 to 24, and a note at most 200 characters with no contact data.";
   if (/42501|row-level security|permission denied/.test(t)) return "Not allowed - a surgeon logs call-ins for his own primary days only.";
   if (/0 rows|refused/.test(t)) return "Nothing changed - the row is not yours or no longer exists. Refresh and try again.";
-  if (/PGRST205|42P01|does not exist/.test(t)) return PAY_UNAVAILABLE_TEXT;
+  if (/PGRST205|42P01/.test(t) || PAY_MISSING_RELATION_RE.test(t)) return PAY_UNAVAILABLE_TEXT;
   return "Couldn't save - check your connection and try again.";
 }
 // payLogAuditText(name, row) -> "Call-in logged: <Name> <Dy M/D>, <h> h" (no amount - the audit row never carries one).
@@ -3454,7 +3521,7 @@ if (typeof module !== "undefined" && module.exports) {
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
     PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT,
-    payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payErrorText, payLogAuditText,
+    payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,

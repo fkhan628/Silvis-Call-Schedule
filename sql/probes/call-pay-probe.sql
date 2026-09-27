@@ -25,7 +25,8 @@
 --
 -- Cases (AFTER the migration):
 --   P1  postgres: the policies on both tables  policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write
---   P2  postgres: anon's table privileges      anon_logs=f anon_settings=f
+--   P2  postgres: anon's table privileges, and authenticated's TRUNCATE / REFERENCES / TRIGGER (revoked)
+--                                              anon_logs=f anon_settings=f auth_truncate=f
 --   P3  postgres: the settings rows            rows=1
 --   N1  anon reads call_pay_logs               ERR 42501 permission denied for table call_pay_logs
 --   N2  anon reads call_pay_settings           ERR 42501 permission denied for table call_pay_settings
@@ -106,14 +107,15 @@ begin
 end $$;
 
 -- P1-P3: as postgres - the apply's fingerprint (policy names, anon's privileges, the settings row count; never a rate)
-do $$ declare v text; a boolean; b boolean; n int; begin
+do $$ declare v text; a boolean; b boolean; c boolean; n int; begin
   begin
     select string_agg(policyname::text, ',' order by policyname) into v from pg_policies where schemaname = 'public' and tablename in ('call_pay_logs', 'call_pay_settings');
     insert into probe_results values ('P1', 'policies=' || coalesce(v, '(none)'));
   exception when others then insert into probe_results values ('P1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
-    select has_table_privilege('anon', 'public.call_pay_logs', 'SELECT,INSERT,UPDATE,DELETE'), has_table_privilege('anon', 'public.call_pay_settings', 'SELECT,INSERT,UPDATE,DELETE') into a, b;
-    insert into probe_results values ('P2', 'anon_logs=' || case when a then 't' else 'f' end || ' anon_settings=' || case when b then 't' else 'f' end);
+    select has_table_privilege('anon', 'public.call_pay_logs', 'SELECT,INSERT,UPDATE,DELETE'), has_table_privilege('anon', 'public.call_pay_settings', 'SELECT,INSERT,UPDATE,DELETE'),
+           has_table_privilege('authenticated', 'public.call_pay_logs', 'TRUNCATE,REFERENCES,TRIGGER') or has_table_privilege('authenticated', 'public.call_pay_settings', 'TRUNCATE,REFERENCES,TRIGGER') into a, b, c;
+    insert into probe_results values ('P2', 'anon_logs=' || case when a then 't' else 'f' end || ' anon_settings=' || case when b then 't' else 'f' end || ' auth_truncate=' || case when c then 't' else 'f' end);
   exception when others then insert into probe_results values ('P2', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
     select count(*) into n from public.call_pay_settings;

@@ -2469,7 +2469,7 @@ const PAY_POLICIES = {
 const PAY_CASES = ["P1", "P2", "P3", "N1", "N2", "N3", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "X1", "X2", "T1", "C1", "C2", "C3", "V1", "V2", "A1", "A2", "A3", "A4"];
 const PAY_AFTER_EQ = {
   P1: "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write",
-  P2: "anon_logs=f anon_settings=f", P3: "rows=1", S1: "ok created_by=s3 hours=1.50", S6: "ok", S10: "own=2 others=0", S11: "updated=1 hours=2.25 created_by=s3",
+  P2: "anon_logs=f anon_settings=f auth_truncate=f", P3: "rows=1", S1: "ok created_by=s3 hours=1.50", S6: "ok", S10: "own=2 others=0", S11: "updated=1 hours=2.25 created_by=s3",
   S12: "updated=0", S13: "deleted=0", S14: "rows=1", S15: "updated=0", S17: "updated=1 created_by=s3", X2: "deleted=1", T1: "own=1 s3=0", C1: "visible=0",
   C2: "rows=0", V1: "visible=0", V2: "rows=0", A1: "sees_all=t", A2: "updated=1 updated_by=s1", A3: "ok created_by=s1",
 };
@@ -2543,6 +2543,9 @@ ok(/raise exception 'PAY_HOURS_OVER: [^\n]*using errcode = 'PY003';/.test(payGua
 ok(payGuard.indexOf("PY001") < payGuard.indexOf("PY002") && payGuard.indexOf("PY002") < payGuard.indexOf("PY003"), "the guard refuses in the order PY001, PY002, PY003");
 ok(/new\.created_by := old\.created_by;/.test(payGuard) && /new\.created_at := old\.created_at;/.test(payGuard) && /new\.created_by := coalesce\(public\.silvis_person_id\(\), auth\.uid\(\)::text, new\.created_by\);/.test(payGuard), "created_by / created_at are stamped on insert and pinned on update");
 ok(!/\bsilvis_is_sched\b/.test(payGuard), "the primary-only guard applies to every caller - no scheduler exemption");
+ok(/perform pg_advisory_xact_lock\(hashtext\('call_pay:' \|\| new\.person_id \|\| ':' \|\| new\.day::text\)\);\n  select coalesce\(sum\(l\.hours\), 0\) into others/.test(payGuard), "call_pay_logs_guard must take the (person, day) advisory lock right before the 24 h sum (two concurrent inserts must not both pass PY003)");
+["call_pay_logs_guard", "call_pay_settings_touch"].forEach((fn) => ok(new RegExp("create or replace function public\\." + fn + "\\(\\) returns trigger\nlanguage plpgsql security invoker set search_path = public as \\$\\$").test(payMig), fn + "() must be security invoker with a pinned search_path (function_search_path_mutable)"));
+["call_pay_settings", "call_pay_logs"].forEach((t) => ok(payMig.indexOf("revoke truncate, references, trigger on table public." + t + " from authenticated;") >= 0 && schema.indexOf("revoke truncate, references, trigger on table public." + t + " from authenticated;") >= 0, "authenticated must lose TRUNCATE / REFERENCES / TRIGGER on " + t + " (Supabase's default privileges grant them; RLS does not cover TRUNCATE)"));
 const payLoop = schema.match(/foreach t in array array\[[^\]]*\]/);
 ok(payLoop && !/call_pay/.test(payLoop[0]), "neither call pay table may be in the anon read_all loop");
 ["call_pay_settings", "call_pay_logs"].forEach((t) => {
@@ -2604,6 +2607,7 @@ ok(/^echo "== 14\. call pay \(2026-09-27\): anon sees neither table, anon cannot
 const s14 = vr.slice(vr.indexOf('echo "== 14. '), vr.indexOf('echo "RESULT: '));
 ok(s14.length > 0 && s14.length < vr.length, "verify-rls.sh section 14 could not be sliced out (it sits right before the RESULT line)");
 ok(/for t in call_pay_settings call_pay_logs; do/.test(s14) && /-H "Prefer: count=exact"/.test(s14) && /if \[ "\$range" = "\*\/0" \]/.test(s14), "section 14a must read both tables as anon with count=exact and require Content-Range */0 on a 200");
+ok(/200\) if \[ "\$PAYSTRICT14" = "1" \]; then bad "anon read of \$t: HTTP 200/.test(s14), "section 14a must FAIL an anon 200 (even Content-Range */0) with SILVIS_CALL_PAY_APPLIED=1 - the anon revoke is then proven over REST");
 ok(/404\) if \[ "\$PAYSTRICT14" = "1" \]; then bad/.test(s14) && /PAYSTRICT14="\$\{SILVIS_CALL_PAY_APPLIED:-\}"/.test(s14), "section 14 must pass a 404 as 'not created yet' only while SILVIS_CALL_PAY_APPLIED is unset");
 ok(/-X POST "\$URL\/rest\/v1\/call_pay_logs"/.test(s14) && /"HTTP 401"\|"HTTP 403"\) ok "anon insert into call_pay_logs refused/.test(s14), "section 14b must POST call_pay_logs as anon and accept 401/403 (or 42501)");
 ok(/SILVIS_SURGEON_JWT/.test(s14) && /call_pay_logs\?select=person_id/.test(s14), "section 14c must read call_pay_logs as a surgeon (gated on SILVIS_SURGEON_JWT)");
@@ -2635,6 +2639,25 @@ ok(/SILVIS_CALL_PAY_APPLIED=1 +grade section 14 strictly/.test(vr.slice(0, vr.in
   const broken = Object.assign({}, after, { S3: "inserted (NO refusal)", C1: "visible=2" });
   const rb = run14('{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(broken).sort().map((k) => k + "=" + broken[k]).join(";") + ';END"}', true);
   eq(rb.result, [PAY_CASES.length - 1, 2], "section 14d must fail a surgeon writing for another surgeon and a coordinator reading call-ins;");
+}
+
+{
+  // 14a against a faked curl: an anon 200 + */0 passes only without the strict flag; 401 always passes; 404 only without it
+  const code14a = s14.slice(s14.indexOf('PAYSTRICT14="${SILVIS_CALL_PAY_APPLIED:-}"'), s14.indexOf("line=$(curl"));
+  const run14a = (status, range, strict) => {
+    const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "vr14a-"));
+    const script = "set -u\nT=" + tmp + "; URL=http://x; ANON=a; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "curl() { local o=''; while [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then o=\"$2\"; shift; fi; shift; done; echo '[]' > \"$o\"; printf 'HTTP/2 " + status + "\\r\\n" + (range ? "content-range: " + range + "\\r\\n" : "") + "\\r\\n'; }\n" +
+      (strict ? "SILVIS_CALL_PAY_APPLIED=1\n" : "unset SILVIS_CALL_PAY_APPLIED\n") + code14a + "\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number);
+  };
+  eq(run14a(200, "*/0", false), [2, 0], "section 14a without the flag: anon 200 + */0 on both tables passes;");
+  eq(run14a(200, "*/0", true), [0, 2], "section 14a with SILVIS_CALL_PAY_APPLIED=1: anon 200 + */0 FAILS (the revoke did not take);");
+  eq(run14a(401, "", true), [2, 0], "section 14a with the flag: anon 401 passes;");
+  eq(run14a(404, "", true), [0, 2], "section 14a with the flag: 404 fails;");
+  eq(run14a(404, "", false), [2, 0], "section 14a without the flag: 404 (not created yet) passes;");
 }
 
 step("call pay: docs - SCHEMA-REVIEW.md section (NOT APPLIED, policies verbatim, blast radius, apply order, rollback), tables (a) / (b), guide 4.2 / 4.3");

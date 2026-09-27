@@ -1576,8 +1576,8 @@ and the SQL no numeric literal beyond its check bounds).
 |---|---|---|
 | `call_pay_settings` | - | new table, one row `main` (check `id = 'main'`): four `numeric(10,2)` rates, each null or 0-99999, **no default**; `activation_unit` `hour` \| `activation` (default `hour`); `weekend_days` jsonb array of `Sun`..`Sat` (default `["Sat","Sun"]` - Friday is a weekday for pay); `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday` (default true); `updated_by` / `updated_at` stamped by `call_pay_settings_touch`. Seeded `(id)` only - every rate null |
 | `call_pay_logs` | - | new table: `id`, `day`, `person_id` (roster id), `hours numeric(5,2)` 0-24 in quarter hours, `note` (<= 200 characters, no `@`, no phone-like digit run), `created_by`, `created_at`, `updated_at`; index `(person_id, day)`, not unique (one row per call-in) |
-| `call_pay_logs_guard` (BEFORE INSERT OR UPDATE, security invoker, every caller) | - | `PY001 PAY_FUTURE` day after today (Central); `PY002 PAY_NOT_PRIMARY` the person is not `schedule_days.primary_id` that day; `PY003 PAY_HOURS_OVER` the person's hours that day would exceed 24; stamps `created_by` / `created_at` on insert, pins them on update. No delete guard: a surgeon removes his own row after the day's primary changed |
-| grants | Supabase default (anon + authenticated all verbs on a new table) | `revoke all ... from anon` on both tables (defence in depth for pay data - the other authenticated-only tables rely on RLS alone); `grant select, insert, update, delete ... to authenticated` |
+| `call_pay_logs_guard` (BEFORE INSERT OR UPDATE, security invoker, `set search_path = public`, every caller) | - | `PY001 PAY_FUTURE` day after today (Central); `PY002 PAY_NOT_PRIMARY` the person is not `schedule_days.primary_id` that day; `PY003 PAY_HOURS_OVER` the person's hours that day would exceed 24 - summed under a transaction advisory lock on (person, day), so two concurrent call-ins cannot both pass; stamps `created_by` / `created_at` on insert, pins them on update. No delete guard: a surgeon removes his own row after the day's primary changed |
+| grants | Supabase default (anon + authenticated all verbs on a new table, TRUNCATE / REFERENCES / TRIGGER included) | `revoke all ... from anon` on both tables (defence in depth for pay data - the other authenticated-only tables rely on RLS alone); `revoke truncate, references, trigger ... from authenticated` (RLS does not cover TRUNCATE); authenticated keeps select / insert / update / delete |
 
 The six policies, verbatim (neither table is in the anon `read_all` loop):
 
@@ -1606,6 +1606,21 @@ a **viewer**, a **follower** and **anon** read and write nothing - and the clien
 the public page. Audit rows the client writes for pay (`pay.rates`, `pay.log.add` / `.edit` / `.delete`) carry changed KEYS,
 days and hours - never an amount - since `audit_log` is readable by the scheduler and the row's author.
 
+**Decisions for Faraz to approve with the apply (RLS scope differs from the 9/27 task text in two places - both narrower or
+equal, never wider):**
+
+1. **Orphan rows stay readable and deletable by their owner.** The task text says a surgeon may select / insert / update /
+   delete his rows "only for days on which he was PRIMARY". As built, insert and update check the primary (PY002, in the
+   guard), but select and delete check the owner only (`person_id = silvis_person_id()`). A call-in left behind when a trade,
+   give or restore moved the day's primary is therefore still visible to its owner (listed as "not counted") and he can delete
+   it; he cannot edit it (PY002). Checking the primary on select / delete too would hide such rows and make them undeletable
+   except by the scheduler.
+2. **The guard binds the scheduler too.** The task text says "the scheduler can do all". RLS lets the scheduler read and write
+   every row, but `call_pay_logs_guard` applies to every caller: the scheduler cannot log a future day (PY001), a day the person
+   was not primary (PY002) or more than 24 h per day (PY003) either - for anyone. Deletes stay open to the scheduler.
+3. **Anon is refused outright** (privileges revoked on top of RLS), unlike the other authenticated-only tables; verify-rls
+   section 14 with `SILVIS_CALL_PAY_APPLIED=1` (and after the record step, always) fails an anon 200 even with `*/0`.
+
 **Blast radius.** Two new tables; no existing table, column, policy, function, grant or row changes. The client that ships with
 this file reads a missing table (PostgREST 404 `PGRST205`, or `42P01` / 400 "does not exist" on older versions) as
 **unavailable** - My schedule > My pay, Totals > Pay and Setup > Pay rates say "Pay tracking is available after the next
@@ -1614,7 +1629,8 @@ PostgREST's schema cache: if the tables do not show after the apply, run `notify
 
 **What could break.** (1) The probe and verify-rls section 14 are written against an AFTER picture nobody has observed: the first
 live run may show a different refusal wording (e.g. anon 401 vs 403 after the revoke, or the exact 42501 text) - section 14
-accepts 401 / 403 / 42501 / `*/0`. (2) Pay follows the CURRENT schedule: a trade, give, claim or restore that moves a past day's
+accepts 401 / 403 / 42501, and `*/0` only without `SILVIS_CALL_PAY_APPLIED=1` (strict: an anon 200 is a FAIL - it would mean
+the revoke did not take). (2) Pay follows the CURRENT schedule: a trade, give, claim or restore that moves a past day's
 primary turns that day's call-ins into orphans (not counted; the owner can delete them, not edit them - PY002). `call_pay_logs` is
 not in `call_schedule_snapshots`, so a snapshot restore neither restores nor rolls back call-ins. (3) A later `create table`
 could re-grant anon through Supabase's default privileges; harmless - the policies still block anon.
@@ -1625,7 +1641,7 @@ could re-grant anon through Supabase's default privileges; harmless - the polici
 2. Pre-check: `select to_regclass('public.call_pay_logs');` -> null.
 3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/call-pay-probe.sql` -> `PROBE_SETUP: call_pay_logs is absent ...`.
 4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-27-call-pay.sql`.
-5. Probe AFTER: every case as its header lists (35 cases; `P1` names the six policies, `P2` `anon_logs=f anon_settings=f`).
+5. Probe AFTER: every case as its header lists (35 cases; `P1` names the six policies, `P2` `anon_logs=f anon_settings=f auth_truncate=f`).
 6. `SILVIS_CALL_PAY_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-14 green (the flag makes a 404 / PROBE_SETUP a FAIL).
 7. Faraz enters the rates in Setup > Pay rates (the app writes the `pay.rates` audit row with the changed keys only).
 8. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; schema.sql revision r -> "applied

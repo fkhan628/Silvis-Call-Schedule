@@ -25,7 +25,13 @@
 --   PY001 PAY_FUTURE       the day is after today in America/Chicago (a call-in is logged once it happened)
 --   PY002 PAY_NOT_PRIMARY  the person is not the primary on that day in schedule_days (backup is never paid)
 --   PY003 PAY_HOURS_OVER   the person's hours on that day would exceed 24
--- Deletes are unguarded (RLS only): a surgeon removes his own row, also one left behind when the day's primary changed.
+-- The guard takes a transaction advisory lock on (person, day) before it sums the day's hours, so two concurrent call-ins of
+-- one person on one day cannot both pass the 24 h check. Both trigger functions are security invoker with a pinned
+-- search_path. Deletes are unguarded (RLS only): a surgeon removes his own row, also one left behind when the day's primary
+-- changed; RLS on select / delete checks the owner only (not the primary), so such an orphan stays readable and deletable by
+-- its owner. The guard binds the scheduler too: nobody, the scheduler included, can log a future day or a non-primary day.
+-- Privileges: anon holds none (revoked); authenticated keeps select / insert / update / delete only (Supabase's default
+-- privileges also grant TRUNCATE / REFERENCES / TRIGGER on a new table - revoked here, since RLS does not cover TRUNCATE).
 --
 -- Blast radius: two new tables; nothing that exists changes. The client shows "Pay tracking is available after the next
 -- database update" until this file is applied (it reads 404 PGRST205 / 42P01 as 'unavailable', never as an empty list).
@@ -70,7 +76,7 @@ create table if not exists public.call_pay_logs (
 create index if not exists call_pay_logs_person_day_idx on public.call_pay_logs(person_id, day);
 
 create or replace function public.call_pay_logs_guard() returns trigger
-language plpgsql as $$
+language plpgsql security invoker set search_path = public as $$
 declare
   today_c date := (now() at time zone 'America/Chicago')::date;
   others  numeric;
@@ -81,6 +87,8 @@ begin
   if not exists (select 1 from public.schedule_days d where d.day = new.day and d.primary_id = new.person_id) then
     raise exception 'PAY_NOT_PRIMARY: % is not the primary on % - call pay is logged for the primary only', new.person_id, new.day using errcode = 'PY002';
   end if;
+  -- one writer per person and day at a time: two concurrent call-ins cannot both pass the 24 h sum (read-then-write)
+  perform pg_advisory_xact_lock(hashtext('call_pay:' || new.person_id || ':' || new.day::text));
   select coalesce(sum(l.hours), 0) into others
     from public.call_pay_logs l
    where l.person_id = new.person_id and l.day = new.day and l.id is distinct from new.id;
@@ -103,7 +111,7 @@ create trigger call_pay_logs_guard_trg
   for each row execute function public.call_pay_logs_guard();
 
 create or replace function public.call_pay_settings_touch() returns trigger
-language plpgsql as $$
+language plpgsql security invoker set search_path = public as $$
 begin
   new.updated_at := now();
   new.updated_by := coalesce(public.silvis_person_id(), auth.uid()::text, new.updated_by);
@@ -116,6 +124,8 @@ create trigger call_pay_settings_touch_trg
 
 revoke all on table public.call_pay_settings from anon;
 revoke all on table public.call_pay_logs from anon;
+revoke truncate, references, trigger on table public.call_pay_settings from authenticated;
+revoke truncate, references, trigger on table public.call_pay_logs from authenticated;
 grant select, insert, update, delete on table public.call_pay_settings to authenticated;
 grant select, insert, update, delete on table public.call_pay_logs to authenticated;
 

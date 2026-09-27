@@ -393,6 +393,7 @@ let failSnapshotInsert = false; // Slice E harness switch (see the Supabase rout
 let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
+let payMock = null;            // call pay (9/27): (url) => { status, body } | null - a step's answer for the two pay tables
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
 let expiredWrites401 = false;   // Prompt 16 A3: every non-GET under /rest/v1 or /functions/v1 whose bearer JWT is past its exp answers 401 PGRST301 (the real PostgREST answer); the browser's own 401 / 400 console lines are expected while armed
 let authRefreshGrant = null;    // Prompt 16 A3: an access token the token endpoint hands out for grant_type=refresh_token; null = the refresh is rejected (400 invalid_grant)
@@ -1240,6 +1241,11 @@ const routeSupabase = async (route, scope) => {
   // Call pay (Faraz 9/27): sql/migrations/2026-09-27-call-pay.sql is report-first - the harness answers what the live
   // project answers before the apply (PostgREST 12.2+: 404 PGRST205), so every pay surface must read "unavailable" (the
   // sentence, no error toast), never an empty list. The ok-state rendering with rows and the writes are NOT exercised here.
+  if (payMock && /^\/rest\/v1\/call_pay_(settings|logs)$/.test(url.pathname)) {
+    // a step's pay answer (the year-switch check): { status, body } for this request, or null for the default below
+    const a = payMock(url);
+    if (a) return route.fulfill({ status: a.status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(a.body) });
+  }
   if (/^\/rest\/v1\/call_pay_(settings|logs)$/.test(url.pathname)) {
     return route.fulfill({ status: 404, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public." + url.pathname.split("/").pop() + "' in the schema cache" }) });
   }
@@ -4357,6 +4363,27 @@ try {
       else if (await page.$("[data-testid=pay-log-form]")) fail("My pay (scheduler): the log form renders while the tables do not exist");
       else ok("My pay (scheduler): 'unavailable' before the call pay migration - the sentence, no toast, no form");
     } catch (e) { fail("My pay (scheduler): no [data-testid=pay-card][data-state=unavailable] on My schedule: " + errLine(e)); }
+    // Call pay review fix: a year switch never shows another year's call-ins as none. The tables "exist" (settings row with
+    // no rate, the current year's logs []) and the PREVIOUS year's logs answer 500: switching to it must read data-state
+    // "failed" with no totals and no log form; switching back reads "ok".
+    try {
+      const yNow = Number(todayIso.slice(0, 4));
+      payMock = (url) => {
+        if (url.pathname.endsWith("/call_pay_settings")) return { status: 200, body: [{ id: "main" }] };
+        const from = (url.searchParams.getAll("day").find(v => v.startsWith("gte.")) || "").slice(4, 8);
+        return from === String(yNow) ? { status: 200, body: [] } : { status: 500, body: { message: "harness: pay read failed" } };
+      };
+      await page.click("[data-testid=pay-refresh]");
+      await page.waitForSelector("[data-testid=pay-card][data-state=ok]", { timeout: 8000 });
+      await page.selectOption("[data-testid=pay-year-select]", String(yNow - 1));
+      await page.waitForSelector("[data-testid=pay-card][data-state=failed]", { timeout: 8000 });
+      if (await page.$("[data-testid=pay-total-month]") || await page.$("[data-testid=pay-log-form]")) fail("My pay (year switch): a failed read of " + (yNow - 1) + " still shows totals or the log form");
+      else ok("My pay (year switch): a failed read of " + (yNow - 1) + " shows 'failed' - no totals, no form (never the other year's call-ins as none)");
+      await page.selectOption("[data-testid=pay-year-select]", String(yNow));
+      await page.waitForSelector("[data-testid=pay-card][data-state=ok]", { timeout: 8000 });
+      ok("My pay (year switch): back on " + yNow + " the card reads 'ok'");
+    } catch (e) { fail("My pay (year switch): " + errLine(e)); }
+    finally { payMock = null; }
     await page.screenshot({ path: path.join(OUT, "mine.png"), fullPage: true });
     ok("screenshot test/ui/out/mine.png");
   } catch (e) { fail("My schedule harness exception: " + errLine(e)); }

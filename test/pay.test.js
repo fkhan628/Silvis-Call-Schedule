@@ -79,12 +79,12 @@ check("a weekday primary day without a call-in: the stipend only", () => {
   assert.strictEqual(d.projected, false);
   assert.deepStrictEqual(d.missing, []);
 });
-check("a weekday call-in with 2.5 after-hours hours: stipend + weekday call-in + 2.5 h x activation", () => {
-  const d = H.payForDay("2026-10-01", "s1", base({ logs: [log("2026-10-01", "s1", 2.5)] }));
-  assert.deepStrictEqual(d.components, { stipend: 10000, callIn: 1000, activation: 1250 });
-  assert.strictEqual(d.totalCents, 12250);
-  assert.strictEqual(d.hours, 2.5);
-  assert.strictEqual(d.quarters, 10);
+check("a weekday call-in with 2.75 after-hours hours: stipend + weekday call-in + 2.75 h x activation", () => {
+  const d = H.payForDay("2026-10-01", "s1", base({ logs: [log("2026-10-01", "s1", 2.75)] }));
+  assert.deepStrictEqual(d.components, { stipend: 10000, callIn: 1000, activation: 1375 });
+  assert.strictEqual(d.totalCents, 12375);
+  assert.strictEqual(d.hours, 2.75);
+  assert.strictEqual(d.quarters, 11);
   assert.strictEqual(d.activations, 1);
 });
 check("a weekend call-in uses the weekend/holiday rate; several call-ins add their hours, the call-in rate is paid once", () => {
@@ -121,8 +121,8 @@ check("activationUnit 'activation' pays per call-in, not per hour", () => {
   assert.strictEqual(d.components.activation, 1000, "2 call-ins x 5");
 });
 check("quarter-hour arithmetic stays in whole cents (0.25 h x a rate with cents rounds once)", () => {
-  const d = H.payForDay("2026-10-01", "s1", base({ settings: settings({ activation_rate: 12.55 }), logs: [log("2026-10-01", "s1", 0.25)] }));
-  assert.strictEqual(d.components.activation, 314, "1255 x 1 / 4 = 313.75 -> 314");
+  const d = H.payForDay("2026-10-01", "s1", base({ settings: settings({ activation_rate: 7.35 }), logs: [log("2026-10-01", "s1", 0.25)] }));
+  assert.strictEqual(d.components.activation, 184, "735 x 1 / 4 = 183.75 -> 184");
   assert.ok(Number.isInteger(d.totalCents));
 });
 check("backup days and externally covered days are unpaid (null); another surgeon's primary day is null", () => {
@@ -179,18 +179,18 @@ check("partial rates: a component whose rate is not needed does not make the day
 
 console.log("\n[E] payForMonth - month, YTD, orphans");
 check("October: rows per primary day, month + YTD totals split by today", () => {
-  const logs = [log("2026-10-01", "s1", 2.5), log("2026-10-03", "s1", 3)];
+  const logs = [log("2026-10-01", "s1", 2.75), log("2026-10-03", "s1", 3)];
   const m = H.payForMonth("s1", 2026, 9, base({ logs }));
   assert.deepStrictEqual(m.days.map(d => d.day), ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-06", "2026-10-20"]);
-  // earned: 10/1 12250, 10/2 10000, 10/3 13500, 10/6 10000 = 45750; projected: 10/20 10000
-  assert.strictEqual(m.month.earnedCents, 45750);
+  // earned: 10/1 12375, 10/2 10000, 10/3 13500, 10/6 10000 = 45875; projected: 10/20 10000
+  assert.strictEqual(m.month.earnedCents, 45875);
   assert.strictEqual(m.month.projectedCents, 10000);
   assert.strictEqual(m.month.earnedDays, 4);
   assert.strictEqual(m.month.projectedDays, 1);
   assert.strictEqual(m.month.calledInDays, 2);
-  assert.strictEqual(m.month.hours, 5.5);
+  assert.strictEqual(m.month.hours, 5.75);
   // YTD adds Jan 15 (10000)
-  assert.strictEqual(m.ytd.earnedCents, 55750);
+  assert.strictEqual(m.ytd.earnedCents, 55875);
   assert.strictEqual(m.ytd.primaryDays, 6);
   assert.strictEqual(m.ytdFrom, "2026-01-01");
   assert.strictEqual(m.to, "2026-10-31");
@@ -209,13 +209,29 @@ check("orphan logs: a call-in on a day the person is no longer primary is listed
   assert.deepStrictEqual(m.orphanLogs.map(l => l.day), ["2026-10-04"]);
   assert.strictEqual(m.month.hours, 1);
 });
-check("payTotalsRows: one row per active pool surgeon, roster order, outside surgeons and inactive ones left out", () => {
+check("payTotalsRows: one row per active pool surgeon, roster order; outside surgeons never; an inactive one only with pay in that year", () => {
   const roster = [{ id: "s1", name: "Khan", code: "FAK" }, { id: "s2", name: "Burchett", code: "MAB" }, { id: "x1", name: "Atwell", type: "external" }, { id: "s9", name: "Gone", active: false }];
   const rows = H.payTotalsRows(roster, 2026, 9, base({ logs: [log("2026-10-04", "s2", 1)] }));
-  assert.deepStrictEqual(rows.map(r => r.id), ["s1", "s2"]);
+  assert.deepStrictEqual(rows.map(r => r.id), ["s1", "s2"], "s9 has no primary day and no call-in in 2026 - left out");
+  assert.ok(rows.every(r => r.inactive === false));
   assert.strictEqual(rows[1].month.primaryDays, 1);
   assert.strictEqual(rows[1].month.earnedCents, 10000 + 2000 + 500);
   assert.deepStrictEqual(H.payTotalsRows(null, 2026, 9, base()), []);
+});
+check("payTotalsRows keeps an INACTIVE surgeon who earned pay earlier in the year (month + YTD + the CSV), marked inactive", () => {
+  const roster = [{ id: "s1", name: "Khan", code: "FAK" }, { id: "s9", name: "Gone", code: "GON", active: false }];
+  const sched = Object.assign({}, SCHED, { "2026-03-10": day("s9", "s1"), "2026-10-07": day("s9", "s1") });
+  const rows = H.payTotalsRows(roster, 2026, 9, base({ schedule: sched }));
+  assert.deepStrictEqual(rows.map(r => r.id), ["s1", "s9"]);
+  const gone = rows[1];
+  assert.strictEqual(gone.inactive, true);
+  assert.strictEqual(gone.month.primaryDays, 1, "10/7");
+  assert.strictEqual(gone.ytd.primaryDays, 2, "3/10 + 10/7");
+  assert.strictEqual(gone.ytd.earnedCents, 20000);
+  assert.strictEqual(H.payCsv(rows, 2026, 9).text.split("\r\n")[2], "2026-10,Gone (inactive),GON,1,0,0,100.00,0.00,200.00,0.00");
+  // a call-in in the year without a primary day (an orphan) also keeps him listed; another year's pay does not
+  assert.deepStrictEqual(H.payTotalsRows(roster, 2026, 9, base({ logs: [log("2026-10-04", "s9", 1)] })).map(r => r.id), ["s1", "s9"]);
+  assert.deepStrictEqual(H.payTotalsRows(roster, 2026, 9, base({ schedule: Object.assign({}, SCHED, { "2025-03-10": day("s9", "s1") }) })).map(r => r.id), ["s1"]);
 });
 
 console.log("\n[F] settings row <-> settings");
@@ -284,7 +300,80 @@ check("payReadFailureState: a missing table is 'unavailable', every other failur
   assert.strictEqual(H.payReadFailureState(401, "JWT expired"), "failed");
   assert.strictEqual(H.payReadFailureState(403, "permission denied"), "failed");
   assert.strictEqual(H.payReadFailureState(404, "<html>not found</html>"), "failed", "a 404 without the token is not a missing table");
+  assert.strictEqual(H.payReadFailureState(400, '{"code":"42703","details":null,"hint":null,"message":"column call_pay_logs.xyz does not exist"}'), "failed", "a missing COLUMN (400 42703) is a real failure, not 'available after the next update'");
+  assert.strictEqual(H.payReadFailureState(400, 'column "xyz" does not exist'), "failed");
+  assert.strictEqual(H.payReadFailureState(400, 'relation "public.schedule_days" does not exist'), "failed", "only a pay table's absence is 'unavailable'");
+  assert.strictEqual(H.payReadFailureState(404, '{"code":"PGRST204","message":"Could not find the column"}'), "failed");
 });
+console.log("\n[G2] year-aware view state - another year's call-ins are never shown as this year's");
+{
+  const S0 = { settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false };
+  const OK = (rows) => ({ state: "ok", rows: rows || [], row: null });
+  const after = (prev, y, st, lg) => H.payStateAfterRead(H.payStateBeforeRead(prev, y), y, st, lg);
+  check("payViewState: nothing read yet -> loading; 'unavailable' wins over everything", () => {
+    assert.strictEqual(H.payViewState(null, 2026), "loading");
+    assert.strictEqual(H.payViewState(S0, 2026), "loading");
+    assert.strictEqual(H.payViewState(Object.assign({}, S0, { logs: "unavailable", loadedYear: 2026, attemptYear: 2026 }), 2026), "unavailable");
+    assert.strictEqual(H.payViewState(Object.assign({}, S0, { settings: "unavailable", logs: "ok", loadedYear: 2026, attemptYear: 2026 }), 2026), "unavailable");
+  });
+  check("a loaded year reads ok; the same year after a failed refresh reads stale (the rows ARE that year's)", () => {
+    const s26 = after(S0, 2026, OK(), OK());
+    assert.deepStrictEqual(s26, { settings: "ok", settingsLoaded: true, logs: "ok", loadedYear: 2026, attemptYear: 2026 });
+    assert.strictEqual(H.payViewState(s26, 2026), "ok");
+    const stale = after(s26, 2026, OK(), { state: "failed" });
+    assert.strictEqual(H.payViewState(stale, 2026), "stale");
+  });
+  check("year mismatch: 2026 held, 2025 requested -> loading while in flight, never ok", () => {
+    const s26 = after(S0, 2026, OK(), OK());
+    const inFlight = H.payStateBeforeRead(s26, 2025);
+    assert.strictEqual(inFlight.logs, "unread");
+    assert.strictEqual(H.payViewState(inFlight, 2025), "loading");
+    assert.strictEqual(H.payViewState(s26, 2025), "loading", "even without a read started (Totals' year differs for a render)");
+  });
+  check("year mismatch + failed read -> failed (not ok with no call-ins)", () => {
+    const s = after(after(S0, 2026, OK(), OK()), 2025, OK(), { state: "failed" });
+    assert.strictEqual(s.loadedYear, 2026);
+    assert.strictEqual(H.payViewState(s, 2025), "failed");
+    assert.strictEqual(H.payViewState(S0.logs && after(S0, 2025, OK(), { state: "failed" }), 2025), "failed", "a first read that failed");
+  });
+  check("year mismatch + skipped read (no fresh token) -> skipped, not a carried-over ok", () => {
+    const s = after(after(S0, 2026, OK(), OK()), 2025, { state: "skipped" }, { state: "skipped" });
+    assert.strictEqual(s.logs, "skipped");
+    assert.strictEqual(H.payViewState(s, 2025), "skipped");
+    assert.strictEqual(s.settings, "ok", "the settings read before stays");
+    const first = after(S0, 2026, { state: "skipped" }, { state: "skipped" });
+    assert.strictEqual(H.payViewState(first, 2026), "skipped", "a skipped FIRST read is not an endless 'Loading'");
+    assert.strictEqual(first.settings, "skipped");
+    const same = after(after(S0, 2026, OK(), OK()), 2026, { state: "skipped" }, { state: "skipped" });
+    assert.strictEqual(H.payViewState(same, 2026), "ok", "same year: a skip keeps what is held");
+  });
+  check("switching back to the held year reads ok at once (its rows are held), and a later answer settles it", () => {
+    const s = after(after(S0, 2026, OK(), OK()), 2025, OK(), { state: "failed" });
+    const back = H.payStateBeforeRead(s, 2026);
+    assert.strictEqual(H.payViewState(back, 2026), "ok");
+  });
+  check("out-of-order answers: only the latest request's answer is applied (the caller's sequence check), so the view matches the year shown", () => {
+    // 2026 -> 2025 -> 2026: requests A(2025) and B(2026) both in flight; B answers first, A late. The component drops A (seq).
+    let s = after(S0, 2026, OK(), OK());
+    let seq = 0; const reqA = { y: 2025, seq: ++seq }; s = H.payStateBeforeRead(s, 2025);
+    const reqB = { y: 2026, seq: ++seq }; s = H.payStateBeforeRead(s, 2026);
+    const land = (req, st, lg) => { if (req.seq !== seq) return; s = H.payStateAfterRead(s, req.y, st, lg); };
+    land(reqB, OK(), OK());
+    land(reqA, OK(), OK());   // late, dropped
+    assert.strictEqual(s.loadedYear, 2026);
+    assert.strictEqual(H.payViewState(s, 2026), "ok");
+    // without the sequence check the late answer would move loadedYear to 2025 and 2026 would read "loading" again
+    assert.strictEqual(H.payViewState(H.payStateAfterRead(s, 2025, OK(), OK()), 2026), "loading");
+  });
+  check("payRatesView: a rates read that never succeeded is failed / loading - never 'rates not set yet'", () => {
+    assert.strictEqual(H.payRatesView(Object.assign({}, S0, { settings: "failed" }), null), "failed");
+    assert.strictEqual(H.payRatesView(Object.assign({}, S0, { settings: "skipped" }), null), "failed");
+    assert.strictEqual(H.payRatesView(S0, null), "loading");
+    assert.strictEqual(H.payRatesView(Object.assign({}, S0, { settings: "ok", settingsLoaded: true }), null), "unset");
+    assert.strictEqual(H.payRatesView(Object.assign({}, S0, { settings: "failed", settingsLoaded: true }), FAKE_ROW), "set", "a failed refresh keeps the rates loaded before");
+    assert.strictEqual(H.payRatesView(Object.assign({}, S0, { settings: "ok", settingsLoaded: true }), { id: "main", stipend_per_shift: 100 }), "partial");
+  });
+}
 check("payErrorText maps the guard tokens, RLS and a 0-row answer to words", () => {
   assert.match(H.payErrorText({ message: "PY001 PAY_FUTURE: ..." }), /after today/);
   assert.match(H.payErrorText('{"code":"PY002","message":"PAY_NOT_PRIMARY: ..."}'), /primary only/);
@@ -309,12 +398,12 @@ check("payMoney formats cents in en-US currency and null as '-'", () => {
 });
 check("payCsv: file name, header, plain 2-decimal amounts, no currency sign, an unset amount left empty", () => {
   const roster = [{ id: "s1", name: "Khan", code: "FAK" }, { id: "s2", name: "Burchett", code: "MAB" }];
-  const rows = H.payTotalsRows(roster, 2026, 9, base({ logs: [log("2026-10-01", "s1", 2.5)] }));
+  const rows = H.payTotalsRows(roster, 2026, 9, base({ logs: [log("2026-10-01", "s1", 2.75)] }));
   const c = H.payCsv(rows, 2026, 9);
   assert.strictEqual(c.name, "silvis-pay-2026-10.csv");
   const lines = c.text.split("\r\n");
   assert.strictEqual(lines[0], "Month,Surgeon,Code,Primary days,Called-in days,Hours,Earned (month),Projected (month),YTD earned,YTD projected");
-  assert.strictEqual(lines[1], "2026-10,Khan,FAK,5,1,2.5,422.50,100.00,522.50,100.00");
+  assert.strictEqual(lines[1], "2026-10,Khan,FAK,5,1,2.75,423.75,100.00,523.75,100.00");
   assert.ok(!c.text.includes(CUR));
   const unset = H.payCsv(H.payTotalsRows(roster, 2026, 9, base({ settings: H.paySettingsFromRow(null) })), 2026, 9);
   assert.strictEqual(unset.text.split("\r\n")[1], "2026-10,Khan,FAK,5,0,0,,,,");
@@ -359,12 +448,27 @@ console.log("\n[I] config.js payDb (sandboxed)");
     const l = await payDb.loadLogs({ personId: "s1", from: "2026-01-01", to: "2026-12-31" });
     assert.strictEqual(l.state, "ok");
     assert.strictEqual(l.rows.length, 1);
-    assert.match(calls[1].url, /call_pay_logs\?select=\*&day=gte\.2026-01-01&day=lte\.2026-12-31&person_id=eq\.s1&order=day\.asc,created_at\.asc$/);
+    assert.match(calls[1].url, /call_pay_logs\?select=\*&day=gte\.2026-01-01&day=lte\.2026-12-31&person_id=eq\.s1&order=day\.asc,created_at\.asc,id\.asc&limit=1000&offset=0$/);
     serve(() => resp(200, []));
     assert.deepStrictEqual(JSON.parse(JSON.stringify(await payDb.loadSettings())), { state: "ok", row: null });
     const all = await payDb.loadLogs({ personId: null, from: "2026-01-01", to: "2026-12-31" });
     assert.ok(!/person_id=/.test(calls[1].url), "the scheduler's read names no person");
     assert.strictEqual(all.rows.length, 0, "a real empty answer is ok + []");
+  });
+  check("the call-in read PAGES past PostgREST's max-rows (a capped 200 must not drop the latest days); the settings read does not", async () => {
+    sandbox.localStorage._m = { "silvis-auth-token": FRESH };
+    const page = (n, from) => Array.from({ length: n }, (_, i) => ({ id: "r" + (from + i), day: "2026-10-01", person_id: "s1", hours: 1 }));
+    serve((url) => { const off = Number((url.match(/offset=(\d+)/) || [])[1]); return resp(200, off === 0 ? page(1000, 0) : off === 1000 ? page(1000, 1000) : page(7, 2000)); });
+    const l = await payDb.loadLogs({ from: "2026-01-01", to: "2026-12-31" });
+    assert.strictEqual(l.state, "ok");
+    assert.strictEqual(l.rows.length, 2007);
+    assert.deepStrictEqual(calls.map(c => (c.url.match(/offset=(\d+)/) || [])[1]), ["0", "1000", "2000"]);
+    assert.strictEqual(new Set(l.rows.map(r => r.id)).size, 2007);
+    serve((url) => /offset=1000/.test(url) ? resp(500, "boom") : resp(200, page(1000, 0)));
+    assert.strictEqual((await payDb.loadLogs({ from: "2026-01-01", to: "2026-12-31" })).state, "failed", "a failing later page fails the whole read (never a truncated ok)");
+    serve(() => resp(200, [{ id: "main" }]));
+    await payDb.loadSettings();
+    assert.ok(!/limit=|offset=/.test(calls[0].url), "the one-row settings read is not paged");
   });
   check("unavailable: the missing-table 404 (PGRST205) - never an empty ok", async () => {
     sandbox.localStorage._m = { "silvis-auth-token": FRESH };
@@ -424,10 +528,37 @@ check("the pay UI is rendered only behind payVisible (My pay) / isScheduler (Set
   assert.ok(/\{payVisible && \(pid === mySurgeon \|\| isScheduler\) && pid && <PayCard\b/.test(SRC), "PayCard behind payVisible and the viewer's own id (or the scheduler)");
   const ratesUses = Array.from(SRC.matchAll(/<PayRatesCard\b/g)).map(m => m.index);
   assert.strictEqual(ratesUses.length, 1, "one PayRatesCard use");
-  const setupGate = SRC.lastIndexOf("isScheduler", ratesUses[0]);
-  assert.ok(setupGate > 0 && ratesUses[0] - setupGate < 40000, "PayRatesCard sits inside the scheduler's Setup block");
+  const SETUP_OPEN = '{view==="setup" && !isPublicMode && isScheduler && <>';
+  const setupAt = SRC.indexOf(SETUP_OPEN);
+  assert.ok(setupAt > 0 && SRC.indexOf(SETUP_OPEN, setupAt + 1) < 0, "exactly one scheduler-only Setup block opener: " + SETUP_OPEN);
+  const setupEnd = SRC.indexOf("{view===", setupAt + SETUP_OPEN.length);
+  assert.ok(setupEnd > setupAt, "the Setup block's end (the next {view=== block)");
+  const setupBlock = SRC.slice(setupAt, setupEnd);
+  assert.ok(ratesUses[0] > setupAt && ratesUses[0] < setupEnd, "PayRatesCard sits INSIDE the scheduler-only Setup block (view===\"setup\" && !isPublicMode && isScheduler)");
+  const closeAt = setupBlock.indexOf("\n        </>}");   // the block's own closer (its opener's indentation)
+  assert.ok(closeAt > 0 && closeAt === setupBlock.lastIndexOf("\n        </>}"), "the Setup block closes once with </>} at its opener's indentation");
+  assert.ok(ratesUses[0] < setupAt + closeAt, "PayRatesCard sits before the Setup block's closing </>}");
   assert.ok(/\{payVisible && isScheduler && modeBtn\("pay", "Pay"\)\}/.test(SRC), "the Totals > Pay mode button renders only for the scheduler");
   assert.ok(/const modeEff = mode === "pay" && !\(payVisible && isScheduler\) \? "month" : mode;/.test(SRC), "a stale 'pay' mode falls back to month for anyone else");
+});
+check("a year switch never shows another year's call-ins: loadPay drops a stale answer (sequence + account) and the cards gate on payViewState", () => {
+  const lp = SRC.slice(SRC.indexOf("const loadPay = async (year, explicit) => {"), SRC.indexOf("// Another account on this page"));
+  assert.ok(/const seq = \+\+paySeqRef\.current;/.test(lp), "loadPay numbers its request");
+  assert.ok(/setPayState\(prev => payStateBeforeRead\(prev, y\)\);\n\s*const \[st, lg\] = await/.test(lp), "loadPay marks the year loading BEFORE the await");
+  assert.ok(/await Promise\.all\([^\n]*\);\n\s*if \(gen !== payGenRef\.current \|\| seq !== paySeqRef\.current\) return;/.test(lp), "right after the await, an answer that is not the latest request (or another account's) is dropped");
+  assert.ok(/setPayState\(prev => payStateAfterRead\(prev, y, st, lg\)\);/.test(lp), "the state after the answer is helpers.js payStateAfterRead");
+  const card = SRC.slice(SRC.indexOf("function PayCard("), SRC.indexOf("function PayRatesCard("));
+  const vsAt = card.indexOf("const vs = payViewState(state, year);");
+  assert.ok(vsAt > 0 && /if \(vs === "failed" \|\| vs === "skipped" \|\| vs === "loading"\) return /.test(card), "PayCard returns before any figure unless the call-ins held are this year's");
+  assert.ok(card.indexOf("pay-total-month") > vsAt && card.indexOf("pay-log-form") > vsAt, "totals and the log form render only after the payViewState gate");
+  const panel = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("// ---- end call pay components"));
+  const pvs = panel.indexOf("const vs = payViewState(state, year);");
+  assert.ok(pvs > 0 && panel.indexOf("pay-csv") > pvs && /if \(vs === "failed" \|\| vs === "skipped" \|\| vs === "loading"\) return /.test(panel), "Totals > Pay (and its CSV) render only after the payViewState gate");
+  assert.ok(/data-testid="pay-csv" onClick=\{exportPay\} disabled=\{state\.loadedYear !== Number\(year\)\}/.test(panel), "the pay CSV is disabled unless the rows held are this year's");
+  assert.ok(/data-testid="pay-totals-refresh"/.test(panel), "Totals > Pay offers Refresh in the loading / failed / skipped states");
+  assert.ok(/<PayCard key=\{pid\} /.test(SRC), "PayCard is keyed by the person (an open edit never carries over to another surgeon)");
+  assert.ok(/payRatesNote\(ratesView, T, true\)/.test(card) && /const ratesView = payRatesView\(state, settingsRow\);/.test(card) && /payRatesNote\(ratesView, T, false\)/.test(panel), "both views show a failed rates read as failed (payRatesView), never 'not set yet'");
+  assert.ok(/Note \(optional - no patient or contact details\)/.test(card), "the call-in note asks for no patient and no contact details");
 });
 check("the pay tables are named only in config.js payDb", () => {
   const files = ["index-source.html", "helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js", "importer.js"].filter(f => fs.existsSync(path.join(ROOT, f)));

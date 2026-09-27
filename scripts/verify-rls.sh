@@ -842,8 +842,9 @@ fi
 echo "== 14. call pay (2026-09-27): anon sees neither table, anon cannot write, rolled-back probe =="
 # sql/migrations/2026-09-27-call-pay.sql (report-first, NOT applied until Faraz runs it): call_pay_settings (the rates + flags,
 # scheduler / linked-surgeon read) and call_pay_logs (the primary's call-ins, own rows / scheduler). Neither table is anon-readable
-# and anon's table privileges are revoked, so an anon request is refused (401 / 403 / 42501) - or, RLS alone, 200 with
-# Content-Range */0 (the section 8 shape). Nothing here writes over REST except the anon POST that must be refused, and nothing
+# and anon's table privileges are revoked, so an anon request is refused (401 / 403 / 42501). With SILVIS_CALL_PAY_APPLIED=1
+# (and, after the record step, always) an anon 200 is a FAIL even with Content-Range */0 - it would mean the revoke did not
+# take; without the flag a 200 + */0 (RLS alone, the section 8 shape) still passes. Nothing here writes over REST except the anon POST that must be refused, and nothing
 # reads or prints a rate. BEFORE the apply the tables do not exist: 404 (PGRST205 / 42P01) and the probe's PROBE_SETUP are the
 # expected not-applied picture and PASS; with SILVIS_CALL_PAY_APPLIED=1 (the run right after the apply) they FAIL.
 PAYSTRICT14="${SILVIS_CALL_PAY_APPLIED:-}"
@@ -853,7 +854,9 @@ for t in call_pay_settings call_pay_logs; do
   range=$(echo "$hdr" | grep -i '^content-range:' | tr -d '\r' | awk '{print $2}')
   echo "   anon GET $t -> HTTP $code  Content-Range: ${range:-<none>}  body: $(head -c 120 $T/vr14_$t.json)"
   case "$code" in
-    200) if [ "$range" = "*/0" ]; then ok "anon sees 0 rows of $t (200 + [] with count=exact -> Content-Range */0)"; else bad "anon read of $t: 200 with Content-Range '$range' (expected */0 or a refusal - pay data must never reach anon)"; fi;;
+    200) if [ "$PAYSTRICT14" = "1" ]; then bad "anon read of $t: HTTP 200 (Content-Range '${range:-<none>}') with SILVIS_CALL_PAY_APPLIED=1 - anon's privileges must be revoked, so a refusal (401 / 403) is expected, not an empty answer"
+         elif [ "$range" = "*/0" ]; then ok "anon sees 0 rows of $t (200 + [] with count=exact -> Content-Range */0; not strict - SILVIS_CALL_PAY_APPLIED unset)"
+         else bad "anon read of $t: 200 with Content-Range '$range' (expected a refusal - pay data must never reach anon)"; fi;;
     401|403) ok "anon read of $t refused (HTTP $code)";;
     404) if [ "$PAYSTRICT14" = "1" ]; then bad "anon read of $t: HTTP 404 with SILVIS_CALL_PAY_APPLIED=1 (the table should exist after the apply)"; else ok "$t not created yet (before the migration: HTTP 404)"; fi;;
     *) bad "anon read of $t: HTTP ${code:-<none>}";;
@@ -897,7 +900,7 @@ if linked; then
     expect_eq14()  { v=$(case_val14 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "call pay probe $1: $3" || bad "call pay probe $1: $3 (got '$v', expected '$2')"; }
     expect_err14() { v=$(case_val14 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "call pay probe $1: $4"; else bad "call pay probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
     expect_eq14  P1  "policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write" "the two tables carry exactly the six call pay policies"
-    expect_eq14  P2  "anon_logs=f anon_settings=f"                   "anon holds no privilege on either table (revoked)"
+    expect_eq14  P2  "anon_logs=f anon_settings=f auth_truncate=f"   "anon holds no privilege on either table; authenticated no TRUNCATE / REFERENCES / TRIGGER (revoked)"
     expect_eq14  P3  "rows=1"                                        "the settings table holds the one 'main' row"
     expect_err14 N1  42501 "permission denied for table call_pay_logs"      "anon cannot read the call-ins"
     expect_err14 N2  42501 "permission denied for table call_pay_settings"  "anon cannot read the rates"
