@@ -3369,6 +3369,45 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(/standing rules - offers are not placed first yet|lands with the engine wiring/.test(src), false, "stale 'not offers-first yet' copy left behind");
     });
 
+    // 9/27 (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
+    // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar, a count on the nav's Paint
+    // offers) and the scheduler's lead-time lines in Periods. Display only - no write, no send; data-driven
+    // (groupRules.offerPeriods.noticeDaysBeforeClose, default in helpers OP_NOTICE_DEFAULTS, never in the edge mirror's set).
+    check("9/27 offer deadline notice: helpers export the two pure readers; OP_PERIOD_DEFAULTS stays literally the daily-reminder mirror's OTM_DEFAULTS (the notice default lives apart)", () => {
+      assert.strictEqual(typeof H.offerDeadlineNotices, "function");
+      assert.strictEqual(typeof H.offerPeriodLeadWarnings, "function");
+      assert.deepStrictEqual(H.OP_NOTICE_DEFAULTS, { noticeDaysBeforeClose: 42 });
+      const hs = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), cron = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
+      const lit = (t, name) => { const m = t.match(new RegExp("const " + name + " = (\\{[^\\n]*?\\});")); return m ? m[1] : null; };
+      assert.ok(lit(hs, "OP_PERIOD_DEFAULTS") && lit(hs, "OP_PERIOD_DEFAULTS") === lit(cron, "OTM_DEFAULTS"), "OP_PERIOD_DEFAULTS and the mirror's OTM_DEFAULTS must stay the same literal (edit edge-functions only with a redeploy)");
+      assert.ok(!/noticeDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeDaysBeforeClose/.test(cron), "the notice key never reaches the timeline defaults or the cron");
+    });
+    check("9/27 offer deadline notice: the linked surgeon only (mySurgeon && !isPublicMode), every open period on his own My schedule, URGENT rows only on the Calendar, a count badge on nav-paint-offers; 'Choose shifts' opens the painter for mySurgeon aimed at that period; T tokens only; writes nothing", () => {
+      assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: myOfferRows, personId: mySurgeon, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");
+      const i = src.indexOf("const offerNoticeBox = (list, where) => {"), j = src.indexOf("const isWeekendDay", i);
+      assert.ok(i > 0 && j > i, "offerNoticeBox not found");
+      const box = src.slice(i, j);
+      assert.ok(box.includes('data-testid="offer-deadline-notice"') && box.includes('className="offer-notice-row" data-period-id={n.periodId || ""}') && box.includes('data-testid="offer-deadline-choose"'), "one notice box, one row per period (data-period-id), a Choose shifts button per row");
+      assert.ok(box.includes("onClick={()=>setOfferSheet({ personId: mySurgeon, periodId: n.periodId || null })}") && box.includes(">Choose shifts</button>"), "Choose shifts opens the offer painter for mySurgeon on that period");
+      assert.ok(box.includes("color:T.warnText,background:T.warnBg,border:`1px solid ${T.warnBorder}`"), "the box paints with the THEME tokens");
+      assert.strictEqual(/#[0-9a-fA-F]{3,6}\b/.test(box), false, "no literal colour in the notice (T tokens only - the dark sheet repaints light literals only)");
+      assert.strictEqual(/fetch\(|rest\/v1|logAudit\(|sendEmailNotif\(|confirm\(/.test(box), false, "the notice writes, sends and asks nothing");
+      assert.ok(src.includes('{pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}') && src.includes('{offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}'), "My schedule shows every notice on his own page; the Calendar only the urgent ones");
+      assert.strictEqual((src.match(/offerNoticeBox\(/g) || []).length, 2, "exactly two mounts (My schedule, Calendar)");
+      const nav = src.slice(src.indexOf('<button data-testid="nav-paint-offers"'), src.indexOf("</button>", src.indexOf('<button data-testid="nav-paint-offers"')));
+      assert.ok(nav.includes('position:"relative"') && nav.includes('{offerNotices.length > 0 && (') && nav.includes('data-testid="offer-deadline-badge"') && nav.includes("background:T.accent,color:T.onAccent"), "the nav's Paint offers carries the count badge in the accent tokens");
+      ["warnText", "warnBg", "warnBorder"].forEach(k => assert.ok(/^#[0-9A-F]{6}$/.test(styles.THEME.light[k]) && /^#[0-9A-F]{6}$/.test(styles.THEME.dark[k]), "THEME token " + k + " in both themes"));
+      assert.ok(src.includes(".offer-notice-row .offer-notice-text { flex-basis: 100% !important; }"), "the phone breakpoint stacks the sentence over the button (a class - inline styles cannot do media queries)");
+    });
+    check("9/27 Periods lead-time lines: prd-lead-warn per period (short lead / publish-by due or passed with open slots) and 'create the next period', from helpers.offerPeriodLeadWarnings over the parent's open-slot counts; css.warnBox; the draft's short-lead warning is STRICT (start - 6 weeks exactly is the rule)", () => {
+      const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
+      assert.ok(sec.includes("const lead = React.useMemo(() => offerPeriodLeadWarnings({ periods: all, today, groupRules, openCounts }), [all, today, groupRules, openCounts]);"), "the lines come from helpers.offerPeriodLeadWarnings");
+      assert.ok(sec.includes('data-testid="prd-lead-warn" data-kind={w.kind} style={{ ...css.warnBox,') && sec.includes('data-testid="prd-lead-warn" data-kind="next-missing" style={{ ...css.warnBox,'), "per-period lines and the next-period line, in css.warnBox");
+      assert.ok(sec.includes("d.offers_close_at > suAddDays(d.start_day, -7 * closeW)") && sec.includes(": shortLead(draft) ? "), "the draft warns on a close LATER than start - closeWeeksBeforeStart weeks (strict >: the 3-month preset lands exactly on it)");
+      assert.ok(src.includes("openCounts={prdOpenCounts} onCreate={createPeriod}") && src.includes("out[p.id || a] = b >= todayStr ? openSlots(schedule, a, b, todayStr).length : 0;"), "the parent counts each period's open slots (today on) with helpers.openSlots");
+      assert.strictEqual(/fetch\(|rest\/v1|logAudit\(|sendEmailNotif\(/.test(sec), false, "PeriodsSection itself never writes (every write is the parent's callback)");
+    });
+
     /* ---------------- H. Prompt 14 part 3c (U3c): the day editor's offer labels + My schedule's offer pills ---------------- */
     console.log("\n[H] Prompt 14 U3c: offer labels in the day editor + My schedule");
     // offerCandidateWords lives in index-source.html at MODULE scope as plain JS (no JSX) so the day editor and My

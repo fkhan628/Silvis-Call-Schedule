@@ -46,6 +46,9 @@ const THEME = {
     success: "#1A8040",
     // Fairness bars (TotalsCard): the fill gradient against its track, both stops >= 3:1.
     barTrack: "#EEF1F4", barStart: "#13294B", barEnd: "#1F3A6B",
+    // Offer deadline notice (9/27, My schedule / Calendar): amber text on its own amber tint, the css.warnBox look in
+    // light mode and a dark amber box in dark mode (the dark sheet repaints neither) - 5.64:1 light, 10.1:1 dark.
+    warnText: "#7A5A20", warnBg: "#FBF1D8", warnBorder: "#E8D090",
   },
   dark: {
     bg: "#0B1A33", surface: "#13294B", raised: "#0F2140", text: "#E6ECF5", muted: "#9FB0C8", border: "#24406B",
@@ -56,6 +59,7 @@ const THEME = {
     open: "#F06060", weekend: "#0F2140", holiday: "#3A3418", skeleton: "#243250",
     success: "#40C060",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
+    warnText: "#F2D08A", warnBg: "#2E2612", warnBorder: "#7A5A20",
   },
 };
 const LIGHT = THEME.light;

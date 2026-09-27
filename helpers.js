@@ -2858,6 +2858,104 @@ function offerNextPeriod(periods, today) {
   });
   return open || any;
 }
+
+/* ═══ Offer deadline notices (Faraz 9/27: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ═══
+ * The reading implemented (docs/SILVIS-CALL-RULES.md section 4, build guide section 17): a period's choices FREEZE
+ * closeWeeksBeforeStart (6) weeks before it starts and its schedule is due publishWeeksBeforeStart (4) weeks before it
+ * (both as before); a linked surgeon who has not answered for an open period gets an in-app notice starting
+ * noticeDaysBeforeClose (42 = six weeks) days BEFORE the freeze. noticeDaysBeforeClose is DATA
+ * (groupRules.offerPeriods); its default lives in OP_NOTICE_DEFAULTS, NOT in OP_PERIOD_DEFAULTS - that one stays
+ * literally equal to the daily-reminder mirror's OTM_DEFAULTS, and offerTimeline's output (pinned against the mirror)
+ * never carries the key: the cron does not read it. Pure: nothing here reads the clock, the DOM or the network. */
+const OP_NOTICE_DEFAULTS = { noticeDaysBeforeClose: 42 };
+// opNoticeRules(groupRules) -> the numbers the notices read from groupRules.offerPeriods, each absent / junk key
+// falling back to its default: noticeDays (>= 0; 0 = no notice), urgentDays = the largest remindDaysBeforeClose
+// (the first reminder e-mail's day; 0 when the list is empty), closeWeeks / publishWeeks (> 0, like offerTimeline).
+function opNoticeRules(groupRules) {
+  const g = groupRules && typeof groupRules === "object" ? groupRules : {};
+  const R = g.offerPeriods && typeof g.offerPeriods === "object" ? g.offerPeriods : {};
+  const pos = (v, d) => (typeof v === "number" && isFinite(v) && v > 0 ? v : d);
+  const remind = (Array.isArray(R.remindDaysBeforeClose) ? R.remindDaysBeforeClose : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0);
+  const nd = R.noticeDaysBeforeClose;
+  return {
+    rules: R,
+    noticeDays: typeof nd === "number" && isFinite(nd) && nd >= 0 ? nd : OP_NOTICE_DEFAULTS.noticeDaysBeforeClose,
+    urgentDays: remind.length ? Math.max.apply(null, remind) : 0,
+    closeWeeks: pos(R.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart),
+    publishWeeks: pos(R.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart),
+  };
+}
+// offerDeadlineNotices({ periods, offers, personId, today, groupRules }) -> one notice per period that asks this
+// person to choose now: status upcoming (absent = upcoming), offers_close_at after today (offerPeriodOpen's reading;
+// an absent close is start - closeWeeksBeforeStart through offerTimeline), the person's offerStatus is not_started
+// (never rules_only, never submitted) and daysToClose <= noticeDaysBeforeClose. Several periods can be open at once
+// (Jan 2027 and Feb - Apr 2027 on 9/27) - every one gets its notice, earliest freeze first:
+// [{ periodId, label, closeAt, daysToClose, startDay, publishBy, urgent }] with urgent = daysToClose <= the largest
+// remindDaysBeforeClose. [] for a missing person, a non-ISO today or no list.
+function offerDeadlineNotices(args) {
+  const a = args && typeof args === "object" ? args : {};
+  const today = opDay(a.today);
+  if (!today || !a.personId || !Array.isArray(a.periods)) return [];
+  const N = opNoticeRules(a.groupRules);
+  const out = [];
+  a.periods.forEach(p => {
+    if (!p || typeof p !== "object" || !opBounds(p)) return;
+    const status = p.status === undefined || p.status === null || p.status === "" ? "upcoming" : String(p.status);
+    if (status !== "upcoming") return;
+    const t = offerTimeline(p, N.rules);
+    if (!t || !(t.offers_close_at > today)) return;
+    if (offerStatus(p, a.offers, a.personId) !== "not_started") return;
+    const daysToClose = suDaysBetween(today, t.offers_close_at);
+    if (daysToClose > N.noticeDays) return;
+    out.push({ periodId: p.id === undefined || p.id === null ? null : String(p.id), label: String(p.label || ""), closeAt: t.offers_close_at, daysToClose, startDay: t.start_day, publishBy: t.publish_by, urgent: daysToClose <= N.urgentDays });
+  });
+  return out.sort((x, y) => (x.closeAt !== y.closeAt ? (x.closeAt < y.closeAt ? -1 : 1) : (x.startDay < y.startDay ? -1 : x.startDay > y.startDay ? 1 : 0)));
+}
+// offerPeriodLeadWarnings({ periods, today, groupRules, openCounts }) -> the scheduler's lead-time warnings for Setup ->
+// Generate -> Periods: { periods: { <key>: [warning...] }, next: null | { from, closeBy, daysToClose } }, key = the
+// row's id (else its start_day), openCounts = { <key>: open slots from today on inside the period's range } (the
+// caller counts them with openSlots over the schedule - the app never flips a status to published, so "still open
+// slots" is the only reading of "not built yet"). Warnings per period:
+//   short-lead      - status upcoming and offers_close_at later than start - 7 * closeWeeksBeforeStart:
+//                     { closeAt, daysBeforeStart, weeksBeforeStart (whole weeks), defaultWeeks }
+//   publish-due     - publish_by within 7 days (0..7) while the range still has open slots: { publishBy, daysToPublish, open }
+//   publish-passed  - publish_by passed (the period not over) while the range still has open slots: same fields
+// next = the next period is not on file: today >= (last period's end + 1) - 7 * closeWeeksBeforeStart -
+// noticeDaysBeforeClose; from = that start, closeBy = the freeze it would get from the rules. No periods -> null
+// (the empty state says so already). Nothing here reads the clock.
+function offerPeriodLeadWarnings(args) {
+  const a = args && typeof args === "object" ? args : {};
+  const today = opDay(a.today);
+  const res = { periods: {}, next: null };
+  if (!today || !Array.isArray(a.periods)) return res;
+  const N = opNoticeRules(a.groupRules);
+  const counts = a.openCounts && typeof a.openCounts === "object" ? a.openCounts : {};
+  let lastEnd = null;
+  a.periods.forEach(p => {
+    const b = opBounds(p);
+    if (!b) return;
+    if (lastEnd === null || b.end > lastEnd) lastEnd = b.end;
+    const key = p.id === undefined || p.id === null || p.id === "" ? b.start : String(p.id);
+    const status = p.status === undefined || p.status === null || p.status === "" ? "upcoming" : String(p.status);
+    const list = [];
+    const close = opDay(p.offers_close_at), pub = opDay(p.publish_by);
+    if (status === "upcoming" && close && close > suAddDays(b.start, -7 * N.closeWeeks)) {
+      const d = suDaysBetween(close, b.start);
+      list.push({ kind: "short-lead", closeAt: close, daysBeforeStart: d, weeksBeforeStart: Math.floor(d / 7), defaultWeeks: N.closeWeeks });
+    }
+    const open = Number(counts[key]) || 0;
+    if (pub && b.end >= today && open > 0) {
+      const d = suDaysBetween(today, pub);
+      if (d <= 7) list.push({ kind: d < 0 ? "publish-passed" : "publish-due", publishBy: pub, daysToPublish: d, open });
+    }
+    if (list.length) res.periods[key] = list;
+  });
+  if (lastEnd) {
+    const from = suAddDays(lastEnd, 1), closeBy = suAddDays(from, -7 * N.closeWeeks);
+    if (today >= suAddDays(closeBy, -N.noticeDays)) res.next = { from, closeBy, daysToClose: suDaysBetween(today, closeBy) };
+  }
+  return res;
+}
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
 // the painter next to "Go by my rules" so the person knows what that means for them. Never carries a note field.
@@ -3243,5 +3341,6 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
   };
 }
