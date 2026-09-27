@@ -3383,7 +3383,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/noticeDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeDaysBeforeClose/.test(cron), "the notice key never reaches the timeline defaults or the cron");
     });
     check("9/27 offer deadline notice: the linked surgeon only (mySurgeon && !isPublicMode), every open period on his own My schedule, URGENT rows only on the Calendar, a count badge on nav-paint-offers; 'Choose shifts' opens the painter for mySurgeon aimed at that period; T tokens only; writes nothing", () => {
-      assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: myOfferRows, personId: mySurgeon, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");
+      assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");
       const i = src.indexOf("const offerNoticeBox = (list, where) => {"), j = src.indexOf("const isWeekendDay", i);
       assert.ok(i > 0 && j > i, "offerNoticeBox not found");
       const box = src.slice(i, j);
@@ -3433,7 +3433,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("U3c pins: offerRows / periodRows enter ctxInputs as offers / periods (with the memo deps) - the ONE wiring the engine, the day editor, the generator and the trade path share; no second buildContext input site adds them", () => {
       assert.ok(src.includes("      timeOffRows, availabilityRows, schedule, offers: offerRows, periods: periodRows,\n"), "ctxInputs must carry offers: offerRows, periods: periodRows");
       assert.ok(src.includes("}, [surgeons, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastFeedRows, eastForecastRows, eastOverrideRows, eastIdByCode, eastVacationReviewRows, offerRows, periodRows]);"), "the ctxInputs memo must depend on offerRows and periodRows (a realtime offer must reach the editor)");
-      assert.strictEqual((src.match(/offers: offerRows/g) || []).length, 1, "offers: offerRows appears once (the ctxInputs memo) - every consumer builds from ctxInputs");
+      // 9/27: the offer deadline notice (a display helper, helpers.offerDeadlineNotices - never a buildContext input) is the
+      // one other reader of offerRows; the pin counts it by name so any THIRD site still fails.
+      assert.strictEqual((src.match(/offers: offerRows/g) || []).length, 2, "offers: offerRows appears twice - the ctxInputs memo (every engine consumer builds from ctxInputs) and the 9/27 notice's offerDeadlineNotices call");
+      assert.strictEqual((src.match(/offerDeadlineNotices\(\{ periods: periodRows, offers: offerRows,/g) || []).length, 1, "the second offers: offerRows is the offerDeadlineNotices display call, not a buildContext input");
     });
     check("U3c pins: the day editor lists the offer standing per candidate from offerState on the DRAFT ctx - one editor-<role>-offers line per role block with an editor-offer-cand per pool surgeon (data-id / data-kind), the period's label named; an eligible dropdown option carries the short tag; REASON_WORDS glosses not-offered and softTag knows offered / outside-offers", () => {
       const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));

@@ -913,12 +913,13 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
 // at call time: every served period with status upcoming, a close after today, the person neither submitted (a row
 // inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the seed's; 42
 // when absent); urgent = within the largest remindDaysBeforeClose. Sorted by close. Today is the Central date.
+// `periods` defaults to periodStore; the notice step passes its own list (periodStore + two synthetic periods).
 const NOTICE_OP = (() => { try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; } })();
 const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
-const expOfferNotices = (person) => {
+const expOfferNotices = (person, periods) => {
   const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42;
   const urgentDays = Math.max(0, ...(Array.isArray(NOTICE_OP.remindDaysBeforeClose) ? NOTICE_OP.remindDaysBeforeClose : [14, 3]));
-  return periodStore.filter(p => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral
+  return (periods || periodStore).filter(p => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral
     && !offerStore.some(o => o.person_id === person && o.day >= p.start_day && o.day <= p.end_day) && !(p.rules_only_ids || []).includes(person)
     && noticeIsoDiff(todayCentral, p.offers_close_at) <= nd)
     .sort((a, b) => a.offers_close_at < b.offers_close_at ? -1 : 1)
@@ -4379,28 +4380,44 @@ try {
 
   // ---- 9/27: the offer deadline notice (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ----
   // A page as surgeon s2 (Burchett: not_started on the served period - his harness row 10/14 lies outside it). The
-  // expected rows are expOfferNotices("s2") (the restatement above), so nothing here depends on the calendar date:
-  // the served period closes 10/2, and from that day on the notice must be ABSENT everywhere (the step says the
-  // positive path is not exercised). Present: the nav's Paint offers carries offer-deadline-badge = the count; Mine
+  // expected rows are expOfferNotices("s2", noticePeriods) (the restatement above), so nothing here depends on the
+  // calendar date: the served period drops out after its 10/2 close, the two synthetic ones below never do. The nav's Paint offers carries offer-deadline-badge = the count; Mine
   // shows one offer-notice-row per period (data-period-id, the label, "in N days" / "tomorrow", the start M/D) inside
   // mine-offers, and "My offers (N upcoming day(s))" still reads; the Calendar shows the URGENT rows only; "Choose
   // shifts" opens the painter for s2 aimed at that period with zero offer writes; at 390 px no horizontal page scroll
   // and the button is >= 36 px tall; screenshots in both themes. The scheduler page (s1 is rules-only there) shows none.
+  // Review 9/27: the served period closes 10/2, so this page gets its OWN period list (GET call_periods answered by the
+  // extra handler; periodStore and every other step are untouched): periodStore + two synthetic upcoming periods, one
+  // closing today+10 (urgent) and one today+30 (inside the window, NOT urgent), both after the last served end, s2
+  // not_started on both - so the Calendar's "urgent rows only" branch is exercised on every run, whatever the date.
   {
     const NOTICE_UID = "00000000-0000-4000-8000-00000000d1e6";
     const NOTICE_PROFILE = { id: NOTICE_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
     const NOTICE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: NOTICE_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
-    const exp = expOfferNotices("s2");
+    const lastServedEnd = periodStore.map(p => p.end_day).sort().pop() || todayCentral;
+    const synthBase = isoAddDays(lastServedEnd > isoAddDays(todayCentral, 60) ? lastServedEnd : isoAddDays(todayCentral, 60), 1);
+    const synthPeriod = (n, start, end, close) => ({ id: "00000000-0000-4000-8000-0000000d1e6" + n, label: "Notice check " + n, start_day: start, end_day: end, offers_close_at: close, publish_by: isoAddDays(start, -28), status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "harness", created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" });
+    const noticePeriods = periodStore.concat([
+      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, 10)),
+      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, 30)),
+    ]);
+    const noticeRoute = async ({ req, url, json }) => {
+      if (url.pathname.startsWith("/rest/v1/call_periods") && req.method() === "GET") { await json(200, noticePeriods.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1)); return true; }
+      return false;
+    };
+    const exp = expOfferNotices("s2", noticePeriods);
     const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    let noticeThemeWas;   // the origin's storage is shared with the other pages: the dark leg puts the flag back below, thrown or not
     const np = await context.newPage();
     watchPage(np, "offer-notice");
     await np.setViewportSize({ width: 390, height: 844 });
     await np.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, NOTICE_JWT);
     await np.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
-    await np.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(NOTICE_PROFILE));
+    await np.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(NOTICE_PROFILE, noticeRoute));
     np.on("dialog", (d) => d.accept());
     try {
       await loadWithRetry(np, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (offer deadline notice)");
+      noticeThemeWas = await np.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } });
       await np.waitForSelector("text=Synced", { timeout: 30000 });
       await np.waitForTimeout(800);
       if ((await np.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the notice page shows a Setup tab - it is being treated as the scheduler");
@@ -4413,8 +4430,11 @@ try {
       await np.waitForTimeout(200);
       const calRows = await np.$$eval("[data-testid=offer-deadline-notice][data-where=calendar] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
       const expCal = exp.filter(n => n.urgent).map(n => n.id);
-      if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
-      else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}`);
+      const hidden = exp.filter(n => !n.urgent).map(n => n.id);
+      if (!hidden.length || !expCal.length) fail(`Offer deadline notice (s2): the synthetic periods should give at least one urgent and one non-urgent row - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
+      if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within the largest reminder offset belong there`);
+      else if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
+      else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
       // Mine: every row
       await np.click('button[data-tab="myschedule"]');
       await np.waitForSelector("[data-testid=mine-offers]", { timeout: 8000 });
@@ -4455,6 +4475,9 @@ try {
         ok("screenshots test/ui/out/offer-notice-390.png / -dark.png");
       }
     } catch (e) { fail("Offer deadline notice (s2): the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
+    finally {
+      if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+    }
     await np.close();
   }
 

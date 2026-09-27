@@ -4832,7 +4832,7 @@ function CallSchedule() {
   // surgeon sees every open period he has not answered (helpers.offerDeadlineNotices: not_started only - never rules_only
   // or submitted). No mySurgeon = nothing: followers, viewers, the office and ?public=1 never see it. Display only.
   // (the rows go in under a local name: the ctxInputs memo stays the one site that hands offerRows over as "offers" - data-layer U3c pin)
-  const offerNotices = useMemo(() => { const myOfferRows = offerRows; return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: myOfferRows, personId: mySurgeon, today: todayStr, groupRules }) : []; }, [mySurgeon, isPublicMode, periodRows, offerRows, todayStr, groupRules]);
+  const offerNotices = useMemo(() => { return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, today: todayStr, groupRules }) : []; }, [mySurgeon, isPublicMode, periodRows, offerRows, todayStr, groupRules]);
   // Setup -> Periods' publish-by line (helpers.offerPeriodLeadWarnings) reads the open slots from today on inside each
   // period's range (helpers.openSlots) - the app never flips a status to published, so "slots still open" is the reading.
   const prdOpenCounts = useMemo(() => {
@@ -9569,7 +9569,7 @@ function PeriodsSection({ css, periods, offers, roster, groupRules, today, nameO
   // 9/27: the per-period lead-time lines (short lead, publish-by due / passed with open slots) and "create the next
   // period" (helpers.offerPeriodLeadWarnings; openCounts = open slots from today on per period, counted by the parent).
   const lead = React.useMemo(() => offerPeriodLeadWarnings({ periods: all, today, groupRules, openCounts }), [all, today, groupRules, openCounts]);
-  const leadWords = (w) => w.kind === "short-lead" ? "Choices close only " + w.weeksBeforeStart + " weeks (" + w.daysBeforeStart + " days) before the start - the default is " + w.defaultWeeks + " weeks, so the schedule has less time to be built."
+  const leadWords = (w) => w.kind === "short-lead" ? "Choices close only " + (w.weeksBeforeStart > 0 ? w.weeksBeforeStart + " week" + (w.weeksBeforeStart === 1 ? "" : "s") + " (" + w.daysBeforeStart + " days)" : w.daysBeforeStart + " day" + (w.daysBeforeStart === 1 ? "" : "s")) + " before the start - the default is " + w.defaultWeeks + " weeks, so the schedule has less time to be built."
     : w.kind === "publish-due" ? "Publish by " + fmtMD(w.publishBy) + inWords(w.daysToPublish) + " - " + w.open + " slot" + (w.open === 1 ? " is" : "s are") + " still open in this period."
     : "Publish-by " + fmtMD(w.publishBy) + " has passed" + inWords(w.daysToPublish) + " - " + w.open + " slot" + (w.open === 1 ? " is" : "s are") + " still open in this period.";
   return (

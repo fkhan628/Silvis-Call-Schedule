@@ -1319,7 +1319,8 @@ once (Jan 2027 and Feb – Apr 2027 on 9/27) and each gets its row. `offerPeriod
 openCounts })` returns the scheduler's lines: `short-lead` (an upcoming period whose close is later than start − 7 ×
 `closeWeeksBeforeStart`), `publish-due` / `publish-passed` (publish-by 7 days or less away, or passed, while the range still
 has open slots from today on — the app never flips a status to `published`, so the parent counts `openSlots` over the
-schedule), and `next` ("create the next period (from M/D) - choices for it should close by M/D" once today ≥ (last end + 1)
+schedule; a row whose status does read `published` gets neither line — it has shipped and the open-shifts board reports its
+holes, review 9/27), and `next` ("create the next period (from M/D) - choices for it should close by M/D" once today ≥ (last end + 1)
 − 7 × `closeWeeksBeforeStart` − `noticeDaysBeforeClose`). UI (`index-source.html`, display only — no write, no send, no
 `confirm()`): for the linked surgeon (`mySurgeon && !isPublicMode`; followers, viewers, the office and `?public=1` have no
 `mySurgeon`) the `offer-deadline-notice` box lists every notice at the top of My schedule's `mine-offers` card (his own page

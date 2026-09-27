@@ -224,10 +224,13 @@ check("E6: offerPeriodLeadWarnings - short lead on the first period's 31-day lea
   eq(w.periods, { p0: [{ kind: "short-lead", closeAt: "2026-10-02", daysBeforeStart: 31, weeksBeforeStart: 4, defaultWeeks: 6 }] }, "served upcoming (the smoke's harness), Nov - Jan's close 10/2 is 31 days before 11/2 - later than start - 42; Jan / Feb - Apr sit exactly on start - 42 (strict >)");
   eq(w.next, null, "the next period (from 5/3/2027) needs no warning before 2/8/2027");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-27", groupRules: GR }).periods, {}, "as the seed reads (published), the first period's short lead is history - no line");
-  const due = H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-28", groupRules: GR, openCounts: { p0: 2 } }).periods.p0;
-  eq(due, [{ kind: "publish-due", publishBy: "2026-10-05", daysToPublish: 7, open: 2 }], "publish-by 10/5 is 7 days out and two slots are still open");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-27", groupRules: GR, openCounts: { p0: 2 } }).periods, {}, "8 days out: quiet");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-28", groupRules: GR, openCounts: { p0: 0 } }).periods, {}, "no open slot: nothing to publish");
+  const cl = SP.map(p => p.id === "p0" ? Object.assign({}, p, { status: "closed" }) : p);
+  const due = H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-28", groupRules: GR, openCounts: { p0: 2 } }).periods.p0;
+  eq(due, [{ kind: "publish-due", publishBy: "2026-10-05", daysToPublish: 7, open: 2 }], "closed (choices in, not yet published): publish-by 10/5 is 7 days out and two slots are still open");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-28", groupRules: GR, openCounts: { p0: 2 } }).periods, {}, "as the seed reads (published) the publish-by line is history too - the open-shifts board reports the holes");
+  eq(H.offerPeriodLeadWarnings({ periods: SP.map(p => p.id === "p0" ? Object.assign({}, p, { status: "generated" }) : p), today: "2026-10-06", groupRules: GR, openCounts: { p0: 2 } }).periods.p0, [{ kind: "publish-passed", publishBy: "2026-10-05", daysToPublish: -1, open: 2 }], "generated but not published: the passed line still shows");
+  eq(H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-27", groupRules: GR, openCounts: { p0: 2 } }).periods, {}, "8 days out: quiet");
+  eq(H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-28", groupRules: GR, openCounts: { p0: 0 } }).periods, {}, "no open slot: nothing to publish");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-12-08", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -1, open: 5 }], "Jan 2027's publish-by passed with slots open");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-01", groupRules: GR, openCounts: { p1: 5 } }).periods, {}, "a period that is over warns no more");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-07", groupRules: GR }).next, null, "2/7/2027: one day before the window");

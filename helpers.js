@@ -2920,6 +2920,7 @@ function offerDeadlineNotices(args) {
 //                     { closeAt, daysBeforeStart, weeksBeforeStart (whole weeks), defaultWeeks }
 //   publish-due     - publish_by within 7 days (0..7) while the range still has open slots: { publishBy, daysToPublish, open }
 //   publish-passed  - publish_by passed (the period not over) while the range still has open slots: same fields
+//   (neither for a period whose status reads published: it has shipped, and the open-shifts board reports its holes)
 // next = the next period is not on file: today >= (last period's end + 1) - 7 * closeWeeksBeforeStart -
 // noticeDaysBeforeClose; from = that start, closeBy = the freeze it would get from the rules. No periods -> null
 // (the empty state says so already). Nothing here reads the clock.
@@ -2944,7 +2945,7 @@ function offerPeriodLeadWarnings(args) {
       list.push({ kind: "short-lead", closeAt: close, daysBeforeStart: d, weeksBeforeStart: Math.floor(d / 7), defaultWeeks: N.closeWeeks });
     }
     const open = Number(counts[key]) || 0;
-    if (pub && b.end >= today && open > 0) {
+    if (pub && status !== "published" && b.end >= today && open > 0) {
       const d = suDaysBetween(today, pub);
       if (d <= 7) list.push({ kind: d < 0 ? "publish-passed" : "publish-due", publishBy: pub, daysToPublish: d, open });
     }
