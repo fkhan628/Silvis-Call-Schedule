@@ -1999,8 +1999,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(de.includes('{eastDetailsVisible && (east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map('), "the East block (lines + placeholder) is the scheduler's only");
     assert.ok(de.includes('{eastDetailsVisible && cur && cur.lockHolder && cur.conflicts.length > 0 && <span data-testid={"editor-" + role + "-lock-breaks"}'), "the 'locked holder breaks' line is the scheduler's only");
     assert.strictEqual((de.match(/locked holder breaks: /g) || []).length, 1, "one 'locked holder breaks' line");
-    assert.ok(de.includes('entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source'), "a derived-week row's source reads 'generated' to non-schedulers");
-    assert.ok(de.includes('{entry && entry.source && <div data-testid="editor-source">Source: '), "the Source line carries data-testid editor-source (the smoke reads it)");
+    assert.ok(de.includes('entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source'), "a derived-week row's source reads 'generated' without eastDetailsVisible (defence in depth: since 9/27 the Source line is canEdit-only)");
+    // Day-click summary (9/27): the Source line is the scheduler's only now (canEdit); the east-derived masking above stays as defence in depth
+    assert.ok(de.includes('{canEdit && entry && entry.source && <div data-testid="editor-source">Source: '), "the Source line carries data-testid editor-source (the smoke reads it) and is the scheduler's only (canEdit)");
     // every East word the editor can render outside canEdit-only parts sits behind eastDetailsVisible. Review 9/25: the
     // scan starts at roleBlock (the role rows - "locked holder breaks", "Not eligible ... (East vacation, ...)"), not at
     // the final return; a line is gated when it names eastDetailsVisible / canEdit itself or sits inside a JSX block
@@ -2075,6 +2076,175 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // CLAUDE.md is the rule this cites
     const claudeMd = fs.readFileSync(path.join(ROOT, "CLAUDE.md"), "utf8");
     assert.ok(/Notes in anon-readable tables carry no reasons/.test(claudeMd), "CLAUDE.md still states the rule Item E3 applies to override notes");
+  });
+
+  // Day-click summary (Faraz 9/27: "less busyness when clicking on the calendar - me as the scheduler needs the full view,
+  // users don't need as much"). DayEditor is lifted verbatim (with the confirm badge's predicate / style and Padlock),
+  // transpiled by the build's own Babel (preset-react, classic runtime) and RUN against a stand-in React whose
+  // createElement returns plain nodes, in a vm realm holding config.js, helpers.js and app-styles.js. Rules-engine
+  // calls are stubs that count their calls. The scheduler (canEdit) keeps every part of the full editor; everyone else
+  // gets the summary, and a linked surgeon's actions follow his day.
+  check("Day-click summary (9/27): the scheduler's day editor is the full editor; every other viewer gets a summary (full names, You chip, OPEN / '-', no offers / Source / eligibility plumbing / padlock / keyboard hint) with a linked surgeon's Propose a trade + Give away on his own day and See it on Open shifts on an OPEN slot", () => {
+    const babel = require("@babel/core");
+    const a0 = src.lastIndexOf("const AWAITING_CONFIRMATION_MARKER = ");
+    const a1 = src.indexOf("// --- Client versions", a0);
+    const d0 = src.indexOf("function DayEditor(props) {"), d1 = src.indexOf("// ===================== SETUP VIEW COMPONENTS");
+    assert.ok(a0 > 0 && a1 > a0 && d0 > a1 && d1 > d0, "the confirm-badge block, Padlock and DayEditor are where the test expects them");
+    const jsx = src.slice(a0, a1) + "\n" + src.slice(d0, d1);
+    const code = babel.transformSync(jsx, { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+    const calls = { eligibility: 0, offerState: 0 };
+    const box = {
+      console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout,
+      atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+      localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+      fetch: () => Promise.reject(new Error("no network in this test")),
+      document: { activeElement: null, contains: () => false }, confirm: () => true,
+    };
+    box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+    vm.createContext(box);
+    for (const f of ["config.js", "helpers.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+    const FAKECTX = { holidayByDay: {} };
+    const HOL_DAY = "2099-11-26";
+    Object.assign(box, {
+      React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment", useMemo: (f) => f(), useState: (v) => [typeof v === "function" ? v() : v, () => {}], useRef: (v) => ({ current: v === undefined ? null : v }), useEffect: () => {} },
+      safeBuildContext: () => ({ ctx: FAKECTX, error: null }),
+      isHolidayDay: (c, d) => d === HOL_DAY ? { name: "Thanksgiving", tier: "major", days: ["2099-11-26", "2099-11-27"] } : null,
+      eastStatusLines: () => [],
+      eligibility: () => { calls.eligibility++; return { ok: true, hard: [], soft: [] }; },
+      offerState: () => { calls.offerState++; return { period: { label: "Test period" } }; },
+      offerCandidateWords: () => ({ kind: "rules", words: "rules (chose go by my rules)", tag: "rules" }),
+      reasonLabel: (c) => String(c), softTag: () => null,
+    });
+    const DayEditor = vm.runInContext(code + "\n;DayEditor", box, { filename: "DayEditor.jsx" });
+    const Padlock = vm.runInContext("Padlock", box);
+    const roster = [
+      { id: "s1", name: "Khan", code: "FAK", fullName: "Faraz Khan", active: true },
+      { id: "s2", name: "Burchett", code: "MAB", fullName: "Michael Burchett", active: true },
+      { id: "s3", name: "Acton", code: "BDA", fullName: "Benjamin Acton", active: true },
+      { id: "x1", name: "Locum", code: "LOC", fullName: "", active: true, type: "external" },
+    ];
+    const nm = (id) => (roster.find(r => r.id === id) || {}).name || id;
+    const colorOf = vm.runInContext("(roster) => (id) => rosterColors(roster.find(r => r.id === id), 0)", box)(roster);
+    const FUT = "2099-01-06", PAST = "2000-01-04";
+    const got = { give: [], open: 0, trade: [] };
+    const render = (o) => DayEditor({
+      day: o.day || FUT, entry: o.entry === undefined ? { primary: "s2", backup: null, primaryLocked: true, backupLocked: false, source: "manual", externalCover: null, note: "awaiting confirmation - check with the office" } : o.entry,
+      roster, ctxInputs: { schedule: {} }, ctxError: o.ctxError || null, canEdit: !!o.canEdit, eastDetailsVisible: !!o.canEdit, rulesImported: o.rulesImported !== false,
+      isPublicMode: !!o.pub, nameOf: nm, codeOf: (id) => id, colorOf, mySurgeon: o.me || "", vacationNames: o.vac || [],
+      onSave: () => {}, onCancel: () => {}, onNav: () => {}, onTrade: (d, r) => got.trade.push(d + " " + r), suggestTrade: () => ({ to: "s3", name: "Acton" }),
+      css: vm.runInContext("css", box), dk: !!o.dk, focusExternal: false,
+      onGive: (d, r) => got.give.push(d + " " + r), onOpenShifts: () => { got.open++; },
+      openOnBoard: o.board === undefined ? (() => true) : o.board,
+    });
+    const kids = (n) => (n && typeof n === "object" && !Array.isArray(n) ? n.children : Array.isArray(n) ? n : []).flat(Infinity);
+    const all = (n, out = []) => { if (Array.isArray(n)) { n.forEach(c => all(c, out)); return out; } if (n && typeof n === "object") { out.push(n); if (typeof n.type !== "function") kids(n).forEach(c => all(c, out)); } return out; };
+    const text = (n) => Array.isArray(n) ? n.map(text).join("") : n === null || n === undefined || n === false || n === true ? "" : typeof n === "object" ? (typeof n.type === "function" ? "" : kids(n).map(text).join("")) : String(n);
+    const by = (tree, id) => all(tree).filter(n => n.props["data-testid"] === id);
+    const one = (tree, id) => { const l = by(tree, id); assert.strictEqual(l.length, 1, "exactly one " + id + " (got " + l.length + ")"); return l[0]; };
+    const none = (tree, ids, who) => ids.forEach(id => assert.strictEqual(by(tree, id).length, 0, who + ": no " + id));
+    const PLUMBING = ["editor-source", "editor-primary-offers", "editor-backup-offers", "editor-offer-cand", "editor-eval-error", "editor-primary", "editor-backup", "editor-save", "editor-note", "editor-external", "editor-lock-primary", "editor-clear-primary", "editor-primary-reasons"];
+
+    // (1) the scheduler: the full editor, unchanged (a surgeon too - Faraz is s1 - but no summary parts)
+    calls.eligibility = 0; calls.offerState = 0;
+    const S = render({ canEdit: true, me: "s1", rulesImported: false, ctxError: "boom" });
+    const sText = text(S);
+    ["editor-primary", "editor-backup", "editor-source", "editor-primary-offers", "editor-backup-offers", "editor-save", "editor-note", "editor-external", "confirm-badge"].forEach(id => one(S, id));
+    assert.ok(/^Source: manual$/.test(text(one(S, "editor-source"))), "the scheduler reads the Source line");
+    assert.ok(sText.includes("Not in a holiday unit.") && sText.includes("Vacations: nobody off") && sText.includes("Eligibility unavailable: boom") && sText.includes("Rules not imported yet"), "the scheduler keeps the holiday / vacations / eligibility lines");
+    const hint = all(S).filter(n => text(n) === "Esc closes - arrow keys move a day");
+    assert.ok(hint.length === 1 && hint[0].props.className === "editor-kbd-hint", "the keyboard hint is the scheduler's, with the class the <=600px rule hides");
+    assert.ok(all(S).some(n => n.type === Padlock), "the scheduler's locked row keeps its padlock");
+    assert.ok(calls.eligibility > 0 && calls.offerState > 0, "the scheduler's editor runs the eligibility sweeps and the offers read");
+    none(S, ["editor-you", "editor-give", "editor-open-shifts", "editor-off", "editor-primary-open"], "the scheduler");
+    const sTrade = one(S, "editor-trade");
+    assert.ok(sTrade.props.style.textDecoration === "underline" && sText.includes("Propose a trade for this day - suggested: Acton"), "the scheduler's trade link is the link it was");
+    assert.ok(all(one(S, "editor-footer")).filter(n => n.type === "button").map(text).includes("Cancel"), "the scheduler's footer reads Cancel");
+
+    // (2) the surgeon on his own day (s2 holds primary; backup empty on a future day)
+    calls.eligibility = 0; calls.offerState = 0;
+    const O = render({ me: "s2" });
+    const oText = text(O);
+    const pBlock = one(O, "editor-primary-block"), bBlock = one(O, "editor-backup-block");
+    assert.ok(text(pBlock).includes("Michael Burchett") && by(pBlock, "editor-you").length === 1 && pBlock.props["data-mine"] === "1", "his row names him in full and carries the You chip");
+    assert.strictEqual(by(O, "editor-you").length, 1, "one You chip");
+    const you = one(O, "editor-you");
+    assert.ok(you.props.style.color === vm.runInContext("THEME.light.accentText", box) && you.props.style.background === vm.runInContext("THEME.light.surface", box) && you.props.style.border === "1px solid " + vm.runInContext("THEME.light.accent", box), "the You chip is drawn in THEME tokens (accentText on the card, accent border - the text-class pair in contrast.mjs)");
+    assert.ok(text(one(bBlock, "editor-backup-open")) === "OPEN", "an empty future slot reads OPEN");
+    assert.strictEqual(by(pBlock, "confirm-badge").length, 1, "the awaiting-confirmation badge stays for the surgeon (his shift is not final)");
+    assert.ok(by(pBlock, "editor-not-final").length === 1 && text(one(pBlock, "editor-not-final")) === "(not final yet)" && one(pBlock, "editor-not-final").props.style.color === vm.runInContext("THEME.light.muted", box), "the summary words the badge beside it (a phone has no hover title)");
+    assert.strictEqual(by(bBlock, "editor-not-final").length, 0, "no words where there is no badge");
+    none(O, PLUMBING, "the surgeon's summary");
+    assert.ok(!all(O).some(n => n.type === Padlock), "no padlock in the summary");
+    assert.strictEqual(calls.eligibility + calls.offerState, 0, "the summary runs no eligibility sweep and no offers read");
+    assert.ok(!oText.includes("Not in a holiday unit.") && !oText.includes("Vacations:") && !oText.includes("No note.") && !oText.includes("arrow keys move a day") && !oText.includes("Rules not imported"), "no filler / plumbing lines in the summary");
+    assert.strictEqual(text(one(O, "editor-note-view")), "Note: awaiting confirmation - check with the office", "the note shows when there is one");
+    const oTrade = one(O, "editor-trade");
+    assert.ok(oTrade.type === "button" && oTrade.props.style.minHeight === 36 && oTrade.props.style.textDecoration === undefined && text(oTrade) === "Propose a trade for this day - suggested: Acton", "his Propose a trade is a real button (36px) with the same words");
+    oTrade.props.onClick(); assert.deepStrictEqual(got.trade.slice(-1), [FUT + " primary"], "Propose a trade hands the day and his role on");
+    const give = one(O, "editor-give");
+    assert.ok(give.type === "button" && give.props.style.minHeight === 36 && text(give) === "Give away", "Give away is a 36px button");
+    give.props.onClick(); assert.deepStrictEqual(got.give, [FUT + " primary"], "Give away hands the day and his role to onGive");
+    none(O, ["editor-open-shifts"], "his own day (he holds primary: the board's Take is off for him on the OPEN backup)");
+    const oFoot = all(one(O, "editor-footer")).filter(n => n.type === "button").map(text);
+    assert.ok(oFoot.includes("Close") && !oFoot.includes("Cancel") && !oFoot.includes("Save"), "the summary's footer closes with Close: " + JSON.stringify(oFoot));
+
+    // (3) a surgeon on someone else's day: no You chip, no trade / give; the OPEN slot still leads to the board
+    const X = render({ me: "s3" });
+    none(X, ["editor-you", "editor-trade", "editor-give"].concat(PLUMBING), "a surgeon on another's day");
+    const os = one(X, "editor-open-shifts");
+    assert.ok(os.props["data-roles"] === "backup" && text(os) === "See it on Open shifts" && os.props.style.minHeight === 36, "the OPEN backup the board lists offers the way to the board");
+    os.props.onClick(); assert.strictEqual(got.open, 1, "See it on Open shifts calls onOpenShifts");
+    // (3b) an OPEN slot the board does not list (a day after the published block with no schedule row): no board link
+    const asked = [];
+    const NB = render({ me: "s3", entry: null, board: (d, r) => { asked.push(d + " " + r); return false; } });
+    assert.ok(text(one(NB, "editor-primary-block")).includes("OPEN") && text(one(NB, "editor-backup-block")).includes("OPEN"), "an unscheduled future day reads OPEN");
+    none(NB, ["editor-open-shifts"], "a day the board does not list");
+    assert.deepStrictEqual(asked, [FUT + " primary", FUT + " backup"], "the board predicate is asked about each OPEN role of the day");
+    const HALF = render({ me: "s3", entry: null, board: (d, r) => r === "backup" });
+    assert.strictEqual(one(HALF, "editor-open-shifts").props["data-roles"], "backup", "only the roles the board lists are named");
+    // (4) the office / a viewer / a follower (no roster link) and ?public=1 (even with a roster id passed): no action at all
+    for (const [who, o] of [["a viewer / the office / a follower", {}], ["?public=1", { pub: true, me: "s2" }]]) {
+      const V = render(o);
+      assert.strictEqual(by(V, "editor-primary-block").length + by(V, "editor-backup-block").length, 2, who + ": both role rows");
+      none(V, ["editor-you", "editor-trade", "editor-give", "editor-open-shifts"].concat(PLUMBING), who);
+      assert.ok(text(V).includes("Michael Burchett"), who + ": the holder's full name");
+    }
+    // (5) a past day: the empty slot reads '-' (the grid's blank), no board link, and no Give away (an accept on a past
+    // day is refused - TRADE_PAST); the trade link keeps its pinned condition
+    const P = render({ me: "s2", day: PAST });
+    none(P, ["editor-backup-open", "editor-open-shifts", "editor-give"], "a past day");
+    one(P, "editor-trade");
+    assert.strictEqual(text(one(P, "editor-backup-block")).replace("Backup", ""), "-", "a past empty slot reads '-'");
+    // (6) outside cover and an outside surgeon; the holiday unit, who is off and no note
+    const E = render({ day: HOL_DAY, me: "s3", vac: ["Acton"], entry: { primary: null, backup: "x1", primaryLocked: false, backupLocked: false, source: "manual-external", externalCover: "Atwell", note: null } });
+    assert.ok(text(one(E, "editor-primary-block")).includes("Atwell (outside surgeon)") && text(one(E, "editor-backup-block")).includes("Locum (outside surgeon)"), "outside cover and an outside surgeon read '(outside surgeon)'");
+    assert.ok(text(E).includes("Thanksgiving holiday unit (major)") && text(one(E, "editor-off")) === "Off: Acton", "the holiday unit and who is off show when there is one");
+    none(E, ["editor-note-view", "editor-open-shifts", "confirm-badge"], "no note / nothing OPEN / nothing awaiting");
+    const N = render({ me: "s3" });
+    none(N, ["editor-off"], "nobody off");
+    // (7) dark theme: the You chip and OPEN read the dark tokens
+    const D = render({ me: "s2", dk: true });
+    assert.ok(one(D, "editor-you").props.style.color === vm.runInContext("THEME.dark.accentText", box) && one(D, "editor-backup-open").props.style.color === vm.runInContext("THEME.dark.open", box), "dark: the chip and OPEN read THEME.dark");
+  });
+  check("Day-click summary (9/27) pins: proposeGiveForDay (after editorNav, proposeTradeForDay untouched) opens the card in give mode; the editor mount, My schedule's mine-give, the coverage strip's board link and the <=600px keyboard-hint rule", () => {
+    const en = src.indexOf("  const editorNav = (delta) => {"), pg = src.indexOf("  const proposeGiveForDay = (day, role, from) => {");
+    assert.ok(en > 0 && pg > en && pg > src.indexOf("const proposeTradeForDay = (day, role, pick) => {"), "proposeGiveForDay sits after editorNav");
+    const give = src.slice(pg, src.indexOf("\n  };\n", pg));
+    for (const w of ["setTradeDay(day);", 'setTradeRole(role === "backup" ? "backup" : "primary");', 'setTradeKind("give");', 'setTradeReturnDay("");', "if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);", "else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);", "setEditorDay(null);", 'setView("timeoff");']) assert.ok(give.includes(w), "proposeGiveForDay: " + w);
+    assert.ok(src.includes('  const openShiftsBoard = () => {\n    setEditorDay(null);\n    setView("openshifts");\n  };'), "openShiftsBoard closes the editor and shows the board");
+    assert.ok(src.includes("onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard} openOnBoard={(d, r) => boardKeys.has(openSlotKey(d, r))}"), "the editor mount passes both callbacks and the board's slot predicate");
+    assert.ok(src.includes("const boardKeys = useMemo(() => new Set(boardSlots.map(s => openSlotKey(s.day, s.role))), [boardSlots]);") && src.indexOf("const boardKeys = useMemo(") > src.indexOf("const boardSlots = board.slots;"), "boardKeys is the board's own slot list");
+    const mine = src.slice(src.indexOf("const daysBlock = (who, own) => {"), src.indexOf("// end of daysBlock"));
+    assert.ok(mine.includes('{own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}'), "My schedule's own rows carry Give away (T tokens, the row owner as From), never the Following view's");
+    const strip = src.slice(src.indexOf("Coverage at a glance (Prompt 11): every count links"), src.indexOf('data-testid="cal-month"'));
+    assert.ok(strip.includes("const toBoard = !isScheduler && !isPublicMode;") && strip.includes("if (toBoard) openShiftsBoard(); else goToDay(first);"), "a signed-in non-scheduler's open count leads to the board; the scheduler and ?public=1 open the day");
+    const media = src.slice(src.indexOf("@media (max-width: 600px) {", src.indexOf(".cal-grid {")), src.indexOf("</style>"));
+    assert.ok(media.includes(".editor-kbd-hint { display: none; }"), "the keyboard hint hides at <= 600px");
+    const de = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+    assert.ok(de.includes("focusExternal, onGive, onOpenShifts, openOnBoard } = props;"), "DayEditor reads onGive / onOpenShifts / openOnBoard");
+    assert.ok(de.includes("{!isPublicMode && !canEdit && myRole && day >= todayC && typeof onGive === \"function\" && (") && de.includes("{!isPublicMode && !canEdit && mySurgeon && !myRole && boardRoles.length > 0 && typeof onOpenShifts === \"function\" && ("), "Give away is today onward; the board link needs a board-listed OPEN slot on a day he does not hold");
+    assert.ok(de.includes("    if (!canEdit) return null; // day-click summary") && de.indexOf("    if (!canEdit) return null; // day-click summary") < de.indexOf("    return period ? { period, items } : null;\n  }, [ctx, day, roster, draft]);"), "the offers read returns early for non-editors (the memo's pinned tail kept)");
+    assert.ok(de.includes('const opts = React.useMemo(() => canEdit ? { primary: evalRole("primary"), backup: evalRole("backup") } : { primary: [], backup: [] }, [ctx, day, draft, roster, canEdit]);'), "the eligibility sweeps run for the scheduler only");
   });
 
   // Item E4 (Faraz 9/26: "the East details still visible to non-schedulers. The open-shifts board's chip hovers, the Take

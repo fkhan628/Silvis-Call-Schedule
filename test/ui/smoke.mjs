@@ -2320,6 +2320,16 @@ try {
         breaks: Array.from(document.querySelectorAll("[data-testid=day-editor] [data-testid$=-lock-breaks]")).map(e => e.textContent.replace(/\s+/g, " ").trim()),
         blocks: document.querySelectorAll("[data-testid=day-editor] [data-testid=editor-primary-block], [data-testid=day-editor] [data-testid=editor-backup-block]").length,
         source: ((document.querySelector("[data-testid=day-editor] [data-testid=editor-source]") || {}).textContent || "").replace(/\s+/g, " ").trim(),
+        // Day-click summary (9/27): what separates the scheduler's full editor from everyone else's summary
+        offers: document.querySelectorAll("[data-testid=day-editor] [data-testid=editor-primary-offers], [data-testid=day-editor] [data-testid=editor-backup-offers]").length,
+        selects: document.querySelectorAll("[data-testid=day-editor] [data-testid=editor-primary], [data-testid=day-editor] [data-testid=editor-backup]").length,
+        save: !!document.querySelector("[data-testid=day-editor] [data-testid=editor-save]"),
+        kbdHint: Array.from(document.querySelectorAll("[data-testid=day-editor] span")).some(e => /arrow keys move a day/.test(e.textContent || "")),
+        filler: /Not in a holiday unit\.|Vacations: nobody off|No note\./.test((document.querySelector("[data-testid=day-editor] [role=dialog]") || {}).textContent || ""),
+        you: document.querySelectorAll("[data-testid=day-editor] [data-testid=editor-you]").length,
+        trade: !!document.querySelector("[data-testid=day-editor] [data-testid=editor-trade]"),
+        give: !!document.querySelector("[data-testid=day-editor] [data-testid=editor-give]"),
+        openShifts: !!document.querySelector("[data-testid=day-editor] [data-testid=editor-open-shifts]"),
       }));
       await pg.keyboard.press("Escape");
       await pg.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
@@ -2418,6 +2428,20 @@ try {
       fail("Item E3 (scheduler): the scheduler pass threw: " + errLine(e));
       if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
     }
+    // Day-click summary (9/27): the scheduler's day editor is still the FULL editor (Faraz: "me as the scheduler needs the
+    // full view") - both selects, Save, the keyboard hint in the DOM (hidden only at <= 600px), the Source line and the
+    // filler lines, and none of the summary's parts (You chip, Give away, See it on Open shifts). Its own try on
+    // E3_LOCK_DAY (10/15), which needs neither a derived East week nor East vacations, so it runs even when the E3
+    // scheduler pass above throws.
+    try {
+      const eF = await e3Editor(page, E3_LOCK_DAY);
+      const bad = [eF.selects !== 2 ? eF.selects + " select(s)" : "", !eF.save ? "no Save" : "", !eF.kbdHint ? "no keyboard hint" : "", !/^Source: /.test(eF.source) ? "no Source line ('" + eF.source + "')" : "", !eF.filler ? "no 'Not in a holiday unit.' / 'Vacations: ...' line" : "", eF.you ? "a You chip" : "", eF.give ? "Give away" : "", eF.openShifts ? "See it on Open shifts" : ""].filter(Boolean);
+      if (bad.length) fail(`Day-click summary (scheduler, ${E3_LOCK_DAY}): the full editor lost a part or gained a summary part - ${bad.join(", ")}`);
+      else ok(`Day-click summary (scheduler, ${E3_LOCK_DAY}): the full editor stays - 2 selects, Save, keyboard hint, '${eF.source}', the filler lines; offers lines ${eF.offers}${eF.offers ? "" : " (none this run - the offers lines are checked by U3c)"}; no You chip / Give away / Open shifts link`);
+    } catch (e) {
+      fail("Day-click summary (scheduler): " + errLine(e));
+      if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+    }
 
     // (2) surgeon, Khan as a surgeon, coordinator, viewer, ?public=1: nothing East on the same surfaces
     const e3Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
@@ -2438,8 +2462,8 @@ try {
       return route.continue({ headers });
     };
     const ROLES_E3 = [
-      { tag: "surgeon", kind: "surgeon", file: "surgeon", jwt: e3Jwt(SURG3_UID, "surgeon@example.com"), route: routeSupabaseAs(SURG3_PROFILE), totals: true },
-      { tag: "Khan as surgeon", kind: "surgeon", file: "khan-surgeon", jwt: e3Jwt(KHAN3_UID, "khan-surgeon@example.com"), route: routeSupabaseAs(KHAN3_PROFILE), totals: true, eastPerson: true },
+      { tag: "surgeon", kind: "surgeon", pid: "s2", file: "surgeon", jwt: e3Jwt(SURG3_UID, "surgeon@example.com"), route: routeSupabaseAs(SURG3_PROFILE), totals: true },
+      { tag: "Khan as surgeon", kind: "surgeon", pid: "s1", file: "khan-surgeon", jwt: e3Jwt(KHAN3_UID, "khan-surgeon@example.com"), route: routeSupabaseAs(KHAN3_PROFILE), totals: true, eastPerson: true },
       { tag: "coordinator", kind: "coordinator", file: "coordinator", jwt: COORD_JWT, route: routeSupabaseAs(COORD_PROFILE), totals: true },
       { tag: "viewer", kind: "viewer", file: "viewer", jwt: VIEWER_JWT, route: routeSupabaseAs(VIEWER_PROFILE), totals: true },
       { tag: "?public=1", kind: "public", file: "public", jwt: null, route: publicRoute, totals: false, url: BASE + "?public=1" },
@@ -2506,8 +2530,115 @@ try {
           const ed = await e3Editor(rp, d);
           if (ed.blocks !== 2) fail(`${T}, day editor ${d}: the editor did not render its two role blocks (${ed.blocks}) - an empty editor proves nothing`);
           else if (ed.hits.length || ed.east.length || ed.eastVac || ed.breaks.length) fail(`${T}, day editor ${d}: East / override detail shown - ${[hitsText(ed.hits), ed.east.length ? ed.east.length + " east-status line(s): " + ed.east[0].slice(0, 80) : "", ed.breaks.length ? "'" + ed.breaks[0].slice(0, 80) + "'" : ""].filter(Boolean).join("; ")}`);
-          else if (d === E3_SRC_DAY && ed.source !== "Source: generated") fail(`${T}, day editor ${d}: the served 'east-derived' row must read 'Source: generated' here, got '${ed.source}'`);
-          else ok(`${T}, day editor ${d}: no East line, no East-vacation state, no 'locked holder breaks'${d === E3_LOCK_DAY && sched.lockBreaks ? " (the scheduler's editor shows it)" : ""}${d === E3_VAC_DAY && facts.eastVac[d] ? " (the rules hold " + facts.eastVac[d] + " East vacation here)" : ""}${d === E3_SRC_DAY ? " - '" + ed.source + "' (the row's source is east-derived)" : ""}`);
+          // Day-click summary (9/27): no Source line at all for a non-scheduler (it read 'Source: generated' on the east-derived row before)
+          else if (ed.source) fail(`${T}, day editor ${d}: a non-scheduler's summary must carry no Source line, got '${ed.source}'`);
+          else ok(`${T}, day editor ${d}: no East line, no East-vacation state, no 'locked holder breaks'${d === E3_LOCK_DAY && sched.lockBreaks ? " (the scheduler's editor shows it)" : ""}${d === E3_VAC_DAY && facts.eastVac[d] ? " (the rules hold " + facts.eastVac[d] + " East vacation here)" : ""}, no Source line${d === E3_SRC_DAY ? " (the row's source is east-derived)" : ""}`);
+          // Day-click summary (9/27): the summary - no offers lines, no selects / Save, no keyboard hint, no filler lines;
+          // the office, a viewer and ?public=1 get no action and no You chip
+          const busy = [ed.offers ? ed.offers + " offers line(s)" : "", ed.selects ? ed.selects + " select(s)" : "", ed.save ? "Save" : "", ed.kbdHint ? "the keyboard hint" : "", ed.filler ? "a filler line ('Not in a holiday unit.' / 'Vacations: nobody off' / 'No note.')" : ""].filter(Boolean);
+          const acts = R.kind === "surgeon" ? [] : [ed.you ? "a You chip" : "", ed.trade ? "Propose a trade" : "", ed.give ? "Give away" : "", ed.openShifts ? "See it on Open shifts" : ""].filter(Boolean);
+          if (busy.length || acts.length) fail(`Day-click summary (${R.tag}), day editor ${d}: the summary shows ${busy.concat(acts).join(", ")}`);
+          else ok(`Day-click summary (${R.tag}), day editor ${d}: the summary - no offers lines, no selects / Save, no keyboard hint, no filler${R.kind === "surgeon" ? (ed.you ? " (his own day: You chip" + (ed.trade && ed.give ? ", Propose a trade + Give away)" : ")") : "") : ", no action / You chip"}`);
+        }
+        // Day-click summary (9/27): a surgeon on his OWN day (a day the served rows give him in November 2026 or, if he
+        // has none there, December; an upcoming one when the month has it) - the You chip on his row, Propose a trade +
+        // (today onward) Give away as real buttons (>= 36px), no offers / Source; Give away opens the Propose card in give
+        // mode. Then an OPEN slot the board lists, on a day he does not hold, offers 'See it on Open shifts', which lands
+        // on the board, and the coverage strip's open count leads to the board too (not to a read-only day).
+        if (R.kind === "surgeon") {
+          const pid = R.pid;
+          const DS = `Day-click summary (${R.tag} ${pid})`;
+          try {
+            const todayCal = await rp.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
+            let own = null;
+            for (const [yy, mm] of [[2026, 10], [2026, 11]]) {
+              await e3Month(rp, yy, mm);
+              const cells = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup"), pv: e.getAttribute("data-preview") })));
+              const mine = cells.filter(c => !c.pv && c.day.slice(5, 7) === String(mm + 1).padStart(2, "0") && (c.p === pid || c.b === pid));
+              own = mine.find(c => todayCal && c.day >= todayCal) || mine[0] || null;
+              if (own) break;
+            }
+            if (!own) console.log(`     (${DS}: no day of ${pid} in November / December 2026 on this page - the own-day summary is not exercised)`);
+            else {
+              const role = own.p === pid ? "primary" : "backup";
+              await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${own.day}"]`);
+              await rp.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
+              await rp.waitForTimeout(150);
+              const od = await rp.evaluate((role) => {
+                const dlg = document.querySelector("[data-testid=day-editor] [role=dialog]");
+                const q = (sel) => dlg.querySelector(sel);
+                const h = (el) => el ? Math.round(el.getBoundingClientRect().height) : 0;
+                return {
+                  youIn: !!q(`[data-testid=editor-${role}-block] [data-testid=editor-you]`), you: dlg.querySelectorAll("[data-testid=editor-you]").length,
+                  trade: q("[data-testid=editor-trade]") ? { tag: q("[data-testid=editor-trade]").tagName, text: q("[data-testid=editor-trade]").textContent.trim(), h: h(q("[data-testid=editor-trade]")) } : null,
+                  give: q("[data-testid=editor-give]") ? { text: q("[data-testid=editor-give]").textContent.trim(), h: h(q("[data-testid=editor-give]")) } : null,
+                  offers: dlg.querySelectorAll("[data-testid$=-offers]").length, source: !!q("[data-testid=editor-source]"),
+                  blocks: dlg.querySelectorAll("[data-testid=editor-primary-block], [data-testid=editor-backup-block]").length,
+                };
+              }, role);
+              if (od.blocks !== 2 || !od.youIn || od.you !== 1) fail(`${DS}, ${own.day} (${role}): his row must carry the one You chip (blocks ${od.blocks}, chip on his row ${od.youIn}, chips ${od.you})`);
+              // Give away only today onward (a give on a past day is refused at accept - TRADE_PAST)
+              const upcoming = !!todayCal && own.day >= todayCal;
+              if (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || (upcoming ? !od.give || od.give.text !== "Give away" : !!od.give)) fail(`${DS}, ${own.day}: Propose a trade${upcoming ? " + Give away" : " and no Give away (a past day)"} expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
+              else if (od.offers || od.source) fail(`${DS}, ${own.day}: the summary still shows ${od.offers} offers line(s) / a Source line (${od.source})`);
+              else ok(`${DS}, ${own.day} (${role}): You chip on his row, '${od.trade.text.slice(0, 70)}' (${od.trade.h}px)${upcoming ? " + 'Give away' (" + od.give.h + "px)" : ", no Give away (a past day)"}, no offers lines, no Source line`);
+              if (upcoming && od.give) {
+                await rp.click("[data-testid=day-editor] [data-testid=editor-give]");
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+                await rp.waitForSelector("[data-testid=trade-kind-give]", { timeout: 8000 });
+                const gp = await rp.$eval("[data-testid=trade-kind-give]", el => el.getAttribute("aria-pressed"));
+                if (gp !== "true") fail(`${DS}: Give away should open the Propose card in give mode (trade-kind-give aria-pressed true), got ${gp}`);
+                else ok(`${DS}: Give away closed the editor and opened the Propose card in give mode`);
+              } else {
+                console.log(`     (${DS}: ${own.day} is past - the Give away click is not exercised)`);
+                await rp.keyboard.press("Escape");
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+              }
+            }
+            // an OPEN slot the board lists (read from the board's own rows), on a day he does not hold -> the board
+            await rp.click('button[data-tab="openshifts"]');
+            await rp.waitForSelector("[data-testid=openshifts-card]", { timeout: 8000 });
+            const boardDays = await rp.$$eval("[data-testid=openshifts-table] tbody tr[data-day]", els => Array.from(new Set(els.map(e => e.getAttribute("data-day")))));
+            await rp.click('button[data-tab="calendar"]');
+            let openDay = null;
+            for (const [yy, mm] of [[2026, 10], [2026, 11]]) {
+              await e3Month(rp, yy, mm);
+              openDay = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", (els, a) => { const c = els.find(e => e.getAttribute("data-open") && !e.getAttribute("data-preview") && e.getAttribute("data-day").slice(5, 7) === a.mo && a.board.includes(e.getAttribute("data-day")) && e.getAttribute("data-primary") !== a.pid && e.getAttribute("data-backup") !== a.pid); return c ? c.getAttribute("data-day") : null; }, { mo: String(mm + 1).padStart(2, "0"), board: boardDays, pid });
+              if (openDay) break;
+            }
+            if (!openDay) console.log(`     (${DS}: no board-listed OPEN slot he does not hold in November / December 2026 on this page (${boardDays.length} board day(s)) - 'See it on Open shifts' is not exercised)`);
+            else {
+              await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${openDay}"]`);
+              await rp.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
+              const osb = await rp.$("[data-testid=day-editor] [data-testid=editor-open-shifts]");
+              if (!osb) { fail(`${DS}: the OPEN day ${openDay} offers no 'See it on Open shifts'`); await rp.keyboard.press("Escape"); }
+              else {
+                await osb.click();
+                await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
+                const board = await rp.waitForSelector("[data-testid=openshifts-card]", { timeout: 8000 }).then(() => true).catch(() => false);
+                if (!board) fail(`${DS}: 'See it on Open shifts' on ${openDay} did not land on the Open shifts board`);
+                else ok(`${DS}: the OPEN day ${openDay} -> 'See it on Open shifts' closed the editor and showed the board`);
+              }
+            }
+            // the coverage strip's open count -> the board (not a read-only day)
+            await e3Month(rp, 2026, 10);
+            const cov = await rp.$eval("[data-testid=cov-open-primary]", el => ({ n: Number(el.getAttribute("data-count") || 0), dis: el.disabled })).catch(() => null);
+            if (!cov || !cov.n || cov.dis) console.log(`     (${DS}: no open primary in the next 60 days - the strip's board link is not exercised)`);
+            else {
+              await rp.click("[data-testid=cov-open-primary]");
+              const board = await rp.waitForSelector("[data-testid=openshifts-card]", { timeout: 8000 }).then(() => true).catch(() => false);
+              const ed2 = !!(await rp.$("[data-testid=day-editor]"));
+              if (!board || ed2) fail(`${DS}: the coverage strip's open-primary count should show the Open shifts board (board ${board}, a day editor open ${ed2})`);
+              else ok(`${DS}: the coverage strip's open-primary count (${cov.n}) leads to the Open shifts board, no day editor`);
+            }
+            // My schedule: Give away beside every Propose a trade
+            await rp.click('button[data-tab="myschedule"]');
+            await rp.waitForTimeout(400);
+            const mt = await rp.$$eval("[data-testid=mine-trade]", els => els.length), mg = await rp.$$eval("[data-testid=mine-give]", els => els.length);
+            if (mt !== mg) fail(`${DS}: My schedule rows carry ${mt} 'Propose a trade' but ${mg} 'Give away'`);
+            else ok(`${DS}: My schedule - 'Give away' beside each of the ${mt} 'Propose a trade' row button(s)${mt ? "" : " (no upcoming day this run - not exercised)"}`);
+          } catch (e) { fail(`${DS}: ` + errLine(e)); if (await rp.$("[data-testid=day-editor]")) { await rp.keyboard.press("Escape").catch(() => {}); } }
+          await rp.click('button[data-tab="calendar"]').catch(() => {});
         }
         // Totals (signed-in roles): screen, fairness and EVERY CSV line
         if (R.totals) {
@@ -3101,6 +3232,13 @@ try {
   await page.waitForTimeout(200);
   const foot = await page.$eval("[data-testid=editor-save]", el => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: window.innerHeight }; });
   if (foot.bottom > foot.vh || foot.top < 0 || foot.h < 36) fail(`mobile 390px: the day editor's Save button is off screen or too small (${JSON.stringify(foot)})`); else ok(`mobile 390px: the day editor's Save button is on screen at open (bottom ${foot.bottom} of ${foot.vh}px, ${foot.h}px tall)`);
+  // Day-click summary (9/27): the scheduler's "Esc closes - arrow keys move a day" hint is hidden at <= 600px (touch)
+  try {
+    const kh = await page.evaluate(() => { const el = document.querySelector("[data-testid=day-editor] .editor-kbd-hint"); return el ? getComputedStyle(el).display : null; });
+    if (kh === null) fail("mobile 390px: the scheduler's day editor lost its keyboard hint (.editor-kbd-hint)");
+    else if (kh !== "none") fail(`mobile 390px: the keyboard hint should be hidden at 390px (display ${kh})`);
+    else ok("mobile 390px: the day editor's keyboard hint is hidden (display none) - it stays at desktop widths");
+  } catch (e) { fail("mobile 390px keyboard hint: " + errLine(e)); }
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
   await b9EditorGuard("light"); // Prompt 16 B9 (b) at 390 px, light theme (the dark pass runs after the dark-mode switch below)
@@ -4301,6 +4439,13 @@ try {
     if (mineDays.length !== expectedCount) fail(`My schedule: upcoming list has ${mineDays.length} day(s), the live rows have ${expectedCount} for s1 in the next 90 days (${todayIso}..${horizon})`);
     else ok(`My schedule: upcoming list = ${mineDays.length} day(s) in the next 90 days${mineDays.length ? ", first " + mineDays[0] : ""}`);
     if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Propose a trade' shortcut on the upcoming rows");
+    // Day-click summary (9/27): 'Give away' beside every 'Propose a trade' on the own rows
+    try {
+      const mtN = await page.$$eval("[data-testid=mine-trade]", els => els.length), mgN = await page.$$eval("[data-testid=mine-give]", els => els.length);
+      if (mtN !== mgN) fail(`My schedule: ${mtN} 'Propose a trade' row button(s) but ${mgN} 'Give away'`);
+      else if (mtN) ok(`My schedule: 'Give away' beside each of the ${mtN} 'Propose a trade' row button(s)`);
+      else console.log("     (My schedule: no upcoming own row - 'Give away' is not exercised)");
+    } catch (e) { fail("My schedule Give away: " + errLine(e)); }
     if (!(await page.$("[data-testid=copy-sync-url]")) || !(await page.$("[data-testid=download-my-calendar]"))) fail("My schedule: the calendar buttons (download / copy sync URL) are missing"); else ok("My schedule: Download my calendar + Copy my calendar-sync URL buttons present");
     if (!(await page.$("[data-testid=mine-person]"))) fail("My schedule: the scheduler's person picker is missing");
     const mineText = await page.$eval("[data-testid=mine-card]", el => el.innerText);
@@ -8461,8 +8606,11 @@ try {
       const saveBtn = await pc.$("[data-testid=editor-save]");
       const closeBtn = await pc.$("[data-testid=editor-footer] button:has-text('Close')");
       const externalInput = await pc.$("[data-testid=editor-external]");
+      // Day-click summary (9/27): the office gets the summary - no action, no You chip, no offers / Source lines, no keyboard hint
+      const coordSummary = await pc.evaluate(() => ["editor-trade", "editor-give", "editor-open-shifts", "editor-you", "editor-source", "editor-primary-offers", "editor-backup-offers"].filter(t => document.querySelector("[data-testid=day-editor] [data-testid=" + t + "]")).concat(Array.from(document.querySelectorAll("[data-testid=day-editor] span")).some(e => /arrow keys move a day/.test(e.textContent || "")) ? ["the keyboard hint"] : []));
       if (saveBtn || externalInput || !closeBtn) fail(`coordinator: the day tap must open the read-only detail (no Save, no outside-cover input, a Close button): save=${!!saveBtn} external=${!!externalInput} close=${!!closeBtn}`);
-      else ok("coordinator: day tap = read-only detail (no editor-save, no editor-external, Close)");
+      else if (coordSummary.length) fail("coordinator: the day summary shows " + coordSummary.join(", "));
+      else ok("coordinator: day tap = read-only summary (no editor-save, no editor-external, no trade / give / Open shifts link / You chip, no offers / Source / keyboard hint, Close)");
       await closeBtn.click();
       await pc.waitForTimeout(200);
       // (c) Time off: the person picker offers every surgeon; no trade card; the note denylist; the clean add for s3
@@ -8766,7 +8914,7 @@ try {
           next: (c.querySelector("[data-testid=next-call]") || { getAttribute: () => null }).getAttribute("data-next-day") || "",
           text: c.innerText || "",
         })));
-        const forbidden = await pf.evaluate(() => ["mine-trade", "mine-offer-tag", "paint-offers", "mine-offers", "mine-vacations", "download-my-calendar", "copy-sync-url", "mine-card", "mine-person"].filter(t => document.querySelector("[data-testid=" + t + "]")));
+        const forbidden = await pf.evaluate(() => ["mine-trade", "mine-give", "mine-offer-tag", "paint-offers", "mine-offers", "mine-vacations", "download-my-calendar", "copy-sync-url", "mine-card", "mine-person"].filter(t => document.querySelector("[data-testid=" + t + "]")));
         const today = await pf.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : null));
         if (cards.map(c => c.id).join(",") !== "s2,s5") fail(`F3 follower (${theme}): expected two following-cards s2, s5 (the stored order), got [${cards.map(c => c.id).join(",")}]`);
         else if (forbidden.length) fail(`F3 follower (${theme}): the Following view renders surgeon-only controls: ${forbidden.join(", ")}`);
@@ -8881,7 +9029,8 @@ try {
             "paint-offers", "nav-paint-offers", "ofp-sheet", "ofp-save", "ob-take", "ob-assign", "ob-external", "ob-email", "claim-sheet", "claim-confirm",
             "editor-save", "editor-trade", "undo-btn", "generate-panel", "gen-run", "gen-accept", "roster-save", "rules-save", "group-save", "holidays-save",
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
-            "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade"];
+            "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade",
+            "mine-give", "editor-give", "editor-open-shifts"]; // day-click summary (9/27): the linked surgeon's actions
           // P20 R2: "notif-pref" left this list - a follower's OWN prefs switches (Settings > Notification settings, his row
           // by profile_id) are his; (c2) checks them and (e) counts their writes. Everything above stays forbidden, and so does
           // any notif-pref OUTSIDE [data-testid=notif-follower-prefs] (a surgeon's switches rendered for him - R2 review 9/25).
@@ -8917,12 +9066,14 @@ try {
           const ed = await pf.$eval("[data-testid=day-editor] [role=dialog]", (d) => ({
             save: !!d.querySelector("[data-testid=editor-save]"),
             trade: !!d.querySelector("[data-testid=editor-trade]"),
+            give: !!d.querySelector("[data-testid=editor-give]"), openShifts: !!d.querySelector("[data-testid=editor-open-shifts]"), you: !!d.querySelector("[data-testid=editor-you]"),
             enabled: Array.from(d.querySelectorAll("select, textarea, input:not([type=hidden])")).filter(x => !x.disabled && !x.readOnly).length,
             buttons: Array.from(d.querySelectorAll("button")).map(b => (b.textContent || "").trim()).filter(Boolean),
           }));
-          if (ed.save || ed.trade || ed.enabled) fail(`${F4}: the day editor on ${pick.day} offers an edit - save=${ed.save} trade=${ed.trade} enabled fields=${ed.enabled} (buttons ${JSON.stringify(ed.buttons)})`);
+          if (ed.save || ed.trade || ed.give || ed.openShifts || ed.enabled) fail(`${F4}: the day editor on ${pick.day} offers an edit - save=${ed.save} trade=${ed.trade} give=${ed.give} openShifts=${ed.openShifts} enabled fields=${ed.enabled} (buttons ${JSON.stringify(ed.buttons)})`);
+          else if (ed.you) fail(`${F4}: the day editor on ${pick.day} shows a You chip - a follower holds no day`);
           else if (!ed.buttons.includes("Close") || ed.buttons.includes("Cancel") || ed.buttons.includes("Save")) fail(`${F4}: the day editor footer should read Close only (no Cancel / Save), got ${JSON.stringify(ed.buttons)}`);
-          else ok(`${F4}: the day editor on ${pick.day}${s2Cell ? " (s2 " + (s2Cell.p === "s2" ? "primary" : "backup") + ")" : " (no s2 day in the visible month - a mid-month day)"} is read-only - buttons ${ed.buttons.join(" / ")}; no Save, no 'Propose a trade', no enabled field`);
+          else ok(`${F4}: the day editor on ${pick.day}${s2Cell ? " (s2 " + (s2Cell.p === "s2" ? "primary" : "backup") + ")" : " (no s2 day in the visible month - a mid-month day)"} is read-only - buttons ${ed.buttons.join(" / ")}; no Save, no 'Propose a trade' / 'Give away' / 'See it on Open shifts', no You chip, no enabled field`);
           await pf.click("[data-testid=day-editor] [role=dialog] button[aria-label=Close]");
           await pf.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 5000 });
           // Following lists s2's upcoming days (the list itself is checked against the served rows in (b))
