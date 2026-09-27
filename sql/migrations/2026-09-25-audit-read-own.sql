@@ -2,8 +2,9 @@
 -- Silvis Call Schedule - migration 2026-09-25: audit_read_own - a user reads back the audit rows he wrote (Prompt 21 step 1,
 -- Faraz 9/25: the Activity log gap). ONE select policy on public.audit_log (drop if exists / create - idempotent). No table,
 -- column, function, trigger, grant or row is touched; audit_insert, audit_read and audit_read_coord are NOT changed.
--- REPORT-FIRST, NOT APPLIED (CLAUDE.md, guide section 4.3: row-level security on the live database). sql/schema.sql mirrors the
--- policy (header revision q, "report-first, NOT yet applied" until the record step); test/schema.test.js pins the identity.
+-- REPORT-FIRST (CLAUDE.md, guide section 4.3: row-level security on the live database); APPLIED 2026-09-27 00:49:39Z after the
+-- 24-hour gate (the observed line in docs/SCHEMA-REVIEW.md). sql/schema.sql mirrors the policy (header revision q, "applied
+-- 2026-09-27 00:49:39Z" since the record step; "report-first, NOT yet applied" before it); test/schema.test.js pins the identity.
 --
 -- The gap (the live check of 9/25 ~7:30 CDT): Acton entered two vacations on 9/24. Both time_off rows exist (created 18:17 and
 -- 18:19 UTC, created_by s3) and so do both vacation_logged notifications, but audit_log has no timeoff.add row for either; the API

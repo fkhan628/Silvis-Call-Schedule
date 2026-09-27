@@ -63,8 +63,8 @@
 //   - trade_update_guard(): kind joins the TRADE_IMMUTABLE leg list; the rest is the 9/23 trade-past body byte for byte,
 //   - apply_trade() untouched (the receiver already applies a one-way row as a party); the file declares `-- supersedes:` B6;
 //     B6's trade_insert_guard and the 9/23 trade_update_guard are frozen by sha256; the probe gains GIVE_SETUP and O..U.
-// Prompt 21 step 1 (2026-09-25, Faraz - sql/migrations/2026-09-25-audit-read-own.sql, REPORT-FIRST, not applied; waits for the
-//   24-hour gate): audit_read_own lets a user read back the audit rows he wrote, so logAudit's INSERT ... RETURNING (db.insert,
+// Prompt 21 step 1 (2026-09-25, Faraz - sql/migrations/2026-09-25-audit-read-own.sql, REPORT-FIRST; applied 2026-09-27 00:49:39Z
+//   after the 24-hour gate): audit_read_own lets a user read back the audit rows he wrote, so logAudit's INSERT ... RETURNING (db.insert,
 //   Prefer: return=representation) stops failing 42501 for a linked surgeon; the policy text exactly as approved, the three
 //   existing audit policies byte-unchanged, schema.sql's mirror + revision q, the rolled-back probe (RETURNING and PostgREST's
 //   return=representation shape as a surgeon / a coordinator / a viewer; CLI and 'cron' rows stay unread), verify-rls.sh
@@ -2206,9 +2206,9 @@ console.log("- P20 R2 review: section 12a / 12a' pins all exist in the files the
 // db.insert sends Prefer: return=representation, so logAudit runs INSERT ... RETURNING, and a RETURNING that reads columns needs
 // a SELECT policy that sees the new row - none did for a linked surgeon (42501; logAudit only console.warns). The prelaunch
 // probe's L4 inserts WITHOUT RETURNING, which is why verify-rls stayed green. sql/migrations/2026-09-25-audit-read-own.sql
-// (REPORT-FIRST, NOT applied; revision q) creates ONE policy, audit_read_own, exactly as Faraz approved it (1b); audit_insert,
-// audit_read and audit_read_coord stay byte-unchanged (audit_read_coord kept on purpose, now redundant). It waits for the 24-hour
-// gate: the gate runs the 33e529d verify-rls, whose C21 expects own_other=0 - an earlier apply turns it red. schema.sql mirrors
+// (REPORT-FIRST; revision q, applied 2026-09-27 00:49:39Z) creates ONE policy, audit_read_own, exactly as Faraz approved it (1b); audit_insert,
+// audit_read and audit_read_coord stay byte-unchanged (audit_read_coord kept on purpose, now redundant). It waited for the 24-hour
+// gate: the gate ran the 33e529d verify-rls, whose C21 expected own_other=0 - an earlier apply would have turned it red. schema.sql mirrors
 // the policy; sql/probes/audit-read-own-probe.sql (rolled back) inserts WITH RETURNING and in PostgREST's return=representation
 // shape as a surgeon, a coordinator and a viewer - the case that would have caught the bug; verify-rls.sh section 13 grades its
 // AFTER picture (nine cases red before the apply, run here against a faked CLI) and section 11's C21 now expects own_other=1.
@@ -2233,14 +2233,14 @@ const AUDIT_OWN_REFUSED_BEFORE = ["S1", "S2", "C2", "C4"];   // the RETURNING in
 const AUDIT_OWN_RED_BEFORE = ["P1", "S1", "S2", "S5", "T1", "C2", "C4", "C5", "D1"];
 const RLS_42501_AUDIT = 'ERR 42501 new row violates row-level security policy for table "audit_log"';
 
-step("P21 S1: the migration - ONE policy, audit_read_own, exactly as approved (1b); nothing else dropped or created; report-first, waits for the 24-hour gate");
+step("P21 S1: the migration - ONE policy, audit_read_own, exactly as approved (1b); nothing else dropped or created; report-first, applied 2026-09-27 after the 24-hour gate");
 const aoMig = read(AUDIT_OWN_MIGRATION);
 ok(!/\r/.test(aoMig), "audit-read-own migration has CRLF line endings");
 ok(migFiles.includes(AUDIT_OWN_FILE) && !PREPARED_NOT_MIRRORED.includes(AUDIT_OWN_FILE), "sql/migrations/" + AUDIT_OWN_FILE + " is a mirrored migration (not exempt like the member return-leg follow-up)");
 eq(aoMig.split("\n").filter((l) => !/^\s*--/.test(l) && l.trim() !== "").join("\n"), "drop policy if exists audit_read_own on public.audit_log;\n" + AUDIT_READ_OWN,
   "the audit-read-own migration's statements must be exactly the drop-if-exists and the approved policy (Faraz 9/25, 1b as written);");
 const aoHdr = aoMig.slice(0, aoMig.search(/^drop policy if exists audit_read_own/m));   // the header quotes the same statement as its rollback
-ok(/^-- REPORT-FIRST, NOT APPLIED/m.test(aoHdr) && /audit_insert, audit_read and audit_read_coord are NOT changed/.test(aoHdr), "the migration header must say REPORT-FIRST, NOT APPLIED and that the three existing audit policies are not changed");
+ok(/^-- REPORT-FIRST \([^)]*\); APPLIED 2026-09-27 00:49:39Z after the/m.test(aoHdr) && !/^-- REPORT-FIRST, NOT APPLIED/m.test(aoHdr) && /audit_insert, audit_read and audit_read_coord are NOT changed/.test(aoHdr), "the migration header must say REPORT-FIRST (...); APPLIED 2026-09-27 00:49:39Z after the 24-hour gate (step 9 replaced 'REPORT-FIRST, NOT APPLIED'; the pin was tightened with it) and that the three existing audit policies are not changed");
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-audit-read-own\.sql/.test(aoHdr), "the migration header must carry the CLI apply line for the orchestrator");
 ok(/WAITS FOR THE 24-HOUR GATE - never apply this file ahead of it/.test(aoHdr) && /silvis-24h-gate/.test(aoHdr) && /33e529d/.test(aoHdr) && /C21/.test(aoHdr) && /own_other=1/.test(aoHdr) && /If the gate reports instead of applying, stop\./.test(aoHdr),
   "the migration header must state the gate constraint (the gate's 33e529d verify-rls C21 expects own_other=0; an early apply turns it red) and the order (gate -> report -> go -> apply -> verify-rls -> push; stop if the gate reports)");
@@ -2274,10 +2274,16 @@ eq(Array.from(schema.matchAll(/create policy ([a-z_]+) on public\.audit_log\b/g)
 ok(schema.indexOf(AUDIT_READ_OWN) > schema.indexOf(AUDIT_UNCHANGED.audit_read_coord) && schema.indexOf(AUDIT_READ_OWN) < schema.indexOf("-- snapshots: scheduler/admin only"), "audit_read_own sits right after audit_read_coord, before the snapshots policies");
 const aoComment = schema.slice(schema.indexOf("-- audit_log: insert by a scheduler / admin"), schema.indexOf("drop policy if exists audit_insert on public.audit_log;"));
 ok(/audit_read_own/.test(aoComment) && /return=representation/.test(aoComment) && /revision q/.test(aoComment), "schema.sql's audit_log comment block must name audit_read_own, why (return=representation -> RETURNING) and revision q");
-ok(/-- Revision 2026-09-25 q \(Prompt 21 step 1, sql\/migrations\/2026-09-25-audit-read-own\.sql, (report-first, NOT yet applied|applied 2026-)[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-25 q (audit_read_own; 'report-first, NOT yet applied' until the record step writes 'applied <timestamp>')");
-// Revision q follows whichever records the member return-leg follow-up: the PREPARED FOLLOW-UP line today, the Revision
-// 2026-09-25 p line once the gate's record step replaces it (review fix 9/25: after that rebase an indexOf of the old line is
-// -1 and a plain '>' would pass vacuously - so one of the two must exist).
+// step 9 (the record step, 2026-09-27) tightened the revision q pins to the applied wording, as revision m's was at its record step
+ok(/revision q - applied 2026-09-27 00:49:39Z/.test(aoComment) && !/NOT yet applied/.test(aoComment), "schema.sql's audit_log comment block must read 'revision q - applied 2026-09-27 00:49:39Z' (step 9; it read 'report-first, NOT yet applied' before)");
+ok(/-- Revision 2026-09-25 q \(Prompt 21 step 1, sql\/migrations\/2026-09-25-audit-read-own\.sql, applied 2026-09-27 00:49:39Z[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-25 q (audit_read_own) as 'applied 2026-09-27 00:49:39Z' (step 9; it read 'report-first, NOT yet applied' before)");
+{
+  const revQ = header.slice(header.search(/^-- Revision 2026-09-25 q /m)).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0];
+  ok(!/NOT yet applied|although not applied/.test(revQ) && /Applied after the 24-hour gate had passed/.test(revQ) && /backfilled/.test(revQ), "schema.sql's revision q text must say it was applied after the 24-hour gate and the rebuildable lost rows backfilled (no 'NOT yet applied' / 'although not applied' left)");
+}
+// Revision q follows whichever records the member return-leg follow-up: the PREPARED FOLLOW-UP line until the gate's record
+// step, the Revision 2026-09-25 p line since (review fix 9/25: after that rebase an indexOf of the old line is -1 and a plain
+// '>' would pass vacuously - so one of the two must exist).
 {
   const qAt = header.search(/^-- Revision 2026-09-25 q /m), pAt = header.search(/^-- Revision 2026-09-25 p /m), fuAt = header.search(/^-- PREPARED FOLLOW-UP, NOT MIRRORED/m);
   ok(pAt >= 0 || fuAt >= 0, "schema.sql's header must record the member return-leg follow-up - the PREPARED FOLLOW-UP line or, after its record step, Revision 2026-09-25 p");
@@ -2374,7 +2380,7 @@ ok(!/a surgeon still reads no audit row/.test(s11) && !/no read policy for him\)
   ok(/the BEFORE picture: audit_read_own is not live/.test(rb.out) && !/the BEFORE picture/.test(ra.out), "section 13 must name the BEFORE picture when P1 lacks audit_read_own (and only then)");
 }
 
-step("P21 S1: docs - SCHEMA-REVIEW.md PREPARED section (evidence, cause, diagnostic, decisions 1b / 1c / 1d + the widened step 3, blast radius, probe table, apply order with the gate, rollback, observed placeholder), table (b), guide 4.3 bullet");
+step("P21 S1: docs - SCHEMA-REVIEW.md section (evidence, cause, diagnostic, decisions 1b / 1c / 1d + the widened step 3, blast radius, probe table, apply order with the gate, rollback, APPLIED status + observed line with the backfill), tables (a) / (b), guide 4.3 bullet");
 ok(/^## 2026-09-25 - audit_log read-back: audit_read_own \(Prompt 21 step 1; `sql\/migrations\/2026-09-25-audit-read-own\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-25 - audit_log read-back: audit_read_own (Prompt 21 step 1; `sql/migrations/2026-09-25-audit-read-own.sql`)' section");
 const reviewP21 = (() => { const at = review.indexOf("## 2026-09-25 - audit_log read-back: audit_read_own"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
 ok(/^\*\*Status: (PREPARED - report-first \(not applied\)|APPLIED 2026-)/.test(((reviewP21.match(/\*\*Status: [^*]*\*\*/) || [""])[0])), "the P21 section's status line must read 'Status: PREPARED - report-first (not applied) ...' (or 'APPLIED 2026-...' after the record step)");
@@ -2388,6 +2394,18 @@ ok(/Blast radius/.test(reviewP21) && /loadAudit/.test(reviewP21) && /prefs\.save
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-25-audit-read-own\.sql/.test(reviewP21) && /audit-read-own-probe\.sql/.test(reviewP21), "the P21 section must carry the CLI apply line and the probe command");
 ok(/drop policy if exists audit_read_own on public\.audit_log;/.test(reviewP21.slice(reviewP21.indexOf("Rolling back"))), "the P21 section's rollback must drop audit_read_own");
 ok(/observed: /.test(reviewP21), "the P21 section must carry an 'observed:' line (placeholder until the orchestrator fills it)");
+// the record step (apply order step 9, 2026-09-27): the status line and the observed line - both probe sentinels, verify-rls
+// sections 11 / 13, the leftovers, the 403 reconciliation (incl. its false positives), the backfilled rows + snapshot, the pending window
+{
+  ok(((reviewP21.match(/\*\*Status: [^*]*\*\*/) || [""])[0]) === "**Status: APPLIED 2026-09-27 00:49:39Z.**", "the P21 section's status line must read `**Status: APPLIED 2026-09-27 00:49:39Z.**` (step 9)");
+  const obsP21 = (reviewP21.match(/^observed: .*$/m) || [""])[0];
+  ok(!/_to be filled/.test(obsP21) && /applied 2026-09-27 00:49:39/.test(obsP21), "the P21 observed line must be filled with the apply time");
+  ok(obsP21.includes("`P1=policies=audit_insert,audit_read,audit_read_coord`") && obsP21.includes("`P1=policies=audit_insert,audit_read,audit_read_coord,audit_read_own`") && /`S2=ok rows=1`/.test(obsP21) && /`C5=own_family=1 own_other=4`/.test(obsP21), "the P21 observed line must carry both probe sentinels (P1 before / after) and the moved cases");
+  ok(/214 passed, 0 failed/.test(obsP21) && /`C21=own_family=1 others=0 own_other=1`/.test(obsP21) && /section 13/.test(obsP21) && /every leftover count 0/.test(obsP21), "the P21 observed line must carry verify-rls 214 / 0, section 11's C21, section 13 and the leftover counts");
+  ok(/2 false positives/.test(obsP21) && /3 backfilled/.test(obsP21) && /snapshot `[0-9a-f-]{36}`/.test(obsP21) && (obsP21.match(/audit row `[0-9a-f-]{36}`/g) || []).length === 3 && /Not recoverable/.test(obsP21) && /PENDING/.test(obsP21) && /detail ->> 'backfilled' = 'true'/.test(obsP21), "the P21 observed line must carry the reconciliation (2 false positives), the 3 backfilled rows with their snapshot, the unrecoverable 403s, the pending 403 window and the undo");
+  // review fix (9/27): the pending window's own deadline is step 8a's (24 h after the 9/26 read), stated as such
+  ok(/no gap only if it runs by 2026-09-27 22:00Z/.test(obsP21) && /\| apply time: Cowork, 2026-09-27 21:30Z \(PENDING\) \|/.test(reviewP21), "the P21 observed line must state the pending window's no-gap deadline (the read by 2026-09-27 22:00Z, step 8a) and step 8a's table must name the apply-time read (Cowork, 2026-09-27 21:30Z, PENDING)");
+}
 // Review fixes (9/25): the apply order rebases onto the gate's record commit before the probes, pushes after verify-rls and
 // before the backfill (the migration header's sequence); step 3 reconciles against the gateway log's 403s and matches a lost
 // timeoff.add by person + time, never by the (editable) dates; the read follows actor_id, not role.
@@ -2409,10 +2427,18 @@ ok(/observed: /.test(reviewP21), "the P21 section must carry an 'observed:' line
   ok(/The read follows `actor_id`, not role/.test(reviewP21) && /user_profiles_admin/.test(reviewP21), "the P21 section must say the read follows actor_id, not role (a demoted coordinator; linking hands over a roster id's history)");
   ok(!/PostgREST's own statement/.test(reviewP21) && /RLS-equivalent/.test(reviewP21), "the P21 section must call S2 / C4 RLS-equivalent to PostgREST's statement, not PostgREST's own statement");
 }
-ok(/^\| `audit_log` \|[^\n]*audit_read_own/m.test(tblB) && /^\| `audit_log` \|[^\n]*audit_read_coord/m.test(tblB), "SCHEMA-REVIEW table (b)'s audit_log row must name audit_read_coord and the prepared audit_read_own");
+ok(/^\| `audit_log` \|[^\n]*audit_read_own/m.test(tblB) && /^\| `audit_log` \|[^\n]*audit_read_coord/m.test(tblB), "SCHEMA-REVIEW table (b)'s audit_log row must name audit_read_coord and audit_read_own");
+ok([tblA, tblB].every((t) => /^\| `audit_log` \|[^\n]*Prompt 21 step 1[ ,(]+applied 2026-09-27 00:49:39Z/m.test(t) && !/^\| `audit_log` \|[^\n]*Prompt 21 step 1[ ,(]+prepared/m.test(t)), "SCHEMA-REVIEW tables (a) / (b): the audit_log rows' Prompt 21 step 1 notes drop 'prepared' and read 'applied 2026-09-27 00:49:39Z' (step 9)");
 const g43ao = g43.indexOf("2026-09-25-audit-read-own.sql");
 ok(g43ao > 0 && /report-first, (NOT applied|applied 2026-)/.test(g43.slice(Math.max(0, g43ao - 400), g43ao + 400)), "guide 4.3 must carry the Prompt 21 step 1 bullet (report-first, NOT applied - or 'applied 2026-MM-DD' after the record step)");
 ok(/^\| `audit_read_own` \|/m.test(g43.slice(g43ao)) && /applied: (_to be filled by the orchestrator_|2026-)/.test(g43.slice(g43ao)) && /24-hour gate/.test(g43.slice(g43ao)), "guide 4.3's Prompt 21 step 1 bullet must carry its audit_read_own row, the gate and the 'applied: _to be filled by the orchestrator_' placeholder");
-console.log("- P21 S1: audit_read_own prepared (report-first, not applied; waits for the 24-hour gate); probe + verify-rls section 13 + C21 own_other=1");
+{
+  // step 9 (2026-09-27) tightened these to the applied wording - the bullet line itself and its own Proof line
+  const aoBullet = (g43.match(/^- \*\*Audit read-back \(Prompt 21 step 1, [^\n]*/m) || [""])[0];
+  const aoProof = (g43.match(/^Proof: `sql\/probes\/audit-read-own-probe\.sql`[^\n]*/m) || [""])[0];
+  ok(/report-first, applied 2026-09-27 00:49 UTC after the 24-hour gate/.test(aoBullet) && !/NOT applied/.test(aoBullet), "guide 4.3's Prompt 21 step 1 bullet must read 'report-first, applied 2026-09-27 00:49 UTC after the 24-hour gate' (step 9; it read 'report-first, NOT applied' before)");
+  ok(/applied: 2026-09-27 00:49:39 UTC/.test(aoProof) && !/_to be filled/.test(aoProof) && /pending Cowork's 2026-09-27 21:30Z read/.test(aoProof), "guide 4.3's Prompt 21 step 1 Proof line must carry 'applied: 2026-09-27 00:49:39 UTC ...' and the pending 403 window (step 9 filled the placeholder)");
+}
+console.log("- P21 S1: audit_read_own applied 2026-09-27 00:49:39Z after the 24-hour gate (report-first); probe + verify-rls section 13 + C21 own_other=1; step 3 backfill recorded");
 
 console.log("schema.test.js: " + N + " assertions passed");

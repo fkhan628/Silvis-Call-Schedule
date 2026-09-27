@@ -68,11 +68,12 @@
 -- return shift ...); scheduler / server rows and a give with no return leg are unchanged. Held back until the client_versions min_version bump to
 -- 2026.09.25c (the rollout build, after Prompt 19's client) and 24 h with every heartbeat on it or newer (old builds sent a whole unit's tail rows
 -- without a return leg); mirrored below since.
--- Revision 2026-09-25 q (Prompt 21 step 1, sql/migrations/2026-09-25-audit-read-own.sql, report-first, NOT yet applied): audit_read_own - a signed-in
+-- Revision 2026-09-25 q (Prompt 21 step 1, sql/migrations/2026-09-25-audit-read-own.sql, applied 2026-09-27 00:49:39Z after the probe): audit_read_own - a signed-in
 -- user reads the audit_log rows he wrote (actor_id = his roster id when linked, else auth.uid()::text), so the client's logAudit INSERT ... RETURNING
 -- (db.insert sends Prefer: return=representation) no longer fails 42501 / HTTP 403 for a linked surgeon, nor for a coordinator's row outside the
 -- timeoff. / offers. / availability. families (prefs.save). audit_insert, audit_read and audit_read_coord are unchanged (audit_read_coord kept, now
--- redundant). Mirrored below although not applied: it waits for the 24-hour gate (applied earlier, it turns the gate's verify-rls C21 red).
+-- redundant). Applied after the 24-hour gate had passed (applied earlier, it would have turned the gate's verify-rls C21 red); the lost audit rows
+-- the tables could rebuild were backfilled (detail.backfilled = true; the rest listed - docs/SCHEMA-REVIEW.md).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -1336,7 +1337,7 @@ create policy prefs_own on public.notification_preferences for all to authentica
 -- the client's logAudit sends; Prompt 16 A1) or by a coordinator writing as itself (actor_id = auth.uid()::text - logAudit's
 -- fallback for an account without a roster link; Prompt 16 A7); read by scheduler/admin (every row) and by a coordinator
 -- (audit_read_coord: its own rows in the timeoff. / offers. / availability. families - the Settings Activity log for the office)
--- and (Prompt 21 step 1, revision q - report-first, NOT yet applied) by every signed-in user for the rows he wrote himself
+-- and (Prompt 21 step 1, revision q - applied 2026-09-27 00:49:39Z) by every signed-in user for the rows he wrote himself
 -- (audit_read_own: actor_id = his roster id when linked, else his profile id - the row audit_insert has just let him write).
 -- Why: the client's db.insert sends Prefer: return=representation, so logAudit runs INSERT ... RETURNING, and a RETURNING that
 -- reads columns needs a SELECT policy that sees the new row - without one a linked surgeon's audit insert (and a coordinator's
