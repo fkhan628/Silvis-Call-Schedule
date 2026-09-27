@@ -68,7 +68,8 @@ export const contrastTable = (mod) => {
     add(theme, "body text in an input", T.text, T.inputBg, "text");
     add(theme, "orange text (links, today's date) on card", T.accentText, T.surface, "text");
     add(theme, "orange text on page", T.accentText, T.bg, "text");
-    // The tint sits only under the bold (700) "newer" version chip - a label, never running text.
+    // The tint sits only under bold (700) chips - the "newer" version chip and (9/27) the day editor summary's "You" chip -
+    // a label, never running text. The summary's other colours are existing pairs: T.open / T.muted / T.text on the card.
     add(theme, "orange text on its tint (bold chip)", T.accentText, T.accentTint, "label");
     add(theme, "OPEN red on card", T.open, T.surface, "text");
     add(theme, "OPEN red on page", T.open, T.bg, "text");

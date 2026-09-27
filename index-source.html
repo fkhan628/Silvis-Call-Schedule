@@ -87,6 +87,8 @@
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-legend { font-size: 10px !important; }
+      /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
+      .editor-kbd-hint { display: none; }
       /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
          B line / vacation dots (smaller, no tracking, and the cell grows). */
       .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
@@ -573,7 +575,7 @@ function CallSchedule() {
   const isAdmin = userProfile?.role === "admin";
   // Prompt 16 A7: the office role - enters / edits any surgeon's vacations and relays their offered dates into the
   // painter (save_offers / set_offer_mode with p_person; the function stamps entered_by = this account's profile id,
-  // source 'office-relay'); no Setup, no Generate, no day editor, no trades. Never linked to a roster entry (DB check).
+  // source 'office-relay'); no Setup, no Generate, no editing day editor (the read-only day summary), no trades. Never linked to a roster entry (DB check).
   const isCoordinator = userProfile?.role === "coordinator";
   const canEnterForAnyone = isScheduler || isCoordinator;
   // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag for everything E3 shows to
@@ -5149,6 +5151,25 @@ function CallSchedule() {
     const m = parse(nd).getMonth(), y = parse(nd).getFullYear();
     if (m !== calMonth || y !== calYear) { setCalMonth(m); setCalYear(y); }
   };
+  // Day-click summary (Faraz 9/27): "Give away" on the day editor (a surgeon's own day) and on My schedule's rows - the
+  // Propose card opened in give mode (one-way, no return day) with the day and the role preselected, the member as From.
+  // The give itself goes through the card's own path (the unit rule and the receiver's eligibility are the trade path's).
+  const proposeGiveForDay = (day, role) => {
+    setTradeDay(day);
+    setTradeRole(role === "backup" ? "backup" : "primary");
+    setTradeKind("give");
+    setTradeReturnDay("");
+    if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
+    setEditorDay(null);
+    setView("timeoff");
+  };
+  // Day-click summary (9/27): an OPEN slot's summary (a linked surgeon, today onward) and the coverage strip's open counts
+  // (every signed-in non-scheduler) lead to the Open shifts board, where the claim is made - the board's eligibility and
+  // its claim sheet are computed only on that view.
+  const openShiftsBoard = () => {
+    setEditorDay(null);
+    setView("openshifts");
+  };
   const rulesImported = surgeonRules !== undefined && groupRules !== undefined && holidays !== undefined;
   // Setup issues (Slice E): computed warnings - roster ids/codes unique, rules
   // per active surgeon, holiday units per scheduled year, East feed / forecast
@@ -5755,9 +5776,12 @@ function CallSchedule() {
               const covItem = (key, text, days, color) => {
                 const n = days.length;
                 const first = n ? days[0] : null;
+                // Day-click summary (9/27): a signed-in non-scheduler's open count leads to the Open shifts board (where a
+                // claim is made), not to a read-only day; the scheduler (and ?public=1, which has no board) opens the day.
+                const toBoard = !isScheduler && !isPublicMode;
                 return (
-                  <button key={key} type="button" data-testid={key} data-count={loaded ? n : ""} data-first={first || ""} disabled={!loaded || !n} onClick={() => { if (first) goToDay(first); }}
-                    title={n ? "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days"}
+                  <button key={key} type="button" data-testid={key} data-count={loaded ? n : ""} data-first={first || ""} disabled={!loaded || !n} onClick={() => { if (!first) return; if (toBoard) openShiftsBoard(); else goToDay(first); }}
+                    title={n ? (toBoard ? "See the open shifts (first " + fmtMD(first) + ") on the Open shifts board" : "Open " + fmtMD(first) + " in the day editor") : "none in the next 60 days"}
                     style={{...css.mini(false),color: !loaded ? dkSubtext : n ? color : "#1a8040",borderColor: !loaded ? "#c8d0d8" : n ? color : "#a0d8b0",fontFamily:font,cursor: n ? "pointer" : "default"}}>
                     <span style={{fontFamily:mono,fontWeight:800}}>{loaded ? n : "..."}</span> {text}{n ? " - first " + fmtMD(first) : ""}
                   </button>
@@ -5990,6 +6014,7 @@ function CallSchedule() {
             canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible} rulesImported={rulesImported} isPublicMode={isPublicMode}
             nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
+            onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard}
             onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
             onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
             suggestTrade={(d, r) => {
@@ -6200,6 +6225,7 @@ function CallSchedule() {
                       {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
                       {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
                       {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>}
+                      {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
                     </div>
                   ))}
                 </div>
@@ -7830,7 +7856,15 @@ function offersLoadVerdict(st) {
 // Left/Right arrows move a day when the draft is clean and focus is not in a
 // field.
 function DayEditor(props) {
-  const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal } = props;
+  const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal, onGive, onOpenShifts } = props;
+  // Day-click summary (Faraz 9/27: "me as the scheduler needs the full view, users don't need as much"): canEdit (the
+  // scheduler) keeps the full editor below unchanged. Everyone else - a surgeon on his own or another's day, the office,
+  // a viewer, a follower, ?public=1 - gets a SUMMARY: the holders by full name (the grid shows codes on a phone), a You
+  // chip on the viewer's own row, OPEN / '-' as the grid words an empty slot, the holiday unit / note / who is off only
+  // when there is one; a linked surgeon gets Propose a trade + Give away on his own day and a way to the Open shifts board
+  // from an OPEN slot. The offers lines, the Source line, the eligibility plumbing, the padlock and the keyboard hint are
+  // the scheduler's; the eligibility sweeps and the offers read are not even computed for the summary (nothing reads them).
+  const T = THEME[dk ? "dark" : "light"];
   // focusExternal (optional): the Open shifts board's 'Outside cover' opened
   // this editor - put the caret in the external-cover input (the write still
   // goes through Save below).
@@ -7919,7 +7953,7 @@ function DayEditor(props) {
     return pool.filter(o => o.active && o.ok).concat(pool.filter(o => o.active && !o.ok)).concat(pool.filter(o => !o.active && o.id === draft[role]))
       .concat(ext.filter(o => o.active || o.id === draft[role]));
   };
-  const opts = React.useMemo(() => ({ primary: evalRole("primary"), backup: evalRole("backup") }), [ctx, day, draft, roster]); // eslint-disable-line
+  const opts = React.useMemo(() => canEdit ? { primary: evalRole("primary"), backup: evalRole("backup") } : { primary: [], backup: [] }, [ctx, day, draft, roster, canEdit]); // eslint-disable-line
   // Small items (9/22): any option whose check THREW -> the error is shown and Save is disabled (fail closed).
   const evalErrors = [].concat(opts.primary, opts.backup).filter(o => o.error);
   const evalBroken = evalErrors.length > 0;
@@ -7928,6 +7962,7 @@ function DayEditor(props) {
   // lies in no period - then nothing is offers-governed and no line is shown. Outside surgeons never offer, and an
   // INACTIVE surgeon is listed only while he holds a slot in the draft (the same rule as the dropdown pool).
   const offerInfo = React.useMemo(() => {
+    if (!canEdit) return null; // day-click summary (9/27): the offers lines are the scheduler's (the editor is keyed by day and canEdit is fixed for the session's role)
     if (!ctx || typeof offerState !== "function") return null;
     const items = [];
     let period = null;
@@ -8015,6 +8050,20 @@ function DayEditor(props) {
     return pill(v);
   };
   const myRole = mySurgeon && entry ? (entry.primary === mySurgeon ? "primary" : entry.backup === mySurgeon ? "backup" : null) : null;
+  // The summary's holder (non-editors): the roster's full name in the surgeon's pill (last name when none is entered),
+  // "(outside surgeon)" after an outside cover or an outside surgeon written in by hand, and an empty slot worded as the
+  // grid words it (helpers.slotIsOpen): OPEN from today on, '-' on a past day (nobody can be paged for it).
+  const todayC = todayCentral();
+  const openRoles = ["primary", "backup"].filter(r => slotIsOpen(day, r === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup, todayC));
+  const summaryHolder = (role) => {
+    const v = role === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup;
+    const outside = <span style={{color:T.muted,fontWeight:400,fontSize:12}}> (outside surgeon)</span>;
+    if (!v) return openRoles.includes(role) ? <span data-testid={"editor-" + role + "-open"} style={{color:T.open,fontWeight:800}}>OPEN</span> : <span style={{color:T.muted}}>-</span>;
+    if (String(v).indexOf("ext:") === 0) return <span style={{color:T.text,fontWeight:700}}>{String(v).slice(4)}{outside}</span>;
+    const s = roster.find(x => x.id === v) || null;
+    const c = colorOf(v);
+    return <span><span style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 8px",fontSize:12.5,fontWeight:700}}>{(s && s.fullName) || nameOf(v)}</span>{s && s.type === "external" ? outside : null}</span>;
+  };
   // Item C: the "Propose a trade for this day" link names the top suggested counter-party for the link's role (the
   // viewer's own role, else the day's primary) and hands the pick to onTrade, which pre-fills the card.
   const tradeLinkRole = myRole || (entry && entry.primary ? "primary" : "backup");
@@ -8033,13 +8082,25 @@ function DayEditor(props) {
     const cur = list.find(o => o.id === draft[role]) || null;
     const ineligible = list.filter(o => !o.ok);
     const ov = overrides.find(x => x.role === role);
+    // the importer's awaiting-confirmation marker on a locked day (awaitingConfirmation): the shift is not final yet - the
+    // summary keeps the badge too (a surgeon should know his day may still move); ONE element for both views
+    const confirmBadge = locked && awaitingConfirmation(opened) ? <span data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={confirmBadgeStyle}>confirm</span> : null;
+    const mine = !isPublicMode && myRole === role; // the summary's You chip: the viewer's own row (a linked surgeon)
+    if (!canEdit) return (
+      <div data-testid={"editor-" + role + "-block"} data-mine={mine ? "1" : undefined} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"8px 0",borderBottom:"1px solid " + border}}>
+        <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
+        {summaryHolder(role)}
+        {mine && <span data-testid="editor-you" style={{background:T.accentTint,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
+        {confirmBadge}
+      </div>
+    );
     return (
       <div data-testid={"editor-" + role + "-block"} style={{border:"1px solid " + border,borderRadius:8,padding:"10px 12px",marginBottom:10,background: dk ? "#1a2540" : "#fafbfc"}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
           <span style={{...label,marginBottom:0,minWidth:60}}>{role === "primary" ? "Primary" : "Backup"}</span>
           {holderView(role)}
           {locked && <Padlock title={role + " locked"} size={11}/>}
-          {locked && awaitingConfirmation(opened) && <span data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={confirmBadgeStyle}>confirm</span>}
+          {confirmBadge}
           {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
           {/* Item E3 (Faraz 9/25): which rule a locked holder breaks (East reasons among them, the raw codes in the hover) is
               override detail - the scheduler's only, like the Override panel's reason list */}
@@ -8100,15 +8161,16 @@ function DayEditor(props) {
           <button type="button" aria-label="Close" onClick={requestClose} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"0 4px",marginLeft:4}}>x</button>
         </div>
         <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
-          <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>
+          {(hol || canEdit) && <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>}
           {/* Item E3 (Faraz 9/25): the East block - status lines, the East-vacation state and diamond, and the "East: ..." placeholder
               line - is the scheduler's only; everyone else gets no East heading, line or word here */}
           {eastDetailsVisible && (east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" data-eastvac={l.eastVac || undefined} style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub}}>{l.eastVac ? <span style={{...eastVacMarkStyle(l.eastVac, dk, sub),marginRight:6,verticalAlign:"middle"}}/> : null}East - {l.text}</div>))}
-          <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div>
-          {ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
-          {!rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
-          {/* Item E3 (9/25): a derived-week row's source "east-derived" reads "generated" (the generator wrote it) to everyone but the scheduler */}
-          {entry && entry.source && <div data-testid="editor-source">Source: {entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source}</div>}
+          {canEdit ? <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div> : vacationNames.length > 0 && <div data-testid="editor-off">Off: {vacationNames.join(", ")}</div>}
+          {canEdit && ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
+          {canEdit && !rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
+          {/* Item E3 (9/25): a derived-week row's source "east-derived" reads "generated" (the generator wrote it) to everyone but the scheduler.
+              Day-click summary (9/27): the Source line is the scheduler's only (the masking stays as defence in depth). */}
+          {canEdit && entry && entry.source && <div data-testid="editor-source">Source: {entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source}</div>}
         </div>
 
         {roleBlock("primary")}
@@ -8139,21 +8201,30 @@ function DayEditor(props) {
               <input data-testid="editor-external" ref={externalRef} value={draft.externalCover || ""} disabled={!!draft.primary} onChange={e => setDraft(d => ({ ...d, externalCover: e.target.value }))} placeholder={draft.primary ? "clear primary to use" : "e.g. Atwell"} title="Someone outside the roster covering primary; counts toward nobody's tally" style={{...inp,width:"100%",opacity:draft.primary?0.6:1}}/>
             </div>
           </div>
-        ) : (
-          <div data-testid="editor-note-view" style={{fontSize:12,color:sub,marginBottom:10}}>{draft.note ? <>Note: {draft.note}</> : "No note."}</div>
-        )}
+        ) : draft.note ? (
+          <div data-testid="editor-note-view" style={{fontSize:12,color:sub,margin:"10px 0"}}>Note: {draft.note}</div>
+        ) : null}
 
         {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
-        {evalBroken && <div role="alert" data-testid="editor-eval-error" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>Eligibility check failed for {Array.from(new Set(evalErrors.map(o => o.name))).join(", ")}: {evalErrors[0].error} - saving is disabled until the rules evaluate again (reload the page; if it persists, tell the scheduler).</div>}
+        {canEdit && evalBroken && <div role="alert" data-testid="editor-eval-error" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>Eligibility check failed for {Array.from(new Set(evalErrors.map(o => o.name))).join(", ")}: {evalErrors[0].error} - saving is disabled until the rules evaluate again (reload the page; if it persists, tell the scheduler).</div>}
         {hint && <div role="status" data-testid="editor-hint" style={{fontSize:12,color:"#a83232",fontWeight:700,marginBottom:8}}>{hint}</div>}
         {/* Sticky footer: the Cancel / Save row stays in view while the dialog body scrolls (a phone showed it below the fold - Prompt 11);
             it pads by the iOS home-indicator inset like the painter sheets' footers (Prompt 16 A5). */}
         <div data-testid="editor-footer" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:"1px solid " + border}}>
           {!isPublicMode && (canEdit || myRole) && (
-            <button type="button" data-testid="editor-trade" data-suggested={tradePick && tradePick.to ? tradePick.to : undefined} onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)} style={{background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0,textAlign:"left"}}>Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}</button>
+            <button type="button" data-testid="editor-trade" data-suggested={tradePick && tradePick.to ? tradePick.to : undefined} onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)} style={canEdit ? {background:"none",border:"none",color:THEME[dk ? "dark" : "light"].accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",padding:0,textAlign:"left"} : {...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,textAlign:"left"}}>Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}</button>
+          )}
+          {/* Day-click summary (9/27): the linked surgeon's own actions - give his day away (the Propose card in give mode), or
+              take an OPEN slot (today onward) on the Open shifts board. Never for the office, a viewer, a follower (no roster
+              link) or ?public=1; the scheduler has the full editor and the board's Assign. */}
+          {!isPublicMode && !canEdit && myRole && typeof onGive === "function" && (
+            <button type="button" data-testid="editor-give" onClick={() => onGive(day, myRole)} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36}}>Give away</button>
+          )}
+          {!isPublicMode && !canEdit && mySurgeon && openRoles.length > 0 && typeof onOpenShifts === "function" && (
+            <button type="button" data-testid="editor-open-shifts" data-roles={openRoles.join(",")} onClick={() => onOpenShifts()} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36}}>See it on Open shifts</button>
           )}
           <span style={{flex:1}}/>
-          <span style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>
+          {canEdit && <span className="editor-kbd-hint" style={{fontSize:10,color:sub}}>Esc closes - arrow keys move a day</span>}
           <button type="button" onClick={requestClose} style={{...css.btn(false),padding:"7px 14px",fontSize:12}}>{canEdit ? "Cancel" : "Close"}</button>
           {canEdit && <button type="button" data-testid="editor-save" onClick={save} disabled={!dirty || evalBroken} title={evalBroken ? "Eligibility check failed - saving is disabled" : undefined} style={{...css.btn(true),padding:"7px 16px",fontSize:12,opacity:(dirty && !evalBroken)?1:0.5}}>Save</button>}
         </div>
