@@ -44,6 +44,10 @@ const THEME = {
     // open-shifts board's <span> - on a span, never a td: the dark sheet's td rule would repaint it)
     // - 4.99:1 on the card, 4.69:1 on the page; dark 6.17:1 / 7.38:1.
     success: "#1A8040",
+    // Backup role word (My schedule / Following rows) and warning text (Setup issues, the generator's Warnings)
+    // (HANDOFF 3.4 item 1, 9/27: the literal #7a5a20 read 2.29:1 on the dark card - the dark sheet never repainted it).
+    // Light #7A5A20 = the backup role colour; dark #D4A84A = 6.57:1 card / 7.24:1 raised / 7.85:1 page.
+    backupText: "#7A5A20", warnText: "#7A5A20",
     // Fairness bars (TotalsCard): the fill gradient against its track, both stops >= 3:1.
     barTrack: "#EEF1F4", barStart: "#13294B", barEnd: "#1F3A6B",
   },
@@ -55,6 +59,7 @@ const THEME = {
     accent: "#FF8A4C", onAccent: "#0B1A33", accentText: "#FF8A4C", accentTint: "#3A2418",
     open: "#F06060", weekend: "#0F2140", holiday: "#3A3418", skeleton: "#243250",
     success: "#40C060",
+    backupText: "#D4A84A", warnText: "#D4A84A",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
   },
 };

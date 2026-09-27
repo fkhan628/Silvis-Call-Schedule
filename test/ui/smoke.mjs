@@ -4309,6 +4309,42 @@ try {
     ok("screenshot test/ui/out/mine.png");
   } catch (e) { fail("My schedule harness exception: " + errLine(e)); }
 
+  // ---- HANDOFF 3.4 item 1 (9/27): the Backup role word reads >= 4.5:1 on its card in dark mode ----
+  // The word was a literal #7a5a20 the dark sheet never repainted (2.29:1 on #13294B); it is T.backupText now.
+  // Measured on computed colours: the role span against the first opaque background up its ancestors.
+  try {
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Dark')");
+    await page.click('button[data-tab="myschedule"]');
+    await page.waitForSelector("[data-testid=mine-card]", { timeout: 8000 });
+    await page.waitForTimeout(300);
+    const bw = await page.evaluate(() => {
+      const el = document.querySelector("[data-testid=mine-day][data-role=backup] [data-testid=mine-role]");
+      if (!el) return null;
+      const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+      const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      let bg = null, bgCss = null;
+      for (let e = el; e && !bg; e = e.parentElement) { bgCss = getComputedStyle(e).backgroundColor; bg = parseRgb(bgCss); }
+      const fg = parseRgb(getComputedStyle(el).color);
+      if (!fg || !bg) return { day: el.closest("[data-testid=mine-day]").getAttribute("data-day"), color: getComputedStyle(el).color, bg: bgCss, ratio: null };
+      const la = lum(fg), lb = lum(bg);
+      return { day: el.closest("[data-testid=mine-day]").getAttribute("data-day"), text: el.textContent.trim(), color: getComputedStyle(el).color, bg: bgCss, ratio: Math.round((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05) * 100) / 100 };
+    });
+    // A missing row is "not exercised" only when the live rows give s1 no backup day in the list's 90-day window;
+    // otherwise the selector (mine-day[data-role=backup] / mine-role) broke.
+    const bwHorizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
+    const bwExpected = recountRows.filter(r => r.day >= todayIso && r.day <= bwHorizon && r.backup_id === "s1").length;
+    if (!bw && bwExpected) fail(`My schedule dark: the live rows give s1 ${bwExpected} backup day(s) in the next 90 days but no [data-testid=mine-day][data-role=backup] [data-testid=mine-role] was found`);
+    else if (!bw) console.log("     (dark Backup role word: not exercised - s1 has no backup row in the next 90 days)");
+    else if (bw.ratio === null || bw.ratio < 4.5) fail(`My schedule dark: the Backup role word on ${bw.day} reads ${bw.ratio}:1 (${bw.color} on ${bw.bg}), below 4.5:1`);
+    else ok(`My schedule dark: the Backup role word on ${bw.day} '${bw.text}' ${bw.color} on ${bw.bg} = ${bw.ratio}:1`);
+    await page.click('button[data-tab="settings"]');
+    await page.click("button:has-text('Light')");
+  } catch (e) {
+    fail("My schedule dark role-word harness exception: " + errLine(e));
+    try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); } catch (_) { /* the next block reports its own state */ }
+  }
+
   // ---- Item D (2026-09-24): Settings (scheduler) shows Khan's combined Silvis + Davenport feed link with Copy at 390 px, light + dark ----
   // The link is calendar-sync?surgeon=FAK&east=1 (the same public feed URL with one flag), in a read-only box beside a
   // Copy button that is a phone tap target (>= 36 px) and reads 'Copied' after writing the URL to the clipboard
