@@ -1,10 +1,10 @@
 -- ============================================================================
 -- Silvis Call Schedule - migration 2026-09-27: call pay - call_pay_settings + call_pay_logs (Faraz 9/27: a place to track
 -- primary call pay; this REVERSES the 9/21 rule "no compensation logic and no $ display anywhere in this app").
--- REPORT-FIRST, NOT APPLIED (CLAUDE.md, guide section 4.3: row-level security on the live database). Two NEW tables and one
--- NEW helper function only: no existing table, column, policy, function, grant or row is touched. sql/schema.sql mirrors
--- every statement below (header revision r, "report-first, NOT yet applied" until the record step); test/schema.test.js
--- pins the identity.
+-- REPORT-FIRST (CLAUDE.md, guide section 4.3: row-level security on the live database); APPLIED 2026-09-28 01:15:26Z after the
+-- probe (the observed line in docs/SCHEMA-REVIEW.md). Two NEW tables and one NEW helper function only: no existing table,
+-- column, policy, function, grant or row is touched. sql/schema.sql mirrors every statement below (header revision r, "applied
+-- 2026-09-28 01:15:26Z" since the record step; "report-first, NOT yet applied" before it); test/schema.test.js pins the identity.
 --
 -- What it holds. call_pay_settings: ONE row 'main' - the four rates the scheduler enters in the app (Setup > Pay rates),
 -- the flags that shape the pay model (which weekdays count as weekend, whether every day of a holiday unit is a holiday,

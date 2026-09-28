@@ -74,7 +74,7 @@
 -- timeoff. / offers. / availability. families (prefs.save). audit_insert, audit_read and audit_read_coord are unchanged (audit_read_coord kept, now
 -- redundant). Applied after the 24-hour gate had passed (applied earlier, it would have turned the gate's verify-rls C21 red); the lost audit rows
 -- the tables could rebuild were backfilled (detail.backfilled = true; the rest listed - docs/SCHEMA-REVIEW.md).
--- Revision 2026-09-27 r (call pay, sql/migrations/2026-09-27-call-pay.sql, report-first, NOT yet applied): Faraz 9/27 reverses the 9/21
+-- Revision 2026-09-27 r (call pay, sql/migrations/2026-09-27-call-pay.sql, applied 2026-09-28 01:15:26Z after the probe): Faraz 9/27 reverses the 9/21
 -- "no compensation logic" rule - primary call pay is tracked in the app. Two NEW tables and one NEW helper: call_pay_settings (one row
 -- 'main': the rates the scheduler enters in Setup, null until then - no rate figure in this repo - plus the pay-model flags and
 -- stipend_off_ids, the surgeons NOT paid by the call stipend; read by the scheduler, the office coordinator (read-only) and linked
@@ -1181,7 +1181,7 @@ create table if not exists public.office_notification_state (
 );
 
 -- ---------- call pay (2026-09-27, Faraz: primary call pay is tracked in the app; sql/migrations/2026-09-27-call-pay.sql,
--- report-first, NOT yet applied - revision r). Authenticated only, never anon: the rates and the call-ins are pay data. The
+-- report-first; applied 2026-09-28 01:15:26Z - revision r). Authenticated only, never anon: the rates and the call-ins are pay data. The
 -- 'main' settings row starts with every rate null (seed rows below) - the scheduler enters the figures in Setup > Pay rates,
 -- so no rate figure is ever in this file. The client reads a missing table (404 PGRST205 / 42P01) as 'unavailable'.
 -- stipend_off_ids (item 5b): the roster ids NOT paid by the call stipend (Setup > Pay rates' per-surgeon switch, default ON =
@@ -1504,7 +1504,7 @@ drop policy if exists contacts_write on public.office_contacts;
 create policy contacts_write on public.office_contacts for all to authenticated
   using (public.silvis_is_sched()) with check (public.silvis_is_sched());
 
--- call pay (2026-09-27, revision r - report-first, NOT yet applied): the settings row is read by the scheduler / admin, by the
+-- call pay (2026-09-27, revision r - applied 2026-09-28 01:15:26Z): the settings row is read by the scheduler / admin, by the
 -- office COORDINATOR (read-only - it prepares the stipends) and by a SURGEON-role account linked to a roster id that is paid by
 -- the call stipend (silvis_pay_enabled - the rates his own pay is computed with); written by the scheduler / admin only. A
 -- call-in row is read by the scheduler / admin and the coordinator (every row, a switched-off surgeon's earlier rows included)

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - call pay PROBE (2026-09-27, Faraz: primary call pay; sql/migrations/2026-09-27-call-pay.sql,
--- REPORT-FIRST, NOT APPLIED). Proves the two new tables' grants, RLS, guards and constraints on the LIVE database
+-- REPORT-FIRST; APPLIED 2026-09-28 01:15:26Z). Proves the two new tables' grants, RLS, guards and constraints on the LIVE database
 -- WITHOUT PERSISTING ANYTHING, and never reads or prints a rate.
 --
 -- Same mechanism as the other probes: run the whole file as ONE batch through the linked Supabase CLI (the Management API
@@ -12,8 +12,12 @@
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/call-pay-probe.sql
 --   (scripts/verify-rls.sh section 14d runs it, grades each case and checks nothing persisted)
 --
--- BEFORE the migration the first block raises 'PROBE_SETUP: call_pay_logs is absent ...' (nothing else runs; verify-rls
--- reads that as the not-applied picture unless SILVIS_CALL_PAY_APPLIED=1). AFTER it every case below must read as listed.
+-- BEFORE the migration the first block raises 'PROBE_SETUP: call_pay_logs is absent ...' (nothing else runs). AFTER it every
+-- case below must read as listed.
+-- As run: the migration was applied 2026-09-28 01:15:26Z (schema.sql revision r); the probe read PROBE_SETUP before it and all 52
+-- cases below as listed after it. Until the record step verify-rls read PROBE_SETUP as the not-applied picture (unless
+-- SILVIS_CALL_PAY_APPLIED=1); since the record step, which dropped that variable, section 14d FAILs a PROBE_SETUP - the
+-- not-applied grading is history.
 --
 -- Fixtures are PAST days in 2020-03 (PY001 refuses a future day), schedule_days rows with source 'probe-pay' and the live
 -- roster ids (the setup first takes s2 and s3 OFF call_pay_settings.stipend_off_ids - they are paid by the stipend for every
