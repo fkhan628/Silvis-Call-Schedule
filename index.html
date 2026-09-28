@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-qH3C9OgxZxFUrrsi/JX+CVpzCXOj5QsFv2zW1HOWDso=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-b7rwDO0Mo1/Ct7o4z18b2CT/aKUkQduGS+sV7xNZLrc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-d46DykP+3D7fSovCBMi7NhFTdJ/voHcFb3Y6TDSSiy8=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-K1U0ry7I2zpN6RfgdlP+kzsJeHF1Z3ZoaBX6pP9o6xk=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -119,7 +119,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.27b";
+    var APP_VERSION = "2026.09.27c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -6087,14 +6087,27 @@ function CallSchedule() {
     color: T.text
   } : {};
   const todayStr = todayCentral();
-  const todayAssign = schedule[todayStr] || null;
-  const buildTonightMsg = () => {
-    const a = todayAssign;
-    if (!a && !loaded) return "Silvis call today: loading schedule";
-    const p = a ? holderLabel(dayHolder(a, "primary"), nameOf) : "OPEN";
-    const b = a ? holderLabel(dayHolder(a, "backup"), nameOf) : "OPEN";
-    return `Silvis call today: P ${p} / B ${b}`;
-  };
+  const onCall = onCallNow(schedule, Date.now());
+  const [, setShiftClockKey] = useState(() => {
+    const c = shiftClockCentral();
+    return c.calendarDay + "|" + c.shiftDay;
+  });
+  useEffect(() => {
+    const tick = () => {
+      const c = shiftClockCentral();
+      setShiftClockKey(c.calendarDay + "|" + c.shiftDay);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    const shiftClockTimer = setInterval(tick, 30000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(shiftClockTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded);
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState("");
   const copyText = async (text, label) => {
@@ -9538,6 +9551,8 @@ function CallSchedule() {
       onChange: e => setCalOnlyOpen(e.target.checked)
     }), " only OPEN"))), React.createElement("div", {
       "data-testid": "today-banner",
+      "data-shift-day": onCall.shiftDay,
+      "data-before-handoff": onCall.beforeHandoff ? "1" : "0",
       style: {
         fontSize: 12.5,
         color: dkText,
@@ -9551,15 +9566,18 @@ function CallSchedule() {
         alignItems: "center",
         flexWrap: "wrap"
       }
-    }, React.createElement("strong", null, "On call today ", fmtMD(todayStr), ":"), React.createElement("span", null, "P"), " ", React.createElement(HolderTag, {
-      a: todayAssign,
+    }, React.createElement("strong", {
+      title: "The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"
+    }, "On call now (until 07:00 ", onCall.handoffDow, "):"), React.createElement("span", null, "P"), " ", React.createElement(HolderTag, {
+      a: onCall.current,
       role: "primary",
       small: true
     }), React.createElement("span", null, "B"), " ", React.createElement(HolderTag, {
-      a: todayAssign,
+      a: onCall.current,
       role: "backup",
       small: true
     }), React.createElement("span", {
+      "data-testid": "today-banner-msg",
       style: {
         fontFamily: mono,
         fontSize: 11,
@@ -9572,7 +9590,25 @@ function CallSchedule() {
         fontSize: 11,
         marginLeft: "auto"
       })
-    }, copied ? "Copied" : "Share today")), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
+    }, copied ? "Copied" : "Share today"), onCall.beforeHandoff && React.createElement("div", {
+      "data-testid": "today-banner-next",
+      style: {
+        flexBasis: "100%",
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        flexWrap: "wrap",
+        color: dkSubtext
+      }
+    }, React.createElement("span", null, "From 07:00:"), " ", React.createElement(HolderTag, {
+      a: onCall.next,
+      role: "primary",
+      small: true
+    }), " ", React.createElement("span", null, "/"), " ", React.createElement(HolderTag, {
+      a: onCall.next,
+      role: "backup",
+      small: true
+    }))), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
       style: muted
     }, "Loading schedule"), previewGen && React.createElement("div", {
       "data-testid": "preview-banner",
