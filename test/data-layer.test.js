@@ -2209,7 +2209,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const tc = src.slice(src.indexOf("function TotalsCard({"), src.indexOf("function SuField("));
     // 9/27 item 5a (deliberate pin change): payTotalsRole ("scheduler" | "office" | null) replaces isScheduler - the office reads
     // Totals > Pay read-only; test/pay.test.js pins the gate
-    assert.ok(tc.includes("function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, payTotalsRole, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, eastDetailsVisible })"), "TotalsCard reads the flag (and, since the call pay step of 9/27, the pay props - test/pay.test.js pins their gate)");
+    // 9/28 (deliberate pin change, review 9/27 Do first 1): daysUnread (loaded, but no schedule_days read landed) joins the
+    // props - the period line says "Schedule not loaded" instead of presenting the empty map's zeros as the tally
+    assert.ok(tc.includes("function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, payTotalsRole, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, daysUnread, eastDetailsVisible })"), "TotalsCard reads the flag (and, since the call pay step of 9/27, the pay props - test/pay.test.js pins their gate)");
     assert.ok(tc.includes("const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));"), "the East days column is the scheduler's only");
     assert.ok(tc.includes('{showEast && <th style={th} title="Days on East (Davenport) call') && tc.includes("{showEast && <td style={td}>{r.east") && tc.includes('{showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""}') && tc.includes("{showEast && <div style={{ fontSize: 11, color: \"#5B6B82\", marginTop: 4 }}>East days:"), "header, cells, fairness text and footnote all read showEast");
     assert.ok(tc.includes("data-east={showEast ? r.east : undefined}"), "the row's data-east attribute follows the column");
@@ -2764,13 +2766,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(none.current, null);
     assert.strictEqual(H.onCallNowMsg(none, nameOf, true), "Silvis call now (until 07:00 Sun): P OPEN / B OPEN; from 07:00: P OPEN / B OPEN");
     assert.strictEqual(H.onCallNowMsg(none, nameOf, false), "Silvis call now: loading schedule", "before the first load: a placeholder, never OPEN");
+    assert.strictEqual(H.onCallNowMsg(none, nameOf, true, false), "Silvis call now: schedule not loaded", "loaded but the schedule_days read never landed: a placeholder, never OPEN (review 9/27 Do first 1)");
+    assert.strictEqual(H.onCallNowMsg(early, nameOf, true, false), "Silvis call now: schedule not loaded", "an unread schedule never names a pair");
+    assert.strictEqual(H.onCallNowMsg(early, nameOf, true, true), H.onCallNowMsg(early, nameOf, true), "daysRead true = omitted (older callers)");
     assert.ok(!/@|\d{3}[-. ]\d{3}[-. ]\d{4}/.test(H.onCallNowMsg(early, nameOf, true)), "names only");
   });
   check("index-source.html: the today banner and Share today read the shift day (onCallNow); todayStr stays todayCentral(); the shift clock ticks and is cleaned up", () => {
     assert.ok(src.includes("  const todayStr = todayCentral();\n"), "todayStr stays the calendar date");
     assert.strictEqual(count("const todayAssign"), 0, "the calendar-day todayAssign is gone (the banner reads onCall)");
     assert.ok(src.includes("  const onCall = onCallNow(schedule, Date.now());"), "onCall");
-    assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded);"), "the share text is helpers.onCallNowMsg");
+    // 9/28 (deliberate pin change, review 9/27 Do first 1): daysReadOk is passed - a finished load whose schedule_days read
+    // never landed reads "schedule not loaded", never OPEN
+    assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);"), "the share text is helpers.onCallNowMsg");
     const sh = src.slice(src.indexOf("  const shareTonightMsg = async () => {"), src.indexOf("\n  };\n", src.indexOf("  const shareTonightMsg = async () => {")));
     assert.ok(sh.includes("const msg = buildTonightMsg();"), "Share today sends buildTonightMsg");
     const b0 = src.indexOf('<div data-testid="today-banner"'), b1 = src.indexOf("{offerNoticeBox(offerNotices.filter(n => n.urgent), \"calendar\")}", b0);
@@ -2795,6 +2802,61 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // TH: the legend's OPEN is the theme's red token (T.open = #B91C1C light / #F06060 dark), same wording.
     assert.ok(src.includes('<span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>'), "legend");
     assert.strictEqual(count("= nobody assigned</span>"), 0, "old legend wording remains");
+  });
+  check("review 9/27 Do first 1 (9/28): a failed first schedule_days read shows 'Schedule not loaded' (banner + Retry, header, placeholders) - never OPEN under 'Synced'; loadFailedRef and the loaded gates are untouched", () => {
+    // daysReadOk only ever turns true, at the three places a read is taken in
+    assert.strictEqual(count("const [daysReadOk, setDaysReadOk] = useState(false);"), 1, "daysReadOk state");
+    assert.strictEqual(count("setDaysReadOk("), 1, "setDaysReadOk is called by markDaysRead only");
+    assert.ok(src.includes("const markDaysRead = () => { daysReadOkRef.current = true; setDaysReadOk(true); setDaysLoadFailed(false); };"), "markDaysRead sets true, clears the banner");
+    assert.ok(!/setDaysReadOk\(false\)|daysReadOkRef\.current = false/.test(src), "daysReadOk never turns back");
+    const adopt = src.slice(src.indexOf("  const adoptLoadedDays = (loadedDays) => {"), src.indexOf("  const sameAssignment"));
+    assert.ok(adopt.includes("markDaysRead();"), "adoptLoadedDays marks the read");
+    const rerunLine = "if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);";
+    const afterRerun = src.slice(src.indexOf(rerunLine), src.indexOf("// Independent secondary loads", src.indexOf(rerunLine)));
+    assert.ok(afterRerun.includes("daysReadThisRun = true;") && afterRerun.includes("markDaysRead();"), "the mount / sign-in re-run marks the read right after the (unchanged) adopt-or-merge line");
+    const rd = src.slice(src.indexOf("    const refreshDays = async () => {"), src.indexOf("    // Authenticated-read tables"));
+    assert.ok(rd.includes("if (adopted !== false) loadFailedRef.current = false;") && rd.includes("if (adopted !== false) markDaysRead();"), "refreshDays marks the read only for an adopted read (a tripped read is not a success)");
+    // the failure: the banner flag in the schedule_days catch, next to the unchanged loadFailedRef arm
+    const cat = src.slice(src.indexOf('console.error("Supabase load error (schedule_days):", e);'), src.indexOf("await loadTimeOff();", src.indexOf('console.error("Supabase load error (schedule_days):", e);')));
+    assert.ok(cat.includes("loadFailedRef.current = true; // read threw - suppress autosave until a read succeeds") && cat.includes("if (!daysReadThisRun) setDaysLoadFailed(true);"), "catch: loadFailedRef armed as before + the banner flag");
+    assert.ok(src.includes("      setLoaded(true);\n"), "setLoaded(true) still runs after the load (the loaded gates are untouched)");
+    // the banner: persistent role=alert, Retry = the poll's full refreshAll
+    assert.ok(src.includes('{daysLoadFailed && !daysReadOk && (') && src.includes('<div data-testid="days-load-failed" role="alert"'), "the banner");
+    assert.ok(src.includes('data-testid="days-load-retry" onClick={retryDaysLoad}'), "Retry button");
+    assert.ok(src.includes("refreshAllRef.current = refreshAll;") && src.includes("try { await refreshAllRef.current(); }"), "Retry runs refreshAll");
+    // header: Synced only once read; the unread text contains no 'Synced' (the smoke waits on text=Synced) and is not 'Not synced'
+    assert.ok(src.includes("{loaded && !saveStatus && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}"), "Synced gated on daysReadOk");
+    assert.strictEqual(count(">Schedule not loaded</span>"), 2, "the header (and the public header) say 'Schedule not loaded'");
+    assert.strictEqual(count("Not synced"), 0, "no 'Not synced' (the smoke's text=Synced would match it)");
+    // placeholders: own testids; loading-slot stays the before-load skeleton only
+    assert.strictEqual(count('data-testid="loading-slot"'), 1, "loading-slot unchanged");
+    assert.ok(src.includes('else if (!holder && !daysReadOk) body = <span className="cal-pill" data-testid="unread-slot"'), "grid cell placeholder");
+    const ht = src.slice(src.indexOf("  const HolderTag = ({a, role, small}) => {"), src.indexOf("\n  };\n", src.indexOf("  const HolderTag = ({a, role, small}) => {")));
+    assert.ok(ht.indexOf("if (!v && !loaded) return <LoadingTag/>;") < ht.indexOf("if (!v && !daysReadOk) return <UnreadTag/>;") && ht.indexOf("if (!v && !daysReadOk) return <UnreadTag/>;") < ht.indexOf("if (!v) return <OpenTag/>;"), "HolderTag: loading, then not loaded, then OPEN");
+    assert.ok(src.includes("const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);"), "no cell is data-open before a read");
+    // the render sites that said OPEN / none / zero over the empty map
+    assert.ok(src.includes("data-count={daysShown ? n : \"\"}") && src.includes("disabled={!daysShown || !n}"), "coverage counts");
+    assert.ok(src.includes("disabled={!daysShown}") && src.includes('if (!daysShown) { showToast("The schedule has not loaded - nothing to share yet.", "error"); return; }'), "Share today disabled + refused until the schedule loads");
+    assert.ok(src.includes("{daysShown && Object.keys(schedule).length === 0 && <p style={{...muted,fontStyle:\"italic\",marginBottom:8}}>No schedule days in the database yet"), "'No schedule days in the database yet' only after a read");
+    assert.ok(src.includes("{daysShown && weekRows.map(r => (") && src.includes('data-testid="week-rows-unread"'), "week rows");
+    assert.ok(src.includes('{!loaded ? "Loading schedule" : !daysReadOk ? "Schedule not loaded" : !boardEnd ?') && src.includes('data-testid="openshifts-unread"'), "the Open shifts board's header line and empty row");
+    assert.ok(src.includes('!daysReadOk ? <span data-testid="next-call-unread"'), "Mine's next call");
+    assert.ok(src.includes("daysUnread={loaded && !daysReadOk} loaded={loaded}") && src.includes('data-testid="totals-days-unread"'), "the Totals line");
+    assert.ok(src.includes("const openCellDay = (d) => { if (loaded && !daysReadOk) {"), "a cell tap does not open an unread day (it would read OPEN)");
+    // notifications: three states; 'No notifications yet' only after a read that landed
+    assert.ok(src.includes('const [notifsRead, setNotifsRead] = useState("unread");'), "notifsRead state");
+    assert.strictEqual(count('setNotifsRead("ok")'), 2, "mount + poll mark ok");
+    assert.strictEqual(count('setNotifsRead("failed")'), 2, "mount + poll mark failed");
+    assert.ok(src.includes('{notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ?'), "the panel's empty text follows the read state");
+  });
+  check("9/28: the coverage strip says 'published through M/D' (lastPublishedDay) and 'last published <time>' only when lastPublished.at exists - never 'never'; neither before the days are read", () => {
+    const stripAt = src.indexOf('<div data-testid="coverage-strip"'), stripEnd = src.indexOf("</div>", src.indexOf('data-testid="cov-last-published"'));
+    const strip = src.slice(stripAt, stripEnd);
+    assert.ok(strip.includes('{daysShown && lastPublishedDay && <span data-testid="cov-published-through" data-value={lastPublishedDay}'), "published through = lastPublishedDay, after a read");
+    assert.ok(strip.includes("published through <strong style={{fontFamily:mono}}>{fmtMD(lastPublishedDay)}</strong>"), "M/D");
+    assert.ok(strip.includes('{daysShown && lastPublished && lastPublished.at && <span data-testid="cov-last-published" data-value={lastPublished.at}>last published <strong>{fmtAuditTime(lastPublished.at)}</strong></span>}'), "last published only with a stamp");
+    assert.ok(!/"never"/.test(strip), "no 'never' in the strip");
+    assert.ok(src.includes("const lastPublishedDay = useMemo(() => suLastContiguousDay(schedule), [schedule]);") && src.includes("const board = useMemo(() => obBoardSlots(schedule, todayStr, lastPublishedDay, {"), "the same value as the Open shifts board's end");
   });
   check("REASON_WORDS glosses the 9/22 soft vocabulary (weekend-primary/backup, window-week targets, consecutive-primary, long-run) plus derived-lock-held, and softTag falls back to it", () => {
     const rw = src.slice(src.indexOf("const REASON_WORDS = {"), src.indexOf("};", src.indexOf("const REASON_WORDS = {")));
@@ -5568,7 +5630,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(countIn(regionText("publish-diff"), "The changes listed above are already saved"), 1, "the publish notice paragraph must appear once (the 9/23 theme commit had left a second copy under it)");
       assert.ok(countIn(regionText("snapshot-list"), "color:T.text") >= 1 && countIn(regionText("snapshot-list"), "color:T.muted") >= 3 && regionText("snapshot-list").includes("{...css.errBox,fontWeight:600}") && regionText("snapshot-list").includes('borderBottom:"1px solid " + T.border'), "snapshot list: T.text reason, T.muted stamp / empty / loading, css.errBox, T.border rows");
       assert.ok(regionText("sucheck").includes('data-sucheck="" style={css.suCheck}>'), "SuCheck: style={css.suCheck} + data-sucheck for the smoke probe");
-      assert.ok(countIn(regionText("openshifts-board"), "color:T.open") === 2 && countIn(regionText("openshifts-board"), "color:T.muted") >= 6 && countIn(regionText("openshifts-board"), "color:T.success") === 1, "open-shifts board: OPEN + 'nobody' in T.open, the notes in T.muted, the empty row in T.success");
+      // 9/28 (deliberate pin change, review 9/27 Do first 1): a third T.open - the empty row's "Schedule not loaded" (openshifts-unread)
+      assert.ok(countIn(regionText("openshifts-board"), "color:T.open") === 3 && countIn(regionText("openshifts-board"), "color:T.muted") >= 6 && countIn(regionText("openshifts-board"), "color:T.success") === 1, "open-shifts board: OPEN + 'nobody' + the empty row's 'Schedule not loaded' in T.open, the notes in T.muted, the empty row in T.success");
       assert.strictEqual(countIn(regionText("claim-sheet"), "color:T.muted"), 3, "claim sheet + e-mail dialog: three T.muted notes");
       const sheet = B2SRC.slice(B2SRC.indexOf("{darkMode && <style>{`"), B2SRC.indexOf("`}</style>}"));
       assert.ok(/label\[style\*="color: rgb\(31, 42, 58\)"\]\s*\{ color: #E6ECF5 !important; \}/.test(sheet), "the dark sheet must keep repainting label rgb(31, 42, 58) -> #E6ECF5 (SuCheck depends on it)");

@@ -88,6 +88,13 @@
 //     instead of passing on the all-OPEN pre-load picture (finding vis-008)
 //   - opens the publish dialog and asserts the diff line carries a real arrow
 //     character, not the text "\u2192" (finding removal-02)
+//   - review 9/27 Do first 1 (9/28): a page whose FIRST schedule_days GET answers
+//     500 (switch failDaysFor) shows the persistent role=alert "Schedule not
+//     loaded" banner, the header "Schedule not loaded" (no "Synced"), no OPEN
+//     cell (unread-slot placeholders, never loading-slot), the banner line
+//     "schedule not loaded", Share today disabled, no coverage count / published
+//     through / "No schedule days" line; Retry (a full refreshAll) then loads
+//     the schedule - banner gone, "Synced", OPEN cells as the rows say
 //   - Slice E (Setup): every card expanded + screenshot (setup-<card>.png), Users
 //     last-admin refusal + PATCH ?id=eq.<uuid>, Rules pattern preview + save,
 //     Availability paste box, vacation conflict panel, Holidays coverage, East
@@ -467,6 +474,7 @@ let followerPrefs400Lines = 0;
 // Item E4 (review, Faraz 9/26): the browser's own "status of 500" line for each east_feed / east_vacation_reviews read
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
+let daysFailConsoleLines = 0; // review 9/27 Do first 1 (9/28): the browser's 500 line + the app's own console.error for the forced schedule_days failure
 const FOLLOW_FEED = [
   { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
@@ -784,6 +792,7 @@ const watchPage = (pg, tag) => {
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
+      else if (daysFailConsoleLines > 0 && /status of 500|Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailConsoleLines--; } // 9/28: the days-fail page's forced schedule_days 500 (the browser's line + the app's console.error)
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -846,6 +855,7 @@ const followsFixtureRows = () => {
   return followsFixture === "present" ? rows.map(r => ({ ...r, follows: followsStore[r.id] || [] })) : rows;
 };
 let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
+let failDaysFor = null, failDaysServed = 0;   // review 9/27 Do first 1 (9/28): the page whose NEXT schedule_days GET answers 500 (the mount read, when set before the load)
 // Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
 // recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
 // land in this store - what the real table would do - so the restore that
@@ -1250,6 +1260,9 @@ const routeSupabase = async (route, scope) => {
   // Prompt 16 B9 (h): one schedule_days GET from the named page answers 200 + [] - exactly what an RLS-filtered or
   // dead-token read looks like - so the app's tripwire can be seen keeping the map. Other pages' polls are untouched.
   if (emptyDaysFor && method === "GET" && url.pathname === "/rest/v1/schedule_days" && req.frame().page() === emptyDaysFor) { emptyDaysFor = null; emptyDaysServed++; return json(200, []); }
+  // Review 9/27 Do first 1 (9/28): one schedule_days GET from the named page answers 500 - set before the page loads, that
+  // is the mount read, so the app finishes its load with no schedule read (loadFailedRef armed, the banner up).
+  if (failDaysFor && method === "GET" && url.pathname === "/rest/v1/schedule_days" && req.frame().page() === failDaysFor) { failDaysFor = null; failDaysServed++; return json(500, { code: "XX000", message: "harness: schedule_days first read forced to fail", details: null, hint: null }); }
   if (daysWiped && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     let rows = Object.values(dayStore).sort((a, b) => a.day < b.day ? -1 : 1);
     const dayQ = (url.searchParams.get("day") || "").replace(/^eq\./, "");
@@ -9044,6 +9057,89 @@ try {
     } catch (e) { fail("refresh banners: " + errLine(e)); try { await p2.screenshot({ path: path.join(OUT, "failure-refresh.png"), fullPage: true }); } catch (e2) {} }
     minVersionOverride = null;
     await p2.close();
+  }
+
+  // ====================== Review 9/27 Do first 1 (9/28): the first schedule_days read fails -> "Schedule not loaded" + Retry ======================
+  // The page's mount read of schedule_days answers 500 (failDaysFor, one request). The app must not present the empty map
+  // as the schedule: a persistent role=alert banner with Retry, the header "Schedule not loaded" (never "Synced"), no OPEN
+  // cell (the unread-slot placeholder - loading-slot is the before-load skeleton only), the banner message "schedule not
+  // loaded" with Share today disabled, the coverage strip without counts / "published through" / "last published", no
+  // "No schedule days in the database yet" line, a cell tap that opens nothing. Retry runs the poll's full refreshAll:
+  // the banner goes, the header reads Synced, the cells carry the rows again. Realtime is silenced (poll only), and the
+  // Retry is clicked well inside the first 60 s poll, so it is the Retry that recovers.
+  {
+    const pdf = await context.newPage();
+    watchPage(pdf, "days-fail");
+    await pdf.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: poll only
+    await pdf.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+    const servedBefore = failDaysServed;
+    daysFailConsoleLines = 2;
+    failDaysFor = pdf;
+    try {
+      await loadWithRetry(pdf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "days-fail page");
+      const banner = pdf.locator("[data-testid=days-load-failed][role=alert]");
+      await banner.waitFor({ timeout: 30000 });
+      await pdf.click('button[data-tab="calendar"]').catch(() => {});
+      await pdf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
+      await pdf.waitForTimeout(300);
+      const st = await pdf.evaluate(() => {
+        const q = (s) => document.querySelector(s), qa = (s) => document.querySelectorAll(s);
+        const hdr = (q("[data-testid=app-header]") || { innerText: "" }).innerText;
+        const share = Array.from(qa("[data-testid=today-banner] button")).find(b => /Share today/.test(b.textContent));
+        return {
+          banner: (q("[data-testid=days-load-failed]") || { innerText: "" }).innerText.replace(/\s+/g, " "),
+          hdrUnread: /Schedule not loaded/.test(hdr), hdrSynced: /synced/i.test(hdr),
+          openCells: qa("[data-testid=cal-grid] .cal-open").length, dataOpen: Array.from(qa("[data-testid=cal-grid] .cal-cell")).filter(c => c.getAttribute("data-open")).length,
+          unreadSlots: qa("[data-testid=unread-slot]").length, loadingSlots: qa("[data-testid=loading-slot], [data-testid=loading-holder]").length,
+          msg: (q("[data-testid=today-banner-msg]") || { textContent: "" }).textContent, shareDisabled: share ? share.disabled : null,
+          covCount: (q("[data-testid=cov-open-primary]") || { getAttribute: () => null }).getAttribute("data-count"),
+          through: !!q("[data-testid=cov-published-through]"), lastPub: !!q("[data-testid=cov-last-published]"),
+          noDaysLine: /No schedule days in the database yet/.test(document.body.innerText),
+          retry: !!q("[data-testid=days-load-retry]"),
+        };
+      });
+      if (failDaysServed !== servedBefore + 1) fail(`days-fail: the harness served ${failDaysServed - servedBefore} forced 500(s) on schedule_days, expected 1 (the mount read)`);
+      else if (!/Schedule not loaded/.test(st.banner) || !st.retry) fail("days-fail: the banner lacks 'Schedule not loaded' or its Retry: " + st.banner.slice(0, 160));
+      else if (!st.hdrUnread || st.hdrSynced) fail(`days-fail: the header must read 'Schedule not loaded' and not 'Synced' (unread ${st.hdrUnread}, synced ${st.hdrSynced})`);
+      else if (st.openCells || st.dataOpen) fail(`days-fail: ${st.openCells} OPEN pill(s) / ${st.dataOpen} data-open cell(s) drawn over a schedule that was never read`);
+      else if (!st.unreadSlots || st.loadingSlots) fail(`days-fail: expected unread-slot placeholders and no loading placeholder (unread ${st.unreadSlots}, loading ${st.loadingSlots})`);
+      else if (st.msg !== "Silvis call now: schedule not loaded" || st.shareDisabled !== true) fail(`days-fail: banner message '${st.msg}', Share today disabled ${st.shareDisabled}`);
+      else if (st.covCount !== "" || st.through || st.lastPub || st.noDaysLine) fail(`days-fail: the coverage strip / empty-schedule line spoke about an unread schedule (count '${st.covCount}', published through ${st.through}, last published ${st.lastPub}, 'No schedule days' ${st.noDaysLine})`);
+      else ok(`days-fail: the first schedule_days read answered 500 - banner "${st.banner.slice(0, 70)}", header 'Schedule not loaded', ${st.unreadSlots} unread-slot placeholder(s), no OPEN, Share today disabled, no coverage count`);
+      // a cell tap opens nothing while unread (the editor would read the day as OPEN)
+      await pdf.click("[data-testid=cal-grid] .cal-cell >> nth=10");
+      await pdf.waitForTimeout(300);
+      if (await pdf.locator("[data-testid=day-editor]").count()) { fail("days-fail: a cell tap opened the day editor over an unread schedule"); await pdf.keyboard.press("Escape"); }
+      else ok("days-fail: a cell tap opens no day while the schedule is unread");
+      await pdf.screenshot({ path: path.join(OUT, "days-load-failed.png"), fullPage: false });
+      // Retry -> the poll's refreshAll reads the rows; the banner goes and the calendar is the table's again
+      await pdf.click("[data-testid=days-load-retry]");
+      const gone = await pdf.waitForSelector("[data-testid=days-load-failed]", { state: "detached", timeout: 20000 }).then(() => true).catch(() => false);
+      await pdf.waitForTimeout(400);
+      const after = await pdf.evaluate(() => ({
+        hdr: (document.querySelector("[data-testid=app-header]") || { innerText: "" }).innerText,
+        unread: document.querySelectorAll("[data-testid=unread-slot], [data-testid=unread-holder]").length,
+        covCount: (document.querySelector("[data-testid=cov-open-primary]") || { getAttribute: () => null }).getAttribute("data-count"),
+        through: (document.querySelector("[data-testid=cov-published-through]") || { getAttribute: () => null }).getAttribute("data-value"),
+        msg: (document.querySelector("[data-testid=today-banner-msg]") || { textContent: "" }).textContent,
+        toast: (document.querySelector("[data-testid=toast]") || { textContent: "" }).textContent,
+      }));
+      // "published through" is lastPublishedDay - the Open shifts board's end (its table's data-to), read off the same page
+      await pdf.click('button[data-tab="openshifts"]');
+      const expThrough = await pdf.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 }).then(() => pdf.$eval("[data-testid=openshifts-table]", el => el.getAttribute("data-to") || null)).catch(() => undefined);
+      await pdf.click('button[data-tab="calendar"]');
+      if (!gone) fail("days-fail: Retry did not clear the 'Schedule not loaded' banner within 20 s");
+      else if (!/Synced/.test(after.hdr) && !/Saved/.test(after.hdr)) fail("days-fail: after Retry the header does not read Synced: " + after.hdr.replace(/\s+/g, " ").slice(0, 120));
+      else if (after.unread) fail(`days-fail: ${after.unread} 'not loaded' placeholder(s) left after Retry`);
+      else if (after.covCount === "" || after.covCount === null) fail("days-fail: after Retry the coverage strip still has no count");
+      else if (expThrough === undefined || (after.through || null) !== expThrough) fail(`days-fail: after Retry 'published through' reads '${after.through}', the Open shifts board ends '${expThrough}'`);
+      else if (!/^Silvis call now \(until 07:00 /.test(after.msg)) fail("days-fail: after Retry the banner message is not the on-call pair: " + after.msg);
+      else if (!/Schedule loaded/.test(after.toast)) fail("days-fail: after Retry the toast does not say 'Schedule loaded.': " + after.toast.slice(0, 120));
+      else ok(`days-fail: Retry recovered - banner gone, header Synced, open primary ${after.covCount}, published through ${after.through}, "${after.msg.slice(0, 60)}"`);
+    } catch (e) { fail("days-fail: " + errLine(e)); try { await pdf.screenshot({ path: path.join(OUT, "failure-days-fail.png"), fullPage: true }); } catch (e2) {} }
+    failDaysFor = null;
+    daysFailConsoleLines = 0;
+    await pdf.close();
   }
 
   // ====================== Prompt 11: data management end to end (recorded writes) ======================

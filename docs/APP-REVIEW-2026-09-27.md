@@ -37,6 +37,7 @@ checked and should not be raised again. The scheduler asked for this file to liv
 ## 2. Do first (ranked by value for effort)
 
 ### 1. A failed first schedule read shows every slot OPEN under "Synced" (high)
+- **Status:** Done on fix/days-load-failed-display, not merged - `daysReadOk` (only ever true: adoptLoadedDays, the re-run merge, refreshDays) drives the placeholders (grid `unread-slot`, today banner `unread-holder` + Share disabled, coverage counts, week rows, the board, Mine / Following, the Totals line, both headers "Schedule not loaded"); `daysLoadFailed` raises the role=alert banner with Retry (a full refreshAll); the notifications panel reads three states; a cell tap opens no unread day. `loadFailedRef` and every `loaded` gate untouched; the pins named below kept; smoke "days-fail" added (build guide §8). Same branch: the coverage strip says "published through M/D" (lastPublishedDay) and "last published <time>" only when `lastPublished.at` exists.
 - **Why:**
   - When the schedule_days read fails at open, `setLoaded(true)` still runs with an empty `schedule` (index-source.html:1774-1783, 267).
   - The header then reads "Synced" (5535). The grid, the today banner and Share today all show OPEN (4582-4585, 5737-5740, 5819-5822, 4523-4529).

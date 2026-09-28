@@ -184,9 +184,12 @@ function onCallNow(schedule, now) {
 //   "Silvis call now (until 07:00 Mon): P Khan / B Acton"
 //   + before 07:00 "; from 07:00: P Burchett / B Philip"
 // An unassigned slot reads OPEN (holderLabel). Before the first load with no row: "Silvis call now: loading schedule".
-function onCallNowMsg(view, nameOf, loaded) {
+// daysRead === false (review 9/27 Do first 1: the load finished but the schedule_days read never landed, so the map
+// is not the table): "Silvis call now: schedule not loaded" - never OPEN. Omitted (older callers) = read.
+function onCallNowMsg(view, nameOf, loaded, daysRead) {
   const v = view || {};
   if (!loaded && !v.current) return "Silvis call now: loading schedule";
+  if (daysRead === false) return "Silvis call now: schedule not loaded";
   const pair = (a) => `P ${holderLabel(dayHolder(a, "primary"), nameOf)} / B ${holderLabel(dayHolder(a, "backup"), nameOf)}`;
   let msg = `Silvis call now (until 07:00 ${v.handoffDow || "?"}): ${pair(v.current)}`;
   if (v.beforeHandoff) msg += `; from 07:00: ${pair(v.next)}`;
