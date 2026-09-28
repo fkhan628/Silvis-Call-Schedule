@@ -2807,7 +2807,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // daysReadOk only ever turns true, at the three places a read is taken in
     assert.strictEqual(count("const [daysReadOk, setDaysReadOk] = useState(false);"), 1, "daysReadOk state");
     assert.strictEqual(count("setDaysReadOk("), 1, "setDaysReadOk is called by markDaysRead only");
-    assert.ok(src.includes("const markDaysRead = () => { daysReadOkRef.current = true; setDaysReadOk(true); setDaysLoadFailed(false); };"), "markDaysRead sets true, clears the banner");
+    // 9/28 review (deliberate pin change): markDaysRead also clears the stale "Not saving - data failed to load" status
+    assert.ok(src.includes("const markDaysRead = () => { daysReadOkRef.current = true; setDaysReadOk(true); setDaysLoadFailed(false); clearLoadFailedStatus(); };"), "markDaysRead sets true, clears the banner and the load-failed status");
     assert.ok(!/setDaysReadOk\(false\)|daysReadOkRef\.current = false/.test(src), "daysReadOk never turns back");
     const adopt = src.slice(src.indexOf("  const adoptLoadedDays = (loadedDays) => {"), src.indexOf("  const sameAssignment"));
     assert.ok(adopt.includes("markDaysRead();"), "adoptLoadedDays marks the read");
@@ -2842,12 +2843,56 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('{!loaded ? "Loading schedule" : !daysReadOk ? "Schedule not loaded" : !boardEnd ?') && src.includes('data-testid="openshifts-unread"'), "the Open shifts board's header line and empty row");
     assert.ok(src.includes('!daysReadOk ? <span data-testid="next-call-unread"'), "Mine's next call");
     assert.ok(src.includes("daysUnread={loaded && !daysReadOk} loaded={loaded}") && src.includes('data-testid="totals-days-unread"'), "the Totals line");
-    assert.ok(src.includes("const openCellDay = (d) => { if (loaded && !daysReadOk) {"), "a cell tap does not open an unread day (it would read OPEN)");
+    // 9/28 review (deliberate pin change): the cell tap uses the shared refuseUnreadDay guard (goToDay and saveDayEdit too)
+    assert.ok(src.includes("const openCellDay = (d) => { if (refuseUnreadDay()) return; setEditorDay(d); };"), "a cell tap does not open an unread day (it would read OPEN)");
     // notifications: three states; 'No notifications yet' only after a read that landed
     assert.ok(src.includes('const [notifsRead, setNotifsRead] = useState("unread");'), "notifsRead state");
     assert.strictEqual(count('setNotifsRead("ok")'), 2, "mount + poll mark ok");
     assert.strictEqual(count('setNotifsRead("failed")'), 2, "mount + poll mark failed");
     assert.ok(src.includes('{notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ?'), "the panel's empty text follows the read state");
+  });
+  check("review 9/28 (finish of Do first 1): a days read that lands clears a stale 'Not saving - data failed to load' (Retry / poll race); the status string is one constant; loadFailedRef untouched", () => {
+    assert.strictEqual(count('"Not saving - data failed to load"'), 1, "the load-failed status is one constant");
+    assert.ok(src.includes('const LOAD_FAILED_STATUS = "Not saving - data failed to load";'), "LOAD_FAILED_STATUS");
+    assert.strictEqual(count("setSaveStatus(LOAD_FAILED_STATUS);"), 2, "both autosave legs still set it while loadFailedRef is up");
+    const clr = src.slice(src.indexOf("  const clearLoadFailedStatus = () => {"), src.indexOf("\n  };\n", src.indexOf("  const clearLoadFailedStatus = () => {")));
+    assert.ok(clr.includes("setSaveStatus(s => s === LOAD_FAILED_STATUS ? \"\" : s);"), "clears only that status (any other status stays)");
+    assert.ok(clr.includes("if (saveStatusShownRef.current === LOAD_FAILED_STATUS) setSaveError(false);"), "and its red tone");
+    assert.ok(!/loadFailedRef/.test(clr), "the clear does not touch loadFailedRef");
+    assert.ok(src.includes("  saveStatusShownRef.current = saveStatus;"), "the ref follows the rendered status");
+    // behaviour: the updater
+    const upd = (s) => s === "Not saving - data failed to load" ? "" : s;
+    assert.strictEqual(upd("Not saving - data failed to load"), ""); assert.strictEqual(upd("Save failed - retrying"), "Save failed - retrying"); assert.strictEqual(upd("Saved"), "Saved");
+  });
+  check("review 9/28: every route into the day editor refuses while unread - goToDay (Setup holidays / East conflicts, Time off, the trades list), the cell tap, the DayEditor mount and saveDayEdit", () => {
+    assert.ok(src.includes('const refuseUnreadDay = () => { if (!loaded || daysReadOkRef.current) return false; showToast(DAYS_UNREAD_DAY_MSG, "error"); return true; };'), "one predicate + message");
+    const g = src.slice(src.indexOf("  const goToDay = (day) => {"), src.indexOf("\n  };\n", src.indexOf("  const goToDay = (day) => {")));
+    assert.ok(g.indexOf("if (refuseUnreadDay()) return;") > 0 && g.indexOf("if (refuseUnreadDay()) return;") < g.indexOf("setEditorDay(day);"), "goToDay refuses before it opens the editor");
+    const sd = src.slice(src.indexOf("const saveDayEdit = "), src.indexOf("const before = schedule[day] || emptyDayAssignment();", src.indexOf("const saveDayEdit = ")));
+    assert.ok(sd.includes("if (refuseUnreadDay()) return false;"), "saveDayEdit refuses before it touches the map");
+    assert.ok(src.includes('{(view==="calendar" || view==="openshifts") && editorDay && (!loaded || daysReadOk) && ('), "the DayEditor is not mounted over an unread schedule");
+    assert.ok(src.includes("onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported} daysUnread={loaded && !daysReadOk}/>"), "HolidaysCard learns daysUnread");
+    const hc = src.slice(src.indexOf("function HolidaysCard("), src.indexOf("function EastVacationList("));
+    assert.ok(hc.includes('data-testid="hol-coverage" data-unread="1">Schedule not loaded</td>') && hc.includes('data-testid="hol-edit-day" onClick={() => onEditDay(d)} disabled={!!daysUnread}') && hc.includes('{daysUnread ? "?/?" :'), "holiday coverage / counts say not loaded; Edit disabled");
+  });
+  check("review 9/28: Calendar tools (exports), My calendar and the Totals CSV refuse while unread - handlers guarded, buttons disabled, no all-OPEN ER preview", () => {
+    assert.ok(src.includes('const refuseUnreadExport = () => { if (daysShown) return false; showToast(EXPORT_UNREAD_TITLE + ".", "error"); return true; };'), "one export guard");
+    ["const downloadMyCal = (surgeonId) => {", "const downloadGroupCal = () => {", "const downloadSharePage = () => {", "const copySharePage = async () => {", "const openPrintable = () => {"].forEach(h => {
+      const at = src.indexOf(h); assert.ok(at > 0, h);
+      assert.ok(src.slice(at, at + h.length + 60).includes("if (refuseUnreadExport()) return;"), h + " refuses first");
+    });
+    assert.ok(src.includes("if (!erRangeOk || refuseUnreadExport()) return;") && count("if (!erRangeOk || refuseUnreadExport()) return;") === 2, "ER copy + download refuse");
+    assert.ok(src.includes("const erPanelHtml = useMemo(() => (daysShown && erRangeOk) ? buildErCallPanelsHTML(") && src.includes("erRangeOk, todayStr, daysShown]);"), "the ER preview memo is gated on daysShown");
+    assert.ok(src.includes('data-testid="er-preview-unread"'), "the ER preview placeholder");
+    ['data-testid="ics-all" onClick={downloadGroupCal} disabled={!daysShown}', 'data-testid="share-download" onClick={downloadSharePage} disabled={!daysShown}', 'data-testid="share-copy" onClick={copySharePage} disabled={!daysShown}', 'data-testid="print-open" onClick={openPrintable} disabled={!daysShown}', 'data-testid="er-copy" onClick={copyErForWord} disabled={!erRangeOk || !daysShown}', 'data-testid="er-download" onClick={downloadErHtml} disabled={!erRangeOk || !daysShown}', 'onClick={()=>downloadMyCal(s.id)} disabled={!daysShown}', 'data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} disabled={!daysShown}', 'data-testid="totals-csv" onClick={exportCsv} disabled={!!daysUnread}'].forEach(b => assert.ok(src.includes(b), "disabled while unread: " + b));
+  });
+  check("review 9/28: the Open shifts tail and Setup > Periods' open counts count nothing over an unread schedule (no '60 / 60 ... Generate covers them')", () => {
+    const bt = src.slice(src.indexOf("  const boardTail = useMemo(() => {"), src.indexOf("}, [schedule, todayStr, boardEnd, boardSlots, daysShown]);"));
+    assert.ok(bt.length > 0 && bt.includes("if (!daysShown) return { from: todayStr, through, primary: 0, backup: 0, unread: true };"), "boardTail is gated");
+    assert.ok(src.includes('<div data-testid="openshifts-tail" data-unread="1"') && src.includes("{boardTail.unread ? ("), "the tail's unread line");
+    const po = src.slice(src.indexOf("  const prdOpenCounts = useMemo(() => {"), src.indexOf("}, [isScheduler, periodRows, schedule, todayStr, daysShown]);"));
+    assert.ok(po.length > 0 && po.includes("if (!daysShown) return out;"), "prdOpenCounts is gated");
+    assert.ok(src.includes('setNotifsRead("unread"); // review 9/28'), "a different account's sign-in resets the notifications read state");
   });
   check("9/28: the coverage strip says 'published through M/D' (lastPublishedDay) and 'last published <time>' only when lastPublished.at exists - never 'never'; neither before the days are read", () => {
     const stripAt = src.indexOf('<div data-testid="coverage-strip"'), stripEnd = src.indexOf("</div>", src.indexOf('data-testid="cov-last-published"'));

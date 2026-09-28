@@ -9112,6 +9112,48 @@ try {
       if (await pdf.locator("[data-testid=day-editor]").count()) { fail("days-fail: a cell tap opened the day editor over an unread schedule"); await pdf.keyboard.press("Escape"); }
       else ok("days-fail: a cell tap opens no day while the schedule is unread");
       await pdf.screenshot({ path: path.join(OUT, "days-load-failed.png"), fullPage: false });
+      // review 9/28: Calendar tools (exports) - no all-OPEN ER preview, every export disabled while unread
+      if (!(await pdf.$("[data-testid=calendar-tools]"))) { await pdf.click("text=Calendar tools (exports)"); await pdf.waitForSelector("[data-testid=calendar-tools]", { timeout: 3000 }); }
+      const tools = await pdf.evaluate(() => {
+        const q = (s) => document.querySelector(s);
+        const prev = q("[data-testid=er-panel-preview]");
+        const dis = (s) => { const b = q(s); return b ? b.disabled : null; };
+        const icsPills = Array.from(document.querySelectorAll("[data-testid=calendar-tools] [data-pill='1']"));
+        return { erOpen: prev ? prev.querySelectorAll("[data-kind=open]").length : 0, erText: prev ? prev.innerText : "", erUnread: !!q("[data-testid=er-preview-unread]"),
+          share: dis("[data-testid=share-download]"), shareCopy: dis("[data-testid=share-copy]"), print: dis("[data-testid=print-open]"), icsAll: dis("[data-testid=ics-all]"),
+          erCopy: dis("[data-testid=er-copy]"), erDl: dis("[data-testid=er-download]"), icsPills: icsPills.length, icsPillsEnabled: icsPills.filter(b => !b.disabled).length };
+      });
+      if (tools.erOpen || /OPEN/.test(tools.erText) || !tools.erUnread) fail(`days-fail: the ER Call Panels preview spoke about an unread schedule (${tools.erOpen} open span(s), placeholder ${tools.erUnread}): ${tools.erText.slice(0, 120)}`);
+      else if (![tools.share, tools.shareCopy, tools.print, tools.icsAll, tools.erCopy, tools.erDl].every(v => v === true) || tools.icsPillsEnabled) fail(`days-fail: an export is enabled over an unread schedule (share ${tools.share}, copy ${tools.shareCopy}, print ${tools.print}, ics-all ${tools.icsAll}, er-copy ${tools.erCopy}, er-download ${tools.erDl}, ${tools.icsPillsEnabled}/${tools.icsPills} .ics pill(s) enabled)`);
+      else ok(`days-fail: Calendar tools - ER preview 'Schedule not loaded' (no OPEN), share / print / .ics / ER copy + download disabled`);
+      // review 9/28: the Open shifts tail counts nothing (was '60 primary / 60 backup ... Generate covers them')
+      await pdf.click('button[data-tab="openshifts"]');
+      await pdf.waitForSelector("[data-testid=openshifts-tail]", { timeout: 8000 }).catch(() => {});
+      const tailU = await pdf.$eval("[data-testid=openshifts-tail]", el => ({ unread: el.getAttribute("data-unread"), p: el.getAttribute("data-primary"), b: el.getAttribute("data-backup"), text: el.innerText })).catch(() => null);
+      if (!tailU) fail("days-fail: the Open shifts tail (openshifts-tail) is missing");
+      else if (tailU.unread !== "1" || tailU.p !== null || tailU.b !== null || /Generate covers them|Not listed/.test(tailU.text)) fail(`days-fail: the Open shifts tail counted over an unread schedule (unread ${tailU.unread}, primary ${tailU.p}, backup ${tailU.b}): ${tailU.text.slice(0, 140)}`);
+      else ok("days-fail: the Open shifts tail reads 'Schedule not loaded' with no counts");
+      // review 9/28: goToDay routes (Setup > Holidays 'Edit M/D') - coverage says not loaded, Edit is disabled, no editor opens
+      if (await pdf.$('button[data-tab="setup"]')) {
+        await pdf.click('button[data-tab="setup"]');
+        const hc = pdf.locator("[data-testid=card-setup_holidays]");
+        if ((await hc.count()) && (await hc.getAttribute("data-open")) !== "1") { await pdf.click("[data-testid=card-toggle-setup_holidays]"); await pdf.waitForTimeout(200); }
+        const hol = await pdf.evaluate(() => {
+          const cov = Array.from(document.querySelectorAll("[data-testid=hol-coverage]")), eds = Array.from(document.querySelectorAll("[data-testid=hol-edit-day]"));
+          return { cov: cov.length, covUnread: cov.filter(c => c.getAttribute("data-unread") === "1").length, covOpen: cov.filter(c => /OPEN|open slot/.test(c.innerText)).length, edits: eds.length, editsEnabled: eds.filter(b => !b.disabled).length };
+        });
+        if (hol.edits) await pdf.click("[data-testid=hol-edit-day] >> nth=0", { force: true }).catch(() => {});
+        await pdf.waitForTimeout(300);
+        const edOpen = await pdf.locator("[data-testid=day-editor]").count();
+        if (!hol.cov) fail("days-fail: Setup > Holidays shows no coverage cells to check (hol-coverage)");
+        else if (hol.covUnread !== hol.cov || hol.covOpen || hol.editsEnabled || edOpen) fail(`days-fail: Setup > Holidays over an unread schedule - ${hol.covUnread}/${hol.cov} coverage cell(s) say not loaded, ${hol.covOpen} say OPEN, ${hol.editsEnabled}/${hol.edits} Edit button(s) enabled, day editor open ${edOpen}`);
+        else ok(`days-fail: Setup > Holidays - ${hol.cov} coverage cell(s) 'Schedule not loaded', ${hol.edits} Edit button(s) disabled, no day editor (goToDay refuses too)`);
+      } else ok("days-fail: (no Setup tab on this page - the goToDay route is pinned in data-layer)");
+      await pdf.click('button[data-tab="calendar"]');
+      await pdf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
+      // Past the 3 s hydration window, so the Retry's parallel reads can re-run the autosave while loadFailedRef is
+      // still up (the 9/28 race: 'Not saving - data failed to load' must not survive the days read landing).
+      await pdf.waitForTimeout(3300);
       // Retry -> the poll's refreshAll reads the rows; the banner goes and the calendar is the table's again
       await pdf.click("[data-testid=days-load-retry]");
       const gone = await pdf.waitForSelector("[data-testid=days-load-failed]", { state: "detached", timeout: 20000 }).then(() => true).catch(() => false);
@@ -9129,13 +9171,22 @@ try {
       const expThrough = await pdf.waitForSelector("[data-testid=openshifts-table]", { timeout: 8000 }).then(() => pdf.$eval("[data-testid=openshifts-table]", el => el.getAttribute("data-to") || null)).catch(() => undefined);
       await pdf.click('button[data-tab="calendar"]');
       if (!gone) fail("days-fail: Retry did not clear the 'Schedule not loaded' banner within 20 s");
-      else if (!/Synced/.test(after.hdr) && !/Saved/.test(after.hdr)) fail("days-fail: after Retry the header does not read Synced: " + after.hdr.replace(/\s+/g, " ").slice(0, 120));
+      else if (/Not saving/.test(after.hdr) || (!/Synced/.test(after.hdr) && !/Saved/.test(after.hdr))) fail("days-fail: after Retry the header does not read Synced (or kept 'Not saving - data failed to load'): " + after.hdr.replace(/\s+/g, " ").slice(0, 120));
       else if (after.unread) fail(`days-fail: ${after.unread} 'not loaded' placeholder(s) left after Retry`);
       else if (after.covCount === "" || after.covCount === null) fail("days-fail: after Retry the coverage strip still has no count");
       else if (expThrough === undefined || (after.through || null) !== expThrough) fail(`days-fail: after Retry 'published through' reads '${after.through}', the Open shifts board ends '${expThrough}'`);
       else if (!/^Silvis call now \(until 07:00 /.test(after.msg)) fail("days-fail: after Retry the banner message is not the on-call pair: " + after.msg);
       else if (!/Schedule loaded/.test(after.toast)) fail("days-fail: after Retry the toast does not say 'Schedule loaded.': " + after.toast.slice(0, 120));
       else ok(`days-fail: Retry recovered - banner gone, header Synced, open primary ${after.covCount}, published through ${after.through}, "${after.msg.slice(0, 60)}"`);
+      // review 9/28: after Retry the exports and the Open shifts tail are live again
+      const toolsAfter = await pdf.evaluate(() => { const d = (s) => { const b = document.querySelector(s); return b ? b.disabled : null; }; return { share: d("[data-testid=share-download]"), print: d("[data-testid=print-open]"), icsAll: d("[data-testid=ics-all]"), erCopy: d("[data-testid=er-copy]"), erUnread: !!document.querySelector("[data-testid=er-preview-unread]") }; });
+      if (toolsAfter.share !== false || toolsAfter.print !== false || toolsAfter.icsAll !== false || toolsAfter.erCopy !== false || toolsAfter.erUnread) fail(`days-fail: after Retry an export is still disabled (share ${toolsAfter.share}, print ${toolsAfter.print}, ics-all ${toolsAfter.icsAll}, er-copy ${toolsAfter.erCopy}, placeholder ${toolsAfter.erUnread})`);
+      else ok("days-fail: after Retry the exports are enabled and the ER preview is drawn");
+      await pdf.click('button[data-tab="openshifts"]');
+      const tailA = await pdf.waitForSelector("[data-testid=openshifts-tail]", { timeout: 8000 }).then(() => pdf.$eval("[data-testid=openshifts-tail]", el => ({ unread: el.getAttribute("data-unread"), p: el.getAttribute("data-primary") }))).catch(() => null);
+      if (!tailA || tailA.unread === "1" || tailA.p === null) fail("days-fail: after Retry the Open shifts tail still reads unread: " + JSON.stringify(tailA));
+      else ok(`days-fail: after Retry the Open shifts tail counts again (primary ${tailA.p})`);
+      await pdf.click('button[data-tab="calendar"]');
     } catch (e) { fail("days-fail: " + errLine(e)); try { await pdf.screenshot({ path: path.join(OUT, "failure-days-fail.png"), fullPage: true }); } catch (e2) {} }
     failDaysFor = null;
     daysFailConsoleLines = 0;

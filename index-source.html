@@ -403,14 +403,32 @@ function CallSchedule() {
   const [daysLoadFailed, setDaysLoadFailed] = useState(false);
   const [daysRetrying, setDaysRetrying] = useState(false);
   const daysReadOkRef = useRef(false); // the Retry handler reads it after its awaited refreshAll
-  const markDaysRead = () => { daysReadOkRef.current = true; setDaysReadOk(true); setDaysLoadFailed(false); };
+  const markDaysRead = () => { daysReadOkRef.current = true; setDaysReadOk(true); setDaysLoadFailed(false); clearLoadFailedStatus(); };
   const daysShown = loaded && daysReadOk; // the map is the table: counts, OPEN and "none" may be shown
+  // Review 9/28 (finish of Do first 1): the autosave effects set LOAD_FAILED_STATUS while loadFailedRef is up - on a
+  // Retry / poll recovery one of refreshAll's parallel reads (availability) can re-run the effect before refreshDays
+  // clears the ref, and a later 0-row sync never resets the status, so the header stayed red under "Schedule loaded.".
+  // Every markDaysRead caller has loadFailedRef false (the load resets it; refreshDays clears it first), so a days
+  // read that lands clears exactly that status (no other) - display only, the ref and the autosave gates are untouched.
+  const LOAD_FAILED_STATUS = "Not saving - data failed to load";
+  const saveStatusShownRef = useRef(""); // the header's current status (set in render below) - the tone to clear with it
+  const clearLoadFailedStatus = () => {
+    if (saveStatusShownRef.current === LOAD_FAILED_STATUS) setSaveError(false);
+    setSaveStatus(s => s === LOAD_FAILED_STATUS ? "" : s);
+  };
+  // Review 9/28: every route into the day editor (a cell tap, goToDay from Setup / Time off / the trades list, the
+  // board's Assign...) and saveDayEdit refuse while a finished load holds no read of schedule_days - the editor would
+  // read the empty map as OPEN, and a save there survives the recovery merge as a "local change" (base {}) and is
+  // CAS-written over the real row. One message, one predicate.
+  const DAYS_UNREAD_DAY_MSG = "The schedule has not loaded - retry first (the banner above); days cannot be opened until it loads.";
+  const refuseUnreadDay = () => { if (!loaded || daysReadOkRef.current) return false; showToast(DAYS_UNREAD_DAY_MSG, "error"); return true; };
   // Bumped after a successful login/biometric-unlock to re-run the data-load
   // effect WITH the now-stored session JWT, without a full page reload (a
   // page reload re-triggers the mount auth-gate and loops on biometric).
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveError, setSaveError] = useState(false); // true = last save failed
+  saveStatusShownRef.current = saveStatus; // clearLoadFailedStatus reads it (the tone goes with the status it clears)
   const importFileRef = useRef(null);
   // --- Sync refs ---
   // lastSyncRef: the schedule map as LAST KNOWN PERSISTED in schedule_days
@@ -837,6 +855,7 @@ function CallSchedule() {
     if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
       switchedUserRef.current = true;
       pendingSaveRef.current = null;
+      setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -2199,7 +2218,7 @@ function CallSchedule() {
     if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window
     if (loadFailedRef.current) {
       setSaveError(true);
-      setSaveStatus("Not saving - data failed to load");
+      setSaveStatus(LOAD_FAILED_STATUS);
       return;
     }
     const payload = buildStateBundle();
@@ -2245,7 +2264,7 @@ function CallSchedule() {
     if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) { settleBlobWaiters(false, "the app is still loading - save again in a moment"); return; } // hydration window
     if (loadFailedRef.current) {
       setSaveError(true);
-      setSaveStatus("Not saving - data failed to load");
+      setSaveStatus(LOAD_FAILED_STATUS);
       settleBlobWaiters(false, "data failed to load");
       return;
     }
@@ -2603,6 +2622,7 @@ function CallSchedule() {
   // reloaded").
   const saveDayEdit = (day, next, meta) => {
     if (!isScheduler || isPublicMode) { showToast("Only the scheduler can change the schedule.", "error"); return false; }
+    if (refuseUnreadDay()) return false; // review 9/28: an edit over the unread (empty) map would be CAS-written over the real row after recovery
     const before = schedule[day] || emptyDayAssignment();
     const after = { ...emptyDayAssignment(), ...next };
     if (after.primary && after.primary === after.backup) { showToast("Primary and backup must be different people.", "error"); return false; }
@@ -3110,6 +3130,7 @@ function CallSchedule() {
   // Open the day editor on any day from Setup (holiday "Edit day", vacation conflicts).
   const goToDay = (day) => {
     if (!suIsIso(day)) return;
+    if (refuseUnreadDay()) return; // review 9/28: no day opens over an unread schedule (Setup, Time off, trades)
     const d = parse(day);
     setCalMonth(d.getMonth()); setCalYear(d.getFullYear());
     setView("calendar");
@@ -4805,7 +4826,13 @@ function CallSchedule() {
   // (a Fri-Sun block is one 3-day event), the same VEVENTs as the
   // calendar-sync feed's default format; the 07:00 times are in each
   // description. The download has no timed variant (the feed's ?timed=1 does).
+  // Review 9/28: every export (.ics, the read-only page, the printable view, the ER Call Panels copy / download)
+  // refuses while the schedule is unread - the empty map would leave the app as an all-OPEN (or empty) schedule.
+  // The buttons are disabled too (EXPORT_UNREAD_TITLE); this is the handler-side guard.
+  const EXPORT_UNREAD_TITLE = "The schedule has not loaded - nothing to export yet";
+  const refuseUnreadExport = () => { if (daysShown) return false; showToast(EXPORT_UNREAD_TITLE + ".", "error"); return true; };
   const downloadMyCal = (surgeonId) => {
+    if (refuseUnreadExport()) return;
     const s = surgeons.find(x => x.id === surgeonId);
     if (!s) return;
     try {
@@ -5101,20 +5128,23 @@ function CallSchedule() {
   const prdOpenCounts = useMemo(() => {
     const out = {};
     if (!isScheduler) return out;
+    if (!daysShown) return out; // review 9/28: no "slots still open" over an unread (empty) schedule
     (periodRows || []).forEach(p => { const a = String((p && p.start_day) || "").slice(0, 10), b = String((p && p.end_day) || "").slice(0, 10); if (suIsIso(a) && suIsIso(b)) out[p.id || a] = b >= todayStr ? openSlots(schedule, a, b, todayStr).length : 0; });
     return out;
-  }, [isScheduler, periodRows, schedule, todayStr]);
+  }, [isScheduler, periodRows, schedule, todayStr, daysShown]);
   // Open slots inside the coverage strip's 60-day window that the board cannot
   // list: days AFTER the published block with no row (nothing to claim -
   // Generate covers them). Shown as a footer so the strip and the board can
   // always be reconciled by eye: strip = board rows in the window + this tail.
   const boardTail = useMemo(() => {
     const through = suAddDays(todayStr, 59);
+    // Review 9/28: an unread schedule counts nothing - the empty map would read as 60 / 60 rowless days
+    if (!daysShown) return { from: todayStr, through, primary: 0, backup: 0, unread: true };
     const from = boardEnd && boardEnd >= todayStr ? suAddDays(boardEnd, 1) : todayStr;
     const listed = new Set(boardSlots.map(s => openSlotKey(s.day, s.role)));
     const counts = from <= through ? openSlotCounts(openSlots(schedule, from, through, todayStr).filter(s => !listed.has(openSlotKey(s.day, s.role)))) : { primary: 0, backup: 0, total: 0 };
     return { from, through, primary: counts.primary, backup: counts.backup };
-  }, [schedule, todayStr, boardEnd, boardSlots]);
+  }, [schedule, todayStr, boardEnd, boardSlots, daysShown]);
   // Eligibility per open slot for every active surgeon (hard rules decide the
   // button; soft entries feed the sheet). Only computed while the board is
   // showing - a few hundred eligibility() calls at most.
@@ -5356,6 +5386,7 @@ function CallSchedule() {
   const toolMonthList = () => { const out = []; for (let i = 0; i < toolMonths; i++) { const d = new Date(calYear, calMonth + i, 1); out.push({ year: d.getFullYear(), month: d.getMonth() }); } return out; };
   const toolRangeEnd = () => fmt(new Date(calYear, calMonth + toolMonths, 0));
   const downloadGroupCal = () => {
+    if (refuseUnreadExport()) return;
     try {
       const events = buildICSEvents(schedule, null, surgeons, {});
       if (events.length === 0) showToast("No assignments on file - the calendar file is empty.", "info");
@@ -5364,12 +5395,14 @@ function CallSchedule() {
   };
   const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname, today: todayStr, weekStartsOn });
   const downloadSharePage = () => {
+    if (refuseUnreadExport()) return;
     try {
       const ok = downloadTextFile(buildSharePage(), `silvis-call-${monthStartStr}-${toolRangeEnd()}.html`, "text/html");
       showToast(ok ? "Read-only page downloaded." : "Read-only page opened - use Share, then Save to Files.", "info");
     } catch(e) { console.error("Share page failed:", e); showToast("Share page failed: " + errText(e), "error"); }
   };
   const copySharePage = async () => {
+    if (refuseUnreadExport()) return;
     try {
       const html = buildSharePage();
       if (!(navigator.clipboard && window.isSecureContext)) throw new Error("clipboard unavailable in this context");
@@ -5378,6 +5411,7 @@ function CallSchedule() {
     } catch(e) { console.warn("Copy share page failed:", e); showToast("Couldn't copy - use 'Share read-only page' to download the file instead.", "error"); }
   };
   const openPrintable = () => {
+    if (refuseUnreadExport()) return;
     try {
       const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations, today: todayStr, weekStartsOn });
       const w = window.open("", "_blank");
@@ -5392,13 +5426,13 @@ function CallSchedule() {
   // the surrounding Monday/Sunday (helpers.js erPanelSpan); the note under the
   // buttons says so and the download is named for the span it really covers.
   const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo) : { from: erFrom, to: erTo, widened: false };
-  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, { today: todayStr }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr]);
+  const erPanelHtml = useMemo(() => (daysShown && erRangeOk) ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, { today: todayStr }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr, daysShown]); // review 9/28: no all-OPEN preview while unread
   // Copy for Word: text/html + text/plain in one ClipboardItem so Word pastes
   // a real table. When the rich clipboard is unavailable (http, an old
   // browser, permission denied) the rendered preview is selected instead and
   // a toast says to press Ctrl+C - the selection copies as a table too.
   const copyErForWord = async () => {
-    if (!erRangeOk) return;
+    if (!erRangeOk || refuseUnreadExport()) return;
     const html = erPanelHtml;
     const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo, { today: todayStr });
     try {
@@ -5417,7 +5451,7 @@ function CallSchedule() {
     }
   };
   const downloadErHtml = () => {
-    if (!erRangeOk) return;
+    if (!erRangeOk || refuseUnreadExport()) return;
     try { downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo, { today: todayStr }), `silvis-er-call-panels-${erSpan.from}-${erSpan.to}.html`, "text/html"); }
     catch(e) { console.error("ER panel download failed:", e); showToast("Download failed: " + errText(e), "error"); }
   };
@@ -6116,7 +6150,7 @@ function CallSchedule() {
 
           <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)"
             summary={cardSummary(holidays === undefined ? "Not imported yet" : (Object.keys((holidays && holidays.units) || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet"))}>
-            <HolidaysCard css={css} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported}/>
+            <HolidaysCard css={css} dk={dk} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported} daysUnread={loaded && !daysReadOk}/>
           </Collapsible>
 
           {/* Call pay (Faraz 9/27): the rates + pay-model flags - the scheduler's only (this whole block is isScheduler) */}
@@ -6179,7 +6213,7 @@ function CallSchedule() {
         {view==="calendar" && (() => {
           // Review 9/27 Do first 1: while no schedule_days read has landed the day editor / summary would show the day as
           // OPEN (and a scheduler's edit there would later be written over the real row) - a cell tap says so instead.
-          const openCellDay = (d) => { if (loaded && !daysReadOk) { showToast("The schedule has not loaded - retry first (the banner above); days cannot be opened until it loads.", "error"); return; } setEditorDay(d); };
+          const openCellDay = (d) => { if (refuseUnreadDay()) return; setEditorDay(d); };
           const SlotLine = ({ role, day, holder, locked }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
             let body;
@@ -6416,8 +6450,8 @@ function CallSchedule() {
                 <div style={{...css.toolTitle,color:dkText}}>Calendar files (.ics)</div>
                 <p style={sectionNote}>One all-day event per run of consecutive days on call (a Fri-Sun weekend is one 3-day bar); the exact times, 07:00 to 07:00 Central, are in each event's description. If you imported an earlier file (one event per shift), delete those events first - an import never removes them. Import the file once; for a feed that keeps itself current use the subscribe links in Settings.</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} data-pill="1" onClick={()=>downloadMyCal(s.id)} title={"Download " + icsFileName(s)} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:"pointer",padding:"4px 10px",fontSize:11}}>{s.name}</button>)}
-                  <button data-testid="ics-all" onClick={downloadGroupCal} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Full group</button>
+                  {activeSurgeons.map(s => <button key={s.id} data-testid={"ics-" + s.code} data-pill="1" onClick={()=>downloadMyCal(s.id)} disabled={!daysShown} title={daysShown ? "Download " + icsFileName(s) : EXPORT_UNREAD_TITLE} style={{...css.badge(sMap[s.id]?.idx||0, s),cursor:daysShown?"pointer":"default",padding:"4px 10px",fontSize:11,opacity:daysShown?1:0.5}}>{s.name}</button>)}
+                  <button data-testid="ics-all" onClick={downloadGroupCal} disabled={!daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(true),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Full group</button>
                 </div>
               </div>
               <div style={css.toolBlock}>
@@ -6426,9 +6460,9 @@ function CallSchedule() {
                   <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:6}}>Months from {MO[calMonth]} {calYear}:
                     <select data-testid="tool-months" aria-label="Months" value={toolMonths} onChange={e=>setToolMonths(Number(e.target.value))} style={{...inp,fontSize:12,padding:"4px 6px"}}>{[1,2,3,4,6,12].map(n=><option key={n} value={n}>{n}</option>)}</select>
                   </label>
-                  <button data-testid="share-download" onClick={downloadSharePage} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Share read-only page</button>
-                  <button data-testid="share-copy" onClick={copySharePage} style={{...css.btn(copiedUrl==="share"),padding:"5px 12px",fontSize:11}}>{copiedUrl==="share" ? "Copied" : "Copy"}</button>
-                  <button data-testid="print-open" onClick={openPrintable} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Open printable view</button>
+                  <button data-testid="share-download" onClick={downloadSharePage} disabled={!daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(true),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Share read-only page</button>
+                  <button data-testid="share-copy" onClick={copySharePage} disabled={!daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(copiedUrl==="share"),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>{copiedUrl==="share" ? "Copied" : "Copy"}</button>
+                  <button data-testid="print-open" onClick={openPrintable} disabled={!daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Open printable view</button>
                 </div>
                 <p style={{...muted,marginTop:6,lineHeight:1.5}}>The read-only page is one self-contained file (month grids plus the week rows) that opens in any browser with no sign-in - attach it to an email or drop it on a shared drive. Copy puts the same page on the clipboard. The printable view opens in a new tab; use the browser's print dialog to print or save as PDF.</p>
               </div>
@@ -6440,11 +6474,12 @@ function CallSchedule() {
                   <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>To <input data-testid="er-to" aria-label="To" type="date" value={erTo} onChange={e=>setErRange({from:erFrom,to:e.target.value})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>
                   <button data-testid="er-preset-1213" onClick={()=>setErRange({from:"2026-11-02",to:"2026-12-13"})} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>11/2 through 12/13</button>
                   <button data-testid="er-reset" onClick={()=>setErRange(null)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Visible month</button>
-                  <button data-testid="er-copy" onClick={copyErForWord} disabled={!erRangeOk} style={{...css.btn(copiedUrl==="er"),padding:"5px 12px",fontSize:11,opacity:erRangeOk?1:0.5}}>{copiedUrl==="er" ? "Copied" : "Copy for Word"}</button>
-                  <button data-testid="er-download" onClick={downloadErHtml} disabled={!erRangeOk} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:erRangeOk?1:0.5}}>Download .html</button>
+                  <button data-testid="er-copy" onClick={copyErForWord} disabled={!erRangeOk || !daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(copiedUrl==="er"),padding:"5px 12px",fontSize:11,opacity:erRangeOk && daysShown?1:0.5}}>{copiedUrl==="er" ? "Copied" : "Copy for Word"}</button>
+                  <button data-testid="er-download" onClick={downloadErHtml} disabled={!erRangeOk || !daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:erRangeOk && daysShown?1:0.5}}>Download .html</button>
                 </div>
                 {!erRangeOk && <p style={{...muted,color:"#c04040",marginBottom:6}}>Enter a valid range (From on or before To).</p>}
                 {erRangeOk && erSpan.widened && <p data-testid="er-span-note" style={{...muted,marginBottom:6}}>Whole weeks: the table runs {fmtMD(erSpan.from)} - {fmtMD(erSpan.to)} (the Mon-Sun weeks around {fmtMD(erFrom)} - {fmtMD(erTo)}), so no covered day is left out of a week row.</p>}
+                {!daysShown && <p data-testid="er-preview-unread" style={{...muted,fontStyle:"italic",marginBottom:6}}>{loaded ? "Schedule not loaded - the ER Call Panels table appears once it loads." : "Loading schedule"}</p>}
                 <div data-testid="er-panel-preview" className="table-wrap" ref={erPreviewRef} style={{overflowX:"auto",background:"#ffffff",color:"#000000",padding:10,borderRadius:6,border:"1px solid " + dkCardBorder}} dangerouslySetInnerHTML={{__html: erPanelHtml}}/>
               </div>
             </div>
@@ -6453,7 +6488,7 @@ function CallSchedule() {
         })()}
 
         {/* Day editor - shared by the calendar and the Open shifts board (Assign... / Outside cover open it on the slot's day; the write still goes through its Save). */}
-        {(view==="calendar" || view==="openshifts") && editorDay && (
+        {(view==="calendar" || view==="openshifts") && editorDay && (!loaded || daysReadOk) && (
           <DayEditor key={editorDay} day={editorDay} entry={schedule[editorDay] || null}
             roster={surgeons} ctxInputs={ctxInputs} ctxError={rulesCtxState.error}
             canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible} rulesImported={rulesImported} isPublicMode={isPublicMode}
@@ -6538,11 +6573,17 @@ function CallSchedule() {
                   </tbody>
                 </table>
               </div>
+              {boardTail.unread ? (
+              <div data-testid="openshifts-tail" data-unread="1" style={{fontSize:11,color:T.muted,fontStyle:"italic",marginTop:8,lineHeight:1.5}}>
+                {loaded ? "Schedule not loaded - the days beyond the published range are not counted until it loads." : "Loading schedule"}
+              </div>
+              ) : (
               <div data-testid="openshifts-tail" data-primary={boardTail.primary} data-backup={boardTail.backup} data-through={boardTail.through} style={{fontSize:11,color:T.muted,marginTop:8,lineHeight:1.5}}>
                 {boardTail.primary + boardTail.backup > 0
                   ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
                   : <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>}
               </div>
+              )}
               <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:T.muted,marginTop:4,lineHeight:1.5}}>
                 {lastGenerate && typeof lastGenerate === "object" && lastGenerate.at
                   ? <>Why column: from the last Accept &amp; Publish on {new Date(lastGenerate.at).toLocaleString()}{lastGenerate.range && lastGenerate.range.start ? " over " + fmtMD(lastGenerate.range.start) + " - " + fmtMD(lastGenerate.range.end || lastGenerate.range.start) : ""} ({lastGenerate.mode === "fill-open-only" ? "fill open slots only" : "generate"}{Number.isInteger(lastGenerate.fixedSlots) ? ", " + lastGenerate.fixedSlots + " slot(s) fixed: locks, outside surgeons, claims and trades" : ""}){lastGenerate.carriedFrom ? "; earlier reasons kept for days outside that range" : ""}.</>
@@ -6705,7 +6746,7 @@ function CallSchedule() {
                 ) : <Badge id={pid}/>}
                 <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                   <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
-                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} title="One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars" style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Download my calendar</button>
+                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} disabled={!daysShown} title={!daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars"} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Download my calendar</button>
                   <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
                 </span>
               </div>
@@ -8857,6 +8898,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
   const periodText = range.label + (modeEff === "fairness" ? "" : "") ;
   const exportCsv = () => {
+    if (daysUnread) { showToast("The schedule has not loaded - nothing to export yet.", "error"); return; } // review 9/28: not the tally of an unread schedule
     try {
       // The any-role run column is APPENDED so the older column positions (East days .. Deviation) stay where
       // consumers (and test/ui/smoke.mjs) read them - Prompt 12 A, 9/22.
@@ -8909,7 +8951,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         <select data-testid="totals-month" value={month0} onChange={e => setMonth0(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{TOTALS_MON.map((m, i) => <option key={m} value={i}>{m}</option>)}</select>
         <select data-testid="totals-year" value={year} onChange={e => setYear(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
         {hasPreview && <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#7a4fbf", cursor: "pointer" }}><input type="checkbox" data-testid="totals-with-preview" checked={withPreview} onChange={e => setWithPreview(e.target.checked)}/> add rows with the Generate preview applied</label>}
-        {modeEff !== "pay" && <button data-testid="totals-csv" onClick={exportCsv} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto" }}>Export CSV</button>}
+        {modeEff !== "pay" && <button data-testid="totals-csv" onClick={exportCsv} disabled={!!daysUnread} title={daysUnread ? "The schedule has not loaded - nothing to export yet" : undefined} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto", opacity: daysUnread ? 0.5 : 1 }}>Export CSV</button>}
       </div>
       <div data-testid="totals-period" style={{ fontSize: 12.5, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 8 }}>
         <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}{daysUnread ? <strong data-testid="totals-days-unread" style={{color:T.open}}> Schedule not loaded - these counts are not the schedule's until it loads.</strong> : null}
@@ -9843,8 +9885,11 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
 // - a minor holiday on a Monday absorbs the weekend before it (Sat-Mon) when
 // groupRules.holidays.mondayMinorAbsorbsWeekend is true. Every unit and day
 // stays editable; the stored days are what the engine reads.
-function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported }) {
+function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported, daysUnread }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
+  // Review 9/28: daysUnread = a finished load holds no read of schedule_days - the coverage / held counts read the
+  // empty map (every unit OPEN, 0/0 held), so they say "not loaded" and the Edit buttons (goToDay) are disabled.
+  const Tk = THEME[dk ? "dark" : "light"];
   const [draft, setDraft] = React.useState(() => suClone(holidays && holidays.units ? holidays : { units: {} }));
   const [dirty, setDirty] = React.useState(false);
   const [newYear, setNewYear] = React.useState("");
@@ -9879,7 +9924,7 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
       {!rulesImported && <div style={css.warnBox}>Rules are not imported yet - holiday units arrive with the seed import, or add a year and units here.</div>}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <span style={{ fontSize: 11, color: "#5B6B82" }}>Held since 9/14/2026 (units, major/minor):</span>
-        {(roster || []).map(s => { const c = counts[s.id] || { major: 0, minor: 0 }; return <span key={s.id} data-testid={"hol-count-" + s.id} style={{ fontSize: 11, fontFamily: mono, background: "#f4f6f8", border: "1px solid #DCE3EC", borderRadius: 5, padding: "2px 7px" }}>{s.name} {c.major}/{c.minor}</span>; })}
+        {(roster || []).map(s => { const c = counts[s.id] || { major: 0, minor: 0 }; return <span key={s.id} data-testid={"hol-count-" + s.id} style={{ fontSize: 11, fontFamily: mono, background: "#f4f6f8", border: "1px solid #DCE3EC", borderRadius: 5, padding: "2px 7px" }}>{s.name} {daysUnread ? "?/?" : c.major + "/" + c.minor}</span>; })}
       </div>
       {years.map(y => (
         <div key={y} style={{ border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
@@ -9900,9 +9945,10 @@ function HolidaysCard({ css, holidays, groupRules, schedule, roster, nameOf, onS
                       </td>
                       <td><select value={u.tier || "major"} onChange={e => edit(y, i, { tier: e.target.value })} style={{ ...inp, width: 80 }}><option value="major">major</option><option value="minor">minor</option></select></td>
                       <td><input type="text" value={dayTexts[key] !== undefined ? dayTexts[key] : (u.days || []).join(", ")} onChange={e => { setDayTexts(t => ({ ...t, [key]: e.target.value })); setDays(y, i, e.target.value); }} onBlur={() => setDayTexts(t => { const n = { ...t }; delete n[key]; return n; })} style={{ ...inp, width: 300, fontFamily: mono }} /></td>
-                      <td style={{ fontSize: 12, whiteSpace: "nowrap" }} data-testid="hol-coverage">P {who(cov.primary)} / B {who(cov.backup)}{cov.openSlots ? <span style={{ color: "#c04040", marginLeft: 4 }}>({cov.openSlots} open slot(s))</span> : null}</td>
+                      {daysUnread ? <td style={{ fontSize: 12, whiteSpace: "nowrap", fontStyle: "italic", color: Tk.muted }} data-testid="hol-coverage" data-unread="1">Schedule not loaded</td>
+                      : <td style={{ fontSize: 12, whiteSpace: "nowrap" }} data-testid="hol-coverage">P {who(cov.primary)} / B {who(cov.backup)}{cov.openSlots ? <span style={{ color: "#c04040", marginLeft: 4 }}>({cov.openSlots} open slot(s))</span> : null}</td>}
                       <td style={{ whiteSpace: "nowrap" }}>
-                        {(u.days || []).slice(0, 4).map(d => <button key={d} onClick={() => onEditDay(d)} title={"Open the day editor for " + d} style={{ ...css.mini(false), marginRight: 3 }}>Edit {fmtMD(d)}</button>)}
+                        {(u.days || []).slice(0, 4).map(d => <button key={d} data-testid="hol-edit-day" onClick={() => onEditDay(d)} disabled={!!daysUnread} title={daysUnread ? "The schedule has not loaded - days cannot be opened until it loads" : "Open the day editor for " + d} style={{ ...css.mini(false), marginRight: 3, opacity: daysUnread ? 0.5 : 1 }}>Edit {fmtMD(d)}</button>)}
                         <button onClick={() => removeUnit(y, i)} style={css.danger}>Remove</button>
                       </td>
                     </tr>
