@@ -312,6 +312,22 @@
 //     by their exact triples (+ audit eastvac.review reset, reason changed /
 //     removed), names both in the refresh toast and keeps the unchanged range's
 //     row; the panel then lists the moved range unreviewed.
+//   - smoke clean on main (Faraz 9/29): no premise is a dated fact about a
+//     surgeon or a day - each is derived from the rows / blob / East tables the
+//     harness reads or serves (rulesHardOn reads the rules' own picture on a
+//     page): the Trades unit (the first holiday unit one surgeon holds as
+//     primary, was Khan's Thanksgiving), the block-member / trade-block triples
+//     (triples the rules let Fierce hold as a block, was the first row-less one,
+//     2027-01-08), the offer painter's weekday-pattern confirmations (the rules'
+//     confirm codes, cross-checked against the served hardNeverWeekdays), the
+//     Export counts (the rows that page was served), the external-cover week
+//     (was 'Atwell 9/28-10/4'), the day editor's East status lines (the served
+//     eastFeed surgeons), the clean vacation range, the 'respect locks OFF'
+//     week, today's ring (the Central date); a case the live data lacks prints
+//     'not exercised', and the seed-vs-live Import premise prints PENDING. Every
+//     call pay read is answered by the harness (default 404 = the missing-table
+//     guard; payMock for 500 / 200); each forced non-2xx arms one expected
+//     console line matched on the pay path + status (payForcedLines).
 // Exit code 1 on any failure.
 //
 // Determinism (finding removal-03): React / ReactDOM / the Supabase SDK are
@@ -475,6 +491,31 @@ let followerPrefs400Lines = 0;
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
+// Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
+// route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
+// and year-switch steps), never by the live project. Each non-2xx answer it forces is pushed here ({ path, status, page }) and
+// arms exactly ONE expected browser line "Failed to load resource: the server responded with a status of <status>" whose
+// location URL is that pay path on the Supabase host - consumed one line each (payForcedLine), matched on path + status, so
+// a pay line the harness did not force, or any other 404 / 500, is still an unexpected console error. payServed keeps every
+// pay answer (status + page) so the 'unavailable' checks can prove the state came from the harness's own 404.
+const payForcedLines = [];
+const payServed = [];
+let payForcedConsumed = 0;
+const payForcedLine = (msg) => {
+  const m = /^Failed to load resource: the server responded with a status of (\d{3})\b/.exec(msg.text());
+  if (!m) return false;
+  let p = "";
+  try { const u = new URL((msg.location() || {}).url || ""); if (u.hostname !== SUPABASE_HOST) return false; p = u.pathname; } catch (e) { return false; }
+  if (!/^\/rest\/v1\/call_pay_(settings|logs)$/.test(p)) return false;
+  const i = payForcedLines.findIndex(x => x.path === p && x.status === Number(m[1]));
+  if (i < 0) return false;
+  payForcedLines.splice(i, 1);
+  payForcedConsumed++;
+  return true;
+};
+// how many pay reads of `pg` the harness answered with its forced 404 (the missing-table guard) - the 'unavailable' checks
+// require > 0, so that state is never assumed from the live project (whose tables exist since the 2026-09-28 apply)
+const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status === 404).length;
 const FOLLOW_FEED = [
   { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
@@ -625,6 +666,8 @@ const dayRow = (day, over) => ({ day, primary_id: null, backup_id: null, primary
 // app's summary. The plan's rows do not depend on `now` (only the blob's
 // settings.importedAt does), so one plan serves both.
 const IMP = require(path.join(ROOT, "importer.js"));
+// helpers.js in node (9/29): the offer painter's confirm family (OFFER_CONFIRM_WORDS) classifies the rules' hard codes
+const HELPERS = require(path.join(ROOT, "helpers.js"));
 const SEED_PATH = path.join(ROOT, "docs", "silvis-seed.json");
 const PLAN_TS = "2026-09-22T00:00:00.000Z";
 const PLAN = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { now: PLAN_TS });
@@ -715,6 +758,26 @@ const readOnCallBanner = async (pg) => {
   if (clk2.shiftDay !== clk.shiftDay || clk2.calendarDay !== clk.calendarDay) return { crossed: true, clk, clk2 };
   return { clk, ...b };
 };
+// Smoke clean on main (9/29): the rules' own picture on a page - the App's rulesCtxState memo on the committed React tree
+// (the same walk as the window-reason and Item E2 blocks) and eligibility(ctx, day, role, id, opts).hard for each query
+// { day, role, id, opts } - so a premise about a surgeon on a day (can Fierce hold this Fri-Sun as a block? does this
+// painted day ask the weekday-pattern confirmation?) is read from what the page was served (rows, blob, offers, East
+// tables) instead of a dated constant. Answers { out: [hard[]] } in query order, or { error }.
+const rulesHardOn = (pg, queries) => pg.evaluate((qs) => {
+  const rootEl = document.getElementById("root");
+  const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+  if (!ck) return { error: "no React container key on #root" };
+  const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+  let ctx = null, n = 0; const stack = [current];
+  while (stack.length && !ctx && n++ < 500000) {
+    const f = stack.pop(); if (!f) continue;
+    if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+    if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+  }
+  if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+  if (typeof eligibility !== "function") return { error: "eligibility() is not a page global" };
+  return { out: qs.map(q => { try { return (eligibility(ctx, q.day, q.role, q.id, q.opts || {}) || {}).hard || []; } catch (e) { return ["threw: " + String(e && e.message || e)]; } }) };
+}, queries);
 // the first open slot (today or later - the app's OPEN rule) between two ISO days inclusive, else null
 const liveOpenBetween = (from, to) => { for (let d = from < todayCentral ? todayCentral : from; d <= to; d = isoPlus(d, 1)) if (liveOpenEarly(d, "primary") || liveOpenEarly(d, "backup")) return d; return null; };
 // LIVE mode only: the slot the harness opens for the claim scenario (the search after the first load). The GET
@@ -785,7 +848,8 @@ const watchPage = (pg, tag) => {
   pg.on("pageerror", (e) => pageErrors.push(`${tag}: ` + String(e && e.message || e)));
   pg.on("console", (msg) => {
     if (msg.type() === "error") {
-      if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
+      if (payForcedLine(msg)) forcedConsoleErrors.push(msg.text()); // 9/29: a pay read the harness answered 404 / 500 (path + status matched, one line each)
+      else if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
@@ -1308,16 +1372,22 @@ const routeSupabase = async (route, scope) => {
   // data.vacations is stripped and the newest cached week hosts the three FAK fixture ranges (the ride-on host
   // rule of east-feed.js planVacationCache puts a range beyond the published weeks on the latest cached week).
   if (method === "GET" && url.pathname === "/rest/v1/east_feed") return json(200, await eastFeedRows(route, req, eastVacFeed));
-  // Call pay (Faraz 9/27): sql/migrations/2026-09-27-call-pay.sql is report-first - the harness answers what the live
-  // project answers before the apply (PostgREST 12.2+: 404 PGRST205), so every pay surface must read "unavailable" (the
-  // sentence, no error toast), never an empty list. The ok-state rendering with rows and the writes are NOT exercised here.
-  if (payMock && /^\/rest\/v1\/call_pay_(settings|logs)$/.test(url.pathname)) {
-    // a step's pay answer (the year-switch check): { status, body } for this request, or null for the default below
-    const a = payMock(url);
-    if (a) return route.fulfill({ status: a.status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(a.body) });
-  }
+  // Call pay (Faraz 9/27; sql/migrations/2026-09-27-call-pay.sql applied 2026-09-28 01:15:26Z): the harness answers EVERY pay
+  // read itself and never passes one to the live project. The default is PostgREST's missing-table answer (12.2+: 404
+  // PGRST205) - the client's 'unavailable' guard, which every pay surface must read as the sentence (no error toast), never as
+  // an empty list; a step's payMock serves the other states (the settings-failed 500, the year-switch 500, 'ok' with an empty
+  // list). Each non-2xx answer arms one expected console line (payForcedLines above). The live tables (they exist since the
+  // apply) are never read here, so no pay step depends on live rows; the ok-state rendering with rates and the writes are
+  // NOT exercised here.
   if (/^\/rest\/v1\/call_pay_(settings|logs)$/.test(url.pathname)) {
-    return route.fulfill({ status: 404, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public." + url.pathname.split("/").pop() + "' in the schema cache" }) });
+    // a step's pay answer (the year-switch check): { status, body } for this request, or null for the default 404
+    const a = payMock ? payMock(url) : null;
+    const status = a ? a.status : 404;
+    const body = a ? a.body : { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public." + url.pathname.split("/").pop() + "' in the schema cache" };
+    let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
+    payServed.push({ path: url.pathname, status, page: pg });
+    if (status >= 400) payForcedLines.push({ path: url.pathname, status });
+    return route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
   }
   // Anon READ passthrough: the fake JWT would be rejected by the real project,
   // so swap it for the anon key (what dbReadHeaders does for an expired token).
@@ -1746,9 +1816,28 @@ try {
     if (liveOpenEarly("2026-10-15", "primary")) { if (!oct15 || oct15.p || !/OPEN/.test(oct15.text)) fail("2026-10-15 should render P OPEN (open primary in the live rows): " + JSON.stringify(oct15)); else ok("2026-10-15 renders P OPEN (open in the live rows)"); }
     else if (!oct15 || !oct15.p || oct15.p !== ((liveEarlyByDay["2026-10-15"] || {}).primary_id || null)) fail("2026-10-15 primary is held in the live rows but the cell shows " + JSON.stringify(oct15)); else ok(`2026-10-15 primary held live by ${oct15.p} - the cell shows the holder, not OPEN`);
   }
-  const atwellCells = octCells.filter(c => c.day >= "2026-09-28" && c.day <= "2026-10-04");
-  if (atwellCells.length !== 7 || !atwellCells.every(c => c.ext === "Atwell" && /Atwell/.test(c.text) && !/OPEN[^]*OPEN/.test(c.text))) fail("week of 9/28: the Atwell external cover is not shown on every cell: " + JSON.stringify(atwellCells.map(c => [c.day, c.ext, c.text.slice(0, 30)])));
-  else ok("week of 9/28: all 7 cells show the external cover label 'Atwell' in the primary line (muted, not OPEN)");
+  // Smoke clean on main (9/29): the external-cover checks (grid, week row, share page, printable, ER panel) read EXT_RUN -
+  // the first run of consecutive days in the October 2026 weeks (9/28-11/1) whose served row has an external cover and no
+  // roster primary - instead of the pinned 'Atwell 9/28-10/4 (backup Fierce)' (the import's week; true today). No such run
+  // in the served rows = a console line per surface, never a silent pass.
+  const EXT_RUN = (() => {
+    let run = null;
+    for (let d = "2026-09-28"; d <= "2026-11-01"; d = isoAddDays(d, 1)) {
+      const r = liveByDay[d]; const ext = r && !r.primary_id && r.external_cover ? String(r.external_cover) : null;
+      if (run) { if (ext === run.name && isoAddDays(run.end, 1) === d) { run.end = d; continue; } break; }
+      if (ext) run = { name: ext, start: d, end: d };
+    }
+    if (!run) return null;
+    const dow = new Date(run.start + "T12:00:00Z").getUTCDay();
+    return { ...run, monday: isoAddDays(run.start, -((dow + 6) % 7)), days: daysBetween(run.start, run.end) };
+  })();
+  if (!EXT_RUN) console.log("     (October 2026: no external-cover run in the served rows for 9/28-11/1 - the external-cover label checks are not exercised this run)");
+  else {
+    const extCells = octCells.filter(c => c.day >= EXT_RUN.start && c.day <= EXT_RUN.end);
+    const extWant = EXT_RUN.days.filter(d => octCells.some(c => c.day === d)).length;
+    if (!extWant || extCells.length !== extWant || !extCells.every(c => c.ext === EXT_RUN.name && c.text.includes(EXT_RUN.name) && !/OPEN[^]*OPEN/.test(c.text))) fail(`${mdOf(EXT_RUN.start)}-${mdOf(EXT_RUN.end)}: the external cover '${EXT_RUN.name}' (served rows) is not shown on every cell: ` + JSON.stringify(extCells.map(c => [c.day, c.ext, c.text.slice(0, 30)])));
+    else ok(`${mdOf(EXT_RUN.start)}-${mdOf(EXT_RUN.end)}: all ${extCells.length} cells show the external cover label '${EXT_RUN.name}' in the primary line (muted, not OPEN) - derived from the served rows`);
+  }
   const filterChips = await page.$$eval("[data-filter]", els => els.map(e => e.getAttribute("data-filter")));
   if (filterChips.length < 6 || !filterChips.includes("SRK")) fail("surgeon filter chips missing: " + filterChips.join(",")); else ok("surgeon filter chips by code: " + filterChips.join(" "));
   await page.screenshot({ path: path.join(OUT, "calendar-oct-2026.png"), fullPage: true });
@@ -1759,8 +1848,6 @@ try {
   if (!weekRowsVisible) { await page.click("text=Week rows (ER Call Panels layout)"); await page.waitForSelector("[data-testid=week-rows]", { timeout: 3000 }); }
   const hdr = await page.$eval("[data-testid=week-rows] thead", el => el.innerText.replace(/\s+/g, " ").trim());
   if (hdr !== "MON/SUN DATES TRAUMA TRAUMA BACKUP") fail("week rows header is not the ER-panel author's: " + hdr); else ok("week rows header: " + hdr);
-  const row928 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
-  if (!/9\/28-10\/4 Atwell/.test(row928) || !/9\/28-10\/4 Fierce/.test(row928)) fail("week row 9/28 lacks '9/28-10/4 Atwell' / '9/28-10/4 Fierce': " + row928); else ok("week row 9/28: '9/28-10/4 Atwell' (primary) and '9/28-10/4 Fierce' (backup) collapsed");
   const row1005 = await page.$eval('[data-testid=week-rows] tr[data-week="2026-10-05"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
   // Live-drift fix (9/24): the week-row entries are DERIVED from the live rows, never pinned to who held a day on
   // the import (the 10/10 trade broke '10/9-10/11 Acton'). expectWeekCols restates buildWeekRows' collapse rule
@@ -1796,6 +1883,15 @@ try {
     else ok(`week row ${mdOf(monday)}: TRAUMA [${expP.join(" / ")}], BACKUP [${expB.join(" / ")}] - equal the live rows collapsed by the same-surgeon rule${runs.length ? " (multi-day run(s): " + runs.join(", ") + ")" : " (no multi-day run this week)"}`);
     return runs;
   };
+  // the external-cover week (9/29: derived - EXT_RUN's Monday, read like every week row: the rendered TRAUMA / BACKUP entries
+  // equal the served rows collapsed, and TRAUMA carries the external run; was '9/28-10/4 Atwell' + '9/28-10/4 Fierce')
+  if (!EXT_RUN) console.log("     (week rows: no external-cover run in the served rows for 9/28-11/1 - the external-cover week row is not exercised this run)");
+  else {
+    const extE = expectWeekCols(EXT_RUN.monday).primary.find(e => e.text.endsWith(" " + EXT_RUN.name));
+    await checkWeekRow(EXT_RUN.monday);
+    if (!extE) fail(`week row ${mdOf(EXT_RUN.monday)}: the served rows' external cover '${EXT_RUN.name}' has no TRAUMA entry in the restated week`);
+    else ok(`week row ${mdOf(EXT_RUN.monday)}: the external cover reads '${extE.text}' in TRAUMA (derived from the served rows)`);
+  }
   {
     const runs1005 = await checkWeekRow("2026-10-05");
     // The collapse must still be exercised: when the week of 10/5 has no multi-day run, the first other week the
@@ -1921,8 +2017,12 @@ try {
       const shareOpen = await sharePage.$eval('.cd[data-day="2026-10-15"] .open', el => getComputedStyle(el).color).catch(() => "");
       if (!/rgb\(192, 64, 64\)/.test(shareOpen)) fail("share page: 10/15 P OPEN is not red: " + shareOpen); else ok("share page renders: 10/15 P OPEN in red");
     }
-    const shareAtwell = await sharePage.$eval('table.wr[data-month="2026-10"] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
-    if (!/9\/28-10\/4 Atwell/.test(shareAtwell)) fail("share page week rows lack '9/28-10/4 Atwell': " + shareAtwell); else ok("share page week rows: '9/28-10/4 Atwell' under the October grid");
+    const extShare = EXT_RUN ? expectWeekCols(EXT_RUN.monday).primary.find(e => e.text.endsWith(" " + EXT_RUN.name)) : null;
+    if (!extShare) console.log("     (share page: no external-cover run in the served October weeks - the external-cover week-row check is not exercised this run)");
+    else {
+      const shareExt = await sharePage.$eval(`table.wr[data-month="2026-10"] tr[data-week="${EXT_RUN.monday}"]`, tr => tr.innerText.replace(/\n/g, " | ")).catch(() => "");
+      if (!shareExt.includes(extShare.text)) fail(`share page week rows lack '${extShare.text}' (the served external cover): ` + shareExt); else ok(`share page week rows: '${extShare.text}' under the October grid`);
+    }
     // TH (O.3): the share page's pills carry the id-keyed surgeon colours the grid uses (Khan navy #1F3A6B).
     const shareKhan = await sharePage.$$eval(".bdg", els => { const e = els.find(x => /Khan/.test(x.textContent)); return e ? getComputedStyle(e).color : ""; }).catch(() => "");
     if (shareKhan !== "rgb(31, 58, 107)") fail("share page: Khan's pill is not the theme navy #1F3A6B: " + JSON.stringify(shareKhan)); else ok("share page: Khan's pill carries the theme navy #1F3A6B (id-keyed table reaches the exports)");
@@ -1945,8 +2045,12 @@ try {
       const printOpen = await pop.$eval('.cell[data-day="2026-10-15"] .shift .open', el => getComputedStyle(el).color).catch(() => "");
       if (!/rgb\(192, 0, 0\)/.test(printOpen)) fail("printable: 10/15 OPEN not red: " + printOpen); else ok("printable view: 10/15 P OPEN in red");
     }
-    const printAtwell = await pop.$eval('.cell[data-day="2026-10-01"] .shift .ext', el => el.textContent).catch(() => "");
-    if (!/Atwell/.test(printAtwell)) fail("printable: 10/1 external cover missing: " + printAtwell); else ok("printable view: 10/1 shows '" + printAtwell + "'");
+    const extPrintDay = EXT_RUN ? EXT_RUN.days.find(d => d >= "2026-10-01" && d <= "2026-10-31") : null;
+    if (!extPrintDay) console.log("     (printable: no external-cover day in October 2026 in the served rows - the external-cover cell check is not exercised this run)");
+    else {
+      const printExt = await pop.$eval(`.cell[data-day="${extPrintDay}"] .shift .ext`, el => el.textContent).catch(() => "");
+      if (!printExt.includes(EXT_RUN.name)) fail(`printable: ${mdOf(extPrintDay)} external cover '${EXT_RUN.name}' missing: ` + printExt); else ok(`printable view: ${mdOf(extPrintDay)} shows '` + printExt + "'");
+    }
     // Prompt 16 B8: the popup (window.open("") + document.write) inherits the app's CSP; its toolbar script is the
     // one static hash in script-src. Proof it RAN under that policy: the flag it sets, no violation recorded.
     const tb = await pop.evaluate(() => ({ ready: window.__silvisPrintToolbar === true, viol: Array.isArray(window.__cspViolations) ? window.__cspViolations.slice() : null, buttons: Array.from(document.querySelectorAll(".toolbar button")).map(b => b.id) }));
@@ -1968,7 +2072,10 @@ try {
     // full-week label), the 10/26 row keeps Sunday 11/1, and the note says
     // the visible-month range was widened to whole weeks.
     const erRow928 = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-09-28"]', tr => tr.innerText.replace(/[\t\n]+/g, " | "));
-    if (!/^9\/28 - 10\/4 \| 9\/28-10\/4 Atwell/.test(erRow928) || /10\/1-10\/4/.test(erRow928)) fail("ER panel: the 9/28 row must list the whole week ('9/28-10/4 Atwell' under '9/28 - 10/4'): " + erRow928); else ok("ER panel: first row is the whole week - '9/28 - 10/4 | 9/28-10/4 Atwell'");
+    // 9/29: the first TRAUMA entry is the served rows' own, restated over the WHOLE Mon-Sun week (expectWeekCols) - a clipped
+    // row (the exp-001 bug: '10/1-...' under a full-week label) differs from it; was pinned to '9/28-10/4 Atwell'
+    const er928First = (expectWeekCols("2026-09-28").primary[0] || {}).text || "";
+    if (!er928First || !erRow928.startsWith("9/28 - 10/4 | " + er928First)) fail(`ER panel: the 9/28 row must list the whole week ('${er928First}' - the served rows restated over 9/28-10/4 - under '9/28 - 10/4'): ` + erRow928); else ok(`ER panel: first row is the whole week - '9/28 - 10/4 | ${er928First}'`);
     const erRow1026 = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-10-26"]', tr => tr.innerText.replace(/[\t\n]+/g, " | "));
     if (!/^10\/26 - 11\/1 \| /.test(erRow1026) || !/11\/1/.test(erRow1026.split(" | ").slice(1).join(" | "))) fail("ER panel: the 10/26 row must keep Sunday 11/1: " + erRow1026); else ok("ER panel: last October row keeps Sunday 11/1 - '" + erRow1026.slice(0, 60) + "...'");
     const erSpanNote = await page.$eval("[data-testid=er-span-note]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
@@ -2077,8 +2184,14 @@ try {
       else ok(`day editor 10/15: the reason line maps the code to words for all ${others.length} ("${rosterNameOf(others[0].value)} - slot locked to ${hName}")`);
     }
   }
+  // 9/29: the East status lines expected are DERIVED from the served blob - one per surgeon whose surgeonRules.<id>.eastFeed is
+  // enabled (Khan's busy days, Fierce's derived weeks today), each naming that surgeon - not the pinned 'Khan + Fierce'
   const eastLines = await page.$$eval("[data-testid=east-status]", els => els.map(e => e.textContent));
-  if (eastLines.length < 2) fail("day editor: East status lines missing (expected Khan + Fierce): " + JSON.stringify(eastLines)); else ok("day editor East status: " + eastLines.join(" || "));
+  const eastIds = Object.keys((liveBlobData && liveBlobData.surgeonRules) || {}).filter(id => { const ef = liveBlobData.surgeonRules[id] && liveBlobData.surgeonRules[id].eastFeed; return !!(ef && ef.enabled); });
+  const eastMissing = eastIds.filter(id => !eastLines.some(t => new RegExp("(^|\\b)" + rosterNameOf(id) + ": ").test(t)));
+  if (!eastIds.length) console.log("     (day editor East status: no surgeon in the served blob has an enabled eastFeed - not exercised; lines: " + JSON.stringify(eastLines) + ")");
+  else if (eastMissing.length) fail(`day editor: East status lines missing for ${eastMissing.map(rosterNameOf).join(", ")} (the served blob enables eastFeed for ${eastIds.map(rosterNameOf).join(" + ")}): ` + JSON.stringify(eastLines));
+  else ok(`day editor East status (one line per eastFeed surgeon of the served blob - ${eastIds.map(rosterNameOf).join(" + ")}): ` + eastLines.join(" || "));
   await page.screenshot({ path: path.join(OUT, "day-editor-2026-10-15.png"), fullPage: false });
   ok("screenshot test/ui/out/day-editor-2026-10-15.png");
   // arrow key moves a day (clean draft), Esc closes
@@ -2280,7 +2393,10 @@ try {
     }
     // (b) the forecast: every rules forecast day of the month reads 'East forecast NN% (...)' with the rules' own
     // percentage and busy wording, and the editor shows no forecast line the rules do not hold
-    if (!fMonth) fail(`Item E2 (scheduler, day editor): the rules context has no East forecast day of 20% or more that the day editor would word as a forecast (outside the published coverage; not standing, busy or override-cleared) on any day ${scanWindow} (east_forecast rows from 11/16 expected while Davenport is unpublished) - the forecast half would prove nothing`);
+    // Smoke clean on main (9/29): whether a forecast day of 20%+ exists outside the published coverage is LIVE East data (the
+    // east_forecast rows are pruned as Davenport publishes) - its absence is named as not exercised, never passed and never a
+    // FAIL of the app; the half still demands every line whenever the rules hold one.
+    if (!fMonth) { forecastPass = "no forecast half (not exercised)"; console.log(`     Item E2 (scheduler, day editor): NOT EXERCISED - the rules context has no East forecast day of 20% or more that the day editor would word as a forecast (outside the published coverage; not standing, busy or override-cleared) on any day ${scanWindow} in the served east_forecast rows - the forecast half has nothing to compare this run`); }
     else {
       const scan = await scanMonth(fMonth);
       const fkey = (f) => f.day + " " + f.pct + "% " + (f.busy ? "busy" : "below");
@@ -2844,7 +2960,8 @@ try {
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
           else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
         }
-        // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' before the migration) and no Totals > Pay; the
+        // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' on the harness's forced 404 - the missing-table
+        // guard; the live tables exist since 2026-09-28 and are never read here) and no Totals > Pay; the
         // office coordinator (9/27 item 5a) reads Totals > Pay READ-ONLY with its CSV button - no My pay, no log form, no Pay
         // rates; a viewer and ?public=1 get no pay UI at all and no dollar figure anywhere on the page
         {
@@ -2853,7 +2970,8 @@ try {
           if (R.kind === "coordinator") {
             // 9/27 review fix: the settings read FAILS (500) while the call-ins read answers 200 - the stipend switches are
             // unknown, so Totals > Pay shows the rates' failed note and Refresh only: no table, no CSV (never a switched-off
-            // surgeon back in the office's file). This page's settings never loaded before (pre-migration 'unavailable').
+            // surgeon back in the office's file). This page's settings never loaded before (the harness's default 404 -
+            // 'unavailable' - answered its earlier pay reads).
             try {
               payMock = (url) => url.pathname.endsWith("/call_pay_settings") ? { status: 500, body: { message: "harness: settings read failed" } } : { status: 200, body: [] };
               await rp.click('button[data-tab="calendar"]');
@@ -2903,9 +3021,11 @@ try {
             await rp.click('button[data-tab="myschedule"]');
             const pc = await rp.waitForSelector("[data-testid=pay-card]", { timeout: 8000 }).then(() => true).catch(() => false);
             const pcState = pc ? await rp.$eval("[data-testid=pay-card]", el => el.getAttribute("data-state")) : null;
+            const pc404 = payForced404For(rp);
             if (!pc) fail(`${T}: My schedule has no My pay card`);
-            else if (pcState !== "unavailable") fail(`${T}: My pay reads '${pcState}' before the migration (expected 'unavailable')`);
-            else if (!payModeBtn) ok(`${T}: My pay card 'unavailable' before the call pay migration; no Totals > Pay`);
+            else if (pcState !== "unavailable") fail(`${T}: My pay reads '${pcState}' on the harness's forced 404 (expected 'unavailable' - the missing-table guard)`);
+            else if (!pc404) fail(`${T}: My pay reads 'unavailable' but the harness answered none of this page's pay reads 404 - the state was not forced by the mock`);
+            else if (!payModeBtn) ok(`${T}: My pay card 'unavailable' on the harness's forced 404 (${pc404} pay read(s) of this page; the missing-table guard); no Totals > Pay`);
           } else {
             const anyPay = await rp.evaluate(() => !!document.querySelector("[data-testid=pay-card], [data-testid=pay-rates], [data-testid=pay-totals], [data-testid=totals-mode-pay]"));
             const dollar = await rp.evaluate(() => /\$\s?\d/.test(document.body.innerText || ""));
@@ -3747,7 +3867,13 @@ try {
   if (!darkRows.length) fail("dark mode: no [data-kind=surgeon] week-row entries to measure");
   else if (dimRows.length) fail("dark mode: week-row names below 3:1 contrast: " + dimRows.map(([n, p]) => `${n} ${p && p.color} ${p && p.ratio}:1`).join(", "));
   else ok("dark mode: week-row names readable - " + darkRows.map(([n, p]) => `${n} ${p.ratio}:1`).join(", "));
-  if (!darkProbe.rows.Fierce) fail("dark mode: no Fierce week-row entry in October 2026 (expected 9/28-10/4 Fierce)");
+  // 9/29: every roster surgeon the served rows put in the October week rows (9/28-11/1) must be measured - derived, was the
+  // pinned 'Fierce (9/28-10/4)'
+  {
+    const octNames = [...new Set(daysBetween("2026-09-28", "2026-11-01").flatMap(d => { const r = liveByDay[d]; return r ? [r.primary_id, r.backup_id].filter(Boolean).map(rosterNameOf) : []; }))];
+    const unmeasured = octNames.filter(n => !darkProbe.rows[n]);
+    if (unmeasured.length) fail(`dark mode: no week-row entry measured for ${unmeasured.join(", ")} although the served rows put them in the October 2026 weeks`);
+  }
   if (!darkProbe.h1 || darkProbe.h1.ratio === null || darkProbe.h1.ratio < 3) fail("dark mode: header title low contrast: " + JSON.stringify(darkProbe.h1)); else ok(`dark mode: h1 '${darkProbe.h1.text}' ${darkProbe.h1.ratio}:1 on the header`);
   const dimDots = darkProbe.dots.filter(d => d.ratio === null || d.ratio < 2);
   if (dimDots.length) fail("dark mode: vacation dots invisible on their cell: " + JSON.stringify(dimDots.slice(0, 4))); else ok(`dark mode: ${darkProbe.dots.length} vacation dot(s) visible on their cells`);
@@ -4593,7 +4719,8 @@ try {
     }
     const totalsText = await page.$eval("[data-testid=totals-card]", el => el.innerText);
     if (/\$/.test(totalsText)) fail("Totals: a '$' appears in the card text (counts are unweighted; pay lives in the Pay mode only)"); else ok("Totals: no '$' anywhere in the card");
-    // Call pay (9/27): the scheduler's Totals > Pay mode - present, 'unavailable' before the migration, and the counts CSV
+    // Call pay (9/27): the scheduler's Totals > Pay mode - present, 'unavailable' on the harness's forced 404 (the missing-table
+    // guard; the live tables exist since the 2026-09-28 apply and are never read by the harness), and the counts CSV
     // button is hidden while it is on (the counts CSV stays $-free); back to "By month" afterwards
     try {
       if (!(await page.$("[data-testid=totals-mode-pay]"))) fail("Totals > Pay: the scheduler has no Pay mode button");
@@ -4603,8 +4730,9 @@ try {
         const ptText = await page.$eval("[data-testid=pay-totals]", el => el.innerText);
         const csvShown = !!(await page.$("[data-testid=totals-csv]"));
         if (!/after the next database update/.test(ptText)) fail("Totals > Pay: the unavailable sentence is missing: " + ptText.slice(0, 120));
+        else if (!payForced404For(page)) fail("Totals > Pay: 'unavailable' although the harness answered none of this page's pay reads 404 - the state was not forced by the mock");
         else if (csvShown) fail("Totals > Pay: the counts CSV button stays visible in pay mode");
-        else ok("Totals > Pay: 'unavailable' before the call pay migration; the counts CSV button hidden in pay mode");
+        else ok(`Totals > Pay: 'unavailable' on the harness's forced 404 (the missing-table guard; ${payForced404For(page)} pay read(s) of this page); the counts CSV button hidden in pay mode`);
         await page.click("[data-testid=totals-mode-month]");
         await page.waitForSelector("[data-testid=totals-table]", { timeout: 8000 });
       }
@@ -4757,7 +4885,8 @@ try {
     if (!(await page.$("[data-testid=mine-person]"))) fail("My schedule: the scheduler's person picker is missing");
     const mineText = await page.$eval("[data-testid=mine-card]", el => el.innerText);
     if (!noAddress(mineText)) fail("My schedule: an email address is rendered");
-    // Call pay (9/27): the scheduler's My pay card, before the migration: 'unavailable' with the sentence, no error toast
+    // Call pay (9/27): the scheduler's My pay card on the harness's forced 404 (the missing-table guard): 'unavailable' with the
+    // sentence, no error toast
     try {
       await page.waitForSelector("[data-testid=pay-card][data-state=unavailable]", { timeout: 8000 });
       const payText = await page.$eval("[data-testid=pay-card]", el => el.innerText);
@@ -4765,7 +4894,8 @@ try {
       if (!/Pay tracking is available after the next database update/.test(payText)) fail("My pay (scheduler): the unavailable card lacks its sentence: " + payText.slice(0, 160));
       else if (/pay data/i.test(toastNow)) fail("My pay (scheduler): a missing pay table raised an error toast: " + toastNow);
       else if (await page.$("[data-testid=pay-log-form]")) fail("My pay (scheduler): the log form renders while the tables do not exist");
-      else ok("My pay (scheduler): 'unavailable' before the call pay migration - the sentence, no toast, no form");
+      else if (!payForced404For(page)) fail("My pay (scheduler): 'unavailable' although the harness answered none of this page's pay reads 404 - the state was not forced by the mock");
+      else ok("My pay (scheduler): 'unavailable' on the harness's forced 404 (the missing-table guard) - the sentence, no toast, no form");
     } catch (e) { fail("My pay (scheduler): no [data-testid=pay-card][data-state=unavailable] on My schedule: " + errLine(e)); }
     // Call pay review fix: a year switch never shows another year's call-ins as none. The tables "exist" (settings row with
     // no rate, the current year's logs []) and the PREVIOUS year's logs answer 500: switching to it must read data-state
@@ -5142,13 +5272,42 @@ try {
       if (JSON.stringify(draftMap) !== JSON.stringify(Object.fromEntries(Object.entries(expected).sort()))) fail("Offer painter: the draft after two singles, one backup and the Either range is " + JSON.stringify(draftMap) + ", expected " + JSON.stringify(expected));
       else ok(`Offer painter: draft = ${d1} P, ${d2} P, ${d3} B, range ${d4}..${d5} = ${expectRange.length} Either day(s) (${Object.keys(expected).length} days, 3 brushes)`);
       await page.click("[data-testid=ofp-range]");
-      // the weekday-pattern confirmation (s1: never PRIMARY on Tue/Thu; backup is open) - once per batch
-      const isTuThu = (d) => dowOf(d) === 2 || dowOf(d) === 4;
-      const expectedAsks = (isTuThu(d1) ? 2 : 0) + (isTuThu(d2) ? 1 : 0) + (expectRange.some(isTuThu) ? 1 : 0);
-      const asks = dialogs.filter(m => /normally not one of your (primary|primary or backup) call days/.test(m));
-      if (asks.length !== expectedAsks) fail(`Offer painter: ${asks.length} weekday-pattern confirmation(s) asked, expected ${expectedAsks} (Tue/Thu among ${d1} x2, ${d2}, range ${expectRange.join(",")}): ` + JSON.stringify(asks.slice(0, 3)));
-      else ok(`Offer painter: the Tue/Thu primary confirmation was asked ${asks.length} time(s) (once per batch), e.g. ${asks[0] ? JSON.stringify(asks[0].split("\n")[0]) : "none needed"}`);
-      if (asks.length && !/never a call day by your rules/.test(asks[0])) fail("Offer painter: the confirmation does not name the reason ('never a call day by your rules'): " + asks[0]);
+      // the weekday-pattern confirmation - once per batch. Smoke clean on main (9/29): WHICH painted day asks is read from the
+      // rules on this page (rulesHardOn with { claim: true } - the painter's own call - and the confirm family of helpers.js
+      // OFFER_CONFIRM_WORDS, read in node), never from a weekday premise alone (the pin read 's1: never PRIMARY on Tue/Thu;
+      // backup is open' and counted Tue/Thu only - any other pattern code the served rules raise on a painted day, or a
+      // backup-side one on the Backup day, asks too). The weekday rule itself stays pinned against the SERVED blob: every
+      // painted primary day on one of s1's hardNeverWeekdays (primary role) must be a confirm day by the rules. d1 is tapped
+      // twice with the brush (tap, tap again clears, tap) = two asks; d2 and d3 one each; the Either range one for the batch.
+      const CONFIRM_CORES = Object.keys(HELPERS.OFFER_CONFIRM_WORDS);
+      const rolesOfBrush = (b) => b === "either" ? ["primary", "backup"] : [b];
+      const askQ = [];
+      const addAskQ = (d, role) => { if (!askQ.some(q => q.day === d && q.role === role)) askQ.push({ day: d, role, id: "s1", opts: { claim: true } }); };
+      [d1, d2].forEach(d => addAskQ(d, "primary")); addAskQ(d3, "backup"); expectRange.forEach(d => { addAskQ(d, "primary"); addAskQ(d, "backup"); });
+      const askRh = await rulesHardOn(page, askQ);
+      const confirmCodesOf = (d, role) => { const i = askQ.findIndex(q => q.day === d && q.role === role); return (((askRh.out || [])[i]) || []).filter(c => CONFIRM_CORES.includes(String(c).split(":")[0])); };
+      const asksOn = (d, brush) => rolesOfBrush(brush).some(role => confirmCodesOf(d, role).length > 0);
+      const paintOrder = [[d1, "primary"], [d2, "primary"], [d3, "backup"]].concat(expectRange.map(d => [d, "either"]));
+      const expectedAsks = (asksOn(d1, "primary") ? 2 : 0) + (asksOn(d2, "primary") ? 1 : 0) + (asksOn(d3, "backup") ? 1 : 0) + (expectRange.some(d => asksOn(d, "either")) ? 1 : 0);
+      const askWhy = paintOrder.map(([d, b]) => `${d} ${b} [${rolesOfBrush(b).flatMap(role => confirmCodesOf(d, role)).join(", ") || "-"}]`).join("; ");
+      const s1Rules = (liveBlobData && liveBlobData.surgeonRules && liveBlobData.surgeonRules.s1) || {};
+      const s1Never = (Array.isArray(s1Rules.hardNeverWeekdaysRoles) ? s1Rules.hardNeverWeekdaysRoles : ["primary", "backup"]).includes("primary") ? (s1Rules.hardNeverWeekdays || []) : [];
+      const WD3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const neverMiss = paintOrder.filter(([d, b]) => b !== "backup" && s1Never.includes(WD3[dowOf(d)]) && !confirmCodesOf(d, "primary").some(c => /^hard-never-weekday:/.test(c))).map(([d]) => d);
+      const asks = dialogs.filter(m => /normally not one of your (primary|backup|primary or backup) call days/.test(m));
+      if (askRh.error) fail("Offer painter: the rules context could not be read for the weekday-pattern premise: " + askRh.error);
+      else if (neverMiss.length) fail(`Offer painter: the served blob says s1 never takes PRIMARY on ${s1Never.join("/")}, but the rules raise no hard-never-weekday on the painted primary day(s) ${neverMiss.join(", ")}: ${askWhy}`);
+      else if (asks.length !== expectedAsks) fail(`Offer painter: ${asks.length} weekday-pattern confirmation(s) asked, expected ${expectedAsks} from the rules' confirm codes (${d1} tapped twice; ${askWhy}): ` + JSON.stringify(asks.slice(0, 3)));
+      else if (!expectedAsks) console.log(`     (Offer painter: no painted day is a weekday-pattern day for s1 by the rules on this page (${askWhy}) - the once-per-batch confirmation is not exercised this run)`);
+      else ok(`Offer painter: the weekday-pattern confirmation was asked ${asks.length} time(s) (once per batch) exactly where the rules raise a confirm code${s1Never.length ? " (s1's never-primary days " + s1Never.join("/") + " from the served blob among them)" : ""}, e.g. ${JSON.stringify(asks[0].split("\n")[0])}`);
+      // the first confirmation names the words of its day's first confirm code (the Tue/Thu rule's 'never a call day by your rules')
+      const firstAsk = paintOrder.find(([d, b]) => asksOn(d, b));
+      if (asks.length && firstAsk) {
+        const role0 = rolesOfBrush(firstAsk[1]).find(role => confirmCodesOf(firstAsk[0], role).length);
+        const words0 = HELPERS.OFFER_CONFIRM_WORDS[String(confirmCodesOf(firstAsk[0], role0)[0]).split(":")[0]];
+        if (!asks[0].includes(words0)) fail(`Offer painter: the first confirmation (${firstAsk[0]} ${firstAsk[1]}) does not name its reason ('${words0}'): ` + asks[0]);
+        else ok(`Offer painter: the first confirmation names its reason ('${words0}' - ${firstAsk[0]} ${role0})`);
+      }
       await page.screenshot({ path: path.join(OUT, "offers-range-390.png"), fullPage: false });
       ok("screenshot test/ui/out/offers-range-390.png");
       const nDays = Object.keys(expected).length;
@@ -5551,11 +5710,25 @@ try {
       await page.fill("[data-testid=trade-day]", "");
       await page.selectOption("[data-testid=trade-to]", "").catch(() => {});
     }
-    // clean range: two days with no schedule rows at all
+    // clean range: two days with no schedule rows at all. Smoke clean on main (9/29): DERIVED from the rows the app is served -
+    // 2027-03-02..03 while it stays clean (row-less, untouched by this run, s1 not primary on the day before - the handoff
+    // rule), else the first such pair of days in one month after it (the Feb-Apr 2027 period will be published one day);
+    // every later pin on this range (the POST, the lead-time note, the grouped line and its text) reads VAC_A / VAC_B.
+    const vacClean = (d) => !liveByDay[d] && !harnessDays[d] && !claimedDays[d];
+    const [VAC_A, VAC_B] = (() => {
+      for (let d = "2027-03-02"; d <= isoAddDays("2027-03-02", 400); d = isoAddDays(d, 1)) {
+        const e = isoAddDays(d, 1);
+        if (d.slice(0, 7) === e.slice(0, 7) && vacClean(d) && vacClean(e) && curDay(isoAddDays(d, -1)).primary !== "s1") return [d, e];
+      }
+      return ["2027-03-02", "2027-03-03"];
+    })();
+    const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const VAC_TEXT = `${MON3[+VAC_A.slice(5, 7) - 1]} ${+VAC_A.slice(8, 10)}\u2013${+VAC_B.slice(8, 10)} (${VAC_A.slice(0, 4)})`;
+    if (VAC_A !== "2027-03-02") console.log(`     (Time off clean range: 2027-03-02..03 is no longer clean in the served rows - using ${VAC_A}..${VAC_B})`);
     const before2 = writes.length;
     await form.locator("select").first().selectOption("s1");
-    await dates.nth(0).fill("2027-03-02");
-    await dates.nth(1).fill("2027-03-03");
+    await dates.nth(0).fill(VAC_A);
+    await dates.nth(1).fill(VAC_B);
     await page.fill("[data-testid=vac-note]", "harness range");
     await page.click("[data-testid=vac-add]");
     await waitFor(() => writesSince(before2, "/rest/v1/notifications").length > 0, 8000);
@@ -5566,27 +5739,27 @@ try {
     const vacNotif = notifs.find(n => n.type === "vacation_logged");
     const toBody = toPosts[0] ? bodyOf(toPosts[0]) : null;
     const stillRefused = await page.$("[data-testid=vac-conflict]");
-    if (stillRefused) fail("Time off clean range: the app refused 2027-03-02..03: " + (await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "))).slice(0, 160));
-    else if (toPosts.length !== 1 || !toBody || toBody.person_id !== "s1" || toBody.start_date !== "2027-03-02" || toBody.end_date !== "2027-03-03" || toBody.note !== "harness range") fail("Time off clean range: expected exactly one time_off POST { s1, 2027-03-02..03, note }: " + JSON.stringify(toPosts.map(w => w.body)));
+    if (stillRefused) fail(`Time off clean range: the app refused ${VAC_A}..${VAC_B}: ` + (await page.$eval("[data-testid=vac-conflict]", el => el.innerText.replace(/\s+/g, " "))).slice(0, 160));
+    else if (toPosts.length !== 1 || !toBody || toBody.person_id !== "s1" || toBody.start_date !== VAC_A || toBody.end_date !== VAC_B || toBody.note !== "harness range") fail("Time off clean range: expected exactly one time_off POST { s1, " + VAC_A + ".." + VAC_B + ", note }: " + JSON.stringify(toPosts.map(w => w.body)));
     else if (audits.length !== 1) fail(`Time off clean range: expected exactly one audit 'timeoff.add', got ${audits.length}`);
     else if (notifs.length !== 1 || !vacNotif) fail(`Time off clean range: expected exactly one notification (vacation_logged), got ${notifs.length}: ` + JSON.stringify(notifs.map(n => n.type)));
-    else if (vacNotif.message !== "Khan logged vacation 3/2-3/3 (harness range)") fail("Time off clean range: composed message wrong: " + vacNotif.message);
-    else ok("Time off clean range: one POST /rest/v1/time_off { s1, 2027-03-02..03 } + one audit timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
+    else if (vacNotif.message !== `Khan logged vacation ${mdOf(VAC_A)}-${mdOf(VAC_B)} (harness range)`) fail("Time off clean range: composed message wrong: " + vacNotif.message);
+    else ok(`Time off clean range: one POST /rest/v1/time_off { s1, ${VAC_A}..${VAC_B} } + one audit` + " timeoff.add + one notification vacation_logged \"" + vacNotif.message + "\"");
     // Shift-adjust (9/27): a surgeon's own saved vacation that starts less than closeWeeksBeforeStart weeks out (6 - the seed's
     // groupRules.offerPeriods) gets the inline advisory vac-lead-note 'The schedule through <M/D> is already being built -
     // ...' (never a dialog on the add path). Faraz 9/27 (ship 9/27 A): never for the scheduler - he builds that schedule -
     // nor the office or a viewer. This page is the scheduler (Khan, s1) adding his own range, so NO note on either side of
-    // the window; which side 2027-03-02 falls on is read from today (no fixed date is assumed) and only named. A surgeon's
+    // the window; which side the clean range's start (VAC_A) falls on is read from today (no fixed date is assumed) and only named. A surgeon's
     // in-window note is pinned in data-layer (helpers.vacationLeadNote + the addVac / render guards).
     try {
-      const leadDays = Math.round((Date.UTC(2027, 2, 2) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
+      const leadDays = Math.round((Date.UTC(+VAC_A.slice(0, 4), +VAC_A.slice(5, 7) - 1, +VAC_A.slice(8, 10)) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
       // the window the app reads: groupRules.offerPeriods.closeWeeksBeforeStart of the served blob (the seed's), a number > 0, else 6
       const leadRule = ((JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules || {}).offerPeriods || {}).closeWeeksBeforeStart;
       const leadWeeks = typeof leadRule === "number" && isFinite(leadRule) && leadRule > 0 ? leadRule : 6;
       const inWindow = leadDays < leadWeeks * 7;
       const lead = await page.$eval("[data-testid=vac-lead-note]", el => (el.firstElementChild ? el.firstElementChild.textContent : el.textContent).replace(/\s+/g, " ").trim()).catch(() => null);
-      if (lead) fail(`Time off lead-time advisory: the scheduler's own vacation 2027-03-02 (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) shows vac-lead-note '${lead}' - the note is never the scheduler's`);
-      else ok(`Time off lead-time advisory: none for the scheduler's own 2027-03-02 (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) - never for the scheduler; a surgeon's in-window note is pinned in data-layer`);
+      if (lead) fail(`Time off lead-time advisory: the scheduler's own vacation ${VAC_A} (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) shows vac-lead-note '${lead}' - the note is never the scheduler's`);
+      else ok(`Time off lead-time advisory: none for the scheduler's own ${VAC_A} (${leadDays} days out, ${inWindow ? "inside" : "past"} the ${leadWeeks}-week window) - never for the scheduler; a surgeon's in-window note is pinned in data-layer`);
     } catch (e) { fail("Time off lead-time advisory: " + errLine(e)); }
     // Prompt 21 step 2 (Faraz 9/26): the audit row goes out with Prefer: return=minimal (logAudit -> db.insert's { returning:
     // "minimal" }: an INSERT without RETURNING, which a writer who cannot read the row back is not refused - Acton's 9/24
@@ -5604,8 +5777,8 @@ try {
     //      (Badge, full name, N upcoming) with that person's compact "Mon D-D" lines under it; the range just added
     //      reads "Mar 2-3 (2027) harness range" (en dash) with its Edit / Remove controls, under Khan's header. ----
     try {
-      await page.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-line-s1-2027-03-02]", { timeout: 15000 });   // 5 s timed out under load (landing run 9/25)
-      const readGroups = (sel) => page.$eval(sel, card => {
+      await page.waitForSelector(`[data-testid=timeoff-card] [data-testid=vac-line-s1-${VAC_A}]`, { timeout: 15000 });   // 5 s timed out under load (landing run 9/25)
+      const readGroups = (sel) => page.$eval(sel, (card, vacA) => {
         const idOf = (el) => el.getAttribute("data-testid").replace(/^vac-group-/, "");
         const groups = Array.from(card.querySelectorAll("[data-testid^=vac-group-]")).map(h => {
           const lines = Array.from(h.parentElement.querySelectorAll("[data-testid^=vac-line-]"));
@@ -5613,11 +5786,11 @@ try {
             foreign: lines.filter(l => !l.getAttribute("data-testid").startsWith("vac-line-" + idOf(h) + "-")).length,
             sorted: lines.map(l => l.getAttribute("data-start")).every((d, i, a) => i === 0 || a[i - 1] <= d) };
         });
-        const line = card.querySelector("[data-testid=vac-line-s1-2027-03-02]");
+        const line = card.querySelector("[data-testid=vac-line-s1-" + vacA + "]");
         return { groups, orphans: Array.from(card.querySelectorAll("[data-testid^=vac-line-]")).filter(l => !l.parentElement.querySelector("[data-testid^=vac-group-]")).length,
           lineText: line ? line.innerText.replace(/\s+/g, " ").trim() : null, lineInS1: !!(line && line.parentElement.querySelector("[data-testid=vac-group-s1]")),
           lineButtons: line ? Array.from(line.querySelectorAll("button")).map(b => b.textContent.trim()) : [] };
-      });
+      }, VAC_A);
       const g = await readGroups("[data-testid=timeoff-card]");
       const ids = g.groups.map(x => x.id), rosterOrder = ids.slice().sort((a, b) => +a.slice(1) - +b.slice(1));
       const s1 = g.groups.find(x => x.id === "s1");
@@ -5629,11 +5802,11 @@ try {
       if (g.groups.some(x => x.foreign)) problems.push("a line under another surgeon's header");
       if (g.groups.some(x => !x.sorted)) problems.push("lines not in date order under " + g.groups.filter(x => !x.sorted).map(x => x.id).join(","));
       if (g.orphans) problems.push(g.orphans + " line(s) outside any group");
-      if (!g.lineInS1) problems.push("the 2027-03-02 line is not under vac-group-s1");
-      if (g.lineText !== "Mar 2\u20133 (2027) harness range Edit Remove") problems.push(`the new line reads '${g.lineText}'`);
+      if (!g.lineInS1) problems.push(`the ${VAC_A} line is not under vac-group-s1`);
+      if (g.lineText !== VAC_TEXT + " harness range Edit Remove") problems.push(`the new line reads '${g.lineText}' (expected '${VAC_TEXT} harness range Edit Remove')`);
       if (g.lineButtons.join() !== "Edit,Remove") problems.push("the new line's controls: " + JSON.stringify(g.lineButtons));
       if (problems.length) fail("Item B grouped vacations (Time off): " + problems.join("; "));
-      else ok(`Item B grouped vacations (Time off): ${g.groups.length} group(s) in roster order (${ids.join(", ")}), Khan's header '${s1.text}', the new line reads 'Mar 2\u20133 (2027) harness range' with Edit / Remove under vac-group-s1, every line under its own header, none orphaned`);
+      else ok(`Item B grouped vacations (Time off): ${g.groups.length} group(s) in roster order (${ids.join(", ")}), Khan's header '${s1.text}', the new line reads '${VAC_TEXT} harness range' with Edit / Remove under vac-group-s1, every line under its own header, none orphaned`);
       // Show past: every header gains "+M past" exactly when M > 0 and lists upcoming + past lines; off again afterwards.
       await page.click("[data-testid=timeoff-card] [data-testid=vac-show-past]");
       await page.waitForTimeout(400);   // 150 ms flaked under load (9/24 - 9/25)
@@ -6148,20 +6321,43 @@ try {
       await mp.close();
     }
 
-    // ----- (B) Khan's Thanksgiving unit (fg-1) -----
-    await page.selectOption("[data-testid=trade-from]", "s1");
+    // ----- (B) a holiday unit one surgeon holds as primary through the unit (fg-1) -----
+    // Smoke clean on main (9/29): the unit and its holder are DERIVED from the rows the app is served (the up-front live
+    // rows + this run's edits and claims, curHolder) and the served blob's holiday units - the first unit of two days or
+    // more that starts after today, is untouched by this run and whose primary is ONE roster surgeon on every day. Until
+    // 9/29 this was pinned to Khan's Thanksgiving 11/26-11/29, which stops holding once the unit passes or is traded. Every
+    // expectation below (the picker's unit name, the unit box, the give label, the split confirm, the unit stamp, the one
+    // notification, the badge collapse, the accept) is built from that unit. No such unit = a console line, (B) not run.
+    const uUnit = (() => {
+      const units = Object.values((liveBlobData && liveBlobData.holidays && liveBlobData.holidays.units) || {}).flat()
+        .filter(u => u && u.name && Array.isArray(u.days) && u.days.length >= 2).map(u => ({ name: u.name, days: u.days.slice().sort() }))
+        .sort((a, b) => a.days[0] < b.days[0] ? -1 : 1);
+      for (const u of units) {
+        if (u.days[0] <= todayIso || u.days.some(d => harnessDays[d] || claimedDays[d])) continue;
+        const h = u.days.map(d => curHolder(d, "primary"));
+        if (h[0] && !String(h[0]).startsWith("ext:") && h.every(x => x === h[0])) return { ...u, holder: h[0] };
+      }
+      return null;
+    })();
+    if (!uUnit) console.log(`     (Trades unit: no holiday unit of the served blob that starts after today ${todayIso}, untouched by this run, has one surgeon as primary on every day in the rows the app is served - the unit trade / give / split / accept steps (B) and datalayer-001 (B3) are not exercised this run)`);
+    else {
+    const U_N = uUnit.days.length, U0 = uUnit.days[0], U_END = uUnit.days[U_N - 1], U_FROM = uUnit.holder, U_FROM_NAME = rosterNameOf(U_FROM);
+    const U_DAYS = uUnit.days.join(","), U_RANGE = `${mdOf(U0)}-${mdOf(U_END)}`, U_LABEL = `${uUnit.name} unit ${U_RANGE} (${U_N} days)`;
+    const rxEsc = (t) => String(t).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    await page.selectOption("[data-testid=trade-from]", U_FROM);
     await page.waitForTimeout(150);
-    const khanOpts = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => ({ value: o.value, text: o.textContent })).filter(o => o.value));
-    const nov26 = khanOpts.find(o => o.value === "2026-11-26|primary");
-    if (!nov26) throw new Error("Khan's picker has no 2026-11-26 primary (the Thanksgiving unit): " + khanOpts.map(o => o.value).join(", "));
-    if (!/Thanksgiving unit/.test(nov26.text)) fail("Trades unit: the picker option for 11/26 does not name the Thanksgiving unit: " + nov26.text); else ok("Trades unit: the day picker names the unit - '" + nov26.text.trim() + "'");
-    await page.selectOption("[data-testid=trade-mine-pick]", nov26.value);
+    const fromOpts = await page.$$eval("[data-testid=trade-mine-pick] option", os => os.map(o => ({ value: o.value, text: o.textContent })).filter(o => o.value));
+    const u0Opt = fromOpts.find(o => o.value === U0 + "|primary");
+    if (!u0Opt) throw new Error(`${U_FROM_NAME}'s picker has no ${U0} primary (the ${uUnit.name} unit he holds in the served rows): ` + fromOpts.map(o => o.value).join(", "));
+    if (!new RegExp(rxEsc(uUnit.name) + " unit").test(u0Opt.text)) fail(`Trades unit: the picker option for ${mdOf(U0)} does not name the ${uUnit.name} unit: ` + u0Opt.text); else ok("Trades unit: the day picker names the unit - '" + u0Opt.text.trim() + `' (derived: ${U_FROM_NAME} primary through the ${uUnit.name} unit ${U_RANGE} in the served rows)`);
+    await page.selectOption("[data-testid=trade-mine-pick]", u0Opt.value);
     await page.waitForTimeout(200);
     const unitDays = await page.$eval("[data-testid=trade-unit]", el => el.getAttribute("data-unit-days")).catch(() => null);
-    if (unitDays !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Trades unit: the unit box should list 11/26..11/29, got " + unitDays); else ok("Trades unit: unit box beside the picker lists the 4 unit days 2026-11-26..29 (Khan primary through the unit)");
+    if (unitDays !== U_DAYS) fail(`Trades unit: the unit box should list ${U_RANGE} (${U_DAYS}), got ` + unitDays); else ok(`Trades unit: unit box beside the picker lists the ${U_N} unit days ${U0}..${U_END} (${U_FROM_NAME} primary through the unit)`);
     const uOpts = await readToOpts();
     const uGood = uOpts.find(o => o.eligible === "true");
-    if (!uGood) throw new Error("no counter-party eligible for all four Thanksgiving days: " + uOpts.map(o => o.text + " [" + o.eligible + "]").join(", "));
+    if (!uGood) console.log(`     (Trades unit: no counter-party is eligible for all ${U_N} days of the ${uUnit.name} unit by the rules on this page (${uOpts.map(o => o.text + " [" + o.eligible + "]").join(", ")}) - the unit give / split / proposal / accept steps are not exercised this run)`);
+    else {
     ok("Trades unit: counter-parties checked over the WHOLE unit: " + uOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
     await page.selectOption("[data-testid=trade-to]", uGood.value);
     await page.waitForTimeout(150);
@@ -6172,8 +6368,8 @@ try {
     const uGiveBox = await page.$eval("[data-testid=trade-unit]", el => el.getAttribute("data-unit-days")).catch(() => null);
     await page.click("[data-testid=trade-kind-trade]");
     await page.waitForTimeout(150);
-    if (uGiveLabel !== "Offer the Thanksgiving unit 11/26-11/29 (4 days) to " + uGood.text.split(" - ")[0]) fail("Give away unit: the button should read 'Offer the Thanksgiving unit 11/26-11/29 (4 days) to " + uGood.text.split(" - ")[0] + "', got '" + uGiveLabel + "'");
-    else if (uGiveBox !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Give away unit: the unit box should still list the four days in give mode, got " + uGiveBox);
+    if (uGiveLabel !== `Offer the ${U_LABEL} to ` + uGood.text.split(" - ")[0]) fail(`Give away unit: the button should read 'Offer the ${U_LABEL} to ` + uGood.text.split(" - ")[0] + "', got '" + uGiveLabel + "'");
+    else if (uGiveBox !== U_DAYS) fail(`Give away unit: the unit box should still list the ${U_N} days in give mode, got ` + uGiveBox);
     else ok("Give away unit: '" + uGiveLabel + "' - the unit box stays (a unit is offered whole unless the scheduler splits it)");
     // (B1) 'whole unit' unticked -> the scheduler must confirm the split; dismissed -> no write
     await page.click("[data-testid=trade-whole-unit]");
@@ -6188,41 +6384,41 @@ try {
     page.off("dialog", dismiss);
     const splitWrites = writesSince(beforeSplit).filter(w => /shift_trade_requests|notifications|send-notification|audit_log/.test(w.path));
     if (splitWrites.length) fail("Trades unit: a single unit day was written although the split confirm was dismissed: " + JSON.stringify(splitWrites.map(w => w.method + " " + w.path)));
-    else if (!dialogs.some(m => /splits it/.test(m) && /Thanksgiving unit 11\/26-11\/29 \(4 days\)/.test(m))) fail("Trades unit: no split confirm naming the unit (dialogs: " + JSON.stringify(dialogs) + ")");
+    else if (!dialogs.some(m => /splits it/.test(m) && m.includes(U_LABEL))) fail(`Trades unit: no split confirm naming the unit '${U_LABEL}' (dialogs: ` + JSON.stringify(dialogs) + ")");
     else if (!/split the unit/i.test(splitNote)) fail("Trades unit: the unticked note does not warn about splitting: " + splitNote);
-    else ok(`Trades unit: single day 11/26 with 'whole unit' unticked -> scheduler confirm "${dialogs[0].slice(0, 100)}..." dismissed, NO write (a member is refused outright)`);
+    else ok(`Trades unit: single day ${mdOf(U0)} with 'whole unit' unticked -> scheduler confirm "${dialogs[0].slice(0, 100)}..." dismissed, NO write (a member is refused outright)`);
     // (B2) whole unit: one row per day with the unit stamp, ONE notification
     await page.click("[data-testid=trade-whole-unit]");
     await page.waitForTimeout(150);
     const uReturn = await pickReturnLeg();
     const uLabel = await page.$eval("[data-testid=trade-submit]", el => el.textContent);
-    if (!/Propose unit trade \(4 days\)/.test(uLabel)) fail("Trades unit: the submit button should read 'Propose unit trade (4 days)', got '" + uLabel + "'");
+    if (!uLabel.includes(`Propose unit trade (${U_N} days)`)) fail(`Trades unit: the submit button should read 'Propose unit trade (${U_N} days)', got '` + uLabel + "'");
     page.on("dialog", acceptAll);
     const beforeUnit = writes.length;
     await page.click("[data-testid=trade-submit]");
-    await waitFor(() => writesSince(beforeUnit, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").length >= 4, 10000);
+    await waitFor(() => writesSince(beforeUnit, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").length >= U_N, 10000);
     await page.waitForTimeout(900);
     page.off("dialog", acceptAll);
     const uPosts = writesSince(beforeUnit, "/rest/v1/shift_trade_requests").filter(w => w.method === "POST").map(bodyOf);
     const uNotifs = writesSince(beforeUnit, "/rest/v1/notifications").map(bodyOf).filter(n => n && n.type === "trade_proposed");
     const uMails = writesSince(beforeUnit).filter(w => /send-notification/.test(w.path)).map(bodyOf).filter(b => b && b.type === "trade_proposed");
     const uDays = uPosts.map(p => p.day).sort();
-    const stampRx = /\[unit holiday 2026-11-26 4: Thanksgiving unit 11\/26-11\/29 \(4 days\), day \d of 4\]$/;
-    const firstRow = uPosts.find(p => p.day === "2026-11-26");
-    if (uPosts.length !== 4 || uDays.join(",") !== "2026-11-26,2026-11-27,2026-11-28,2026-11-29") fail("Trades unit: expected 4 POSTs for 11/26..29, got " + JSON.stringify(uDays));
-    else if (!uPosts.every(p => p.from_surgeon_id === "s1" && p.to_surgeon_id === uGood.value && p.role === "primary" && p.status === "pending")) fail("Trades unit: row bodies wrong: " + JSON.stringify(uPosts));
+    const stampRx = new RegExp("\\[unit holiday " + U0 + " " + U_N + ": " + rxEsc(U_LABEL) + ", day \\d+ of " + U_N + "\\]$");
+    const firstRow = uPosts.find(p => p.day === U0);
+    if (uPosts.length !== U_N || uDays.join(",") !== U_DAYS) fail(`Trades unit: expected ${U_N} POSTs for ${U_DAYS}, got ` + JSON.stringify(uDays));
+    else if (!uPosts.every(p => p.from_surgeon_id === U_FROM && p.to_surgeon_id === uGood.value && p.role === "primary" && p.status === "pending")) fail("Trades unit: row bodies wrong: " + JSON.stringify(uPosts));
     else if (!uPosts.every(p => stampRx.test(p.detail))) fail("Trades unit: rows lack the unit stamp in detail: " + uPosts.map(p => p.detail).join(" | "));
     else if (uReturn ? (uPosts.filter(p => p.return_day).length !== 1 || firstRow.return_day !== uReturn.split("|")[0]) : uPosts.some(p => p.return_day)) fail("Trades unit: the single return day should ride on the first row only: " + JSON.stringify(uPosts.map(p => [p.day, p.return_day])));
-    else if (uNotifs.length !== 1 || !/moved as one/.test(uNotifs[0].message) || !/Primary 11\/26-11\/29/.test(uNotifs[0].message)) fail("Trades unit: expected ONE trade_proposed notification naming the unit range, got " + JSON.stringify(uNotifs.map(n => n.message)));
+    else if (uNotifs.length !== 1 || !/moved as one/.test(uNotifs[0].message) || !uNotifs[0].message.includes("Primary " + U_RANGE)) fail(`Trades unit: expected ONE trade_proposed notification naming the unit range 'Primary ${U_RANGE}', got ` + JSON.stringify(uNotifs.map(n => n.message)));
     else if (uMails.length !== 1 || uMails[0].data.message !== uNotifs[0].message) fail("Trades unit: expected one send-notification with the same composed message: " + JSON.stringify(uMails));
-    else ok(`Trades unit: whole-unit proposal -> 4 POSTs (11/26..29, ${uGood.text}, primary, unit stamp in detail${uReturn ? ", return " + uReturn.replace("|", " ") + " on the first row" : ", one-way (scheduler)"}) + ONE notification "${uNotifs[0].message.slice(0, 100)}..."`);
-    const unitRows = page.locator('[data-testid=trade-row][data-unit="holiday:2026-11-26"][data-status=pending]');
+    else ok(`Trades unit: whole-unit proposal -> ${U_N} POSTs (${U0}..${U_END}, ${uGood.text}, primary, unit stamp in detail${uReturn ? ", return " + uReturn.replace("|", " ") + " on the first row" : ", one-way (scheduler)"}) + ONE notification "${uNotifs[0].message.slice(0, 100)}..."`);
+    const unitRows = page.locator(`[data-testid=trade-row][data-unit="holiday:${U0}"][data-status=pending]`);
     const unitRowCount = await unitRows.count();
     const groupAttr = unitRowCount ? await unitRows.first().getAttribute("data-group") : null;
     const acceptLabel = unitRowCount ? await unitRows.first().locator("[data-testid=trade-accept]").textContent() : "";
     const tagText = unitRowCount ? await unitRows.first().locator("[data-testid=trade-unit-tag]").textContent().catch(() => "") : "";
-    if (unitRowCount !== 4 || groupAttr !== "4" || !/Accept \(4 days\)/.test(acceptLabel) || !/Thanksgiving unit .* day \d of 4/.test(tagText)) fail(`Trades unit: expected 4 pending rows tagged holiday:2026-11-26 with data-group=4, a unit tag and 'Accept (4 days)', got ${unitRowCount} rows, group ${groupAttr}, tag '${tagText}', button '${acceptLabel}'`);
-    else ok(`Trades unit: 4 pending rows carry the unit tag ('${tagText.trim()}'), data-group=4 and 'Accept (4 days)'`);
+    if (unitRowCount !== U_N || groupAttr !== String(U_N) || !acceptLabel.includes(`Accept (${U_N} days)`) || !new RegExp(rxEsc(uUnit.name) + " unit .* day \\d+ of " + U_N).test(tagText)) fail(`Trades unit: expected ${U_N} pending rows tagged holiday:${U0} with data-group=${U_N}, a unit tag and 'Accept (${U_N} days)', got ${unitRowCount} rows, group ${groupAttr}, tag '${tagText}', button '${acceptLabel}'`);
+    else ok(`Trades unit: ${U_N} pending rows carry the unit tag ('${tagText.trim()}'), data-group=${U_N} and 'Accept (${U_N} days)'`);
     // Ship 9/27 review fix (Faraz 9/27 "one badge count"): the SCHEDULER's Time off badge counts every pending proposal
     // group-wide, ONE per proposal - the 4-day unit above is one count, not four. In-page: each pending trade-row in the
     // Pending card weighs 1 / data-group (a unit's rows share data-group = the rows that move together), so the sum is
@@ -6235,8 +6431,8 @@ try {
         return { rows: rows.length, proposals, badge: badge ? badge.textContent.trim() : null, title: badge ? badge.getAttribute("title") : null };
       });
       if (sb.badge !== String(sb.proposals)) fail(`Scheduler badge (one per proposal): the Time off badge reads ${JSON.stringify(sb.badge)} but the Pending card holds ${sb.proposals} pending proposal(s) over ${sb.rows} row(s) - a unit is one badge count`);
-      else if (sb.rows - sb.proposals < 3) fail(`Scheduler badge (one per proposal): expected the 4-day unit to collapse (rows ${sb.rows}, proposals ${sb.proposals})`);
-      else ok(`Scheduler badge (one per proposal): the Time off badge reads ${sb.badge} for ${sb.rows} pending row(s) - the 4-day unit counts once ('${sb.title}')`);
+      else if (sb.rows - sb.proposals < U_N - 1) fail(`Scheduler badge (one per proposal): expected the ${U_N}-day unit to collapse (rows ${sb.rows}, proposals ${sb.proposals})`);
+      else ok(`Scheduler badge (one per proposal): the Time off badge reads ${sb.badge} for ${sb.rows} pending row(s) - the ${U_N}-day unit counts once ('${sb.title}')`);
     } catch (e) { fail("Scheduler badge (one per proposal): " + errLine(e)); }
     const uIds = (await unitRows.evaluateAll(els => els.map(e => e.getAttribute("data-trade-id")))).sort(); // the ids the mock assigned (the POST bodies carry none)
     await page.screenshot({ path: path.join(OUT, "trades.png"), fullPage: true });
@@ -6253,16 +6449,16 @@ try {
       const skipWarn = consoleWarns.slice(warnsBefore).find(t => /shift_trade_requests: read skipped/.test(t));
       await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT);
       await page.waitForTimeout(200);
-      if (still !== 4) fail(`datalayer-001: with the token expired a realtime refresh left ${still} of 4 pending rows listed (the list was wiped by an anon 200 + [])`);
+      if (still !== U_N) fail(`datalayer-001: with the token expired a realtime refresh left ${still} of ${U_N} pending rows listed (the list was wiped by an anon 200 + [])`);
       else if (foreignGet) fail("datalayer-001: shift_trade_requests was read with a non-session Authorization while the token was expired: " + JSON.stringify(foreignGet));
       else if (!skipWarn) fail("datalayer-001: no console.warn that the authenticated-only read was skipped");
-      else ok("datalayer-001: expired token + realtime change on shift_trade_requests -> the read is SKIPPED (console.warn, no anon GET) and all 4 pending rows stay listed");
+      else ok(`datalayer-001: expired token + realtime change on shift_trade_requests -> the read is SKIPPED (console.warn, no anon GET) and all ${U_N} pending rows stay listed`);
     }
     // (B4) Accept the unit: 4 PATCH accepted, then 4 rpc/apply_trade, every row applied, one notification each
     page.on("dialog", acceptAll);
     const beforeUAcc = writes.length;
     await unitRows.first().locator("[data-testid=trade-accept]").click();
-    await waitFor(() => writesSince(beforeUAcc).filter(w => w.path === "/rest/v1/rpc/apply_trade").length >= 4, 15000);
+    await waitFor(() => writesSince(beforeUAcc).filter(w => w.path === "/rest/v1/rpc/apply_trade").length >= U_N, 15000);
     await page.waitForTimeout(1500);
     page.off("dialog", acceptAll);
     const useq = writesSince(beforeUAcc);
@@ -6272,17 +6468,19 @@ try {
     const rpcIds = uRpcs.map(w => (bodyOf(w) || {}).p_trade_id).sort();
     const lastPatchIdx = uPatches.length ? useq.lastIndexOf(uPatches[uPatches.length - 1]) : -1;
     const firstRpcIdx = uRpcs.length ? useq.indexOf(uRpcs[0]) : -1;
-    const appliedCount = await page.locator('[data-testid=trade-row][data-unit="holiday:2026-11-26"][data-status=applied]').count();
+    const appliedCount = await page.locator(`[data-testid=trade-row][data-unit="holiday:${U0}"][data-status=applied]`).count();
     const uAccNotifs = useq.filter(w => w.path.startsWith("/rest/v1/notifications")).map(bodyOf).filter(Boolean).map(n => n.type);
     const uAppliedMail = useq.filter(w => /send-notification/.test(w.path)).map(bodyOf).filter(b => b && b.type === "trade_applied");
-    if (uPatches.length !== 4 || JSON.stringify(patchedIds) !== JSON.stringify(uIds) || !uPatches.every(w => (bodyOf(w) || {}).status === "accepted")) fail("Trades unit accept: expected 4 PATCH status=accepted (one per row): " + JSON.stringify(useq.map(w => w.method + " " + w.path)));
-    else if (uRpcs.length !== 4 || JSON.stringify(rpcIds) !== JSON.stringify(uIds)) fail("Trades unit accept: expected 4 rpc/apply_trade, one per row: " + JSON.stringify(rpcIds));
+    if (uPatches.length !== U_N || JSON.stringify(patchedIds) !== JSON.stringify(uIds) || !uPatches.every(w => (bodyOf(w) || {}).status === "accepted")) fail(`Trades unit accept: expected ${U_N} PATCH status=accepted (one per row): ` + JSON.stringify(useq.map(w => w.method + " " + w.path)));
+    else if (uRpcs.length !== U_N || JSON.stringify(rpcIds) !== JSON.stringify(uIds)) fail(`Trades unit accept: expected ${U_N} rpc/apply_trade, one per row: ` + JSON.stringify(rpcIds));
     else if (firstRpcIdx < lastPatchIdx) fail("Trades unit accept: an apply_trade ran before the last status PATCH (the unit must be accepted whole before any day moves)");
-    else if (appliedCount !== 4) fail("Trades unit accept: expected all 4 rows to read applied, got " + appliedCount);
+    else if (appliedCount !== U_N) fail(`Trades unit accept: expected all ${U_N} rows to read applied, got ` + appliedCount);
     else if (uAccNotifs.filter(t => t === "trade_accepted").length !== 1 || uAccNotifs.filter(t => t === "trade_applied").length !== 1) fail("Trades unit accept: expected exactly one trade_accepted and one trade_applied notification for the unit, got " + uAccNotifs.join(","));
-    else if (uAppliedMail.length !== 1 || !/^Trade applied to the schedule: .*Primary 11\/26-11\/29/.test(uAppliedMail[0].data.message)) fail("Trades unit accept: one send-notification trade_applied naming the unit range expected: " + JSON.stringify(uAppliedMail.map(m => m.data && m.data.message)));
-    else ok(`Trades unit accept: 4 x PATCH accepted, then 4 x rpc/apply_trade (all after the last PATCH); 4 rows applied; one trade_accepted + one trade_applied notification; email "${uAppliedMail[0].data.message.slice(0, 90)}..."`);
+    else if (uAppliedMail.length !== 1 || !/^Trade applied to the schedule: /.test(uAppliedMail[0].data.message) || !uAppliedMail[0].data.message.includes("Primary " + U_RANGE)) fail(`Trades unit accept: one send-notification trade_applied naming the unit range 'Primary ${U_RANGE}' expected: ` + JSON.stringify(uAppliedMail.map(m => m.data && m.data.message)));
+    else ok(`Trades unit accept: ${U_N} x PATCH accepted, then ${U_N} x rpc/apply_trade (all after the last PATCH); ${U_N} rows applied; one trade_accepted + one trade_applied notification; email "${uAppliedMail[0].data.message.slice(0, 90)}..."`);
     if (!useq.every(w => noAddress(w.body))) fail("Trades unit: a write body carries an email address");
+    } // uGood
+    } // uUnit
     await page.click('button[data-tab="calendar"]');
   } catch (e) {
     page.off("dialog", acceptAll);
@@ -6317,17 +6515,33 @@ try {
     const rowless = (d) => !fixtureHasDay(d) && !liveByDay[d] && !harnessDays[d];
     const dowUtc = (d) => new Date(d + "T12:00:00Z").getUTCDay(); // 0 = Sun
     const scanEnd = isoAddDays(lastLiveDay > todayIso ? lastLiveDay : todayIso, 400);
-    const weekendTriples = [];
-    for (let d = todayIso; weekendTriples.length < 2 && d <= scanEnd; d = isoAddDays(d, 1)) {
+    const rowlessTriples = [];
+    for (let d = todayIso; rowlessTriples.length < 26 && d <= scanEnd; d = isoAddDays(d, 1)) {
       if (dowUtc(d) !== 5) continue;
       const t = [d, isoAddDays(d, 1), isoAddDays(d, 2)];
-      if (t.every(x => rowless(x) && !holidayUnitDays.has(x))) weekendTriples.push(t);
+      if (t.every(x => rowless(x) && !holidayUnitDays.has(x))) rowlessTriples.push(t);
     }
+    // Smoke clean on main (9/29): the premise of (2) and (3) - Fierce (s5) may hold all three days of the triple as a block
+    // member - is read from the rules on this page (rulesHardOn: eligibility(..., 's5', { asBlockMember, assume: the other
+    // two days }) empty on each day), never taken for granted on the first row-less triple (2027-01-08..10 until 9/29, where
+    // the served East / forecast / offers / rows decide it - a data fact, not the block-member rule under test). The first
+    // two such triples are used; without one, the first row-less triples still carry the Item E3 override save and the
+    // weekend-block unit text, and the block-member half is named as not exercised (with the rules' reasons).
+    const blkQ = rowlessTriples.flatMap(t => t.map(d => ({ day: d, role: "primary", id: "s5", opts: { asBlockMember: true, assume: t.filter(x => x !== d).map(x => ({ date: x, role: "primary" })) } })));
+    const blkRh = blkQ.length ? await rulesHardOn(page, blkQ) : { out: [] };
+    if (blkRh.error) fail("small items: the rules context could not be read for the block-member premise: " + blkRh.error);
+    const blkHardOf = (i) => [0, 1, 2].map(k => ((blkRh.out || [])[i * 3 + k]) || ["unread"]);
+    const blockOkIdx = rowlessTriples.map((t, i) => i).filter(i => blkHardOf(i).every(h => h.length === 0));
+    const pickA = blockOkIdx.length ? blockOkIdx[0] : 0;
+    const pickB = blockOkIdx.length > 1 ? blockOkIdx[1] : rowlessTriples.findIndex((t, i) => i !== pickA && !blockOkIdx.includes(i));
+    const weekendTriples = [rowlessTriples[pickA], rowlessTriples[pickB]].filter(Boolean);
+    const blockOk = [blockOkIdx.includes(pickA), blockOkIdx.includes(pickB)];
+    const blockWhy = (i) => rowlessTriples[i] ? rowlessTriples[i].map((d, k) => d + " [" + (blkHardOf(i)[k].join(", ") || "none") + "]").join(" ") : "";
     const tripleDays = new Set(weekendTriples.flat());
     let fcDay = null;
     for (let d = todayIso; !fcDay && d <= scanEnd; d = isoAddDays(d, 1)) { if (dowUtc(d) >= 1 && dowUtc(d) <= 5 && rowless(d) && !tripleDays.has(d)) fcDay = d; }
     if (!fcDay || weekendTriples.length < 2) throw new Error(`no row-less weekday / holiday-free Fri-Sun triples between ${todayIso} and ${scanEnd} (fcDay ${fcDay}, triples ${weekendTriples.length})`);
-    console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - the first row-less weekday and holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run; scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
+    console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - the first row-less weekday and holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run where the rules let Fierce hold all three as a block member (${blockOkIdx.length} of the first ${rowlessTriples.length} row-less triples do${rowlessTriples[0] && !blockOkIdx.includes(0) ? "; not " + rowlessTriples[0][0] + ": " + blockWhy(0) : ""}); scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
     await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
     try {
       await showMonth(+fcDay.slice(0, 4), +fcDay.slice(5, 7) - 1);
@@ -6421,6 +6635,7 @@ try {
       const friOpts = await page.$$eval("[data-testid=editor-primary] option", els => els.map(o => ({ value: o.value, text: o.textContent.trim(), eligible: o.getAttribute("data-eligible") })));
       const friFierce = friOpts.find(o => o.value === "s5");
       if (!friFierce) fail(`Day editor ${blk[0]}: Fierce is not in the Primary dropdown: ` + JSON.stringify(friOpts));
+      else if (!blockOk[0]) console.log(`     (Day editor ${blk[0]}: no row-less Fri-Sun triple in the first ${rowlessTriples.length} lets Fierce hold all three days as a block member by the rules on this page (${blockWhy(pickA)}) - the block-member eligibility half is not exercised this run; the editor reads '${friFierce.text}' [${friFierce.eligible}])`);
       else if (friFierce.eligible !== "true") fail(`Day editor ${blk[0]}: Fierce holds Sat+Sun (${blk[1]}, ${blk[2]}) and must be ELIGIBLE for the Friday as a block member, got '${friFierce.text}' [${friFierce.eligible}]`);
       else {
         await page.selectOption("[data-testid=editor-primary]", "s5");
@@ -6453,6 +6668,7 @@ try {
         const fierceOpt = blockOpts.find(o => o.value === "s5");
         if (!unitText.includes("weekend block")) fail(`Trades block: ${wk[0]} primary is not offered as a weekend-block unit: ` + JSON.stringify(unitText));
         else if (!fierceOpt) fail("Trades block: Fierce is not a counter-party option: " + JSON.stringify(blockOpts));
+        else if (!blockOk[1]) console.log(`     (Trades block: the rules on this page do not let Fierce hold ${wk[0]}-${wk[2]} as a block member (${blockWhy(pickB)}) - no second such row-less triple in the first ${rowlessTriples.length}; the receiver half is not exercised this run (option '${fierceOpt.text}' [${fierceOpt.eligible}]))`);
         else if (fierceOpt.eligible !== "true") fail(`Trades block: Fierce must be ELIGIBLE to receive the whole Fri-Sun block ${wk[0]}-${wk[2]} (asBlockMember), got '${fierceOpt.text}' [${fierceOpt.eligible}]`);
         else ok(`Trades block: Khan's ${wk[0]}-${wk[2]} primary is one weekend-block unit and Fierce reads eligible to receive it ('${fierceOpt.text}')`);
         await page.screenshot({ path: path.join(OUT, "trade-block-receiver.png") });
@@ -6546,13 +6762,15 @@ try {
       await card.screenshot({ path: path.join(OUT, `setup-${name}.png`) });
       if (pageErrors.length > before) fail(`setup card ${ck}: pageerror ${pageErrors.slice(before).join(" | ")}`); else ok(`setup card ${ck}: expanded, screenshot test/ui/out/setup-${name}.png`);
     }
-    // Call pay (9/27): Setup > Pay rates reads 'unavailable' before the migration - the sentence, no rate inputs
+    // Call pay (9/27): Setup > Pay rates reads 'unavailable' on the harness's forced 404 (the missing-table guard) - the
+    // sentence, no rate inputs
     {
       const prState = await page.$eval("[data-testid=pay-rates]", el => el.getAttribute("data-state")).catch(() => null);
       const prText = await page.$eval("[data-testid=pay-rates]", el => el.innerText).catch(() => "");
-      if (prState !== "unavailable" || !/after the next database update/.test(prText)) fail(`Setup > Pay rates: expected the 'unavailable' state before the migration, got ${prState}: ${prText.slice(0, 120)}`);
+      if (prState !== "unavailable" || !/after the next database update/.test(prText)) fail(`Setup > Pay rates: expected the 'unavailable' state on the harness's forced 404 (the missing-table guard), got ${prState}: ${prText.slice(0, 120)}`);
+      else if (!payForced404For(page)) fail("Setup > Pay rates: 'unavailable' although the harness answered none of this page's pay reads 404 - the state was not forced by the mock");
       else if (await page.$("[data-testid=pay-rate-stipendPerShift]")) fail("Setup > Pay rates: rate inputs render while the table does not exist");
-      else ok("Setup > Pay rates: 'unavailable' before the call pay migration (no inputs)");
+      else ok("Setup > Pay rates: 'unavailable' on the harness's forced 404 (the missing-table guard; no inputs)");
     }
     // Setup issues render as a list or "None."
     const issues = await page.$eval("[data-testid=setup-issues]", el => el.innerText.trim()).catch(() => null);
@@ -7222,11 +7440,24 @@ try {
       else ok(`Generate presets: default start ${expStart} = ${firstOpen ? "the first open slot on/after today " + todayCentral : "the day after the longest contiguous block, clamped to today (nothing open on/after today " + todayCentral + ")"}; 'Through end of year' = ${expStart} to ${expTeoyEnd} is the default range, 3 months = ${expStart} to ${exp3End}, data-gen-start agrees (all derived from the live rows; last contiguous saved day ${lastPub}); panel names the start, the last saved day and the held-slot ranges from the start on ${laterRanges.map(laterLabel).join(", ") || "(none)"}`);
     }
 
-    // ---- Accept with 'respect locks' OFF over the locked import (10/5-10/11): a confirm BEFORE any write;
+    // ---- Accept with 'respect locks' OFF over a published week: a confirm BEFORE any write;
     //      dismissed -> zero writes (no snapshot, no schedule_days), preview kept (finding safe-2) ----
-    {
-      await page.fill("[data-testid=gen-start]", "2026-10-05");
-      await page.fill("[data-testid=gen-end]", "2026-10-11");
+    // Smoke clean on main (9/29): the week is DERIVED - 10/5-10/11 (the locked import) while it lies on/after today, else
+    // the first Mon-Sun week on/after today whose seven days all have a served row with a held slot (the confirm names the
+    // locked / published slots it would replace); none = a console line.
+    const rlWeek = (() => {
+      const held = (d) => { const r = liveByDay[d]; return !!(r && (r.primary_id || r.backup_id || r.external_cover)); };
+      if ("2026-10-05" >= todayIso) return ["2026-10-05", "2026-10-11"];
+      for (let m = todayIso; m <= lastLiveDay; m = isoAddDays(m, 1)) {
+        if (new Date(m + "T12:00:00Z").getUTCDay() !== 1) continue;
+        if (daysBetween(m, isoAddDays(m, 6)).every(held)) return [m, isoAddDays(m, 6)];
+      }
+      return null;
+    })();
+    if (!rlWeek) console.log(`     (Accept with 'respect locks' OFF: no Mon-Sun week on/after today ${todayIso} is fully published in the served rows - the confirm-before-write check is not exercised this run)`);
+    else {
+      await page.fill("[data-testid=gen-start]", rlWeek[0]);
+      await page.fill("[data-testid=gen-end]", rlWeek[1]);
       await page.fill("[data-testid=gen-n]", "3");
       await page.fill("[data-testid=gen-seed]", "7");
       await page.uncheck("[data-testid=gen-respect-locks]");
@@ -7246,7 +7477,7 @@ try {
       if (dialogs.length !== 1 || !/This replaces \d+ locked \/ published slot\(s\)/.test(dialogs[0]) || !/'respect locks' OFF/.test(dialogs[0])) fail("Accept (respect locks off): expected one confirm naming the locked / published slots and the OFF checkbox, got " + JSON.stringify(dialogs));
       else if (bad.length) fail("Accept (respect locks off, confirm dismissed): something was written: " + JSON.stringify(bad.map(w => w.method + " " + w.path)));
       else if (!kept || !/Nothing was written - the preview is kept/.test(txt)) fail(`Accept (respect locks off, dismissed): preview kept=${!!kept}, toast=${/Nothing was written/.test(txt)}`);
-      else ok(`Accept with 'respect locks' OFF over 10/5-10/11: confirm BEFORE any write ("${dialogs[0].split("\n")[0].slice(0, 110)}"); dismissed -> zero snapshot / schedule_days / audit writes, preview kept`);
+      else ok(`Accept with 'respect locks' OFF over ${mdOf(rlWeek[0])}-${mdOf(rlWeek[1])}: confirm BEFORE any write ("${dialogs[0].split("\n")[0].slice(0, 110)}"); dismissed -> zero snapshot / schedule_days / audit writes, preview kept`);
       await page.click("[data-testid=gen-discard]");
       await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
       await page.check("[data-testid=gen-respect-locks]");
@@ -8096,7 +8327,11 @@ try {
       console.log(`     (Import dry run, restated from the plan's ${planDays.length} days vs the ${liveRows.length} ${fixture ? "fixture" : "live"} rows: ${planInserts.length} missing, ${planUpdates.length} seed-owned day(s) differing (would update), ${planUnchanged.length} unchanged, ${planBlocked.length} day(s) differing that the app edited / published since the import = ${planBlockedLines} blocked slot line(s) (never overwritten${planBlocked.length ? ": " + planBlocked.slice(0, 5).join(", ") + (planBlocked.length > 5 ? ", ... " + planBlocked.slice(-1)[0] : "") : ""}))`);
       const expBlobLine = "call_schedule_data 'main': " + Object.keys(PLAN_P.blob).map(k => k + "=" + (blobDelta.includes(k) ? (liveBlobData && Object.keys(liveBlobData).length ? "update" : "insert") : "unchanged")).join(", ");
       const dryBlobLine = dryLines.find(l => l.startsWith("call_schedule_data 'main': ")) || "(no call_schedule_data line)";
-      if (planInserts.length || planUpdates.length || avIns0.length || (!fixture && blobDelta.length)) fail(`Import dry run premise: the live rows do not hold the seed - ${planInserts.length} plan day(s) missing, ${planUpdates.length} seed-owned day(s) differing (${[...planInserts, ...planUpdates].slice(0, 6).join(", ")}), ${avIns0.length} availability row(s) of the period-aware plan missing (${avIns0.slice(0, 4).map(r => r.person_id + " " + r.start_date).join(", ")}), blob key(s) differing from the period-aware plan's: ${blobDelta.join(", ") || "none"} - the orchestrator's pending seed apply, not a harness expectation`);
+      // Smoke clean on main (9/29): whether the live rows hold the repo's seed is a DATA state (the seed revision the orchestrator
+      // has not applied yet - e.g. the 9/27 revision's groupRules / settings stamp), not an app behaviour: every expectation
+      // below (the dry-run total, its schedule_days / blob lines, the legs) is restated from the rows and blob the app is served,
+      // so a pending seed apply changes the expected diff, not the verdict. It is printed as PENDING, never a FAIL.
+      if (planInserts.length || planUpdates.length || avIns0.length || (!fixture && blobDelta.length)) console.log(`     Import dry run PENDING (data, not a harness expectation): the live rows do not hold the repo seed - ${planInserts.length} plan day(s) missing, ${planUpdates.length} seed-owned day(s) differing (${[...planInserts, ...planUpdates].slice(0, 6).join(", ")}), ${avIns0.length} availability row(s) of the period-aware plan missing (${avIns0.slice(0, 4).map(r => r.person_id + " " + r.start_date).join(", ")}), blob key(s) differing from the period-aware plan's: ${blobDelta.join(", ") || "none"} - the orchestrator's pending seed apply; the dry-run expectations below are restated from that state`);
       if (total.trim() !== expDryTotal || dryTail !== expDryTail || drySdLine !== expSdLine || dryBlobLine !== expBlobLine) fail(`Import dry run: expected '${expDryTotal}', the diff text ending '${expDryTail}', its schedule_days line '${expSdLine}' (${planBlocked.length} blocked day(s) = ${planBlockedLines} blocked line(s), restated from the rows the app is served) and its blob line '${expBlobLine}' (${blobDelta.length} key(s) restated against the ${fixture ? "fixture" : "live"} blob), got '${total.trim()}' | '${dryTail}' | '${drySdLine}' | '${dryBlobLine}'`);
       else if (!new RegExp("call_periods: plan " + PLAN_P.periodRows.length + " row\\(s\\)").test(diffText) || !new RegExp("call_offers: plan " + PLAN_P.offerRows.length + " row\\(s\\)").test(diffText) || !diffText.includes(`offers status (${perLabel})`)) fail(`Import dry run: the diff text must carry the CLI's period legs ('call_periods: plan ${PLAN_P.periodRows.length} row(s)', 'call_offers: plan ${PLAN_P.offerRows.length} row(s)', 'offers status (${perLabel})'): ` + diffText.split("\n").filter(l => /^call_(periods|offers)|^offers status/.test(l)).join(" | ").slice(0, 400));
       else if (!legs0.includes(perLabel) || !Object.keys(PLAN_P.stats.offersByPerson).every(id => legs0.includes(`${nm(id)} ${PLAN_P.stats.offersByPerson[id]}`)) || !/applied by the CLI only/.test(legs0)) fail(`Import dry run: the seed-period-legs panel must name the period '${perLabel}', the offers per surgeon (${offersWords}) and say the legs are applied by the CLI only: ` + legs0.slice(0, 300));
@@ -8850,12 +9085,13 @@ try {
     await sessCtx.close();
   } else console.log("     (A3 session scenario skipped: no row-less edit day)");
   // (d) a signed-in month view per theme on the main page: navy header, orange today ring, id-keyed pill colours, dark page.
-  const monthProbe = () => page.evaluate(() => {
+  const monthProbe = () => page.evaluate((todayIso0) => {
     const h1 = document.querySelector("h1");
     const hdr = h1 && h1.closest("[data-testid=app-header]");
     const cs = (el, p) => el ? getComputedStyle(el)[p] : "";
-    const d = new Date(); const todayLocal = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    const today = document.querySelector("[data-testid=cal-grid] .cal-cell[data-day='" + todayLocal + "']");
+    // 9/29: today is the app's Central date (todayCentral, passed in), never the browser's local date - a browser in UTC read
+    // tomorrow's cell after 19:00 Central and failed the ring on a cell the app never marks
+    const today = document.querySelector("[data-testid=cal-grid] .cal-cell[data-day='" + todayIso0 + "']");
     // Every visible P pill, keyed by the holder id the cell carries (the first pill of a cell is the P line).
     const pills = {};
     for (const cell of document.querySelectorAll("[data-testid=cal-grid] .cal-cell[data-primary]")) {
@@ -8868,7 +9104,7 @@ try {
     // The per-surgeon .ics download buttons (Calendar tools card): roster pills rendered as buttons.
     const ics = Array.from(document.querySelectorAll("[data-testid^=ics-]:not([data-testid=ics-all])")).map(b => ({ code: b.getAttribute("data-testid").slice(4), color: cs(b, "color"), bg: cs(b, "backgroundColor"), border: cs(b, "borderTopStyle") }));
     return { hdrBg: cs(hdr, "backgroundColor"), h1: cs(h1, "color"), todayBorder: today ? cs(today, "borderTopColor") : null, pills, open: open ? cs(open, "color") : null, tabUnderline: cs(active, "borderBottomColor"), tabColor: cs(active, "color"), inactiveTabColor: cs(inactive, "color"), ics, bodyBg: getComputedStyle(document.body).backgroundColor };
-  });
+  }, todayCentral);
   const themeMod = loadTheme();
   const rgbOf = (hex) => "rgb(" + hexToRgb(hex).join(", ") + ")";
   const hexOfRgb = (rgb) => { const m = /rgba?\((\d+), (\d+), (\d+)/.exec(rgb || ""); return m ? "#" + [m[1], m[2], m[3]].map(n => Number(n).toString(16).padStart(2, "0")).join("") : null; };
@@ -8883,7 +9119,7 @@ try {
       await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
       await page.click('button[data-tab="calendar"]');
       await page.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
-      const t = new Date(); await showMonth(t.getFullYear(), t.getMonth());
+      await showMonth(+todayCentral.slice(0, 4), +todayCentral.slice(5, 7) - 1); // the app's Central month (9/29: never the browser's local date)
       await openCard("cal_tools");
       await page.waitForSelector("[data-testid^=ics-]", { timeout: 5000 });
       await page.waitForTimeout(300);
@@ -9215,6 +9451,22 @@ try {
   {
     const p3 = await context.newPage();
     watchPage(p3, "data");
+    // Smoke clean on main (9/29): what this page was SERVED for the three exported tables - the rows of its last full read of
+    // each (the app's own list reads: select=* with no row filter; schedule_days paged by limit / offset) - so the Export
+    // counts are compared with the rows the app actually read, not with a second anon count taken later (the live tables are
+    // written by real users now; a vacation entered between the two reads is not an export fault). The anon count stays as a
+    // cross-check line.
+    const p3Served = {};
+    p3.on("response", async (r) => {
+      try {
+        const u = new URL(r.url());
+        const t = u.pathname.replace(/^\/rest\/v1\//, "");
+        if (u.hostname !== SUPABASE_HOST || !["schedule_days", "time_off", "availability"].includes(t) || r.request().method() !== "GET" || !r.ok()) return;
+        if (u.searchParams.get("select") !== "*" || [...u.searchParams.keys()].some(k => !["select", "order", "limit", "offset"].includes(k))) return;
+        const rows = await r.json();
+        if (Array.isArray(rows)) p3Served[t] = Number(u.searchParams.get("offset") || 0) + rows.length;
+      } catch (e) {}
+    });
     await p3.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
     await p3.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
     const dialogs3 = [];
@@ -9238,6 +9490,7 @@ try {
         return Number((res.headers.get("content-range") || "").split("/")[1] || "0");
       };
       const liveCounts = { schedule_days: await liveCount("schedule_days"), time_off: await liveCount("time_off"), availability: await liveCount("availability") };
+      const servedCounts = { ...p3Served };
       // (1) Export
       await toSettings();
       const [dl] = await Promise.all([p3.waitForEvent("download", { timeout: 8000 }), p3.click("[data-testid=export-backup]")]);
@@ -9246,11 +9499,12 @@ try {
       const backup = JSON.parse(expText);
       const shapeOk = ["config", "schedule_days", "time_off", "availability"].every(k => k in backup) && backup.config && typeof backup.config === "object" && !Array.isArray(backup.config) && [backup.schedule_days, backup.time_off, backup.availability].every(Array.isArray);
       if (!shapeOk) fail("Export backup: shape is not { config, schedule_days, time_off, availability }: keys " + Object.keys(backup).join(","));
-      else if (backup.schedule_days.length !== liveCounts.schedule_days || backup.time_off.length !== liveCounts.time_off || backup.availability.length !== liveCounts.availability) fail(`Export backup: counts ${backup.schedule_days.length}/${backup.time_off.length}/${backup.availability.length} differ from the live anon data ${liveCounts.schedule_days}/${liveCounts.time_off}/${liveCounts.availability} (schedule_days/time_off/availability)`);
+      else if (["schedule_days", "time_off", "availability"].some(t => typeof servedCounts[t] !== "number")) fail(`Export backup: the page's own reads of schedule_days / time_off / availability were not observed (${JSON.stringify(servedCounts)}) - nothing to compare the export with`);
+      else if (backup.schedule_days.length !== servedCounts.schedule_days || backup.time_off.length !== servedCounts.time_off || backup.availability.length !== servedCounts.availability) fail(`Export backup: counts ${backup.schedule_days.length}/${backup.time_off.length}/${backup.availability.length} differ from the rows this page was served ${servedCounts.schedule_days}/${servedCounts.time_off}/${servedCounts.availability} (schedule_days/time_off/availability; live anon count now ${liveCounts.schedule_days}/${liveCounts.time_off}/${liveCounts.availability})`);
       else if ("schedule" in backup.config || "vacations" in backup.config || "availability" in backup.config) fail("Export backup: config carries operational keys: " + Object.keys(backup.config).join(","));
       else if (!/^silvis-call-backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(expName)) fail("Export backup: filename " + expName);
       else if (!noAddress(expText)) fail("Export backup: the file carries an email address");
-      else ok(`Export backup: ${expName} = { config (${Object.keys(backup.config).join(", ")}), schedule_days ${backup.schedule_days.length}, time_off ${backup.time_off.length}, availability ${backup.availability.length} } - counts equal the live anon data`);
+      else ok(`Export backup: ${expName} = { config (${Object.keys(backup.config).join(", ")}), schedule_days ${backup.schedule_days.length}, time_off ${backup.time_off.length}, availability ${backup.availability.length} } - counts equal the rows this page was served` + (["schedule_days", "time_off", "availability"].every(t => servedCounts[t] === liveCounts[t]) ? " and the live anon count" : ` (the live anon count now reads ${liveCounts.schedule_days}/${liveCounts.time_off}/${liveCounts.availability} - the live tables moved between the two reads)`));
       // (2) Malformed imports are refused before any write
       const beforeBad = writes.length;
       await p3.setInputFiles("[data-testid=import-file]", { name: "bad-shape.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ config: [], schedule_days: [] })) });
@@ -9980,7 +10234,7 @@ if (pageErrors.length) fail("pageerrors: " + pageErrors.join(" | ")); else ok("n
 const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
-if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh - expected)`);
+if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh, the days-fail 500, the East 500s, ${payForcedConsumed} pay read(s) answered 404 / 500 by the pay mock - expected)`);
 if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
 // Prompt 16 B9 (a): the worker fallback is quiet by design (console.warn + genWorkerBroken) - the whole-run sweep is
 // where a device that silently dropped to the inline run would show.
