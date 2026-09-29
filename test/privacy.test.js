@@ -246,7 +246,8 @@ function payKeyHits(value, where) {
 // <<< A6d
 
 // >>> A6e
-// ---- A6e: who reads pay (Faraz 9/27 item 5 - folded into the unapplied call pay migration). The figures reach exactly: the
+// ---- A6e: who reads pay (Faraz 9/27 item 5 - folded into the call pay migration before its apply; applied 2026-09-28 01:15:26Z,
+// recorded in docs/SCHEMA-REVIEW.md). The figures reach exactly: the
 // scheduler, the office coordinator READ-ONLY (it prepares the stipends; 5a) and a linked surgeon his own - only while he is
 // "paid by the call stipend" (5b: a switched-off surgeon reads no rate, enforced in RLS). Never a viewer, a follower, anon or
 // the public page. The switch list is data the scheduler sets: the repo names nobody in it.

@@ -1110,7 +1110,8 @@ function CallSchedule() {
   // ====================================================================
   // CALL PAY (Faraz 9/27 - reverses the 9/21 "no compensation logic and no $ display" rule). Primary call pay only; the
   // model is helpers.js payForDay / payForMonth, the tables are config.js payDb's (sql/migrations/2026-09-27-call-pay.sql,
-  // report-first - until it is applied every read answers "unavailable" and the cards say so, no toast). Who: a linked
+  // applied 2026-09-28 01:15:26Z, recorded in docs/SCHEMA-REVIEW.md; a missing table still reads "unavailable" - a guard -
+  // and the cards say so, no toast). Who: a linked
   // surgeon-role account (his own pay, while he is paid by the call stipend), the scheduler (everyone's) and - read-only, for
   // preparing the stipends (Faraz 9/27, item 5a) - the office coordinator (Totals > Pay and its CSV; no My pay, no log form,
   // no Setup > Pay rates, no write); never a viewer, a follower, ?public=1 or a session whose profile failed to load (its
@@ -9059,8 +9060,9 @@ function SuCheck({ label, checked, onChange, title, testid }) {
 // what: a linked surgeon his own pay (My schedule > My pay) while he is paid by the call stipend, the scheduler anyone's
 // plus Totals > Pay and Setup > Pay rates (with the per-surgeon "Paid by the call stipend" switches); the office
 // coordinator Totals > Pay and its CSV, read-only; viewer, follower and ?public=1 see no pay UI and no amount (payVisible /
-// payTotalsRole in CallSchedule). A surgeon switched off gets no My pay and is left out of Totals > Pay. Until
-// sql/migrations/2026-09-27-call-pay.sql is applied every card says PAY_UNAVAILABLE_TEXT (state "unavailable").
+// payTotalsRole in CallSchedule). A surgeon switched off gets no My pay and is left out of Totals > Pay. The tables exist
+// since sql/migrations/2026-09-27-call-pay.sql was applied (2026-09-28 01:15:26Z); a missing table (the guard) makes every
+// card say PAY_UNAVAILABLE_TEXT (state "unavailable").
 // Colours are THEME tokens only (test/pay.test.js pins no hex literal between PayCard and the end marker).
 const PAY_KIND_WORD = { weekday: "Weekday", weekend: "Weekend", holiday: "Holiday" };
 function payStateNote(state, T, year) {

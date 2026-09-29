@@ -665,7 +665,7 @@ check("paySettingsHidden: only a SUCCESSFUL settings read with no row reads as '
   assert.strictEqual(H.paySettingsHidden(st({ settings: "unread", settingsLoaded: false }), null), false, "loading");
   assert.strictEqual(H.paySettingsHidden(st({ settings: "failed", settingsLoaded: false }), null), false, "a failed first read");
   assert.strictEqual(H.paySettingsHidden(st({ settings: "skipped", settingsLoaded: false }), null), false, "no fresh token");
-  assert.strictEqual(H.paySettingsHidden(st({ settings: "unavailable", settingsLoaded: false }), null), false, "the migration is not applied");
+  assert.strictEqual(H.paySettingsHidden(st({ settings: "unavailable", settingsLoaded: false }), null), false, "a missing pay table (the unavailable guard)");
   assert.strictEqual(H.paySettingsHidden(null, null), false);
 });
 check("payErrorText maps PY004 (the office) and PY005 (switched off) to words", () => {

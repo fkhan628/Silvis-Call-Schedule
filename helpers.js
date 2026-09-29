@@ -3586,7 +3586,7 @@ function payStipendDelta(beforeRow, afterRow) {
   return { off: b.filter(function (id) { return a.indexOf(id) < 0; }), on: a.filter(function (id) { return b.indexOf(id) < 0; }) };
 }
 // paySettingsHidden(state, row) -> true when the last successful settings read answered NO row. For a linked surgeon that is
-// RLS saying he is switched off the stipend (the 'main' row exists once the migration is applied): his My pay card is not
+// RLS saying he is switched off the stipend (the 'main' row exists since the migration was applied, 2026-09-28): his My pay card is not
 // rendered. Never true before a read succeeded (loading / failed / skipped / unavailable are not "switched off").
 function paySettingsHidden(state, row) {
   return !!(state && typeof state === "object" && state.settingsLoaded && state.settings !== "unavailable") && (row === null || row === undefined || (Array.isArray(row) && row.length === 0));
@@ -3771,8 +3771,8 @@ function payLogValidate(input, opts) {
   if (PAY_NOTE_CONTACT_RE.test(note)) return "Refused: the note looks like contact data (an @ or a phone number).";
   return null;
 }
-// payReadFailureState(status, bodyText) -> "unavailable" ONLY when a pay TABLE does not exist yet (the migration is not
-// applied): PostgREST 404 PGRST205 (12.2+), or a 404 / 400 whose error code is 42P01, or `relation "...call_pay_..." does not
+// payReadFailureState(status, bodyText) -> "unavailable" ONLY when a pay TABLE does not exist (a guard: the migration is
+// applied since 2026-09-28 01:15:26Z, so this answers only for a rolled-back or rebuilt project): PostgREST 404 PGRST205 (12.2+), or a 404 / 400 whose error code is 42P01, or `relation "...call_pay_..." does not
 // exist` (older versions). Anything else is "failed" - a missing COLUMN (400 42703 after a partial apply or a schema the client
 // does not match) is a real failure, never "available after the next database update".
 // (written call[_]pay[_] so the table names stay in config.js payDb alone - test/pay.test.js [J])
@@ -3787,7 +3787,7 @@ function payReadFailureState(status, bodyText) {
 }
 // payViewState(state, year) -> what a pay card may show for `year`, from CallSchedule's payState { settings, logs,
 // loadedYear, attemptYear } (see payStateBeforeRead / payStateAfterRead):
-//   "unavailable"  a pay table does not exist yet (the migration)       -> PAY_UNAVAILABLE_TEXT
+//   "unavailable"  a pay table does not exist (the guard; applied 9/28)  -> PAY_UNAVAILABLE_TEXT
 //   "ok"           the call-ins held ARE that year's                     -> figures
 //   "stale"        that year's call-ins held, the last refresh failed    -> figures + "couldn't refresh"
 //   "failed"       that year's call-ins were never read, the read failed -> no figures (never "not called in")

@@ -49,7 +49,7 @@ read-only, for preparing the stipends (Totals > Pay and its CSV only - no My pay
 viewer / follower / `?public=1` see no $ and no pay UI. A per-surgeon "Paid by the call stipend" switch (Setup > Pay rates,
 default on; `call_pay_settings.stipend_off_ids`) takes a surgeon out: no My pay, not in Totals > Pay, and no read of the
 rates - enforced in RLS (`silvis_pay_enabled`), not only in the UI; who is switched off is data Faraz sets, never code.
-The **rates and pay flags live only in the authenticated `call_pay_settings` table and the call-ins in `call_pay_logs`** (`sql/migrations/2026-09-27-call-pay.sql`, report-first) - never in the repo, the seed, the
+The **rates and pay flags live only in the authenticated `call_pay_settings` table and the call-ins in `call_pay_logs`** (`sql/migrations/2026-09-27-call-pay.sql`, applied 2026-09-28 01:15:26Z - recorded in `docs/SCHEMA-REVIEW.md`) - never in the repo, the seed, the
 blob or any anon-readable table (a deliberate exception to "defaults are data in groupRules": the pay flags are data in
 `call_pay_settings`, not the public blob; `test/privacy.test.js` A6d pins no figure anywhere); tests use obviously fake
 rates. No $ in notifications, e-mails, calendar feeds, the public page or exports others see; pay audit rows carry keys /

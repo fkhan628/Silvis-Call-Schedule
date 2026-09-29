@@ -344,13 +344,15 @@ const notifPrefsDb = {
   },
 };
 
-// ---- Call pay (Faraz 9/27; sql/migrations/2026-09-27-call-pay.sql - report-first, NOT applied until Faraz runs it) ----
+// ---- Call pay (Faraz 9/27; sql/migrations/2026-09-27-call-pay.sql - applied 2026-09-28 01:15:26Z, recorded in docs/SCHEMA-REVIEW.md) ----
 // The ONLY place the client names the two pay tables. Both are authenticated-only (never anon), so a read goes out only
 // with a FRESH user token (dbAuthHeaders) - without one it answers { state: "skipped" } and the caller keeps what it has
 // (an anon read would be refused, or answer 200 + [] - a failed read dressed as an empty one). Reads answer
 //   { state: "ok", row | rows }       rows may be [] (a real empty month)
-//   { state: "unavailable" }          the table does not exist yet (PostgREST 404 PGRST205 / 42P01 - helpers.payReadFailureState):
-//                                     the cards say "Pay tracking is available after the next database update", no toast
+//   { state: "unavailable" }          the table does not exist (PostgREST 404 PGRST205 / 42P01 - helpers.payReadFailureState):
+//                                     the cards say "Pay tracking is available after the next database update", no toast.
+//                                     A guard since the apply (both tables exist): a missing table - a rollback, a rebuilt
+//                                     project - still reads as that sentence, never as an empty list
 //   { state: "failed", error }        anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
 //   { state: "skipped" }              no fresh token - nothing was read
 // Writes go through db / authFetch (the user's JWT, a refresh + one retry on a 401): saveSettings upserts the 'main' row;
