@@ -2075,7 +2075,12 @@ try {
     // 9/29: the first TRAUMA entry is the served rows' own, restated over the WHOLE Mon-Sun week (expectWeekCols) - a clipped
     // row (the exp-001 bug: '10/1-...' under a full-week label) differs from it; was pinned to '9/28-10/4 Atwell'
     const er928First = (expectWeekCols("2026-09-28").primary[0] || {}).text || "";
-    if (!er928First || !erRow928.startsWith("9/28 - 10/4 | " + er928First)) fail(`ER panel: the 9/28 row must list the whole week ('${er928First}' - the served rows restated over 9/28-10/4 - under '9/28 - 10/4'): ` + erRow928); else ok(`ER panel: first row is the whole week - '9/28 - 10/4 | ${er928First}'`);
+    // review 9/29: the WHOLE rendered TRAUMA column must equal the served rows restated over the whole week (the first
+    // entry alone can itself start 10/1 once 9/28-9/30 are past, so a clipped rendering could match it)
+    const er928All = expectWeekCols("2026-09-28").primary.map(e => e.text);
+    const er928Got = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-09-28"]', tr => { const td = tr.querySelectorAll("td")[1]; return td ? Array.from(td.querySelectorAll("[data-kind]")).map(e => e.textContent.trim()) : []; }).catch(() => []);
+    if (er928Got.join(" / ") !== er928All.join(" / ")) fail(`ER panel: the 9/28 row's TRAUMA entries [${er928Got.join(" / ")}] differ from the served rows restated over the whole week 9/28-10/4 [${er928All.join(" / ")}] (a clipped entry is the exp-001 bug)`);
+    else if (!er928First || !erRow928.startsWith("9/28 - 10/4 | " + er928First)) fail(`ER panel: the 9/28 row must list the whole week ('${er928First}' - the served rows restated over 9/28-10/4 - under '9/28 - 10/4'): ` + erRow928); else ok(`ER panel: first row is the whole week - '9/28 - 10/4 | ${er928First}'`);
     const erRow1026 = await page.$eval('[data-testid=er-panel-preview] tr[data-week="2026-10-26"]', tr => tr.innerText.replace(/[\t\n]+/g, " | "));
     if (!/^10\/26 - 11\/1 \| /.test(erRow1026) || !/11\/1/.test(erRow1026.split(" | ").slice(1).join(" | "))) fail("ER panel: the 10/26 row must keep Sunday 11/1: " + erRow1026); else ok("ER panel: last October row keeps Sunday 11/1 - '" + erRow1026.slice(0, 60) + "...'");
     const erSpanNote = await page.$eval("[data-testid=er-span-note]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
@@ -3870,7 +3875,10 @@ try {
   // 9/29: every roster surgeon the served rows put in the October week rows (9/28-11/1) must be measured - derived, was the
   // pinned 'Fierce (9/28-10/4)'
   {
-    const octNames = [...new Set(daysBetween("2026-09-28", "2026-11-01").flatMap(d => { const r = liveByDay[d]; return r ? [r.primary_id, r.backup_id].filter(Boolean).map(rosterNameOf) : []; }))];
+    // review 9/29: the rows as served when this probe runs - the board claim's overlay (claimedDays, overlaid on every
+    // schedule_days GET) on top of the live rows (the harnessOpen blank is already in liveByDay; the day edits of
+    // harnessDays come after this probe)
+    const octNames = [...new Set(daysBetween("2026-09-28", "2026-11-01").flatMap(d => { const r = (liveByDay[d] || claimedDays[d]) ? { ...(liveByDay[d] || {}), ...(claimedDays[d] || {}) } : null; return r ? [r.primary_id, r.backup_id].filter(Boolean).map(rosterNameOf) : []; }))];
     const unmeasured = octNames.filter(n => !darkProbe.rows[n]);
     if (unmeasured.length) fail(`dark mode: no week-row entry measured for ${unmeasured.join(", ")} although the served rows put them in the October 2026 weeks`);
   }
@@ -6355,9 +6363,25 @@ try {
     const unitDays = await page.$eval("[data-testid=trade-unit]", el => el.getAttribute("data-unit-days")).catch(() => null);
     if (unitDays !== U_DAYS) fail(`Trades unit: the unit box should list ${U_RANGE} (${U_DAYS}), got ` + unitDays); else ok(`Trades unit: unit box beside the picker lists the ${U_N} unit days ${U0}..${U_END} (${U_FROM_NAME} primary through the unit)`);
     const uOpts = await readToOpts();
-    const uGood = uOpts.find(o => o.eligible === "true");
-    if (!uGood) console.log(`     (Trades unit: no counter-party is eligible for all ${U_N} days of the ${uUnit.name} unit by the rules on this page (${uOpts.map(o => o.text + " [" + o.eligible + "]").join(", ")}) - the unit give / split / proposal / accept steps are not exercised this run)`);
-    else {
+    // Review 9/29: the premise "someone can take the whole unit" is DERIVED independently of the form - eligibility()
+    // asked directly for every counter-party on every unit day with the opts tradeEligibility / tradeEligibilityOver pass
+    // (ignoreLocks, claim, assume: the other unit days in the same role; a holiday unit is never a full weekend block, so
+    // no asBlockMember). The form's data-eligible set must equal the rules' set; 'not exercised' only when BOTH are empty.
+    const uQ = [];
+    uOpts.forEach(o => uUnit.days.forEach(d => uQ.push({ day: d, role: "primary", id: o.value, opts: { ignoreLocks: true, claim: true, assume: uUnit.days.filter(x => x !== d).map(x => ({ date: x, role: "primary" })) } })));
+    const uRh = uQ.length ? await rulesHardOn(page, uQ) : { out: [] };
+    const uHard = (i) => (uRh.out || []).slice(i * U_N, (i + 1) * U_N);
+    const uRulesOk = uRh.error ? [] : uOpts.filter((o, i) => uHard(i).every(h => h.length === 0)).map(o => o.value).sort();
+    const uFormOk = uOpts.filter(o => o.eligible === "true").map(o => o.value).sort();
+    const uWhy = uOpts.map((o, i) => o.text.split(" - ")[0] + " [" + uUnit.days.map((d, k) => mdOf(d) + ": " + ((uHard(i)[k] || [])[0] || "ok")).join(", ") + "]").join("; ");
+    let uGood = null;
+    if (uRh.error) fail(`Trades unit: the rules' own picture could not be read to derive the whole-unit premise: ${uRh.error}`);
+    else if ((uRh.out || []).some(h => h.some(x => String(x).startsWith("threw:")))) fail(`Trades unit: eligibility() threw deriving the whole-unit premise: ${uWhy}`);
+    else if (uOpts.some(o => o.eligible === "unknown")) fail(`Trades unit: the trade-to options read 'unknown' (rules not loaded): ` + uOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
+    else if (uRulesOk.join(",") !== uFormOk.join(",")) fail(`Trades unit: the form's whole-unit eligible set [${uFormOk.join(", ")}] differs from eligibility() asked over every unit day [${uRulesOk.join(", ")}] (${uWhy})`);
+    else if (!uRulesOk.length) console.log(`     (Trades unit: no counter-party is eligible for all ${U_N} days of the ${uUnit.name} unit - the rules asked directly agree with the form (${uWhy}) - the unit give / split / proposal / accept steps are not exercised this run)`);
+    else uGood = uOpts.find(o => o.value === uRulesOk[0]);
+    if (uGood) {
     ok("Trades unit: counter-parties checked over the WHOLE unit: " + uOpts.map(o => `${o.text} [${o.eligible}]`).join(", "));
     await page.selectOption("[data-testid=trade-to]", uGood.value);
     await page.waitForTimeout(150);
@@ -6537,6 +6561,21 @@ try {
     const weekendTriples = [rowlessTriples[pickA], rowlessTriples[pickB]].filter(Boolean);
     const blockOk = [blockOkIdx.includes(pickA), blockOkIdx.includes(pickB)];
     const blockWhy = (i) => rowlessTriples[i] ? rowlessTriples[i].map((d, k) => d + " [" + (blkHardOf(i)[k].join(", ") || "none") + "]").join(" ") : "";
+    // Review 9/29: the premise is read from the same eligibility() whose block-member rule (2) and (3) exercise, so a
+    // regression in that rule must not read as 'not exercised'. Block-rule codes are the ones a block member's
+    // asBlockMember / assume answer (rules.js: weekend-block-only is relaxed by asBlockMember; max-consecutive counts the
+    // assumed block days - a block-style surgeon who cannot hold his own block is a rule/data contradiction). FAIL when
+    // (a) any day asked WITH asBlockMember still reads weekend-block-only, (b) a triple is excluded by block-rule codes
+    // alone, (c) none of the row-less triples qualifies (not a plausible data state). 'Not exercised' stays only for
+    // triples excluded by at least one data code (East, forecast, time off, offers, caps, rows).
+    const isBlockRuleCode = (h) => h === "weekend-block-only" || String(h).startsWith("max-consecutive:");
+    if (!blkRh.error && rowlessTriples.length) {
+      const wboIdx = rowlessTriples.map((t, i) => i).filter(i => blkHardOf(i).some(h => h.includes("weekend-block-only")));
+      const ruleOnlyIdx = rowlessTriples.map((t, i) => i).filter(i => !blockOkIdx.includes(i) && blkHardOf(i).flat().length && blkHardOf(i).flat().every(isBlockRuleCode));
+      if (wboIdx.length) fail(`block-member premise: eligibility(..., 's5', { asBlockMember: true }) still reads weekend-block-only on ${wboIdx.length} triple(s) - asBlockMember is not relaxing it: ${wboIdx.slice(0, 3).map(blockWhy).join(" | ")}`);
+      if (ruleOnlyIdx.length) fail(`block-member premise: ${ruleOnlyIdx.length} row-less triple(s) excluded by block-rule codes alone - eligibility() is not honouring asBlockMember / assume: ${ruleOnlyIdx.slice(0, 3).map(blockWhy).join(" | ")}`);
+      if (!blockOkIdx.length) fail(`block-member premise: none of the first ${rowlessTriples.length} row-less Fri-Sun triples lets Fierce hold all three days as a block member - not a plausible data state: ${blockWhy(0)}`);
+    }
     const tripleDays = new Set(weekendTriples.flat());
     let fcDay = null;
     for (let d = todayIso; !fcDay && d <= scanEnd; d = isoAddDays(d, 1)) { if (dowUtc(d) >= 1 && dowUtc(d) <= 5 && rowless(d) && !tripleDays.has(d)) fcDay = d; }
@@ -8468,7 +8507,11 @@ try {
         const planPKeys = new Set(plan3P.availabilityRows.map(avKey));
         const retiredKeys = new Set(plan3.availabilityRows.map(avKey).filter(k => !planPKeys.has(k)));
         const unexpectedMissing = expAvIns.filter(r => !retiredKeys.has(avKey(r)));
-        if (unexpectedMissing.length || !expAvIns.some(r => r.start_date === extra && r.person_id === "s2") || expToIns.length) fail(`Import apply premise: the live availability / time_off tables do not hold the seed - ${expAvIns.length} availability row(s) missing (${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ")}; expected the extra ${extra} plus at most the ${Math.max(0, retiredKeys.size - 1)} row(s) the period retires; unexpected: ${unexpectedMissing.map(r => r.person_id + " " + r.start_date).join(", ") || "none"}), ${expToIns.length} time_off row(s) missing - the orchestrator's pending seed apply`);
+        // review 9/29: like the dry run, seed rows not yet applied live are DATA (the orchestrator's pending seed apply) - the
+        // apply expectations below (the availability body, the time_off write, the result panel) are restated from
+        // expAvIns / expToIns, so they print PENDING; the harness's own extra s2 date not missing live stays a FAIL
+        if (!expAvIns.some(r => r.start_date === extra && r.person_id === "s2")) fail(`Import apply premise: the harness's extra availability row s2 ${extra} is not missing live (${expAvIns.length} missing: ${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ") || "none"}) - the added date is supposed to be new`);
+        else if (unexpectedMissing.length || expToIns.length) console.log(`     Import apply PENDING (data, not a harness expectation): the live availability / time_off tables do not hold the seed - ${expAvIns.length} availability row(s) missing (${expAvIns.map(r => r.person_id + " " + r.start_date).join(", ")}; expected the extra ${extra} plus at most the ${Math.max(0, retiredKeys.size - 1)} row(s) the period retires; unexpected: ${unexpectedMissing.map(r => r.person_id + " " + r.start_date).join(", ") || "none"}), ${expToIns.length} time_off row(s) missing - the orchestrator's pending seed apply; the apply expectations below are restated from that state`);
         const planMonths = [...new Set(planDays.map(d => d.slice(0, 7)))];
         const readPlanCells = async () => { const out = {}; for (const ym of planMonths) { await showMonth(+ym.slice(0, 4), +ym.slice(5, 7) - 1); const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary") || null, b: e.getAttribute("data-backup") || null, ext: e.getAttribute("data-ext") || null }))); cells.forEach(c => { if (planByDay[c.day]) out[c.day] = c; }); } return out; };
         const cellDiffers = (c, d) => { const l = liveByDay[d] || {}; return !c || c.p !== (l.primary_id || null) || c.b !== (l.backup_id || null) || c.ext !== (l.external_cover || null); };
