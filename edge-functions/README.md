@@ -9,7 +9,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23) | yes - any non-empty send the gate lets through |
-| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (planned, section 4 - not created yet) with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
+| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -22,7 +22,9 @@ with the Vault secret the same day: `{"mode":"open-shifts","dryRun":true}` ->
 "skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":
 [{"person_id":"s1","status":"dry_run_composed"}]}`; `{"mode":"nope"}` -> 400; the
 default-mode dryRun still answers as before (200, tomorrow's two on-call people
-`skipped_wrong_hour`). The third (Monday open-shifts) cron job in section 4 is not created yet.
+`skipped_wrong_hour`). The Monday open-shifts cron job of section 4, `silvis-open-shifts-weekly`, exists and is active:
+a read-only `cron.job` check (Cowork, 2026-09-28) listed it with schedule `0 12 * * 1`, and its first observed run was
+2026-09-28 12:00Z (Monday 07:00 Central). When it was created is not recorded here.
 
 **Audit RLS-1 (2026-09-23): `send-notification` deployed as version 4** (2026-09-23 ~15:55 UTC, from the linked CLI
 with `--no-verify-jwt`; the workdir copy is byte-identical to `edge-functions/send-notification/index.ts`, sha256
@@ -35,7 +37,7 @@ by the deploy.
 `cd8996d` with `--no-verify-jwt` (send-notification: the `offers_reminder` / `offers_closed` categories over the version-4
 role / party gate; daily-reminder: mode `offers` beside `open-shifts`; the workdir copies are byte-identical to the repo files).
 Anon POSTs answer 401 on both. The cron job `silvis-offers-daily` was created the same minute (jobid 3, `0 13 * * *`, the
-Vault secret; `cron.job` now lists three jobs - `silvis-open-shifts-weekly` is still the one not created).
+Vault secret; `cron.job` then listed three jobs - the fourth, `silvis-open-shifts-weekly`, is active since; see the deploy record below).
 
 **Prompt 16 A7 (coordinator role, 2026-09-24): `send-notification` redeploy is a comment-only change.** The new
 `user_profiles.role` value `coordinator` (office users who enter the surgeons' vacations and relay offered dates; see
@@ -76,8 +78,9 @@ unauthenticated GET, the other three answered 401 without their gate - see
 the 9/22 status report, history, `docs/HISTORY.md`). The function-side secrets `CRON_SECRET`,
 `RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` were set in the dashboard the
 same day (2026-09-22 12:56 UTC, by Faraz; names only are recorded anywhere).
-Three of the four pg_cron jobs in section 4 exist (`silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
-since 9/22, `silvis-offers-daily` since 9/23; `silvis-open-shifts-weekly` is not created yet) and read the secret from Supabase
+All four pg_cron jobs in section 4 exist and are active (`silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
+since 9/22, `silvis-offers-daily` since 9/23, `silvis-open-shifts-weekly` - seen by a read-only `cron.job` check on
+2026-09-28, first observed run 2026-09-28 12:00Z, creation time not recorded) and read the secret from Supabase
 Vault (`silvis_cron_secret`) at run time; both functions answered pg_net
 `dryRun` posts with 200 (the 9/22 review, section 6 - history, `docs/HISTORY.md`). The version
 numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set`
@@ -402,7 +405,9 @@ select cron.schedule(
 
 -- Weekly open-shifts notice (Prompt 13 part 5c), Monday 12:00 UTC = Monday 07:00 CDT / 06:00 CST.
 -- Reads the secret from Vault (vault.create_secret('<value>', 'silvis_cron_secret') once, in the SQL editor);
--- the other two live jobs also read the secret from Vault the same way since 9/22.
+-- the other three live jobs also read the secret from Vault the same way (the hourly reminder and the digest since 9/22,
+-- silvis-offers-daily since 9/23). This job is active (read-only cron.job check 2026-09-28; first observed run
+-- 2026-09-28 12:00Z); the statement stays here as the reference for a rebuild (cron.unschedule first).
 -- The function answers 200 { open: 0, sent: 0 } when
 -- nothing in [today, today+30] is open, so the job is safe to leave running.
 select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
@@ -426,7 +431,7 @@ select cron.schedule('silvis-offers-daily', '0 13 * * *', $$
     body := '{"mode":"offers"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; today three exist (the hourly reminder and the weekly digest since 9/22, silvis-offers-daily since 9/23) - silvis-open-shifts-weekly is the one not created yet
+select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; all four exist today (the hourly reminder and the weekly digest since 9/22, silvis-offers-daily since 9/23, silvis-open-shifts-weekly - read-only check 2026-09-28, first observed run 2026-09-28 12:00Z)
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 
@@ -444,14 +449,16 @@ Notes
 - Nothing secret is stored in `cron.job.command`: the command names the Vault
   row, and `vault.decrypted_secrets` is readable only as the postgres role
   (Faraz in the SQL editor), never through the REST API or the anon key. This
-  supersedes the Davenport posture (secret pasted into the command). The two live jobs read the Vault
-  row since 9/22, and `silvis-open-shifts-weekly` does too once created.
+  supersedes the Davenport posture (secret pasted into the command). The four live jobs read the Vault
+  row the same way, as the SQL above writes them (the first two since 9/22, `silvis-offers-daily` since 9/23,
+  `silvis-open-shifts-weekly` active by the read-only `cron.job` check of 2026-09-28).
 - Rotate: change the Vault row's value (`vault.update_secret` on the
   `silvis_cron_secret` row) and set the same new value with
   `supabase secrets set CRON_SECRET=<new>`. The jobs read the new value on
   their next tick without an `alter_job`; until both sides agree the cron
   calls get 401 and nothing is sent (fail closed).
-- Both jobs run unattended since 2026-09-22. A live send results only from the
+- The four jobs run unattended (the first two since 2026-09-22, `silvis-offers-daily` since 2026-09-23,
+  `silvis-open-shifts-weekly` - first observed run 2026-09-28 12:00Z). A live send results only from the
   inputs listed in section 6 (a linked account whose reminder hour matches;
   rows in `office_contacts` plus a non-empty digest diff).
 
@@ -654,7 +661,7 @@ and quote the 200 body in the deploy record (section 3).
   a broadcast reaches every follower) - a follower account is a real recipient from then on, and only the scheduler can
   change or stop his mail (the section 3 PRECONDITION). The Monday `{"mode":"open-shifts"}` cron and the offers mode do
   NOT add followers.
-- Creating the third and fourth pg_cron jobs, `silvis-open-shifts-weekly` and `silvis-offers-daily` (section 4) - from then on the Monday open-shifts notice and the daily offers timeline run unattended.
+- The third and fourth pg_cron jobs, `silvis-offers-daily` (created 2026-09-23) and `silvis-open-shifts-weekly` (active by the read-only `cron.job` check of 2026-09-28; first observed run 2026-09-28 12:00Z) (section 4) - the daily offers timeline and the Monday open-shifts notice run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
 email (`publish` with a real period label while `office_contacts` holds only

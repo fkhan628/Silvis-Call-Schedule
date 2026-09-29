@@ -362,7 +362,8 @@ function openSlotReason(reasonsById) {
    the board's reasons map (index-source.html boardReasons), the carry-over of an earlier record
    (lastGenerateFromDiagnostics) and the Alerts feed's open_shifts rows (openSlotsMessageCurrent below) call it; the blob
    itself is rewritten by the next Accept & Publish. The Monday cron (daily-reminder, 5c) relays the stored text as is
-   until then - its job, silvis-open-shifts-weekly, is not created yet (edge-functions/README.md section 4). Pure. */
+   until then - its job, silvis-open-shifts-weekly, is active (edge-functions/README.md section 4; read-only cron.job
+   check 2026-09-28, first observed run 2026-09-28 12:00Z). Pure. */
 const OPEN_SLOT_REASON_RETIRED = { "East feed busy": "not available", "East-derived week": "not available" };
 function openSlotReasonCurrent(reason) {
   if (typeof reason !== "string" || !Object.keys(OPEN_SLOT_REASON_RETIRED).some(k => reason.indexOf(k) >= 0)) return reason;

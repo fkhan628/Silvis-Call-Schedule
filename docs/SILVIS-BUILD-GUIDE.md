@@ -847,9 +847,10 @@ back in table order; a current sentence passes byte for byte) - in `boardReasons
 5a / 5b e-mails composed from it) and on the carry-over below, so the next Accept & Publish rewrites the whole stored
 record - and an Alerts row already posted through `helpers.openSlotsMessageCurrent` (the feed and the browser
 notification; the row is never rewritten). The Monday cron (5c, `daily-reminder` mode `open-shifts`) relays the stored
-sentence as is (it has no copy of the table - pinned); its job `silvis-open-shifts-weekly` is not created yet (16.4), so
-nothing relays the old wording until it is - create it after an Accept & Publish, or mirror `openSlotReasonCurrent` into
-the function first. **Merge across runs (P13R (e), 9/23):** `lastGenerateFromDiagnostics(diagnostics, atIso, previous)`
+sentence as is (it has no copy of the table - pinned); its job `silvis-open-shifts-weekly` is active (16.4: a read-only
+`cron.job` check on 2026-09-28 listed it; first observed run 2026-09-28 12:00Z), so a record stored before Item E3 reaches
+the Monday e-mail in its old wording until the next Accept & Publish rewrites it - or mirror `openSlotReasonCurrent` into
+the function. **Merge across runs (P13R (e), 9/23):** `lastGenerateFromDiagnostics(diagnostics, atIso, previous)`
 records the run facts too — `mode` (`generate` | `fill-open-only`, item T) and `fixedSlots` — and inside the newest run's
 range its reasons and weekend kinds replace the earlier ones; slots and weekends OUTSIDE that range keep the earlier
 record's entries, and the record then carries `carriedFrom` = that earlier record's `at` (so an October fill-open-only
@@ -909,7 +910,7 @@ git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and 
 
 **The group is told** on Accept & Publish when open
 slots remain (`send-notification` category `open_shifts`, honouring `schedule_updates_email`), on demand from the board
-("Email the group now", logged as `openshifts.notify`), and — once the job of 16.4 exists (not yet, 2026-09-23) — every **Monday 07:00 Central** (12:00 UTC: 07:00 CDT /
+("Email the group now", logged as `openshifts.notify`), and — by the job of 16.4, active (read-only `cron.job` check 2026-09-28; first observed run 2026-09-28 12:00Z) — every **Monday 07:00 Central** (12:00 UTC: 07:00 CDT /
 06:00 CST, see 16.4) while any open slot lies in
 the next 30 days (`daily-reminder` mode `open-shifts`, cron job `silvis-open-shifts-weekly`, Vault secret like the
 others). Reasons persisted in `call_schedule_data.data.lastGenerate` are operational wording only (anon-readable blob).
@@ -956,9 +957,14 @@ categories of 16.1 (`test/fixtures/open-shifts-email.json` pins the composition 
 
 ### 16.4 The cron job
 
-Pasted once in the SQL editor by Faraz, after the secret is in Vault and `daily-reminder` is deployed (order: secret →
+**Status: created and active.** A read-only `cron.job` check (Cowork, 2026-09-28) lists `silvis-open-shifts-weekly` with
+schedule `0 12 * * 1` beside the other three jobs (four in all); its first observed run was 2026-09-28 12:00Z (Monday
+07:00 Central). When it was created is not recorded. The SQL below stays the reference (for a rebuild: `cron.unschedule`
+first).
+
+Pasted once in the SQL editor, after the secret is in Vault and `daily-reminder` is deployed (order: secret →
 function → cron, so nothing ever runs ungated). `12:00 UTC` = Monday 07:00 CDT / 06:00 CST. Verbatim, as in
-`edge-functions/README.md` section 4 next to the other two jobs:
+`edge-functions/README.md` section 4 next to the other three jobs:
 
 ```sql
 select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
@@ -969,11 +975,11 @@ select cron.schedule('silvis-open-shifts-weekly', '0 12 * * 1', $$
     body := '{"mode":"open-shifts"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect three rows after this block (two exist today; this statement creates the third)
+select jobid, jobname, schedule, active from cron.job;                 -- four rows today: the hourly reminder, the weekly digest, silvis-offers-daily and this job
 ```
 
-The secret is read from Vault (`vault.create_secret('<value>', 'silvis_cron_secret')` once; the other two live jobs read
-it the same way since 9/22), so `cron.job.command` holds only the lookup. Proof after the deploy: one `dryRun` POST
+The secret is read from Vault (`vault.create_secret('<value>', 'silvis_cron_secret')` once; the other three live jobs read
+it the same way - the first two since 9/22, `silvis-offers-daily` since 9/23), so `cron.job.command` holds only the lookup. Proof after the deploy: one `dryRun` POST
 (`{"mode":"open-shifts","dryRun":true}`) through pg_net or curl with the 200 body quoted; the function answers
 `{ open: 0, sent: 0 }` when nothing in the window is open, so the job is safe to leave running. Rotation and the
 fail-closed 401 behaviour are in the README (section 4, Notes).
@@ -991,8 +997,9 @@ step is proven by observing it (a real row, a quoted 200 body, a byte-diff) — 
    the Supabase CLI `--no-verify-jwt` (README section 3), the deployed source downloaded and byte-compared with the repo
    copy afterwards. A dashboard deploy would re-enable Verify JWT — always the CLI.
 3. **Vault secret + cron job:** `vault.create_secret` once, then the `cron.schedule` of 16.4; `select ... from cron.job`
-   must show three rows. Not before Faraz has approved live mail (README section 6): from then on the Monday notice is a
-   real send to every opted-in surgeon whenever anything in the next 30 days is open.
+   must show the job. **Done:** the read-only `cron.job` check of 2026-09-28 shows four jobs, `silvis-open-shifts-weekly`
+   among them, active; first observed run 2026-09-28 12:00Z. The Monday notice is a real send (README section 6) to
+   every opted-in surgeon whenever anything in the next 30 days is open.
 4. **Live mail on the client paths** needs step 2 plus `RESEND_API_KEY` / `NOTIFICATION_FROM_EMAIL` set by name. Until
    `send-notification` is redeployed, the live function answers `400 unknown notification type` for `open_shifts` /
    `shift_claimed`; the client treats that as `notEnabled` — an INFO toast ("the e-mail for this notice is not enabled

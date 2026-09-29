@@ -13,11 +13,11 @@ afterwards; the editor keeps query history).*
 2. **Authentication → Email templates** (optional): the default "Invite user" and "Reset password" templates work; the app
    detects `#type=invite` / `#type=recovery` in the URL hash and opens the set-a-password form.
 3. `sql/schema.sql` is applied (Prompt 2). Re-running it is safe.
-4. After approving live mail (`edge-functions/README.md` section 6): the Vault secret `silvis_cron_secret` is already in place;
-   paste the `cron.schedule` of README section 4 for `silvis-open-shifts-weekly` and confirm
-   `select jobid, jobname, schedule, active from cron.job` shows four rows — the three that exist today
-   (`silvis-daily-reminder-hourly`, `silvis-office-digest-weekly`, `silvis-offers-daily`, created 9/23) plus the new one — before
-   telling the surgeons about the Monday e-mail (that job is the one NOT created yet as of 2026-09-23).
+4. The pg_cron jobs are in place — four, all active: `silvis-daily-reminder-hourly`, `silvis-office-digest-weekly`,
+   `silvis-offers-daily` (created 9/23) and the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
+   `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z). All read
+   the Vault secret `silvis_cron_secret`. For a rebuild, the `cron.schedule` statements of `edge-functions/README.md`
+   section 4 are the reference; `select jobid, jobname, schedule, active from cron.job` must show the four rows.
 
 ## Your own account (first — already done for Faraz on 9/23 - `admin`, roster `s1`; kept for a rebuild)
 
@@ -118,10 +118,10 @@ hard schedule rules allow it (their OR / outreach days, monthly and backup caps,
 preferences are shown as warnings on the confirm sheet but do not block. When Take is greyed out the reason is written
 next to it (on a phone the button's tooltip never shows). The scheduler can still reassign the
 day from the day editor afterwards. The group is also e-mailed on publish (from the app's Accept & Publish dialog; the 9/23 command-line publish sent
-nothing) and — once the Monday cron job `silvis-open-shifts-weekly` is created (`edge-functions/README.md` section 4 / guide
-16.4–16.5 step 3; NOT created yet as of 2026-09-23) — every Monday 07:00 Central while any shift in the next 30 days is open
-(both covered by the "Schedule published / changes affecting me" e-mail preference in Settings). Until then, announce open
-shifts with **Email the group now** on the Open shifts board.
+nothing) and every Monday 07:00 Central while any shift in the next 30 days is open (the Monday cron job
+`silvis-open-shifts-weekly`, `edge-functions/README.md` section 4 / guide 16.4 — active; first observed run
+2026-09-28 12:00Z); both are covered by the "Schedule published / changes affecting me" e-mail preference in Settings.
+In between, the scheduler can announce open shifts with **Email the group now** on the Open shifts board.
 
 **East vacations (for the person with an East code — Khan today; tell them once).** The scheduler's **Setup → East
 feed → Refresh from Davenport** also brings over that person's Davenport vacations (kind vacation only; no-call days

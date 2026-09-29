@@ -952,7 +952,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(/vault\.decrypted_secrets where name = 'silvis_cron_secret' limit 1\), 'unset'\)\)/.test(readme), "the Vault lookup exactly as given");
     assert.ok(readme.indexOf(`body := '{"mode":"open-shifts"}'::jsonb`) > 0, "the body");
     assert.ok(/12:00 UTC = Monday 07:00 CDT \/ 06:00 CST/.test(readme), "the UTC note");
-    assert.ok(/other two (live )?jobs (also )?read the secret from Vault/.test(readme), "the note that the other two jobs read Vault");
+    assert.ok(/other (two|three) (live )?jobs (also )?read the secret from Vault/.test(readme), "the note that the other jobs read Vault (three since silvis-offers-daily, 9/23)");
     assert.ok(readme.indexOf(`'{"mode":"open-shifts","dryRun":true}'`) > 0, "the dryRun example");
     assert.ok(/\{"mode":"open-shifts","dry_run":true,"open":N/.test(readme), "the dryRun response shape");
     assert.ok(/open_shifts/.test(readme) && /shift_claimed/.test(readme), "section 6 lists the new live-mail paths");
@@ -1137,9 +1137,14 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(/setObNotice\(null\)/.test(close) && /obEmailBtnRef\.current/.test(close) && /\.focus\(\)/.test(close), "closeObNotice returns focus to the opener");
     assert.ok(/if \(!obNotice\) return undefined;[\s\S]{0,300}obCancelRef\.current\.focus\(\)/.test(appSrc), "an effect focuses Cancel when the dialog opens");
   });
-  check("edge-functions/README.md (fix round): the Vault note says the TWO live jobs read the secret from Vault and the open-shifts job does once created - never 'three live jobs' before it exists", () => {
+  // 9/29 (Faraz): silvis-open-shifts-weekly exists - a read-only cron.job check (Cowork, 2026-09-28) listed it and its first
+  // run at 2026-09-28 12:00Z - so this pin flipped from 'the TWO live jobs ... once created' to the four live jobs, with the
+  // observation recorded and no 'not created' / 'once created' wording left.
+  check("edge-functions/README.md (9/29): the Vault note says the FOUR live jobs read the secret from Vault; silvis-open-shifts-weekly is recorded as active (read-only cron.job check 2026-09-28, first observed run 2026-09-28 12:00Z) - never 'not created' / 'once created' now that it exists", () => {
     assert.ok(!/three live Silvis jobs/.test(readme), "no 'three live Silvis jobs'");
-    assert.ok(/two live jobs[^\n]*Vault/.test(readme) && /once (it is )?created/.test(readme), "the two live jobs + 'once created' wording");
+    assert.ok(/four live jobs[^\n]*Vault/.test(readme), "the four live jobs read the Vault row");
+    assert.ok(!/not created|once (it is )?created/.test(readme), "no 'not created' / 'once created' wording for a job that exists");
+    assert.ok(/first observed run 2026-09-28 12:00Z/.test(readme) && /read-only `cron\.job` check/.test(readme), "the observation is recorded (read-only check, first observed run)");
   });
 }
 
