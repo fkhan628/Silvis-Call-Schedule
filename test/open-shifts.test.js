@@ -952,7 +952,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(/vault\.decrypted_secrets where name = 'silvis_cron_secret' limit 1\), 'unset'\)\)/.test(readme), "the Vault lookup exactly as given");
     assert.ok(readme.indexOf(`body := '{"mode":"open-shifts"}'::jsonb`) > 0, "the body");
     assert.ok(/12:00 UTC = Monday 07:00 CDT \/ 06:00 CST/.test(readme), "the UTC note");
-    assert.ok(/other (two|three) (live )?jobs (also )?read the secret from Vault/.test(readme), "the note that the other jobs read Vault (three since silvis-offers-daily, 9/23)");
+    assert.ok(/other three (live )?jobs (also )?read the secret from Vault/.test(readme), "the note that the other three live jobs read Vault (three since silvis-offers-daily, 9/23; the stale 'other two' is refused)");
     assert.ok(readme.indexOf(`'{"mode":"open-shifts","dryRun":true}'`) > 0, "the dryRun example");
     assert.ok(/\{"mode":"open-shifts","dry_run":true,"open":N/.test(readme), "the dryRun response shape");
     assert.ok(/open_shifts/.test(readme) && /shift_claimed/.test(readme), "section 6 lists the new live-mail paths");

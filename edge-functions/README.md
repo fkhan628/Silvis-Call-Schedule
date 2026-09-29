@@ -37,7 +37,7 @@ by the deploy.
 `cd8996d` with `--no-verify-jwt` (send-notification: the `offers_reminder` / `offers_closed` categories over the version-4
 role / party gate; daily-reminder: mode `offers` beside `open-shifts`; the workdir copies are byte-identical to the repo files).
 Anon POSTs answer 401 on both. The cron job `silvis-offers-daily` was created the same minute (jobid 3, `0 13 * * *`, the
-Vault secret; `cron.job` then listed three jobs - the fourth, `silvis-open-shifts-weekly`, is active since; see the deploy record below).
+Vault secret; `cron.job` then listed three jobs - the fourth, `silvis-open-shifts-weekly`, is active by the read-only `cron.job` check of 2026-09-28; see the deploy record below).
 
 **Prompt 16 A7 (coordinator role, 2026-09-24): `send-notification` redeploy is a comment-only change.** The new
 `user_profiles.role` value `coordinator` (office users who enter the surgeons' vacations and relay offered dates; see
@@ -58,7 +58,7 @@ refusals are in section 5. Deploy the client build that sends `trade_id` (a push
 `send-notification` v6, or trade mail from an older client answers 400 until the users reload.
 Open decision (review 2026-09-23, not in this deploy): a minimum length for the CONFIGURED `CRON_SECRET`
 (`cronSecretMatches` refuses an unset / empty configured value and any short, prefix or missing header,
-but accepts a one-character configured value). Adding a floor blind could lock the three pg_cron jobs
+but accepts a one-character configured value). Adding a floor blind could lock the four pg_cron jobs
 out on redeploy; Faraz confirms the live secret's length (never its value) first, then the floor lands
 in both `@cronSecret` blocks with a test, or the secret is rotated per section 4 before it does.
 

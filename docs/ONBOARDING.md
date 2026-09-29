@@ -13,8 +13,8 @@ afterwards; the editor keeps query history).*
 2. **Authentication → Email templates** (optional): the default "Invite user" and "Reset password" templates work; the app
    detects `#type=invite` / `#type=recovery` in the URL hash and opens the set-a-password form.
 3. `sql/schema.sql` is applied (Prompt 2). Re-running it is safe.
-4. The pg_cron jobs are in place — four, all active: `silvis-daily-reminder-hourly`, `silvis-office-digest-weekly`,
-   `silvis-offers-daily` (created 9/23) and the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
+4. The pg_cron jobs are in place — four, all active: `silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
+   (created 9/22), `silvis-offers-daily` (created 9/23) and the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
    `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z). All read
    the Vault secret `silvis_cron_secret`. For a rebuild, the `cron.schedule` statements of `edge-functions/README.md`
    section 4 are the reference; `select jobid, jobname, schedule, active from cron.job` must show the four rows.
