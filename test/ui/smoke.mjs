@@ -865,6 +865,23 @@ const watchPage = (pg, tag) => {
   pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
   pg.on("request", (r) => { if (/\/vendor\//.test(r.url())) vendorRequests.push(`${tag}: ${r.url()}`); });
 };
+// 9/29 (smoke clean): resolves once no Supabase REST read of `pg` has been in flight for 500 ms (cap 10 s). The signin and
+// B7 pages navigate (goto / reload / the app's own reload on "Keep me signed in") right after a mount; a read still in
+// flight then is aborted (net::ERR_ABORTED) and the app's console.error "Supabase load error (...): TypeError: Failed to
+// fetch" is an unexpected console error that depends only on read latency. networkidle alone is not enough: after the A2
+// replaceState (a same-document navigation) it may already count as reached while the mount's reads run.
+const restReadsSettled = (pg) => {
+  let inflight = 0, lastChange = Date.now();
+  const isRest = (r) => /\/rest\/v1\//.test(r.url());
+  pg.on("request", (r) => { if (isRest(r)) { inflight++; lastChange = Date.now(); } });
+  const done = (r) => { if (isRest(r)) { inflight = Math.max(0, inflight - 1); lastChange = Date.now(); } };
+  pg.on("requestfinished", done);
+  pg.on("requestfailed", done);
+  return async () => {
+    const until = Date.now() + 10000;
+    while (Date.now() < until && (inflight > 0 || Date.now() - lastChange < 500)) await new Promise(r => setTimeout(r, 50));
+  };
+};
 watchPage(page, "main");
 await installRealtimeMock(page);
 
@@ -8741,6 +8758,7 @@ try {
   // (c) the sign-in screen in both themes: a second page with the session token removed before the app boots.
   const signin = await context.newPage();
   watchPage(signin, "signin");
+  const settleSignin = restReadsSettled(signin);
   await signin.addInitScript(() => { try { localStorage.removeItem("silvis-auth-token"); localStorage.removeItem("silvis-auth-refresh"); } catch (e) {} });
   await signin.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
     const req = route.request();
@@ -8761,6 +8779,7 @@ try {
   for (const theme of ["light", "dark"]) {
     try {
       await signin.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark");
+      await settleSignin(); // the previous theme's mount reads land before this navigation (an in-flight read cut by it logs "Failed to fetch")
       await signin.goto(BASE, { waitUntil: "domcontentloaded" });
       await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
       await signin.waitForTimeout(300);
@@ -8791,6 +8810,7 @@ try {
     });
     try {
       // a real navigation each time: a hash-only change of the current URL is same-document and would never remount the app
+      await settleSignin();
       await signin.goto("about:blank");
       await signin.goto(BASE + A2_HASH, { waitUntil: "domcontentloaded" });
       await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
@@ -8803,12 +8823,14 @@ try {
       await signin.screenshot({ path: path.join(OUT, "signin-expired-link.png"), fullPage: true });
       ok("screenshot test/ui/out/signin-expired-link.png");
       // a reload of the cleaned URL shows no message
+      await settleSignin(); // the A2 mount's reads (call_schedule_data ...) land first - a reload mid-read aborts it and the app logs "Failed to fetch"
       await signin.reload({ waitUntil: "domcontentloaded" });
       await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
       await signin.waitForTimeout(600);
       const b = await cardState();
       if (b.msg) fail("A2 expired link: the message repeats after a reload of the cleaned URL: " + b.msg); else ok("A2 expired link: a reload of the cleaned URL shows no message");
       // the query form, beside another query key that must survive the clean-up
+      await settleSignin();
       await signin.goto("about:blank");
       await signin.goto(BASE + "?keep=1&error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired", { waitUntil: "domcontentloaded" });
       await signin.waitForSelector("[data-testid=auth-error]", { timeout: 20000 });
@@ -8844,6 +8866,7 @@ try {
       await b7Ctx.route((url) => url.hostname === EAST_HOST, routeEast);
       const b7 = await b7Ctx.newPage();
       watchPage(b7, "b7-" + theme);
+      const settleB7 = restReadsSettled(b7);
       const logouts = [];
       await b7.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
         try {
@@ -8883,6 +8906,7 @@ try {
         if (s.hash !== "") fail(`B7 ${theme}: the hash is still in the URL: ${s.hash.slice(0, 40)}`); else ok(`B7 ${theme}: the hash left the URL before the pair was adopted`);
         // the same account's link whose token is dead (expired / already used): probed BEFORE anything is stored, so the
         // live session stays - the ordinary mount follows and the expired-link message is a toast over the signed-in app
+        await settleB7();
         await b7.goto("about:blank");
         await b7.goto(BASE + linkHash(B7_DEAD, "b7-dead-refresh"), { waitUntil: "domcontentloaded" });
         await b7.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!(t && /expired or was already used/.test(t.textContent || "")); }, undefined, { timeout: 20000 });
@@ -8894,6 +8918,7 @@ try {
         if (z.hash !== "") fail(`B7 ${theme} dead same-account link: the hash is still in the URL: ${z.hash.slice(0, 40)}`);
         if (logouts.length) fail(`B7 ${theme} dead same-account link: a logout went out (${logouts.length})`);
         // another account's link, while that session is stored
+        await settleB7();
         await b7.goto("about:blank");
         await b7.goto(BASE + linkHash(B7_OTHER, "b7-other-refresh"), { waitUntil: "domcontentloaded" });
         await b7.waitForSelector("[data-testid=link-conflict]", { timeout: 20000 });
@@ -8912,6 +8937,7 @@ try {
           await b7.screenshot({ path: path.join(OUT, `recovery-conflict-390-${theme}.png`), fullPage: false });
           ok(`screenshot test/ui/out/recovery-conflict-390-${theme}.png`);
           if (theme === "light") {
+            await settleB7(); // "Keep me signed in" reloads the page: the conflict mount's reads (schedule_days ...) land first, or the reload aborts one mid-flight
             await b7.click("text=Keep me signed in");
             await b7.waitForSelector("[data-testid=app-header]", { timeout: 30000 });
             await b7.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}); // let the mount's data load finish before the next navigation
@@ -9454,6 +9480,10 @@ try {
       const retryClick = await pdf.$eval("[data-testid=days-load-retry]", b => { if (b.disabled || !b.offsetParent) return `shown ${!!b.offsetParent}, disabled ${b.disabled}`; b.click(); return "clicked"; }).catch(e => "missing: " + errLine(e));
       if (retryClick !== "clicked") fail("days-fail: the Retry button could not be clicked right after the switch flipped off (" + retryClick + ")");
       const gone = await pdf.waitForSelector("[data-testid=days-load-failed]", { state: "detached", timeout: 20000 }).then(() => true).catch(() => false);
+      // The banner comes down as soon as the days read lands, but retryDaysLoad toasts only after refreshAll has settled
+      // EVERY parallel read (the blob and each secondary table) - wait for its toast, either verdict, not a fixed 400 ms
+      // (a slow secondary read left the toast unset at the read, 9/29). The check below still requires 'Schedule loaded'.
+      await pdf.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Schedule loaded|Still couldn't load the schedule/.test(t.textContent || ""); }, undefined, { timeout: 20000 }).catch(() => {});
       await pdf.waitForTimeout(400);
       const after = await pdf.evaluate(() => ({
         hdr: (document.querySelector("[data-testid=app-header]") || { textContent: "" }).textContent, // textContent (the sub line is uppercased by CSS)
