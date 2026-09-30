@@ -2947,7 +2947,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(!gc.includes("nameOf(") && !gc.includes("Badge") && !gc.includes("slotIsOpen") && !gc.includes("todayStr"), "the name only through HolderTag (loading / not loaded / OPEN / external as the On call now banner); never the calendar day");
     assert.ok(/flexBasis:"100%"[^>]*flexWrap:"wrap"/.test(gc.slice(0, gc.indexOf(">"))), "the line wraps at a phone width");
     assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);") && !/groupCall/.test(H.onCallNowMsg.toString()), "Share today's text is unchanged (onCallNowMsg, no group call)");
-    for (const f of ["buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildIcs", "icsFor"]) if (typeof H[f] === "function") assert.ok(!/groupCall/.test(H[f].toString()), f + " does not read group call");
+    for (const f of ["buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS"]) { assert.strictEqual(typeof H[f], "function", f + " is a helpers export (the pin must not skip a renamed builder)"); assert.ok(!/groupCall/.test(H[f].toString()), f + " does not read group call"); }
   });
   check("empty-schedule note and legend say OPEN is today onward", () => {
     assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");

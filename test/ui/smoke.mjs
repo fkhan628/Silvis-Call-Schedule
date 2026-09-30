@@ -797,6 +797,8 @@ const groupCallExpectText = (g) => {
 };
 const checkGroupCallBanner = async (pg, label) => {
   try {
+    // the blob read up front failed: skip with a note, as the share page / printable sentence checks do
+    if (!gcBlobEarly.read) { console.log(`     (${label} group call: the blob was not read up front - the group-call line is not compared)`); return; }
     const r = await readGroupCallBanner(pg);
     if (r.error) { fail(`${label} group call: ${r.error}`); return; }
     if (r.crossed) { console.log(`     (${label} group call: the Central clock crossed 07:00 / the own-patients boundary while reading - skipped this run)`); return; }
@@ -809,7 +811,7 @@ const checkGroupCallBanner = async (pg, label) => {
     else if (r.rule !== r.want.sentence) fail(`${label} group call: the rule sentence '${r.rule}' is not groupCallRuleSentence(blob.groupRules) '${r.want.sentence}'`);
     else if (/@|\d{3}[-. )]\d{3}[-. ]\d{4}/.test(r.text + " " + r.rule)) fail(`${label} group call: contact data in the line: ${r.text}`);
     else if (r.overflow) fail(`${label} group call: the line overflows its box: ${r.text}`);
-    else ok(`${label} group call: ${g.mode} (${g.day}) - '${r.text}'${want ? "" : " (names not compared)"}; the rule sentence is the data's`);
+    else ok(`${label} group call: ${g.mode} (${g.day}) - '${r.text}'${want ? "" : " (names not compared)"}; the rule sentence equals groupCallRuleSentence(blob.groupRules)${gcBlobEarly.groupRules && gcBlobEarly.groupRules.groupCall ? "" : " (the blob carries no groupCall block - the code defaults)"}`);
   } catch (e) { fail(`${label} group call: ` + String(e && e.message || e).split("\n")[0]); }
 };
 // Smoke clean on main (9/29): the rules' own picture on a page - the App's rulesCtxState memo on the committed React tree

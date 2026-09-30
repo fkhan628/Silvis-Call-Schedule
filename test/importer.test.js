@@ -1763,9 +1763,10 @@ step("9/27: the ship's seed entry - offerPeriods reminders 42 / 14 / 3 and the n
   ok(!("offerPeriodsNote" in plan.blob.groupRules), "9/27: offerPeriodsNote is dropped before the blob (impScrubRuleNotes)");
   const rev927 = seed._meta.revisions.filter((t) => /^2026-09-27 /.test(t));
   eq(rev927.length, 1, "9/27: one _meta.revisions entry dated 2026-09-27");
-  // pin moved deliberately 9/29 (Prompt 22): the 9/27 entry is still one entry dated 2026-09-27, but no longer the last -
-  // the group-call entry follows it (the step below pins that one as the last) - the intent (one entry, dated the day) is kept
-  eq([seed._meta.revisions.indexOf(rev927[0]) >= 0, (rev927[0].match(/^\d{4}-\d{2}-\d{2}/) || [])[0]], [true, "2026-09-27"], "9/27: one entry, dated 2026-09-27");
+  // pin moved deliberately 9/29 (Prompt 22): the 9/27 entry is no longer the last - the group-call entry follows it (the
+  // step below pins that one as the last). Kept intent: the 9/27 entry is the one right before it, so nothing was
+  // appended between the two and the 9/27 entry was not moved.
+  eq(seed._meta.revisions.indexOf(rev927[0]), seed._meta.revisions.length - 2, "9/27: the 9/27 entry sits right before the 9/29 (last) entry");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev927[0]), "9/27: the entry carries no amount and no contact-like value");
   ok(/remindDaysBeforeClose \[14, 3\] -> \[42, 14, 3\]/.test(rev927[0]) && /noticeUrgentDaysBeforeClose 14/.test(rev927[0]) && /compensationInApp false -> true/.test(rev927[0]), "9/27: the entry names the reminder list, the urgent key and compensationInApp");
   ok(seed.openQuestions.some((t) => /^18\. ~~Offer deadline notice/.test(t) && /DECIDED 9\/27/.test(t)), "9/27: open question 18 is struck and decided");
