@@ -214,6 +214,7 @@ checked and should not be raised again. The scheduler asked for this file to liv
 - **Bare-fetch writes (low, S-M):** move about 20 of them to authFetch (1377, 1410, 2636, 2666, 2681, 2732, 2748, 2832, 2843, 2878, 3199, 3213, 3223, 3275, 4041, 4181, 4253, 4277, 4388; snapshots in config.js:399-542). Add a negative pin, and keep the keepalive flush on bare fetch.
 - **Manual-edit notifications (low, M):** send the alert and email after the day's write lands, not at edit time (2465-2497).
 - **Realtime status (low, S):** log non-SUBSCRIBED statuses and `.on("system")` errors (1901-1903). This client part is not scheduler-only.
+- **Blob-read state, app-wide (low, M; added 9/29 with Prompt 22, Faraz):** mirror a successful call_schedule_data read into state (today only `blobLoadedRef`, which gates writes), so the blob-based displays - the holiday markers, the offer-notice thresholds, the group call line and the share / printable rule sentence - say "not loaded" instead of falling back to the code defaults while the blob read has failed. Accepted as is for now: the next 60 s poll (refreshAll -> refreshBlobRow -> adoptBlob) replaces the defaults once a read lands.
 
 **Phone and everyday use**
 - **Phone header (medium, M):**
