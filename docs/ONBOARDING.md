@@ -86,6 +86,8 @@ e-mails (14 and 3 days; the six-week one once Faraz sets `[42, 14, 3]` in Setup 
 first period was relayed from the seed before the painter existed. Still to come: the publish e-mail's line naming the
 days a surgeon was placed on outside his list.*
 
+**Group call (Faraz 9/29 - the rule as it has always been, now on the Calendar).** Weekdays until 5 PM you take your own patients' calls; weeknights from 5 PM, weekends and every day of a holiday unit, the Trauma primary on call also takes the clinic's patient calls - the Calendar's On call now banner says who has group call right now (and, before 5 PM, who takes it at 5 PM).
+
 **How to paint (show them on their phone).** Open **Mine** and tap **Paint my
 offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
 row per day for the month; ‹ › move ahead as far as you like. While a period is open, a **Go to <period> (freezes M/D,
