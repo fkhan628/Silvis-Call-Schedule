@@ -904,6 +904,23 @@ function payloadLooksWipedDaily(p) {
   return !anyDay && noVac && noAvail;
 }
 
+// ---- Write retry (review 9/27, Do first 2) ----
+// A failed write is retried on a backoff: 5 s after the first failure of a streak, 15 s after the second, then every
+// 60 s until a write lands (the streak is the count of consecutive failed runs; a run that fails nothing ends it). Only
+// the first failure of a streak toasts - the red header line stays for the whole streak.
+const SYNC_RETRY_MS = [5000, 15000, 60000];
+function syncRetryDelay(streak) {
+  const n = Math.max(1, Math.floor(Number(streak) || 1));
+  return SYNC_RETRY_MS[Math.min(n, SYNC_RETRY_MS.length) - 1];
+}
+// The header's failure line: the day leg (schedule_days) and the blob leg (the shared setup) each keep their own
+// unresolved failure, so a later "Saved" of one leg never hides the other's. "" when neither is failing.
+function syncFailLine(dayFail, blobFail) {
+  const d = String(dayFail || ""), b = String(blobFail || "");
+  if (!b) return d;
+  return d ? d + " | Setup: " + b : "Setup: " + b;
+}
+
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
 // The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
 // (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
@@ -3972,6 +3989,7 @@ if (typeof module !== "undefined" && module.exports) {
     undoEntry, undoNoteWrite, undoApply, undoMessage,
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
+    SYNC_RETRY_MS, syncRetryDelay, syncFailLine,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,

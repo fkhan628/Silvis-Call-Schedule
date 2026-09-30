@@ -428,6 +428,14 @@ function CallSchedule() {
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveError, setSaveError] = useState(false); // true = last save failed
+  // Review 9/27 Do first 2: each write leg's UNRESOLVED failure lives in its own state - the day leg (schedule_days) and
+  // the blob leg (the shared setup) - set when a write fails and cleared only when that leg's next write lands, so a
+  // later "Saved" of one leg (saveStatus, the transient line) can never clear the other's red line. The header shows
+  // helpers.js syncFailLine(daySyncFail, blobSyncFail) and says "Synced" only while both are "". React state, never
+  // daySyncBusyRef (which can stay above 0 by design).
+  const [daySyncFail, setDaySyncFail] = useState("");
+  const [blobSyncFail, setBlobSyncFail] = useState("");
+  const syncFail = syncFailLine(daySyncFail, blobSyncFail);
   saveStatusShownRef.current = saveStatus; // clearLoadFailedStatus reads it (the tone goes with the status it clears)
   const importFileRef = useRef(null);
   // --- Sync refs ---
@@ -462,6 +470,14 @@ function CallSchedule() {
   const daySyncChainRef = useRef(Promise.resolve()); // serializes syncScheduleDays runs
   const daySyncBusyRef = useRef(0); // RF2 b: syncScheduleDays runs enqueued or in flight; the keepalive flush skips its schedule_days leg while > 0
   const daySyncRetryRef = useRef(null); // auto-retry timer after a failed day write
+  // Review 9/27 Do first 2: the retry backs off 5 -> 15 -> 60 s (helpers.js syncRetryDelay) over a streak of failed
+  // runs, and only the streak's first failure toasts. blobDirtyRef: a Setup (blob) write failed and has not landed
+  // since - it survives leg 1 replacing or releasing pendingSaveRef, and the retry timer, the 'online' event and the
+  // 60 s poll re-fire the blob leg (resyncPendingRef) until a blob write lands.
+  const daySyncStreakRef = useRef(0);
+  const blobDirtyRef = useRef(false);
+  const blobFailStreakRef = useRef(0);
+  const blobRetryRef = useRef(null);
   // --- Data-loss guard refs ---
   // everHadRealDataRef arms the empty-save guard: it flips true the first time
   // we observe real operational data (schedule days / vacations / availability)
@@ -1728,6 +1744,14 @@ function CallSchedule() {
   };
   const syncScheduleDaysNow = async (nextSchedule, wipeGranted) => {
     if (!nextSchedule) return { ok: false, error: "no schedule" };
+    // Review 9/27 Do first 2: a run that leaves nothing failed ends the failure streak - the day leg's red line
+    // clears, the backoff restarts at 5 s, and a retry still armed is moot (the 'online' resync or a new edit got
+    // there first).
+    const daySyncSettled = () => {
+      daySyncStreakRef.current = 0;
+      if (daySyncRetryRef.current) { clearTimeout(daySyncRetryRef.current); daySyncRetryRef.current = null; }
+      setDaySyncFail("");
+    };
     const prev = lastSyncRef.current || {};
     const next = nextSchedule;
     // -- Accidental-wipe guard (schedule_days) --
@@ -1746,7 +1770,9 @@ function CallSchedule() {
     for (const day of Object.keys(Object.assign({}, prev, next)).sort()) {
       if (!sameAssignment(day, prev[day], next[day])) changed.push(day);
     }
-    if (changed.length === 0) return { ok: true, changed: 0 };
+    // Nothing differs from what was last persisted: nothing is owed, so an earlier failure streak is over (the day
+    // was changed back, or a conflict reload adopted the table's row).
+    if (changed.length === 0) { daySyncSettled(); return { ok: true, changed: 0 }; }
     const ts = new Date().toISOString();
     const by = userProfile?.person_id || authUser?.id || null;
     const persisted = JSON.parse(JSON.stringify(prev));
@@ -1757,24 +1783,32 @@ function CallSchedule() {
       const ver = dayVersionsRef.current[day];
       let sentAgainst = ver; // B1: the version this write REALLY goes out against - the own-write note below is keyed on it
       let r;
-      if (ver === undefined) {
-        r = await postDayRow(row, by, ts);
-        if (r.duplicate) {
-          // The row exists (another device created it, or our version map is
-          // stale): adopt its version and retry ONCE as a CAS update. The retry
-          // goes out against the re-read version (B1: an undo entry recorded at
-          // "no row" must NOT follow it - that day reads as "changed since").
-          const cur = await fetchDayRow(day);
-          if (cur && typeof cur.version === "number") {
-            dayVersionsRef.current[day] = cur.version;
-            sentAgainst = cur.version;
-            r = await patchDayRow(row, cur.version, by, ts);
-          } else {
-            r = { error: "duplicate day and re-read failed", status: 409 };
+      // Review 9/27 Do first 2: a REJECTED fetch (offline, DNS, a timeout - authFetch rethrows it) is a failed write
+      // like an HTTP error: status 0 takes the failed branch below (red status, the backoff retry). Before this it
+      // threw out of the loop into syncScheduleDays' catch, which only toasted - no status, no retry, lastSyncRef not
+      // even updated for the days that had landed, and the header went on saying "Synced".
+      try {
+        if (ver === undefined) {
+          r = await postDayRow(row, by, ts);
+          if (r.duplicate) {
+            // The row exists (another device created it, or our version map is
+            // stale): adopt its version and retry ONCE as a CAS update. The retry
+            // goes out against the re-read version (B1: an undo entry recorded at
+            // "no row" must NOT follow it - that day reads as "changed since").
+            const cur = await fetchDayRow(day);
+            if (cur && typeof cur.version === "number") {
+              dayVersionsRef.current[day] = cur.version;
+              sentAgainst = cur.version;
+              r = await patchDayRow(row, cur.version, by, ts);
+            } else {
+              r = { error: "duplicate day and re-read failed", status: 409 };
+            }
           }
+        } else {
+          r = await patchDayRow(row, ver, by, ts);
         }
-      } else {
-        r = await patchDayRow(row, ver, by, ts);
+      } catch (e) {
+        r = { error: "network error: " + String((e && e.message) || e), status: 0 };
       }
       if (r.error !== undefined) {
         failed++; failMsg = writeFailToast(r.status, r.error);
@@ -1790,26 +1824,36 @@ function CallSchedule() {
       written++;
     }
     lastSyncRef.current = persisted;
+    // Review 9/27 Do first 2: the failure goes to the day leg's own line (daySyncFail - a later blob "Saved" cannot
+    // clear it) and the transient saveStatus is emptied (a "Saving generated days" must not stay up over it). Only
+    // the first failed run of a streak toasts; the red line stays until a run fails nothing (daySyncSettled).
+    if (failed) daySyncStreakRef.current += 1;
+    const firstOfStreak = daySyncStreakRef.current === 1;
     if (failed && authFail) {
       // Prompt 16 A3: a 401 (dead session - authFetch already tried one refresh) or a 403 (no permission) does NOT
       // get the 5-second retry: the same write would fail the same way every five seconds and toast each time
       // (the 9/23 review's B). The status stays red and the pending days stay in the map; after a sign-in the
       // data-load re-run merges the table and re-syncs them (mergeLoadedDays + syncScheduleDays). The toast is
       // skipped while the session-expired banner carries the same message - the two never stack.
-      setSaveError(true);
+      setSaveError(false); setSaveStatus("");
       // "sign in again" only when the session is known dead; a 401 whose refresh hit a network error is re-sent
       // by the next granted refresh (resyncPendingRef) - no sign-in needed (the 9/23 review of A3).
-      setSaveStatus(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
-      if (!(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+      setDaySyncFail(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
+      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
     } else if (failed) {
-      setSaveError(true);
-      setSaveStatus("Save failed - retrying");
-      showToast(failMsg, "error");
+      // Any other failure - an HTTP error or a rejected fetch (status 0: offline, DNS, a timeout) - retries on the
+      // backoff (5 -> 15 -> 60 s).
+      setSaveError(false); setSaveStatus("");
+      setDaySyncFail("Save failed - retrying");
+      if (firstOfStreak) showToast(failMsg, "error");
       scheduleDaySyncRetry();
-    } else if (written) {
-      setSaveError(false);
-      setSaveStatus("Saved");
-      setTimeout(() => setSaveStatus(""), 2000);
+    } else {
+      daySyncSettled();
+      if (written) {
+        setSaveError(false);
+        setSaveStatus("Saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+      }
     }
     if (conflict) {
       // Someone else wrote one of these days first. Pull the authoritative
@@ -1846,13 +1890,15 @@ function CallSchedule() {
     }
     return failed ? { ok: false, error: failMsg, failed } : { ok: true, changed: written };
   };
+  // Review 9/27 Do first 2: the delay follows the failure streak - 5 s, 15 s, then 60 s (helpers.js syncRetryDelay) -
+  // instead of a fixed 5 s that toasted every 5 s for as long as an outage lasted.
   const scheduleDaySyncRetry = () => {
     if (daySyncRetryRef.current) clearTimeout(daySyncRetryRef.current);
     daySyncRetryRef.current = setTimeout(() => {
       daySyncRetryRef.current = null;
       if (loadFailedRef.current || isPublicMode) return;
       syncScheduleDays(scheduleRef.current);
-    }, 5000);
+    }, syncRetryDelay(daySyncStreakRef.current));
   };
 
   // Adopt the config blob field-by-field (mount load, background refresh,
@@ -1902,8 +1948,9 @@ function CallSchedule() {
             // The row has not moved since our last read (the same rule refreshBlobRow uses): the local state - a
             // Setup edit made while the session was expired, whose upsert 401ed - stays the truth, and the autosave
             // re-fires so it lands now (the 9/23 review of A3: adopting here silently dropped that edit, then wrote
-            // the server's values back).
-            if (pendingSaveRef.current) setSaveTick(t => t + 1);
+            // the server's values back). Review 9/27 Do first 2: a failed Setup write is owed too (blobDirtyRef) once
+            // leg 1 has released pendingSaveRef.
+            if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
           } else {
             if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
             if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
@@ -2028,6 +2075,11 @@ function CallSchedule() {
         loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
         loadOffers(true), loadPeriods(true),
       ]);
+      // Review 9/27 Do first 2: a Setup (blob) write that failed is re-sent by the poll as well - the blob leg is not
+      // keyed on the arrays the poll re-creates, so nothing else would re-fire it once its retry timer has run out of
+      // luck. Day writes have their own backoff timer (scheduleDaySyncRetry). Not while the session is known dead (the
+      // banner is up): that write would 401 every minute - the sign-in's re-run re-fires it (leg A).
+      if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
     };
     refreshDaysRef.current = refreshDays;       // trade apply -> refetch the rows the function wrote
     refreshTradesRef.current = refreshTradeReqs;
@@ -2218,8 +2270,10 @@ function CallSchedule() {
     if (isPublicMode) return;  // Public viewers never write to the DB
     if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window
     if (loadFailedRef.current) {
-      setSaveError(true);
-      setSaveStatus(LOAD_FAILED_STATUS);
+      // Faraz 9/29: refused exactly as before; the header's wording only - while the schedule has never been read
+      // (daysReadOk false) it keeps "Schedule not loaded" (the banner carries the Retry) instead of switching to
+      // LOAD_FAILED_STATUS after the 3 s window. A session that had read the days and lost a later read still says it.
+      if (daysReadOkRef.current) { setSaveError(true); setSaveStatus(LOAD_FAILED_STATUS); }
       return;
     }
     const payload = buildStateBundle();
@@ -2259,13 +2313,37 @@ function CallSchedule() {
     setupSaveToasts(labels, ok, why).forEach(t => showToast(t.text, t.tone));
   };
   const settleBlobWaiters = (ok, why) => settleWaiters(takeBlobWaiters(), ok, why);
+  // Review 9/27 Do first 2: the blob leg's failure bookkeeping. blobWriteFailed marks the Setup change as owed
+  // (blobDirtyRef - it outlives leg 1 overwriting or releasing pendingSaveRef), shows the blob leg's own red line,
+  // arms the backoff retry when a retry can help (not a 403, not a 401 - those wait for a granted refresh or the
+  // sign-in, as in the day leg) and answers whether this is the streak's first failure (the only one that toasts).
+  // blobWriteLanded runs on every exit of saveBlobNow that did not throw - saved, skipped (the row already holds the
+  // content), landed earlier, or reloaded (a newer row replaced the change, and said so) - so nothing is owed.
+  const blobWriteLanded = () => {
+    blobDirtyRef.current = false;
+    blobFailStreakRef.current = 0;
+    if (blobRetryRef.current) { clearTimeout(blobRetryRef.current); blobRetryRef.current = null; }
+    setBlobSyncFail("");
+  };
+  const blobWriteFailed = (text, retry) => {
+    blobDirtyRef.current = true;
+    blobFailStreakRef.current += 1;
+    setBlobSyncFail(text);
+    if (retry) {
+      if (blobRetryRef.current) clearTimeout(blobRetryRef.current);
+      blobRetryRef.current = setTimeout(() => {
+        blobRetryRef.current = null;
+        if (blobDirtyRef.current) resyncPendingRef.current("retry");
+      }, syncRetryDelay(blobFailStreakRef.current));
+    }
+    return blobFailStreakRef.current === 1;
+  };
   useEffect(() => {
     if (!loaded) return;
     if (isPublicMode) return;  // Public viewers never write to the DB
     if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) { settleBlobWaiters(false, "the app is still loading - save again in a moment"); return; } // hydration window
     if (loadFailedRef.current) {
-      setSaveError(true);
-      setSaveStatus(LOAD_FAILED_STATUS);
+      if (daysReadOkRef.current) { setSaveError(true); setSaveStatus(LOAD_FAILED_STATUS); } // Faraz 9/29: unread keeps "Schedule not loaded" (see leg 1)
       settleBlobWaiters(false, "data failed to load");
       return;
     }
@@ -2296,6 +2374,7 @@ function CallSchedule() {
       }
       try {
         const r = await saveBlobNow(payload, "autosave");
+        blobWriteLanded(); // review 9/27 Do first 2: nothing of the Setup is owed any more
         if (r && r.saved) {
           setSaveError(false);
           setSaveStatus("Saved");
@@ -2306,14 +2385,18 @@ function CallSchedule() {
         if (r && r.reloaded) settleWaiters(mine, false, "the setup changed on another device and was reloaded - check it and save again"); else settleWaiters(mine, true);
       } catch (e) {
         console.error("Save failed:", e);
-        setSaveError(true);
         const failMsg = String(e?.message || e);
         const denied = /42501|row-level security|\b403\b/i.test(failMsg);
         const authFail = /401|JWT|expired/i.test(failMsg);
-        setSaveStatus(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying");
+        // Review 9/27 Do first 2: the blob leg's own red line (a later day "Saved" cannot clear it), the Setup change
+        // kept owed (blobDirtyRef) and re-sent on the backoff / 'online' / the poll; a rejected fetch ("Failed to
+        // fetch") is an ordinary failure here and retries. The transient saveStatus is emptied (see the day leg).
+        setSaveError(false); setSaveStatus("");
+        const firstOfStreak = blobWriteFailed(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying", !denied && !authFail);
         // Prompt 16 A3: while the session-expired banner is up it carries this message - no toast beside it; a 401
-        // without the banner (the refresh hit a network error) is re-sent by the next granted refresh
-        if (!(auth.sessionExpired && authFail)) showToast(denied
+        // without the banner (the refresh hit a network error) is re-sent by the next granted refresh. Do first 2:
+        // one toast per failure streak.
+        if (firstOfStreak && !(auth.sessionExpired && authFail)) showToast(denied
           ? "Couldn't save the shared setup - your account doesn't have permission. Ask the scheduler."
           : authFail
             ? (auth.sessionExpired ? "Changes aren't saving - your session expired. Sign in again." : "Changes aren't saving - your session couldn't be refreshed; they go out once it is.")
@@ -2328,11 +2411,21 @@ function CallSchedule() {
   // refresh (poll / visibility). The days go through syncScheduleDays (a no-op when nothing is pending); an armed
   // payload re-fires the autosave effect (saveTick), whose blob leg gates itself on canWriteBlob / blobLoadedRef.
   // Ref bridge: the callers live in []-deps effects (conventions item 1).
+  // Review 9/27 Do first 2: also the bridge of the write retry - the blob leg's backoff timer ("retry"), the window's
+  // 'online' event and the 60 s poll call it; a Setup write that failed (blobDirtyRef) is re-sent even when leg 1
+  // has since replaced or released pendingSaveRef.
   resyncPendingRef.current = (source) => {
     if (isPublicMode || !loaded || loadFailedRef.current) return;
     syncScheduleDays(scheduleRef.current);
-    if (pendingSaveRef.current) { console.warn(`Session refreshed (${source}): re-sending the pending save.`); setSaveTick(t => t + 1); }
+    if (pendingSaveRef.current || blobDirtyRef.current) { console.warn(`Re-sync (${source}): re-sending the pending save.`); setSaveTick(t => t + 1); }
   };
+  // Review 9/27 Do first 2: the connection is back - re-send whatever failed now instead of waiting out the backoff.
+  useEffect(() => {
+    if (isPublicMode) return;
+    const onOnline = () => resyncPendingRef.current("online");
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
 
   // --- Flush pending save when app is backgrounded or closing ---
   // The auto-save above has an 800ms debounce; an edit made right before
@@ -2350,7 +2443,11 @@ function CallSchedule() {
   const flushRef = useRef(() => {});
   flushRef.current = (source) => {
     if (isPublicMode) return;
-    const payload = pendingSaveRef.current;
+    // Review 9/27 Do first 2: a leg whose write failed still owes it after the other leg's success released
+    // pendingSaveRef (a failed Setup write - blobDirtyRef; failed days - daySyncFail): flush the current state then,
+    // through the same gates and the same diff (only days that differ from lastSyncRef, the blob only when its
+    // signature moved).
+    const payload = pendingSaveRef.current || ((blobDirtyRef.current || daySyncFail) ? buildStateBundle() : null);
     if (!payload) return;
     if (loadFailedRef.current) return;
     if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
@@ -5976,10 +6073,13 @@ function CallSchedule() {
                 <>
                   Silvis Surgical Care
                   {saveStatus && <span role="status" aria-live="polite" style={{marginLeft:8,color:saveError?"#FF8A8A":"#7FD39A",fontWeight:600,fontSize:11}}>{saveStatus}</span>}
+                  {/* Review 9/27 Do first 2: a write that has not landed keeps its leg's red line until it does - never "Synced" over it */}
+                  {syncFail && <span data-testid="hdr-sync-failed" role="status" aria-live="polite" style={{marginLeft:8,color:"#FF8A8A",fontWeight:600,fontSize:11}}>{syncFail}</span>}
                   {/* Review 9/27 Do first 1: "Synced" only once the schedule was read; "Schedule not loaded" otherwise (no
-                      wording that contains "synced" - the smoke waits on the substring text=Synced) */}
-                  {loaded && !saveStatus && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}
-                  {loaded && !saveStatus && !daysReadOk && <span data-testid="hdr-days-unread" style={{marginLeft:8,color:T.onNavy,fontWeight:700,fontSize:10}}>Schedule not loaded</span>}
+                      wording that contains "synced" - the smoke waits on the substring text=Synced). Faraz 9/29: while
+                      unread the header keeps "Schedule not loaded" whatever else the status line says. */}
+                  {loaded && !saveStatus && !syncFail && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}
+                  {loaded && !daysReadOk && <span data-testid="hdr-days-unread" style={{marginLeft:8,color:T.onNavy,fontWeight:700,fontSize:10}}>Schedule not loaded</span>}
                   {!loaded && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Connecting</span>}
                 </>
               )}

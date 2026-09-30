@@ -90,11 +90,19 @@
 //     character, not the text "\u2192" (finding removal-02)
 //   - review 9/27 Do first 1 (9/28): a page whose schedule_days GETs answer 500
 //     from load until its Retry (switch failDaysFor) shows the persistent role=alert "Schedule not
-//     loaded" banner, the header "Schedule not loaded" (no "Synced"), no OPEN
+//     loaded" banner, the header "Schedule not loaded" throughout - sampled past
+//     the 3 s autosave window, never "Not saving - data failed to load" (Faraz
+//     9/29), never "Synced" - no OPEN
 //     cell (unread-slot placeholders, never loading-slot), the banner line
 //     "schedule not loaded", Share today disabled, no coverage count / published
 //     through / "No schedule days" line; Retry (a full refreshAll) then loads
 //     the schedule - banner gone, "Synced", OPEN cells as the rows say
+//   - review 9/27 Do first 2: a day's CAS PATCH aborted at the network level
+//     (switch abortDayWrite, route.abort - a rejected fetch) shows the header's
+//     red "Save failed - retrying" (no "Synced") with one toast, the app's own
+//     5 s retry lands it as ONE PATCH ?version=eq.1 (v2); a second edit failing
+//     twice in a row toasts once, and the window 'online' event re-sends it at
+//     once as ONE PATCH ?version=eq.2 (v3) (day-write-network-failure.png)
 //   - Slice E (Setup): every card expanded + screenshot (setup-<card>.png), Users
 //     last-admin refusal + PATCH ?id=eq.<uuid>, Rules pattern preview + save,
 //     Availability paste box, vacation conflict panel, Holidays coverage, East
@@ -416,6 +424,9 @@ let failSnapshotInsert = false; // Slice E harness switch (see the Supabase rout
 let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
+let abortDayWrite = null;       // review 9/27 Do first 2: { day, method } - that schedule_days write dies at the network level (route.abort, a rejected fetch: offline / DNS / timeout)
+let abortDayWriteLines = 0;     // one browser 'Failed to load resource' line per aborted write (armed by the route as it aborts)
+const abortedDayUrls = new Set(); // their URLs - the requestfailed listener does not report what the harness aborted on purpose
 let payMock = null;            // call pay (9/27): (url) => { status, body } | null - a step's answer for the two pay tables
 let blobReadOverride = null;    // fix round 2 (safe-4): { updated_at, updated_by } stamped onto every call_schedule_data GET row
 let expiredWrites401 = false;   // Prompt 16 A3: every non-GET under /rest/v1 or /functions/v1 whose bearer JWT is past its exp answers 401 PGRST301 (the real PostgREST answer); the browser's own 401 / 400 console lines are expected while armed
@@ -908,6 +919,7 @@ const watchPage = (pg, tag) => {
       else if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
+      else if (abortDayWriteLines > 0 && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); abortDayWriteLines--; } // review 9/27 Do first 2: a schedule_days write the harness aborted (one line each)
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
@@ -918,7 +930,7 @@ const watchPage = (pg, tag) => {
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
   });
-  pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
+  pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; if (abortedDayUrls.has(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
   pg.on("request", (r) => { if (/\/vendor\//.test(r.url())) vendorRequests.push(`${tag}: ${r.url()}`); });
 };
 // 9/29 (smoke clean): resolves once no Supabase REST read of `pg` has been in flight for 500 ms (cap 10 s). The signin and
@@ -1353,6 +1365,13 @@ const routeSupabase = async (route, scope) => {
     // warn + toast and leave the cache alone. The attempt is still recorded.
     if (abortEastFeedPost && method === "POST" && url.pathname.startsWith("/rest/v1/east_feed")) {
       writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
+      return route.abort("failed");
+    }
+    // Review 9/27 Do first 2 harness switch: the named day's schedule_days write dies at the network level - the
+    // app's fetch REJECTS (what offline, a DNS failure or a timeout look like), it is not an HTTP error. Recorded.
+    if (abortDayWrite && url.pathname === "/rest/v1/schedule_days" && method === abortDayWrite.method && (url.searchParams.get("day") || "").replace(/^eq\./, "") === abortDayWrite.day) {
+      writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true, at: Date.now() });
+      abortedDayUrls.add(req.url()); abortDayWriteLines++;
       return route.abort("failed");
     }
     // RF2 b harness switch: the write is recorded when it ARRIVES (so the step can see the sync start) and answered
@@ -4675,6 +4694,96 @@ try {
       } finally { delayScheduleWriteMs = 0; }
       await page.waitForTimeout(6000); // let the held write answer and the chain drain before the next step
     }
+  }
+
+  // ---- Review 9/27 Do first 2: a day write that dies at the network level shows red, retries on its own, lands once ----
+  // A row-less day of the edit month gets a backup (POST v1, lands); then a second backup edit whose CAS PATCH the
+  // harness ABORTS (route.abort - the app's fetch rejects, as offline / DNS / a timeout do). Before Do first 2 that
+  // threw past the failed branch: a toast only, no status, no retry, and the header kept "Synced". Now the header
+  // carries the day leg's red line "Save failed - retrying" (never "Synced") with ONE toast; the harness lets the
+  // network back and the app's own 5 s retry lands the edit as ONE PATCH ?version=eq.1 (v2). Then a third edit fails
+  // twice in a row (the 5 s retry is aborted too) with no second toast (one per failure streak), and the window
+  // 'online' event re-sends it at once as ONE PATCH ?version=eq.2 (v3) - well inside the 15 s backoff. The whole step
+  // runs inside one poll interval (the poll drops an intercepted row-less day).
+  if (day) {
+    try {
+      const [dy, dm] = day.split("-").map(Number);
+      const dim = new Date(Date.UTC(dy, dm, 0)).getUTCDate();
+      const monthAll = Array.from({ length: dim }, (_, i) => `${day.slice(0, 7)}-${String(i + 1).padStart(2, "0")}`);
+      const b1Spare = monthAll.filter(d => d !== day && !fixtureHasDay(d) && !liveByDay[d]).reverse();
+      const b1Days = new Set(b1Spare.slice(0, 2)); // the B1 undo step's two days
+      const wd = b1Spare.find(d => !b1Days.has(d) && !harnessDays[d]);
+      if (!wd) fail("Do first 2 (network failure): no free row-less day left in " + day.slice(0, 7));
+      else {
+        const parse = (w) => { try { return JSON.parse(w.body || "{}"); } catch (e) { return {}; } };
+        const dayWrites = (from) => writes.slice(from).filter(w => w.path.startsWith("/rest/v1/schedule_days") && (w.path.includes("day=eq." + wd + "&") || parse(w).day === wd));
+        const okPatches = (from) => dayWrites(from).filter(w => w.method === "PATCH" && !w.aborted);
+        const hdr = () => page.$eval("[data-testid=app-header]", el => ({ text: el.textContent, failLine: (el.querySelector("[data-testid=hdr-sync-failed]") || { textContent: "" }).textContent })); // textContent: the sub line is uppercased by CSS
+        await page.evaluate(() => { if (window.__df2Toasts) return; window.__df2Toasts = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__df2Toasts.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+        const toasts = () => page.evaluate(() => window.__df2Toasts.slice());
+        const NET_TOAST = "Couldn't save schedule changes - check your connection.";
+        await freshPollWindow("Do first 2 network failure");
+        // (0) the premise: a POST v1 that lands
+        const w0 = writes.length;
+        await editDay(wd, "backup", "s6");
+        await waitFor(() => dayWrites(w0).length > 0, 4000);
+        await page.waitForTimeout(600);
+        const post = dayWrites(w0).find(w => w.method === "POST");
+        if (!post || post.aborted || parse(post).version !== 1) fail(`Do first 2 (network failure): the premise edit ${wd} B -> Sarkar did not land as POST v1: ` + JSON.stringify(dayWrites(w0).map(w => w.method + " " + w.path)));
+        else {
+          // (1) the PATCH dies -> red line, no Synced, one toast; the edit stays in the cell
+          abortDayWrite = { day: wd, method: "PATCH" };
+          const w1 = writes.length, t1 = (await toasts()).length;
+          await editDay(wd, "backup", "s3");
+          const sawAbort = await waitFor(() => dayWrites(w1).some(w => w.aborted), 4000);
+          await waitFor(async () => (await hdr()).failLine !== "", 2000);
+          const h1 = await hdr(), tA = (await toasts()).slice(t1), cell1 = await cellAttr(wd, "data-backup");
+          abortDayWrite = null; // the network is back: the app's own retry must land it
+          if (!sawAbort) fail(`Do first 2 (network failure): the ${wd} backup edit sent no schedule_days PATCH for the harness to abort: ` + JSON.stringify(dayWrites(w1).map(w => w.method + " " + w.path)));
+          else if (h1.failLine !== "Save failed - retrying" || /synced/i.test(h1.text)) fail(`Do first 2 (network failure): after the aborted PATCH the header must carry the red 'Save failed - retrying' and no 'Synced' (red line '${h1.failLine}', header '${h1.text.replace(/\s+/g, " ").slice(0, 120)}')`);
+          else if (tA.filter(t => t === NET_TOAST).length !== 1) fail("Do first 2 (network failure): expected exactly one 'check your connection' toast for the failure, got " + JSON.stringify(tA));
+          else if (cell1 !== "s3") fail(`Do first 2 (network failure): the cell lost the edit (data-backup ${cell1})`);
+          else ok(`Do first 2 (network failure): ${wd} B -> Acton, its CAS PATCH aborted at the network level -> header 'Save failed - retrying' (no 'Synced'), one toast '${NET_TOAST}', the cell keeps the edit`);
+          await page.screenshot({ path: path.join(OUT, "day-write-network-failure.png"), fullPage: false });
+          const landed = await waitFor(() => okPatches(w1).length > 0, 9000);
+          await page.waitForTimeout(700);
+          const aborted1 = dayWrites(w1).filter(w => w.aborted), ok1 = okPatches(w1), b1 = ok1[0] ? parse(ok1[0]) : {};
+          const h1b = await hdr();
+          if (!landed) fail(`Do first 2 (retry): nothing re-sent the ${wd} edit within 9 s of the network coming back (the 5 s retry)`);
+          else if (ok1.length !== 1 || aborted1.length !== 1) fail(`Do first 2 (retry): expected ONE aborted and ONE landed PATCH, got ` + JSON.stringify(dayWrites(w1).map(w => `${w.method} ${w.path}${w.aborted ? " [aborted]" : ""}`)));
+          else if (ok1[0].path !== `/rest/v1/schedule_days?day=eq.${wd}&version=eq.1` || aborted1[0].path !== ok1[0].path || b1.version !== 2 || b1.backup_id !== "s3") fail("Do first 2 (retry): the re-sent write is not the same CAS PATCH ?version=eq.1 -> v2 with backup s3: " + ok1[0].path + " " + ok1[0].body);
+          else if (ok1[0].at - aborted1[0].at < 4000) fail(`Do first 2 (retry): the PATCH landed ${ok1[0].at - aborted1[0].at} ms after the failure - not the app's 5 s retry`);
+          else if (h1b.failLine || !/Synced|Saved/.test(h1b.text)) fail(`Do first 2 (retry): the header did not recover (red line '${h1b.failLine}', header '${h1b.text.replace(/\s+/g, " ").slice(0, 120)}')`);
+          else ok(`Do first 2 (retry): ${Math.round((ok1[0].at - aborted1[0].at) / 100) / 10} s later the app's own retry landed ONE PATCH ?day=eq.${wd}&version=eq.1 (v2, backup s3) - the row written once; the red line cleared`);
+          // (2) a failure streak: the 5 s retry fails too - no second toast; 'online' re-sends at once
+          abortDayWrite = { day: wd, method: "PATCH" };
+          const w2 = writes.length, t2 = (await toasts()).length;
+          await editDay(wd, "backup", "s2");
+          await waitFor(() => dayWrites(w2).some(w => w.aborted), 4000);
+          const two = await waitFor(() => dayWrites(w2).filter(w => w.aborted).length >= 2, 9000);
+          await page.waitForTimeout(500);
+          const h2 = await hdr(), tB = (await toasts()).slice(t2);
+          abortDayWrite = null;
+          const w3 = writes.length;
+          const tOnline = Date.now();
+          await page.evaluate(() => window.dispatchEvent(new Event("online")));
+          const landed2 = await waitFor(() => okPatches(w3).length > 0, 3000);
+          await page.waitForTimeout(800);
+          const aborted2 = dayWrites(w2).filter(w => w.aborted), ok2 = okPatches(w2), b2 = ok2[0] ? parse(ok2[0]) : {};
+          const h2b = await hdr();
+          if (!two) fail("Do first 2 (streak): the 5 s retry of the second aborted edit never went out: " + JSON.stringify(dayWrites(w2).map(w => `${w.method} ${w.path}${w.aborted ? " [aborted]" : ""}`)));
+          else if (tB.filter(t => t === NET_TOAST).length !== 1) fail("Do first 2 (streak): two failed runs in a row must toast once, got " + JSON.stringify(tB));
+          else if (h2.failLine !== "Save failed - retrying" || /synced/i.test(h2.text)) fail(`Do first 2 (streak): the red line is gone mid-streak ('${h2.failLine}', header '${h2.text.replace(/\s+/g, " ").slice(0, 120)}')`);
+          else ok(`Do first 2 (streak): the ${wd} edit failed twice (the first send and the 5 s retry, both aborted) - ONE toast, the red line held`);
+          if (!landed2) fail("Do first 2 ('online'): the window 'online' event did not re-send the failed edit within 3 s (the next backoff step is 15 s)");
+          else if (ok2.length !== 1 || aborted2.some(w => w.path !== `/rest/v1/schedule_days?day=eq.${wd}&version=eq.2`) || ok2[0].path !== `/rest/v1/schedule_days?day=eq.${wd}&version=eq.2` || b2.version !== 3 || b2.backup_id !== "s2") fail("Do first 2 ('online'): expected every attempt against version 2 and ONE landed PATCH -> v3 with backup s2: " + JSON.stringify(dayWrites(w2).map(w => `${w.method} ${w.path}${w.aborted ? " [aborted]" : ""} ${w.body}`)));
+          else if (h2b.failLine || !/Synced|Saved/.test(h2b.text)) fail(`Do first 2 ('online'): the header did not recover (red line '${h2b.failLine}')`);
+          else ok(`Do first 2 ('online'): the event re-sent it ${ok2[0].at - tOnline} ms later as ONE PATCH ?day=eq.${wd}&version=eq.2 (v3, backup s2); the red line cleared`);
+          noteEdit(wd, { backup_id: "s2" });
+        }
+      }
+    } catch (e) { fail("Do first 2 (network failure): " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-day-write-network.png"), fullPage: true }); } catch (e2) {} }
+    abortDayWrite = null;
   }
 
   // ---- Publish dialog: the diff line shows a real arrow, not the text "\u2192" ----
@@ -9466,11 +9575,13 @@ try {
       await loadWithRetry(pdf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "days-fail page");
       const banner = pdf.locator("[data-testid=days-load-failed][role=alert]");
       await banner.waitFor({ timeout: 30000 });
-      // The header is read as soon as the load finishes ("Connecting" gone), inside the app's 3 s hydration window: with
-      // every read failing, the first autosave pass after that window raises "Not saving - data failed to load", which
-      // takes the header's status slot (and hides "Schedule not loaded" there) - also a failure display, never "Synced".
+      // The header is read as soon as the load finishes ("Connecting" gone), inside the app's 3 s hydration window, and
+      // then sampled every 100 ms until the Retry below (well past that window). Faraz 9/29: while the schedule is unread
+      // the header keeps "Schedule not loaded" THROUGHOUT - the first autosave pass after the window no longer switches
+      // it to "Not saving - data failed to load" (autosave is refused exactly as before) - and never says "Synced".
       await pdf.waitForFunction(() => { const h = document.querySelector("[data-testid=app-header]"); return h && !/Connecting/.test(h.textContent); }, null, { timeout: 30000 });
       const hdrEarly = await pdf.$eval("[data-testid=app-header]", el => el.textContent); // textContent: the sub line is text-transform:uppercase
+      await pdf.evaluate(() => { window.__hdrSamples = []; const t0 = Date.now(); window.__hdrSampler = setInterval(() => { const h = document.querySelector("[data-testid=app-header]"); window.__hdrSamples.push({ ms: Date.now() - t0, text: h ? h.textContent : "" }); }, 100); });
       await pdf.click('button[data-tab="calendar"]').catch(() => {});
       await pdf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
       await pdf.waitForTimeout(300);
@@ -9493,7 +9604,7 @@ try {
       if (failDaysServed < servedBefore + 1) fail(`days-fail: the harness served ${failDaysServed - servedBefore} forced 500(s) on schedule_days, expected at least 1 (the mount read)`);
       else if (!/Schedule not loaded/.test(st.banner) || !st.retry) fail("days-fail: the banner lacks 'Schedule not loaded' or its Retry: " + st.banner.slice(0, 160));
       else if (!/Schedule not loaded/.test(hdrEarly) || /synced/i.test(hdrEarly)) fail(`days-fail: once loaded, the header must read 'Schedule not loaded' and not 'Synced': ${hdrEarly.replace(/\s+/g, " ").slice(0, 120)}`);
-      else if (!(st.hdrUnread || st.hdrLoadFailed) || st.hdrSynced) fail(`days-fail: the header must still read 'Schedule not loaded' (or 'Not saving - data failed to load') and not 'Synced' (unread ${st.hdrUnread}, load-failed ${st.hdrLoadFailed}, synced ${st.hdrSynced})`);
+      else if (!st.hdrUnread || st.hdrLoadFailed || st.hdrSynced) fail(`days-fail: the header must still read 'Schedule not loaded' - never 'Not saving - data failed to load' (Faraz 9/29), never 'Synced' (unread ${st.hdrUnread}, load-failed ${st.hdrLoadFailed}, synced ${st.hdrSynced})`);
       else if (st.openCells || st.dataOpen) fail(`days-fail: ${st.openCells} OPEN pill(s) / ${st.dataOpen} data-open cell(s) drawn over a schedule that was never read`);
       else if (!st.unreadSlots || st.loadingSlots) fail(`days-fail: expected unread-slot placeholders and no loading placeholder (unread ${st.unreadSlots}, loading ${st.loadingSlots})`);
       else if (st.msg !== "Silvis call now: schedule not loaded" || st.shareDisabled !== true) fail(`days-fail: banner message '${st.msg}', Share today disabled ${st.shareDisabled}`);
@@ -9554,6 +9665,14 @@ try {
       // Past the 3 s hydration window, so the Retry's parallel reads can re-run the autosave while loadFailedRef is
       // still up (the 9/28 race: 'Not saving - data failed to load' must not survive the days read landing).
       await pdf.waitForTimeout(3300);
+      // Faraz 9/29: every header sample from the load to here (past the 3 s window) read "Schedule not loaded" - never
+      // "Not saving - data failed to load", never "Synced"
+      const samples = await pdf.evaluate(() => { clearInterval(window.__hdrSampler); return window.__hdrSamples || []; });
+      const badSample = samples.find(x => !/Schedule not loaded/.test(x.text) || /Not saving/.test(x.text) || /synced/i.test(x.text));
+      const spanMs = samples.length ? samples[samples.length - 1].ms : 0;
+      if (!samples.length || spanMs < 3300) fail(`days-fail (Faraz 9/29): the header was sampled for ${spanMs} ms only - expected past the 3 s autosave window`);
+      else if (badSample) fail(`days-fail (Faraz 9/29): at +${badSample.ms} ms the header read '${badSample.text.replace(/\s+/g, " ").slice(0, 120)}' - it must keep 'Schedule not loaded' (no 'Not saving', no 'Synced') while the schedule is unread`);
+      else ok(`days-fail (Faraz 9/29): ${samples.length} header samples over ${Math.round(spanMs / 100) / 10} s from the load (past the 3 s window) all read 'Schedule not loaded' - never 'Not saving - data failed to load', never 'Synced'`);
       // Retry -> the poll's refreshAll reads the rows; the banner goes and the calendar is the table's again.
       // The switch flips off right before the click, so every read up to here failed and the Retry is what recovers.
       // The click is dispatched on the button itself in the same step (after checking it is shown and enabled): a 60 s

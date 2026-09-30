@@ -628,13 +628,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const intentionalScheduleWipeRef = ref(false);
       const scheduleHistoryRef = ref(s.history || [{ days: [{ day: "2026-11-02", before: null, version: 1 }] }]); // Prompt 16 B1: an undo entry at the version the first write goes out against
       const lastSyncRef = ref({ "2026-11-02": { primary: "s1" }, "2026-11-03": { primary: "s2" }, "2026-11-04": { primary: "s3" }, "2026-11-05": { primary: "s4" } });
-      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory"];
+      // review 9/27 Do first 2 (deliberate harness change): the span now also reads the failure-streak refs and the
+      // day leg's own status setter - passed as stubs here (the Do first 2 section runs them for real)
+      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory", "daySyncStreakRef", "daySyncRetryRef", "setDaySyncFail"];
       const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
         intentionalScheduleWipeRef, ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1, "2026-11-03": 1, "2026-11-04": 1, "2026-11-05": 1 }), ref(lastSyncRef.current),
         H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
         s.postDayRow || (async () => ({ version: 1 })), async (row, ver) => { state.patched.push(row.day); state.patchedAgainst.push(ver); return { version: ver + 1 }; }, s.fetchDayRow || (async () => null),
         () => {}, () => {}, (m) => state.toasts.push(m), () => {}, async () => ({ sched: {}, vers: {} }), () => {}, null, null, () => "write failed", () => 0, { warn: () => {} }, { sessionExpired: false },
-        H.undoNoteWrite, scheduleHistoryRef, (h) => { scheduleHistoryRef.current = h; state.historySets++; });
+        H.undoNoteWrite, scheduleHistoryRef, (h) => { scheduleHistoryRef.current = h; state.historySets++; },
+        ref(0), ref(null), () => {});
       return { ...fns, state, intentionalScheduleWipeRef, lastSyncRef, scheduleHistoryRef };
     };
     const wipe = { "2026-11-02": {}, "2026-11-03": {}, "2026-11-04": {}, "2026-11-05": {} };
@@ -2978,7 +2981,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('data-testid="days-load-retry" onClick={retryDaysLoad}'), "Retry button");
     assert.ok(src.includes("refreshAllRef.current = refreshAll;") && src.includes("try { await refreshAllRef.current(); }"), "Retry runs refreshAll");
     // header: Synced only once read; the unread text contains no 'Synced' (the smoke waits on text=Synced) and is not 'Not synced'
-    assert.ok(src.includes("{loaded && !saveStatus && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}"), "Synced gated on daysReadOk");
+    // review 9/27 Do first 2 (deliberate pin change): "Synced" also waits for no unresolved write failure (syncFail)
+    assert.ok(src.includes("{loaded && !saveStatus && !syncFail && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}"), "Synced gated on daysReadOk (and on no failing write leg)");
     assert.strictEqual(count(">Schedule not loaded</span>"), 2, "the header (and the public header) say 'Schedule not loaded'");
     assert.strictEqual(count("Not synced"), 0, "no 'Not synced' (the smoke's text=Synced would match it)");
     // placeholders: own testids; loading-slot stays the before-load skeleton only
@@ -4666,13 +4670,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const run = async (status, sessionExpired) => {
         const state = { toasts: [], statuses: [], retries: 0 };
         const lastSyncRef = ref({ "2026-11-02": { primary: "s1" } });
-        const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory"];
+        // review 9/27 Do first 2 (deliberate harness change): the day leg's failure text now goes to its own line
+        // (setDaySyncFail) - captured into the same statuses list the checks below read
+        const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "scheduleDaySyncRetry", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "writeFailToast", "setTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory", "daySyncStreakRef", "daySyncRetryRef", "setDaySyncFail"];
         const fns = new Function(...params, body + "\nreturn { syncScheduleDays, syncScheduleDaysNow };")(
           ref(false), ref(0), ref(Promise.resolve()), lastSyncRef, ref({ "2026-11-02": 1 }), ref(lastSyncRef.current),
           H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
           async () => ({ version: 1 }), async () => ({ error: status === 401 ? "JWT expired" : status === 403 ? "row-level security" : "boom", status }), async () => null,
           () => {}, (s) => state.statuses.push(s), (m) => state.toasts.push(m), () => { state.retries++; }, async () => ({ sched: {}, vers: {} }), () => {}, null, null, (st) => "write failed " + st, () => 0, { warn: () => {} }, { sessionExpired },
-          H.undoNoteWrite, ref([]), () => {});
+          H.undoNoteWrite, ref([]), () => {},
+          ref(0), ref(null), (s) => state.statuses.push(s));
         const r = await fns.syncScheduleDays({ "2026-11-02": { primary: "s3" } });
         return { r, state };
       };
@@ -4708,7 +4715,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(ra > 0 && raHead.includes("const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current(\"poll\");"), "refreshAll must refresh the session before its reads and re-send the pending save after a granted refresh");
       // the re-send bridge: days through syncScheduleDays (no-op when nothing is pending), an armed payload through one more autosave run
       const rp = src.slice(src.indexOf("resyncPendingRef.current = (source) => {"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
-      assert.ok(rp.includes("if (isPublicMode || !loaded || loadFailedRef.current) return;") && rp.includes("syncScheduleDays(scheduleRef.current);") && rp.includes("if (pendingSaveRef.current) {") && rp.includes("setSaveTick(t => t + 1);"), "resyncPendingRef: " + rp.slice(0, 400));
+      // review 9/27 Do first 2 (deliberate pin change): an owed Setup write (blobDirtyRef) re-fires the autosave too
+      assert.ok(rp.includes("if (isPublicMode || !loaded || loadFailedRef.current) return;") && rp.includes("syncScheduleDays(scheduleRef.current);") && rp.includes("if (pendingSaveRef.current || blobDirtyRef.current) {") && rp.includes("setSaveTick(t => t + 1);"), "resyncPendingRef: " + rp.slice(0, 400));
       assert.ok(src.includes("}, [loaded, schedule, vacations, availabilityRows, saveTick]);") && src.includes("}, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);"), "saveTick is a dependency of both autosave legs (A4 split)");
       const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
       assert.ok(adopt.includes("auth.applyRealtimeAuth();"), "adoptSignedInUser -> realtime.setAuth (password, biometric unlock and the stored session all pass here)");
@@ -4724,7 +4732,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // the blob leg of the re-run (9/23 review, major): the row unchanged since our last read -> keep the local state and re-fire the autosave; moved -> adopt and say so
       const legA = src.slice(src.indexOf("// Leg A - the config blob."), src.indexOf("// Leg B - the schedule itself"));
       assert.ok(legA.includes("const rerun = !!loadedAtRef.current && !switchedUserRef.current;"), "leg A knows a re-run of the same account");
-      assert.ok(legA.includes("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {") && legA.includes("if (pendingSaveRef.current) setSaveTick(t => t + 1);"), "unchanged row on a re-run -> no adoptBlob, the armed payload re-fires");
+      // review 9/27 Do first 2 (deliberate pin change): a failed Setup write (blobDirtyRef) re-fires too, pendingSaveRef released or not
+      assert.ok(legA.includes("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {") && legA.includes("if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);"), "unchanged row on a re-run -> no adoptBlob, the armed payload (or the owed Setup write) re-fires");
       const iSkip = legA.indexOf("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {"), iAdopt = legA.indexOf("adoptBlob(d);");
       assert.ok(iSkip > 0 && iAdopt > iSkip && legA.slice(iSkip, iAdopt).includes("} else {"), "adoptBlob sits in the else branch only");
       assert.ok(legA.includes("if (rerun && isScheduler && pendingSaveRef.current) showToast("), "a moved row over an armed payload is announced");
@@ -4740,10 +4749,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sync.includes("if (r.status === 401 || r.status === 403) authFail = r.status;"), "the auth failure is tracked per write");
       const iAuthBranch = sync.indexOf("if (failed && authFail) {");
       assert.ok(iAuthBranch > 0 && iAuthBranch < sync.indexOf("scheduleDaySyncRetry();"), "the auth-failure branch (no retry) must come before the retry branch");
-      assert.ok(sync.includes("if (!(authFail === 401 && auth.sessionExpired)) showToast(failMsg, \"error\");"), "the 401 toast is skipped beside the banner");
+      // review 9/27 Do first 2 (deliberate pin change): and only the first failure of a streak toasts
+      assert.ok(sync.includes("if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, \"error\");"), "the 401 toast is skipped beside the banner");
       assert.strictEqual((sync.match(/scheduleDaySyncRetry\(\);/g) || []).length, 1, "one retry site, in the non-auth branch");
       const blob = src.slice(src.indexOf("// --- Supabase: Auto-save on changes ---"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
-      assert.ok(blob.includes("const authFail = /401|JWT|expired/i.test(failMsg);") && blob.includes("if (!(auth.sessionExpired && authFail)) showToast("), "the blob leg's session-expired toast is skipped while the banner is up");
+      // review 9/27 Do first 2 (deliberate pin change): the blob leg toasts once per failure streak as well
+      assert.ok(blob.includes("const authFail = /401|JWT|expired/i.test(failMsg);") && blob.includes("if (firstOfStreak && !(auth.sessionExpired && authFail)) showToast("), "the blob leg's session-expired toast is skipped while the banner is up");
       assert.ok(blob.includes('authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying"'), "the blob leg says 'sign in again' only when the session is known dead");
     });
   }
@@ -5364,7 +5375,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // the re-read version in the duplicate-POST branch (a foreign row an undo entry at null must not follow).
       const loop = B1SRC.slice(B1SRC.indexOf("      const ver = dayVersionsRef.current[day];"), i);
       assert.ok(loop.includes("      let sentAgainst = ver;"), "sentAgainst starts as the version map's entry");
-      assert.ok(loop.includes("            dayVersionsRef.current[day] = cur.version;\n            sentAgainst = cur.version;\n            r = await patchDayRow(row, cur.version, by, ts);"), "the duplicate branch re-keys it on the re-read version before the CAS retry");
+      // review 9/27 Do first 2 (deliberate pin change): two spaces deeper - the writes sit inside the try that maps a rejected fetch to status 0
+      assert.ok(loop.includes("              dayVersionsRef.current[day] = cur.version;\n              sentAgainst = cur.version;\n              r = await patchDayRow(row, cur.version, by, ts);"), "the duplicate branch re-keys it on the re-read version before the CAS retry");
       assert.strictEqual(B1count(loop, "sentAgainst = "), 2, "set in exactly those two places");
       assert.strictEqual(B1count(B1SRC, "undoNoteWrite("), 1, "the sync loop is the only place a write is noted");
       const rt = B1SRC.slice(B1SRC.indexOf("    const onDayChange = (payload) => {"), B1SRC.indexOf("    let rtChannel = null;"));
@@ -6373,7 +6385,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(timerAt > 0 && mineAt > timerAt && mineAt < writeAt, `the run takes its waiters first thing inside the timer (timer ${timerAt}, mine ${mineAt}, write ${writeAt})`);
       assert.strictEqual(B9count("settleBlobWaiters(", leg.slice(timerAt)), 0, "nothing inside the timer settles the LIVE list (a waiter registered during the await belongs to the next run)");
       const catchBody = leg.slice(leg.indexOf("} catch (e) {", writeAt));
-      const genericAt = catchBody.indexOf('if (!(auth.sessionExpired && authFail)) showToast(denied');
+      const genericAt = catchBody.indexOf('if (firstOfStreak && !(auth.sessionExpired && authFail)) showToast(denied'); // review 9/27 Do first 2 (deliberate pin change): one generic toast per failure streak
       const settleAt = catchBody.indexOf("settleWaiters(mine, false, denied ?");
       assert.ok(genericAt > 0 && settleAt > genericAt, `the specific line toasts after the generic one (generic ${genericAt}, settle ${settleAt})`);
     });
@@ -6670,6 +6682,296 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(/notifPrefsDb\.loadFollower\(pid\)/.test(src), "the follower's row is read by profile_id");
     });
   }
+
+  /* ---------------- DF2. Review 9/27 Do first 2: the write retry (day leg, blob leg, header) + Faraz 9/29 header ---------------- */
+  console.log("\n[DF2] review 9/27 Do first 2 (a rejected fetch is a failed write; backoff 5 -> 15 -> 60 s; one toast per streak; 'online' re-sync; an owed Setup write survives leg 1) + Faraz 9/29 ('Schedule not loaded' while unread)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle) => src.split(needle).length - 1;
+    const between = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return src.slice(i, j); };
+    const acheckD = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const ref = (v) => ({ current: v });
+    const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
+    const TOAST_NET = "Couldn't save schedule changes - check your connection.";
+    const netDown = () => Promise.reject(new TypeError("Failed to fetch")); // what fetch does offline / on DNS failure / on a timeout abort
+
+    check("DF2 helpers: syncRetryDelay backs off 5 s -> 15 s -> 60 s (then stays at 60 s; junk reads as the first failure); syncFailLine keeps the two legs apart ('' when neither fails, 'Setup: ' names the blob leg)", () => {
+      assert.deepStrictEqual([0, 1, 2, 3, 4, 50].map(H.syncRetryDelay), [5000, 5000, 15000, 60000, 60000, 60000]);
+      assert.deepStrictEqual([undefined, null, "x", -3].map(H.syncRetryDelay), [5000, 5000, 5000, 5000]);
+      assert.deepStrictEqual(H.SYNC_RETRY_MS, [5000, 15000, 60000]);
+      assert.strictEqual(H.syncFailLine("", ""), "");
+      assert.strictEqual(H.syncFailLine("Save failed - retrying", ""), "Save failed - retrying");
+      assert.strictEqual(H.syncFailLine("", "Save failed - retrying"), "Setup: Save failed - retrying");
+      assert.strictEqual(H.syncFailLine("Save failed - retrying", "Not saved - no permission"), "Save failed - retrying | Setup: Not saved - no permission");
+      assert.ok(!/synced/i.test(H.syncFailLine("Save failed - sign in again", "Save failed - will retry")), "no failure wording contains 'synced' (the smoke waits on text=Synced)");
+    });
+
+    // The day leg lifted verbatim WITH its retry timer (syncScheduleDays .. scheduleDaySyncRetry) and the real
+    // writeFailToast, run against stub writes and a fake clock: every timer is recorded, a test fires them by hand.
+    let dayBody = "", liftErr = null;
+    try { dayBody = between("  const writeFailToast = (status, body) => {", "  // Both day writes go out through authFetch") + between("  const syncScheduleDays = (nextSchedule) => {", "  // Adopt the config blob field-by-field"); } catch (e) { liftErr = e; }
+    const mkDays = (o) => {
+      if (liftErr) throw liftErr;
+      const opt = o || {};
+      const st = { toasts: [], statuses: [], dayFail: [], timers: [], cleared: [], writes: [] };
+      const refs = { lastSyncRef: ref({ "2026-11-02": { primary: "s1" } }), scheduleRef: ref({ "2026-11-02": { primary: "s1" } }), dayVersionsRef: ref(opt.versions || { "2026-11-02": 1 }), daySyncChainRef: ref(Promise.resolve()), daySyncBusyRef: ref(0), daySyncStreakRef: ref(0), daySyncRetryRef: ref(null), loadFailedRef: ref(false) };
+      let tid = 0;
+      const setTimeoutF = (fn, ms) => { const t = { id: ++tid, fn, ms }; st.timers.push(t); return t.id; };
+      const clearTimeoutF = (id) => { st.cleared.push(id); };
+      st.net = { patch: opt.patch || (async (row, ver) => ({ version: ver + 1 })), post: opt.post || (async () => ({ version: 1 })), get: opt.get || (async () => null) };
+      const params = ["intentionalScheduleWipeRef", "daySyncBusyRef", "daySyncChainRef", "lastSyncRef", "dayVersionsRef", "scheduleRef", "scheduleWipeCheck", "sameAssignment", "assignmentToDayRow", "emptyDayAssignment", "postDayRow", "patchDayRow", "fetchDayRow", "setSaveError", "setSaveStatus", "showToast", "loadScheduleDays", "setSchedule", "userProfile", "authUser", "setTimeout", "clearTimeout", "console", "auth", "undoNoteWrite", "scheduleHistoryRef", "setHistory", "daySyncStreakRef", "daySyncRetryRef", "setDaySyncFail", "loadFailedRef", "isPublicMode", "syncRetryDelay"];
+      const fns = new Function(...params, dayBody + "\nreturn { syncScheduleDays, syncScheduleDaysNow, scheduleDaySyncRetry, writeFailToast };")(
+        ref(false), refs.daySyncBusyRef, refs.daySyncChainRef, refs.lastSyncRef, refs.dayVersionsRef, refs.scheduleRef, H.scheduleWipeCheck, sameAssignment, H.assignmentToDayRow, H.emptyDayAssignment,
+        async (row, by, ts) => { st.writes.push({ method: "POST", day: row.day, row }); return st.net.post(row); },
+        async (row, ver, by, ts) => { st.writes.push({ method: "PATCH", day: row.day, ver, row }); return st.net.patch(row, ver); },
+        async (day) => { st.writes.push({ method: "GET", day }); return st.net.get(day); },
+        () => {}, (s) => st.statuses.push(s), (m) => st.toasts.push(m), async () => ({ sched: {}, vers: {}, count: 0 }), () => {}, null, null,
+        setTimeoutF, clearTimeoutF, { warn: () => {} }, { sessionExpired: !!opt.sessionExpired }, H.undoNoteWrite, ref([]), () => {},
+        refs.daySyncStreakRef, refs.daySyncRetryRef, (s) => st.dayFail.push(s), refs.loadFailedRef, false, H.syncRetryDelay);
+      // the retry timers (the "Saved" line's own 2 s clear-timer is not one)
+      st.retryTimers = () => st.timers.filter(t => t.ms !== 2000);
+      // fire the last retry timer and wait for the run it enqueued
+      st.fireRetry = async () => { const t = st.retryTimers().slice(-1)[0]; if (!t) throw new Error("no retry timer armed"); t.fn(); await refs.daySyncChainRef.current; };
+      st.lastFail = () => st.dayFail.length ? st.dayFail[st.dayFail.length - 1] : undefined;
+      return { st, refs, fns };
+    };
+    const EDIT = { "2026-11-02": { primary: "s3" } };
+
+    await acheckD("DF2 day leg: a PATCH whose fetch REJECTS (offline / DNS / timeout) is a failed write, not a throw - the run answers { ok:false, failed:1 }, the day leg's line reads 'Save failed - retrying' (the transient status emptied, never 'Saved'), ONE toast 'check your connection', a retry armed at 5 s, and nothing advanced (lastSyncRef / the version stay, so the retry re-sends)", async () => {
+      const { st, refs, fns } = mkDays({ patch: netDown });
+      refs.scheduleRef.current = EDIT;
+      const r = await fns.syncScheduleDays(EDIT);
+      assert.strictEqual(r.ok, false, JSON.stringify(r)); assert.strictEqual(r.failed, 1, JSON.stringify(r));
+      assert.strictEqual(st.lastFail(), "Save failed - retrying");
+      assert.ok(!st.statuses.includes("Saved") && st.statuses[st.statuses.length - 1] === "", "the transient status is emptied: " + JSON.stringify(st.statuses));
+      assert.deepStrictEqual(st.toasts, [TOAST_NET], "the rejected fetch reads as status 0 -> the connection toast");
+      assert.strictEqual(fns.writeFailToast(0, "network error: TypeError: Failed to fetch"), TOAST_NET);
+      assert.deepStrictEqual(st.retryTimers().map(t => t.ms), [5000]);
+      assert.strictEqual(refs.lastSyncRef.current["2026-11-02"].primary, "s1", "the failed day is not marked persisted");
+      assert.strictEqual(refs.dayVersionsRef.current["2026-11-02"], 1);
+    });
+    await acheckD("DF2 day leg: the outage goes on - each retry that fails backs off 5 -> 15 -> 60 -> 60 s and toasts NOTHING more (one toast per streak); the red line stays; then the network is back: the next retry lands ONE PATCH against the same version 1 (CAS -> v2), the line clears, 'Saved', no further timer, and the streak restarts (a new failure toasts again at 5 s)", async () => {
+      const { st, refs, fns } = mkDays({ patch: netDown });
+      refs.scheduleRef.current = EDIT;
+      await fns.syncScheduleDays(EDIT);
+      await st.fireRetry(); await st.fireRetry(); await st.fireRetry();
+      assert.deepStrictEqual(st.retryTimers().map(t => t.ms), [5000, 15000, 60000, 60000]);
+      assert.deepStrictEqual(st.toasts, [TOAST_NET], "toasted once for the whole streak: " + JSON.stringify(st.toasts));
+      assert.strictEqual(st.lastFail(), "Save failed - retrying");
+      assert.strictEqual(st.writes.filter(w => w.method === "PATCH").length, 4, "the timer re-ran the sync each time (one PATCH per run)");
+      st.net.patch = async (row, ver) => ({ version: ver + 1 });
+      const nTimers = st.retryTimers().length;
+      await st.fireRetry();
+      const patches = st.writes.filter(w => w.method === "PATCH");
+      assert.deepStrictEqual(patches.map(w => w.ver), [1, 1, 1, 1, 1], "every attempt went out against version 1 (nothing advanced on a failure)");
+      assert.strictEqual(refs.dayVersionsRef.current["2026-11-02"], 2, "the landed write's version");
+      assert.strictEqual(refs.lastSyncRef.current["2026-11-02"].primary, "s3");
+      assert.strictEqual(st.lastFail(), "", "the day leg's line clears");
+      assert.ok(st.statuses.includes("Saved"));
+      assert.strictEqual(st.retryTimers().length, nTimers, "no retry armed after the success");
+      assert.strictEqual(refs.daySyncStreakRef.current, 0);
+      // the same map again: nothing to write
+      await fns.syncScheduleDays(EDIT);
+      assert.strictEqual(st.writes.filter(w => w.method === "PATCH").length, 5, "the row is written once - a re-run with nothing changed sends nothing");
+      // a new streak
+      st.net.patch = netDown;
+      const next = { "2026-11-02": { primary: "s4" } }; refs.scheduleRef.current = next;
+      await fns.syncScheduleDays(next);
+      assert.deepStrictEqual(st.toasts, [TOAST_NET, TOAST_NET], "a new streak toasts again");
+      assert.strictEqual(st.retryTimers().slice(-1)[0].ms, 5000, "and starts over at 5 s");
+    });
+    await acheckD("DF2 day leg: a success that lands while a retry is still armed (the 'online' re-sync, a new edit) clears that timer - the retry never fires a stale run; a timer that fires while loadFailedRef is up does not sync", async () => {
+      const { st, refs, fns } = mkDays({ patch: netDown });
+      refs.scheduleRef.current = EDIT;
+      await fns.syncScheduleDays(EDIT);
+      const armed = st.retryTimers()[0];
+      assert.strictEqual(refs.daySyncRetryRef.current, armed.id);
+      st.net.patch = async (row, ver) => ({ version: ver + 1 });
+      await fns.syncScheduleDays(EDIT); // the 'online' resync
+      assert.ok(st.cleared.includes(armed.id), "the armed retry was cleared");
+      assert.strictEqual(refs.daySyncRetryRef.current, null);
+      assert.strictEqual(st.lastFail(), "");
+      const m = mkDays({ patch: netDown });
+      m.refs.scheduleRef.current = EDIT;
+      await m.fns.syncScheduleDays(EDIT);
+      m.refs.loadFailedRef.current = true;
+      const before = m.st.writes.length;
+      m.st.retryTimers()[0].fn(); await m.refs.daySyncChainRef.current;
+      assert.strictEqual(m.st.writes.length, before, "no sync (no write) while the load is failed");
+      m.refs.loadFailedRef.current = false;
+      m.st.retryTimers()[0].fn(); await m.refs.daySyncChainRef.current;
+      assert.strictEqual(m.st.writes.length, before + 1, "the same timer does sync once the load is fine (the check above is not vacuous)");
+    });
+    await acheckD("DF2 day leg: a POST (no version known) whose fetch rejects, and a 409 whose re-read (fetchDayRow) rejects, both take the failed branch (status 0) - red line, one toast, a 5 s retry; nothing is marked persisted", async () => {
+      const a = mkDays({ versions: {}, post: netDown });
+      a.refs.scheduleRef.current = EDIT;
+      const ra = await a.fns.syncScheduleDays(EDIT);
+      assert.strictEqual(ra.ok, false); assert.strictEqual(a.st.lastFail(), "Save failed - retrying"); assert.deepStrictEqual(a.st.toasts, [TOAST_NET]); assert.deepStrictEqual(a.st.retryTimers().map(t => t.ms), [5000]);
+      assert.deepStrictEqual(a.st.writes.map(w => w.method), ["POST"]);
+      const b = mkDays({ versions: {}, post: async () => ({ duplicate: true }), get: netDown });
+      b.refs.scheduleRef.current = EDIT;
+      const rb = await b.fns.syncScheduleDays(EDIT);
+      assert.strictEqual(rb.ok, false); assert.strictEqual(b.st.lastFail(), "Save failed - retrying"); assert.deepStrictEqual(b.st.toasts, [TOAST_NET]); assert.deepStrictEqual(b.st.retryTimers().map(t => t.ms), [5000]);
+      assert.deepStrictEqual(b.st.writes.map(w => w.method), ["POST", "GET"], "no PATCH without a re-read version");
+      assert.strictEqual(b.refs.lastSyncRef.current["2026-11-02"].primary, "s1");
+    });
+    await acheckD("DF2 day leg: the 401 / 403 branch still comes first and arms no timer; a second 403 in the same streak (a later re-sync) does not toast again; an HTTP 500 retries like a rejected fetch", async () => {
+      const f = mkDays({ patch: async () => ({ error: "row-level security", status: 403 }) });
+      f.refs.scheduleRef.current = EDIT;
+      await f.fns.syncScheduleDays(EDIT); await f.fns.syncScheduleDays(EDIT);
+      assert.strictEqual(f.st.retryTimers().length, 0, "no retry on a 403");
+      assert.strictEqual(f.st.toasts.length, 1, "one toast for the streak: " + JSON.stringify(f.st.toasts));
+      assert.strictEqual(f.st.lastFail(), "Not saved - no permission");
+      const e = mkDays({ patch: async () => ({ error: "boom", status: 500 }) });
+      e.refs.scheduleRef.current = EDIT;
+      await e.fns.syncScheduleDays(EDIT);
+      assert.deepStrictEqual(e.st.retryTimers().map(t => t.ms), [5000]); assert.strictEqual(e.st.toasts.length, 1); assert.strictEqual(e.st.lastFail(), "Save failed - retrying");
+    });
+
+    // The blob leg's bookkeeping, the re-send bridge and the 'online' listener, lifted verbatim.
+    let blobBody = "", resyncBody = "", onlineFn = "", legOneFn = "", liftErr2 = null;
+    try {
+      blobBody = between("  const blobWriteLanded = () => {", "    return blobFailStreakRef.current === 1;\n  };\n") + "    return blobFailStreakRef.current === 1;\n  };\n";
+      resyncBody = between("  resyncPendingRef.current = (source) => {", "  // Review 9/27 Do first 2: the connection is back");
+      const oi = src.indexOf('    const onOnline = () => resyncPendingRef.current("online");');
+      const os = src.lastIndexOf("  useEffect(() => {\n    if (isPublicMode) return;\n", oi), oe = src.indexOf("\n  }, []);", oi);
+      if (oi < 0 || os < 0 || oe < 0 || oi - os > 80) throw new Error("the 'online' listener effect is not where expected");
+      onlineFn = src.slice(os + "  useEffect(".length, oe) + "\n  }";
+      legOneFn = between("  useEffect(() => {\n    if (!loaded) return;\n    if (isPublicMode) return;  // Public viewers never write to the DB\n    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window", "\n  }, [loaded, schedule, vacations, availabilityRows, saveTick]);").slice("  useEffect(".length) + "\n  }";
+    } catch (e) { liftErr2 = e; }
+    const mkSession = () => {
+      if (liftErr2) throw liftErr2;
+      const st = { blobFail: [], timers: [], cleared: [], ticks: 0, days: 0, resyncs: [] };
+      const refs = { blobDirtyRef: ref(false), blobFailStreakRef: ref(0), blobRetryRef: ref(null), pendingSaveRef: ref(null), loadFailedRef: ref(false), scheduleRef: ref(EDIT), resyncPendingRef: ref(null) };
+      let tid = 0;
+      const setTimeoutF = (fn, ms) => { const t = { id: ++tid, fn, ms }; st.timers.push(t); return t.id; };
+      const blob = new Function("blobDirtyRef", "blobFailStreakRef", "blobRetryRef", "setBlobSyncFail", "setTimeout", "clearTimeout", "resyncPendingRef", "syncRetryDelay", blobBody + "\nreturn { blobWriteLanded, blobWriteFailed };")(
+        refs.blobDirtyRef, refs.blobFailStreakRef, refs.blobRetryRef, (s) => st.blobFail.push(s), setTimeoutF, (id) => st.cleared.push(id), refs.resyncPendingRef, H.syncRetryDelay);
+      new Function("isPublicMode", "loaded", "loadFailedRef", "syncScheduleDays", "scheduleRef", "pendingSaveRef", "blobDirtyRef", "console", "setSaveTick", "resyncPendingRef", resyncBody)(
+        false, true, refs.loadFailedRef, () => { st.days++; return Promise.resolve({ ok: true }); }, refs.scheduleRef, refs.pendingSaveRef, refs.blobDirtyRef, { warn: () => {} }, () => { st.ticks++; }, refs.resyncPendingRef);
+      const real = refs.resyncPendingRef.current;
+      refs.resyncPendingRef.current = (source) => { st.resyncs.push(source); return real(source); };
+      st.lastBlobFail = () => st.blobFail.length ? st.blobFail[st.blobFail.length - 1] : undefined;
+      return { st, refs, blob };
+    };
+    await acheckD("DF2 blob leg: a failed Setup write stays OWED after leg 1 replaced and released pendingSaveRef - the 'online' re-sync, the blob retry timer and the poll's call all re-fire the autosave (saveTick) with nothing pending; a landed blob write ends it (no tick, timer cleared)", async () => {
+      const { st, refs, blob } = mkSession();
+      const P2 = { tag: "setup edit" }, P1 = { tag: "leg 1" };
+      refs.pendingSaveRef.current = P2;                     // the blob effect armed its payload ...
+      const first = blob.blobWriteFailed("Save failed - retrying", true); // ... and its PATCH failed (Failed to fetch)
+      assert.strictEqual(first, true); assert.strictEqual(refs.blobDirtyRef.current, true); assert.strictEqual(st.lastBlobFail(), "Save failed - retrying");
+      assert.deepStrictEqual(st.timers.map(t => t.ms), [5000]);
+      refs.pendingSaveRef.current = P1;                     // leg 1 (a poll's new arrays) armed its own payload ...
+      const r = { ok: true };
+      if (r && r.ok && refs.pendingSaveRef.current === P1) refs.pendingSaveRef.current = null; // ... and its run landed (the effect's .then, pinned below)
+      assert.strictEqual(refs.pendingSaveRef.current, null, "nothing is pending any more - before Do first 2 the Setup change was dropped here");
+      refs.resyncPendingRef.current("online");
+      assert.strictEqual(st.ticks, 1, "the 'online' re-sync re-fires the autosave for the owed Setup write");
+      assert.strictEqual(st.days, 1, "and re-syncs the days (a no-op when nothing is pending)");
+      st.timers[0].fn();                                    // the blob retry timer
+      assert.deepStrictEqual(st.resyncs, ["online", "retry"]); assert.strictEqual(st.ticks, 2);
+      refs.resyncPendingRef.current("poll");                // refreshAll's call while blobDirtyRef is up (pinned below)
+      assert.strictEqual(st.ticks, 3);
+      const second = blob.blobWriteFailed("Save failed - retrying", true);
+      assert.strictEqual(second, false, "the second failure of the streak does not toast");
+      assert.strictEqual(st.timers[st.timers.length - 1].ms, 15000);
+      blob.blobWriteLanded();
+      assert.strictEqual(refs.blobDirtyRef.current, false); assert.strictEqual(st.lastBlobFail(), ""); assert.strictEqual(refs.blobRetryRef.current, null);
+      assert.ok(st.cleared.includes(st.timers[st.timers.length - 1].id), "the armed blob retry was cleared");
+      refs.resyncPendingRef.current("online");
+      assert.strictEqual(st.ticks, 3, "nothing owed -> no tick");
+      assert.strictEqual(blob.blobWriteFailed("Save failed - retrying", true), true, "a new streak toasts again");
+      assert.strictEqual(st.timers[st.timers.length - 1].ms, 5000);
+      const nt = st.timers.length;
+      assert.strictEqual(blob.blobWriteFailed("Not saved - no permission", false), false);
+      assert.strictEqual(st.timers.length, nt, "a 403 / 401 arms no blob timer (retry false)");
+      refs.loadFailedRef.current = true; refs.resyncPendingRef.current("online");
+      assert.strictEqual(st.ticks, 3, "no re-send while the load is failed (unchanged gate)");
+    });
+    await acheckD("DF2 header: a later day 'Saved' does not clear the blob leg's red line - the day run's success sets its own line to '' and 'Saved', the blob's stays 'Save failed - retrying', syncFailLine reads 'Setup: Save failed - retrying' and 'Synced' is held back until both lines are ''", async () => {
+      const s = mkSession();
+      s.blob.blobWriteFailed("Save failed - retrying", true);
+      const d = mkDays();
+      d.refs.scheduleRef.current = EDIT;
+      const r = await d.fns.syncScheduleDays(EDIT);
+      assert.strictEqual(r.ok, true);
+      assert.strictEqual(d.st.lastFail(), ""); assert.ok(d.st.statuses.includes("Saved"));
+      const line = H.syncFailLine(d.st.lastFail(), s.st.lastBlobFail());
+      assert.strictEqual(line, "Setup: Save failed - retrying");
+      assert.ok(src.includes("{loaded && !saveStatus && !syncFail && daysReadOk && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Synced</span>}"), "Synced is gated on syncFail");
+      s.blob.blobWriteLanded();
+      assert.strictEqual(H.syncFailLine(d.st.lastFail(), s.st.lastBlobFail()), "");
+    });
+    await acheckD("DF2 'online': the listener effect registers ONE window 'online' handler that calls resyncPendingRef.current(\"online\") and its cleanup removes that same handler; public mode registers none", async () => {
+      if (liftErr2) throw liftErr2;
+      const calls = [], added = [], removed = [];
+      const win = { addEventListener: (t, f) => added.push([t, f]), removeEventListener: (t, f) => removed.push([t, f]) };
+      const eff = new Function("isPublicMode", "window", "resyncPendingRef", "return (" + onlineFn + ");");
+      const cleanup = eff(false, win, ref((s) => calls.push(s)))();
+      assert.strictEqual(added.length, 1); assert.strictEqual(added[0][0], "online");
+      added[0][1]();
+      assert.deepStrictEqual(calls, ["online"]);
+      cleanup();
+      assert.strictEqual(removed.length, 1); assert.strictEqual(removed[0][0], "online"); assert.strictEqual(removed[0][1], added[0][1], "the same handler is removed");
+      const none = [];
+      assert.strictEqual(eff(true, { addEventListener: (t) => none.push(t), removeEventListener: () => {} }, ref(() => {}))(), undefined);
+      assert.deepStrictEqual(none, []);
+    });
+    await acheckD("Faraz 9/29: leg 1 of the autosave (lifted) refuses exactly as before while loadFailedRef is up - no payload armed, no write timer - and while the schedule is unread (daysReadOk false) it leaves the header alone ('Schedule not loaded' stays; no 'Not saving - data failed to load'); once days were read it still says LOAD_FAILED_STATUS; with the load fine it arms the payload and syncs after 800 ms", async () => {
+      if (liftErr2) throw liftErr2;
+      const run = (loadFailed, daysRead) => {
+        const st = { status: [], error: [], timers: [], syncs: 0 };
+        const pendingSaveRef = ref(null);
+        const eff = new Function("loaded", "isPublicMode", "loadedAtRef", "loadFailedRef", "daysReadOkRef", "setSaveError", "setSaveStatus", "LOAD_FAILED_STATUS", "buildStateBundle", "pendingSaveRef", "payloadLooksWiped", "everHadRealDataRef", "setTimeout", "clearTimeout", "allowWipeSaveRef", "console", "syncScheduleDays", "return (" + legOneFn + ");");
+        eff(true, false, ref(0), ref(loadFailed), ref(daysRead), (v) => st.error.push(v), (s) => st.status.push(s), "Not saving - data failed to load", () => ({ schedule: EDIT, vacations: [], availability: [] }), pendingSaveRef,
+          () => false, ref(true), (fn, ms) => { st.timers.push({ fn, ms }); return 1; }, () => {}, ref(false), { warn: () => {} }, () => { st.syncs++; return Promise.resolve({ ok: true }); })();
+        return { st, pendingSaveRef };
+      };
+      const unread = run(true, false), read = run(true, true), fine = run(false, true);
+      assert.deepStrictEqual(unread.st.status, [], "unread: the header is not switched to 'Not saving'");
+      assert.strictEqual(unread.pendingSaveRef.current, null); assert.strictEqual(unread.st.timers.length, 0, "unread: refused - nothing armed, no write");
+      assert.deepStrictEqual(read.st.status, ["Not saving - data failed to load"]); assert.deepStrictEqual(read.st.error, [true]);
+      assert.strictEqual(read.pendingSaveRef.current, null); assert.strictEqual(read.st.timers.length, 0, "read once, later load failed: refused, and says so");
+      assert.ok(fine.pendingSaveRef.current, "load fine: the payload is armed"); assert.deepStrictEqual(fine.st.timers.map(t => t.ms), [800]);
+      fine.st.timers[0].fn(); await Promise.resolve(); await Promise.resolve();
+      assert.strictEqual(fine.st.syncs, 1); assert.strictEqual(fine.pendingSaveRef.current, null, "a run that landed releases the payload it was armed with");
+    });
+
+    check("DF2 pins: the per-day try maps a rejection to status 0 inside the wipe-gated loop (the gate still precedes the first write; one scheduleDaySyncRetry(); site after the 401/403 branch); the streak counts failed runs and only its first toasts; daySyncSettled ends it on a run that fails nothing (and on a run with nothing to write); the timer's delay is syncRetryDelay(daySyncStreakRef.current)", () => {
+      const fn = src.slice(src.indexOf("const syncScheduleDaysNow = async (nextSchedule, wipeGranted) => {"), src.indexOf("const scheduleDaySyncRetry = () => {"));
+      const gate = fn.indexOf("if (chk.wipe && !wipeGranted) {"), tryAt = fn.indexOf("      try {\n        if (ver === undefined) {"), catchAt = fn.indexOf('        r = { error: "network error: " + String((e && e.message) || e), status: 0 };');
+      assert.ok(gate > 0 && tryAt > gate && catchAt > tryAt, `wipe gate ${gate} < try ${tryAt} < status-0 catch ${catchAt}`);
+      assert.ok(fn.indexOf("if (r.error !== undefined) {") > catchAt, "the mapped rejection falls into the existing failed branch");
+      assert.ok(fn.includes("if (failed) daySyncStreakRef.current += 1;\n    const firstOfStreak = daySyncStreakRef.current === 1;"), "the streak");
+      assert.ok(fn.includes('      setDaySyncFail("Save failed - retrying");\n      if (firstOfStreak) showToast(failMsg, "error");\n      scheduleDaySyncRetry();'), "the retry branch: own line, one toast per streak, the timer");
+      assert.ok(fn.includes("if (changed.length === 0) { daySyncSettled(); return { ok: true, changed: 0 }; }") && fn.includes("    } else {\n      daySyncSettled();\n      if (written) {"), "daySyncSettled on both non-failing exits");
+      const ds = fn.slice(fn.indexOf("const daySyncSettled = () => {"), fn.indexOf("const prev = lastSyncRef.current || {};"));
+      assert.ok(ds.includes("daySyncStreakRef.current = 0;") && ds.includes("clearTimeout(daySyncRetryRef.current); daySyncRetryRef.current = null;") && ds.includes('setDaySyncFail("");'), "daySyncSettled: " + ds);
+      assert.ok(!/setSaveStatus\("Save failed/.test(fn) && !/setSaveError\(true\)/.test(fn.slice(fn.indexOf("lastSyncRef.current = persisted;"))), "the day leg's failures go to daySyncFail, not the transient status");
+      const sr = src.slice(src.indexOf("const scheduleDaySyncRetry = () => {"), src.indexOf("// Adopt the config blob field-by-field"));
+      assert.ok(sr.includes("}, syncRetryDelay(daySyncStreakRef.current));") && !sr.includes("}, 5000);"), "the backoff delay");
+    });
+    check("DF2 pins: blob leg - blobWriteLanded right after saveBlobNow returns, blobWriteFailed in the catch with the pinned status wording and a retry only when it can help (not denied / authFail); the poll re-fires an owed Setup write after its reads; the keepalive flush builds the current state when a leg still owes a write; the header shows syncFail (hdr-sync-failed) and the leg-1 release line is unchanged", () => {
+      const eff = src.slice(src.indexOf("    // Leg 2 - the config blob."), src.indexOf("  }, [loaded, surgeons, surgeonRules, groupRules, holidays, settings, lastPublished, lastGenerate, saveTick]);"));
+      assert.ok(eff.includes('const r = await saveBlobNow(payload, "autosave");\n        blobWriteLanded();'), "landed on every non-throwing exit");
+      assert.ok(eff.includes('const firstOfStreak = blobWriteFailed(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying", !denied && !authFail);'), "failed: the line, the owed flag, the retry rule");
+      const cat = eff.slice(eff.indexOf("} catch (e) {", eff.indexOf('await saveBlobNow(payload, "autosave")')));
+      assert.ok(!cat.includes("setSaveError(true)") && cat.includes('setSaveError(false); setSaveStatus("");'), "the blob leg's write failure goes to blobSyncFail, not the transient status (emptied)");
+      const ra = src.slice(src.indexOf("const refreshAll = async () => {"), src.indexOf("refreshDaysRef.current = refreshDays;"));
+      assert.ok(ra.indexOf('if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");') > ra.indexOf("await Promise.allSettled(["), "the poll re-sends an owed Setup write after its reads (not while the session is known dead)");
+      assert.ok(src.includes("    const payload = pendingSaveRef.current || ((blobDirtyRef.current || daySyncFail) ? buildStateBundle() : null);\n    if (!payload) return;"), "the keepalive flush");
+      assert.strictEqual(count("syncScheduleDays(payload.schedule).then((r) => { if (r && r.ok && pendingSaveRef.current === payload) pendingSaveRef.current = null; });"), 1, "leg 1's release (the line the owed-write test models)");
+      assert.ok(src.includes("  const syncFail = syncFailLine(daySyncFail, blobSyncFail);"), "one derived line");
+      assert.ok(src.includes('{syncFail && <span data-testid="hdr-sync-failed" role="status" aria-live="polite"'), "the header renders it");
+      assert.strictEqual(count('useEffect(() => {\n    if (isPublicMode) return;\n    const onOnline = () => resyncPendingRef.current("online");\n    window.addEventListener("online", onOnline);\n    return () => window.removeEventListener("online", onOnline);\n  }, []);'), 1, "one 'online' listener, cleaned up");
+    });
+    check("Faraz 9/29 pins: both autosave legs set LOAD_FAILED_STATUS only once the days were read (the refusal - the return - is unchanged); the header renders 'Schedule not loaded' whenever loaded && !daysReadOk, whatever saveStatus says", () => {
+      assert.strictEqual(count("if (daysReadOkRef.current) { setSaveError(true); setSaveStatus(LOAD_FAILED_STATUS); }"), 2);
+      assert.strictEqual(count("setSaveStatus(LOAD_FAILED_STATUS);"), 2);
+      assert.ok(src.includes('{loaded && !daysReadOk && <span data-testid="hdr-days-unread" style={{marginLeft:8,color:T.onNavy,fontWeight:700,fontSize:10}}>Schedule not loaded</span>}'), "the private header's unread line");
+      assert.strictEqual(count("{loaded && !saveStatus && !daysReadOk &&"), 0, "no longer hidden by a status");
+    });
+  })();
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
