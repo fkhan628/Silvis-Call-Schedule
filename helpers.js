@@ -1704,9 +1704,15 @@ function surgeonTextColor(c, code, dark) {
    normalizeMonths(); default = the schedule's span. opts.today (default
    todayCentral()): an unassigned slot before today renders an empty line
    (the P/B letter stays, no OPEN text, no red) - slotIsOpen decides. */
+// Group call (Faraz 9/29): the rule sentence's styles - appended only when the sentence is shown, so a disabled rule
+// leaves the share page and the printable month exactly as they were.
+const GROUP_CALL_SHARE_CSS = ".hd p.gc{margin-top:6px;color:#13294B;font-size:12px}\n";
+const GROUP_CALL_PRINT_CSS = "    .group-call-rule { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #3a2030; padding: 0 16px 8px; line-height: 1.35; }\n";
 function generateShareHTML(schedule, roster, opts) {
   const o = opts || {};
   const sched = schedule || {};
+  // opts.groupRules (Faraz 9/29): the group-call rule sentence under the title - text only, no names; nothing when disabled
+  const gcRule = groupCallRuleSentence(o.groupRules);
   const list = (roster || []).filter(r => r && r.id);
   const months = normalizeMonths(o.months, sched);
   const weekStartsOn = normalizeWeekStart(o.weekStartsOn);
@@ -1802,9 +1808,9 @@ body{font-family:'Outfit',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Hel
 <title>Silvis Call Schedule - ${escHtml(span)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
-<style>${css}</style></head>
+<style>${css}${gcRule ? GROUP_CALL_SHARE_CSS : ""}</style></head>
 <body>
-<div class="hd"><h1>Silvis Surgical Care - Trauma / Acute Care Surgery Call</h1><p>${escHtml(span)} &middot; primary (P, in Silvis) and backup (B) &middot; one 24-hour shift per day, 07:00 to 07:00${o.appUrl ? ` &middot; live schedule: <a href="${escHtml(o.appUrl)}">${escHtml(o.appUrl)}</a>` : ""}</p></div>
+<div class="hd"><h1>Silvis Surgical Care - Trauma / Acute Care Surgery Call</h1><p>${escHtml(span)} &middot; primary (P, in Silvis) and backup (B) &middot; one 24-hour shift per day, 07:00 to 07:00${o.appUrl ? ` &middot; live schedule: <a href="${escHtml(o.appUrl)}">${escHtml(o.appUrl)}</a>` : ""}</p>${gcRule ? `<p class="gc">${escHtml(gcRule)}</p>` : ""}</div>
 <div class="ro">Read-only snapshot generated ${escHtml(stamp)}. Changes made after this time are not shown - the live app is the source of truth.</div>
 <div class="lg">${legend}<span><span class="open">OPEN</span> = nobody assigned</span><span><span class="ext">Atwell (ext)</span> = external cover</span><span>Fri-Sun tinted = weekend unit</span><span>gold = holiday unit</span><span>VAC = on vacation</span></div>
 ${body}
@@ -1833,6 +1839,9 @@ function buildPrintableCalendarHTML(opts) {
   const vacations = o.vacations || {};
   const holByDay = holidayNameByDay(o.holidays);
   const today = todayOrCentral(o.today);
+  // Group call (Faraz 9/29): the rule sentence under each page's title - text only, no names; "" (nothing added) when
+  // groupRules.groupCall.enabled is false, so the document is then exactly what it was before
+  const gcRule = groupCallRuleSentence(o.groupRules);
   const MONTH_NAMES = EXPORT_MONTH_NAMES;
   const weekStartsOn = normalizeWeekStart(o.weekStartsOn);
   const startDow = weekStartsOn === "mon" ? 1 : 0; // the grid's first column, as Date#getDay
@@ -1932,6 +1941,7 @@ function buildPrintableCalendarHTML(opts) {
 
     let html = `<div class="page" data-month="${year}-${String(month + 1).padStart(2, "0")}">`;
     html += `<div class="month-title">${MONTH_NAMES[month]} ${year}</div>`;
+    if (gcRule) html += `<div class="group-call-rule">${escHtml(gcRule)}</div>`;
     html += `<div class="dow-row">`;
     weekdayLabels(weekStartsOn, ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]).forEach(d => html += `<div class="dow">${d}</div>`);
     html += `</div>`;
@@ -2017,7 +2027,7 @@ function buildPrintableCalendarHTML(opts) {
     .bar { position: absolute; height: 13px; line-height: 13px; font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 400; text-align: center; white-space: nowrap; overflow: hidden; border: 0.5px solid; letter-spacing: 0.2px; }
     .bar.vac-surgeon { background-image: repeating-linear-gradient(135deg, #c8d0dc 0px, #c8d0dc 3px, #bec6d2 3px, #bec6d2 4px); border-color: #98a0ac; color: #202020; }
     .footer { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #000; padding: 6px 0 8px; border-top: 1px solid #8a1838; }
-  `;
+  ` + (gcRule ? GROUP_CALL_PRINT_CSS : "");
 
   let pages = "";
   let y = startYear, m = startMonth;
@@ -3953,7 +3963,7 @@ if (typeof module !== "undefined" && module.exports) {
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
-    GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow,
+    GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow, GROUP_CALL_SHARE_CSS, GROUP_CALL_PRINT_CSS,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,

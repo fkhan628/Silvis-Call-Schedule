@@ -5404,7 +5404,7 @@ function CallSchedule() {
       downloadICS(generateICS(events, "Silvis Call - All"), icsFileName(null));
     } catch(e) { console.error("Group calendar export failed:", e); showToast("Calendar export failed: " + errText(e), "error"); }
   };
-  const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname, today: todayStr, weekStartsOn });
+  const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt: new Date(), appUrl: location.origin + location.pathname, today: todayStr, weekStartsOn, groupRules });
   const downloadSharePage = () => {
     if (refuseUnreadExport()) return;
     try {
@@ -5424,7 +5424,7 @@ function CallSchedule() {
   const openPrintable = () => {
     if (refuseUnreadExport()) return;
     try {
-      const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations, today: todayStr, weekStartsOn });
+      const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations, today: todayStr, weekStartsOn, groupRules });
       const w = window.open("", "_blank");
       if (!w) { showToast("Popup blocked - allow popups for this site and try again.", "error"); return; }
       w.document.open(); w.document.write(html); w.document.close();

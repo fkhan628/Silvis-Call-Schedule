@@ -828,6 +828,47 @@ check("M: an outside surgeon's id that is NOT in the roster list still renders (
   assert.ok(html.includes('<span data-kind="surgeon">11/12 x1</span>'), html);
 });
 
+/* ---- Group call (Faraz 9/29, Prompt 22): the rule sentence under the title of the share page and the printable month ---- */
+const GC_RULE = "Group call: weekdays until 5 PM, each provider takes their own patients' calls. Weeknights from 5 PM, weekends and holidays, the Trauma primary takes group call.";
+const gcOn = { groupCall: { enabled: true, ownPatientsUntil: "17:00", holidayUnitDaysAllDay: true } }, gcOff = { groupCall: { enabled: false } };
+const gcShare = (g) => H.generateShareHTML(schedule, roster, { months: ["2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5), today: TODAY_NOV, groupRules: g });
+const gcPrint = (g, n) => H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: n || 1, schedule, roster, holidays, vacations, today: TODAY_NOV, groupRules: g });
+check("Group call: the share page carries the rule sentence under its title (text only, no names); disabled = the page as it was", () => {
+  const on = gcShare(gcOn), off = gcShare(gcOff);
+  const esc = H.escHtml(GC_RULE);
+  assert.strictEqual(H.groupCallRuleSentence(gcOn), GC_RULE);
+  assert.ok(on.includes('</p><p class="gc">' + esc + "</p></div>"), "the sentence is the header's second paragraph (escaped once)");
+  assert.ok(esc.includes("patients&#39; calls"), "fixture: the apostrophe is escaped");
+  assert.strictEqual((on.match(/class="gc"/g) || []).length, 1, "once per page");
+  assert.ok(on.indexOf('class="gc"') < on.indexOf('<div class="ro">'), "under the title, above the read-only line");
+  assert.ok(!roster.some(r => esc.includes(r.name)), "no names in the sentence");
+  assert.ok(!/Group call/.test(off) && !/class="gc"/.test(off), "disabled: no sentence");
+  assert.strictEqual(on.replace('<p class="gc">' + esc + "</p>", "").replace(H.GROUP_CALL_SHARE_CSS, ""), off, "disabled leaves the page byte-for-byte as it was (the enabled page minus the sentence and its style)");
+  assert.ok(gcShare(undefined).includes('<p class="gc">'), "no groupRules = the code defaults (enabled)");
+  assert.ok(gcShare({ groupCall: { ownPatientsUntil: "18:00", holidayUnitDaysAllDay: false } }).includes("Weeknights from 6 PM and weekends, the Trauma primary takes group call."), "built from the data");
+  assert.ok(!/<script/i.test(on), "still no scripts");
+});
+check("Group call: the printable month carries the rule sentence under every page's title (text only); disabled = the document as it was", () => {
+  const on = gcPrint(gcOn, 2), off = gcPrint(gcOff, 2);
+  const esc = H.escHtml(GC_RULE);
+  assert.strictEqual((on.match(/<div class="group-call-rule">/g) || []).length, 2, "one per month page");
+  assert.ok(on.includes('<div class="month-title">November 2026</div><div class="group-call-rule">' + esc + "</div>") && on.includes('<div class="month-title">December 2026</div><div class="group-call-rule">' + esc + "</div>"), "directly under each month title");
+  assert.ok(on.includes(".group-call-rule {"), "its style");
+  assert.ok(!/group-call-rule|Group call/.test(off), "disabled: no sentence, no style");
+  assert.strictEqual(on.split('<div class="group-call-rule">' + esc + "</div>").join("").replace(H.GROUP_CALL_PRINT_CSS, ""), off, "disabled leaves the printable byte-for-byte as it was");
+  assert.ok(gcPrint(undefined).includes('<div class="group-call-rule">'), "no groupRules = the code defaults (enabled)");
+});
+check("Group call: the ER Call Panels export and the .ics builders do not change (no sentence, no group-call read)", () => {
+  assert.ok(!/Group call|group-call/i.test(H.buildErCallPanelsHTML(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV })), "ER panel HTML");
+  assert.ok(!/Group call/i.test(H.buildErCallPanelsText(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV })), "ER panel text");
+  for (const f of ["buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS"]) assert.ok(typeof H[f] === "function" && !/groupCall/.test(H[f].toString()), f + " reads no group call");
+});
+check("Group call: the app passes groupRules to both builders (index-source.html)", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "index-source.html"), "utf8");
+  assert.ok(/generateShareHTML\(schedule, surgeons, \{[^}]*weekStartsOn, groupRules \}\)/.test(src), "share page");
+  assert.ok(/buildPrintableCalendarHTML\(\{ startYear: calYear[^}]*weekStartsOn, groupRules \}\)/.test(src), "printable month");
+});
+
 livePanel().catch(e => { failed++; console.log("FAIL live ER panel\n     " + (e && e.message || e)); }).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
