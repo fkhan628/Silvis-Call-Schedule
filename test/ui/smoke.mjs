@@ -99,7 +99,7 @@
 //     the schedule - banner gone, "Synced", OPEN cells as the rows say
 //   - review 9/27 Do first 2: a day's CAS PATCH aborted at the network level
 //     (switch abortDayWrite, route.abort - a rejected fetch) shows the header's
-//     red "Save failed - retrying" (no "Synced") with one toast, the app's own
+//     red "Schedule: Save failed - retrying" (no "Synced") with one toast, the app's own
 //     5 s retry lands it as ONE PATCH ?version=eq.1 (v2); a second edit failing
 //     twice in a row toasts once, and the window 'online' event re-sends it at
 //     once as ONE PATCH ?version=eq.2 (v3) (day-write-network-failure.png)
@@ -1005,6 +1005,7 @@ const followsFixtureRows = () => {
   return followsFixture === "present" ? rows.map(r => ({ ...r, follows: followsStore[r.id] || [] })) : rows;
 };
 let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
+let failDaysSideReadAt = []; // review 9/30: when the failDaysFor page read availability / time_off (the forced autosave pass of the 9/29 check re-reads them)
 let failDaysFor = null, failDaysServed = 0;   // review 9/27 Do first 1 (9/28): the page whose schedule_days GETs answer 500 while set (from page load until the case's Retry step clears it)
 // Prompt 11 (factory reset): once the app's DELETE of every schedule_days row is
 // recorded, the table reads as EMPTY from then on and later CAS POSTs / PATCHes
@@ -1421,6 +1422,9 @@ const routeSupabase = async (route, scope) => {
   // before the page loads and cleared right before the Retry click, so the mount read AND the stored-session check's
   // re-read (reloadTrigger) both fail and the checks read a stable failed state (no read taken in, the banner up).
   // Each 500 served allows exactly one browser line + one app console.error.
+  // review 9/30: the days-fail page's availability / time_off reads are timestamped (answered as usual below) - the Faraz 9/29
+  // check proves its forced autosave pass came after the 3 s hydration window by them
+  if (failDaysFor && method === "GET" && (url.pathname === "/rest/v1/availability" || url.pathname === "/rest/v1/time_off") && req.frame().page() === failDaysFor) failDaysSideReadAt.push(Date.now());
   if (failDaysFor && method === "GET" && url.pathname === "/rest/v1/schedule_days" && req.frame().page() === failDaysFor) { failDaysServed++; daysFail500Lines++; daysFailAppLines++; return json(500, { code: "XX000", message: "harness: schedule_days first read forced to fail", details: null, hint: null }); }
   if (daysWiped && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     let rows = Object.values(dayStore).sort((a, b) => a.day < b.day ? -1 : 1);
@@ -4700,7 +4704,7 @@ try {
   // A row-less day of the edit month gets a backup (POST v1, lands); then a second backup edit whose CAS PATCH the
   // harness ABORTS (route.abort - the app's fetch rejects, as offline / DNS / a timeout do). Before Do first 2 that
   // threw past the failed branch: a toast only, no status, no retry, and the header kept "Synced". Now the header
-  // carries the day leg's red line "Save failed - retrying" (never "Synced") with ONE toast; the harness lets the
+  // carries the day leg's red line "Schedule: Save failed - retrying" (never "Synced") with ONE toast; the harness lets the
   // network back and the app's own 5 s retry lands the edit as ONE PATCH ?version=eq.1 (v2). Then a third edit fails
   // twice in a row (the 5 s retry is aborted too) with no second toast (one per failure streak), and the window
   // 'online' event re-sends it at once as ONE PATCH ?version=eq.2 (v3) - well inside the 15 s backoff. The whole step
@@ -4740,10 +4744,10 @@ try {
           const h1 = await hdr(), tA = (await toasts()).slice(t1), cell1 = await cellAttr(wd, "data-backup");
           abortDayWrite = null; // the network is back: the app's own retry must land it
           if (!sawAbort) fail(`Do first 2 (network failure): the ${wd} backup edit sent no schedule_days PATCH for the harness to abort: ` + JSON.stringify(dayWrites(w1).map(w => w.method + " " + w.path)));
-          else if (h1.failLine !== "Save failed - retrying" || /synced/i.test(h1.text)) fail(`Do first 2 (network failure): after the aborted PATCH the header must carry the red 'Save failed - retrying' and no 'Synced' (red line '${h1.failLine}', header '${h1.text.replace(/\s+/g, " ").slice(0, 120)}')`);
+          else if (h1.failLine !== "Schedule: Save failed - retrying" || /synced/i.test(h1.text)) fail(`Do first 2 (network failure): after the aborted PATCH the header must carry the red 'Schedule: Save failed - retrying' and no 'Synced' (red line '${h1.failLine}', header '${h1.text.replace(/\s+/g, " ").slice(0, 120)}')`);
           else if (tA.filter(t => t === NET_TOAST).length !== 1) fail("Do first 2 (network failure): expected exactly one 'check your connection' toast for the failure, got " + JSON.stringify(tA));
           else if (cell1 !== "s3") fail(`Do first 2 (network failure): the cell lost the edit (data-backup ${cell1})`);
-          else ok(`Do first 2 (network failure): ${wd} B -> Acton, its CAS PATCH aborted at the network level -> header 'Save failed - retrying' (no 'Synced'), one toast '${NET_TOAST}', the cell keeps the edit`);
+          else ok(`Do first 2 (network failure): ${wd} B -> Acton, its CAS PATCH aborted at the network level -> header 'Schedule: Save failed - retrying' (no 'Synced'), one toast '${NET_TOAST}', the cell keeps the edit`);
           await page.screenshot({ path: path.join(OUT, "day-write-network-failure.png"), fullPage: false });
           const landed = await waitFor(() => okPatches(w1).length > 0, 9000);
           await page.waitForTimeout(700);
@@ -4773,7 +4777,7 @@ try {
           const h2b = await hdr();
           if (!two) fail("Do first 2 (streak): the 5 s retry of the second aborted edit never went out: " + JSON.stringify(dayWrites(w2).map(w => `${w.method} ${w.path}${w.aborted ? " [aborted]" : ""}`)));
           else if (tB.filter(t => t === NET_TOAST).length !== 1) fail("Do first 2 (streak): two failed runs in a row must toast once, got " + JSON.stringify(tB));
-          else if (h2.failLine !== "Save failed - retrying" || /synced/i.test(h2.text)) fail(`Do first 2 (streak): the red line is gone mid-streak ('${h2.failLine}', header '${h2.text.replace(/\s+/g, " ").slice(0, 120)}')`);
+          else if (h2.failLine !== "Schedule: Save failed - retrying" || /synced/i.test(h2.text)) fail(`Do first 2 (streak): the red line is gone mid-streak ('${h2.failLine}', header '${h2.text.replace(/\s+/g, " ").slice(0, 120)}')`);
           else ok(`Do first 2 (streak): the ${wd} edit failed twice (the first send and the 5 s retry, both aborted) - ONE toast, the red line held`);
           if (!landed2) fail("Do first 2 ('online'): the window 'online' event did not re-send the failed edit within 3 s (the next backoff step is 15 s)");
           else if (ok2.length !== 1 || aborted2.some(w => w.path !== `/rest/v1/schedule_days?day=eq.${wd}&version=eq.2`) || ok2[0].path !== `/rest/v1/schedule_days?day=eq.${wd}&version=eq.2` || b2.version !== 3 || b2.backup_id !== "s2") fail("Do first 2 ('online'): expected every attempt against version 2 and ONE landed PATCH -> v3 with backup s2: " + JSON.stringify(dayWrites(w2).map(w => `${w.method} ${w.path}${w.aborted ? " [aborted]" : ""} ${w.body}`)));
@@ -9577,10 +9581,12 @@ try {
       await banner.waitFor({ timeout: 30000 });
       // The header is read as soon as the load finishes ("Connecting" gone), inside the app's 3 s hydration window, and
       // then sampled every 100 ms until the Retry below (well past that window). Faraz 9/29: while the schedule is unread
-      // the header keeps "Schedule not loaded" THROUGHOUT - the first autosave pass after the window no longer switches
-      // it to "Not saving - data failed to load" (autosave is refused exactly as before) - and never says "Synced".
+      // the header keeps "Schedule not loaded" THROUGHOUT - an autosave pass after the window (forced below by a Retry
+      // while the days still fail) no longer switches it to "Not saving - data failed to load" (autosave is refused
+      // exactly as before) - and never says "Synced".
       await pdf.waitForFunction(() => { const h = document.querySelector("[data-testid=app-header]"); return h && !/Connecting/.test(h.textContent); }, null, { timeout: 30000 });
       const hdrEarly = await pdf.$eval("[data-testid=app-header]", el => el.textContent); // textContent: the sub line is text-transform:uppercase
+      const hdrT0 = Date.now(); // node clock; loadedAtRef (the hydration window's start) is at or before it
       await pdf.evaluate(() => { window.__hdrSamples = []; const t0 = Date.now(); window.__hdrSampler = setInterval(() => { const h = document.querySelector("[data-testid=app-header]"); window.__hdrSamples.push({ ms: Date.now() - t0, text: h ? h.textContent : "" }); }, 100); });
       await pdf.click('button[data-tab="calendar"]').catch(() => {});
       await pdf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
@@ -9664,15 +9670,31 @@ try {
       await pdf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
       // Past the 3 s hydration window, so the Retry's parallel reads can re-run the autosave while loadFailedRef is
       // still up (the 9/28 race: 'Not saving - data failed to load' must not survive the days read landing).
-      await pdf.waitForTimeout(3300);
-      // Faraz 9/29: every header sample from the load to here (past the 3 s window) read "Schedule not loaded" - never
-      // "Not saving - data failed to load", never "Synced"
+      const sinceT0 = Date.now() - hdrT0;
+      if (sinceT0 < 3300) await pdf.waitForTimeout(3300 - sinceT0);
+      // Faraz 9/29 (review 9/30: the check must FORCE the pass it judges - nothing else re-runs an autosave leg in this
+      // window, so a header that switched on that pass went unseen). The banner's Retry, clicked while the switch is
+      // still on, runs the poll's full refreshAll: the schedule_days GET answers 500 again (loadFailedRef stays up, the
+      // banner stays) and loadAvailability sets a NEW availabilityRows array, which re-runs leg 1 of the autosave past
+      // the window. Before 9/29 that pass set 'Not saving - data failed to load'; the samples - taken until a second
+      // after the pass - must never show it. Proven by the harness: another forced 500 and an availability / time_off
+      // read after load + 3 s. (Checked against the mutant without the daysReadOkRef gate: this check FAILS there.)
+      const sidePre = failDaysSideReadAt.length, servedPre = failDaysServed;
+      const forceClick = await pdf.$eval("[data-testid=days-load-retry]", b => { if (b.disabled || !b.offsetParent) return `shown ${!!b.offsetParent}, disabled ${b.disabled}`; b.click(); return "clicked"; }).catch(e => "missing: " + errLine(e));
+      const forceToast = forceClick === "clicked" && await pdf.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Still couldn't load the schedule/.test(t.textContent || ""); }, undefined, { timeout: 20000 }).then(() => true).catch(() => false);
+      await pdf.waitForTimeout(1000); // the leg-1 pass on the new array, its status and the render - all inside the sampling
+      const forcedReads = failDaysSideReadAt.slice(sidePre).filter(t => t - hdrT0 > 3000);
       const samples = await pdf.evaluate(() => { clearInterval(window.__hdrSampler); return window.__hdrSamples || []; });
       const badSample = samples.find(x => !/Schedule not loaded/.test(x.text) || /Not saving/.test(x.text) || /synced/i.test(x.text));
       const spanMs = samples.length ? samples[samples.length - 1].ms : 0;
-      if (!samples.length || spanMs < 3300) fail(`days-fail (Faraz 9/29): the header was sampled for ${spanMs} ms only - expected past the 3 s autosave window`);
+      const lastReadMs = forcedReads.length ? forcedReads[forcedReads.length - 1] - hdrT0 : 0;
+      if (forceClick !== "clicked") fail("days-fail (Faraz 9/29): the Retry that forces the post-window autosave pass could not be clicked (" + forceClick + ")");
+      else if (!forceToast) fail("days-fail (Faraz 9/29): the forced Retry (days still failing) did not end with 'Still couldn't load the schedule'");
+      else if (failDaysServed <= servedPre) fail("days-fail (Faraz 9/29): the forced Retry served no further schedule_days 500 - the load did not stay failed");
+      else if (!forcedReads.length) fail(`days-fail (Faraz 9/29): no availability / time_off read after load + 3 s - the autosave pass was not forced past the window (${failDaysSideReadAt.length - sidePre} read(s) since the click)`);
+      else if (!samples.length || spanMs < lastReadMs + 800) fail(`days-fail (Faraz 9/29): the header was sampled to +${spanMs} ms only - expected past the forced pass (+${lastReadMs} ms) by 0.8 s`);
       else if (badSample) fail(`days-fail (Faraz 9/29): at +${badSample.ms} ms the header read '${badSample.text.replace(/\s+/g, " ").slice(0, 120)}' - it must keep 'Schedule not loaded' (no 'Not saving', no 'Synced') while the schedule is unread`);
-      else ok(`days-fail (Faraz 9/29): ${samples.length} header samples over ${Math.round(spanMs / 100) / 10} s from the load (past the 3 s window) all read 'Schedule not loaded' - never 'Not saving - data failed to load', never 'Synced'`);
+      else ok(`days-fail (Faraz 9/29): a Retry past the 3 s window (days still 500, ${forcedReads.length} availability/time_off re-read(s) from +${forcedReads[0] - hdrT0} ms) re-ran the autosave; ${samples.length} header samples over ${Math.round(spanMs / 100) / 10} s all read 'Schedule not loaded' - never 'Not saving - data failed to load', never 'Synced'`);
       // Retry -> the poll's refreshAll reads the rows; the banner goes and the calendar is the table's again.
       // The switch flips off right before the click, so every read up to here failed and the Retry is what recovers.
       // The click is dispatched on the button itself in the same step (after checking it is shown and enabled): a 60 s
@@ -9687,7 +9709,8 @@ try {
       // The banner comes down as soon as the days read lands, but retryDaysLoad toasts only after refreshAll has settled
       // EVERY parallel read (the blob and each secondary table) - wait for its toast, either verdict, not a fixed 400 ms
       // (a slow secondary read left the toast unset at the read, 9/29). The check below still requires 'Schedule loaded'.
-      await pdf.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Schedule loaded|Still couldn't load the schedule/.test(t.textContent || ""); }, undefined, { timeout: 20000 }).catch(() => {});
+      // Review 9/30: 'Schedule loaded' only - the forced Retry above left a "Still couldn't load" toast that may still be up.
+      await pdf.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Schedule loaded/.test(t.textContent || ""); }, undefined, { timeout: 20000 }).catch(() => {});
       await pdf.waitForTimeout(400);
       const after = await pdf.evaluate(() => ({
         hdr: (document.querySelector("[data-testid=app-header]") || { textContent: "" }).textContent, // textContent (the sub line is uppercased by CSS)

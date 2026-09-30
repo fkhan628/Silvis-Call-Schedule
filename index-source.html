@@ -478,6 +478,28 @@ function CallSchedule() {
   const blobDirtyRef = useRef(false);
   const blobFailStreakRef = useRef(0);
   const blobRetryRef = useRef(null);
+  // Review of Do first 2 (9/30): a streak is a run of failures of ONE kind ("retry" - a network error / 5xx - "401",
+  // "403"): a failure of another kind starts a new streak, so it toasts and its backoff starts at 5 s (a network
+  // failure after an expired-session 401 used to stay silent and wait 15 s).
+  const daySyncFailKindRef = useRef(null);
+  const blobFailKindRef = useRef(null);
+  // Review of Do first 2 (9/30): the write-retry state belongs to the account that owed the writes. clearWriteRetryTimers
+  // stops both retry timers (sign-out: nothing fires into a signed-out page; the owed flag stays for the SAME account
+  // signing back in, whose re-read re-sends it). resetWriteRetryState also drops what is owed, the streaks and both red
+  // lines - a switch to a DIFFERENT account (adoptSignedInUser, beside the A3 drop of the armed payload): otherwise the
+  // blob retry timer, the 'online' event, the 60 s poll or the keepalive flush would send the previous account's
+  // failed change under the new account's JWT, and the new account would start with a red line and a streak running.
+  const clearWriteRetryTimers = () => {
+    if (daySyncRetryRef.current) { clearTimeout(daySyncRetryRef.current); daySyncRetryRef.current = null; }
+    if (blobRetryRef.current) { clearTimeout(blobRetryRef.current); blobRetryRef.current = null; }
+  };
+  const resetWriteRetryState = () => {
+    clearWriteRetryTimers();
+    blobDirtyRef.current = false;
+    daySyncStreakRef.current = 0; blobFailStreakRef.current = 0;
+    daySyncFailKindRef.current = null; blobFailKindRef.current = null;
+    setDaySyncFail(""); setBlobSyncFail("");
+  };
   // --- Data-loss guard refs ---
   // everHadRealDataRef arms the empty-save guard: it flips true the first time
   // we observe real operational data (schedule days / vacations / availability)
@@ -871,6 +893,14 @@ function CallSchedule() {
     if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
       switchedUserRef.current = true;
       pendingSaveRef.current = null;
+      // Review of Do first 2 (9/30): the previous account's failed writes go with its armed payload - synchronously,
+      // before the profile read below makes the new account a writer. The shared setup counts as unread until the
+      // re-run's read lands (never write a blob this session has not read - the previous account's local copy is not
+      // a read): blobLoadedRef off keeps the blob leg and the keepalive flush's blob leg shut, and the cleared stamp
+      // makes that read - or the poll's, if it fails - ADOPT the row instead of keeping the local copy.
+      resetWriteRetryState();
+      blobLoadedRef.current = false;
+      blobTsRef.current = null;
       setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
@@ -1019,6 +1049,7 @@ function CallSchedule() {
   };
 
   const handleSignOut = async () => {
+    clearWriteRetryTimers(); // review of Do first 2 (9/30): no write retry fires into the signed-out page
     await auth.signOut();
     biometric.unenroll();
     setAuthUser(null); setUserProfile(null); setProfileLoadFailed(false);
@@ -1748,7 +1779,7 @@ function CallSchedule() {
     // clears, the backoff restarts at 5 s, and a retry still armed is moot (the 'online' resync or a new edit got
     // there first).
     const daySyncSettled = () => {
-      daySyncStreakRef.current = 0;
+      daySyncStreakRef.current = 0; daySyncFailKindRef.current = null;
       if (daySyncRetryRef.current) { clearTimeout(daySyncRetryRef.current); daySyncRetryRef.current = null; }
       setDaySyncFail("");
     };
@@ -1764,6 +1795,10 @@ function CallSchedule() {
       setSaveError(true);
       setSaveStatus("Wipe blocked - schedule not changed");
       showToast("Blocked an unexpected schedule wipe - your saved schedule is safe. Reload to resync.", "error");
+      // Review of Do first 2 (9/30): nothing will retry a blocked wipe (a retry never carries the one-shot grant - an
+      // intentional clear that failed offline lands here on its retry), so a failure streak ends: no timer stays armed
+      // and the header shows the block, not "Save failed - retrying".
+      daySyncSettled();
       return { ok: false, error: "wipe blocked", blocked: true }; // lastSyncRef untouched; nothing written
     }
     const changed = [];
@@ -1827,7 +1862,12 @@ function CallSchedule() {
     // Review 9/27 Do first 2: the failure goes to the day leg's own line (daySyncFail - a later blob "Saved" cannot
     // clear it) and the transient saveStatus is emptied (a "Saving generated days" must not stay up over it). Only
     // the first failed run of a streak toasts; the red line stays until a run fails nothing (daySyncSettled).
-    if (failed) daySyncStreakRef.current += 1;
+    if (failed) {
+      // review of Do first 2 (9/30): a failure of another kind than the streak's starts a new one (see daySyncFailKindRef)
+      const kind = authFail ? String(authFail) : "retry";
+      daySyncStreakRef.current = daySyncFailKindRef.current === kind ? daySyncStreakRef.current + 1 : 1;
+      daySyncFailKindRef.current = kind;
+    }
     const firstOfStreak = daySyncStreakRef.current === 1;
     if (failed && authFail) {
       // Prompt 16 A3: a 401 (dead session - authFetch already tried one refresh) or a 403 (no permission) does NOT
@@ -2321,15 +2361,19 @@ function CallSchedule() {
   // content), landed earlier, or reloaded (a newer row replaced the change, and said so) - so nothing is owed.
   const blobWriteLanded = () => {
     blobDirtyRef.current = false;
-    blobFailStreakRef.current = 0;
+    blobFailStreakRef.current = 0; blobFailKindRef.current = null;
     if (blobRetryRef.current) { clearTimeout(blobRetryRef.current); blobRetryRef.current = null; }
     setBlobSyncFail("");
   };
-  const blobWriteFailed = (text, retry) => {
-    blobDirtyRef.current = true;
-    blobFailStreakRef.current += 1;
+  // kind (review of Do first 2, 9/30): "retry" (a network error / 5xx - the backoff timer), "401" (re-sent by a granted
+  // refresh or the sign-in's re-read), "403" (denied - NOT owed: no timer, and the poll / 'online' do not re-send a
+  // write this account may not make; only a new Setup edit or a reload tries again). A new kind starts a new streak.
+  const blobWriteFailed = (text, kind) => {
+    blobDirtyRef.current = kind !== "403";
+    blobFailStreakRef.current = blobFailKindRef.current === kind ? blobFailStreakRef.current + 1 : 1;
+    blobFailKindRef.current = kind;
     setBlobSyncFail(text);
-    if (retry) {
+    if (kind === "retry") {
       if (blobRetryRef.current) clearTimeout(blobRetryRef.current);
       blobRetryRef.current = setTimeout(() => {
         blobRetryRef.current = null;
@@ -2357,8 +2401,7 @@ function CallSchedule() {
       // -- Empty-save guard -- (the same predicate as leg 1; the one-shot bypass is consumed there)
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave (blob): refusing to write while the payload looks wiped over real data.");
-        setSaveError(true);
-        setSaveStatus("Save blocked - empty data not written");
+        setBlobSyncFail("Save blocked - empty data not written"); // review of Do first 2 (9/30): the blob leg's own red line - a day run cannot clear it
         settleWaiters(mine, false, "empty data was not written");
         return;
       }
@@ -2367,8 +2410,7 @@ function CallSchedule() {
       // would replace the real jsonb with defaults (finding safety-2).
       if (!blobLoadedRef.current) {
         console.warn("Autosave: the shared setup (call_schedule_data) has not loaded this session - blob write skipped so defaults cannot overwrite it.");
-        setSaveError(true);
-        setSaveStatus("Setup not saved - shared setup failed to load");
+        setBlobSyncFail("Not saved - shared setup not loaded"); // review of Do first 2 (9/30): the blob leg's own red line ("Setup: ...") - a day run cannot clear it
         settleWaiters(mine, false, "the shared setup did not load this session");
         return;
       }
@@ -2392,7 +2434,7 @@ function CallSchedule() {
         // kept owed (blobDirtyRef) and re-sent on the backoff / 'online' / the poll; a rejected fetch ("Failed to
         // fetch") is an ordinary failure here and retries. The transient saveStatus is emptied (see the day leg).
         setSaveError(false); setSaveStatus("");
-        const firstOfStreak = blobWriteFailed(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying", !denied && !authFail);
+        const firstOfStreak = blobWriteFailed(denied ? "Not saved - no permission" : authFail ? (auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry") : "Save failed - retrying", denied ? "403" : authFail ? "401" : "retry");
         // Prompt 16 A3: while the session-expired banner is up it carries this message - no toast beside it; a 401
         // without the banner (the refresh hit a network error) is re-sent by the next granted refresh. Do first 2:
         // one toast per failure streak.
@@ -2416,6 +2458,10 @@ function CallSchedule() {
   // has since replaced or released pendingSaveRef.
   resyncPendingRef.current = (source) => {
     if (isPublicMode || !loaded || loadFailedRef.current) return;
+    // Review of Do first 2 (9/30): signed out - no write can land ('online' and the poll still fire); a different account
+    // just signed in - the local map is still the previous account's until the re-run adopts the tables (switchedUserRef
+    // drops when that run ends), so nothing of it is re-sent under the new JWT.
+    if (!authUserRef.current || switchedUserRef.current) return;
     syncScheduleDays(scheduleRef.current);
     if (pendingSaveRef.current || blobDirtyRef.current) { console.warn(`Re-sync (${source}): re-sending the pending save.`); setSaveTick(t => t + 1); }
   };
@@ -2424,7 +2470,7 @@ function CallSchedule() {
     if (isPublicMode) return;
     const onOnline = () => resyncPendingRef.current("online");
     window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
+    return () => { window.removeEventListener("online", onOnline); clearWriteRetryTimers(); }; // review of Do first 2 (9/30): no retry outlives the app
   }, []);
 
   // --- Flush pending save when app is backgrounded or closing ---

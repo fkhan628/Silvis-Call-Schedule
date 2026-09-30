@@ -914,11 +914,11 @@ function syncRetryDelay(streak) {
   return SYNC_RETRY_MS[Math.min(n, SYNC_RETRY_MS.length) - 1];
 }
 // The header's failure line: the day leg (schedule_days) and the blob leg (the shared setup) each keep their own
-// unresolved failure, so a later "Saved" of one leg never hides the other's. "" when neither is failing.
+// unresolved failure, so a later "Saved" of one leg never hides the other's. "" when neither is failing. Each part
+// names its leg ("Schedule: " / "Setup: " - review of 9/30: a green "Saved" of the other leg can sit beside it).
 function syncFailLine(dayFail, blobFail) {
   const d = String(dayFail || ""), b = String(blobFail || "");
-  if (!b) return d;
-  return d ? d + " | Setup: " + b : "Setup: " + b;
+  return [d && "Schedule: " + d, b && "Setup: " + b].filter(Boolean).join(" | ");
 }
 
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
