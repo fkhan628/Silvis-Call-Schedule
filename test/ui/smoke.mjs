@@ -726,6 +726,9 @@ const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, 
 // pair, plus the pair from 07:00). The expectation is restated from the up-front rows and the blob roster for the
 // clock the PAGE reads (shiftClockCentral(new Date()) evaluated in the page), never a wall-clock constant, so the
 // check holds at any hour. The harness-opened slot (live mode) is >= today + 3, never the shift day or today.
+// Prompt 22 (group call): the same up-front blob read also keeps groupRules / holidays - the group-call expectation below
+// is the page's own groupCallNow over them (read = false when the read failed: the group-call checks then say so).
+const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined };
 const onCallRosterEarly = await (async () => {
   try {
     let d;
@@ -735,6 +738,7 @@ const onCallRosterEarly = await (async () => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       d = ((await r.json())[0] || {}).data; if (typeof d === "string") d = JSON.parse(d);
     }
+    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; }
     const m = {}; ((d && d.roster) || []).forEach(x => { if (x && x.id) m[x.id] = x.name; });
     return m;
   } catch (e) { console.log("     (roster read for the on-call-now check failed: " + (e && e.message || e) + " - names are not compared)"); return null; }
@@ -757,6 +761,56 @@ const readOnCallBanner = async (pg) => {
   const clk2 = await clockOf();
   if (clk2.shiftDay !== clk.shiftDay || clk2.calendarDay !== clk.calendarDay) return { crossed: true, clk, clk2 };
   return { clk, ...b };
+};
+// Prompt 22 (Faraz 9/29): the group-call line in the today banner. The expectation is the PAGE's own
+// groupCallNow(rows, new Date(), { groupRules, holidays }) over the rows and the blob the harness read up front (the rows
+// of yesterday / today / tomorrow - the harness-opened slot is >= today + 3, never among them), so the check holds at any
+// hour; the name is restated from the blob roster with the banner's HolderTag labels (OPEN, "<name> (ext)"). Skipped when
+// the page's clock crosses 07:00 or ownPatientsUntil while reading.
+const gcRowsNear = () => { const out = {}; for (let n = -1; n <= 1; n++) { const d = isoPlus(todayCentral, n); const r = liveEarlyByDay[d]; if (r) out[d] = { primary: r.primary_id || null, backup: r.backup_id || null, externalCover: r.external_cover || null }; } return out; };
+const GC_MIDDOT = String.fromCharCode(183); // the banner's &middot; (this file stays ASCII)
+const readGroupCallBanner = async (pg) => {
+  if (!gcBlobEarly.read) return { error: "the blob was not read up front - the group-call expectation cannot be restated" };
+  const arg = { rows: gcRowsNear(), groupRules: gcBlobEarly.groupRules, holidays: gcBlobEarly.holidays };
+  const ev = () => pg.evaluate((a) => {
+    if (typeof groupCallNow !== "function" || typeof groupCallRuleSentence !== "function") return { error: "helpers.groupCallNow / groupCallRuleSentence are not page globals" };
+    const g = groupCallNow(a.rows, new Date(), { groupRules: a.groupRules, holidays: a.holidays });
+    return { g: g ? { mode: g.mode, day: g.day, holder: g.holder, untilLabel: g.untilLabel } : null, sentence: groupCallRuleSentence(a.groupRules) };
+  }, arg);
+  const e1 = await ev();
+  if (e1.error) return e1;
+  await pg.waitForFunction((w) => { const el = document.querySelector("[data-testid=today-banner] [data-testid=group-call]"); return w ? !!el && el.getAttribute("data-group-mode") === w.mode && el.getAttribute("data-group-day") === w.day : !el; }, e1.g, { timeout: 40000 }).catch(() => {});
+  const b = await pg.evaluate(() => {
+    const el = document.querySelector("[data-testid=today-banner] [data-testid=group-call]"), rl = document.querySelector("[data-testid=today-banner] [data-testid=group-call-rule]");
+    return { present: !!el, mode: el ? el.getAttribute("data-group-mode") : null, day: el ? el.getAttribute("data-group-day") : null, text: el ? el.textContent.replace(/\s+/g, " ").trim() : "", rule: rl ? rl.textContent.trim() : null, overflow: el ? el.scrollWidth > el.clientWidth + 1 : false };
+  });
+  const e2 = await ev();
+  if (JSON.stringify(e2.g && [e2.g.mode, e2.g.day]) !== JSON.stringify(e1.g && [e1.g.mode, e1.g.day])) return { crossed: true };
+  return { want: e1, ...b };
+};
+const groupCallExpectText = (g) => {
+  if (!g) return null;
+  const v = g.holder;
+  const name = (v === null || v === undefined || v === "") ? "OPEN" : String(v).startsWith("ext:") ? String(v).slice(4) + " (ext)" : (onCallRosterEarly ? (onCallRosterEarly[v] || null) : null);
+  if (name === null) return null; // the roster read failed: names are not compared
+  return g.mode === "own" ? `Group call: own patients until ${g.untilLabel} ${GC_MIDDOT} from ${g.untilLabel}: ${name}` : `Group call now: ${name} (Trauma primary)`;
+};
+const checkGroupCallBanner = async (pg, label) => {
+  try {
+    const r = await readGroupCallBanner(pg);
+    if (r.error) { fail(`${label} group call: ${r.error}`); return; }
+    if (r.crossed) { console.log(`     (${label} group call: the Central clock crossed 07:00 / the own-patients boundary while reading - skipped this run)`); return; }
+    const g = r.want.g;
+    if (!g) { if (r.present || r.rule !== null) fail(`${label} group call: disabled in the blob, but the banner shows a group-call line`); else ok(`${label} group call: disabled in the blob - no line`); return; }
+    const want = groupCallExpectText(g);
+    if (!r.present) fail(`${label} group call: no group-call line in the today banner`);
+    else if (r.mode !== g.mode || r.day !== g.day) fail(`${label} group call: the banner says ${r.mode} / ${r.day}, the page's groupCallNow(rows, new Date()) says ${g.mode} / ${g.day}`);
+    else if (want && r.text !== want) fail(`${label} group call: expected '${want}', got '${r.text}'`);
+    else if (r.rule !== r.want.sentence) fail(`${label} group call: the rule sentence '${r.rule}' is not groupCallRuleSentence(blob.groupRules) '${r.want.sentence}'`);
+    else if (/@|\d{3}[-. )]\d{3}[-. ]\d{4}/.test(r.text + " " + r.rule)) fail(`${label} group call: contact data in the line: ${r.text}`);
+    else if (r.overflow) fail(`${label} group call: the line overflows its box: ${r.text}`);
+    else ok(`${label} group call: ${g.mode} (${g.day}) - '${r.text}'${want ? "" : " (names not compared)"}; the rule sentence is the data's`);
+  } catch (e) { fail(`${label} group call: ` + String(e && e.message || e).split("\n")[0]); }
 };
 // Smoke clean on main (9/29): the rules' own picture on a page - the App's rulesCtxState memo on the committed React tree
 // (the same walk as the window-reason and Item E2 blocks) and eligibility(ctx, day, role, id, opts).hard for each query
@@ -1474,6 +1528,8 @@ try {
       else ok("Share today: the shared text says 'now' and matches the banner: " + shared);
     }
   } catch (e) { fail("On call now / Share today: " + String(e && e.message || e).split("\n")[0]); }
+  // Prompt 22: the group-call line under it (the scheduler's page)
+  await checkGroupCallBanner(page, "scheduler");
 
   // Realtime mock joined?
   if (await waitFor(() => rt.joined, 15000)) ok(`realtime mock joined ${rt.topic} (frames: ${[...new Set(rt.frames)].join(", ")})`);
@@ -2026,6 +2082,14 @@ try {
     if (s.name !== "silvis-call-2026-10-01-2026-11-30.html") fail("share page filename: " + s.name);
     else if (grids !== 2 || tables !== 2 || /<script/i.test(s.text)) fail(`share page: ${grids} grid(s), ${tables} week-row table(s), script=${/<script/i.test(s.text)}`);
     else ok(`share page: ${s.name} - 2 month grids + 2 week-row tables, no scripts, ${s.text.length} bytes`);
+    // Prompt 22: the group-call rule sentence under the title, from the blob's groupRules (nothing when disabled)
+    {
+      const wantRule = gcBlobEarly.read ? HELPERS.groupCallRuleSentence(gcBlobEarly.groupRules) : null;
+      const gotRule = (s.text.match(/<p class="gc">([^<]*)<\/p>/g) || []);
+      if (wantRule === null) console.log("     (share page: the blob was not read up front - the group-call sentence is not compared)");
+      else if (wantRule === "" ? gotRule.length !== 0 : (gotRule.length !== 1 || gotRule[0] !== '<p class="gc">' + HELPERS.escHtml(wantRule) + "</p>")) fail(`share page: the group-call sentence should be ${wantRule ? "'" + wantRule + "' once" : "absent (disabled)"}, got ${JSON.stringify(gotRule)}`);
+      else ok(`share page: ${wantRule ? "the group-call sentence under the title - '" + wantRule.slice(0, 60) + "...'" : "group call disabled - no sentence"}`);
+    }
     const sharePage = await context.newPage();
     watchPage(sharePage, "share");
     await sharePage.goto(BASE + "test/ui/out/" + s.name, { waitUntil: "load" });
@@ -2056,6 +2120,14 @@ try {
     watchPage(pop, "print");
     await pop.waitForSelector(".page .cell .shift", { timeout: 8000 });
     const printTitle = await pop.title();
+    // Prompt 22: the group-call rule sentence under every page's month title, from the blob's groupRules
+    {
+      const wantRule = gcBlobEarly.read ? HELPERS.groupCallRuleSentence(gcBlobEarly.groupRules) : null;
+      const pr = await pop.evaluate(() => ({ pages: document.querySelectorAll(".page").length, rules: Array.from(document.querySelectorAll(".page > .month-title + .group-call-rule")).map(e => e.textContent), any: document.querySelectorAll(".group-call-rule").length }));
+      if (wantRule === null) console.log("     (printable: the blob was not read up front - the group-call sentence is not compared)");
+      else if (wantRule === "" ? pr.any !== 0 : (pr.rules.length !== pr.pages || pr.any !== pr.pages || pr.rules.some(t => t !== wantRule))) fail(`printable: the group-call sentence should be ${wantRule ? "under each of the " + pr.pages + " month title(s)" : "absent (disabled)"} - found ${pr.any} (${JSON.stringify(pr.rules.slice(0, 2))})`);
+      else ok(`printable view: ${wantRule ? "the group-call sentence under each of the " + pr.pages + " month title(s)" : "group call disabled - no sentence"}`);
+    }
     const printCell = await pop.$eval('.cell[data-day="2026-10-05"]', el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
     if (!/P (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell) || !/B (Khan|Burchett|Acton|Philip|Fierce|Sarkar|OPEN)/.test(printCell)) fail("printable 10/5 cell lacks 'P <Name>' / 'B <Name>': " + printCell); else ok(`printable view '${printTitle}': 10/5 cell reads "${printCell}"`);
     if (dated("2026-10-15", "the 'printable 10/15 P OPEN red' pin") && (liveOpenEarly("2026-10-15", "primary") || (console.log("     (printable: 10/15 primary is held live - the OPEN-red pin has nothing to check)"), false))) {
@@ -2813,6 +2885,9 @@ try {
           ok(`${T}: the page reads as a ${R.tag} - Time off tab '${toText}', ${tabs.includes("myschedule") ? "a Mine tab" : "no Mine tab"}${officeCard === null ? "" : officeCard ? ", the office's offers card" : ", no office offers card"}`);
         }
         await rp.waitForTimeout(800);
+        // Prompt 22: the group-call line on this role's Calendar (the office roles were moved to Time off by the role probe)
+        if (R.jwt) { await rp.click('button[data-tab="calendar"]').catch(() => {}); await rp.waitForSelector("[data-testid=today-banner]", { timeout: 8000 }).catch(() => {}); }
+        await checkGroupCallBanner(rp, T);
         const facts = await e3Facts(rp, [E3_VAC_DAY]);
         if (facts.error) throw new Error("rules context: " + facts.error);
         // the coverage strip
@@ -9268,6 +9343,7 @@ try {
       else if (want && pr.msg !== want) fail(`?public=1 On call now: expected '${want}', got '${pr.msg}'`);
       else ok(`?public=1 On call now: the banner names the ${pr.clk.shiftDay} shift: ${pr.msg}`);
     }
+    await checkGroupCallBanner(pub, "?public=1");
     // Item E (Faraz 9/24; Item E2 9/25): the public link gets the clean grid too - November 2026 (the month whose
     // derived / forecast days the scheduler's day editor was checked on above) carries no E / F / f badge, no
     // "East-derived:" hover bit and no East legend line.
@@ -9421,6 +9497,13 @@ try {
       else if (st.msg !== "Silvis call now: schedule not loaded" || st.shareDisabled !== true) fail(`days-fail: banner message '${st.msg}', Share today disabled ${st.shareDisabled}`);
       else if (st.covCount !== "" || st.through || st.lastPub || st.noDaysLine) fail(`days-fail: the coverage strip / empty-schedule line spoke about an unread schedule (count '${st.covCount}', published through ${st.through}, last published ${st.lastPub}, 'No schedule days' ${st.noDaysLine})`);
       else ok(`days-fail: the first schedule_days read answered 500 - banner "${st.banner.slice(0, 70)}", header 'Schedule not loaded', ${st.unreadSlots} unread-slot placeholder(s), no OPEN, Share today disabled, no coverage count`);
+      // Prompt 22: the group-call line names no one over the unread schedule (HolderTag's "not loaded", never a name or OPEN)
+      const gcDf = await pdf.evaluate(() => { const el = document.querySelector("[data-testid=today-banner] [data-testid=group-call]"); return el ? { text: el.textContent.replace(/\s+/g, " ").trim(), unread: !!el.querySelector("[data-testid=unread-holder]") } : null; });
+      const gcNames = onCallRosterEarly ? Object.values(onCallRosterEarly).filter(Boolean) : [];
+      if (gcBlobEarly.read && HELPERS.groupCallRules(gcBlobEarly.groupRules).enabled === false) { if (gcDf) fail("days-fail: group call is disabled in the blob, but the banner shows its line"); else ok("days-fail: group call disabled - no line"); }
+      else if (!gcDf) fail("days-fail: the banner has no group-call line");
+      else if (!gcDf.unread || /\bOPEN\b/.test(gcDf.text) || gcNames.some(n => gcDf.text.includes(n))) fail(`days-fail: the group-call line names someone (or OPEN) over an unread schedule: '${gcDf.text}'`);
+      else ok(`days-fail: the group-call line names no one - '${gcDf.text}'`);
       // a cell tap opens nothing while unread (the editor would read the day as OPEN)
       await pdf.click("[data-testid=cal-grid] .cal-cell >> nth=10");
       await pdf.waitForTimeout(300);
