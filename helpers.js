@@ -145,14 +145,14 @@ function shiftCentralParts(now) {
   let d = now instanceof Date ? now : (typeof now === "number" ? new Date(now) : new Date());
   if (isNaN(d.getTime())) { console.warn("shiftClockCentral: invalid time, using the current time:", now); d = new Date(); }
   try {
-    if (!shiftClockFormatter) shiftClockFormatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" });
+    if (!shiftClockFormatter) shiftClockFormatter = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
     const p = {};
     shiftClockFormatter.formatToParts(d).forEach(x => { if (x.type !== "literal") p[x.type] = x.value; });
-    const y = Number(p.year), m = Number(p.month), dd = Number(p.day), h = Number(p.hour);
-    if (y > 0 && m >= 1 && m <= 12 && dd >= 1 && dd <= 31 && h >= 0 && h <= 24) return { y, m, d: dd, h: h === 24 ? 0 : h };
+    const y = Number(p.year), m = Number(p.month), dd = Number(p.day), h = Number(p.hour), mi = Number(p.minute);
+    if (y > 0 && m >= 1 && m <= 12 && dd >= 1 && dd <= 31 && h >= 0 && h <= 24 && mi >= 0 && mi <= 59) return { y, m, d: dd, h: h === 24 ? 0 : h, mi };
     console.warn("shiftClockCentral: unexpected Intl parts, using the device clock:", p);
   } catch (e) { console.warn("shiftClockCentral: time zone data unavailable, using the device clock", e); }
-  return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), h: d.getHours() };
+  return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), h: d.getHours(), mi: d.getMinutes() };
 }
 // The ISO day `n` days after the civil date y-m-d (UTC arithmetic - no device zone, no DST).
 function shiftIsoPlus(y, m, d, n) {
@@ -216,6 +216,62 @@ function groupCallRules(groupRules) {
   return { enabled: bool(g.enabled, GROUP_CALL_DEFAULTS.enabled), ownPatientsUntil: until,
     untilMinutes: Number(until.slice(0, 2)) * 60 + Number(until.slice(3)),
     holidayUnitDaysAllDay: bool(g.holidayUnitDaysAllDay, GROUP_CALL_DEFAULTS.holidayUnitDaysAllDay) };
+}
+// groupCallTimeLabel("17:00") -> "5 PM"; "18:30" -> "6:30 PM"; "12:00" -> "12 PM"; "00:15" -> "12:15 AM". Anything that is
+// not "HH:MM" reads as the default time's label.
+function groupCallTimeLabel(hhmm) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(hhmm || "").trim()) || /^(\d\d):(\d\d)$/.exec(GROUP_CALL_DEFAULTS.ownPatientsUntil);
+  const h = Number(m[1]), mi = Number(m[2]);
+  return (h % 12 === 0 ? 12 : h % 12) + (mi ? ":" + m[2] : "") + (h < 12 ? " AM" : " PM");
+}
+// groupCallRuleSentence(groupRules) -> the rule in one or two sentences, built from the data (the banner, the printable
+// month and the share page all show it); "" when group call is disabled. Faraz 9/29's wording:
+//   "Group call: weekdays until 5 PM, each provider takes their own patients' calls. Weeknights from 5 PM, weekends and
+//    holidays, the Trauma primary takes group call."
+// holidayUnitDaysAllDay false drops "and holidays" (a weekday holiday then follows the weekday rule); a time at or before the
+// 07:00 handoff leaves no own-patients window, so the sentence says the Trauma primary takes group call at all hours.
+function groupCallRuleSentence(groupRules) {
+  const R = groupCallRules(groupRules);
+  if (!R.enabled) return "";
+  if (R.untilMinutes <= SHIFT_HANDOFF_HOUR * 60) return "Group call: the Trauma primary takes group call at all hours.";
+  const t = groupCallTimeLabel(R.ownPatientsUntil);
+  return `Group call: weekdays until ${t}, each provider takes their own patients' calls. ` +
+    (R.holidayUnitDaysAllDay ? `Weeknights from ${t}, weekends and holidays, the Trauma primary takes group call.` : `Weeknights from ${t} and weekends, the Trauma primary takes group call.`);
+}
+// groupCallNow(schedule, now, { groupRules, holidays }) -> who takes the clinic's patient calls at `now`, in Central time
+// whatever the device zone (shiftClockCentral's reading; `now` = a Date or epoch ms, default the current time):
+//   null  group call is disabled (groupRules.groupCall.enabled === false)
+//   { mode: "own", day, until, untilLabel, entry, holder }
+//         a Mon-Fri Central calendar day that is not a holiday-unit day (when holidayUnitDaysAllDay; holidayNameByDay's
+//         shapes), from the 07:00 handoff until ownPatientsUntil: each provider takes their own patients' calls; entry /
+//         holder = that day's primary, who takes group call from `until`
+//   { mode: "group", day, until: null, untilLabel: null, entry, holder }
+//         any other moment: the Trauma primary of onCallNow(...).current - day is its shift day (before 07:00, the previous
+//         calendar day), so a split weekend changes hands at 07:00
+// entry is the schedule row or null (a missing row) - the banner hands it to HolderTag with role "primary", which reads
+// loading / not loaded / OPEN / an external cover exactly as the On call now banner does; holder = dayHolder(entry,
+// "primary"): a roster id, "ext:<name>" or null (OPEN). Pure given `now`.
+function groupCallNow(schedule, now, opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  const R = groupCallRules(o.groupRules);
+  if (!R.enabled) return null;
+  // one instant for both readings (the own-window test and onCallNow), so a default `now` cannot straddle a boundary
+  let t = now;
+  if (t === undefined || t === null) t = Date.now();
+  else if (!(t instanceof Date) && typeof t !== "number") { console.warn("groupCallNow: `now` is neither a Date nor epoch ms, using the current time:", now); t = Date.now(); }
+  else if (isNaN(t instanceof Date ? t.getTime() : t)) { console.warn("groupCallNow: invalid time, using the current time:", now); t = Date.now(); }
+  const s = schedule && typeof schedule === "object" ? schedule : {};
+  const c = shiftCentralParts(t);
+  const cal = shiftIsoPlus(c.y, c.m, c.d, 0);
+  const dow = ttDow(cal);
+  const holidayDay = R.holidayUnitDaysAllDay && !!holidayNameByDay(o.holidays)[cal];
+  const minute = c.h * 60 + c.mi;
+  if (dow !== "Sat" && dow !== "Sun" && !holidayDay && minute >= SHIFT_HANDOFF_HOUR * 60 && minute < R.untilMinutes) {
+    const entry = s[cal] || null;
+    return { mode: "own", day: cal, until: R.ownPatientsUntil, untilLabel: groupCallTimeLabel(R.ownPatientsUntil), entry, holder: dayHolder(entry, "primary") };
+  }
+  const oc = onCallNow(s, t);
+  return { mode: "group", day: oc.shiftDay, until: null, untilLabel: null, entry: oc.current, holder: dayHolder(oc.current, "primary") };
 }
 
 // slotIsOpen(dateStr, holder, today) -> true iff the slot has NO holder
@@ -3897,7 +3953,7 @@ if (typeof module !== "undefined" && module.exports) {
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
-    GROUP_CALL_DEFAULTS, groupCallRules,
+    GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,

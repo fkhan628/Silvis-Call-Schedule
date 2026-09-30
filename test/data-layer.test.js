@@ -2787,6 +2787,121 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     }
     assert.deepStrictEqual(H.groupCallRules(require(path.join(ROOT, "docs", "silvis-seed.json")).groupRules), dflt, "the seed's block reads as the defaults");
   });
+  // groupCallNow fixtures: Mon 9/28 .. Mon 10/5 2026 (CDT = UTC-5), a split weekend (Sat s5, Sun s6), the seed's holiday units
+  const GC_SEED = require(path.join(ROOT, "docs", "silvis-seed.json"));
+  const gcSched = {
+    "2026-09-28": { primary: "s1", backup: "s2" }, "2026-09-29": { primary: "s2", backup: "s3" }, "2026-09-30": { primary: "s3", backup: "s4" },
+    "2026-10-01": { primary: "s4", backup: "s1" }, "2026-10-02": { primary: "s4", backup: "s2" }, "2026-10-03": { primary: "s5", backup: "s1" },
+    "2026-10-04": { primary: "s6", backup: "s2" }, "2026-10-05": { primary: "s1", backup: "s3" },
+    "2026-10-31": { primary: "s2", backup: "s1" }, "2026-11-01": { primary: "s3", backup: "s1" }, "2026-11-02": { primary: "s4", backup: "s5" },
+    "2026-11-25": { primary: "s1", backup: "s2" }, "2026-11-26": { primary: "s1", backup: "s3" }, "2026-11-27": { primary: "s1", backup: "s4" }, "2026-11-28": { primary: "s1", backup: "s5" },
+    "2026-12-24": { primary: "s2", backup: "s6" },
+    "2027-03-13": { primary: "s5", backup: "s1" }, "2027-03-14": { primary: "s6", backup: "s2" }, "2027-03-15": { primary: "s3", backup: "s4" },
+  };
+  const gcOpts = { groupRules: GC_SEED.groupRules, holidays: GC_SEED.holidays };
+  const gcAt = (utc, sched, opts) => H.groupCallNow(sched || gcSched, new Date(utc), opts || gcOpts);
+  const gcBrief = (g) => g && [g.mode, g.day, g.holder];
+  check("groupCallNow: weekday own-patients window 07:00 -> 17:00 (Tue 14:00 own, holder = Tue's primary from 5 PM; Tue 17:00 group, Tue's; Tue 03:00 group, Mon's until 07:00)", () => {
+    const tue = gcAt("2026-09-29T19:00:00Z");
+    assert.deepStrictEqual(tue, { mode: "own", day: "2026-09-29", until: "17:00", untilLabel: "5 PM", entry: gcSched["2026-09-29"], holder: "s2" }, "Tue 14:00 CDT");
+    assert.deepStrictEqual(gcAt("2026-09-29T22:00:00Z"), { mode: "group", day: "2026-09-29", until: null, untilLabel: null, entry: gcSched["2026-09-29"], holder: "s2" }, "Tue 17:00 CDT");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T21:59:00Z")), ["own", "2026-09-29", "s2"], "Tue 16:59");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T08:00:00Z")), ["group", "2026-09-28", "s1"], "Tue 03:00 = Mon's shift until 07:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T11:59:00Z")), ["group", "2026-09-28", "s1"], "Tue 06:59");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T12:00:00Z")), ["own", "2026-09-29", "s2"], "Tue 07:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-30T04:59:00Z")), ["group", "2026-09-29", "s2"], "Tue 23:59");
+  });
+  check("groupCallNow: Fri 16:59 own / 17:00 group; Sat and Sun group all day with each shift day's primary (a split weekend changes at 07:00); Mon 06:59 group (Sun's), Mon 07:00 own", () => {
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-02T21:59:00Z")), ["own", "2026-10-02", "s4"], "Fri 16:59");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-02T22:00:00Z")), ["group", "2026-10-02", "s4"], "Fri 17:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-03T08:00:00Z")), ["group", "2026-10-02", "s4"], "Sat 03:00 = Fri's shift");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-03T15:00:00Z")), ["group", "2026-10-03", "s5"], "Sat 10:00 - no own window on a Saturday");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-03T19:00:00Z")), ["group", "2026-10-03", "s5"], "Sat 14:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-04T11:59:00Z")), ["group", "2026-10-03", "s5"], "Sun 06:59 = Sat's primary");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-04T12:00:00Z")), ["group", "2026-10-04", "s6"], "Sun 07:00 = Sun's primary (split weekend)");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-04T19:00:00Z")), ["group", "2026-10-04", "s6"], "Sun 14:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-05T11:59:00Z")), ["group", "2026-10-04", "s6"], "Mon 06:59 = Sun's");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-10-05T12:00:00Z")), ["own", "2026-10-05", "s1"], "Mon 07:00");
+  });
+  check("groupCallNow: every holiday-unit day is group call all day (Thanksgiving Thu 11/26 and Fri 11/27 10:00; Christmas Eve Thu 12/24 10:00); Wed 11/25 (no unit) is a normal weekday", () => {
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-26T16:00:00Z")), ["group", "2026-11-26", "s1"], "Thanksgiving Thu 10:00 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-27T16:00:00Z")), ["group", "2026-11-27", "s1"], "Thanksgiving Fri 10:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-12-24T16:00:00Z")), ["group", "2026-12-24", "s2"], "Christmas Eve Thu 10:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-25T16:00:00Z")), ["own", "2026-11-25", "s1"], "Wed 11/25 10:00 - not in the unit");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-26T16:00:00Z", null, { groupRules: GC_SEED.groupRules, holidays: [{ name: "Thanksgiving", days: ["2026-11-26"] }] })), ["group", "2026-11-26", "s1"], "a flat unit list (holidayNameByDay's shapes)");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-26T16:00:00Z", null, { groupRules: GC_SEED.groupRules })), ["own", "2026-11-26", "s1"], "no holidays passed -> a weekday");
+  });
+  check("groupCallNow: both clock changes - fall back 2026-11-01 (01:30 CDT and CST group with Sat 10/31's primary; Mon 11/2 06:59 / 07:00 / 16:59 / 17:00 CST) and spring forward 2027-03-14 (Sun 03:00 CDT; Mon 3/15 06:59 / 07:00 / 16:59 / 17:00 CDT)", () => {
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-01T06:30:00Z")), ["group", "2026-10-31", "s2"], "01:30 CDT");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-01T07:30:00Z")), ["group", "2026-10-31", "s2"], "01:30 CST (the repeated hour)");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-01T13:00:00Z")), ["group", "2026-11-01", "s3"], "Sun 07:00 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-02T12:59:00Z")), ["group", "2026-11-01", "s3"], "Mon 06:59 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-02T13:00:00Z")), ["own", "2026-11-02", "s4"], "Mon 07:00 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-02T22:59:00Z")), ["own", "2026-11-02", "s4"], "Mon 16:59 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-02T23:00:00Z")), ["group", "2026-11-02", "s4"], "Mon 17:00 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-14T07:59:00Z")), ["group", "2027-03-13", "s5"], "Sun 01:59 CST");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-14T08:00:00Z")), ["group", "2027-03-13", "s5"], "Sun 03:00 CDT (one minute later)");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-15T11:59:00Z")), ["group", "2027-03-14", "s6"], "Mon 06:59 CDT");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-15T12:00:00Z")), ["own", "2027-03-15", "s3"], "Mon 07:00 CDT");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-15T21:59:00Z")), ["own", "2027-03-15", "s3"], "Mon 16:59 CDT");
+    assert.deepStrictEqual(gcBrief(gcAt("2027-03-15T22:00:00Z")), ["group", "2027-03-15", "s3"], "Mon 17:00 CDT");
+  });
+  check("groupCallNow reads Chicago whatever the device zone (TZ=UTC, Asia/Tokyo, America/Los_Angeles, Pacific/Honolulu child processes)", () => {
+    const cp = require("child_process");
+    const code = 'const H = require(process.argv[1]); const seed = require(process.argv[2]); const s = { "2026-09-28": { primary: "s1" }, "2026-09-29": { primary: "s2" }, "2026-11-26": { primary: "s1" } }; ' +
+      'console.log(JSON.stringify(["2026-09-29T19:00:00Z", "2026-09-29T21:59:00Z", "2026-09-29T22:00:00Z", "2026-09-29T08:00:00Z", "2026-09-29T12:00:00Z", "2026-11-26T16:00:00Z"].map(t => { const g = H.groupCallNow(s, new Date(t), { groupRules: seed.groupRules, holidays: seed.holidays }); return g.mode + " " + g.day + " " + g.holder; })));';
+    for (const zone of ["UTC", "Asia/Tokyo", "America/Los_Angeles", "Pacific/Honolulu"]) {
+      const r = cp.spawnSync(process.execPath, ["-e", code, path.join(ROOT, "helpers.js"), path.join(ROOT, "docs", "silvis-seed.json")], { env: { ...process.env, TZ: zone }, encoding: "utf8" });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.deepStrictEqual(JSON.parse(r.stdout.trim()), ["own 2026-09-29 s2", "own 2026-09-29 s2", "group 2026-09-29 s2", "group 2026-09-28 s1", "own 2026-09-29 s2", "group 2026-11-26 s1"], "TZ=" + zone);
+    }
+  });
+  check("groupCallNow: a missing row, an OPEN primary and an external cover (holder null / null / 'ext:<name>'; entry as stored, for HolderTag)", () => {
+    assert.deepStrictEqual(gcAt("2026-09-29T19:00:00Z", {}), { mode: "own", day: "2026-09-29", until: "17:00", untilLabel: "5 PM", entry: null, holder: null }, "a missing row (own)");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T22:00:00Z", {})), ["group", "2026-09-29", null], "a missing row (group)");
+    const open = { "2026-09-29": { primary: null, backup: "s3" } };
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T22:00:00Z", open)), ["group", "2026-09-29", null], "an OPEN primary");
+    const ext = { "2026-09-29": { primary: null, backup: "s3", externalCover: "Locum" } };
+    const g = gcAt("2026-09-29T22:00:00Z", ext);
+    assert.deepStrictEqual([g.holder, g.entry], ["ext:Locum", ext["2026-09-29"]], "an external cover stands in for the primary");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T19:00:00Z", ext)), ["own", "2026-09-29", "ext:Locum"], "own window: the cover takes group call from 5 PM");
+    assert.deepStrictEqual(gcBrief(H.groupCallNow(null, new Date("2026-09-29T22:00:00Z"), gcOpts)), ["group", "2026-09-29", null], "a null schedule");
+  });
+  check("groupCallNow: ownPatientsUntil '18:00' (17:30 own, 18:00 group, label 6 PM); holidayUnitDaysAllDay false (Thanksgiving Thu 10:00 own, Sat 11/28 group); enabled false -> null; no groupRules -> the defaults", () => {
+    const six = { groupRules: { groupCall: { enabled: true, ownPatientsUntil: "18:00", holidayUnitDaysAllDay: true } }, holidays: GC_SEED.holidays };
+    const g1730 = gcAt("2026-09-29T22:30:00Z", null, six);
+    assert.deepStrictEqual([g1730.mode, g1730.until, g1730.untilLabel, g1730.holder], ["own", "18:00", "6 PM", "s2"], "Tue 17:30 with 18:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T23:00:00Z", null, six)), ["group", "2026-09-29", "s2"], "Tue 18:00 with 18:00");
+    const noHol = { groupRules: { groupCall: { holidayUnitDaysAllDay: false } }, holidays: GC_SEED.holidays };
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-26T16:00:00Z", null, noHol)), ["own", "2026-11-26", "s1"], "Thanksgiving Thu 10:00 follows the weekday rule");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-26T23:00:00Z", null, noHol)), ["group", "2026-11-26", "s1"], "... group from 17:00");
+    assert.deepStrictEqual(gcBrief(gcAt("2026-11-28T16:00:00Z", null, noHol)), ["group", "2026-11-28", "s1"], "Sat 11/28 is a weekend");
+    assert.strictEqual(gcAt("2026-09-29T19:00:00Z", null, { groupRules: { groupCall: { enabled: false } }, holidays: GC_SEED.holidays }), null, "enabled false -> null");
+    assert.deepStrictEqual(gcBrief(H.groupCallNow(gcSched, new Date("2026-09-29T19:00:00Z"))), ["own", "2026-09-29", "s2"], "no opts -> the defaults (and no holidays)");
+    const early = { groupRules: { groupCall: { ownPatientsUntil: "06:00" } } };
+    assert.deepStrictEqual(gcBrief(gcAt("2026-09-29T15:00:00Z", null, early)), ["group", "2026-09-29", "s2"], "a time at or before 07:00 leaves no own window");
+  });
+  check("groupCallNow: epoch ms equals the Date; a non-Date `now` and an invalid Date warn and read the current time", () => {
+    assert.deepStrictEqual(H.groupCallNow(gcSched, Date.parse("2026-09-29T19:00:00Z"), gcOpts), gcAt("2026-09-29T19:00:00Z"), "epoch ms");
+    const orig = console.warn; const seen = [];
+    console.warn = (...a) => { seen.push(a.join(" ")); };
+    try { H.groupCallNow(gcSched, "2026-09-29T19:00:00Z", gcOpts); H.groupCallNow(gcSched, new Date("x"), gcOpts); } finally { console.warn = orig; }
+    assert.strictEqual(seen.filter(s => /groupCallNow: `now` is neither|groupCallNow: invalid time/.test(s)).length, 2, JSON.stringify(seen));
+    assert.strictEqual(seen.length, 2, "one warning each - onCallNow is handed the resolved instant: " + JSON.stringify(seen));
+  });
+  check("groupCallTimeLabel / groupCallRuleSentence: '5 PM' wording from the data (Faraz 9/29), 'and holidays' only with holidayUnitDaysAllDay, '' when disabled", () => {
+    assert.deepStrictEqual(["17:00", "18:30", "12:00", "00:15", "09:05", "junk", null].map(H.groupCallTimeLabel), ["5 PM", "6:30 PM", "12 PM", "12:15 AM", "9:05 AM", "5 PM", "5 PM"]);
+    assert.strictEqual(H.groupCallRuleSentence(GC_SEED.groupRules), "Group call: weekdays until 5 PM, each provider takes their own patients' calls. Weeknights from 5 PM, weekends and holidays, the Trauma primary takes group call.");
+    assert.strictEqual(H.groupCallRuleSentence(undefined), H.groupCallRuleSentence(GC_SEED.groupRules), "absent -> the defaults' sentence");
+    assert.strictEqual(H.groupCallRuleSentence({ groupCall: { ownPatientsUntil: "18:00" } }), "Group call: weekdays until 6 PM, each provider takes their own patients' calls. Weeknights from 6 PM, weekends and holidays, the Trauma primary takes group call.");
+    assert.strictEqual(H.groupCallRuleSentence({ groupCall: { holidayUnitDaysAllDay: false } }), "Group call: weekdays until 5 PM, each provider takes their own patients' calls. Weeknights from 5 PM and weekends, the Trauma primary takes group call.");
+    assert.strictEqual(H.groupCallRuleSentence({ groupCall: { enabled: false } }), "");
+    assert.strictEqual(H.groupCallRuleSentence({ groupCall: { ownPatientsUntil: "07:00" } }), "Group call: the Trauma primary takes group call at all hours.");
+    assert.ok(!/@|\d{3}[-. ]\d{3}[-. ]\d{4}/.test(H.groupCallRuleSentence(GC_SEED.groupRules)), "the rule only");
+  });
+  check("shiftClockCentral keeps its output shape after the group-call minute reading (the parts reader gained a minute; the four keys are unchanged)", () => {
+    assert.deepStrictEqual(Object.keys(H.shiftClockCentral(new Date("2026-09-29T19:07:00Z"))).sort(), ["beforeHandoff", "calendarDay", "handoffDay", "shiftDay"]);
+  });
   check("index-source.html: the today banner and Share today read the shift day (onCallNow); todayStr stays todayCentral(); the shift clock ticks and is cleaned up", () => {
     assert.ok(src.includes("  const todayStr = todayCentral();\n"), "todayStr stays the calendar date");
     assert.strictEqual(count("const todayAssign"), 0, "the calendar-day todayAssign is gone (the banner reads onCall)");
