@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+DWsnTq4352kTsKAXefx1yS9aZW0GQ/rBdoo6HW4dNc=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-K1U0ry7I2zpN6RfgdlP+kzsJeHF1Z3ZoaBX6pP9o6xk=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-jOkVAi4PKcJi8D69IXcSbxuXTH7LhTMuxlXe2xVWGYU=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-OgX/Q/cbQYfUPJurcTDH1AT3pwHUjnzNOoOlZjC2vGc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -119,7 +119,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.27d";
+    var APP_VERSION = "2026.09.29a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -318,9 +318,33 @@ function CallSchedule() {
   const [vacConflict, setVacConflict] = useState(null);
   const [vacLeadNote, setVacLeadNote] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [daysReadOk, setDaysReadOk] = useState(false);
+  const [daysLoadFailed, setDaysLoadFailed] = useState(false);
+  const [daysRetrying, setDaysRetrying] = useState(false);
+  const daysReadOkRef = useRef(false);
+  const markDaysRead = () => {
+    daysReadOkRef.current = true;
+    setDaysReadOk(true);
+    setDaysLoadFailed(false);
+    clearLoadFailedStatus();
+  };
+  const daysShown = loaded && daysReadOk;
+  const LOAD_FAILED_STATUS = "Not saving - data failed to load";
+  const saveStatusShownRef = useRef("");
+  const clearLoadFailedStatus = () => {
+    if (saveStatusShownRef.current === LOAD_FAILED_STATUS) setSaveError(false);
+    setSaveStatus(s => s === LOAD_FAILED_STATUS ? "" : s);
+  };
+  const DAYS_UNREAD_DAY_MSG = "The schedule has not loaded - retry first (the banner above); days cannot be opened until it loads.";
+  const refuseUnreadDay = () => {
+    if (!loaded || daysReadOkRef.current) return false;
+    showToast(DAYS_UNREAD_DAY_MSG, "error");
+    return true;
+  };
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveError, setSaveError] = useState(false);
+  saveStatusShownRef.current = saveStatus;
   const importFileRef = useRef(null);
   const lastSyncRef = useRef(null);
   const dayVersionsRef = useRef({});
@@ -402,6 +426,7 @@ function CallSchedule() {
   const [minePerson, setMinePerson] = useState("");
   const refreshDaysRef = useRef(null);
   const refreshTradesRef = useRef(null);
+  const refreshAllRef = useRef(null);
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState("");
@@ -530,6 +555,7 @@ function CallSchedule() {
     }
   }, [authUser, isPublicMode]);
   const [notifications, setNotifications] = useState([]);
+  const [notifsRead, setNotifsRead] = useState("unread");
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifLastSeen, setNotifLastSeen] = useState(() => {
     try {
@@ -653,6 +679,7 @@ function CallSchedule() {
     if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
       switchedUserRef.current = true;
       pendingSaveRef.current = null;
+      setNotifsRead("unread");
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -1700,6 +1727,7 @@ function CallSchedule() {
     lastSyncRef.current = JSON.parse(JSON.stringify(loadedDays.sched));
     lastDaysCountRef.current = loadedDays.count;
     daysTripwireWarnedRef.current = false;
+    markDaysRead();
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
   const mergeLoadedDays = fresh => {
@@ -1980,6 +2008,7 @@ function CallSchedule() {
   useEffect(() => {
     (async () => {
       loadFailedRef.current = false;
+      let daysReadThisRun = false;
       try {
         const {
           data: row
@@ -2006,6 +2035,8 @@ function CallSchedule() {
           mergeLoadedDays(loadedDays);
           syncScheduleDays(scheduleRef.current);
         } else adoptLoadedDays(loadedDays);
+        daysReadThisRun = true;
+        markDaysRead();
         try {
           const trades = await readAuthOnlyTable("shift_trade_requests", {
             order: "submitted_at.desc",
@@ -2020,9 +2051,13 @@ function CallSchedule() {
             order: "created_at.desc",
             limit: 50
           });
-          if (notifs) setNotifications(notifs);
+          if (notifs) {
+            setNotifications(notifs);
+            setNotifsRead("ok");
+          }
         } catch (e) {
           console.warn("Notifications load failed:", e);
+          setNotifsRead("failed");
         }
         await loadOffers(true);
         await loadPeriods(true);
@@ -2044,6 +2079,7 @@ function CallSchedule() {
       } catch (e) {
         console.error("Supabase load error (schedule_days):", e);
         loadFailedRef.current = true;
+        if (!daysReadThisRun) setDaysLoadFailed(true);
         showToast("Couldn't load the latest data - check your connection and reload.", "error");
       }
       await loadTimeOff();
@@ -2074,6 +2110,7 @@ function CallSchedule() {
         const fresh = await loadScheduleDays();
         const adopted = mergeLoadedDays(fresh);
         if (adopted !== false) loadFailedRef.current = false;
+        if (adopted !== false) markDaysRead();
       } catch (e) {
         console.warn("Background schedule refresh failed:", e);
       }
@@ -2095,9 +2132,13 @@ function CallSchedule() {
           order: "created_at.desc",
           limit: 50
         });
-        if (notifs) setNotifications(notifs);
+        if (notifs) {
+          setNotifications(notifs);
+          setNotifsRead("ok");
+        }
       } catch (e) {
         console.warn("Background notifications refresh failed:", e);
+        setNotifsRead("failed");
       }
     };
     const refreshMinVersion = async () => {
@@ -2124,6 +2165,7 @@ function CallSchedule() {
     };
     refreshDaysRef.current = refreshDays;
     refreshTradesRef.current = refreshTradeReqs;
+    refreshAllRef.current = refreshAll;
     const onDayChange = payload => {
       try {
         const nw = payload.new,
@@ -2380,7 +2422,7 @@ function CallSchedule() {
     if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return;
     if (loadFailedRef.current) {
       setSaveError(true);
-      setSaveStatus("Not saving - data failed to load");
+      setSaveStatus(LOAD_FAILED_STATUS);
       return;
     }
     const payload = buildStateBundle();
@@ -2433,7 +2475,7 @@ function CallSchedule() {
     }
     if (loadFailedRef.current) {
       setSaveError(true);
-      setSaveStatus("Not saving - data failed to load");
+      setSaveStatus(LOAD_FAILED_STATUS);
       settleBlobWaiters(false, "data failed to load");
       return;
     }
@@ -2813,6 +2855,7 @@ function CallSchedule() {
       showToast("Only the scheduler can change the schedule.", "error");
       return false;
     }
+    if (refuseUnreadDay()) return false;
     const before = schedule[day] || emptyDayAssignment();
     const after = _objectSpread(_objectSpread({}, emptyDayAssignment()), next);
     if (after.primary && after.primary === after.backup) {
@@ -3570,6 +3613,7 @@ function CallSchedule() {
   };
   const goToDay = day => {
     if (!suIsIso(day)) return;
+    if (refuseUnreadDay()) return;
     const d = parse(day);
     setCalMonth(d.getMonth());
     setCalYear(d.getFullYear());
@@ -6087,16 +6131,28 @@ function CallSchedule() {
     color: T.text
   } : {};
   const todayStr = todayCentral();
-  const onCall = onCallNow(schedule, Date.now());
-  const [, setShiftClockKey] = useState(() => {
-    const c = shiftClockCentral();
-    return c.calendarDay + "|" + c.shiftDay;
+  const clockNow = Date.now();
+  const onCall = onCallNow(schedule, clockNow);
+  const groupCall = groupCallNow(schedule, clockNow, {
+    groupRules,
+    holidays
   });
+  const groupCallOptsRef = useRef({
+    groupRules,
+    holidays
+  });
+  groupCallOptsRef.current = {
+    groupRules,
+    holidays
+  };
+  const shiftClockKeyNow = () => {
+    const c = shiftClockCentral();
+    const g = groupCallNow(null, Date.now(), groupCallOptsRef.current);
+    return c.calendarDay + "|" + c.shiftDay + "|" + (g ? g.mode : "off");
+  };
+  const [, setShiftClockKey] = useState(shiftClockKeyNow);
   useEffect(() => {
-    const tick = () => {
-      const c = shiftClockCentral();
-      setShiftClockKey(c.calendarDay + "|" + c.shiftDay);
-    };
+    const tick = () => setShiftClockKey(shiftClockKeyNow());
     const onVisible = () => {
       if (document.visibilityState === "visible") tick();
     };
@@ -6107,7 +6163,18 @@ function CallSchedule() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
-  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded);
+  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);
+  const retryDaysLoad = async () => {
+    if (daysRetrying || !refreshAllRef.current) return;
+    setDaysRetrying(true);
+    try {
+      await refreshAllRef.current();
+    } catch (e) {
+      console.warn("Retry (schedule not loaded): the refresh failed:", e);
+    }
+    setDaysRetrying(false);
+    if (daysReadOkRef.current) showToast("Schedule loaded.", "info");else showToast("Still couldn't load the schedule - check your connection and try again. Nothing was changed.", "error");
+  };
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState("");
   const copyText = async (text, label) => {
@@ -6133,6 +6200,10 @@ function CallSchedule() {
     }
   };
   const shareTonightMsg = async () => {
+    if (!daysShown) {
+      showToast("The schedule has not loaded - nothing to share yet.", "error");
+      return;
+    }
     const msg = buildTonightMsg();
     if (navigator.share) {
       try {
@@ -6153,7 +6224,14 @@ function CallSchedule() {
       showToast("Couldn't copy - long-press the message to copy it manually.", "error");
     }
   };
+  const EXPORT_UNREAD_TITLE = "The schedule has not loaded - nothing to export yet";
+  const refuseUnreadExport = () => {
+    if (daysShown) return false;
+    showToast(EXPORT_UNREAD_TITLE + ".", "error");
+    return true;
+  };
   const downloadMyCal = surgeonId => {
+    if (refuseUnreadExport()) return;
     const s = surgeons.find(x => x.id === surgeonId);
     if (!s) return;
     try {
@@ -6199,6 +6277,15 @@ function CallSchedule() {
       fontSize: 11
     }
   }, "loading");
+  const UnreadTag = () => React.createElement("span", {
+    "data-testid": "unread-holder",
+    title: "Schedule not loaded",
+    style: {
+      color: dkSubtext,
+      fontStyle: "italic",
+      fontSize: 11
+    }
+  }, "not loaded");
   const HolderTag = ({
     a,
     role,
@@ -6206,6 +6293,7 @@ function CallSchedule() {
   }) => {
     const v = dayHolder(a, role);
     if (!v && !loaded) return React.createElement(LoadingTag, null);
+    if (!v && !daysReadOk) return React.createElement(UnreadTag, null);
     if (!v) return React.createElement(OpenTag, null);
     if (typeof v === "string" && v.indexOf("ext:") === 0) return React.createElement("span", {
       style: {
@@ -6477,15 +6565,23 @@ function CallSchedule() {
   const prdOpenCounts = useMemo(() => {
     const out = {};
     if (!isScheduler) return out;
+    if (!daysShown) return out;
     (periodRows || []).forEach(p => {
       const a = String(p && p.start_day || "").slice(0, 10),
         b = String(p && p.end_day || "").slice(0, 10);
       if (suIsIso(a) && suIsIso(b)) out[p.id || a] = b >= todayStr ? openSlots(schedule, a, b, todayStr).length : 0;
     });
     return out;
-  }, [isScheduler, periodRows, schedule, todayStr]);
+  }, [isScheduler, periodRows, schedule, todayStr, daysShown]);
   const boardTail = useMemo(() => {
     const through = suAddDays(todayStr, 59);
+    if (!daysShown) return {
+      from: todayStr,
+      through,
+      primary: 0,
+      backup: 0,
+      unread: true
+    };
     const from = boardEnd && boardEnd >= todayStr ? suAddDays(boardEnd, 1) : todayStr;
     const listed = new Set(boardSlots.map(s => openSlotKey(s.day, s.role)));
     const counts = from <= through ? openSlotCounts(openSlots(schedule, from, through, todayStr).filter(s => !listed.has(openSlotKey(s.day, s.role)))) : {
@@ -6499,7 +6595,7 @@ function CallSchedule() {
       primary: counts.primary,
       backup: counts.backup
     };
-  }, [schedule, todayStr, boardEnd, boardSlots]);
+  }, [schedule, todayStr, boardEnd, boardSlots, daysShown]);
   const boardBlockMember = (day, role, id) => {
     const dow = parse(day).getDay();
     if (dow !== 5 && dow !== 6 && dow !== 0) return false;
@@ -6869,6 +6965,7 @@ function CallSchedule() {
   };
   const toolRangeEnd = () => fmt(new Date(calYear, calMonth + toolMonths, 0));
   const downloadGroupCal = () => {
+    if (refuseUnreadExport()) return;
     try {
       const events = buildICSEvents(schedule, null, surgeons, {});
       if (events.length === 0) showToast("No assignments on file - the calendar file is empty.", "info");
@@ -6885,9 +6982,11 @@ function CallSchedule() {
     generatedAt: new Date(),
     appUrl: location.origin + location.pathname,
     today: todayStr,
-    weekStartsOn
+    weekStartsOn,
+    groupRules
   });
   const downloadSharePage = () => {
+    if (refuseUnreadExport()) return;
     try {
       const ok = downloadTextFile(buildSharePage(), `silvis-call-${monthStartStr}-${toolRangeEnd()}.html`, "text/html");
       showToast(ok ? "Read-only page downloaded." : "Read-only page opened - use Share, then Save to Files.", "info");
@@ -6897,6 +6996,7 @@ function CallSchedule() {
     }
   };
   const copySharePage = async () => {
+    if (refuseUnreadExport()) return;
     try {
       const html = buildSharePage();
       if (!(navigator.clipboard && window.isSecureContext)) throw new Error("clipboard unavailable in this context");
@@ -6909,6 +7009,7 @@ function CallSchedule() {
     }
   };
   const openPrintable = () => {
+    if (refuseUnreadExport()) return;
     try {
       const html = buildPrintableCalendarHTML({
         startYear: calYear,
@@ -6919,7 +7020,8 @@ function CallSchedule() {
         holidays,
         vacations,
         today: todayStr,
-        weekStartsOn
+        weekStartsOn,
+        groupRules
       });
       const w = window.open("", "_blank");
       if (!w) {
@@ -6942,11 +7044,11 @@ function CallSchedule() {
     to: erTo,
     widened: false
   };
-  const erPanelHtml = useMemo(() => erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, {
+  const erPanelHtml = useMemo(() => daysShown && erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, {
     today: todayStr
-  }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr]);
+  }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr, daysShown]);
   const copyErForWord = async () => {
-    if (!erRangeOk) return;
+    if (!erRangeOk || refuseUnreadExport()) return;
     const html = erPanelHtml;
     const text = buildErCallPanelsText(schedule, surgeons, erFrom, erTo, {
       today: todayStr
@@ -6980,7 +7082,7 @@ function CallSchedule() {
     }
   };
   const downloadErHtml = () => {
-    if (!erRangeOk) return;
+    if (!erRangeOk || refuseUnreadExport()) return;
     try {
       downloadTextFile(buildErCallPanelsDocument(schedule, surgeons, erFrom, erTo, {
         today: todayStr
@@ -8431,7 +8533,13 @@ function CallSchedule() {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit"
-  })), !loaded && React.createElement(React.Fragment, null, " - Loading schedule")) : React.createElement(React.Fragment, null, "Silvis Surgical Care", saveStatus && React.createElement("span", {
+  })), !loaded && React.createElement(React.Fragment, null, " - Loading schedule"), loaded && !daysReadOk && React.createElement(React.Fragment, null, " - ", React.createElement("span", {
+    "data-testid": "hdr-days-unread",
+    style: {
+      color: T.onNavy,
+      fontWeight: 700
+    }
+  }, "Schedule not loaded"))) : React.createElement(React.Fragment, null, "Silvis Surgical Care", saveStatus && React.createElement("span", {
     role: "status",
     "aria-live": "polite",
     style: {
@@ -8440,13 +8548,21 @@ function CallSchedule() {
       fontWeight: 600,
       fontSize: 11
     }
-  }, saveStatus), loaded && !saveStatus && React.createElement("span", {
+  }, saveStatus), loaded && !saveStatus && daysReadOk && React.createElement("span", {
     style: {
       marginLeft: 8,
       color: T.navyMuted,
       fontSize: 10
     }
-  }, "Synced"), !loaded && React.createElement("span", {
+  }, "Synced"), loaded && !saveStatus && !daysReadOk && React.createElement("span", {
+    "data-testid": "hdr-days-unread",
+    style: {
+      marginLeft: 8,
+      color: T.onNavy,
+      fontWeight: 700,
+      fontSize: 10
+    }
+  }, "Schedule not loaded"), !loaded && React.createElement("span", {
     style: {
       marginLeft: 8,
       color: T.navyMuted,
@@ -8580,7 +8696,52 @@ function CallSchedule() {
       padding: "18px 14px 60px",
       position: "relative"
     }
-  }, !isPublicMode && showNotifs && React.createElement("div", {
+  }, daysLoadFailed && !daysReadOk && React.createElement("div", {
+    "data-testid": "days-load-failed",
+    role: "alert",
+    style: {
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap",
+      background: T.surface,
+      color: T.text,
+      border: "1px solid " + T.open,
+      borderLeft: "4px solid " + T.open,
+      borderRadius: 8,
+      padding: "10px 12px",
+      marginBottom: 12,
+      fontFamily: font
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: "1 1 240px",
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      color: T.open,
+      fontWeight: 800,
+      fontSize: 14
+    }
+  }, "Schedule not loaded"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      lineHeight: 1.5,
+      marginTop: 2
+    }
+  }, "The schedule could not be read, so no one's call is shown - a slot marked \"not loaded\" is not open. Check your connection, then retry. Nothing was changed.")), React.createElement("button", {
+    type: "button",
+    "data-testid": "days-load-retry",
+    onClick: retryDaysLoad,
+    disabled: daysRetrying,
+    style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      padding: "8px 16px",
+      fontSize: 13,
+      minHeight: 40,
+      opacity: daysRetrying ? 0.6 : 1
+    })
+  }, daysRetrying ? "Retrying..." : "Retry")), !isPublicMode && showNotifs && React.createElement("div", {
     "data-testid": "notif-panel",
     style: {
       position: "absolute",
@@ -8638,13 +8799,15 @@ function CallSchedule() {
       color: "#8a94a0"
     }
   }, "x"))), myNotifications.length === 0 ? React.createElement("p", {
+    "data-testid": "notif-empty",
+    "data-read": notifsRead,
     style: {
       color: "#8a94a0",
       fontSize: 13,
       textAlign: "center",
       padding: 20
     }
-  }, "No notifications yet") : myNotifications.map(n => {
+  }, notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ? "Couldn't load the notifications - they are retried every minute." : "Notifications not loaded yet.") : myNotifications.map(n => {
     const tabMap = {
       schedule_published: "calendar",
       schedule_changed: "calendar",
@@ -8985,6 +9148,7 @@ function CallSchedule() {
     summary: cardSummary(holidays === undefined ? "Not imported yet" : Object.keys(holidays && holidays.units || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet")
   }, React.createElement(HolidaysCard, {
     css: css,
+    dk: dk,
     holidays: holidays,
     groupRules: groupRules,
     schedule: schedule,
@@ -8993,7 +9157,8 @@ function CallSchedule() {
     onSave: saveHolidays,
     onEditDay: goToDay,
     showToast: showToast,
-    rulesImported: rulesImported
+    rulesImported: rulesImported,
+    daysUnread: loaded && !daysReadOk
   })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_pay",
@@ -9240,6 +9405,10 @@ function CallSchedule() {
       fontFamily: font
     }
   }, "Clear range")))), view === "calendar" && (() => {
+    const openCellDay = d => {
+      if (refuseUnreadDay()) return;
+      setEditorDay(d);
+    };
     const SlotLine = ({
       role,
       day,
@@ -9254,7 +9423,20 @@ function CallSchedule() {
         style: {
           background: T.skeleton
         }
-      });else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
+      });else if (!holder && !daysReadOk) body = React.createElement("span", {
+        className: "cal-pill",
+        "data-testid": "unread-slot",
+        title: "Schedule not loaded",
+        style: {
+          color: T.muted,
+          fontStyle: "italic",
+          fontWeight: 500
+        }
+      }, React.createElement("span", {
+        className: "cal-name"
+      }, "not loaded"), React.createElement("span", {
+        className: "cal-code"
+      }, "?"));else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
         className: "cal-pill cal-blank",
         "aria-hidden": "true"
       }, "\xA0");else if (!holder) body = React.createElement("span", {
@@ -9353,26 +9535,26 @@ function CallSchedule() {
           key: key,
           type: "button",
           "data-testid": key,
-          "data-count": loaded ? n : "",
-          "data-first": first || "",
-          disabled: !loaded || !n,
+          "data-count": daysShown ? n : "",
+          "data-first": daysShown ? first || "" : "",
+          disabled: !daysShown || !n,
           onClick: () => {
             if (!first) return;
             if (toBoard) openShiftsBoard();else goToDay(first);
           },
-          title: n ? toBoard ? "See the open shifts (first " + fmtMD(first) + ") on the Open shifts board" : "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days",
+          title: !daysShown ? loaded ? "Schedule not loaded" : "Loading schedule" : n ? toBoard ? "See the open shifts (first " + fmtMD(first) + ") on the Open shifts board" : "Open " + fmtMD(first) + " in the day editor" : "none in the next 60 days",
           style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
-            color: !loaded ? dkSubtext : n ? color : "#1a8040",
-            borderColor: !loaded ? "#c8d0d8" : n ? color : "#a0d8b0",
+            color: !daysShown ? dkSubtext : n ? color : "#1a8040",
+            borderColor: !daysShown ? "#c8d0d8" : n ? color : "#a0d8b0",
             fontFamily: font,
-            cursor: n ? "pointer" : "default"
+            cursor: daysShown && n ? "pointer" : "default"
           })
         }, React.createElement("span", {
           style: {
             fontFamily: mono,
             fontWeight: 800
           }
-        }, loaded ? n : "..."), " ", text, n ? " - first " + fmtMD(first) : "");
+        }, daysShown ? n : "..."), " ", text, daysShown && n ? " - first " + fmtMD(first) : "");
       };
       return React.createElement("div", {
         "data-testid": "coverage-strip",
@@ -9420,10 +9602,18 @@ function CallSchedule() {
           fontFamily: mono,
           fontWeight: 800
         }
-      }, eastVacUnreviewed), eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""), React.createElement("span", {
+      }, eastVacUnreviewed), eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""), daysShown && lastPublishedDay && React.createElement("span", {
+        "data-testid": "cov-published-through",
+        "data-value": lastPublishedDay,
+        title: "The last day of the published schedule's contiguous block - the Open shifts board runs to it"
+      }, "published through ", React.createElement("strong", {
+        style: {
+          fontFamily: mono
+        }
+      }, fmtMD(lastPublishedDay))), daysShown && lastPublished && lastPublished.at && React.createElement("span", {
         "data-testid": "cov-last-published",
-        "data-value": lastPublished && lastPublished.at || ""
-      }, "last published ", React.createElement("strong", null, lastPublished && lastPublished.at ? fmtAuditTime(lastPublished.at) : "never")), isScheduler && !isPublicMode && React.createElement("span", {
+        "data-value": lastPublished.at
+      }, "last published ", React.createElement("strong", null, fmtAuditTime(lastPublished.at))), isScheduler && !isPublicMode && React.createElement("span", {
         "data-testid": "cov-last-snapshot",
         "data-value": lastSnapshotAt || ""
       }, "last snapshot ", React.createElement("strong", null, snapshotAgeText(lastSnapshotAt))));
@@ -9584,11 +9774,16 @@ function CallSchedule() {
         color: dkSubtext
       }
     }, buildTonightMsg()), !isPublicMode && React.createElement("button", {
+      "data-testid": "share-today",
       onClick: shareTonightMsg,
+      disabled: !daysShown,
+      title: daysShown ? undefined : "The schedule has not loaded - nothing to share yet",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "4px 10px",
         fontSize: 11,
-        marginLeft: "auto"
+        marginLeft: "auto",
+        opacity: daysShown ? 1 : 0.5,
+        cursor: daysShown ? "pointer" : "default"
       })
     }, copied ? "Copied" : "Share today"), onCall.beforeHandoff && React.createElement("div", {
       "data-testid": "today-banner-next",
@@ -9608,9 +9803,42 @@ function CallSchedule() {
       a: onCall.next,
       role: "backup",
       small: true
-    }))), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
+    })), groupCall && React.createElement("div", {
+      "data-testid": "group-call",
+      "data-group-mode": groupCall.mode,
+      "data-group-day": groupCall.day,
+      style: {
+        flexBasis: "100%",
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, groupCall.mode === "own" ? React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call:"), " ", React.createElement("span", null, "own patients until ", groupCall.untilLabel, " · from ", groupCall.untilLabel, ":"), " ", React.createElement(HolderTag, {
+      a: groupCall.entry,
+      role: "primary",
+      small: true
+    })) : React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call now:"), " ", React.createElement(HolderTag, {
+      a: groupCall.entry,
+      role: "primary",
+      small: true
+    }), " ", React.createElement("span", null, "(Trauma primary)"))), groupCall && React.createElement("div", {
+      "data-testid": "group-call-rule",
+      style: {
+        flexBasis: "100%",
+        fontSize: 11,
+        lineHeight: 1.4,
+        color: dkSubtext
+      }
+    }, groupCallRuleSentence(groupRules))), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
       style: muted
-    }, "Loading schedule"), previewGen && React.createElement("div", {
+    }, "Loading schedule"), loaded && !daysReadOk && React.createElement("p", {
+      "data-testid": "cal-days-unread",
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic",
+        marginBottom: 8
+      })
+    }, "Schedule not loaded - the calendar shows no one's call until it loads (see Retry above)."), previewGen && React.createElement("div", {
       "data-testid": "preview-banner",
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         marginBottom: 10,
@@ -9645,7 +9873,7 @@ function CallSchedule() {
     }, "Discard"), React.createElement("button", {
       onClick: () => setView("setup"),
       style: css.mini(false)
-    }, "Diagnostics")), loaded && Object.keys(schedule).length === 0 && React.createElement("p", {
+    }, "Diagnostics")), daysShown && Object.keys(schedule).length === 0 && React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic",
         marginBottom: 8
@@ -9692,8 +9920,8 @@ function CallSchedule() {
       const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
       const pH = dayHolder(a, "primary");
       const bH = a ? a.backup : null;
-      const openP = slotIsOpen(d, pH, todayStr),
-        openB = slotIsOpen(d, bH, todayStr);
+      const openP = daysReadOk && slotIsOpen(d, pH, todayStr),
+        openB = daysReadOk && slotIsOpen(d, bH, todayStr);
       const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup));
       const dim = !inFilter || calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")));
       const isToday = d === todayStr;
@@ -9719,11 +9947,11 @@ function CallSchedule() {
         "data-backup": bH || "",
         "data-ext": a && a.externalCover || "",
         "data-open": (openP ? "P" : "") + (openB ? "B" : ""),
-        onClick: () => setEditorDay(d),
+        onClick: () => openCellDay(d),
         onKeyDown: e => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setEditorDay(d);
+            openCellDay(d);
           }
         },
         title: titleBits.join(" | "),
@@ -9914,7 +10142,15 @@ function CallSchedule() {
         fontStyle: "italic",
         color: dkSubtext
       })
-    }, "Loading schedule")), loaded && weekRows.map(r => React.createElement("tr", {
+    }, "Loading schedule")), loaded && !daysReadOk && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 3,
+      "data-testid": "week-rows-unread",
+      style: _objectSpread(_objectSpread({}, tdS), {}, {
+        fontFamily: font,
+        fontStyle: "italic",
+        color: dkSubtext
+      })
+    }, "Schedule not loaded")), daysShown && weekRows.map(r => React.createElement("tr", {
       key: r.monday,
       "data-week": r.monday,
       style: {
@@ -9970,19 +10206,24 @@ function CallSchedule() {
         "data-testid": "ics-" + s.code,
         "data-pill": "1",
         onClick: () => downloadMyCal(s.id),
-        title: "Download " + icsFileName(s),
+        disabled: !daysShown,
+        title: daysShown ? "Download " + icsFileName(s) : EXPORT_UNREAD_TITLE,
         style: _objectSpread(_objectSpread({}, css.badge(((_sMap$s$id = sMap[s.id]) === null || _sMap$s$id === void 0 ? void 0 : _sMap$s$id.idx) || 0, s)), {}, {
-          cursor: "pointer",
+          cursor: daysShown ? "pointer" : "default",
           padding: "4px 10px",
-          fontSize: 11
+          fontSize: 11,
+          opacity: daysShown ? 1 : 0.5
         })
       }, s.name);
     }), React.createElement("button", {
       "data-testid": "ics-all",
       onClick: downloadGroupCal,
+      disabled: !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
         padding: "5px 12px",
-        fontSize: 11
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
       })
     }, "Full group"))), React.createElement("div", {
       style: css.toolBlock
@@ -10020,23 +10261,32 @@ function CallSchedule() {
     }, n)))), React.createElement("button", {
       "data-testid": "share-download",
       onClick: downloadSharePage,
+      disabled: !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
         padding: "5px 12px",
-        fontSize: 11
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
       })
     }, "Share read-only page"), React.createElement("button", {
       "data-testid": "share-copy",
       onClick: copySharePage,
+      disabled: !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(copiedUrl === "share")), {}, {
         padding: "5px 12px",
-        fontSize: 11
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
       })
     }, copiedUrl === "share" ? "Copied" : "Copy"), React.createElement("button", {
       "data-testid": "print-open",
       onClick: openPrintable,
+      disabled: !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "5px 12px",
-        fontSize: 11
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
       })
     }, "Open printable view")), React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -10125,20 +10375,22 @@ function CallSchedule() {
     }, "Visible month"), React.createElement("button", {
       "data-testid": "er-copy",
       onClick: copyErForWord,
-      disabled: !erRangeOk,
+      disabled: !erRangeOk || !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(copiedUrl === "er")), {}, {
         padding: "5px 12px",
         fontSize: 11,
-        opacity: erRangeOk ? 1 : 0.5
+        opacity: erRangeOk && daysShown ? 1 : 0.5
       })
     }, copiedUrl === "er" ? "Copied" : "Copy for Word"), React.createElement("button", {
       "data-testid": "er-download",
       onClick: downloadErHtml,
-      disabled: !erRangeOk,
+      disabled: !erRangeOk || !daysShown,
+      title: daysShown ? undefined : EXPORT_UNREAD_TITLE,
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "5px 12px",
         fontSize: 11,
-        opacity: erRangeOk ? 1 : 0.5
+        opacity: erRangeOk && daysShown ? 1 : 0.5
       })
     }, "Download .html")), !erRangeOk && React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
@@ -10150,7 +10402,13 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         marginBottom: 6
       })
-    }, "Whole weeks: the table runs ", fmtMD(erSpan.from), " - ", fmtMD(erSpan.to), " (the Mon-Sun weeks around ", fmtMD(erFrom), " - ", fmtMD(erTo), "), so no covered day is left out of a week row."), React.createElement("div", {
+    }, "Whole weeks: the table runs ", fmtMD(erSpan.from), " - ", fmtMD(erSpan.to), " (the Mon-Sun weeks around ", fmtMD(erFrom), " - ", fmtMD(erTo), "), so no covered day is left out of a week row."), !daysShown && React.createElement("p", {
+      "data-testid": "er-preview-unread",
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic",
+        marginBottom: 6
+      })
+    }, loaded ? "Schedule not loaded - the ER Call Panels table appears once it loads." : "Loading schedule"), React.createElement("div", {
       "data-testid": "er-panel-preview",
       className: "table-wrap",
       ref: erPreviewRef,
@@ -10166,7 +10424,7 @@ function CallSchedule() {
         __html: erPanelHtml
       }
     })))));
-  })(), (view === "calendar" || view === "openshifts") && editorDay && React.createElement(DayEditor, {
+  })(), (view === "calendar" || view === "openshifts") && editorDay && (!loaded || daysReadOk) && React.createElement(DayEditor, {
     key: editorDay,
     day: editorDay,
     entry: schedule[editorDay] || null,
@@ -10263,7 +10521,7 @@ function CallSchedule() {
         fontSize: 11,
         color: T.muted
       }
-    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`)), React.createElement("p", {
+    }, !loaded ? "Loading schedule" : !daysReadOk ? "Schedule not loaded" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`)), React.createElement("p", {
       style: sectionNote
     }, "Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.", mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : "", isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : "", " The generator's reason for leaving a slot open appears after the next Generate."), React.createElement("div", {
       style: {
@@ -10364,7 +10622,12 @@ function CallSchedule() {
       style: {
         color: T.success
       }
-    }, !loaded ? "Loading schedule" : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."))), rows.map(s => {
+    }, !loaded ? "Loading schedule" : !daysReadOk ? React.createElement("span", {
+      "data-testid": "openshifts-unread",
+      style: {
+        color: T.open
+      }
+    }, "Schedule not loaded - the open shifts are not known until it loads.") : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."))), rows.map(s => {
       const key = openSlotKey(s.day, s.role);
       const elig = boardElig[key] || null;
       const eligible = elig ? elig.filter(o => o.ok) : [];
@@ -10486,7 +10749,17 @@ function CallSchedule() {
           padding: "6px 9px"
         })
       }, "Outside cover"))));
-    })))), React.createElement("div", {
+    })))), boardTail.unread ? React.createElement("div", {
+      "data-testid": "openshifts-tail",
+      "data-unread": "1",
+      style: {
+        fontSize: 11,
+        color: T.muted,
+        fontStyle: "italic",
+        marginTop: 8,
+        lineHeight: 1.5
+      }
+    }, loaded ? "Schedule not loaded - the days beyond the published range are not counted until it loads." : "Loading schedule") : React.createElement("div", {
       "data-testid": "openshifts-tail",
       "data-primary": boardTail.primary,
       "data-backup": boardTail.backup,
@@ -10829,7 +11102,12 @@ function CallSchedule() {
         style: {
           fontStyle: "italic"
         }
-      }, "Loading schedule") : !next ? React.createElement("span", null, "No upcoming call on file for ", nameOf(who), ".") : React.createElement(React.Fragment, null, React.createElement("div", {
+      }, "Loading schedule") : !daysReadOk ? React.createElement("span", {
+        "data-testid": "next-call-unread",
+        style: {
+          fontStyle: "italic"
+        }
+      }, "Schedule not loaded - the next call is not known until it loads.") : !next ? React.createElement("span", null, "No upcoming call on file for ", nameOf(who), ".") : React.createElement(React.Fragment, null, React.createElement("div", {
         style: {
           fontSize: 11,
           fontWeight: 700,
@@ -10858,9 +11136,13 @@ function CallSchedule() {
         }
       }, React.createElement("div", {
         style: css.subT
-      }, "Upcoming - next 90 days (", upcoming.length, ")"), React.createElement("span", {
+      }, "Upcoming - next 90 days (", daysShown ? upcoming.length : "...", ")"), React.createElement("span", {
         style: muted
-      }, "H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation")), upcoming.length === 0 ? React.createElement("p", {
+      }, "H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation")), !daysShown ? React.createElement("p", {
+        style: _objectSpread(_objectSpread({}, muted), {}, {
+          fontStyle: "italic"
+        })
+      }, loaded ? "Schedule not loaded." : "Loading schedule") : upcoming.length === 0 ? React.createElement("p", {
         style: _objectSpread(_objectSpread({}, muted), {}, {
           fontStyle: "italic"
         })
@@ -11020,10 +11302,12 @@ function CallSchedule() {
     }, pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)), React.createElement("button", {
       "data-testid": "download-my-calendar",
       onClick: () => downloadMyCal(pid),
-      title: "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars",
+      disabled: !daysShown,
+      title: !daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "5px 12px",
-        fontSize: 11
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
       })
     }, "Download my calendar"), React.createElement("button", {
       "data-testid": "copy-sync-url",
@@ -11658,6 +11942,7 @@ function CallSchedule() {
     payYear: payYear,
     onPayYear: setPayYear,
     onPayRefresh: () => loadPay(payYear, true),
+    daysUnread: loaded && !daysReadOk,
     loaded: loaded,
     eastDetailsVisible: eastDetailsVisible
   }), view === "settings" && !isPublicMode && React.createElement(React.Fragment, null, isScheduler && groupHeading("settings-group", "personal", "Your preferences", true), React.createElement("div", {
@@ -15998,6 +16283,7 @@ function TotalsCard({
   onPayYear,
   onPayRefresh,
   loaded,
+  daysUnread,
   eastDetailsVisible
 }) {
   const T = THEME[dk ? "dark" : "light"];
@@ -16140,6 +16426,10 @@ function TotalsCard({
   const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
   const periodText = range.label + (modeEff === "fairness" ? "" : "");
   const exportCsv = () => {
+    if (daysUnread) {
+      showToast("The schedule has not loaded - nothing to export yet.", "error");
+      return;
+    }
     try {
       const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
       const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
@@ -16261,10 +16551,13 @@ function TotalsCard({
   }), " add rows with the Generate preview applied"), modeEff !== "pay" && React.createElement("button", {
     "data-testid": "totals-csv",
     onClick: exportCsv,
+    disabled: !!daysUnread,
+    title: daysUnread ? "The schedule has not loaded - nothing to export yet" : undefined,
     style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
       padding: "5px 12px",
       fontSize: 11,
-      marginLeft: "auto"
+      marginLeft: "auto",
+      opacity: daysUnread ? 0.5 : 1
     })
   }, "Export CSV")), React.createElement("div", {
     "data-testid": "totals-period",
@@ -16273,7 +16566,12 @@ function TotalsCard({
       color: dk ? "#c0c0d8" : "#3a4a58",
       marginBottom: 8
     }
-  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : ""), !ctx && React.createElement("div", {
+  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : "", daysUnread ? React.createElement("strong", {
+    "data-testid": "totals-days-unread",
+    style: {
+      color: T.open
+    }
+  }, " Schedule not loaded - these counts are not the schedule's until it loads.") : null), !ctx && React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
@@ -19562,6 +19860,7 @@ function AvailabilityCard({
 }
 function HolidaysCard({
   css,
+  dk,
   holidays,
   groupRules,
   schedule,
@@ -19570,12 +19869,14 @@ function HolidaysCard({
   onSave,
   onEditDay,
   showToast,
-  rulesImported
+  rulesImported,
+  daysUnread
 }) {
   const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
     padding: "3px 6px",
     fontSize: 12
   });
+  const Tk = THEME[dk ? "dark" : "light"];
   const [draft, setDraft] = React.useState(() => suClone(holidays && holidays.units ? holidays : {
     units: {}
   }));
@@ -19700,7 +20001,7 @@ function HolidaysCard({
         borderRadius: 5,
         padding: "2px 7px"
       }
-    }, s.name, " ", c.major, "/", c.minor);
+    }, s.name, " ", daysUnread ? "?/?" : c.major + "/" + c.minor);
   })), years.map(y => React.createElement("div", {
     key: y,
     style: {
@@ -19802,7 +20103,16 @@ function HolidaysCard({
         width: 300,
         fontFamily: mono
       })
-    })), React.createElement("td", {
+    })), daysUnread ? React.createElement("td", {
+      style: {
+        fontSize: 12,
+        whiteSpace: "nowrap",
+        fontStyle: "italic",
+        color: Tk.muted
+      },
+      "data-testid": "hol-coverage",
+      "data-unread": "1"
+    }, "Schedule not loaded") : React.createElement("td", {
       style: {
         fontSize: 12,
         whiteSpace: "nowrap"
@@ -19819,10 +20129,13 @@ function HolidaysCard({
       }
     }, (u.days || []).slice(0, 4).map(d => React.createElement("button", {
       key: d,
+      "data-testid": "hol-edit-day",
       onClick: () => onEditDay(d),
-      title: "Open the day editor for " + d,
+      disabled: !!daysUnread,
+      title: daysUnread ? "The schedule has not loaded - days cannot be opened until it loads" : "Open the day editor for " + d,
       style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
-        marginRight: 3
+        marginRight: 3,
+        opacity: daysUnread ? 0.5 : 1
       })
     }, "Edit ", fmtMD(d))), React.createElement("button", {
       onClick: () => removeUnit(y, i),
