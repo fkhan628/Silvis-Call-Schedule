@@ -4768,14 +4768,24 @@ function CallSchedule() {
   // day's (helpers.js shiftClockCentral / onCallNow). ONLY the today banner,
   // Share today and the ?public=1 banner read it - todayStr (above) stays the
   // calendar date for the OPEN logic, the today ring and everything else.
-  const onCall = onCallNow(schedule, Date.now());
+  // Group call (Faraz 9/29, Prompt 22): who takes the clinic's patient calls now - each provider their own on a weekday
+  // from 07:00 until groupRules.groupCall.ownPatientsUntil (5 PM), else the Trauma primary (helpers.groupCallNow; null
+  // when disabled). One instant feeds both readings, so the two banner lines never straddle a boundary.
+  const clockNow = Date.now();
+  const onCall = onCallNow(schedule, clockNow);
+  const groupCall = groupCallNow(schedule, clockNow, { groupRules, holidays });
   // The shift clock ticks while the app stays open: every 30 s (and when the
-  // page becomes visible again) the Central calendar day + shift day are
-  // re-read; the state changes only when one of them moves (00:00 / 07:00),
-  // which re-renders the banner even when the 60 s poll finds nothing new.
-  const [, setShiftClockKey] = useState(() => { const c = shiftClockCentral(); return c.calendarDay + "|" + c.shiftDay; });
+  // page becomes visible again) the Central calendar day + shift day + the
+  // group-call mode are re-read; the state changes only when one of them moves
+  // (00:00 / 07:00 / ownPatientsUntil), which re-renders the banner even when
+  // the 60 s poll finds nothing new. The tick reads the rules through a ref
+  // (the effect runs once).
+  const groupCallOptsRef = useRef({ groupRules, holidays });
+  groupCallOptsRef.current = { groupRules, holidays };
+  const shiftClockKeyNow = () => { const c = shiftClockCentral(); const g = groupCallNow(null, Date.now(), groupCallOptsRef.current); return c.calendarDay + "|" + c.shiftDay + "|" + (g ? g.mode : "off"); };
+  const [, setShiftClockKey] = useState(shiftClockKeyNow);
   useEffect(() => {
-    const tick = () => { const c = shiftClockCentral(); setShiftClockKey(c.calendarDay + "|" + c.shiftDay); };
+    const tick = () => setShiftClockKey(shiftClockKeyNow());
     const onVisible = () => { if (document.visibilityState === "visible") tick(); };
     const shiftClockTimer = setInterval(tick, 30000);
     document.addEventListener("visibilitychange", onVisible);
@@ -6319,6 +6329,15 @@ function CallSchedule() {
                   <span>From 07:00:</span> <HolderTag a={onCall.next} role="primary" small/> <span>/</span> <HolderTag a={onCall.next} role="backup" small/>
                 </div>
               )}
+              {/* Group call (Faraz 9/29): who takes the clinic's patient calls now (groupCall = helpers.groupCallNow), then the rule sentence from the data; the name goes through HolderTag */}
+              {groupCall && (
+                <div data-testid="group-call" data-group-mode={groupCall.mode} data-group-day={groupCall.day} style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                  {groupCall.mode === "own"
+                    ? <><strong>Group call:</strong> <span>own patients until {groupCall.untilLabel} &middot; from {groupCall.untilLabel}:</span> <HolderTag a={groupCall.entry} role="primary" small/></>
+                    : <><strong>Group call now:</strong> <HolderTag a={groupCall.entry} role="primary" small/> <span>(Trauma primary)</span></>}
+                </div>
+              )}
+              {groupCall && <div data-testid="group-call-rule" style={{flexBasis:"100%",fontSize:11,lineHeight:1.4,color:dkSubtext}}>{groupCallRuleSentence(groupRules)}</div>}
             </div>
             {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (within groupRules.offerPeriods.noticeUrgentDaysBeforeClose, default 14); the full list is on Mine */}
             {offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}

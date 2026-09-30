@@ -2905,7 +2905,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("index-source.html: the today banner and Share today read the shift day (onCallNow); todayStr stays todayCentral(); the shift clock ticks and is cleaned up", () => {
     assert.ok(src.includes("  const todayStr = todayCentral();\n"), "todayStr stays the calendar date");
     assert.strictEqual(count("const todayAssign"), 0, "the calendar-day todayAssign is gone (the banner reads onCall)");
-    assert.ok(src.includes("  const onCall = onCallNow(schedule, Date.now());"), "onCall");
+    // 9/29 (deliberate pin change, Prompt 22): one instant (clockNow) feeds onCall and groupCall
+    assert.ok(src.includes("  const clockNow = Date.now();\n  const onCall = onCallNow(schedule, clockNow);\n  const groupCall = groupCallNow(schedule, clockNow, { groupRules, holidays });"), "onCall + groupCall from one instant");
     // 9/28 (deliberate pin change, review 9/27 Do first 1): daysReadOk is passed - a finished load whose schedule_days read
     // never landed reads "schedule not loaded", never OPEN
     assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);"), "the share text is helpers.onCallNowMsg");
@@ -2926,7 +2927,27 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const tk = src.slice(src.indexOf("  const [, setShiftClockKey] = useState("), src.indexOf("  const buildTonightMsg = () =>"));
     assert.ok(tk.includes("const shiftClockTimer = setInterval(tick, 30000);") && tk.includes('document.addEventListener("visibilitychange", onVisible);'), "the shift clock timer + visibility listener");
     assert.ok(tk.includes('return () => { clearInterval(shiftClockTimer); document.removeEventListener("visibilitychange", onVisible); };') && tk.includes("}, []);"), "the shift clock cleanup");
-    assert.ok(tk.includes('setShiftClockKey(c.calendarDay + "|" + c.shiftDay)'), "the tick changes state only when the calendar day or the shift day moves");
+    // 9/29 (deliberate pin change, Prompt 22): the key also carries the group-call mode, so the banner re-renders at
+    // ownPatientsUntil (5 PM) too; the tick reads the rules through a ref (the effect still runs once)
+    const kn = src.slice(src.indexOf("  const shiftClockKeyNow = () => {"), src.indexOf("\n", src.indexOf("  const shiftClockKeyNow = () => {")));
+    assert.ok(kn.includes('return c.calendarDay + "|" + c.shiftDay + "|" + (g ? g.mode : "off");') && kn.includes("groupCallNow(null, Date.now(), groupCallOptsRef.current)"), "the key = calendar day | shift day | group-call mode");
+    assert.ok(src.includes("  const groupCallOptsRef = useRef({ groupRules, holidays });\n  groupCallOptsRef.current = { groupRules, holidays };"), "the tick's rules ref follows every render");
+    assert.ok(tk.includes("const [, setShiftClockKey] = useState(shiftClockKeyNow);") && tk.includes("const tick = () => setShiftClockKey(shiftClockKeyNow());"), "the tick changes state only when the calendar day, the shift day or the group-call mode moves");
+  });
+  check("index-source.html (Prompt 22): the today banner carries group call - Faraz's wording, the name through HolderTag, the rule sentence from the data; Share today, the ER panels and the feeds are untouched", () => {
+    const b0 = src.indexOf('<div data-testid="today-banner"'), b1 = src.indexOf("{offerNoticeBox(offerNotices.filter(n => n.urgent), \"calendar\")}", b0);
+    const banner = src.slice(b0, b1);
+    const g0 = banner.indexOf("{groupCall && (");
+    assert.ok(g0 > banner.indexOf('data-testid="today-banner-next"'), "the group-call line sits inside the banner, after the On call now lines");
+    const gc = banner.slice(g0);
+    for (const w of ['data-testid="group-call" data-group-mode={groupCall.mode} data-group-day={groupCall.day}', '{groupCall.mode === "own"',
+      "<strong>Group call:</strong> <span>own patients until {groupCall.untilLabel} &middot; from {groupCall.untilLabel}:</span> <HolderTag a={groupCall.entry} role=\"primary\" small/>",
+      "<strong>Group call now:</strong> <HolderTag a={groupCall.entry} role=\"primary\" small/> <span>(Trauma primary)</span>",
+      '{groupCall && <div data-testid="group-call-rule"', "{groupCallRuleSentence(groupRules)}</div>}"]) assert.ok(gc.includes(w), "group call: " + w);
+    assert.ok(!gc.includes("nameOf(") && !gc.includes("Badge") && !gc.includes("slotIsOpen") && !gc.includes("todayStr"), "the name only through HolderTag (loading / not loaded / OPEN / external as the On call now banner); never the calendar day");
+    assert.ok(/flexBasis:"100%"[^>]*flexWrap:"wrap"/.test(gc.slice(0, gc.indexOf(">"))), "the line wraps at a phone width");
+    assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);") && !/groupCall/.test(H.onCallNowMsg.toString()), "Share today's text is unchanged (onCallNowMsg, no group call)");
+    for (const f of ["buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildIcs", "icsFor"]) if (typeof H[f] === "function") assert.ok(!/groupCall/.test(H[f].toString()), f + " does not read group call");
   });
   check("empty-schedule note and legend say OPEN is today onward", () => {
     assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");
