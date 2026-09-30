@@ -2771,6 +2771,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(H.onCallNowMsg(early, nameOf, true, true), H.onCallNowMsg(early, nameOf, true), "daysRead true = omitted (older callers)");
     assert.ok(!/@|\d{3}[-. ]\d{3}[-. ]\d{4}/.test(H.onCallNowMsg(early, nameOf, true)), "names only");
   });
+  /* ---------------- G3. group call (Faraz 9/29, Prompt 22) - the rule is data with code defaults ---------------- */
+  check("groupCallRules: GROUP_CALL_DEFAULTS { enabled: true, ownPatientsUntil '17:00', holidayUnitDaysAllDay: true } when groupRules / groupCall is absent; each absent or junk key falls back on its own", () => {
+    assert.deepStrictEqual(H.GROUP_CALL_DEFAULTS, { enabled: true, ownPatientsUntil: "17:00", holidayUnitDaysAllDay: true });
+    const dflt = { enabled: true, ownPatientsUntil: "17:00", untilMinutes: 1020, holidayUnitDaysAllDay: true };
+    for (const g of [undefined, null, {}, "x", { groupCall: null }, { groupCall: [] }, { groupCall: "on" }, { groupCall: {} }]) assert.deepStrictEqual(H.groupCallRules(g), dflt, "defaults for " + JSON.stringify(g));
+    assert.deepStrictEqual(H.groupCallRules({ groupCall: { enabled: false } }), { ...dflt, enabled: false }, "enabled false is kept");
+    assert.deepStrictEqual(H.groupCallRules({ groupCall: { holidayUnitDaysAllDay: false } }), { ...dflt, holidayUnitDaysAllDay: false }, "holidayUnitDaysAllDay false is kept");
+    assert.deepStrictEqual(H.groupCallRules({ groupCall: { ownPatientsUntil: "18:00" } }), { ...dflt, ownPatientsUntil: "18:00", untilMinutes: 1080 }, "18:00");
+    assert.deepStrictEqual(H.groupCallRules({ groupCall: { ownPatientsUntil: " 16:30 " } }), { ...dflt, ownPatientsUntil: "16:30", untilMinutes: 990 }, "trimmed 16:30");
+    for (const bad of ["24:00", "5 PM", "17", "7:00", "17:60", 1700, null, true]) assert.deepStrictEqual(H.groupCallRules({ groupCall: { ownPatientsUntil: bad } }), dflt, "junk ownPatientsUntil " + JSON.stringify(bad) + " -> 17:00");
+    for (const bad of ["false", 0, 1, null, "yes"]) {
+      assert.strictEqual(H.groupCallRules({ groupCall: { enabled: bad } }).enabled, true, "junk enabled " + JSON.stringify(bad) + " -> true");
+      assert.strictEqual(H.groupCallRules({ groupCall: { holidayUnitDaysAllDay: bad } }).holidayUnitDaysAllDay, true, "junk holidayUnitDaysAllDay " + JSON.stringify(bad) + " -> true");
+    }
+    assert.deepStrictEqual(H.groupCallRules(require(path.join(ROOT, "docs", "silvis-seed.json")).groupRules), dflt, "the seed's block reads as the defaults");
+  });
   check("index-source.html: the today banner and Share today read the shift day (onCallNow); todayStr stays todayCentral(); the shift clock ticks and is cleaned up", () => {
     assert.ok(src.includes("  const todayStr = todayCentral();\n"), "todayStr stays the calendar date");
     assert.strictEqual(count("const todayAssign"), 0, "the calendar-day todayAssign is gone (the banner reads onCall)");

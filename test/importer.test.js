@@ -1763,10 +1763,34 @@ step("9/27: the ship's seed entry - offerPeriods reminders 42 / 14 / 3 and the n
   ok(!("offerPeriodsNote" in plan.blob.groupRules), "9/27: offerPeriodsNote is dropped before the blob (impScrubRuleNotes)");
   const rev927 = seed._meta.revisions.filter((t) => /^2026-09-27 /.test(t));
   eq(rev927.length, 1, "9/27: one _meta.revisions entry dated 2026-09-27");
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-27", rev927[0]], "9/27: it is the last entry, and seedLastRevision reads its date");
+  // pin moved deliberately 9/29 (Prompt 22): the 9/27 entry is still one entry dated 2026-09-27, but no longer the last -
+  // the group-call entry follows it (the step below pins that one as the last) - the intent (one entry, dated the day) is kept
+  eq([seed._meta.revisions.indexOf(rev927[0]) >= 0, (rev927[0].match(/^\d{4}-\d{2}-\d{2}/) || [])[0]], [true, "2026-09-27"], "9/27: one entry, dated 2026-09-27");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev927[0]), "9/27: the entry carries no amount and no contact-like value");
   ok(/remindDaysBeforeClose \[14, 3\] -> \[42, 14, 3\]/.test(rev927[0]) && /noticeUrgentDaysBeforeClose 14/.test(rev927[0]) && /compensationInApp false -> true/.test(rev927[0]), "9/27: the entry names the reminder list, the urgent key and compensationInApp");
   ok(seed.openQuestions.some((t) => /^18\. ~~Offer deadline notice/.test(t) && /DECIDED 9\/27/.test(t)), "9/27: open question 18 is struck and decided");
+}
+
+step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule only, equal to the code defaults");
+{
+  // Faraz 9/29: group call on the calendar. The block is the code defaults (helpers.js GROUP_CALL_DEFAULTS), so the live
+  // blob needs no edit; a seed apply carries the same values. groupRules is a core key: the seed's core hash moves.
+  const H = require(path.join(__dirname, "..", "helpers.js"));
+  eq(plan.blob.groupRules.groupCall, { enabled: true, ownPatientsUntil: "17:00", holidayUnitDaysAllDay: true }, "9/29: blob groupRules.groupCall");
+  eq(plan.blob.groupRules.groupCall, H.GROUP_CALL_DEFAULTS, "9/29: the seed block equals the code defaults (the live blob, which lacks it, reads the same)");
+  const gcText = JSON.stringify(seed.groupRules.groupCall);
+  ok(!/@|\d{3}[-.]\d{3}[-.]\d{4}/.test(gcText) && !seed.roster.some((r) => r.name && gcText.indexOf(r.name) >= 0), "9/29: the block carries no contact-like value and no roster name (the blob is anon-readable)");
+  eq(Object.keys(seed.groupRules.groupCall).sort(), ["enabled", "holidayUnitDaysAllDay", "ownPatientsUntil"], "9/29: the rule's three keys only - no note, no reason");
+  const rev929 = seed._meta.revisions.filter((t) => /^2026-09-29 /.test(t));
+  eq(rev929.length, 1, "9/29: one _meta.revisions entry dated 2026-09-29");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-29", rev929[0]], "9/29: it is the last entry, and seedLastRevision reads its date");
+  ok(/groupRules\.groupCall/.test(rev929[0]) && /holidayUnitDaysAllDay/.test(rev929[0]) && /GROUP_CALL_DEFAULTS/.test(rev929[0]) && /seedCoreHash moves/.test(rev929[0]), "9/29: the entry names the block, the holiday reading, the code defaults and the core-hash move");
+  ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev929[0]), "9/29: the entry carries no amount and no contact-like value");
+  const seedNo = clone(seed); delete seedNo.groupRules.groupCall; seedNo._meta.revisions = seedNo._meta.revisions.filter((t) => !/^2026-09-29 /.test(t));
+  const planNo = IMP.importPlan(seedNo, { now: NOW });
+  ok(plan.blob.settings.seedCoreHash !== planNo.blob.settings.seedCoreHash, "9/29: the block moves the seed's core hash (groupRules is a core key)");
+  eq(IMP.planDiff(plan, { blob: clone(planNo.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
+    { roster: "unchanged", surgeonRules: "unchanged", groupRules: "update", holidays: "unchanged", settings: "update" }, "9/29: against the pre-9/29 blob only groupRules (the block) and settings update");
 }
 
 console.log("ok " + n + " assertions");

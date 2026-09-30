@@ -196,6 +196,28 @@ function onCallNowMsg(view, nameOf, loaded, daysRead) {
   return msg;
 }
 
+/* ═══ Group call (Faraz 9/29, Prompt 22 - current practice, written down) ═══
+   On weekdays, from the 07:00 handoff until ownPatientsUntil (17:00), each provider takes their own patients' calls. On
+   weeknights from then, on weekends and - holidayUnitDaysAllDay - on every day of a holiday unit (the reading call pay
+   uses: holidayNameByDay / payHolidaySet), the Trauma primary on call also takes the clinic's patient calls: "group
+   call". DATA: groupRules.groupCall, each absent / junk key falling back to GROUP_CALL_DEFAULTS (the OP_NOTICE_DEFAULTS
+   pattern - the live blob needs no edit). The blob is anon-readable: the rule only, no names, no reasons. */
+const GROUP_CALL_DEFAULTS = { enabled: true, ownPatientsUntil: "17:00", holidayUnitDaysAllDay: true };
+// groupCallRules(groupRules) -> { enabled, ownPatientsUntil, untilMinutes, holidayUnitDaysAllDay }. enabled and
+// holidayUnitDaysAllDay are booleans (anything else -> the default); ownPatientsUntil is "HH:MM", 00:00-23:59 (anything
+// else -> "17:00"); untilMinutes is its minute of the day. A time at or before the 07:00 handoff leaves no own-patients
+// window: group call around the clock. Pure.
+function groupCallRules(groupRules) {
+  const G = groupRules && typeof groupRules === "object" ? groupRules.groupCall : null;
+  const g = G && typeof G === "object" && !Array.isArray(G) ? G : {};
+  const bool = (v, d) => (typeof v === "boolean" ? v : d);
+  const m = typeof g.ownPatientsUntil === "string" ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(g.ownPatientsUntil.trim()) : null;
+  const until = m ? m[1] + ":" + m[2] : GROUP_CALL_DEFAULTS.ownPatientsUntil;
+  return { enabled: bool(g.enabled, GROUP_CALL_DEFAULTS.enabled), ownPatientsUntil: until,
+    untilMinutes: Number(until.slice(0, 2)) * 60 + Number(until.slice(3)),
+    holidayUnitDaysAllDay: bool(g.holidayUnitDaysAllDay, GROUP_CALL_DEFAULTS.holidayUnitDaysAllDay) };
+}
+
 // slotIsOpen(dateStr, holder, today) -> true iff the slot has NO holder
 // (null / undefined / "") AND dateStr is today or later (today inclusive,
 // both ISO strings). An unassigned slot before today is not OPEN - nobody can
@@ -3875,6 +3897,7 @@ if (typeof module !== "undefined" && module.exports) {
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
+    GROUP_CALL_DEFAULTS, groupCallRules,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
