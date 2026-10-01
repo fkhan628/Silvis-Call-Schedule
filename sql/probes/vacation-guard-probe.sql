@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - vacation guard PROBE (2026-09-30, Faraz 9/30 - Prompt 27: "need at least 2 surgeons around";
--- sql/migrations/2026-09-30-vacation-guard.sql, REPORT-FIRST, NOT APPLIED). Proves the time_off trigger time_off_vacation_guard
+-- sql/migrations/2026-09-30-vacation-guard.sql, REPORT-FIRST; APPLIED 2026-10-01 16:53:33Z). Proves the time_off trigger time_off_vacation_guard
 -- on the LIVE database WITHOUT PERSISTING ANYTHING.
 --
 -- Same mechanism as the other probes: run the whole file as ONE batch through the linked Supabase CLI (the Management API
@@ -14,6 +14,10 @@
 --
 -- BEFORE the migration the first block raises 'PROBE_SETUP: time_off_vacation_guard is absent ...' (nothing else runs). AFTER
 -- it every case below must read as listed.
+-- As run: the migration was applied 2026-10-01 16:53:33Z (schema.sql revision s); the probe read PROBE_SETUP before it and all 20
+-- cases below as listed after it (K1 / K2 name s2 as n1). Until the record step verify-rls read PROBE_SETUP as the not-applied
+-- picture (unless its flag for the run right after the apply was set); since the record step, which dropped that flag, section
+-- 15 FAILs a PROBE_SETUP - the not-applied grading is history.
 --
 -- The roster is READ from the live blob (call_schedule_data 'main'), never written - the probe does not modify the blob, even
 -- inside its transaction: the active surgeons (active not false, not type 'external') in roster order, the minimum

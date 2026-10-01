@@ -1,8 +1,9 @@
 -- ============================================================================
 -- Silvis Call Schedule - vacation guard: the days ALREADY under the minimum (2026-09-30, Faraz 9/30 - Prompt 27;
--- sql/migrations/2026-09-30-vacation-guard.sql, REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked
--- or changed. Run it BEFORE the apply (and whenever in doubt): the trigger never re-checks or deletes what is already there,
--- but a non-scheduler's new vacation over such a day is refused from the apply on, so the scheduler should know these days.
+-- sql/migrations/2026-09-30-vacation-guard.sql, REPORT-FIRST; APPLIED 2026-10-01 16:53:33Z). READ-ONLY: one SELECT, nothing is written, locked
+-- or changed. Run it BEFORE the apply (done: 0 rows on 2026-10-01 at ~05:10 UTC, and again at 16:52 UTC as the apply run's
+-- step 1) and whenever in doubt: the trigger never re-checks or deletes what is already there, but a non-scheduler's new
+-- vacation over such a day is refused since the apply, so the scheduler should know these days.
 --
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/vacation-guard-overlimit.sql
 --

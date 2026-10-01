@@ -14,7 +14,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
-| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, **prepared 2026-09-30 - report-first, NOT APPLIED** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
+| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. |
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
@@ -1766,7 +1766,7 @@ observed: applied by Faraz in the Supabase SQL editor, committed 2026-10-01 04:3
 
 ## 2026-09-30 - vacation guard: time_off_vacation_guard (Faraz 9/30, Prompt 27; `sql/migrations/2026-09-30-vacation-guard.sql`)
 
-**Status: PREPARED - report-first, NOT APPLIED.**
+**Status: APPLIED 2026-10-01 16:53:33Z** (Faraz, from PowerShell through Git's bash.exe with `AI_AGENT=1` - `apply-vacation-guard.sh`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then.
 
 Faraz 9/30: "a warning when people are taking vacations and a warning that stops vacations if more than 4 people are on
 vacation. Need at least 2 surgeons around." No approval step - vacations stay self-entered. Needed live before 11/9 (the
@@ -1862,7 +1862,8 @@ is marked away (left out as not small: it would need the count without the range
 
 **What could break.** (1) The probe and verify-rls section 15 are written against an AFTER picture nobody has observed (no
 local Postgres was available to this lane; the SQL was reviewed by reading): the first live run may show a typo or a
-different wording - section 15 grades exact strings, so it would say so by case. (2) The expected strings rest on the live
+different wording - section 15 grades exact strings, so it would say so by case. *As run (2026-10-01): the first live run read
+all 20 cases exactly as written - no typo, no other wording.* (2) The expected strings rest on the live
 roster (six active surgeons, minimum 2, an East person): P1 / P2 are graded first and name a changed picture. (3) A malformed
 date inside a cached `east_feed` range cannot make the trigger raise (a value not shaped `YYYY-MM-DD` is skipped, the rest is
 compared as text - never cast), while the read-only over-limit query casts it and would fail loudly. (4) The known gap above:
@@ -1988,6 +1989,16 @@ be around (minimum 2) - pick other dates or ask the scheduler`.
    8's "Vacation guard" bullet ("report-first, NOT applied - section 4.3") and `CLAUDE.md`'s time-off sentence ("report-first
    until applied").
 
+*As run (2026-10-01): item 1 first - the client's check had shipped before the apply. Items 2-6 by `apply-vacation-guard.sh`
+(Faraz, from PowerShell through Git's bash.exe, the repo at `00d446b`), its steps 1-6 in this order: the over-limit query, a
+function-and-trigger absent check (item 2's pre-check, widened to the trigger), probe BEFORE, the migration (after typing
+APPLY), probe AFTER, `SILVIS_VACATION_GUARD_APPLIED=1 bash scripts/verify-rls.sh` - the first failure of any step stops the
+script. Item 7 is the record commit, as listed except the migration file: it is kept byte for byte as it ran (sha256
+`6b6b4a31cae2ff619f94f8849e70d215a2f0c2155f59dacadae56731617f3db0`, pinned in `test/schema.test.js` - the offers pattern), the
+apply noted in ONE trailer line instead of its header turning APPLIED; the probe's and the over-limit query's headers read
+APPLIED. `SILVIS_VACATION_GUARD_APPLIED` is gone from `scripts/verify-rls.sh` (section 15 FAILs a PROBE_SETUP), and the script
+now sets the CLI's agent mode itself (`export AI_AGENT="${AI_AGENT:-1}"` - the first attempt below).*
+
 **Rolling back** = `drop trigger if exists time_off_vacation_guard_trg on public.time_off; drop function if exists
 public.time_off_vacation_guard();` (nothing else refers to either; the client's own check stays).
 
@@ -1996,5 +2007,51 @@ observed (pre-apply, 2026-10-01): the read-only over-limit query (`sql/probes/va
 column, not which days are listed); probe BEFORE: `PROBE_SETUP: time_off_vacation_guard is absent -
 sql/migrations/2026-09-30-vacation-guard.sql is not applied` (nothing else ran). The orchestrator's apply was refused by the
 session's permission classifier and not retried by any other route: Faraz applies the migration himself (SQL editor or the
-linked CLI), as he did the period fold on 10/1 04:33Z. Post-apply: _to be filled after the apply (the probe AFTER - 20 cases -
-and the `SILVIS_VACATION_GUARD_APPLIED=1 bash scripts/verify-rls.sh` counts)_
+linked CLI), as he did the period fold on 10/1 04:33Z. Post-apply: the next paragraph.
+
+observed (apply, 2026-10-01): applied 2026-10-01 16:53:33Z (`apply-vacation-guard.sh` step 4: the migration file through
+`supabase db query --linked`, CLI exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz, from PowerShell through Git's
+bash.exe with `export AI_AGENT=1` (log `apply-vacation-guard-20261001T165241Z.log`, outside the repo; repo HEAD `00d446b`, the
+migration unchanged since `d97dba0`; supabase CLI 2.84.2, the workdir linked to `bzhsroegtagqhutbnsrp`). Step 1, the over-limit
+pre-check (read-only): 0 rows - `OK - no day is under the minimum`. Step 2, the function-absent check: 0 rows - `OK - neither
+the function nor the trigger exists`. Step 3, probe BEFORE: `PROBE_SETUP: time_off_vacation_guard is absent -
+sql/migrations/2026-09-30-vacation-guard.sql is not applied` (nothing else ran). Step 5, probe AFTER - 20 cases, every one as
+the probe table above lists (P4 the non-roster kind; K1 / K2 name `s2`, the live n1), as the log printed them:
+
+```text
+A1=ok
+C1=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/9, 10/10 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+D1=ok
+E1=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/1 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+E2=ok
+E3=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/7 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+I1=ok
+K1=ERR P0001 ON_CALL_CONFLICT: s2 is on call 10/13 (primary), trade those shifts before entering this vacation
+K2=ERR P0001 ON_CALL_CONFLICT: s2 is on call 10/29 (backup), trade those shifts before entering this vacation
+M1=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/25 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+N1=ok
+P1=active=6 min=2
+P2=east=yes
+P3=triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t
+P4=inactive=non-roster
+S1=ok
+S2=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/16, 10/17 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+S3=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+S4=updated=1
+U1=ERR VG001 VACATION_TOO_FEW_AROUND: on 10/10 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+```
+
+Step 6, `SILVIS_VACATION_GUARD_APPLIED=1 bash scripts/verify-rls.sh` (section 15 graded strictly): `RESULT: 292 passed, 0
+failed` - section 15 every case PASS (the 20 above) and `vacation guard probe persisted nothing (leftover count 0: ...)`;
+sections 1-14 green with every leftover count 0; the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d, 14c) skipped - no JWT set.
+The first attempt (log `apply-vacation-guard-20261001T164818Z.log`, started 16:48:18Z) stopped at step 1 and changed nothing:
+the pre-check printed a bare JSON array (`[]`), and the script, which reads the CLI's agent-mode envelope
+`{"warning","boundary","rows"}`, stopped on "the pre-check output could not be read as JSON rows" - Supabase CLI 2.84.2 adds the
+envelope only in agent mode (auto-detected from env vars such as `CLAUDECODE` / `AI_AGENT`, or `--agent=yes`) and Faraz's shell
+was not an agent shell; nothing after step 1 ran (no absent check, no probe, no migration). Faraz re-ran with
+`export AI_AGENT=1` - the run above. The record step (one commit, item 7 and its as-run note): this status, table (a)'s
+`time_off` row, schema.sql revision s and its block comment, the migration's trailer line and sha256 pin, the probe's and the
+over-limit query's headers, verify-rls section 15 strict by default with `SILVIS_VACATION_GUARD_APPLIED` dropped and
+`AI_AGENT` set by the script, guide 4.3 and section 8, the rules doc's Time off row, CLAUDE.md, and the test pins with them.
+Not re-run against the live project after the record step (the record lane ran nothing live); the next plain
+`bash scripts/verify-rls.sh` grades section 15 strictly with no flag.
