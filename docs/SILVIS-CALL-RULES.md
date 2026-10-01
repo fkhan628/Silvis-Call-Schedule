@@ -334,8 +334,8 @@ as the Davenport holiday pools.
 
 **⟶ 9/30 — the yearly holiday plan (Prompt 25, Faraz: "copy Davenport's split of major and minor holidays"; "the
 generator makes most of the decisions").** `helpers.js` `planHolidays` proposes one primary and one backup for every
-holiday unit of a year, the whole year at once. It is a proposal only: nothing is locked or published by it, and the
-Setup card that shows it and its Accept are a later step (Prompt 25 steps 1–2 are built: the planner and its report).
+holiday unit of a year, the whole year at once. It is a proposal only: nothing is locked or published by it — **only
+the scheduler's Accept in Setup → Holidays locks a plan** (Prompt 25 steps 3–5, built 10/1; the flow is below the rules).
 The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DEFAULTS` — the seed's block equals them):
 
 1. **Pool: every active roster surgeon** — Sarkar included ("in for all rotations"); an outside surgeon never. A plan
@@ -376,6 +376,47 @@ highest sits out) → alternation → the primaries' summed primary rate → the
 `holidayRules.holidaysOff`, `holidayRules.maxMajorHolidays`, `backupOptOut`, `eastFeed`, `eastStanding`; group
 `eastFeed.forecast.busyThreshold`, `dayBeforeRules.trailingEdgeRoles`. Not copied from Davenport: FAK's Christmas lock
 (data here), its presets and the A / B night-before coverage. The architecture is in the build guide §20.
+
+**⟶ 10/1 — Plan, swap, Accept and Re-check in the app (Prompt 25 steps 3–5, Faraz 9/30: "nothing is locked or
+published without the scheduler's Accept").** Setup → Holidays (units per year) → **Yearly holiday plan**, the
+scheduler's only:
+
+- **Plan ‹year›** (the year picker opens on the first year after today's with units in the shared setup — 2027 now)
+  runs the planner on the app's live state: the saved units of that year, the roster, every surgeon's rules and the
+  group rules, the history (the schedule's units + `groupRules.holidayPlan.history`), the East feed / forecast /
+  overrides / derived weeks the app already reads, and the vacations — the `time_off` rows **plus** each East
+  surgeon's Davenport vacation ranges that are *away* or still *unreviewed* (what the rules engine reads as a vacation;
+  a *home* range is not). It shows, per unit, the primary and the backup with the planner's **why**; each surgeon's
+  counts (major / minor **before** — held as primary / held / eligible — and **in the plan**); what was relaxed; the
+  warnings. **Nothing is written.**
+- **Swaps keep the rules.** Each slot has a *swap…* list: swap the holder with any other slot's holder, or replace him
+  with any other pool surgeon. Every move is judged by the planner's own refusal logic (`holidayPlanCheck` — the same
+  limits as rules 1–5: a refusal reason, primary = backup, two majors inside Philip's 12 months, the same holiday and
+  role as last year, the tier shape) and the list says *keeps the rules* or *BREAKS: …*. A move that breaks a rule asks
+  first, naming each rule; Cancel keeps the plan (never a silent break). An accepted rule-breaking move stays listed
+  under the table, and Accept names it again. *Back to the planner's plan* undoes every swap. Preferences that are not
+  limits (alternation) are listed, never asked.
+- **Accept ‹year›** locks every planned unit day for everyone: **both roles locked, source `holiday-plan-‹year›`, note
+  "‹unit› unit - holiday plan ‹year›"** (the unit only — no name, no reason; `schedule_days` is anon-readable). One
+  confirm comes first and names every rule the plan breaks and every planned slot whose row already holds someone else
+  — **a different locked holder or a published (unlocked) holder is replaced only when the scheduler presses OK on that
+  confirm; Cancel writes nothing**. A unit that has already started is left as it is on file. Then, in order: a backup
+  **snapshot** (a failed capture blocks — nothing is locked), the days through the normal schedule write (per-day
+  compare-and-swap, the wipe guard, the "changed by someone else" reload), **one audit row** `holiday_plan.accept` (the
+  year, the units with roster ids, the slots replaced, the broken rules, the snapshot counts — no amounts), and the
+  notices a hand edit of those days would send — one in-app *Schedule changed* note and one e-mail (category *schedule
+  updates*) to the surgeons whose slot changed hands, one message for the whole plan. The office notice stays Settings
+  → Office notifications → *Publish and notify office*.
+- **After Accept the units behave like any locked unit:** Generate never touches them (locks are respected); a trade or
+  a give moves the whole unit (the trade card reads the unit from the holiday units, not from the row's source), and a
+  locked slot moves only when the scheduler applies the trade (the database's rule for every lock). A hand edit or a
+  trade turns the day's source into `manual` / `trade`.
+- **Re-check ‹year›** (read-only; shown after an Accept, or on its button) lists every accepted slot — a unit day still
+  carrying the plan's source — that the current state now refuses: a newer East day or forecast, a new vacation (a
+  Davenport one included), a rule change (an opt-out, a 12-month limit) or a surgeon leaving the roster. Each comes with
+  the best swap by the planner's own ordering (fewest broken rules, then the planner's cost terms) and whether it keeps
+  every rule. *Apply swap* goes through the same Accept path (its confirm, the snapshot first, audit
+  `holiday_plan.swap`, the same notices) and writes the swap's units only.
 
 ## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22; ⟶ water-filled share decided 9/23
 

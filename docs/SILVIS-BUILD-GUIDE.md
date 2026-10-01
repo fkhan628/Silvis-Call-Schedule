@@ -1780,7 +1780,7 @@ did not move is reported NOT VERIFIED (exit 1) by the re-read — the `DO` block
 `test/day-edit.test.js` (the live October rows as a fixture, before/after pinned, SQL pins, override gating, the
 sequential Khan Fri–Mon batch, verify-after-apply); CI step "Day-edit CLI tests".
 
-## 20. The yearly holiday plan (`helpers.js` `planHolidays`, Prompt 25, Faraz 9/30 — steps 1–2 built)
+## 20. The yearly holiday plan (`helpers.js` `planHolidays`, Prompt 25, Faraz 9/30 — steps 1–5 built)
 
 The rules are `docs/SILVIS-CALL-RULES.md` §5 ("the yearly holiday plan"); this is the machinery. One pure function in
 the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no network, no writes):
@@ -1796,6 +1796,10 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   (split holders listed, an external cover kept as `ext:<label>`) plus `groupRules.holidayPlan.history`; without
   `history` the planner builds it from `schedule` + `holidays`. `holidayPlanRules(groupRules)` reads the block with
   `HOLIDAY_PLAN_DEFAULTS` per key (the `GROUP_CALL_DEFAULTS` pattern).
+- **One refusal logic.** `hplPrepare(year, opts)` reads the inputs once — the units, the pool, the history and the
+  lifetime counts, every hard limit below (`block[unit][id][role]`), the derived week's forced holders and the tier
+  shape — and both the search (`planHolidays`) and the judges of a given plan (`holidayPlanCheck`,
+  `holidayPlanSwapOptions`, `holidayPlanRecheck`, below) read it; there is no second copy of a rule.
 - **Hard limits** are computed once per (unit, surgeon, role) in the rules engine's vocabulary (`inactive`,
   `holiday-opt-out:<name>`, `backup-opt-out`, `time-off:<day>`, `day-before-vacation`, `east-busy`,
   `east-forecast-busy:<p>`, `max-major-holidays:<n>`, `derived-lock:<role>`, `derived-lock-held:<id>`) with
@@ -1822,7 +1826,65 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   builder, one section per rule, the 2027 plan on the seed inputs + the 2026 holders, and ten simulated years on the seed
   rules (every limit, no repeat unless a derived week forces it, the rotation exact until a derived-week override and
   caught up by the tenth year). `test/generator-regression.js` restates `holidaysOff` generically for the generator.
-- **Not built (later steps of Prompt 25):** the Setup card that shows the plan beside the counts, and its Accept, which
-  would write the units as locks through the normal day-edit path (snapshot first, compare-and-swap, audit, the office
-  notice) — report-first, like every write to published rows. The 2027 report (on the 10/1 live inputs, beside Cowork's
-  hand-worked plan) is outside the repo, in the gate folder of the 10/1 run.
+- **Judging a plan (steps 3–5).** A plan is the planner's `assignments` shape or `{ <unit>: { primary, backup } }`.
+  `holidayPlanCheck(year, plan, opts)` → `{ ok, breaks, soft, open, cost, warnings }`: `breaks` (hard — each `{ rule,
+  unit, role, id, text, key }`) are `refused` (the `block` reasons for that slot), `not-in-pool`, `same-person`,
+  `max-major` (two majors of the plan inside the 12-month window, history included — the search's `majorOk`),
+  `no-repeat` and `shape`; `soft` is the alternation miss; `open` the open slots (not a break); `cost` is the planner's
+  vector computed exactly as the search scores a complete plan — for the planner's own plan it equals `search.cost`
+  (pinned). `holidayPlanSwapOptions(year, plan, unit, role, opts)` lists every swap of the slot's holder with another
+  filled slot's holder and every replacement by another pool member, each judged by the same check (`breaks`, `added`
+  vs the plan, `resolved`, `ok`), sorted fewest breaks → cost vector → listing order (deterministic; the seeded draw is
+  the planner's alone). `holidayPlanRecheck(year, opts + schedule)` reads the accepted slots (unit days whose row source
+  is `holiday-plan-<year>`; one holder per role, else the slot is reported mixed and skipped), judges each on the
+  current state with the slot rules (`refused`, `not-in-pool`, `same-person`, `max-major`) and suggests the first option
+  that clears it and adds no break (`valid`), else the first that clears it. `holidayPlanAcceptRows(year, plan,
+  schedule, { holidays | units, only, today })` builds the rows Accept writes — every planned role locked, source
+  `holiday-plan-<year>` (`holidayPlanSource`), note `holidayPlanNote` = "<unit> unit - holiday plan <year>", a roster
+  primary clears an external cover, an open plan role keeps what is on file (cleared if it would equal the other role),
+  a started unit skipped — and `conflicts`: every planned slot the row already holds differently (locked or not).
+  `holidayPlanInputs(year, state)` maps the app's state (`ctxInputs`) to the planner's opts: `time_off` + the away /
+  unreviewed East ranges (`derivedEastVacations`), `holidayPlanHistory` over the schedule (its warnings apart), the East
+  pieces as they are, seed = the year. `holidayPlanDefaultYear`, `holidayPlanUnitLines` (the notice lines).
+- **The card (`index-source.html` `HolidayPlanPanel`, inside `HolidaysCard`, rendered for `isScheduler` only — Setup is
+  the scheduler's view anyway).** Testids: `holplan` (the box), `holplan-year`, `holplan-run` ("Plan <year>"),
+  `holplan-preview` (`data-year`, `data-pass`), `holplan-row` (`data-unit`, `data-tier`) with `holplan-p` / `holplan-b`
+  (`data-id`), `holplan-swap` (`data-unit`, `data-role`; options labelled "keeps the rules" / "adds no break" / "BREAKS:
+  <rules>"), `holplan-why`, `holplan-counts` / `holplan-count-<id>`, `holplan-breaks` (`data-count`) /
+  `holplan-break` (`data-rule`), `holplan-soft`, `holplan-open`, `holplan-relaxed`, `holplan-warnings`,
+  `holplan-swapped`, `holplan-accept`, `holplan-reset`, `holplan-discard`, `holplan-recheck` ("Re-check <year>"),
+  `holplan-recheck-list` (`data-year`, `data-accepted`, `data-blocked`), `holplan-recheck-item` (`data-unit`,
+  `data-role`, `data-id`), `holplan-recheck-suggestion`, `holplan-recheck-apply`, `holplan-recheck-close`. The plan is
+  computed on Plan (inputs = the saved units; unsaved Holidays edits disable Accept); the check, the swap lists and the
+  Re-check are recomputed from the live `ctxInputs` on every render, so a vacation or an East refresh after Plan shows at
+  once. A swap whose `added` is not empty asks `confirm` naming each rule first. The panel itself never writes: its only
+  write is `onAccept`, from Accept and from a Re-check *Apply swap*.
+- **Accept (`acceptHolidayPlan(year, plan, meta)` in the App, the card's `onAccept`).** Refuses anyone but the scheduler
+  and an unread schedule (`refuseUnreadDay`); `holidayPlanAcceptRows` over the current map; ONE `confirm` naming the
+  broken rules (the card's check texts) and the conflicts (Cancel writes nothing); `snapshots.capture("holiday_plan")`
+  (label "Before a holiday plan Accept / swap"; a failed capture blocks); re-derived over the current map when a realtime
+  row landed meanwhile (a new conflict asks again); `pushUndo` + `setSchedule` + `syncScheduleDays(next)` — the same CAS
+  path as every schedule write (POST v1 for a new day, PATCH `?day&version` otherwise, the wipe guard, the conflict
+  reload); ONE audit row after the sync with its outcome (`holiday_plan.accept`, or `holiday_plan.swap` for a Re-check
+  swap — `{ year, source, units: [{ name, days, primary, backup }], days, changes, replaced, breaks (keys), snapshot,
+  outcome, error }`, roster ids, no amounts); once the days are on file the manual-edit notices (`addNotification` +
+  `sendEmailNotif` "manual_edit" to the roster holders whose slot changed hands, one message for the plan). No office
+  notice and no publish dialog (that stays Settings → Office notifications). `meta.mode "swap"` + `meta.only` write the
+  swap's units only.
+- **The accepted rows elsewhere.** `generator.js` keeps every slot with `primaryLocked` / `backupLocked` and a holder
+  while `respectLocks` is on (the default; with it off, Accept & Publish confirms every locked slot it would replace) —
+  `test/holiday-plan.test.js` N1 generates over Thanksgiving and Christmas / New Year's 2027 and finds the rows as
+  accepted. `tradeUnitOf` reads the unit from `rulesCtx.holidayByDay` (every stored unit of every year) and the holder,
+  never the row source, so a trade or a give of an accepted day moves the whole unit (N2 restates it and pins the source
+  text); `apply_trade` moves a locked slot only for the scheduler and clears its lock (source `trade`).
+- **Proof (steps 3–5):** `test/holiday-plan.test.js` J (the check: the planner's plans break nothing and score
+  `search.cost`, every break kind), K (the swap options: each = the check of its assignments, the ranking, a swap twice =
+  the original), M (the Accept rows, the conflicts, `only` / `today`, `holidayPlanInputs`, the default year), L (Re-check:
+  a newer vacation, East day, rule and roster change, each with its suggestion; applying it clears the slot; a hand-edited
+  or mixed unit), N (the generator, the trade unit); `test/data-layer.test.js` [P25] (scheduler-only, the confirm →
+  snapshot → sync → audit order, the CAS path only, one audit row with no amounts, the hand-edit notices only after the
+  write, no write in the panel but `onAccept`); `test/ui/smoke.mjs` "holiday plan" (Plan 2027 from the served rows, a
+  breaking swap asks and a dismissed one changes nothing, Accept with a failing snapshot writes nothing, Accept for real =
+  snapshot then one CAS write per unit day with both locks / the source / the note, one audit row, the notices; Re-check
+  with a mocked vacation; every write answered by the harness). The 2027 report (on the 10/1 live inputs, beside
+  Cowork's hand-worked plan) is outside the repo, in the gate folder of the 10/1 run.

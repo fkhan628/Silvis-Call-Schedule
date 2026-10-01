@@ -111,6 +111,15 @@
 //     first schedule_days write, publish dialog), Import seed dry run (0 changes,
 //     no writes; import-dryrun.png) and a seed with an injected contact key
 //     (refused). Switch: failSnapshotInsert makes the snapshot POST answer 500.
+//   - Prompt 25 steps 3-5 (Setup > Holidays > the yearly holiday plan, after the Holidays coverage check): Plan 2027
+//     renders helpers.planHolidays on the SERVED rows / blob / time_off (exact while no East input reaches a 2027 unit
+//     day), a swap labelled BREAKS asks a confirm naming each rule (dismissed: unchanged; accepted: moved + listed; reset),
+//     Accept with a failing snapshot writes nothing, Accept for real = the 'holiday_plan' snapshot before one CAS write
+//     per unit day (both locks, source holiday-plan-2027, the unit-only note), one audit holiday_plan.accept, one
+//     manual_edit note + e-mail, no office notice; Re-check lists the Thanksgiving primary under a mocked vacation
+//     (extraTimeOff + a realtime frame) with its suggested swap, whose Apply asks the Accept confirm (dismissed). Every
+//     non-GET of the step is counted against the recorded writes. Switches: extraTimeOff, planDaysCapture /
+//     planDayStore (the accepted days served back until the step ends; then DELETE frames + harnessDays).
 //   - Prompt 12 item SM2 (the schedule is published through 2027-01-03 since the
 //     9/23 overnight publish): no pin names a day the schedule can fill. The
 //     week-row OPEN entries, the ER copy's red OPEN span, the fail-closed /
@@ -421,6 +430,14 @@ const FAKE_PROFILE = { id: FAKE_UID, person_id: "s1", role: "admin", display_nam
 const COORD_UID = "00000000-0000-4000-8000-00000000c0c0";
 const COORD_PROFILE = { id: COORD_UID, person_id: null, role: "coordinator", display_name: "Office (harness)", email: null, created_at: "2026-09-24T00:00:00Z" };
 let failSnapshotInsert = false; // Slice E harness switch (see the Supabase route)
+// Prompt 25 steps 3-5 (the holiday plan step): extraTimeOff = mocked time_off rows appended to every time_off GET while
+// set (the Re-check's newer vacation - never written anywhere); planDaysCapture = while set, a schedule_days POST / PATCH
+// whose body carries a holiday-plan-<year> source is kept in planDayStore and served back on every schedule_days GET -
+// what the real table would hold after the Accept - so the app's 60 s poll cannot drop the accepted days in the middle
+// of the step. The step clears both (and registers the days in harnessDays, so settleMapToLive waits for their drop).
+let extraTimeOff = [];
+let planDaysCapture = false;
+const planDayStore = {};
 let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
@@ -669,6 +686,14 @@ const rtSendRow = (table, record, type) => {
   return true;
 };
 const rtSendDayRow = (record, type) => rtSendRow("schedule_days", record, type);
+// Prompt 25: a schedule_days DELETE frame (the day in old_record - supabase-js reads a DELETE's row from it): the app drops
+// the day from its map, its version map and lastSyncRef. The holiday plan step sends one per accepted day when it takes
+// those days back out of the served rows, so the steps after it see the live picture at once.
+const rtDropDayRow = (day) => {
+  if (!rt.joined) return false;
+  rtSend({ topic: rt.topic, event: "postgres_changes", ref: null, join_ref: rt.joinRef, payload: { ids: [RT_TABLES.indexOf("schedule_days") + 1], data: { type: "DELETE", schema: "public", table: "schedule_days", commit_timestamp: new Date().toISOString(), columns: [], record: {}, old_record: { day }, errors: null } } });
+  return true;
+};
 const dayRow = (day, over) => ({ day, primary_id: null, backup_id: null, primary_locked: false, backup_locked: false, source: "manual", external_cover: null, note: null, version: 1, updated_by: "s4", updated_at: new Date().toISOString(), ...over });
 
 // The importer's plan for docs/silvis-seed.json, computed once (Prompt 12 SM2): it
@@ -739,7 +764,7 @@ const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, 
 // check holds at any hour. The harness-opened slot (live mode) is >= today + 3, never the shift day or today.
 // Prompt 22 (group call): the same up-front blob read also keeps groupRules / holidays - the group-call expectation below
 // is the page's own groupCallNow over them (read = false when the read failed: the group-call checks then say so).
-const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined, surgeonRules: undefined }; // surgeonRules: the Rules preview check (9/30)
+const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined, surgeonRules: undefined, roster: undefined }; // surgeonRules: the Rules preview check (9/30); roster: the holiday plan restatement (Prompt 25)
 const onCallRosterEarly = await (async () => {
   try {
     let d;
@@ -749,7 +774,7 @@ const onCallRosterEarly = await (async () => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       d = ((await r.json())[0] || {}).data; if (typeof d === "string") d = JSON.parse(d);
     }
-    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; gcBlobEarly.surgeonRules = d.surgeonRules; }
+    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; gcBlobEarly.surgeonRules = d.surgeonRules; gcBlobEarly.roster = d.roster; }
     const m = {}; ((d && d.roster) || []).forEach(x => { if (x && x.id) m[x.id] = x.name; });
     return m;
   } catch (e) { console.log("     (roster read for the on-call-now check failed: " + (e && e.message || e) + " - names are not compared)"); return null; }
@@ -1032,9 +1057,21 @@ const scheduleDayRows = async (route, req, url) => {
     let o = r;
     if (harnessOpen.day && r.day === harnessOpen.day) o = { ...o, [harnessOpen.role === "primary" ? "primary_id" : "backup_id"]: null };
     if (claimedDays[r.day]) o = { ...o, ...claimedDays[r.day], version: (Number(r.version) || 0) + 1 };
+    if (planDayStore[r.day]) o = { ...o, ...planDayStore[r.day] };
     return o;
   };
-  return (Array.isArray(rows) ? rows : []).map(overlay);
+  const out = (Array.isArray(rows) ? rows : []).map(overlay);
+  // Prompt 25: the holiday plan's accepted days (planDayStore) are rows the real table would now hold - appended to the
+  // first page (or to a ?day=eq. re-read of that day) when the read does not already carry them
+  const planDays = Object.keys(planDayStore);
+  if (planDays.length) {
+    const dayQ = (/^eq\.(\d{4}-\d{2}-\d{2})$/.exec(url.searchParams.get("day") || "") || [])[1] || "";
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const have = new Set(out.map(r => r && r.day));
+    planDays.filter(d => !have.has(d) && (dayQ ? d === dayQ : offset === 0)).forEach(d => out.push({ ...planDayStore[d] }));
+    out.sort((a, b) => (a && a.day) < (b && b.day) ? -1 : (a && a.day) > (b && b.day) ? 1 : 0);
+  }
+  return out;
 };
 // The east_feed rows a GET is answered with: the live cache, every row's data.vacations stripped, the newest published
 // week hosting `ranges` as FAK's (the route below passes eastVacFeed; Item E4's pages, 9/26, add their one-day 'home'
@@ -1401,6 +1438,13 @@ const routeSupabase = async (route, scope) => {
     if (method === "DELETE" && url.pathname + url.search === "/rest/v1/schedule_days?day=not.is.null") { daysWiped = true; Object.keys(dayStore).forEach(k => delete dayStore[k]); }
     if (daysWiped && url.pathname === "/rest/v1/schedule_days" && method === "POST") { try { const b = JSON.parse(body); if (b && b.day) dayStore[b.day] = { ...b }; } catch (e) {} }
     if (daysWiped && url.pathname === "/rest/v1/schedule_days" && method === "PATCH") { try { const b = JSON.parse(body); const d = (url.searchParams.get("day") || "").replace(/^eq\./, ""); if (dayStore[d]) Object.assign(dayStore[d], b); } catch (e) {} }
+    // Prompt 25: the holiday plan step keeps the accepted days it is served back (planDayStore; see the switch above)
+    if (planDaysCapture && url.pathname === "/rest/v1/schedule_days" && (method === "POST" || method === "PATCH")) {
+      try {
+        const b = JSON.parse(body || "{}"), d = b.day || (url.searchParams.get("day") || "").replace(/^eq\./, "");
+        if (d && typeof b.source === "string" && b.source.indexOf("holiday-plan-") === 0) planDayStore[d] = { ...(planDayStore[d] || {}), ...b, day: d, version: Number(b.version) || 1, updated_at: b.updated_at || new Date().toISOString() };
+      } catch (e) {}
+    }
     if (method === "POST" && url.pathname.startsWith("/rest/v1/call_schedule_snapshots")) {
       try { const b = JSON.parse(body); snapStore.push({ id: crypto.randomUUID(), reason: b.reason || null, source_updated_at: b.source_updated_at || null, created_at: new Date().toISOString(), data: b.data }); }
       catch (e) { failedRequests.push("snapshot POST body did not parse: " + (e && e.message || e)); }
@@ -1470,8 +1514,15 @@ const routeSupabase = async (route, scope) => {
   }
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
   // ... and the harness-opened slot (LIVE mode, P13R-2) reads back blank with its live source and version.
-  if ((Object.keys(claimedDays).length || harnessOpen.day) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
+  // ... and (Prompt 25) the holiday plan's accepted days while the step holds them (planDayStore).
+  if ((Object.keys(claimedDays).length || harnessOpen.day || Object.keys(planDayStore).length) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     return json(200, await scheduleDayRows(route, req, url));
+  }
+  // Prompt 25 (the holiday plan Re-check): the harness's mocked vacation rows, appended to every time_off GET while set
+  if (extraTimeOff.length && method === "GET" && url.pathname === "/rest/v1/time_off") {
+    let rows = fixtureAnswer(url);
+    if (!rows) { const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } }); rows = await res.json().catch(() => []); }
+    return json(200, (Array.isArray(rows) ? rows : []).concat(extraTimeOff.map(r => ({ ...r }))));
   }
   // Prompt 19 S5: the scheduler's page (schedFeed.page) reads schedFeed.rows as its Alerts feed while a check needs it
   // (the anon passthrough answers [] for the authenticated-only notifications table).
@@ -7414,6 +7465,281 @@ try {
       if (!/Thanksgiving/.test(holText) || !/P Khan/.test(holText)) fail("Holidays 2026: Thanksgiving row with 'P Khan' coverage expected: " + holText.slice(0, 300)); else ok("Holidays 2026: units listed with coverage from schedule_days (Thanksgiving P Khan)");
       const counts = await page.$eval("[data-testid=hol-count-s1]", el => el.textContent);
       if (!/Khan \d+\/\d+/.test(counts)) fail("Holidays: per-surgeon major/minor counts missing: " + counts); else ok("Holidays: per-surgeon counts beside each name (" + counts + ")");
+    }
+
+    // ---- Prompt 25 steps 3-5: the yearly holiday plan - Setup > Holidays > Plan 2027 / swap / Accept / Re-check ----
+    // (1) Plan 2027 renders the plan from the SERVED rows: the harness restates the planner's inputs from what it serves
+    //     (the blob read up front - units, roster, rules; history from the served schedule_days rows (+ the claim overlay)
+    //     through helpers.holidayPlanHistory; vacations = the served time_off rows) and runs helpers.planHolidays on them -
+    //     the planner is proven by test/holiday-plan.test.js, this proves the page fed it the served data and shows its
+    //     answer (holders per unit, the counts table, the relaxed line). The exact comparison needs the East inputs to stay
+    //     clear of every 2027 unit day (the live East feed / forecast / overrides, the stated weeks, the harness's East
+    //     vacation fixtures, the mocked Davenport week): when one reaches a unit day the restatement cannot know its
+    //     refusal and the step checks the shape only (logged). (2) A swap that BREAKS a rule warns: the first swap option
+    //     labelled BREAKS asks in a confirm naming each rule - dismissed, the plan is unchanged; accepted, the slot moves and
+    //     the breaks are listed; 'Back to the planner's plan' restores it. Nothing is written. (3) Accept with the snapshot
+    //     insert forced to fail: ONE confirm, one snapshot POST (500), ZERO schedule_days writes, no audit row, the plan
+    //     kept. (4) Accept for real: the snapshot 'holiday_plan' precedes the first schedule_days write; exactly one CAS write
+    //     per 2027 unit day (POST v1 for a row-less day, PATCH ?day&version for a live row) with the shown holders, both
+    //     locks, source holiday-plan-2027 and the note '<unit> unit - holiday plan 2027'; ONE audit holiday_plan.accept
+    //     (year, units with roster ids, outcome ok); one manual_edit notification + one manual_edit send-notification to
+    //     the holders whose slot changed hands; no office notice. (5) Re-check 2027 (shown after the Accept): every accepted
+    //     unit, nothing blocked; a mocked vacation of the Thanksgiving primary (extraTimeOff + a realtime time_off frame -
+    //     never written) lists that slot with time-off:<day> and the suggested swap (the restatement's
+    //     holidayPlanRecheck suggestion in the exact mode); its Apply asks the Accept confirm - dismissed, nothing written.
+    //     Every non-GET request the page sent to the Supabase host during the step was answered by this harness (counted
+    //     against the recorded writes): nothing reaches the live database.
+    {
+      const HP_Y = 2027, HP_SRC = "holiday-plan-2027";
+      const hpUnits = (gcBlobEarly.read && gcBlobEarly.holidays && gcBlobEarly.holidays.units && Array.isArray(gcBlobEarly.holidays.units[String(HP_Y)])) ? gcBlobEarly.holidays.units[String(HP_Y)].filter(u => u && typeof u.name === "string" && Array.isArray(u.days) && u.days.length).map(u => ({ name: u.name, tier: u.tier, days: u.days.slice().sort() })).sort((a, b) => a.days[0] < b.days[0] ? -1 : 1) : [];
+      if (!hpUnits.length) console.log(`     (holiday plan: ${gcBlobEarly.read ? "the served blob carries no " + HP_Y + " holiday units" : "the blob was not read up front"} - the Plan ${HP_Y} checks are skipped this run)`);
+      else if (hpUnits[0].days[0] < todayCentral) console.log(`     (holiday plan: the ${HP_Y} units start ${hpUnits[0].days[0]}, before today - Accept would skip started units; the Plan ${HP_Y} checks are skipped this run)`);
+      else {
+        const hpDays = [...new Set(hpUnits.flatMap(u => u.days))].sort();
+        const hpUnitOfDay = {}; hpUnits.forEach(u => u.days.forEach(d => { hpUnitOfDay[d] = u.name; }));
+        const hpDialogs = []; let hpAnswer = "dismiss";
+        const onHpDlg = (d) => { hpDialogs.push(d.message()); (hpAnswer === "accept" ? d.accept() : d.dismiss()).catch(() => {}); };
+        const hpReq = [];
+        // every non-GET REST / function request the page sends to the Supabase host (the auth endpoints and the realtime socket are not writes)
+        const hpRestPath = (p) => p.startsWith("/rest/v1/") || p.startsWith("/functions/v1/");
+        const onHpReq = (r) => { try { const u = new URL(r.url()); if (u.hostname === SUPABASE_HOST && hpRestPath(u.pathname) && !["GET", "HEAD", "OPTIONS"].includes(r.method())) hpReq.push(r.method() + " " + u.pathname); } catch (e) {} };
+        // the writes a plan step could make (a background heartbeat / blob autosave is not one of them)
+        const hpWriteish = (w) => /^\/rest\/v1\/(schedule_days|call_schedule_snapshots|audit_log|notifications|time_off)\b/.test(w.path) || w.path.startsWith("/functions/v1/");
+        const hpStart = writes.length;
+        const readPlan = () => page.$$eval("[data-testid=holplan-row]", rows => rows.map(r => { const p = r.querySelector("[data-testid=holplan-p]"), b = r.querySelector("[data-testid=holplan-b]"), w = r.querySelector("[data-testid=holplan-why]"); return { unit: r.getAttribute("data-unit"), p: p ? (p.getAttribute("data-id") || null) : null, b: b ? (b.getAttribute("data-id") || null) : null, why: w ? w.innerText.trim() : "" }; }));
+        const hpGet = async (q) => { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/${q}`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error(q.split("?")[0] + " read: HTTP " + r.status); const j = await r.json(); if (!Array.isArray(j)) throw new Error(q.split("?")[0] + " read: not an array"); return j; };
+        const RULE_MARK = { refused: "cannot be the", shape: "tier gives each", "no-repeat": "two years running", "max-major": "per rolling 12 months", "same-person": "both primary and backup", "not-in-pool": "not an active roster surgeon" };
+        page.on("dialog", onHpDlg); page.on("request", onHpReq);
+        try {
+          // the restatement's inputs - what this harness serves, never the page's state
+          const hpTimeOff = fixture ? fixture.time_off.map(r => ({ person_id: r.person_id, start_date: r.start_date, end_date: r.end_date })) : await hpGet("time_off?select=person_id,start_date,end_date&order=start_date.asc");
+          const hpSched = {}; Object.keys(liveByDay).forEach(d => { hpSched[d] = HELPERS.dayRowToAssignment({ ...liveByDay[d], ...(claimedDays[d] || {}), day: d }); });
+          const hpTouchWeek = (mon) => hpDays.some(d => d >= mon && d <= isoAddDays(mon, 6));
+          const hpReach = [];
+          try {
+            (await hpGet("east_feed?select=week_monday")).forEach(r => { const m = String(r.week_monday).slice(0, 10); if (hpTouchWeek(m)) hpReach.push("east_feed week " + m); });
+            (await hpGet("east_forecast?select=week_monday")).forEach(r => { const m = String(r.week_monday).slice(0, 10); if (hpTouchWeek(m)) hpReach.push("east_forecast week " + m); });
+            (await hpGet("east_overrides?select=day")).forEach(r => { const d = String(r.day).slice(0, 10); if (hpDays.includes(d)) hpReach.push("east_overrides " + d); });
+          } catch (e) { hpReach.push("the East tables could not be read (" + String(e && e.message || e) + ")"); }
+          Object.keys(gcBlobEarly.surgeonRules || {}).forEach(id => { const sw = gcBlobEarly.surgeonRules[id] && gcBlobEarly.surgeonRules[id].eastFeed && gcBlobEarly.surgeonRules[id].eastFeed.statedWeeks; if (sw && typeof sw === "object") ["eastPrimary", "eastBackup"].forEach(k => (Array.isArray(sw[k]) ? sw[k] : []).forEach(m => { if (hpTouchWeek(String(m))) hpReach.push(id + " statedWeeks " + m); })); });
+          EASTVAC_RANGES.concat(eastVacFeed).forEach(x => { if (hpDays.some(d => (d >= x.start && d <= x.end) || (isoAddDays(d, 1) >= x.start && isoAddDays(d, 1) <= x.end))) hpReach.push("East vacation fixture " + x.start + ".." + x.end); });
+          if (hpTouchWeek(EAST_WEEK.week_monday)) hpReach.push("the mocked Davenport week " + EAST_WEEK.week_monday);
+          const hpExact = hpReach.length === 0;
+          const hpOpts = { units: hpUnits, roster: gcBlobEarly.roster || [], surgeonRules: gcBlobEarly.surgeonRules || {}, groupRules: gcBlobEarly.groupRules || {}, history: HELPERS.holidayPlanHistory({ schedule: hpSched, holidays: gcBlobEarly.holidays, groupRules: gcBlobEarly.groupRules }).entries, east: {}, vacations: hpTimeOff, seed: HP_Y };
+          const hpWant = HELPERS.planHolidays(HP_Y, hpOpts);
+          if (!hpExact) console.log(`     (holiday plan: the East inputs reach a ${HP_Y} unit day (${hpReach.slice(0, 4).join("; ")}) - the restatement cannot know those refusals; the rendered plan is checked for shape only this run)`);
+          // a fresh poll interval: the Plan .. Re-check sequence reads the app's map and must not race the 60 s poll
+          await freshPollWindow("holiday plan");
+          await page.click('button[data-tab="setup"]');
+          await openCard("setup_holidays");
+          await page.waitForSelector("[data-testid=holplan]", { timeout: 8000 });
+          const hpYears = await page.$$eval("[data-testid=holplan-year] option", os => os.map(o => o.value));
+          if (!hpYears.includes(String(HP_Y))) throw new Error(`the year picker does not offer ${HP_Y}: ${hpYears.join(",")}`);
+          await page.selectOption("[data-testid=holplan-year]", String(HP_Y));
+          const hpRunText = (await page.$eval("[data-testid=holplan-run]", el => el.textContent)).trim();
+          const wPlan = writes.length;
+          await page.click("[data-testid=holplan-run]");
+          await page.waitForSelector("[data-testid=holplan-preview]", { timeout: 10000 });
+          await page.waitForTimeout(300);
+
+          // (1) the plan as rendered vs the restatement
+          const shown0 = await readPlan();
+          const want0 = hpWant.assignments.map(a => ({ unit: a.unit.name, p: a.primary || null, b: a.backup || null }));
+          const got0 = shown0.map(r => ({ unit: r.unit, p: r.p, b: r.b }));
+          const hpCountRows = await page.$$eval("[data-testid^=holplan-count-]", rows => rows.map(r => ({ id: r.getAttribute("data-testid").replace("holplan-count-", ""), cells: Array.from(r.querySelectorAll("td")).map(td => td.textContent.trim()) })));
+          const relaxedText = await page.$eval("[data-testid=holplan-relaxed]", el => el.textContent.trim()).catch(() => "");
+          const pass0 = await page.$eval("[data-testid=holplan-preview]", el => el.getAttribute("data-pass"));
+          const breaks0 = Number(await page.$eval("[data-testid=holplan-breaks]", el => el.getAttribute("data-count")));
+          const breakLines0 = await page.$$eval("[data-testid=holplan-break]", els => els.map(x => x.textContent.replace(/^- /, "").trim()));
+          const cntWant = (id) => { const c = hpWant.counts[id]; if (!c) return null; const bf = (t) => c.before[t].primary + " / " + c.before[t].any + " / " + c.before[t].eligible; const pl = (t) => { let p = 0, b = 0; want0.forEach((a, i) => { if (hpWant.assignments[i].unit.tier !== t) return; if (a.p === id) p++; if (a.b === id) b++; }); return p + "P / " + b + "B"; }; return [bf("major"), bf("minor"), pl("major"), pl("minor")]; };
+          const cntBad = hpExact ? Object.keys(hpWant.counts).filter(id => { const r = hpCountRows.find(x => x.id === id), w = cntWant(id); return !r || JSON.stringify(r.cells.slice(1)) !== JSON.stringify(w); }) : [];
+          if (hpRunText !== "Plan " + HP_Y) fail(`holiday plan: the Plan button reads '${hpRunText}', expected 'Plan ${HP_Y}'`);
+          else if (writesSince(wPlan).filter(hpWriteish).length) fail("holiday plan: Plan wrote something: " + JSON.stringify(writesSince(wPlan).filter(hpWriteish).map(w => w.method + " " + w.path)));
+          else if (got0.length !== hpUnits.length || got0.some((r, i) => r.unit !== hpUnits[i].name)) fail(`holiday plan: the preview lists ${JSON.stringify(got0.map(r => r.unit))}, the served ${HP_Y} units are ${JSON.stringify(hpUnits.map(u => u.name))}`);
+          else if (hpExact && JSON.stringify(got0) !== JSON.stringify(want0)) fail(`holiday plan: Plan ${HP_Y} shows ${JSON.stringify(got0)}, planHolidays on the served rows / blob / time_off gives ${JSON.stringify(want0)}`);
+          else if (hpExact && String(hpWant.search.pass) !== pass0) fail(`holiday plan: pass ${pass0} shown, ${hpWant.search.pass} restated`);
+          else if (cntBad.length) fail(`holiday plan: the counts table differs from the restatement for ${cntBad.join(", ")}: ` + JSON.stringify(hpCountRows.filter(r => cntBad.includes(r.id))) + " want " + JSON.stringify(cntBad.map(cntWant)));
+          else if (hpExact && relaxedText !== "Relaxed: " + (hpWant.relaxed.length ? hpWant.relaxed.join("; ") : "nothing (every rule held)") + ".") fail("holiday plan: the relaxed line reads " + JSON.stringify(relaxedText));
+          else if (shown0.some(r => !r.why)) fail("holiday plan: a unit row shows no 'why': " + JSON.stringify(shown0.filter(r => !r.why).map(r => r.unit)));
+          else ok(`holiday plan: Plan ${HP_Y} (nothing written) renders ${got0.map(r => r.unit + " " + (r.p || "OPEN") + "/" + (r.b || "OPEN")).join(", ")}${hpExact ? " = planHolidays on the served rows (history " + hpOpts.history.length + " unit(s), " + hpTimeOff.length + " time_off row(s)); pass " + pass0 + ", the counts table and the relaxed line equal the restatement" : " (shape only - see above)"}; every row says why`);
+          await page.screenshot({ path: path.join(OUT, "holiday-plan-2027.png"), fullPage: false }).catch(() => {});
+
+          // (2) a swap that breaks a rule warns - dismissed: unchanged; accepted: moved + listed; reset restores
+          const hpOpt = await page.evaluate(() => {
+            const sels = Array.from(document.querySelectorAll("[data-testid=holplan-swap]"));
+            for (let i = 0; i < sels.length; i++) { const o = Array.from(sels[i].options).find(x => / - BREAKS: /.test(x.textContent)); if (o) return { i, unit: sels[i].getAttribute("data-unit"), role: sels[i].getAttribute("data-role"), value: o.value, text: o.textContent }; }
+            return null;
+          });
+          if (!hpOpt) fail("holiday plan: no swap option is labelled BREAKS - with six surgeons a replacement always breaks the tier shape, so the list is not judging the moves");
+          else {
+            const codes = hpOpt.text.replace(/^.* - BREAKS: /, "").split(",").map(s => s.trim()).filter(Boolean);
+            const slotOf = (rows) => { const r = rows.find(x => x.unit === hpOpt.unit); return r ? (hpOpt.role === "primary" ? r.p : r.b) : undefined; };
+            const wSw = writes.length;
+            hpAnswer = "dismiss"; let dN = hpDialogs.length;
+            await page.locator("[data-testid=holplan-swap]").nth(hpOpt.i).selectOption(hpOpt.value);
+            await page.waitForTimeout(400);
+            const m1 = hpDialogs.slice(dN), after1 = await readPlan(), swapped1 = !!(await page.$("[data-testid=holplan-swapped]"));
+            const named = (m) => codes.every(c => !RULE_MARK[c] || m.indexOf(RULE_MARK[c]) >= 0);
+            if (m1.length !== 1 || !/ BREAKS \d+ rule\(s\):\n- /.test(m1[0]) || !named(m1[0])) fail(`holiday plan swap: '${hpOpt.text}' should ask ONE confirm naming the rule(s) ${codes.join(", ")} - dialogs: ` + JSON.stringify(m1.map(m => m.slice(0, 300))));
+            else if (JSON.stringify(after1) !== JSON.stringify(shown0) || swapped1) fail("holiday plan swap: dismissing the confirm still changed the plan: " + JSON.stringify(after1.map(r => [r.unit, r.p, r.b])));
+            else ok(`holiday plan swap: '${hpOpt.unit} ${hpOpt.role}: ${hpOpt.text}' asks first ("${m1[0].split("\n")[0].slice(0, 120)}" naming ${codes.join(", ")}); dismissed - the plan is unchanged`);
+            hpAnswer = "accept"; dN = hpDialogs.length;
+            await page.locator("[data-testid=holplan-swap]").nth(hpOpt.i).selectOption(hpOpt.value);
+            await page.waitForTimeout(500);
+            const m2 = hpDialogs.slice(dN), after2 = await readPlan();
+            const brk2 = await page.$eval("[data-testid=holplan-breaks]", el => ({ n: Number(el.getAttribute("data-count")), lines: Array.from(el.querySelectorAll("[data-testid=holplan-break]")).map(x => x.textContent.replace(/^- /, "").trim()) }));
+            const swapped2 = !!(await page.$("[data-testid=holplan-swapped]"));
+            const unlisted = brk2.lines.filter(l => breakLines0.indexOf(l) < 0 && !(m2.length && m2[0].indexOf(l) >= 0));
+            if (m2.length !== 1) fail("holiday plan swap (accepted): expected one confirm, got " + m2.length);
+            else if (slotOf(after2) === slotOf(shown0)) fail(`holiday plan swap (accepted): the ${hpOpt.unit} ${hpOpt.role} still shows ${slotOf(after2)}`);
+            else if (!swapped2 || brk2.n <= breaks0 || unlisted.length) fail(`holiday plan swap (accepted): swapped marker ${swapped2}, ${brk2.n} break(s) listed (before ${breaks0}); listed but not named in the confirm: ` + JSON.stringify(unlisted));
+            else ok(`holiday plan swap (accepted): ${hpOpt.unit} ${hpOpt.role} ${slotOf(shown0)} -> ${slotOf(after2)}; the plan now lists ${brk2.n} break(s), each named in the confirm (${brk2.lines.slice(0, 3).join(" | ").slice(0, 200)})`);
+            await page.click("[data-testid=holplan-reset]");
+            await page.waitForTimeout(400);
+            const after3 = await readPlan(), breaks3 = Number(await page.$eval("[data-testid=holplan-breaks]", el => el.getAttribute("data-count")));
+            if (JSON.stringify(after3) !== JSON.stringify(shown0) || breaks3 !== breaks0 || (await page.$("[data-testid=holplan-swapped]"))) fail("holiday plan: 'Back to the planner's plan' did not restore it: " + JSON.stringify(after3.map(r => [r.unit, r.p, r.b])) + ", breaks " + breaks3);
+            else if (writesSince(wSw).filter(hpWriteish).length) fail("holiday plan swap: a swap wrote something: " + JSON.stringify(writesSince(wSw).filter(hpWriteish).map(w => w.method + " " + w.path)));
+            else ok(`holiday plan: 'Back to the planner's plan' restores the plan (${breaks3} break(s)); the swaps wrote nothing`);
+          }
+
+          // (3) Accept with a FAILING snapshot: nothing locked, the plan kept
+          const shownA = await readPlan();
+          failSnapshotInsert = true; hpAnswer = "accept";
+          const wF = writes.length, dF = hpDialogs.length;
+          await page.click("[data-testid=holplan-accept]");
+          await waitFor(() => writesSince(wF, "/rest/v1/call_schedule_snapshots").length > 0, 30000);
+          await page.waitForTimeout(1500);
+          failSnapshotInsert = false;
+          {
+            const mF = hpDialogs.slice(dF), snapF = writesSince(wF, "/rest/v1/call_schedule_snapshots"), dayF = writesSince(wF, "/rest/v1/schedule_days"), audF = writesSince(wF, "/rest/v1/audit_log");
+            const toastF = /Couldn't save a backup snapshot - NOTHING was locked/.test(await bodyText());
+            const keptF = !!(await page.$("[data-testid=holplan-preview]"));
+            const wantConfirm = `Accept the ${HP_Y} holiday plan: lock ${hpDays.length} day(s) of ${hpUnits.length} unit(s)`;
+            if (mF.length !== 1 || mF[0].indexOf(wantConfirm) < 0 || !/A backup snapshot is saved first/.test(mF[0]) || !/Cancel writes nothing\./.test(mF[0])) fail(`holiday plan Accept (snapshot failing): expected ONE confirm containing '${wantConfirm}' + the snapshot / Cancel lines - dialogs: ` + JSON.stringify(mF.map(m => m.slice(-400))));
+            else if (snapF.length !== 1 || !snapF[0].forcedFail) fail("holiday plan Accept (snapshot failing): expected exactly one failed snapshot insert, saw " + JSON.stringify(snapF.map(w => w.method + " " + w.path + (w.forcedFail ? " [forced fail]" : ""))));
+            else if (dayF.length || audF.length) fail(`holiday plan Accept (snapshot failing): ${dayF.length} schedule_days write(s) and ${audF.length} audit row(s) although the snapshot failed`);
+            else if (!toastF || !keptF) fail(`holiday plan Accept (snapshot failing): toast 'NOTHING was locked' ${toastF}, plan kept ${keptF}`);
+            else ok(`holiday plan Accept with a failing snapshot: one confirm ('${wantConfirm}'), one snapshot POST (500), ZERO schedule_days writes, no audit row, the plan kept, toast says nothing was locked`);
+          }
+
+          // (4) Accept for real
+          planDaysCapture = true; hpAnswer = "accept";
+          const w4 = writes.length, d4 = hpDialogs.length;
+          await page.click("[data-testid=holplan-accept]");
+          await waitFor(() => !!auditSince(w4, "holiday_plan.accept"), 60000);
+          await page.waitForTimeout(1500);
+          const seq4 = writesSince(w4);
+          const shownBy = {}; shownA.forEach(r => { shownBy[r.unit] = r; });
+          const accRows = {};
+          {
+            const snapI = seq4.findIndex(w => w.method === "POST" && w.path.startsWith("/rest/v1/call_schedule_snapshots"));
+            const dayI = seq4.findIndex(w => w.path.startsWith("/rest/v1/schedule_days"));
+            const dayW = seq4.filter(w => w.path.startsWith("/rest/v1/schedule_days"));
+            const wDay = (w) => w.method === "PATCH" ? (/day=eq\.(\d{4}-\d{2}-\d{2})/.exec(w.path) || [])[1] : ((bodyOf(w) || {}).day || null);
+            const problems = [], seen = new Set();
+            dayW.forEach(w => {
+              const d = wDay(w), b = bodyOf(w) || {}, u = hpUnitOfDay[d], live = liveByDay[d];
+              if (!u) { problems.push("outside the unit days: " + w.method + " " + w.path); return; }
+              if (seen.has(d)) problems.push("a second write of " + d);
+              seen.add(d);
+              const casOk = live ? (w.method === "PATCH" && new RegExp("^/rest/v1/schedule_days\\?day=eq\\." + d + "&version=eq\\.\\d+$").test(w.path)) : (w.method === "POST" && b.version === 1 && /return=representation/.test(w.prefer || ""));
+              if (!casOk) problems.push(d + " not CAS-shaped: " + w.method + " " + w.path);
+              const s = shownBy[u] || {};
+              const wantP = s.p || (live && live.primary_id) || null, wantB = s.b || (live && live.backup_id) || null;
+              if ((b.primary_id || null) !== wantP || (b.backup_id || null) !== wantB) problems.push(`${d} holders ${b.primary_id}/${b.backup_id}, shown ${wantP}/${wantB}`);
+              if ((s.p && b.primary_locked !== true) || (s.b && b.backup_locked !== true)) problems.push(`${d} locks ${b.primary_locked}/${b.backup_locked}`);
+              if (b.source !== HP_SRC) problems.push(`${d} source ${JSON.stringify(b.source)}`);
+              if (b.note !== u + " unit - holiday plan " + HP_Y) problems.push(`${d} note ${JSON.stringify(b.note)}`);
+              if (s.p && b.external_cover !== null) problems.push(`${d} external_cover ${JSON.stringify(b.external_cover)}`);
+              accRows[d] = HELPERS.dayRowToAssignment({ ...b, day: d });
+            });
+            const missing = hpDays.filter(d => !seen.has(d));
+            const audits = seq4.map(bodyOf).filter(b => b && b.action === "holiday_plan.accept");
+            const aud = audits[0], det = aud && aud.detail;
+            const wantAffected = [...new Set(hpDays.flatMap(d => { const s = shownBy[hpUnitOfDay[d]] || {}, l = liveByDay[d] || {}; const out = []; if (s.p && s.p !== (l.primary_id || null)) out.push(s.p, l.primary_id); if (s.b && s.b !== (l.backup_id || null)) out.push(s.b, l.backup_id); return out; }).filter(id => id && (gcBlobEarly.roster || []).some(r => r.id === id && r.type !== "external")))].sort();
+            const notes = seq4.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/notifications")).map(bodyOf).filter(b => b && b.type === "manual_edit");
+            const mails = seq4.filter(w => w.method === "POST" && w.path.startsWith("/functions/v1/send-notification")).map(bodyOf).filter(b => b && b.type === "manual_edit");
+            const office = seq4.filter(w => w.path.startsWith("/functions/v1/office-notifications"));
+            const m4 = hpDialogs.slice(d4);
+            if (m4.length !== 1) fail("holiday plan Accept: expected ONE confirm, got " + JSON.stringify(m4.map(m => m.slice(0, 200))));
+            else if (snapI < 0 || seq4[snapI].snapshotReason !== "holiday_plan") fail("holiday plan Accept: no snapshot 'holiday_plan' recorded (" + (snapI < 0 ? "none" : seq4[snapI].snapshotReason) + ")");
+            else if (dayI < 0 || dayI < snapI) fail(`holiday plan Accept: a schedule_days write (#${dayI}) before the snapshot (#${snapI})`);
+            else if (problems.length || missing.length || dayW.length !== hpDays.length) fail(`holiday plan Accept: ${dayW.length} schedule_days write(s), expected one per ${HP_Y} unit day (${hpDays.length}); missing ${JSON.stringify(missing)}; ${problems.slice(0, 6).join("; ")}`);
+            else if (audits.length !== 1 || !det || det.year !== HP_Y || det.source !== HP_SRC || det.outcome !== "ok" || !det.snapshot || JSON.stringify((det.units || []).map(u => [u.name, u.primary, u.backup])) !== JSON.stringify(shownA.map(r => [r.unit, r.p, r.b]))) fail("holiday plan Accept: expected ONE audit holiday_plan.accept { year, source, units = the shown plan (roster ids), snapshot counts, outcome ok }: " + JSON.stringify(audits.map(a => a.detail)).slice(0, 600));
+            else if (wantAffected.length && (notes.length !== 1 || mails.length !== 1 || JSON.stringify((mails[0].targetIds || []).slice().sort()) !== JSON.stringify(wantAffected) || !/^Holiday plan 2027 - locked:/.test(String(mails[0].data && mails[0].data.message || "")))) fail(`holiday plan Accept: expected one manual_edit notification + one manual_edit send-notification to ${JSON.stringify(wantAffected)} - got ${notes.length} note(s), mails ${JSON.stringify(mails.map(m => ({ targetIds: m.targetIds, message: String(m.data && m.data.message || "").slice(0, 80) })))}`);
+            else if (office.length) fail("holiday plan Accept: an office notice went out: " + JSON.stringify(office.map(w => w.path)));
+            else ok(`holiday plan Accept: snapshot 'holiday_plan' (#${snapI}) precedes the first schedule_days write (#${dayI}); ${dayW.length} CAS write(s) = every ${HP_Y} unit day (${dayW.filter(w => w.method === "POST").length} POST v1, ${dayW.filter(w => w.method === "PATCH").length} PATCH ?day&version) with the shown holders, both locks, source ${HP_SRC} and the unit-only note; ONE audit holiday_plan.accept (units = the plan, outcome ok); one manual_edit note + one manual_edit e-mail to ${wantAffected.length} holder(s); no office notice`);
+          }
+
+          // (5) Re-check 2027: all accepted, nothing blocked; then a mocked vacation blocks the Thanksgiving primary
+          await page.waitForSelector("[data-testid=holplan-recheck-list]", { timeout: 10000 });
+          const rc0 = await page.$eval("[data-testid=holplan-recheck-list]", el => ({ year: el.getAttribute("data-year"), acc: Number(el.getAttribute("data-accepted")), blocked: Number(el.getAttribute("data-blocked")) }));
+          const previewGone = !(await page.$("[data-testid=holplan-preview]"));
+          if (rc0.year !== String(HP_Y) || rc0.acc !== hpUnits.length || rc0.blocked !== 0 || !previewGone) fail(`holiday plan Re-check after Accept: year ${rc0.year}, ${rc0.acc} accepted unit(s) (want ${hpUnits.length}), ${rc0.blocked} blocked (want 0), preview cleared ${previewGone}`);
+          else ok(`holiday plan Re-check ${HP_Y} after Accept: ${rc0.acc} accepted unit(s), nothing blocked; the preview is cleared`);
+          const tgUnit = hpUnits.find(u => u.name === "Thanksgiving") || hpUnits[hpUnits.length - 1];
+          const tgHolder = (shownBy[tgUnit.name] || {}).p;
+          if (!tgHolder) fail(`holiday plan Re-check: the ${tgUnit.name} primary is open in the accepted plan - nothing to block`);
+          else {
+            const vacDay = tgUnit.days[Math.min(2, tgUnit.days.length - 1)];
+            const vacRow = { id: "harness-holplan-vacation", person_id: tgHolder, start_date: vacDay, end_date: vacDay, note: null, public: false, created_at: new Date().toISOString() };
+            extraTimeOff = [vacRow];
+            const w5 = writes.length;
+            if (!rtSendRow("time_off", vacRow, "INSERT")) throw new Error("the realtime mock is not joined - the mocked vacation cannot reach the page");
+            const sawItem = await page.waitForFunction(([u, id]) => Array.from(document.querySelectorAll("[data-testid=holplan-recheck-item]")).some(el => el.getAttribute("data-unit") === u && el.getAttribute("data-role") === "primary" && el.getAttribute("data-id") === id), [tgUnit.name, tgHolder], { timeout: 15000 }).then(() => true).catch(() => false);
+            const items = await page.$$eval("[data-testid=holplan-recheck-item]", els => els.map(el => ({ unit: el.getAttribute("data-unit"), role: el.getAttribute("data-role"), id: el.getAttribute("data-id"), text: el.innerText.replace(/\s+/g, " "), sug: ((el.querySelector("[data-testid=holplan-recheck-suggestion]") || {}).textContent || "").trim(), apply: !!el.querySelector("[data-testid=holplan-recheck-apply]") })));
+            const it = items.find(x => x.unit === tgUnit.name && x.role === "primary" && x.id === tgHolder);
+            let wantItems = null;
+            if (hpExact) {
+              const rcWant = HELPERS.holidayPlanRecheck(HP_Y, { ...hpOpts, vacations: hpTimeOff.concat([vacRow]), schedule: { ...hpSched, ...accRows } });
+              wantItems = rcWant.blocked.map(b => ({ unit: b.unit.name, role: b.role, id: b.id, sug: b.suggestion ? "Suggested: " + b.suggestion.text + (b.valid ? " - keeps every rule" : " - BREAKS: " + b.suggestion.added.map(x => x.text).join("; ")) : "No swap clears it - open the day editor or change the plan by hand." }));
+            }
+            if (!sawItem || !it) fail(`holiday plan Re-check: the mocked vacation (${tgHolder} ${vacDay}) did not list the ${tgUnit.name} primary - items: ` + JSON.stringify(items));
+            else if (it.text.indexOf("time-off:" + vacDay) < 0) fail("holiday plan Re-check: the item does not name time-off:" + vacDay + ": " + it.text);
+            else if (!/^Suggested: /.test(it.sug) || !it.apply) fail("holiday plan Re-check: no suggested swap / Apply on the item: " + JSON.stringify(it));
+            else if (wantItems && JSON.stringify(items.map(x => ({ unit: x.unit, role: x.role, id: x.id, sug: x.sug }))) !== JSON.stringify(wantItems)) fail("holiday plan Re-check: the list differs from holidayPlanRecheck on the served data + the accepted rows + the mocked vacation: " + JSON.stringify(items.map(x => [x.unit, x.role, x.id, x.sug])) + " want " + JSON.stringify(wantItems.map(x => [x.unit, x.role, x.id, x.sug])));
+            else ok(`holiday plan Re-check: a mocked vacation (${tgHolder} ${vacDay}, never written) lists ${tgUnit.name} primary with time-off:${vacDay}; ${it.sug}${wantItems ? " (= the restatement)" : ""}`);
+            if (it && it.apply) {
+              hpAnswer = "dismiss";
+              const d6 = hpDialogs.length, w6 = writes.length;
+              const idx = items.filter(x => x.apply).indexOf(it);
+              await page.locator("[data-testid=holplan-recheck-apply]").nth(idx).click();
+              await page.waitForTimeout(800);
+              const m6 = hpDialogs.slice(d6), wr6 = writesSince(w6).filter(w => w.path.startsWith("/rest/v1/schedule_days") || w.path.startsWith("/rest/v1/call_schedule_snapshots") || w.path.startsWith("/rest/v1/audit_log"));
+              if (m6.length !== 1 || !/Apply this swap: lock \d+ day\(s\) of \d+ unit\(s\)/.test(m6[0]) || !/A backup snapshot is saved first/.test(m6[0])) fail("holiday plan Re-check Apply: expected the Accept confirm ('Apply this swap: lock N day(s) of M unit(s)', snapshot first) - dialogs: " + JSON.stringify(m6.map(m => m.slice(-300))));
+              else if (wr6.length) fail("holiday plan Re-check Apply (dismissed): it wrote " + JSON.stringify(wr6.map(w => w.method + " " + w.path)));
+              else ok(`holiday plan Re-check Apply: the same guarded path - its confirm ("${m6[0].split("\n").filter(Boolean).pop().slice(0, 110)}") dismissed, nothing written`);
+            }
+            if (writesSince(w5).some(w => w.path.startsWith("/rest/v1/time_off"))) fail("holiday plan Re-check: the mocked vacation was written: " + JSON.stringify(writesSince(w5).filter(w => w.path.startsWith("/rest/v1/time_off")).map(w => w.method + " " + w.path)));
+            extraTimeOff = [];
+            rtSendRow("time_off", vacRow, "DELETE");
+            const cleared = await page.waitForFunction(() => { const el = document.querySelector("[data-testid=holplan-recheck-list]"); return !!el && el.getAttribute("data-blocked") === "0"; }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+            if (!cleared) fail("holiday plan Re-check: after the mocked vacation was withdrawn the list still shows a blocked slot");
+            else ok("holiday plan Re-check: the vacation withdrawn (time_off re-read without it) - nothing blocked again");
+          }
+          await page.click("[data-testid=holplan-recheck-close]").catch(() => {});
+          // nothing reached the live database: every non-GET the page sent to the Supabase host was answered (and recorded) here
+          await page.waitForTimeout(500); // the last requests' route handlers record them
+          const recorded = {};
+          writesSince(hpStart).forEach(w => { const k = w.method + " " + w.path.split("?")[0]; recorded[k] = (recorded[k] || 0) + 1; });
+          const unanswered = hpReq.filter(k => { if (recorded[k]) { recorded[k]--; return false; } return true; });
+          if (!hpReq.some(k => k.startsWith("POST /rest/v1/schedule_days"))) fail("holiday plan: the request listener saw no schedule_days POST during the step - the live-database check proves nothing: " + JSON.stringify(hpReq.slice(0, 12)));
+          else if (unanswered.length) fail(`holiday plan: ${unanswered.length} of ${hpReq.length} non-GET request(s) to the Supabase host have no recorded harness answer - a write may have reached the live database: ` + JSON.stringify(unanswered.slice(0, 12)));
+          else ok(`holiday plan: all ${hpReq.length} non-GET request(s) of the step were answered (and recorded) by the harness - snapshot, CAS writes, audit, notification, e-mail; nothing reached the live database`);
+        } catch (e) {
+          fail("holiday plan (Prompt 25) harness exception: " + errLine(e));
+          try { await page.screenshot({ path: path.join(OUT, "failure-holiday-plan.png"), fullPage: true }); } catch (e2) {}
+        } finally {
+          page.off("dialog", onHpDlg); page.off("request", onHpReq);
+          failSnapshotInsert = false; planDaysCapture = false; extraTimeOff = [];
+          // the accepted days leave the served rows now (never in the live table): a DELETE frame per day drops them from the
+          // app's map at once (best effort - the app's next poll drops them too), and they are registered in harnessDays so
+          // settleMapToLive confirms the grid is back to the live rows before any live-state pin derives
+          const hpHeld = Object.keys(planDayStore);
+          hpHeld.forEach(d => { delete planDayStore[d]; noteEdit(d, { primary_id: null, backup_id: null }); rtDropDayRow(d); });
+          if (hpHeld.length) { await page.waitForTimeout(600); console.log(`     (holiday plan: ${hpHeld.length} accepted day(s) taken back out of the served rows - DELETE frames sent; settleMapToLive re-checks them)`); }
+        }
+      }
     }
 
     // ---- East feed: status line + derived weeks ----
