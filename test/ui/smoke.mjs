@@ -519,6 +519,7 @@ let followerPrefs400Lines = 0;
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
+let df4Forced500Lines = 0; // review 9/27 Do first 4: the browser's own "status of 500" line per time_off / availability read the startup page's route forced to fail (armed per forced answer, consumed one line each, cleared after the step)
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
 // and year-switch steps), never by the live project. Each non-2xx answer it forces is pushed here ({ path, status, page }) and
@@ -953,6 +954,7 @@ const watchPage = (pg, tag) => {
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
+      else if (df4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); df4Forced500Lines--; } // review 9/27 Do first 4: a time_off / availability read the startup page's route answered 500
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -3726,8 +3728,13 @@ try {
         const reads = `east_feed read ${st.forced.feed}x, east_vacation_reviews ${st.forced.reviews}x (500)`;
         if (!st.forced.feed || (wantReviews && !st.forced.reviews)) fail(`${T}: the forced failure never reached the page (${reads}) - the toast check proves nothing`);
         else if (R.kind === "scheduler") {
+          // Review 9/27 Do first 4 (adapted deliberately): the startup reads run in parallel and the load says every failed
+          // read in ONE toast, so the scheduler's two East sentences arrive together - each in a toast of its own would
+          // replace the other (the flakiness the review named for this check).
+          const oneT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t) && /Couldn't load the East vacation reviews/.test(t));
           if (!feedT || !revT) fail(`${T}: the scheduler must still see both toasts - ${reads}; shown: ${JSON.stringify(shown)}`);
-          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' toasts show`);
+          else if (!oneT) fail(`${T}: the two East sentences came in separate toasts (Do first 4: one combined toast for the load) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' sentences show, in one combined toast`);
         } else if (shown.length) fail(`${T}: a 'Couldn't load the East ...' toast shows to a non-scheduler - ${JSON.stringify(shown)} (${reads})`);
         else ok(`${T}: ${reads} - no 'Couldn't load the East ...' toast${wantReviews ? "" : " (public mode never reads the reviews - the feed-cache toast is its proof)"}`);
         st.failEast = false;
@@ -10674,6 +10681,87 @@ try {
     failDaysFor = null;
     daysFail500Lines = 0; daysFailAppLines = 0;
     await pdf.close();
+  }
+
+  // ====================== Review 9/27 Do first 4: the startup reads run in parallel; ONE toast for the reads that failed ======================
+  // Its own BrowserContext with a scheduler token minted here (the start-time FAKE_JWT may have expired by now, and an
+  // expired token skips the authenticated-only reads this step counts); Realtime silenced (no SUBSCRIBED refreshAll adds
+  // reads). The page's call_schedule_data GETs are held DF4_HOLD_MS before they are answered; its time_off and availability
+  // GETs answer 500. Expected: every startup read (the anon tables and the authenticated-only ones) is issued before the
+  // FIRST held blob read answers - the chain this replaced issued the schedule_days read only after the blob had answered
+  // and each later read after the one before it, so its first schedule_days GET came DF4_HOLD_MS after the blob's; while
+  // the blob is held the header still says "Connecting" (`loaded` waits for every read) and "Synced" comes only after it
+  // answered; the two failures reach the person in ONE toast that names both (each toasted on its own before, the second
+  // replacing the first) - on both loads of a signed-in open (the mount run, then the stored session's re-run).
+  {
+    const DF4_HOLD_MS = 2500;
+    const DF4_READS = ["schedule_days", "time_off", "availability", "east_feed", "east_forecast", "east_overrides", "client_versions", "shift_trade_requests", "notifications", "call_offers", "call_periods", "east_vacation_reviews"];
+    const df4Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df4Ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+    await df4Ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: df4Jwt, version: APP_VERSION });
+    await df4Ctx.addInitScript(() => {
+      window.__df4Toasts = [];
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && window.__df4Toasts[window.__df4Toasts.length - 1] !== txt) window.__df4Toasts.push(txt); };
+      new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
+    });
+    await df4Ctx.route(cdnMatcher, routeCdn);
+    await df4Ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+    const p4 = await df4Ctx.newPage();
+    watchPage(p4, "do-first-4");
+    const settle4 = restReadsSettled(p4);
+    const reads4 = []; // { path, at, answeredAt } per REST GET, node clock
+    await p4.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: no SUBSCRIBED refreshAll
+    await p4.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET" || !url.pathname.startsWith("/rest/v1/")) return routeSupabase(route);
+      const rec = { path: url.pathname.slice("/rest/v1/".length), at: Date.now(), answeredAt: null };
+      reads4.push(rec);
+      if (rec.path === "time_off" || rec.path === "availability") {
+        df4Forced500Lines++;
+        rec.answeredAt = Date.now();
+        return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: Do first 4 forced read failure", details: null, hint: null }) });
+      }
+      if (rec.path === "call_schedule_data") await new Promise(r => setTimeout(r, DF4_HOLD_MS));
+      const out = await routeSupabase(route);
+      rec.answeredAt = Date.now();
+      return out;
+    });
+    try {
+      await p4.goto(BASE, { waitUntil: "domcontentloaded" });
+      await p4.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      if (!(await waitFor(() => reads4.some(r => r.path === "call_schedule_data"), 15000))) throw new Error("the page never read call_schedule_data");
+      const blob0 = reads4.find(r => r.path === "call_schedule_data");
+      await p4.waitForTimeout(Math.max(0, blob0.at + DF4_HOLD_MS / 2 - Date.now()));
+      const hdrHeld = await p4.$eval("[data-testid=app-header]", el => el.textContent).catch(() => "");
+      await p4.waitForSelector("text=Synced", { timeout: 30000 });
+      const syncedAt = Date.now();
+      // both loads (the mount run and the sign-in re-run) have read the blob and every read has settled
+      await waitFor(() => reads4.filter(r => r.path === "call_schedule_data" && r.answeredAt).length >= 2, 15000);
+      await settle4();
+      await p4.waitForTimeout(600);
+      const firstAt = {}; reads4.forEach(r => { if (firstAt[r.path] === undefined) firstAt[r.path] = r.at; });
+      const late = DF4_READS.filter(n => firstAt[n] === undefined || firstAt[n] >= blob0.answeredAt);
+      const lag = DF4_READS.filter(n => firstAt[n] !== undefined).map(n => n + " +" + (firstAt[n] - blob0.at) + " ms").join(", ");
+      if (!blob0.answeredAt || blob0.answeredAt - blob0.at < DF4_HOLD_MS - 50) fail(`Do first 4: the harness did not hold the first call_schedule_data read (${blob0.answeredAt ? blob0.answeredAt - blob0.at : "never answered"} ms)`);
+      else if (late.length) fail(`Do first 4: ${late.length} startup read(s) went out only after the held blob read answered (${blob0.answeredAt - blob0.at} ms) - the load is still a chain: ${late.join(", ")} (first GETs after the blob's: ${lag})`);
+      else ok(`Do first 4: all ${DF4_READS.length} startup reads were in flight before the held blob read answered (${blob0.answeredAt - blob0.at} ms): ${lag}`);
+      if (!/Connecting/.test(hdrHeld) || /Synced/.test(hdrHeld)) fail(`Do first 4: with the blob read held the header must still say 'Connecting' (loaded waits for every read) - '${hdrHeld.replace(/\s+/g, " ").slice(0, 120)}'`);
+      else if (syncedAt < blob0.answeredAt) fail(`Do first 4: 'Synced' showed ${blob0.answeredAt - syncedAt} ms before the held blob read answered`);
+      else ok(`Do first 4: 'Connecting' while the blob read was held; 'Synced' ${syncedAt - blob0.answeredAt} ms after it answered`);
+      const toasts = await p4.evaluate(() => (window.__df4Toasts || []).slice());
+      const failT = toasts.filter(t => /Couldn't load (vacations|availability statements)/.test(t));
+      const both = (t) => t.includes("Couldn't load vacations - data shown may be incomplete.") && t.includes("Couldn't load availability statements - data shown may be incomplete.");
+      const forced = reads4.filter(r => r.path === "time_off" || r.path === "availability").length;
+      if (forced < 4) fail(`Do first 4: expected both loads to read time_off and availability (4 forced 500s), the route answered ${forced}`);
+      else if (!failT.length) fail("Do first 4: no toast named the failed time_off / availability reads: " + JSON.stringify(toasts));
+      else if (!failT.every(both)) fail("Do first 4: the two failed reads toasted separately (each toast replaces the one before) - expected ONE toast naming both: " + JSON.stringify(failT));
+      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> ${failT.length} toast(s), each naming both: '${failT[0].slice(0, 140)}'`);
+      await p4.screenshot({ path: path.join(OUT, "do-first-4-startup.png"), fullPage: true }).catch(() => {});
+    } catch (e) { fail("Do first 4: " + errLine(e)); try { await p4.screenshot({ path: path.join(OUT, "failure-do-first-4.png"), fullPage: true }); } catch (e2) {} }
+    await settle4();
+    await df4Ctx.close();
+    df4Forced500Lines = 0;
   }
 
   // ====================== Prompt 11: data management end to end (recorded writes) ======================

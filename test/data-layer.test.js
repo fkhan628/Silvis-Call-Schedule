@@ -2503,9 +2503,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const r = await fn(quiet);
         return { toasts, warns, reads, r };
       };
+      // Review 9/27 Do first 4: `quiet` may be a function - the mount load's collector for its ONE combined toast
+      const sink = () => { const got = []; const f = (m) => got.push(m); f.got = got; return f; };
+      const tSinkOn = sink(), tSinkOff = sink(), rSinkOn = sink(), rSinkOff = sink(), rSink404 = sink();
       return {
         tOff: await tables(false, "east_feed", false), tOn: await tables(true, "east_feed", false), tOnQuiet: await tables(true, "east_overrides", true), tOnOk: await tables(true, null, false),
         rOff: await reviews(false, "HTTP 500", false), rOn: await reviews(true, "HTTP 500", false), rOn404: await reviews(true, "HTTP 404 not found", false), rOnQuiet: await reviews(true, "HTTP 500", true), rPublic: await reviews(false, "HTTP 500", false, true),
+        tOnSink: { ...(await tables(true, "east_forecast", tSinkOn)), got: tSinkOn.got }, tOffSink: { ...(await tables(false, "east_forecast", tSinkOff)), got: tSinkOff.got },
+        rOnSink: { ...(await reviews(true, "HTTP 500", rSinkOn)), got: rSinkOn.got }, rOffSink: { ...(await reviews(false, "HTTP 500", rSinkOff)), got: rSinkOff.got }, rOn404Sink: { ...(await reviews(true, "HTTP 404 not found", rSink404)), got: rSink404.got },
       };
     } catch (e) { return { error: String(e && e.message || e) }; }
   })();
@@ -2602,9 +2607,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("const eastDetailsVisibleRef = useRef(false);"), 1);
     assert.ok(src.includes("useEffect(() => { eastDetailsVisibleRef.current = eastDetailsVisible; }, [eastDetailsVisible]);"), "the ref is mirrored from the flag after every render");
     // (4) the two toasts: gated on the ref, the console.warn kept for everyone - and run
-    assert.ok(src.includes('if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn\'t load the East (Davenport) feed cache'), "the feed-cache toast reads the ref");
-    assert.ok(src.includes('if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn\'t load the East vacation reviews'), "the reviews toast reads the ref");
-    assert.strictEqual(count("showToast(\"Couldn't load the East"), 2, "two 'Couldn't load the East ...' toasts, both gated");
+    // Review 9/27 Do first 4 (pin moved deliberately): the sentence is built once, gated on the ref as before, and goes to
+    // the mount load's collector when `quiet` is a function (its ONE combined toast), to a toast when quiet is falsy.
+    assert.ok(src.includes('if (r.some(x => x === null) && eastDetailsVisibleRef.current) { const msg = "Couldn\'t load the East (Davenport) feed cache'), "the feed-cache toast reads the ref");
+    assert.ok(src.includes('if (!missing && eastDetailsVisibleRef.current) { const msg = "Couldn\'t load the East vacation reviews'), "the reviews toast reads the ref");
+    assert.strictEqual(count("Couldn't load the East"), 2, "two 'Couldn't load the East ...' sentences, both gated");
+    assert.strictEqual(count('if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error");'), 4, "time_off, availability and the two East loaders: the collector, a toast, or nothing");
     assert.ok(!e4Loaders.error, "the loaders could not be lifted / run: " + e4Loaders.error);
     const L = e4Loaders;
     assert.deepStrictEqual(L.tOff.toasts, [], "a non-scheduler gets no feed-cache toast");
@@ -2618,6 +2626,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(L.rOn404.toasts, [], "a 404 (migration not applied) is still not toasted");
     assert.deepStrictEqual(L.rOnQuiet.toasts, [], "a quiet (poll) read never toasts");
     assert.ok(L.rPublic.r === true && L.rPublic.reads.length === 0 && L.rPublic.toasts.length === 0, "public mode still never reads the reviews");
+    // Review 9/27 Do first 4: a function `quiet` (the mount load's collector) gets the same sentence, never a toast of its own
+    assert.ok(L.tOnSink.toasts.length === 0 && L.tOnSink.got.length === 1 && L.tOnSink.got[0] === "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads." && L.tOnSink.ok === false, "the scheduler's feed-cache sentence goes to the collector: " + JSON.stringify(L.tOnSink));
+    assert.ok(L.tOffSink.toasts.length === 0 && L.tOffSink.got.length === 0, "a non-scheduler's collector gets nothing");
+    assert.ok(L.rOnSink.toasts.length === 0 && L.rOnSink.got.length === 1 && L.rOnSink.got[0] === "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load." && L.rOnSink.r === false, "the scheduler's reviews sentence goes to the collector: " + JSON.stringify(L.rOnSink));
+    assert.ok(L.rOffSink.toasts.length === 0 && L.rOffSink.got.length === 0 && L.rOn404Sink.toasts.length === 0 && L.rOn404Sink.got.length === 0, "a non-scheduler / a 404 gives the collector nothing");
   });
   // Follow-ups 10/1 item 1 (the 10/1 queue report): Prompt 23's codes get plain words - lone-weekend-day (hard),
   // weekend-cap and hard-never-beyond-notice (soft), weekday-primary (soft, same gap) - reasonLabel falls back to softTag
@@ -3081,7 +3094,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const rd = src.slice(src.indexOf("    const refreshDays = async () => {"), src.indexOf("    // Authenticated-read tables"));
     assert.ok(rd.includes("if (adopted !== false) loadFailedRef.current = false;") && rd.includes("if (adopted !== false) markDaysRead();"), "refreshDays marks the read only for an adopted read (a tripped read is not a success)");
     // the failure: the banner flag in the schedule_days catch, next to the unchanged loadFailedRef arm
-    const cat = src.slice(src.indexOf('console.error("Supabase load error (schedule_days):", e);'), src.indexOf("await loadTimeOff();", src.indexOf('console.error("Supabase load error (schedule_days):", e);')));
+    // Review 9/27 Do first 4 (pin moved deliberately): the catch ends Leg B - the secondary reads follow it, no longer
+    // the sequential "await loadTimeOff();" (the parallel load; run in section DF4).
+    const catAt = src.indexOf('console.error("Supabase load error (schedule_days):", e);');
+    const cat = src.slice(catAt, src.indexOf("// Independent secondary loads", catAt));
+    assert.ok(catAt > 0 && cat.length > 0 && cat.length < 800, "the schedule_days catch is the end of Leg B, right before the secondary loads: " + cat.length);
     assert.ok(cat.includes("loadFailedRef.current = true; // read threw - suppress autosave until a read succeeds") && cat.includes("if (!daysReadThisRun) setDaysLoadFailed(true);"), "catch: loadFailedRef armed as before + the banner flag");
     assert.ok(src.includes("      setLoaded(true);\n"), "setLoaded(true) still runs after the load (the loaded gates are untouched)");
     // the banner: persistent role=alert, Retry = the poll's full refreshAll
@@ -3525,7 +3542,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('readAuthOnlyTable("east_vacation_reviews"'), "the reviews must be read with readAuthOnlyTable");
     assert.strictEqual(src.includes('db.query("east_vacation_reviews"'), false, "never a plain db.query (anon fallback) on the reviews table");
     assert.ok(src.includes('setEastVacReviewState(missing ? "missing" : "failed")'), "a 404 must be recorded as 'missing' (the table is prepared, not applied)");
-    assert.ok(src.includes("await loadEastVacationReviews();"), "initial load");
+    // Review 9/27 Do first 4 (pin moved deliberately): the initial load reads the reviews in its parallel batch
+    assert.ok(src.includes('loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),'), "initial load");
     assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),"), "the 60-s poll refreshes the reviews too");
   });
   check("P15: the review write path - dbAuthHeaders() on every mutation, an upsert on (person_id,start,end) with merge-duplicates + representation checked non-empty, a reset is a DELETE by the exact triple, one audit eastvac.review, own rows or the scheduler", () => {
@@ -3655,7 +3673,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const ls = src.indexOf("const loadEastVacationReviews = async (quiet) => {");
     const lb = src.slice(ls, src.indexOf("\n  };", ls));
     // Item E4 (9/26): the condition gained "&& eastDetailsVisibleRef.current" (the toast is the scheduler's only; pinned and run in "Item E4 (9/26)")
-    assert.ok(lb.includes("if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("), "a 404 at start is not toasted (the panel banner names it; a save attempt refuses with a toast)");
+    // Review 9/27 Do first 4 (pin moved deliberately): the sentence goes to the mount load's collector or a toast - neither for a 404
+    assert.ok(lb.includes("if (!missing && eastDetailsVisibleRef.current) { const msg = ") && lb.includes('if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error"); }'), "a 404 at start is not toasted (the panel banner names it; a save attempt refuses with a toast)");
   });
   check("P15 fix: public mode draws no East-vacation marker, legend, title or strip item (the reviews are never loaded there, so every state would read 'unreviewed'); the strip item renders for the scheduler and for the person with the East code only (never a dead end for another surgeon or the viewer)", () => {
     const ps = src.indexOf("const eastVacPeople = useMemo(() => {");
@@ -4894,7 +4913,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(legA.includes("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {") && legA.includes("if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);"), "unchanged row on a re-run -> no adoptBlob, the armed payload (or the owed Setup write) re-fires");
       const iSkip = legA.indexOf("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {"), iAdopt = legA.indexOf("adoptBlob(d);");
       assert.ok(iSkip > 0 && iAdopt > iSkip && legA.slice(iSkip, iAdopt).includes("} else {"), "adoptBlob sits in the else branch only");
-      assert.ok(legA.includes("if (rerun && isScheduler && pendingSaveRef.current) showToast("), "a moved row over an armed payload is announced");
+      // Review 9/27 Do first 4 (pin moved deliberately): announced in the load's ONE combined toast (a toast of its own would be replaced)
+      assert.ok(legA.includes('if (rerun && isScheduler && pendingSaveRef.current) sayLoadFail("blobMoved")('), "a moved row over an armed payload is announced");
       // the hydration window opens once; the switched-account flag is consumed at the end of the load
       assert.ok(src.includes("if (!loadedAtRef.current) loadedAtRef.current = Date.now();\n      switchedUserRef.current = false;"), "loadedAtRef is set on the FIRST load only (a re-run does not re-open the 3-s autosave window) and the switch flag is cleared");
       assert.strictEqual(count("loadedAtRef.current = Date.now()"), 1, "one place sets loadedAtRef");
@@ -7239,6 +7259,175 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("setSaveStatus(LOAD_FAILED_STATUS);"), 2);
       assert.ok(src.includes('{loaded && !daysReadOk && <span data-testid="hdr-days-unread" style={{marginLeft:8,color:T.onNavy,fontWeight:700,fontSize:10}}>Schedule not loaded</span>}'), "the private header's unread line");
       assert.strictEqual(count("{loaded && !saveStatus && !daysReadOk &&"), 0, "no longer hidden by a status");
+    });
+  })();
+
+  /* ---------------- DF4. Review 9/27 Do first 4: the startup load runs its reads in parallel ---------------- */
+  console.log("\n[DF4] review 9/27 Do first 4 (every startup read at once in ONE Promise.allSettled; loaded / loadedAtRef / switchedUserRef after everything settles; only the schedule_days failure arms loadFailedRef; ONE combined toast; runGenerate refuses an unread schedule)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle, hay) => (hay || src).split(needle).length - 1;
+    const between = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return src.slice(i, j); };
+    const acheckD = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const ref = (v) => ({ current: v });
+    const tick = () => new Promise(r => setImmediate(r)); // every pending microtask has run
+    // a load that never settles (a read it waits on was never started - the sequential chain) must FAIL the check, not leave
+    // the event loop empty: node would then exit 0 in the middle of the suite with no summary line
+    const bounded = (pr) => { let t; return Promise.race([pr, new Promise((_, rej) => { t = setTimeout(() => rej(new Error("the load never settled within 3 s - a read it waits on was never started")), 3000); })]).finally(() => clearTimeout(t)); };
+    // The mount load's IIFE body, lifted verbatim and run against deferred stub reads (the test answers each one).
+    const MOUNT_FROM = "      loadFailedRef.current = false; // reset each load attempt";
+    const MOUNT_TO = "\n    })();\n\n    // --- Realtime subscriptions (preferred) with safety-net poll ---";
+    let mountBody = "", liftErr = null;
+    try { mountBody = between(MOUNT_FROM, MOUNT_TO); } catch (e) { liftErr = e; }
+    const PARAMS = ["loadFailedRef", "supabase", "blobLoadedRef", "loadedAtRef", "switchedUserRef", "blobTsRef", "pendingSaveRef", "blobDirtyRef", "setSaveTick", "isScheduler", "adoptBlob", "console",
+      "loadScheduleDays", "mergeLoadedDays", "syncScheduleDays", "scheduleRef", "adoptLoadedDays", "markDaysRead", "setDaysLoadFailed",
+      "readAuthOnlyTable", "setTradeRequests", "setNotifications", "setNotifsRead", "loadOffers", "loadPeriods", "db", "versionCmp", "APP_VERSION", "setForceUpdate",
+      "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "combinedLoadToast", "showToast", "setLoaded"];
+    const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews"];
+    const LOUD = ["time_off", "availability", "east", "east_vacation_reviews"]; // the loaders that toasted on their own before
+    const FAILMSG = {
+      days: "Couldn't load the latest data - check your connection and reload.",
+      blob: "Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.",
+      blobMoved: "The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.",
+      time_off: "Couldn't load vacations - data shown may be incomplete.",
+      availability: "Couldn't load availability statements - data shown may be incomplete.",
+      east: "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.",
+      east_vacation_reviews: "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.",
+    };
+    const mk = (o) => {
+      if (liftErr) throw liftErr;
+      const opt = o || {};
+      const st = { started: [], settled: [], toasts: [], loaded: [], adoptBlob: 0, adoptDays: 0, merge: 0, sync: 0, marked: 0, saveTick: 0, daysFailed: [], quiet: {}, d: {} };
+      const defer = (name) => { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); st.started.push(name); st.d[name] = { res: (v) => { st.settled.push(name); res(v); }, rej: (e) => { st.settled.push(name); rej(e); } }; return p; };
+      const refs = { loadFailedRef: ref(!!opt.loadFailed), blobLoadedRef: ref(false), loadedAtRef: ref(opt.loadedAt || null), switchedUserRef: ref(!!opt.switched), blobTsRef: ref(opt.blobTs || null), pendingSaveRef: ref(opt.pending || null), blobDirtyRef: ref(false), scheduleRef: ref({}) };
+      // a loader that takes the collector: answered { fail: true } it fails and hands its sentence on exactly like the real one
+      const loader = (name) => async (quiet) => {
+        st.quiet[name] = quiet;
+        const r = await defer(name);
+        const ok = !(r && r.fail);
+        if (!ok) { if (typeof quiet === "function") quiet(FAILMSG[name]); else if (!quiet) st.toasts.push("error " + FAILMSG[name]); }
+        return name === "east" ? { ok, feedRows: ok ? [] : null } : ok;
+      };
+      const supabase = { from: () => ({ select: () => ({ eq: () => ({ single: () => defer("blob") }) }) }) };
+      const run = new Function(...PARAMS, "return async () => {\n" + mountBody + "\n};")(
+        refs.loadFailedRef, supabase, refs.blobLoadedRef, refs.loadedAtRef, refs.switchedUserRef, refs.blobTsRef, refs.pendingSaveRef, refs.blobDirtyRef, () => { st.saveTick++; }, !!opt.scheduler,
+        () => { st.adoptBlob++; }, { error: () => {}, warn: () => {} },
+        () => defer("days"), () => { st.merge++; return true; }, () => { st.sync++; }, refs.scheduleRef, () => { st.adoptDays++; }, () => { st.marked++; }, (v) => st.daysFailed.push(v),
+        (t) => defer(t), () => {}, () => {}, () => {},
+        (q) => { st.quiet.call_offers = q; return defer("call_offers"); }, (q) => { st.quiet.call_periods = q; return defer("call_periods"); },
+        { query: (t) => defer(t) }, () => 0, "2026.10.01", () => {},
+        loader("time_off"), loader("availability"), loader("east"), loader("east_vacation_reviews"),
+        H.combinedLoadToast, (m, tone) => st.toasts.push(tone + " " + m),
+        (v) => st.loaded.push({ v, pending: READS.filter(n => !st.settled.includes(n)) }));
+      const OK = { blob: { data: { data: { roster: [] }, updated_at: opt.rowTs || "t-blob" } }, days: { sched: {}, vers: {}, count: 0 }, shift_trade_requests: [], notifications: [], call_offers: true, call_periods: true, client_versions: [] };
+      st.ok = (name) => st.d[name].res(OK[name] !== undefined ? OK[name] : {});
+      st.failRead = (name) => (LOUD.includes(name) ? st.d[name].res({ fail: true }) : st.d[name].rej(new Error("HTTP 500 harness")));
+      st.okRest = () => READS.forEach(n => { if (st.d[n] && !st.settled.includes(n)) st.ok(n); });
+      return { st, refs, run };
+    };
+
+    check("DF4 helpers: combinedLoadToast says every collected failure in ONE line - the schedule, then the shared setup (read, then the re-run notice), then time off, availability and the two East parts - whatever order they were collected in; an unknown key goes last; '' when nothing failed", () => {
+      assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"]);
+      assert.strictEqual(H.combinedLoadToast({}), "");
+      assert.strictEqual(H.combinedLoadToast(null), "");
+      assert.strictEqual(H.combinedLoadToast({ timeOff: FAILMSG.time_off }), FAILMSG.time_off, "one failure reads exactly as the loader's own toast did");
+      assert.strictEqual(H.combinedLoadToast({ eastReviews: "E2.", other: "X.", eastFeed: "E1.", timeOff: "T.", blob: "B.", days: "D.", availability: "A.", blobMoved: "M." }), "D. B. M. T. A. E1. E2. X.");
+      assert.strictEqual(H.combinedLoadToast({ days: "  D.  ", blob: "", timeOff: 3 }), "D.", "blank and non-string parts are dropped");
+    });
+
+    await acheckD("DF4 (lifted mount load): every read starts at once - all eleven are in flight before any answers (the chain it replaced started each read after the previous one settled); setLoaded(true) waits for the LAST answer, then loadedAtRef is set (first load) and switchedUserRef cleared; offers / periods stay quiet, the four loud loaders get the collector", async () => {
+      const { st, refs, run } = mk({ switched: true });
+      const p = run();
+      await tick();
+      assert.deepStrictEqual(st.started.slice().sort(), READS.slice().sort(), "in flight before any answer: " + JSON.stringify(st.started));
+      const order = READS.slice().reverse(); // the blob read answers last
+      for (const n of order.slice(0, -1)) {
+        st.ok(n); await tick();
+        assert.strictEqual(st.loaded.length, 0, "setLoaded ran after " + n + " while the blob read was still out");
+      }
+      assert.strictEqual(refs.loadedAtRef.current, null, "loadedAtRef waits too");
+      assert.strictEqual(refs.switchedUserRef.current, true, "switchedUserRef waits too");
+      st.ok("blob");
+      await bounded(p);
+      assert.strictEqual(st.loaded.length, 1, "setLoaded once");
+      assert.strictEqual(st.loaded[0].v, true);
+      assert.deepStrictEqual(st.loaded[0].pending, [], "every read had settled before setLoaded(true)");
+      assert.ok(typeof refs.loadedAtRef.current === "number" && refs.loadedAtRef.current > 0, "loadedAtRef set on the first load");
+      assert.strictEqual(refs.switchedUserRef.current, false, "switchedUserRef cleared after the load");
+      assert.ok(st.adoptDays === 1 && st.merge === 0 && st.marked === 1 && st.adoptBlob === 1 && refs.blobLoadedRef.current === true, "first load: the table adopted and marked read, the blob adopted");
+      assert.deepStrictEqual(st.toasts, [], "nothing failed - no toast");
+      assert.strictEqual(refs.loadFailedRef.current, false);
+      assert.ok(st.quiet.call_offers === true && st.quiet.call_periods === true, "offers and periods stay quiet (as before)");
+      assert.ok(LOUD.every(n => typeof st.quiet[n] === "function"), "time_off, availability and the two East loaders hand their sentence to the collector: " + JSON.stringify(Object.keys(st.quiet).map(k => k + ":" + typeof st.quiet[k])));
+    });
+
+    await acheckD("DF4 (lifted): the reads that fail are said in ONE toast once everything has settled - the schedule first, then the shared setup, then time off and the East parts, whatever order they failed in; only the schedule_days failure arms loadFailedRef and raises the banner flag", async () => {
+      const { st, refs, run } = mk({ scheduler: true });
+      const p = run();
+      await tick();
+      st.failRead("east_vacation_reviews"); st.failRead("east"); st.failRead("time_off"); await tick();
+      st.failRead("blob"); await tick();
+      assert.deepStrictEqual(st.toasts, [], "no toast while reads are still out (each failure used to toast at once, replacing the one before)");
+      ["shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "availability"].forEach(n => st.ok(n));
+      await tick();
+      assert.strictEqual(st.loaded.length, 0, "the days read is still out");
+      st.failRead("days");
+      await bounded(p);
+      const one = "error " + [FAILMSG.days, FAILMSG.blob, FAILMSG.time_off, FAILMSG.east, FAILMSG.east_vacation_reviews].join(" ");
+      assert.deepStrictEqual(st.toasts, [one], "one toast, in the fixed order");
+      assert.strictEqual(refs.loadFailedRef.current, true, "the days failure arms loadFailedRef");
+      assert.deepStrictEqual(st.daysFailed, [true], "and raises the banner flag");
+      assert.ok(st.marked === 0 && st.adoptDays === 0 && refs.blobLoadedRef.current === false, "nothing was taken in");
+      assert.ok(st.loaded.length === 1 && st.loaded[0].pending.length === 0, "loaded once, after everything");
+    });
+
+    await acheckD("DF4 (lifted): the blob and two secondary reads fail but schedule_days lands - loadFailedRef stays down (a previous attempt's flag is reset), the read is marked, no banner flag; the one toast leads with the shared setup", async () => {
+      const { st, refs, run } = mk({ loadFailed: true });
+      const p = run();
+      assert.strictEqual(refs.loadFailedRef.current, false, "reset at the start of each attempt");
+      await tick();
+      st.failRead("availability"); st.failRead("blob"); st.failRead("time_off");
+      st.okRest();
+      await bounded(p);
+      assert.strictEqual(refs.loadFailedRef.current, false, "only the schedule_days catch arms loadFailedRef");
+      assert.ok(st.marked === 1 && st.adoptDays === 1 && st.daysFailed.length === 0, "the days read was taken in");
+      assert.deepStrictEqual(st.toasts, ["error " + [FAILMSG.blob, FAILMSG.time_off, FAILMSG.availability].join(" ")]);
+      assert.strictEqual(typeof st.quiet.east, "function", "the East loader got the collector");
+    });
+
+    await acheckD("DF4 (lifted): a sign-in re-run of the same account merges + re-syncs (loadedAtRef kept, not re-opened); an unchanged blob row re-fires the armed save and is not adopted; a moved row over an armed payload is announced IN the one toast, ahead of a failed read", async () => {
+      const a = mk({ loadedAt: 12345, blobTs: "t-blob", pending: { roster: [] } });
+      const pa = a.run(); await tick();
+      a.st.okRest(); await bounded(pa);
+      assert.ok(a.st.merge === 1 && a.st.sync === 1 && a.st.adoptDays === 0, "the re-run merges and re-syncs");
+      assert.ok(a.st.adoptBlob === 0 && a.st.saveTick === 1, "an unchanged row: no adoptBlob, the armed save re-fires");
+      assert.strictEqual(a.refs.loadedAtRef.current, 12345, "the hydration window is not re-opened");
+      assert.deepStrictEqual(a.st.toasts, []);
+      const b = mk({ loadedAt: 12345, blobTs: "t-old", rowTs: "t-new", pending: { roster: [] }, scheduler: true });
+      const pb = b.run(); await tick();
+      b.st.failRead("availability"); b.st.okRest(); await bounded(pb);
+      assert.strictEqual(b.st.adoptBlob, 1, "a moved row is adopted");
+      assert.deepStrictEqual(b.st.toasts, ["error " + FAILMSG.blobMoved + " " + FAILMSG.availability], "the notice and the failure in one toast");
+      const c = mk({ loadedAt: 12345, switched: true });
+      const pc = c.run(); await tick(); c.st.okRest(); await bounded(pc);
+      assert.ok(c.st.adoptDays === 1 && c.st.merge === 0 && c.refs.switchedUserRef.current === false, "a different account adopts the table wholesale; the flag is cleared after the load");
+    });
+
+    check("DF4 pins: the mount load is ONE Promise.allSettled over Leg A, Leg B and the secondary reads - no sequential await of a loader left at its top level; one toast site for the load; runGenerate refuses an unread schedule (daysReadOkRef) BEFORE the offers verdict, the busy flag and the ctx build", () => {
+      assert.ok(!liftErr, "the mount body could not be lifted: " + liftErr);
+      assert.strictEqual(count("await Promise.allSettled([", mountBody), 1, "one settled batch");
+      const batch = mountBody.slice(mountBody.indexOf("await Promise.allSettled(["), mountBody.indexOf("]);", mountBody.indexOf("await Promise.allSettled([")));
+      for (const n of ["legA()", "legB()", "loadTrades()", "loadNotifs()", "loadOffers(true)", "loadPeriods(true)", "loadMinVersion()", 'loadTimeOff(sayLoadFail("timeOff"))', 'loadAvailability(sayLoadFail("availability"))', 'loadEastTables(sayLoadFail("eastFeed"))', 'loadEastVacationReviews(sayLoadFail("eastReviews"))']) assert.ok(batch.includes(n), "the batch runs " + n);
+      assert.ok(!/\n      await (loadTimeOff|loadAvailability|loadEastTables|loadEastVacationReviews|loadOffers|loadPeriods|loadScheduleDays|readAuthOnlyTable|supabase)\b/.test(mountBody), "no sequential top-level await of a read");
+      assert.strictEqual(count("showToast(", mountBody), 1, "the load's one toast site");
+      assert.ok(mountBody.indexOf("if (loadFailToast) showToast(loadFailToast, \"error\");") > mountBody.indexOf("await Promise.allSettled([") && mountBody.indexOf("setLoaded(true);") > mountBody.indexOf("if (loadFailToast) showToast("), "the toast, then setLoaded, after the batch");
+      assert.strictEqual(count("loadFailedRef.current = true", mountBody), 1, "one arm of loadFailedRef in the load (the schedule_days catch)");
+      const rg = between("  const runGenerate = async (o) => {", "  const rerollGenerate = () => {");
+      const iDays = rg.indexOf('if (!daysReadOkRef.current) { showToast(GEN_DAYS_UNREAD_MSG, "error"); return; }'), iVerdict = rg.indexOf("const ov = offersLoadVerdict(offersLoad);"), iBusy = rg.indexOf("setGenBusy(true);"), iBuild = rg.indexOf("safeBuildContext(");
+      assert.ok(iDays > 0 && iDays < iVerdict && iVerdict < iBusy && iBusy < iBuild, "the refusal comes first (" + [iDays, iVerdict, iBusy, iBuild].join(", ") + ")");
+      assert.strictEqual(count("GEN_DAYS_UNREAD_MSG"), 2, "declared once, used once");
+      assert.ok(src.indexOf("const GEN_DAYS_UNREAD_MSG = ") > 0 && src.indexOf("const GEN_DAYS_UNREAD_MSG = ") < src.indexOf("  const runGenerate = async (o) => {"), "declared before runGenerate");
+      assert.ok(/const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded[^"]*Nothing was run\.";/.test(src), "the refusal says so and that nothing ran");
     });
   })();
 

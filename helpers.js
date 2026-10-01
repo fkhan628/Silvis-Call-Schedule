@@ -944,6 +944,20 @@ function syncFailLine(dayFail, blobFail) {
   return [d && "Schedule: " + d, b && "Setup: " + b].filter(Boolean).join(" | ");
 }
 
+// ---- The startup load (review 9/27, Do first 4) ----
+// The mount load runs all its reads at once (one Promise.allSettled), so a read that fails cannot toast on its own:
+// parallel toasts replace each other and only the last one would be seen. Each failure is collected under its key and
+// the load shows ONE toast once everything has settled, in this order: the schedule (schedule_days), the shared setup
+// (the blob read, then its "changed elsewhere" notice on a sign-in re-run), then the secondary reads. Each part is the
+// reader's own sentence, unchanged; the two East parts reach the collector for the scheduler only (the loaders' Item E4
+// gate). A key outside the order goes last, in the order it was collected. "" when nothing failed.
+const LOAD_FAIL_ORDER = ["days", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"];
+function combinedLoadToast(fails) {
+  const f = fails && typeof fails === "object" ? fails : {};
+  const keys = LOAD_FAIL_ORDER.concat(Object.keys(f).filter(k => LOAD_FAIL_ORDER.indexOf(k) < 0));
+  return keys.map(k => (typeof f[k] === "string" ? f[k].trim() : "")).filter(Boolean).join(" ");
+}
+
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
 // The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
 // (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
@@ -6025,6 +6039,7 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     SYNC_RETRY_MS, syncRetryDelay, syncFailLine,
+    LOAD_FAIL_ORDER, combinedLoadToast,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
