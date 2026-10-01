@@ -10764,6 +10764,126 @@ try {
     df4Forced500Lines = 0;
   }
 
+  // ====================== Review 9/27 Do first 5: the 60 s poll pauses in hidden tabs, catches up when shown, skips at the sign-in card ======================
+  // Two pages in their own BrowserContexts (a token minted here; Realtime silenced, so every read below is the poll's).
+  // An init script takes over the 60-second interval - the app's callback is kept (window.__df5Poll() runs one tick on
+  // demand) and never fires on its own - makes document.hidden / visibilityState settable (window.__df5SetHidden(h)
+  // flips them and dispatches visibilitychange) and adds window.__df5Skew to Date.now() (the poll's clocks).
+  //  (1) signed in, hidden: a tick reads notifications and nothing else - not schedule_days, the blob, the East tables,
+  //      the offers or the profile (the poll used to run its 14 GETs whatever the tab's state);
+  //  (2) shown again within a minute of the last full refresh: no catch-up read;
+  //  (3) shown again after more than a minute (the clock moved 61 s): refreshAll at once - schedule_days read before the
+  //      next tick - and that first run after the load reads east_feed / east_forecast with east_overrides;
+  //  (4) a visible tick a minute later: schedule_days and east_overrides again, but NOT east_feed / east_forecast (every
+  //      10 minutes); (5) eleven minutes on: east_feed / east_forecast again;
+  //  (6) a page with no session (the sign-in card), visible: a tick reads nothing (it used to run the whole poll, its
+  //      authenticated reads logging "read skipped").
+  {
+    const df5Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df5Init = () => {
+      const si = window.setInterval.bind(window), ci = window.clearInterval.bind(window);
+      const polls = new Map();
+      window.setInterval = function (fn, ms, ...rest) {
+        if (ms === 60000 && typeof fn === "function") { const id = si(() => {}, 2147483647); polls.set(id, fn); return id; }
+        return si(fn, ms, ...rest);
+      };
+      window.clearInterval = function (id) { polls.delete(id); return ci(id); };
+      window.__df5PollCount = () => polls.size;
+      window.__df5Poll = () => { const fns = Array.from(polls.values()); if (!fns.length) return Promise.reject(new Error("no 60 s interval is armed")); return Promise.resolve(fns[fns.length - 1]()); };
+      let hidden = false;
+      Object.defineProperty(Document.prototype, "hidden", { configurable: true, get() { return hidden; } });
+      Object.defineProperty(Document.prototype, "visibilityState", { configurable: true, get() { return hidden ? "hidden" : "visible"; } });
+      window.__df5SetHidden = (h) => { hidden = !!h; document.dispatchEvent(new Event("visibilitychange")); };
+      const dn = Date.now.bind(Date);
+      window.__df5Skew = 0;
+      Date.now = () => dn() + window.__df5Skew;
+    };
+    const DF5_FULL = ["schedule_days", "call_schedule_data", "time_off", "availability", "east_overrides", "east_vacation_reviews", "call_offers", "call_periods", "client_versions", "shift_trade_requests", "user_profiles"];
+    const mkPage5 = async (token, tag) => {
+      const ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+      await ctx.addInitScript(({ token, version }) => { try { if (token) { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); } else { localStorage.removeItem("silvis-auth-token"); localStorage.removeItem("silvis-auth-refresh"); } localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token, version: APP_VERSION });
+      await ctx.addInitScript(df5Init);
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const pg = await ctx.newPage();
+      watchPage(pg, tag);
+      const settle = restReadsSettled(pg);
+      const reads = [];
+      await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await pg.route((url) => url.hostname === SUPABASE_HOST, (route) => {
+        const req = route.request(); const url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname.startsWith("/rest/v1/")) reads.push({ path: url.pathname.slice("/rest/v1/".length), at: Date.now() });
+        return routeSupabase(route);
+      });
+      return { ctx, pg, settle, reads };
+    };
+    const since = (reads, n) => reads.slice(n).map(r => r.path);
+    const tickAndSettle = async (P) => { const n = P.reads.length; await P.pg.evaluate(() => window.__df5Poll()); await P.settle(); return since(P.reads, n); };
+    // (1)-(5): signed in
+    const A = await mkPage5(df5Jwt, "do-first-5");
+    try {
+      await A.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await A.pg.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await A.settle();
+      await A.pg.waitForTimeout(500);
+      const armed = await A.pg.evaluate(() => window.__df5PollCount());
+      if (armed !== 1) throw new Error(`expected one 60 s interval armed after the load, found ${armed}`);
+      // (1) hidden
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      const hid = await tickAndSettle(A);
+      const hidFull = hid.filter(p => DF5_FULL.includes(p) || p === "east_feed" || p === "east_forecast");
+      if (!hid.includes("notifications")) fail(`Do first 5 (hidden tab): the tick did not read notifications (background pop-ups depend on it): ${JSON.stringify(hid)}`);
+      else if (hidFull.length) fail(`Do first 5 (hidden tab): the tick ran the full poll - ${hidFull.length} read(s) beyond notifications: ${JSON.stringify(hid)}`);
+      else ok(`Do first 5 (hidden tab): one tick read ${JSON.stringify(hid)} - notifications only, no schedule_days / blob / East / offers / profile`);
+      // (2) shown again inside the minute
+      let n = A.reads.length;
+      await A.pg.evaluate(() => window.__df5SetHidden(false));
+      await A.pg.waitForTimeout(800); await A.settle();
+      const soon = since(A.reads, n);
+      if (soon.includes("schedule_days")) fail(`Do first 5 (visible again within a minute): a catch-up refresh ran although the load was under a minute ago: ${JSON.stringify(soon)}`);
+      else ok(`Do first 5 (visible again within a minute): no catch-up read (${JSON.stringify(soon)})`);
+      // (3) hidden, the clock moves 61 s, shown -> refreshAll at once
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      n = A.reads.length;
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; window.__df5SetHidden(false); });
+      const caught = await waitFor(() => A.reads.slice(n).some(r => r.path === "schedule_days"), 3000);
+      await A.settle();
+      const cu = since(A.reads, n);
+      if (!caught) fail(`Do first 5 (visible after more than a minute): no refreshAll on becoming visible - reads: ${JSON.stringify(cu)}`);
+      else if (!cu.includes("east_feed") || !cu.includes("east_forecast") || !cu.includes("east_overrides")) fail(`Do first 5 (visible after more than a minute): the first full run after the load must read the three East tables: ${JSON.stringify(cu)}`);
+      else ok(`Do first 5 (visible after more than a minute): refreshAll ran at once (${cu.length} reads, schedule_days and the three East tables among them)`);
+      // (4) a minute later, visible tick: overrides yes, feed / forecast no
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; });
+      const t4 = await tickAndSettle(A);
+      if (!t4.includes("schedule_days") || !t4.includes("east_overrides")) fail(`Do first 5 (visible tick): the full poll did not run (schedule_days / east_overrides missing): ${JSON.stringify(t4)}`);
+      else if (t4.includes("east_feed") || t4.includes("east_forecast")) fail(`Do first 5 (visible tick, a minute after the last East read): east_feed / east_forecast were read again (every 10 minutes): ${JSON.stringify(t4)}`);
+      else ok(`Do first 5 (visible tick): schedule_days and east_overrides read, east_feed / east_forecast not (${t4.length} reads)`);
+      // (5) eleven minutes on
+      await A.pg.evaluate(() => { window.__df5Skew += 11 * 60000; });
+      const t5 = await tickAndSettle(A);
+      if (!t5.includes("east_feed") || !t5.includes("east_forecast")) fail(`Do first 5 (ten-minute East read): eleven minutes after the last East read the tick did not read east_feed / east_forecast: ${JSON.stringify(t5)}`);
+      else ok("Do first 5 (ten-minute East read): eleven minutes on, the tick reads east_feed and east_forecast again");
+    } catch (e) { fail("Do first 5: " + errLine(e)); try { await A.pg.screenshot({ path: path.join(OUT, "failure-do-first-5.png"), fullPage: true }); } catch (e2) {} }
+    await A.settle();
+    await A.ctx.close();
+    // (6) no session: the sign-in card
+    const B = await mkPage5(null, "do-first-5-signed-out");
+    try {
+      await B.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await B.pg.waitForSelector("button:has-text('Sign in')", { timeout: 30000 });
+      await B.settle();
+      await B.pg.waitForTimeout(500);
+      const t6 = await tickAndSettle(B);
+      if (t6.length) fail(`Do first 5 (signed out): a tick at the sign-in card read ${JSON.stringify(t6)} - the poll must skip there`);
+      else ok("Do first 5 (signed out): a tick at the sign-in card reads nothing");
+    } catch (e) { fail("Do first 5 (signed out): " + errLine(e)); try { await B.pg.screenshot({ path: path.join(OUT, "failure-do-first-5-signed-out.png"), fullPage: true }); } catch (e2) {} }
+    await B.settle();
+    await B.ctx.close();
+  }
+
   // ====================== Prompt 11: data management end to end (recorded writes) ======================
   {
     const p3 = await context.newPage();

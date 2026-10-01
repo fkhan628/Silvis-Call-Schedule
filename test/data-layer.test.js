@@ -2486,7 +2486,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   const e4Lift = (a, end) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(end, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' not found"); return src.slice(i, j + end.length); };
   const e4Loaders = await (async () => {
     try {
-      const tablesSrc = e4Lift("  const loadEastTables = async (quiet) => {", "\n  };\n");
+      // Review 9/27 Do first 5 (pin moved deliberately): loadEastTables gained overridesOnly (the poll between its 10-minute reads)
+      const tablesSrc = e4Lift("  const loadEastTables = async (quiet, overridesOnly) => {", "\n  };\n");
       const reviewsSrc = e4Lift("  const loadEastVacationReviews = async (quiet) => {", "\n  };\n");
       const tables = async (visible, failTable, quiet) => {
         const toasts = [], warns = [];
@@ -2603,7 +2604,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
     // the flag is declared before every reader (a const read before its line is a TDZ crash), the ref mirrors it
     const flagAt = src.indexOf("const eastDetailsVisible = isScheduler && !isPublicMode;");
-    assert.ok(flagAt > 0 && flagAt < src.indexOf("  const loadEastTables = async (quiet) => {") && flagAt < src.indexOf("const tradeReasonText = ") && src.indexOf("const isScheduler") < flagAt, "eastDetailsVisible declared with the role flags, before the loaders and tradeReasonText");
+    assert.ok(flagAt > 0 && flagAt < src.indexOf("  const loadEastTables = async (quiet, overridesOnly) => {") /* Do first 5: pin moved deliberately (overridesOnly) */ && flagAt < src.indexOf("const tradeReasonText = ") && src.indexOf("const isScheduler") < flagAt, "eastDetailsVisible declared with the role flags, before the loaders and tradeReasonText");
     assert.strictEqual(count("const eastDetailsVisibleRef = useRef(false);"), 1);
     assert.ok(src.includes("useEffect(() => { eastDetailsVisibleRef.current = eastDetailsVisible; }, [eastDetailsVisible]);"), "the ref is mirrored from the flag after every render");
     // (4) the two toasts: gated on the ref, the console.warn kept for everyone - and run
@@ -3544,7 +3545,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('setEastVacReviewState(missing ? "missing" : "failed")'), "a 404 must be recorded as 'missing' (the table is prepared, not applied)");
     // Review 9/27 Do first 4 (pin moved deliberately): the initial load reads the reviews in its parallel batch
     assert.ok(src.includes('loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),'), "initial load");
-    assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),"), "the 60-s poll refreshes the reviews too");
+    // Review 9/27 Do first 5 (pin moved deliberately): the poll reads the East tables through refreshEastTables (the overrides every
+    // run, the cache tables every 10 minutes) and the reviews on every run, as before
+    assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true),"), "the 60-s poll refreshes the reviews too");
   });
   check("P15: the review write path - dbAuthHeaders() on every mutation, an upsert on (person_id,start,end) with merge-duplicates + representation checked non-empty, a reset is a DELETE by the exact triple, one audit eastvac.review, own rows or the scheduler", () => {
     const ws = src.indexOf("const saveEastVacationReview = async");
@@ -3654,7 +3657,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok((src.match(/eastVacationPerson\(s, ef\)/g) || []).length >= 4, "the predicate is defined once and used in the three places");
   });
   check("P15 fix: the refresh's stale list is computed against the RELOADED cache picture (eastVacations(cacheRows, code) - the same merged list the panel, the ctx and the markers read), never the raw fetched list; loadEastTables hands the east_feed rows back; no cache -> no reset", () => {
-    const ls = src.indexOf("const loadEastTables = async (quiet) => {");
+    const ls = src.indexOf("const loadEastTables = async (quiet, overridesOnly) => {"); // Do first 5: pin moved deliberately (overridesOnly)
+    assert.ok(ls > 0, "loadEastTables not found");
     const lb = src.slice(ls, src.indexOf("\n  };", ls));
     assert.ok(lb.includes("feedRows"), "loadEastTables must return the east_feed rows it loaded (feedRows)");
     const rs = src.indexOf("const refreshEastFeed = async () => {");
@@ -6230,7 +6234,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const iFresh = raBody.indexOf("const fr = await auth.ensureFresh();"), iSettle = raBody.indexOf("await Promise.allSettled(["), iOwn = raBody.indexOf("refreshOwnProfile(fr),");
       assert.ok(iFresh > 0 && iSettle > iFresh && iOwn > iSettle, "refreshAll: ensureFresh, then the settled batch that includes refreshOwnProfile(fr): " + raBody);
       assert.strictEqual(B4count("refreshOwnProfile(fr)"), 1, "one call site (the poll and the SUBSCRIBED handler share refreshAll)");
-      assert.strictEqual(B4count("const pollInterval = setInterval(refreshAll, 60000);"), 1, "the 60-second poll");
+      // Review 9/27 Do first 5 (pin moved deliberately): the interval runs pollTick, whose full mode is refreshAll (still the one read
+      // site the poll and the SUBSCRIBED handler share); a hidden tab gets the session upkeep + notifications only (section DF5)
+      assert.strictEqual(B4count("const pollInterval = setInterval(pollTick, POLL_MS);"), 1, "the 60-second poll");
+      const pt = B4SRC.slice(B4SRC.indexOf("    const pollTick = async () => {"), B4SRC.indexOf("    const onPollVisibility = "));
+      assert.ok(pt.length > 0 && pt.includes('if (mode === "full") { await refreshAll(); return; }') && !pt.includes("refreshOwnProfile"), "pollTick: the full mode is refreshAll: " + pt.slice(0, 300));
       assert.strictEqual(B4count("setUserProfile("), 5, "setUserProfile call sites: adoptSignedInUser (ok + failed), handleSignOut, the Users card PATCH of the admin's own row, refreshOwnProfile");
     });
   }
@@ -7428,6 +7436,158 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("GEN_DAYS_UNREAD_MSG"), 2, "declared once, used once");
       assert.ok(src.indexOf("const GEN_DAYS_UNREAD_MSG = ") > 0 && src.indexOf("const GEN_DAYS_UNREAD_MSG = ") < src.indexOf("  const runGenerate = async (o) => {"), "declared before runGenerate");
       assert.ok(/const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded[^"]*Nothing was run\.";/.test(src), "the refusal says so and that nothing ran");
+    });
+  })();
+
+  /* ---------------- DF5. Review 9/27 Do first 5: the 60 s poll pauses in hidden tabs ---------------- */
+  console.log("\n[DF5] review 9/27 Do first 5 (a hidden tab: the session upkeep + notifications only; shown again after more than a minute: refreshAll at once; nothing at the sign-in card; east_feed / east_forecast every 10 min, east_overrides every run)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle, hay) => (hay || src).split(needle).length - 1;
+    const between = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return src.slice(i, j); };
+    const acheckD = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const ref = (v) => ({ current: v });
+
+    check("DF5 helpers: pollTickMode - 'skip' at the sign-in card (no user, not ?public=1) and in a hidden ?public=1 tab, 'head' in a hidden signed-in tab, 'full' otherwise; pollCatchUpDue - more than 60 s since the last full refresh (or never); eastPollDue - 10 minutes since the last East cache read (or never / failed)", () => {
+      assert.strictEqual(H.POLL_MS, 60000);
+      assert.strictEqual(H.EAST_POLL_MS, 600000);
+      const m = (signedIn, publicMode, hidden) => H.pollTickMode({ signedIn, publicMode, hidden });
+      assert.deepStrictEqual([m(false, false, false), m(false, false, true), m(true, false, false), m(true, false, true), m(false, true, false), m(false, true, true), m(true, true, false), m(true, true, true)],
+        ["skip", "skip", "full", "head", "full", "skip", "full", "head"]);
+      assert.strictEqual(H.pollTickMode(), "skip", "no state = nobody signed in");
+      assert.strictEqual(H.pollCatchUpDue(0, 5000), true, "never refreshed");
+      assert.strictEqual(H.pollCatchUpDue(1000, 61000), false, "exactly a minute is not more than a minute");
+      assert.strictEqual(H.pollCatchUpDue(1000, 61001), true);
+      assert.strictEqual(H.pollCatchUpDue(null, 1), true);
+      assert.strictEqual(H.eastPollDue(0, 1000), true, "never read (the first run after a load) / the last read failed");
+      assert.strictEqual(H.eastPollDue(1000, 600999), false);
+      assert.strictEqual(H.eastPollDue(1000, 601000), true);
+    });
+
+    // refreshEastTables + refreshAll (the clocks comment .. refreshDaysRef) and pollTick + onPollVisibility, lifted verbatim
+    // and run against stub readers, a stub document (hidden) and a stub clock (Date.now).
+    let pollSrc = "", liftErr = null;
+    try { pollSrc = between("    // Review 9/27 Do first 5: the poll's clocks.", "    refreshDaysRef.current = refreshDays;") + between("    const pollTick = async () => {", "    document.addEventListener(\"visibilitychange\", onPollVisibility);"); } catch (e) { liftErr = e; }
+    const mk = (o) => {
+      if (liftErr) throw liftErr;
+      const opt = o || {};
+      const st = { reads: [], resync: [], now: 1000000, eastFail: !!opt.eastFail };
+      const rd = (name) => async () => { st.reads.push(name); };
+      const refs = { authUserRef: ref(opt.signedOut ? null : { id: "u1" }), resyncPendingRef: ref((s) => st.resync.push(s)), blobDirtyRef: ref(!!opt.blobDirty) };
+      const doc = { hidden: !!opt.hidden };
+      const clock = { now: () => st.now };
+      const auth = { ensureFresh: async () => { st.reads.push("ensureFresh"); return { ok: true, refreshed: !!opt.refreshed }; }, sessionExpired: false };
+      const fns = new Function("auth", "resyncPendingRef", "refreshOwnProfile", "refreshBlobRow", "refreshDays", "refreshTradeReqs", "refreshNotifs", "refreshMinVersion",
+        "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "loadOffers", "loadPeriods", "blobDirtyRef", "authUserRef", "isPublicMode", "document", "Date",
+        "pollTickMode", "pollCatchUpDue", "eastPollDue",
+        pollSrc + "\nreturn { refreshAll, refreshEastTables, pollTick, onPollVisibility, clocks: () => ({ lastFullPollAt, lastEastPollAt }) };")(
+        auth, refs.resyncPendingRef, async () => { st.reads.push("profile"); }, rd("blob"), rd("days"), rd("trades"), rd("notifications"), rd("minVersion"),
+        async (q) => { st.reads.push("time_off:" + q); }, async (q) => { st.reads.push("availability:" + q); },
+        async (q, overridesOnly) => { st.reads.push(overridesOnly ? "east:overrides" : "east:all"); return { ok: !st.eastFail, feedRows: null }; },
+        async (q) => { st.reads.push("reviews:" + q); }, async (q) => { st.reads.push("offers:" + q); }, async (q) => { st.reads.push("periods:" + q); },
+        refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue);
+      st.take = () => { const r = st.reads.slice(); st.reads.length = 0; return r; };
+      return { st, refs, doc, fns };
+    };
+    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all", "reviews:true", "offers:true", "periods:true"];
+    const sorted = (a) => a.slice().sort();
+    const flush = () => new Promise(r => setImmediate(r));
+
+    await acheckD("DF5 (lifted poll): nobody signed in and not ?public=1 (the sign-in card) - a tick reads nothing, not even the session check; ?public=1 visible - the full refresh; ?public=1 hidden - nothing", async () => {
+      const a = mk({ signedOut: true });
+      await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), [], "the sign-in card: no read");
+      a.doc.hidden = true; await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), [], "hidden sign-in card: no read");
+      const b = mk({ signedOut: true, publicMode: true });
+      await b.fns.pollTick();
+      assert.deepStrictEqual(sorted(b.st.take()), sorted(FULL_FIRST), "?public=1 keeps the full poll");
+      b.doc.hidden = true; await b.fns.pollTick();
+      assert.deepStrictEqual(b.st.take(), [], "a hidden ?public=1 tab reads nothing (no session, no pop-ups)");
+    });
+
+    await acheckD("DF5 (lifted poll): a hidden signed-in tab - ensureFresh first, then notifications and nothing else; a granted refresh re-sends what a 401 left (poll); an owed Setup write is re-sent; the full-refresh clock does not move", async () => {
+      const a = mk({ hidden: true, refreshed: true, blobDirty: true });
+      const before = a.fns.clocks();
+      await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), ["ensureFresh", "notifications"], "the session upkeep and the notifications read only");
+      assert.deepStrictEqual(a.st.resync, ["poll", "poll"], "the granted refresh's re-send, then the owed Setup write's");
+      assert.deepStrictEqual(a.fns.clocks(), before, "a hidden tick is not a full refresh (the catch-up clock stays)");
+      const b = mk({ hidden: true });
+      await b.fns.pollTick();
+      assert.deepStrictEqual(b.st.take(), ["ensureFresh", "notifications"]);
+      assert.deepStrictEqual(b.st.resync, [], "nothing re-sent when nothing is owed and nothing was refreshed");
+    });
+
+    await acheckD("DF5 (lifted poll): a visible tick is refreshAll - every reader; the first run after the load reads the East cache tables too, a run a minute later the overrides only, ten minutes after the last cache read all three again; a failed cache read is retried by the next run", async () => {
+      const a = mk();
+      await a.fns.pollTick();
+      assert.deepStrictEqual(sorted(a.st.take()), sorted(FULL_FIRST), "the full refresh, East cache tables included (first run after the load)");
+      a.st.now += 61000; await a.fns.pollTick();
+      const r2 = a.st.take();
+      assert.ok(r2.includes("east:overrides") && !r2.includes("east:all") && r2.includes("days") && r2.includes("reviews:true"), "a minute later: overrides (and the reviews) every run, not the cache tables: " + JSON.stringify(r2));
+      a.st.now += 8 * 60000; await a.fns.pollTick();
+      assert.ok(a.st.take().includes("east:overrides"), "nine minutes after the cache read: still overrides only");
+      a.st.now += 60000; await a.fns.pollTick();
+      assert.ok(a.st.take().includes("east:all"), "ten minutes after the cache read: all three");
+      const b = mk({ eastFail: true });
+      await b.fns.refreshAll();
+      assert.ok(b.st.take().includes("east:all"));
+      b.st.eastFail = false; b.st.now += 61000; await b.fns.refreshAll();
+      assert.ok(b.st.take().includes("east:all"), "after a failed cache read the next run reads all three again");
+      b.st.now += 61000; await b.fns.refreshAll();
+      assert.ok(b.st.take().includes("east:overrides"), "and then the 10-minute cadence again");
+    });
+
+    await acheckD("DF5 (lifted poll): becoming visible - nothing while still hidden or within a minute of the last full refresh (the load counts); after more than a minute refreshAll at once, which resets the clock; nothing for a signed-out page", async () => {
+      const a = mk({ hidden: true });
+      a.st.now += 120000; a.fns.onPollVisibility(); await flush();
+      assert.deepStrictEqual(a.st.take(), [], "still hidden: nothing");
+      const b = mk();
+      b.st.now += 30000; b.fns.onPollVisibility(); await flush();
+      assert.deepStrictEqual(b.st.take(), [], "shown half a minute after the load: no catch-up");
+      b.st.now += 31000; b.fns.onPollVisibility(); await flush();
+      const r = b.st.take();
+      assert.ok(r.includes("days") && r.includes("profile") && r.includes("east:all"), "shown 61 s after the load: refreshAll at once: " + JSON.stringify(r));
+      assert.strictEqual(b.fns.clocks().lastFullPollAt, b.st.now, "the catch-up is a full refresh (clock reset)");
+      b.st.now += 5000; b.fns.onPollVisibility(); await flush();
+      assert.deepStrictEqual(b.st.take(), [], "shown again 5 s later: nothing");
+      const c = mk({ signedOut: true });
+      c.st.now += 120000; c.fns.onPollVisibility(); await flush();
+      assert.deepStrictEqual(c.st.take(), [], "signed out: the catch-up skips too");
+    });
+
+    await acheckD("DF5 (lifted loadEastTables): overridesOnly reads east_overrides alone (feedRows null); without it all three, as before", async () => {
+      const lift = between("  const loadEastTables = async (quiet, overridesOnly) => {", "\n  // Prompt 15 part 3: the East vacation reviews");
+      const run = async (overridesOnly) => {
+        const tables = [];
+        const fn = new Function("db", "setEastFeedRows", "setEastForecastRows", "setEastOverrideRows", "setEastLoadState", "showToast", "eastDetailsVisibleRef", "console", lift + "\nreturn loadEastTables;")(
+          { query: async (t) => { tables.push(t); return [{ t }]; } }, () => {}, () => {}, () => {}, () => {}, () => {}, { current: true }, { warn: () => {} });
+        const r = await fn(true, overridesOnly);
+        return { tables: tables.sort(), r };
+      };
+      const o = await run(true), a = await run(false);
+      assert.deepStrictEqual(o.tables, ["east_overrides"]);
+      assert.ok(o.r.ok === true && o.r.feedRows === null, JSON.stringify(o.r));
+      assert.deepStrictEqual(a.tables, ["east_feed", "east_forecast", "east_overrides"]);
+      assert.ok(a.r.ok === true && Array.isArray(a.r.feedRows) && a.r.feedRows[0].t === "east_feed");
+    });
+
+    check("DF5 pins: ONE poll interval (pollTick every POLL_MS) and ONE visibilitychange listener of its own, both removed in the load effect's cleanup; the poll's hidden head is the A3 head; the A3 / keepalive / version / shift-clock visibility handlers are untouched", () => {
+      assert.strictEqual(count("setInterval("), 2, "the poll and the shift clock - no new timer");
+      assert.strictEqual(count("const pollInterval = setInterval(pollTick, POLL_MS);"), 1);
+      assert.strictEqual(count('document.addEventListener("visibilitychange", onPollVisibility);'), 1);
+      assert.ok(src.includes('      clearInterval(pollInterval);\n      document.removeEventListener("visibilitychange", onPollVisibility);'), "removed together with the interval");
+      const eff = between("  // --- Supabase: Load on mount + real-time sync ---", "  }, [reloadTrigger]);");
+      assert.ok(eff.includes("const pollTick = async () => {") && eff.includes("const onPollVisibility = ") && eff.includes("const refreshEastTables = async () => {"), "all inside the load effect");
+      const pt = between("    const pollTick = async () => {", "    const onPollVisibility = ");
+      assert.ok(pt.includes("const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });"), "the mode");
+      assert.ok(pt.includes('const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current("poll");\n      await refreshNotifs();'), "the hidden head: ensureFresh / re-send, then notifications");
+      assert.ok(src.includes("const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };"), "the catch-up reads document.hidden (the smoke's keepalive dispatches override hidden only)");
+      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 5, "the keepalive flush, A3's ensureFresh, the version check, the shift clock and the poll's");
+      const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
+      assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
+      assert.ok(!/loadEastTables\(true\)/.test(ra) && ra.includes("refreshEastTables()"), "the poll's East read goes through the 10-minute cadence");
     });
   })();
 

@@ -12,7 +12,7 @@ checked and should not be raised again. The scheduler asked for this file to liv
   (`ui/integration-2026-09-27`). Find the code by the function, testid or string quoted next to each number.*
 - *"Scheduler-only" marks work the scheduler applies by hand (schema and RLS migrations, edge-function deploys, cron,
   Vault, Auth, SMTP); everything else is repo code a session can change on a branch.*
-- *Status (10/1): Do first 1-3 are on main and Do first 4 is on `perf/startup-and-poll` - each item's own Status line says what was done; no other item is fixed yet. Overlaps with the 9/27 ship: the Settings "(Prompt 10)" footer text is gone
+- *Status (10/1): Do first 1-3 are on main and Do first 4 and 5 are on `perf/startup-and-poll` - each item's own Status line says what was done; no other item is fixed yet. Overlaps with the 9/27 ship: the Settings "(Prompt 10)" footer text is gone
   (settings declutter), the coordinator's empty calendar-sync card is now hidden rather than given the full feed, and
   My schedule rows now also carry a "Give away" button (day-click summary) - re-measure "Mine rows" (Do first 9) at
   390 px on the shipped layout. The overlap column in section 6 names requests that shipped on 9/27.*
@@ -109,6 +109,7 @@ checked and should not be raised again. The scheduler asked for this file to liv
 - **Effort** S-M · **Risk** low-medium (the sign-in re-run will now usually take the merge path, so run the smoke) · **Scheduler-only** no
 
 ### 5. Pause the 60 s poll in hidden tabs (medium)
+- **Status:** Done on perf/startup-and-poll (10/1), not merged - the interval runs `pollTick` (`helpers.js pollTickMode`): nothing at the sign-in card or in a hidden ?public=1 tab; in a hidden signed-in tab the ensureFresh / re-send head + refreshNotifs (+ the owed Setup write's re-send, Do first 2); refreshAll otherwise; a `visibilitychange` listener in the load effect (removed with `pollInterval`) runs refreshAll when the tab is shown and the last full refresh is over 60 s old; east_feed / east_forecast every 10 min (`refreshEastTables`, `loadEastTables(true, overridesOnly)`), east_overrides and the reviews every run. The A3 visibility handler, the refreshAll head and the B4 order are kept (the B4 interval pin moved deliberately). Build guide §4.8; data-layer section DF5; smoke "Do first 5".
 - **Why:**
   - `setInterval(refreshAll, 60000)` (1913) runs whether or not the tab is visible and whether or not anyone is signed in. None of the visibility handlers (670, 1012, 2264) gates it.
   - Each run is 14 GETs, including all of schedule_days and the East jsonb (1835-1847, 1226-1230). That is about 840 requests an hour per desktop tab (the office and scheduler desks).

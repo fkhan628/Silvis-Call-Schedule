@@ -958,6 +958,36 @@ function combinedLoadToast(fails) {
   return keys.map(k => (typeof f[k] === "string" ? f[k].trim() : "")).filter(Boolean).join(" ");
 }
 
+// ---- The 60-second poll (review 9/27, Do first 5) ----
+// The safety-net poll ran refreshAll every 60 s whatever the tab's state - 14 GETs a run, all of schedule_days and the
+// East jsonb among them (about 840 requests an hour per desktop tab) - and at the sign-in card too, where every
+// authenticated read is skipped with a console warning. pollTickMode says what one tick does:
+//   "skip" - nobody is signed in and the page is not ?public=1 (the sign-in card), or a hidden ?public=1 page (no
+//            session to keep alive, no pop-ups): no read at all;
+//   "head" - a hidden tab of a signed-in person: the session upkeep only (ensureFresh and the re-send after a granted
+//            refresh - Prompt 16 A3 needs the 60 s cadence) plus the notifications read (background pop-ups:
+//            sendBrowserNotif fires only while the page lacks focus);
+//   "full" - refreshAll.
+// pollCatchUpDue: on becoming visible, a full refresh runs at once when the last one started more than POLL_MS ago (or
+// never). eastPollDue: refreshAll reads east_feed / east_forecast every EAST_POLL_MS (0 = never read yet, or the last
+// read failed); east_overrides and the reviews stay on every run (the client-side East claim gate needs fresh overrides).
+const POLL_MS = 60000;
+const EAST_POLL_MS = 10 * 60000;
+function pollTickMode(o) {
+  const p = o || {};
+  if (!p.signedIn && !p.publicMode) return "skip";
+  if (p.hidden) return p.signedIn ? "head" : "skip";
+  return "full";
+}
+function pollCatchUpDue(lastFullAt, now) {
+  const last = Number(lastFullAt);
+  return !(last > 0) || Number(now) - last > POLL_MS;
+}
+function eastPollDue(lastEastAt, now) {
+  const last = Number(lastEastAt);
+  return !(last > 0) || Number(now) - last >= EAST_POLL_MS;
+}
+
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
 // The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
 // (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
@@ -6040,6 +6070,7 @@ if (typeof module !== "undefined" && module.exports) {
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     SYNC_RETRY_MS, syncRetryDelay, syncFailLine,
     LOAD_FAIL_ORDER, combinedLoadToast,
+    POLL_MS, EAST_POLL_MS, pollTickMode, pollCatchUpDue, eastPollDue,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,

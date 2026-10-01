@@ -1450,7 +1450,9 @@ function CallSchedule() {
   // Returns { ok, feedRows }: feedRows = the east_feed rows just loaded (null when
   // that read failed), so a caller that must act on the RELOADED cache in the same
   // tick (refreshEastFeed's review resets) never reads a stale state closure.
-  const loadEastTables = async (quiet) => {
+  // Review 9/27 Do first 5: overridesOnly (the poll between its 10-minute reads of the cache tables - refreshEastTables
+  // in the load effect) reads east_overrides alone; feedRows is then null (that caller never reads it).
+  const loadEastTables = async (quiet, overridesOnly) => {
     const one = async (table, order, set, key) => {
       try {
         const rows = await db.query(table, { order });
@@ -1464,7 +1466,7 @@ function CallSchedule() {
         return null;
       }
     };
-    const r = await Promise.all([
+    const r = await Promise.all(overridesOnly ? [one("east_overrides", "day.asc", setEastOverrideRows, "overrides")] : [
       one("east_feed", "week_monday.asc", setEastFeedRows, "feed"),
       one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"),
       one("east_overrides", "day.asc", setEastOverrideRows, "overrides"),
@@ -1475,7 +1477,7 @@ function CallSchedule() {
     // sign-in re-run (reloadTrigger) reads again and toasts then, and Setup > East feed shows the failed table either way.
     // Review 9/27 Do first 4: a function `quiet` (the mount load's collector) takes the sentence for its ONE combined toast.
     if (r.some(x => x === null) && eastDetailsVisibleRef.current) { const msg = "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads."; if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error"); }
-    return { ok: r.every(x => x !== null), feedRows: r[0] };
+    return { ok: r.every(x => x !== null), feedRows: overridesOnly ? null : r[0] };
   };
   // Prompt 15 part 3: the East vacation reviews (authenticated-only table). No
   // fresh token -> not read (readAuthOnlyTable returns null; the current list is
@@ -2184,7 +2186,23 @@ function CallSchedule() {
         else setForceUpdate(null);
       } catch(e) { console.warn("Background min-version refresh failed:", e); }
     };
+    // Review 9/27 Do first 5: the poll's clocks. lastFullPollAt - when the last full refresh started (this load, or
+    // refreshAll): the visible-again catch-up runs refreshAll only when that is more than a poll period ago
+    // (helpers.js pollCatchUpDue). lastEastPollAt - when refreshAll last read east_feed / east_forecast: the two cache
+    // tables change with the Davenport feed run, not by the minute, so they are read every 10 minutes (eastPollDue), on
+    // the first run after a load and on the run after a failed read; east_overrides is read on every run (the client-side
+    // East claim gate needs fresh overrides), and so are the reviews.
+    let lastFullPollAt = Date.now();
+    let lastEastPollAt = 0;
+    const refreshEastTables = async () => {
+      const now = Date.now();
+      const all = eastPollDue(lastEastPollAt, now);
+      if (all) lastEastPollAt = now;
+      const r = await loadEastTables(true, !all);
+      if (all && !(r && r.ok)) lastEastPollAt = 0; // a failed read is retried by the next run, not 10 minutes later
+    };
     const refreshAll = async () => {
+      lastFullPollAt = Date.now(); // review 9/27 Do first 5: the visible-again catch-up reads it
       // Prompt 16 A3: the 60-second poll keeps the session alive - a refresh here (only when the token is inside
       // its last five minutes) means the authenticated-only reads below and the next write carry a live token;
       // when it did refresh, anything a 401 left behind is re-sent (no-op when nothing is pending).
@@ -2193,7 +2211,7 @@ function CallSchedule() {
       await Promise.allSettled([
         refreshOwnProfile(fr), // Prompt 16 B4: the own profile row, after the refresh above
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
-        loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
+        loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), // Do first 5: refreshEastTables - overrides every run, the cache tables every 10 min
         loadOffers(true), loadPeriods(true),
       ]);
       // Review 9/27 Do first 2: a Setup (blob) write that failed is re-sent by the poll as well - the blob leg is not
@@ -2267,10 +2285,29 @@ function CallSchedule() {
       window.addEventListener("supabase-sdk-ready", onReady);
       setTimeout(() => { window.removeEventListener("supabase-sdk-ready", onReady); if (!rtChannel) setupRealtime(); }, 5000);
     }
+    // Review 9/27 Do first 5: one tick of the 60-second poll (helpers.js pollTickMode) - nothing at the sign-in card (no
+    // signed-in user, not ?public=1: every authenticated read would be skipped) or in a hidden ?public=1 tab; in a hidden
+    // tab of a signed-in person only the session upkeep (the same ensureFresh / re-send head as refreshAll - A3 needs the
+    // 60 s cadence), the notifications read (background pop-ups: sendBrowserNotif fires only while the page lacks focus)
+    // and the re-send of an owed Setup write (Do first 2); refreshAll otherwise. A tab shown again catches up at once with
+    // refreshAll when the last full refresh is more than a poll period old. The other visibilitychange listeners (the
+    // keepalive flush, A3's ensureFresh, the version check, the shift clock) are untouched.
+    const pollTick = async () => {
+      const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });
+      if (mode === "skip") return;
+      if (mode === "full") { await refreshAll(); return; }
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
+      await refreshNotifs();
+      if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
+    };
+    const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };
+    document.addEventListener("visibilitychange", onPollVisibility);
     // Safety-net poll: every 60 seconds. If Realtime works nothing changes.
-    const pollInterval = setInterval(refreshAll, 60000);
+    const pollInterval = setInterval(pollTick, POLL_MS);
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener("visibilitychange", onPollVisibility);
       if (rtChannel && rtClient) { try { rtClient.removeChannel(rtChannel); } catch(e) { console.warn("Realtime channel cleanup failed:", e); } }
     };
   }, [reloadTrigger]);
