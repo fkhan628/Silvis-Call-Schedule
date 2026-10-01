@@ -2548,14 +2548,14 @@ IDS_P23.forEach(id => eq([clean.per[id].contribution, clean.per[id].standaloneFr
 
 step("Prompt 23 B4: hardNeverWeekdays with notice - 56 days hard, 57 soft, from ctx.today");
 eq(clean.today, SA.SEED_TEST_TODAY, "tests read the adapter's fixed today (never the clock)");
-eq(R.defaultWeights().hardNeverBeyondNotice, 2, "defaultWeights().hardNeverBeyondNotice = 2 (the Setup weights editor lists every default key)");
+eq(R.defaultWeights().hardNeverBeyondNotice, 3, "defaultWeights().hardNeverBeyondNotice = 3 (= medium, cancels the weekday-primary bonus; the Setup weights editor lists every default key)");
 const atToday = (today, extras) => makeCtx(Object.assign({ schedule: {}, today: today }, extras || {}));
 // Tue 2027-01-12: 56 days after 2026-11-17, 57 after 2026-11-16. Thu 2027-01-14: 56 after 11/19, 57 after 11/18.
 eq(R.rdDaysBetween("2026-11-17", "2027-01-12"), 56, "fixture arithmetic");
 blocked(R.eligibility(atToday("2026-11-17"), "2027-01-12", P, KHAN), "hard-never-weekday:Tue", "Tue 56 days out: hard");
 const tue57 = R.eligibility(atToday("2026-11-16"), "2027-01-12", P, KHAN);
 okElig(tue57, "Tue 57 days out: allowed");
-eq(tue57.soft.filter(s => s.reason.indexOf("hard-never") === 0), [{ reason: "hard-never-beyond-notice:Tue", weight: 2 }], "...with the soft hard-never-beyond-notice at weights.hardNeverBeyondNotice");
+eq(tue57.soft.filter(s => s.reason.indexOf("hard-never") === 0), [{ reason: "hard-never-beyond-notice:Tue", weight: 3 }], "...with the soft hard-never-beyond-notice at weights.hardNeverBeyondNotice (3)");
 lacks(tue57.hard, "weekday-not-allowed", "...and no weekday-not-allowed (Tue is in his hardNeverWeekdays, never on the allow-list check)");
 blocked(R.eligibility(atToday("2026-11-19"), "2027-01-14", P, KHAN), "hard-never-weekday:Thu", "Thu 56 days out: hard");
 hasSoft(R.eligibility(atToday("2026-11-18"), "2027-01-14", P, KHAN), "hard-never-beyond-notice:Thu", "Thu 57 days out: soft");
@@ -2567,7 +2567,8 @@ lacksSoft(R.eligibility(atToday("2026-11-16"), "2027-01-12", B, KHAN), "hard-nev
 const rowTue = (today) => withRows([row(KHAN, "available", "2027-01-12", "primary")], { today: today });
 okElig(R.eligibility(rowTue("2026-11-17"), "2027-01-12", P, KHAN), "a dated row of his lifts the hard rule inside the notice (W, unchanged)");
 lacksSoft(R.eligibility(rowTue("2026-11-16"), "2027-01-12", P, KHAN), "hard-never-beyond-notice", "...and beyond it there is no soft either (his own date)");
-// Mon/Wed fill first: beyond the notice a Tue/Thu soft sum is above his Mon/Wed one (auto-offer +1 < beyond-notice +2)
+// Mon/Wed fill first: beyond the notice a Tue/Thu soft sum is above his Mon/Wed one (auto-offer +1 < beyond-notice +3; the
+// weekday bonus -3 on both: Mon/Wed net -2, a far Tue/Thu net 0 - allowed, never preferred over a colleague at 0)
 const ssum = r => r.soft.reduce((a, s) => a + s.weight, 0);
 const far = atToday("2026-11-01");
 ok(ssum(R.eligibility(far, "2027-01-11", P, KHAN)) < ssum(R.eligibility(far, "2027-01-12", P, KHAN)) && ssum(R.eligibility(far, "2027-01-13", P, KHAN)) < ssum(R.eligibility(far, "2027-01-14", P, KHAN)), "beyond the notice Mon/Wed still score better than Tue/Thu (Mon/Wed fill first)");

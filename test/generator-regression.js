@@ -2037,7 +2037,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   };
   const out57 = runN("2026-11-30");
   eq(out57.schedule[DAYN].primary, KHAN, "B4: 57 days out the generator places Khan on the Tuesday nobody else may take");
-  ok(out57.diagnostics.softPenalties.some((s) => s.day === DAYN && s.id === KHAN && s.reason === "hard-never-beyond-notice:Tue" && s.weight === 2), "B4: ...and the soft hard-never-beyond-notice:Tue (weights.hardNeverBeyondNotice 2) rides in the soft list");
+  ok(out57.diagnostics.softPenalties.some((s) => s.day === DAYN && s.id === KHAN && s.reason === "hard-never-beyond-notice:Tue" && s.weight === 3), "B4: ...and the soft hard-never-beyond-notice:Tue (weights.hardNeverBeyondNotice 3) rides in the soft list");
   eq(out57.diagnostics.hardViolations, [], "B4: no hard violation beyond the notice");
   const out56 = runN("2026-12-01");
   eq(out56.schedule[DAYN].primary, null, "B4: 56 days out the Tuesday stays open");

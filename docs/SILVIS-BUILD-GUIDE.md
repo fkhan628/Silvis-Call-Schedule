@@ -394,7 +394,7 @@ counted once in its Saturday's month (Silvis `roles` on `days`, or East-busy —
 forecast ≥ threshold outside the coverage, never a home day), on the weekend's first held counted day, only when the East
 data do not already count it; `rules.weekendCapCounts(ctx, id, month)` lists the counted weekends. `hardNeverWeekdaysNoticeDays`:
 `hard-never-weekday` only for a date ≤ N days after `ctx.today`; beyond it the soft `hard-never-beyond-notice:<wd>` at
-`weights.hardNeverBeyondNotice` (code default 2). **`ctx.today`** = `input.today`, else the Central date read once by
+`weights.hardNeverBeyondNotice` (code default 3 = medium: it cancels the weekday bonus, so a far Tue/Thu is allowed, never preferred). **`ctx.today`** = `input.today`, else the Central date read once by
 `buildContext` (`rdTodayCentral`) — `eligibility()` never reads a clock; tests pin a fixed today (`test/seed-adapter.js`
 `SEED_TEST_TODAY` 2026-11-23). Malformed values warn once and are ignored (the notice: the rule stays hard everywhere).
 

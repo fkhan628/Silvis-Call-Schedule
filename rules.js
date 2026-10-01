@@ -213,7 +213,7 @@
 //                 after ctx.today (the day the placement is made - see below; a
 //                 past date is inside the notice); a date further out is allowed
 //                 for those roles with the soft 'hard-never-beyond-notice:<wd>' at
-//                 +weights.hardNeverBeyondNotice (2), so his allowed weekdays fill
+//                 +weights.hardNeverBeyondNotice (3), so his allowed weekdays fill
 //                 first. A dated row / offer of his lifts the rule entirely, as
 //                 before (W); absent or not a whole number >= 0 = hard everywhere
 //                 (a malformed value warns once).
@@ -415,7 +415,7 @@ function defaultWeights() {
     offerBonus: 6,     // Prompt 14 P2 (9/23): soft 'offered' bonus on a submitted surgeon's offered day (strong; 0 = off)
     outsideOffers: 6,  // Prompt 14 P2 (9/23): soft 'outside-offers' penalty on a submitted surgeon's non-offered day - preferred mode, and an exhaustive surgeon's claim result (strong; 0 = off)
     offerBonusOverShare: 0, // Prompt 14 P2 review (9/23): what the 'offered' bonus reads in the GENERATOR once the placement no longer brings him towards his share for the role and month (0 = the bonus stops at the share; = offerBonus restores the untapered reading). rules.js itself always emits -offerBonus.
-    hardNeverBeyondNotice: 2 // Prompt 23 B4 (9/30): soft 'hard-never-beyond-notice:<wd>' on a hardNeverWeekdays day further out than surgeonRules.<id>.hardNeverWeekdaysNoticeDays (more than the +1 auto-offer of his allowed weekdays, so those fill first); 0 = off
+    hardNeverBeyondNotice: 3 // Prompt 23 B4 (9/30): soft 'hard-never-beyond-notice:<wd>' on a hardNeverWeekdays day further out than surgeonRules.<id>.hardNeverWeekdaysNoticeDays; 3 (= medium = the weekday-primary bonus) leaves such a day net 0 - allowed, never preferred over a colleague - so his allowed weekdays fill first (the 10/1 Jan - Jun preview: at 2 he took 17 Tue/Thu against 11 Mon/Wed, at 3 9 against 18); 0 = off
   };
 }
 
