@@ -679,6 +679,8 @@ const dayRow = (day, over) => ({ day, primary_id: null, backup_id: null, primary
 const IMP = require(path.join(ROOT, "importer.js"));
 // helpers.js in node (9/29): the offer painter's confirm family (OFFER_CONFIRM_WORDS) classifies the rules' hard codes
 const HELPERS = require(path.join(ROOT, "helpers.js"));
+// rules.js in node (Prompt 24): the engine's weight keys (defaultWeights) the Setup > Rules weights list must name
+const RULES_ENGINE = require(path.join(ROOT, "rules.js"));
 const SEED_PATH = path.join(ROOT, "docs", "silvis-seed.json");
 const PLAN_TS = "2026-09-22T00:00:00.000Z";
 const PLAN = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { now: PLAN_TS });
@@ -4878,6 +4880,15 @@ try {
     if ((await card.getAttribute("data-open")) !== "1") { await page.click(`[data-testid=card-toggle-${ck}]`); await page.waitForTimeout(200); }
     return card;
   };
+  // Prompt 24 (moved deliberately 10/1): Setup > Rules shows only the rules a surgeon uses (helpers SU_RULE_FIELDS), so a step
+  // that needs a field the picked surgeon does not use adds it from the "Add a rule" menu first. Adding a field without a start
+  // value (Monthly target, Backup caps, ...) writes nothing - the field only appears; true = it was added.
+  const ensureRuleField = async (pg, fieldId) => {
+    if (await pg.$(`[data-testid=rules-field-${fieldId}]`)) return false;
+    await pg.selectOption("[data-testid=rules-add]", fieldId);
+    await pg.waitForSelector(`[data-testid=rules-field-${fieldId}]`, { timeout: 3000 });
+    return true;
+  };
   // vis-003: give Acton a monthly target through the Rules card (the save path
   // Setup drives) so the target mark, the signed deviation and the Target /
   // Deviation columns are exercised; cleared again in the finally below.
@@ -4886,6 +4897,8 @@ try {
     await page.click('button[data-tab="setup"]');
     await openCard("setup_rules");
     await page.click("[data-testid=rules-pick-s3]");
+    await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
+    await ensureRuleField(page, "monthlyTarget"); // Prompt 24: Acton uses no monthlyTarget - the field comes from the menu (reveal only)
     await page.waitForSelector("[data-testid=rules-monthly-target]", { timeout: 5000 });
     await page.fill("[data-testid=rules-monthly-target]", value === null ? "" : String(value));
     // Save is disabled when the draft already equals the saved rules - then there is nothing to write.
@@ -7125,10 +7138,15 @@ try {
       }
     }
 
-    // ---- (4) Setup -> Rules: the 'Primary contribution' select writes surgeonRules.<id>.primaryContribution ----
+    // ---- (4) Setup -> Rules: the 'Prefers' select (was 'Primary contribution') writes surgeonRules.<id>.primaryContribution ----
+    // Prompt 24 (moved deliberately 10/1): only the rules s1 uses are on the form - Monthly target (his is null = equal share)
+    // and, should the live rules drop it, Prefers come from the "Add a rule" menu first (neither writes anything by appearing).
     await page.click('button[data-tab="setup"]');
     await openCard("setup_rules");
     await page.click("[data-testid=rules-pick-s1]");
+    await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
+    await ensureRuleField(page, "primaryContribution");
+    await ensureRuleField(page, "monthlyTarget");
     await page.waitForSelector("[data-testid=rules-primary-contribution]", { timeout: 5000 });
     const pcHint = await page.$eval("[data-testid=rules-monthly-target]", el => el.parentElement.innerText.replace(/\s+/g, " "));
     if (!pcHint.includes("blank = equal share; a number = primary target")) fail("Rules: the Monthly target hint should read 'blank = equal share; a number = primary target', got: " + JSON.stringify(pcHint));
@@ -7149,7 +7167,9 @@ try {
     const pcHit = await waitFor(() => pcPosts().some(w => pcOf(w) === pcWant), 6000, 100);
     const pcBlob = pcPosts().pop() || null;
     const pcSaved = pcBlob ? pcOf(pcBlob) : "(no blob write)";
-    if (pcOpts.join(",") !== ",weekends") fail("Rules: Primary contribution options should be (none) / weekends, got: " + pcOpts.join(","));
+    // Prompt 24 (moved deliberately): the options are (none) / weekends / weekdays (Prompt 23's value) - plus "<value> (not known)"
+    // only when the live rules carry another value
+    if (pcOpts.filter(v => v === "" || v === "weekends" || v === "weekdays").join(",") !== ",weekends,weekdays" || pcOpts.length > 4) fail("Rules: Prefers options should be (none) / weekends / weekdays, got: " + pcOpts.join(","));
     else if (!pcBlob) fail("Rules: no call_schedule_data write after saving the Primary contribution change");
     else if (!pcHit) fail(`Rules: no call_schedule_data write carried surgeonRules.s1.primaryContribution ${JSON.stringify(pcWant)} within 6 s of the save (${pcPosts().length} write(s); the last carries ${JSON.stringify(pcSaved)})`);
     else ok(`Rules: Primary contribution select (live value '${pcWas}') -> '${pcNew || "(none)"}' -> blob write carries surgeonRules.s1.primaryContribution ${JSON.stringify(pcWant)} (${pcPosts().length} blob write(s) since the click)`);
@@ -7425,6 +7445,203 @@ try {
         await page.waitForTimeout(1200); // the debounced run finds the signature already written and skips
         await maxInput.fill("3");
         if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
+      }
+    }
+
+    // ---- Prompt 24 (Faraz 9/30: "the rules section in the settings is overwhelming"): Setup > Rules trimmed ----
+    // Acton (s3): the plain-words summary and the field list equal helpers.suRulesSummary / suRuleFieldsUsed over the rules the
+    // editor shows (read through its own JSON editor); Advanced is closed by default and holds the JSON editors, the group rules
+    // and the Weights (closed too); a rule added from the menu and removed again leaves no trace; ONE edit per group (availability
+    // mode, the never-on notice days, weekend style, any-role run, a backup cap added from the menu, the East feed added from the
+    // menu with its forecast, a holiday) is saved, the call_schedule_data PATCH carries exactly those edits on top of the shown
+    // rules, a re-pick reads every value back; then the per-surgeon JSON editor puts the original rules back into the form
+    // (the form shows them) and Save writes them unchanged; the group JSON editor applied unchanged saves the same group rules.
+    // Writes are the harness's (never the live project); the original is restored before the step ends.
+    {
+      const P24 = "P24 Rules";
+      const canon = (v) => JSON.stringify(v, (k, x) => x && typeof x === "object" && !Array.isArray(x) ? Object.keys(x).sort().reduce((o, kk) => { o[kk] = x[kk]; return o; }, {}) : x);
+      const s3Of = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s3; } catch (e) { return undefined; } };
+      const blobPatches = (from) => writesSince(from, "/rest/v1/call_schedule_data").filter(w => w.method === "PATCH");
+      const p24Names = {}; (Array.isArray(gcBlobEarly.roster) ? gcBlobEarly.roster : []).forEach(r => { if (r && r.id) p24Names[r.id] = r.name; });
+      const sumOf = (rules) => HELPERS.suRulesSummary(rules, { names: p24Names, holidayNames: ["New Year's", "Memorial Day", "July 4th", "Labor Day", "Thanksgiving", "Christmas"], groupRules: gcBlobEarly.groupRules || {} }).map(l => l.family + ": " + l.text);
+      const pageState = () => page.evaluate(() => ({
+        lines: Array.from(document.querySelectorAll("[data-testid=rules-summary-line]")).map(e => e.getAttribute("data-family") + ": " + e.children[1].textContent),
+        fields: Array.from(document.querySelectorAll("[data-testid^=rules-field-]")).map(e => e.getAttribute("data-testid").slice("rules-field-".length)),
+        menu: Array.from(document.querySelectorAll("[data-testid=rules-add] option")).map(o => o.value).filter(Boolean),
+        status: (document.querySelector("[data-testid=rules-status]") || {}).textContent || null,
+      }));
+      const savedDerived = (r) => { const c = JSON.parse(JSON.stringify(r)); if (c.holidayRules) c.holidayRules.neverThanksgiving = (c.holidayRules.holidaysOff || []).indexOf("Thanksgiving") >= 0; return c; };
+      let orig = null;
+      try {
+        await openCard("setup_rules");
+        await page.click("[data-testid=rules-pick-s3]");
+        await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
+        // (a) Advanced closed by default: no JSON editor, no group rules, no group-save in the DOM
+        const advClosed = await page.evaluate(() => ({ open: (document.querySelector("[data-testid=rules-advanced]") || { getAttribute: () => null }).getAttribute("data-open"), inside: ["rules-raw-toggle", "rules-raw", "group-save", "group-default-cap-primary", "rules-weights"].filter(t => document.querySelector("[data-testid=" + t + "]")) }));
+        if (advClosed.open !== "0" || advClosed.inside.length) fail(`${P24}: Advanced must start closed with nothing of it rendered - data-open ${advClosed.open}, rendered: ${advClosed.inside.join(", ")}`);
+        else ok(`${P24}: Advanced is closed by default (no JSON editor, group rules, weights or group-save rendered)`);
+        await page.click("[data-testid=rules-advanced-toggle]");
+        await page.waitForSelector("[data-testid=rules-raw-toggle]", { timeout: 3000 });
+        // the weights are a collapsed group inside Advanced; open, they read plain names (no engine key as a label)
+        const wClosed = await page.evaluate(() => ({ open: document.querySelector("[data-testid=rules-weights]").getAttribute("data-open"), inputs: document.querySelectorAll("[data-testid=rules-weights] input").length }));
+        await page.click("[data-testid=rules-weights-toggle]");
+        await page.waitForTimeout(150);
+        const wOpen = await page.$$eval("[data-testid=rules-weights] input[type=number]", els => els.map(e => e.parentElement.firstElementChild.textContent));
+        const wKeys = Object.keys(RULES_ENGINE.defaultWeights());
+        if (wClosed.open !== "0" || wClosed.inputs) fail(`${P24}: the Weights must start collapsed inside Advanced (data-open ${wClosed.open}, ${wClosed.inputs} inputs)`);
+        else if (wOpen.length < wKeys.length || wOpen.some(l => /[a-z][A-Z]/.test(l) || wKeys.includes(l))) fail(`${P24}: the open Weights should list every engine weight under a plain name, got ${wOpen.length}: ${JSON.stringify(wOpen)}`);
+        else ok(`${P24}: Weights collapsed inside Advanced; open, ${wOpen.length} weights under plain names (e.g. '${wOpen.slice(4, 6).join("', '")}')`);
+        await page.click("[data-testid=rules-weights-toggle]");
+        // (b) the rules the editor shows, through its own JSON editor
+        await page.click("[data-testid=rules-raw-toggle]");
+        await page.waitForSelector("[data-testid=rules-raw]", { timeout: 3000 });
+        orig = JSON.parse(await page.inputValue("[data-testid=rules-raw]"));
+        await page.click("[data-testid=rules-raw-toggle]");
+        const st0 = await pageState();
+        const wantFields = HELPERS.suRuleFieldsUsed(orig);
+        if (JSON.stringify(st0.lines) !== JSON.stringify(sumOf(orig))) fail(`${P24}: the summary should be suRulesSummary over the shown rules - want ${JSON.stringify(sumOf(orig))}, got ${JSON.stringify(st0.lines)}`);
+        else if (JSON.stringify(st0.fields) !== JSON.stringify(wantFields)) fail(`${P24}: the fields should be the ones Acton uses (${wantFields.join(", ")}), got ${st0.fields.join(", ")}`);
+        else if (st0.menu.some(id => wantFields.includes(id)) || st0.menu.length + wantFields.length !== HELPERS.SU_RULE_FIELDS.length) fail(`${P24}: the Add a rule menu should list exactly the unused fields, got ${st0.menu.join(", ")}`);
+        else ok(`${P24}: Acton's summary (${st0.lines.length} lines: ${st0.lines.map(l => l.split(":")[0]).join(", ")}) and his ${st0.fields.length} fields equal the helpers over the shown rules; the menu lists the other ${st0.menu.length}`);
+        // (c) add a rule from the menu and remove it again
+        const addId = ["standaloneFriday", "noLoneWeekendDay", "handoffPartnerRequired"].find(id => st0.menu.includes(id) && !HELPERS.suRuleFieldHasKeys(HELPERS.suRuleField(id), orig));
+        if (!addId) console.log(`     (${P24}: no key-free check rule in the menu - the add / remove leg is skipped this run)`);
+        else {
+          await page.selectOption("[data-testid=rules-add]", addId);
+          await page.waitForSelector(`[data-testid=rules-field-${addId}]`, { timeout: 3000 });
+          const stA = await pageState();
+          const checked = await page.$eval(`[data-testid=rules-field-${addId}] input[type=checkbox]`, el => el.checked);
+          await page.click(`[data-testid=rules-remove-${addId}]`);
+          await page.waitForSelector(`[data-testid=rules-field-${addId}]`, { state: "detached", timeout: 3000 });
+          const stR = await pageState();
+          const addedLine = JSON.stringify(sumOf(HELPERS.suRuleFieldAdd(HELPERS.suRuleField(addId), orig)));
+          if (!checked || stA.menu.includes(addId) || stA.status !== "Unsaved" || JSON.stringify(stA.lines) !== addedLine) fail(`${P24}: adding '${addId}' should show its field ticked, leave the menu, mark Unsaved and show in the summary - checked ${checked}, status ${stA.status}, lines ${JSON.stringify(stA.lines)}`);
+          else if (!stR.menu.includes(addId) || JSON.stringify(stR.lines) !== JSON.stringify(st0.lines) || JSON.stringify(stR.fields) !== JSON.stringify(st0.fields)) fail(`${P24}: removing '${addId}' should return it to the menu and the summary / fields to where they were - menu ${stR.menu.includes(addId)}, lines ${JSON.stringify(stR.lines)}`);
+          else ok(`${P24}: '${addId}' added from the menu (field ticked, summary says so, Unsaved) and removed again (back in the menu, summary and fields as before)`);
+        }
+        // (d) one edit per group, then Save
+        const modeNew = orig.availabilityMode === "whitelist-weeks" ? "blacklist-recurring" : "whitelist-weeks";
+        const wsNew = orig.weekendStyle === "block" ? "split" : "block";
+        const mcaNew = Math.min(14, (typeof orig.maxConsecutiveAnyRole === "number" ? orig.maxConsecutiveAnyRole : 3) + 1);
+        const holOld = (orig.holidayRules && Array.isArray(orig.holidayRules.holidaysOff)) ? orig.holidayRules.holidaysOff : [];
+        const holNew = holOld.includes("Christmas") ? holOld.filter(h => h !== "Christmas") : holOld.concat(["Christmas"]);
+        await ensureRuleField(page, "availabilityMode");
+        await page.selectOption("[data-testid=rules-avail-mode]", modeNew);                       // availability
+        await ensureRuleField(page, "hardNeverWeekdays");
+        await page.fill("[data-testid=rules-hard-never-notice]", "56");                           // weekdays and patterns
+        await ensureRuleField(page, "weekendStyle");
+        await page.selectOption("[data-testid=rules-weekend-style]", wsNew);                      // weekends
+        await ensureRuleField(page, "maxConsecutiveAnyRole");
+        await page.fill("[data-testid=rules-max-consec-any]", String(mcaNew));                    // limits
+        const bcAdded = await ensureRuleField(page, "backupCap");
+        await page.fill("[data-testid=rules-backup-cap-days]", "6");                              // backup
+        const efAdded = await ensureRuleField(page, "eastFeed");
+        if (!(await page.isChecked("[data-testid=rules-east-enabled]"))) await page.check("[data-testid=rules-east-enabled]");
+        if (!(await page.isChecked("[data-testid=rules-east-forecast]"))) await page.check("[data-testid=rules-east-forecast]"); // East / Davenport
+        await ensureRuleField(page, "holidaysOff");
+        await page.locator("[data-testid=rules-field-holidaysOff] label", { hasText: "Christmas" }).locator("input").click(); // holidays
+        const exp = JSON.parse(JSON.stringify(orig));
+        exp.availabilityMode = modeNew; exp.hardNeverWeekdaysNoticeDays = 56; exp.weekendStyle = wsNew; exp.maxConsecutiveAnyRole = mcaNew;
+        exp.backupCap = Object.assign({}, orig.backupCap || {}, { perMonthDays: 6 });
+        exp.eastFeed = Object.assign({}, orig.eastFeed || {}, { enabled: true, forecast: true });
+        exp.holidayRules = Object.assign({}, orig.holidayRules || {}, { holidaysOff: holNew });
+        const expSaved = savedDerived(exp);
+        let before = writes.length, hit = null;
+        for (let attempt = 1; attempt <= 2 && !hit; attempt++) {
+          if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) await page.click("[data-testid=rules-save]");
+          await waitFor(() => { hit = blobPatches(before).find(w => canon(s3Of(w)) === canon(expSaved)) || null; return !!hit; }, 6000, 100);
+          if (!hit && attempt === 1) console.log(`     (${P24}: no blob write carried the edits within 6 s - the background blob refresh may have raced the save; retrying once)`);
+        }
+        const lastS3 = (blobPatches(before).pop() && s3Of(blobPatches(before).pop())) || null;
+        if (!hit) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 = the shown rules + the seven edits${addId ? " (and no " + addId + ")" : ""}: want ${canon(expSaved).slice(0, 600)} - last write ${canon(lastS3).slice(0, 600)}`);
+        else ok(`${P24}: Save -> PATCH call_schedule_data with surgeonRules.s3 = the shown rules + one edit per group (availabilityMode ${modeNew}, hardNeverWeekdaysNoticeDays 56, weekendStyle ${wsNew}, maxConsecutiveAnyRole ${mcaNew}, backupCap.perMonthDays 6${bcAdded ? " (added from the menu)" : ""}, eastFeed { enabled, forecast }${efAdded ? " (added from the menu)" : ""}, holidaysOff ${JSON.stringify(holNew)}) and nothing else`);
+        // (e) read back after a re-pick (the field set is re-read from the saved rules)
+        await page.click("[data-testid=rules-pick-s1]");
+        await page.waitForTimeout(200);
+        await page.click("[data-testid=rules-pick-s3]");
+        await page.waitForSelector("[data-testid=rules-field-backupCap]", { timeout: 3000 }).catch(() => {});
+        const rb = await page.evaluate(() => {
+          const v = (t) => { const el = document.querySelector("[data-testid=" + t + "]"); return el ? (el.type === "checkbox" ? el.checked : el.value) : null; };
+          const xmas = Array.from(document.querySelectorAll("[data-testid=rules-field-holidaysOff] label")).find(l => /Christmas/.test(l.textContent));
+          return { mode: v("rules-avail-mode"), notice: v("rules-hard-never-notice"), ws: v("rules-weekend-style"), mca: v("rules-max-consec-any"), bc: v("rules-backup-cap-days"), ef: v("rules-east-enabled"), fc: v("rules-east-forecast"), xmas: xmas ? xmas.querySelector("input").checked : null };
+        });
+        const stB = await pageState();
+        const rbWant = { mode: modeNew, notice: "56", ws: wsNew, mca: String(mcaNew), bc: "6", ef: true, fc: true, xmas: holNew.includes("Christmas") };
+        if (canon(rb) !== canon(rbWant)) fail(`${P24}: read back after a re-pick - want ${canon(rbWant)}, got ${canon(rb)}`);
+        else if (JSON.stringify(stB.lines) !== JSON.stringify(sumOf(expSaved))) fail(`${P24}: the summary after the save should read the saved rules - want ${JSON.stringify(sumOf(expSaved))}, got ${JSON.stringify(stB.lines)}`);
+        else ok(`${P24}: a re-pick reads every edited value back (${Object.keys(rbWant).length} fields) and the summary reads the saved rules (e.g. '${stB.lines.find(l => l.startsWith("Backup"))}')`);
+      } catch (e) { fail(`${P24}: ` + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-p24-rules.png"), fullPage: true }); } catch (e2) {} }
+      // (f) the per-surgeon JSON editor puts the original back: Apply shows it in the form, Save writes it unchanged
+      if (orig) {
+        try {
+          if ((await page.getAttribute("[data-testid=rules-advanced]", "data-open")) !== "1") await page.click("[data-testid=rules-advanced-toggle]");
+          if (!(await page.$("[data-testid=rules-raw]"))) await page.click("[data-testid=rules-raw-toggle]");
+          await page.fill("[data-testid=rules-raw]", JSON.stringify(orig, null, 2));
+          await page.click("[data-testid=rules-raw-apply]");
+          await page.waitForSelector("[data-testid=rules-raw]", { state: "detached", timeout: 3000 });
+          const formWs = await page.inputValue("[data-testid=rules-weekend-style]").catch(() => null);
+          const origSaved = savedDerived(orig);
+          let before = writes.length, hit = null;
+          for (let attempt = 1; attempt <= 2 && !hit; attempt++) {
+            if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) await page.click("[data-testid=rules-save]");
+            await waitFor(() => { hit = blobPatches(before).find(w => canon(s3Of(w)) === canon(origSaved)) || null; return !!hit; }, 6000, 100);
+          }
+          const stC = await pageState();
+          if (formWs !== (orig.weekendStyle || "")) fail(`${P24} JSON: Apply JSON should put the original weekend style '${orig.weekendStyle}' back into the form, got '${formWs}'`);
+          else if (!hit) fail(`${P24} JSON: Save after Apply JSON should write the original surgeonRules.s3 unchanged - last write ${canon((blobPatches(before).pop() && s3Of(blobPatches(before).pop())) || null).slice(0, 600)}`);
+          else if (JSON.stringify(stC.lines) !== JSON.stringify(sumOf(origSaved))) fail(`${P24} JSON: the summary should read the original rules again, got ${JSON.stringify(stC.lines)}`);
+          else ok(`${P24} JSON: the per-surgeon JSON editor round-trips - Apply put the original rules into the form (weekend style '${formWs}'), Save wrote surgeonRules.s3 unchanged, the summary reads them again`);
+        } catch (e) { fail(`${P24} JSON (restore): ` + errLine(e)); }
+        // (g) the group JSON editor: applied unchanged and saved -> no diff, so no blob write (the autosave skips an unchanged
+        // signature); an edit applied through it shows in the form (Default monthly cap) and Save writes exactly that change;
+        // the original is applied back the same way and written unchanged
+        try {
+          if ((await page.getAttribute("[data-testid=rules-advanced]", "data-open")) !== "1") await page.click("[data-testid=rules-advanced-toggle]");
+          const groupOf = (w) => { try { return JSON.parse(w.body).data.groupRules; } catch (e) { return undefined; } };
+          const applyGroup = async (obj) => {
+            if (!(await page.$("[data-testid=group-raw]"))) await page.click("[data-testid=group-raw-toggle]");
+            await page.waitForSelector("[data-testid=group-raw]", { timeout: 3000 });
+            const shown = JSON.parse(await page.inputValue("[data-testid=group-raw]"));
+            if (obj) await page.fill("[data-testid=group-raw]", JSON.stringify(obj, null, 2));
+            await page.click("[data-testid=group-raw-apply]");
+            await page.waitForSelector("[data-testid=group-raw]", { state: "detached", timeout: 3000 });
+            return shown;
+          };
+          const saveGroupAndFind = async (want) => {
+            const before = writes.length;
+            await page.click("[data-testid=group-save]");
+            let hit = null;
+            await waitFor(() => { hit = blobPatches(before).find(w => canon(groupOf(w)) === canon(want)) || null; return !!hit; }, 6000, 100);
+            return { hit, n: blobPatches(before).length, last: (blobPatches(before).pop() && groupOf(blobPatches(before).pop())) || null };
+          };
+          const disabledAtStart = await page.$eval("[data-testid=group-save]", el => el.disabled);
+          // (g1) unchanged
+          const g0 = await applyGroup(null);
+          const enabledAfterApply = await page.$eval("[data-testid=group-save]", el => !el.disabled);
+          const b0 = writes.length;
+          await page.click("[data-testid=group-save]");
+          await page.waitForTimeout(2500);
+          const diffWrites = blobPatches(b0).filter(w => canon(groupOf(w)) !== canon(g0));
+          if (!disabledAtStart || !enabledAfterApply) fail(`${P24} group JSON: Save group rules should be disabled before a change (${disabledAtStart}) and enabled after Apply JSON (${enabledAfterApply})`);
+          else if (diffWrites.length) fail(`${P24} group JSON: applying the group rules unchanged must not change them - ${diffWrites.length} blob write(s) carried other groupRules`);
+          else ok(`${P24} group JSON: applied unchanged and saved -> no diff (${blobPatches(b0).length} blob write(s), none with other group rules)`);
+          // (g2) an edit through the JSON editor shows in the form and is what Save writes
+          const capWas = g0.defaultMonthlyCap && typeof g0.defaultMonthlyCap.primary === "number" ? g0.defaultMonthlyCap.primary : 8;
+          const g1 = JSON.parse(JSON.stringify(g0)); g1.defaultMonthlyCap = Object.assign({}, g1.defaultMonthlyCap || {}, { primary: capWas + 1 }); delete g1.defaultMonthlyCap.total;
+          await applyGroup(g1);
+          const capShown = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const s1r = await saveGroupAndFind(g1);
+          if (capShown !== String(capWas + 1)) fail(`${P24} group JSON: Apply JSON should put the default monthly cap ${capWas + 1} into the form, it shows '${capShown}'`);
+          else if (!s1r.hit) fail(`${P24} group JSON: Save group rules after the JSON edit should write groupRules = the edited JSON - ${s1r.n} write(s), last ${canon(s1r.last).slice(0, 300)}`);
+          else ok(`${P24} group JSON: an edit applied through the group JSON editor shows in the form (default cap ${capWas} -> ${capShown}) and Save writes exactly that groupRules`);
+          // (g3) the original back the same way
+          await applyGroup(g0);
+          const capBack = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const s0r = await saveGroupAndFind(g0);
+          if (!s0r.hit || capBack !== String(capWas)) fail(`${P24} group JSON (restore): the original group rules should be back in the form (cap '${capBack}') and written unchanged - ${s0r.n} write(s), last ${canon(s0r.last).slice(0, 300)}`);
+          else ok(`${P24} group JSON (restore): the original group rules applied back (cap ${capBack}) and written unchanged`);
+          await page.click("[data-testid=rules-advanced-toggle]");
+        } catch (e) { fail(`${P24} group JSON: ` + errLine(e)); }
       }
     }
 
@@ -9124,10 +9341,10 @@ try {
   // measured (at 390 px the notification and snapshot cards sit below the fold of one 844 px viewport).
   try {
     const reg = regionTable();
-    if (reg.length) console.log("     six-region literal table:\n" + formatRegionTable(reg).split("\n").map(l => "       " + l).join("\n"));
+    if (reg.length) console.log("     region literal table (Prompt 16 B2 + Setup > Rules):\n" + formatRegionTable(reg).split("\n").map(l => "       " + l).join("\n"));
     const regBad = reg.filter(r => !r.ok);
     if (regBad.length) fail("B2 region table: " + regBad.length + " literal text colour(s) below their minimum: " + regBad.map(r => `${r.region} ${r.theme} line ${r.line} <${r.tag}> ${r.literal} paints ${r.fg} on ${r.bg} ${r.ratio}:1`).join("; "));
-    else ok(`B2 region table: ${reg.length} literal text colour(s) left in the six regions${reg.length ? ", all at their minimum" : " - every text colour is a theme token"}`);
+    else ok(`B2 region table: ${reg.length} literal text colour(s) left in the regions (the six of Prompt 16 B2 + Setup > Rules)${reg.length ? ", all at their minimum" : " - every text colour is a theme token"}`);
   } catch (e) { fail("B2 region table: " + errLine(e)); }
   {
     const measure = (rootSel, skipSel) => page.evaluate(([rootSel, skipSel]) => {
@@ -9209,6 +9426,21 @@ try {
         const genCard = page.locator("[data-testid=card-setup_generate]");
         if ((await genCard.count()) && (await genCard.getAttribute("data-open")) !== "1") { await page.click("[data-testid=card-toggle-setup_generate]"); await page.waitForTimeout(250); }
         judge(`${theme} 390 SuCheck labels (Setup > Generate)`, await measure("label[data-sucheck]"));
+        // Prompt 24: Setup > Rules at 390 px - Acton's summary, his fields (the pattern rows) and the open Advanced section (group
+        // rules, weights) - every text element at its minimum on computed colours, and no sideways page scroll (p24-rules-<theme>-390.png)
+        try {
+          await openCard("setup_rules");
+          await page.click("[data-testid=rules-pick-s3]");
+          await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
+          if ((await page.getAttribute("[data-testid=rules-advanced]", "data-open")) !== "1") await page.click("[data-testid=rules-advanced-toggle]");
+          if ((await page.getAttribute("[data-testid=rules-weights]", "data-open")) !== "1") await page.click("[data-testid=rules-weights-toggle]");
+          await page.waitForTimeout(250);
+          judge(`${theme} 390 Setup > Rules (summary, fields, Advanced)`, await measure("[data-testid=rules-editor]", "button[disabled]"));
+          const ovf = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+          if (ovf > 1) fail(`B2 ${theme} 390 Setup > Rules: the page scrolls sideways by ${ovf}px`); else ok(`B2 ${theme} 390 Setup > Rules: no sideways page scroll with Advanced and the Weights open`);
+          await page.locator("[data-testid=rules-editor]").screenshot({ path: path.join(OUT, `p24-rules-${theme}-390.png`) });
+          await page.click("[data-testid=rules-advanced-toggle]");
+        } catch (e) { fail(`B2 ${theme} 390 Setup > Rules: ` + errLine(e)); }
         await page.click('button[data-tab="openshifts"]');
         await page.waitForSelector("[data-testid=openshifts-table]", { timeout: 10000 });
         await page.waitForTimeout(300);
