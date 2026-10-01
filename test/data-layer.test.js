@@ -1193,6 +1193,39 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const link = src.slice(et, src.indexOf("Propose a trade for this day", et) + 140);
       assert.ok(link.includes("onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)}") && link.includes('Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}'), "the link names the suggestion and passes it on");
     });
+    check("Prompt 23 review (behaviour): tradeUnitOf (lifted verbatim) - a noLoneWeekendDay holder's PRIMARY Sat + Sun pair is one 'weekend-block' unit (giving one day would leave a lone weekend day, hard lone-weekend-day); his Fri-Sun stays the block; a block-style holder without the key is unchanged", () => {
+      const R = require(path.join(ROOT, "rules.js"));
+      const SA = require(path.join(ROOT, "test", "seed-adapter.js"));
+      const seedT = require(path.join(ROOT, "docs", "silvis-seed.json"));
+      const i0 = src.indexOf("  const tradeUnitOf = (day, role, holderId) => {"), i1 = src.indexOf("  // Item C (Faraz 9/23 evening): the suggested counter-parties", i0);
+      assert.ok(i0 > 0 && i1 > i0, "tradeUnitOf at App scope, before the Item C suggestions");
+      const body = src.slice(i0, i1);
+      const mkUnit = (schedule, sr) => {
+        const rulesCtx = R.buildContext(SA.seedToContextInput(seedT, { eastDerived: [], eastBusyDays: {}, schedule, ...(sr ? { surgeonRules: sr } : {}) }));
+        return new Function("rulesCtx", "scheduleRef", "schedule", "suIsIso", "parse", "fmt", "addD", body + "\nreturn tradeUnitOf;")(rulesCtx, { current: schedule }, schedule, H.suIsIso, H.parse, H.fmt, H.addD);
+      };
+      const P = (id) => ({ primary: id });
+      // Khan (s1: noLoneWeekendDay, block style) holds Sat 1/23 + Sun 1/24/2027, someone else the Friday
+      const pair = mkUnit({ "2027-01-22": P("s2"), "2027-01-23": P("s1"), "2027-01-24": P("s1") });
+      const want = { kind: "weekend-block", name: "weekend pair", days: ["2027-01-23", "2027-01-24"] };
+      assert.deepStrictEqual(pair("2027-01-23", "primary", "s1"), want, "Saturday of his pair -> the pair");
+      assert.deepStrictEqual(pair("2027-01-24", "primary", "s1"), want, "Sunday of his pair -> the pair");
+      assert.strictEqual(pair("2027-01-22", "primary", "s2"), null, "the Friday holder's lone Friday is no unit");
+      // his Fri-Sun: the block (as before); his lone Friday beside someone else's pair: no unit (a standalone Friday is his shape)
+      const blk = mkUnit({ "2027-01-22": P("s1"), "2027-01-23": P("s1"), "2027-01-24": P("s1") });
+      ["2027-01-22", "2027-01-23", "2027-01-24"].forEach(d => assert.deepStrictEqual(blk(d, "primary", "s1"), { kind: "weekend-block", name: "weekend block", days: ["2027-01-22", "2027-01-23", "2027-01-24"] }, "his Fri-Sun from " + d + " -> the block"));
+      assert.strictEqual(mkUnit({ "2027-01-22": P("s1"), "2027-01-23": P("s2"), "2027-01-24": P("s2") })("2027-01-22", "primary", "s1"), null, "his standalone Friday -> no unit");
+      // backup weekends are not under the pair rule: his backup Sat + Sun is not a unit (block style wants all three)
+      assert.strictEqual(mkUnit({ "2027-01-23": { primary: "s2", backup: "s1" }, "2027-01-24": { primary: "s2", backup: "s1" } })("2027-01-23", "backup", "s1"), null, "a backup Sat + Sun -> no unit (the pair rule is primary only)");
+      // a weekend a holiday unit cuts is no weekend unit: Sat 12/25/2027 is the Christmas unit, his Sun 12/26 alone is exempt anyway
+      assert.strictEqual(mkUnit({ "2027-12-25": P("s1"), "2027-12-26": P("s1") })("2027-12-26", "primary", "s1"), null, "a holiday-cut weekend -> no weekend unit");
+      // generic: without noLoneWeekendDay his Sat + Sun is no unit (the pre-review reading); Philip (block style, no key) unchanged
+      const srNo = SA.seedToSurgeonRules(seedT); delete srNo.s1.noLoneWeekendDay;
+      assert.strictEqual(mkUnit({ "2027-01-23": P("s1"), "2027-01-24": P("s1") }, srNo)("2027-01-23", "primary", "s1"), null, "the key off: no pair unit");
+      assert.strictEqual(mkUnit({ "2027-01-30": P("s4"), "2027-01-31": P("s4") })("2027-01-30", "primary", "s4"), null, "Philip's Sat + Sun without his Friday: no unit (as before)");
+      // the card's unit paths read the kind: tradeUnitTag's regex and tradeGroupOf group a 'weekend-block' stamp of any length
+      assert.ok(src.includes("const tradeUnitTag = (r) => { const m = /\\[unit (holiday|weekend-block) (\\d{4}-\\d{2}-\\d{2}) (\\d+): "), "tradeUnitTag reads the weekend-block kind (the pair reuses it)");
+    });
   }
   // Prompt 19 step 2 (Faraz 9/24): "Give a day away" on the Propose card - a Trade / Give away switch; a give carries no
   // return leg, every row is sent with kind 'give' and is worded as a give; the unit rule and the receiver's eligibility
@@ -3925,9 +3958,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("U3a: offerRulesWords speaks every seed surgeon's rules from the data (no name branch), defaults when nothing is on file", () => {
     const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
     const words = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules);
-    const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu."), JSON.stringify(k)); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
+    const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu within 56 days; further ahead only as a last resort."), JSON.stringify(k)); /* Prompt 23 B4 (9/30): was "Never primary on Tue, Thu." - the notice key says how far ahead the rule is hard */ assert.ok(k.some(s => s === "Preferred: weekday primary (Mon-Thu, or a Friday on its own).") && k.some(s => s === "Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun - never a Saturday or Sunday alone.") && k.some(s => s === "At most 2 weekends a month, East weekends included (preferred, not a hard limit)."), "Prompt 23 B1-B3 in his words: " + JSON.stringify(k)); /* Prompt 23 review (10/1): was "A Friday may stand alone; Saturday and Sunday come as a pair (never one alone as primary)." beside "Weekends: Fri-Sun as one block." - one primary-shapes sentence, and his block style speaks of backup weekends only */ assert.ok(k.some(s => s === "Backup weekends: Fri-Sun as one block.") && !k.some(s => /^Weekends: /.test(s)), "the block style is his backup weekends': " + JSON.stringify(k)); assert.deepStrictEqual(H.offerRulesWords({ noLoneWeekendDay: true, weekendStyle: "block" }, {}).filter(s => /eekend|Saturday/.test(s)), ["Saturday and Sunday come as a pair (never one alone as primary).", "Weekends: Fri-Sun as one block."], "generic: the pair key alone keeps the style line for both roles"); assert.deepStrictEqual(H.offerRulesWords({ standaloneFriday: true, weekendStyle: "split" }, {}).filter(s => /eekend/.test(s)), ["Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun.", "Backup weekends: split with a partner."], "generic: standaloneFriday alone"); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
     const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 8 primary days a month (7 preferred)."));
-    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon, the 2/4 Wed.")); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
+    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
     const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));
     const f = words("s5"); assert.ok(f.some(s => s === "Outside your East weeks: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f)); assert.ok(f.some(s => /East weeks derive your Silvis week/.test(s))); assert.ok(f.some(s => s === "Cap: 14 primary days a month, East primary-week days included."));
     const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15 (about 2 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
@@ -5417,8 +5450,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(B1SRC.includes("if (r.restored.length) { scheduleRef.current = r.next; setSchedule(r.next); }"), "the map moves only when a day came back");
       assert.ok(B1SRC.includes('showToast(r.message, r.skipped.length ? "error" : "info");'), "the toast says what was restored and what was skipped");
       // every push site hands over both maps
-      for (const site of ["pushUndo(schedule, { ...schedule, [day]: after });", "pushUndo(schedule, next);", "pushUndo(cur, next);", "pushUndo(scheduleRef.current || schedule, m.next);", "pushUndo(scheduleRef.current, sched);"]) assert.strictEqual(B1count(B1SRC, site), 1, "push site: " + site);
-      assert.strictEqual(B1count(B1SRC, "pushUndo("), 5, "the five sites and nothing else - no one-argument push left");
+      // pin moved deliberately 10/1 (Prompt 25 step 3): acceptHolidayPlan is the sixth site - pushUndo(base, next) over the
+      // map the plan rows were merged into (the current map, or the one re-read after the snapshot)
+      for (const site of ["pushUndo(schedule, { ...schedule, [day]: after });", "pushUndo(schedule, next);", "pushUndo(cur, next);", "pushUndo(scheduleRef.current || schedule, m.next);", "pushUndo(scheduleRef.current, sched);", "pushUndo(base, next);"]) assert.strictEqual(B1count(B1SRC, site), 1, "push site: " + site);
+      assert.strictEqual(B1count(B1SRC, "pushUndo("), 6, "the six sites and nothing else - no one-argument push left");
       assert.strictEqual(B1count(B1SRC, "setScheduleHistory("), 1, "the state setter is reached only through setHistory (ref + state together)");
       assert.ok(B1SRC.includes('data-testid="undo-btn"'), "the smoke's handle on the button");
     });
@@ -7133,6 +7168,103 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("setSaveStatus(LOAD_FAILED_STATUS);"), 2);
       assert.ok(src.includes('{loaded && !daysReadOk && <span data-testid="hdr-days-unread" style={{marginLeft:8,color:T.onNavy,fontWeight:700,fontSize:10}}>Schedule not loaded</span>}'), "the private header's unread line");
       assert.strictEqual(count("{loaded && !saveStatus && !daysReadOk &&"), 0, "no longer hidden by a status");
+    });
+  })();
+
+  /* ---------------- Prompt 25 steps 3-5: the holiday plan card (Setup > Holidays > Plan / Accept / Re-check) ---------------- */
+  console.log("\n[P25] holiday plan: scheduler-only, Accept = confirm -> snapshot -> CAS sync -> one audit row -> notices; no write without Accept");
+  (() => {
+    const HP = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const hpCount = (s, needle) => s.split(needle).length - 1;
+    const acc = HP.slice(HP.indexOf("  const acceptHolidayPlan = async (year, plan, meta) => {"), HP.indexOf("  // --- Seed import (docs/silvis-seed.json through importer.js) ---"));
+    const panel = HP.slice(HP.indexOf("function HolidayPlanPanel("), HP.indexOf("// --- East feed status, forecast, overrides, derived weeks and busy days ---"));
+    check("P25 pins: the card is the scheduler's only - the Setup view is scheduler-only, HolidaysCard renders HolidayPlanPanel for isScheduler (passed isScheduler && !isPublicMode), and acceptHolidayPlan refuses anyone else and an unread schedule before it reads the map", () => {
+      assert.ok(acc.length > 200 && panel.length > 200, "acceptHolidayPlan / HolidayPlanPanel found");
+      assert.ok(HP.includes('{view==="setup" && !isPublicMode && isScheduler && <>'), "Setup is the scheduler's view");
+      assert.ok(HP.includes("onSave={saveHolidays} isScheduler={isScheduler && !isPublicMode} planState={ctxInputs} today={todayStr} onAcceptPlan={acceptHolidayPlan}"), "the call site: scheduler flag, live state, the one write path");
+      assert.ok(HP.includes("{isScheduler && <HolidayPlanPanel css={css} dk={dk} holidays={holidays} planState={planState}"), "HolidaysCard renders the panel for the scheduler only");
+      const gate = acc.indexOf('if (!isScheduler || isPublicMode) { showToast("Only the scheduler can lock holiday units.", "error"); return false; }');
+      const unread = acc.indexOf("if (refuseUnreadDay()) return false;");
+      const rows = acc.indexOf("const acc = holidayPlanAcceptRows(year, plan, cur, opts);");
+      assert.ok(gate > 0 && unread > gate && rows > unread, `gate=${gate} unread=${unread} rows=${rows}`);
+      assert.strictEqual(hpCount(HP, "onAcceptPlan={acceptHolidayPlan}"), 1, "acceptHolidayPlan is reached from the card only");
+    });
+    check("P25 pins: Accept order - ONE confirm (breaks + replaced slots, Cancel writes nothing) BEFORE the snapshot; snapshots.capture('holiday_plan') BLOCKS on failure before the map moves; the re-derivation after the snapshot; then pushUndo / setSchedule / syncScheduleDays(next); the audit row AFTER the sync", () => {
+      const cf = acc.indexOf('if (!confirm(parts.join("\\n\\n"))) { showToast("Nothing was written - the plan is kept.", "info"); return false; }');
+      const snap = acc.indexOf('const snap = await snapshots.capture("holiday_plan");');
+      const fail1 = acc.indexOf("if (!snap.ok) {");
+      const failRet = acc.indexOf("return false;", fail1);
+      const rederive = acc.indexOf("if ((scheduleRef.current || schedule) !== cur) {");
+      const undo = acc.indexOf("pushUndo(base, next);");
+      const set = acc.indexOf("setSchedule(next);");
+      const sync = acc.indexOf("const r = await syncScheduleDays(next);");
+      const audit = acc.indexOf('logAudit(swap ? "holiday_plan.swap" : "holiday_plan.accept"');
+      assert.ok(cf > 0 && snap > cf && fail1 > snap && failRet > fail1 && rederive > failRet && undo > rederive && set > undo && sync > set && audit > sync, JSON.stringify({ cf, snap, fail1, failRet, rederive, undo, set, sync, audit }));
+      assert.ok(acc.slice(fail1, failRet).includes("NOTHING was locked"), "the blocked capture says nothing was locked");
+      assert.ok(acc.includes("This plan BREAKS ${breaks.length} rule(s)") && acc.includes("will be REPLACED") && acc.includes("Cancel writes nothing."), "the confirm names the broken rules and the replaced slots");
+      assert.ok(acc.includes("const fresh = rows.conflicts.filter(") && acc.includes("Replace them too?"), "a conflict that appeared while the snapshot was saving asks again");
+      assert.strictEqual(hpCount(acc, "snapshots.capture("), 1, "one snapshot");
+      assert.strictEqual(hpCount(acc, "confirm("), 2, "the one confirm + the post-snapshot re-ask");
+    });
+    check("P25 pins: the CAS write path only - the merged map goes through syncScheduleDays (per-day CAS on version, the wipe guard, the conflict reload); no direct fetch / db write / day-row helper, no wipe grant", () => {
+      assert.strictEqual(hpCount(acc, "syncScheduleDays("), 1, "one sync");
+      ["fetch(", "authFetch(", "db.update(", "db.insert(", "db.upsert(", "postDayRow(", "patchDayRow(", "intentionalScheduleWipeRef", "schedule_days"].forEach(n => assert.strictEqual(hpCount(acc, n), 0, "no " + n + " in acceptHolidayPlan"));
+      assert.ok(acc.includes("const next = { ...base, ...rows.rows };"), "the plan rows (helpers.holidayPlanAcceptRows: both locks, source holiday-plan-<year>, the unit-only note) merged over the map on file");
+      assert.ok(acc.includes('const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";'), "the outcome of the sync");
+    });
+    check("P25 pins: ONE audit row (holiday_plan.accept / holiday_plan.swap) with the year, the units (roster ids), the replaced slots, the broken rule keys, the snapshot counts and the outcome - no amounts", () => {
+      assert.strictEqual(hpCount(acc, "logAudit("), 1, "one audit call");
+      assert.ok(acc.includes("{ year, source: rows.source, units: unitList, days: rows.days.length, changes: changed.length, replaced: rows.conflicts.map(c => ({ day: c.day, role: c.role, from: c.from, to: c.to, locked: c.locked })), breaks: (Array.isArray(m.breakKeys) ? m.breakKeys : []).concat(skipBreaks.map(b => b.key)), snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null }"), "the detail (review fix B: the broken rule keys include the ones a skipped started unit adds)");
+      assert.ok(!/\$\s*\d|amount|stipend|rate/i.test(acc.slice(acc.indexOf("logAudit("), acc.indexOf("if (r && r.ok) {", acc.indexOf("logAudit(")))), "no amount, rate or pay word in the audit call");
+    });
+    check("P25 pins: the notices are a hand edit's (one manual_edit in-app note + one manual_edit e-mail to the holders whose slot changed hands), only once the days are on file; no office notice, no broadcast", () => {
+      const ok = acc.indexOf("if (r && r.ok) {");
+      const note = acc.indexOf('addNotification("manual_edit"'), mail = acc.indexOf('sendEmailNotif("manual_edit", { message: msg, subject: `Holiday plan ${year}${swap ? " - swap" : ""}` }, affected);');
+      assert.ok(ok > 0 && note > ok && mail > note, `ok=${ok} note=${note} mail=${mail}`);
+      assert.strictEqual(hpCount(acc, "addNotification("), 1); assert.strictEqual(hpCount(acc, "sendEmailNotif("), 1);
+      ["office-notifications", "schedule_published", "publishRef.current()", "pendingOpenShiftsNoticeRef"].forEach(n => assert.strictEqual(hpCount(acc, n), 0, "no " + n));
+      assert.ok(acc.includes('const affected = [...new Set(noticeChanged.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];'), "affected = roster holders before / after a changed slot (review fix G: against the rows last persisted)");
+    });
+    check("[P25] review fix G pins: the notices diff the rows LAST PERSISTED (lastSyncRef, read before the sync - never written here) or the 'before' a failed / conflicted Accept left pending, against the plan rows; a failed / conflicted Accept keeps its before-rows (earliest wins) for the next Accept of the year that saves; a saved Accept clears its days", () => {
+      assert.ok(HP.includes("  const holidayNoticePendingRef = useRef({});"), "the pending-notice ref, declared once at the component's top level");
+      const before = acc.indexOf("rows.days.forEach(d => { noticeBefore[d] = Object.prototype.hasOwnProperty.call(pend, d) ? pend[d] : (persisted[d] || null); noticeAfter[d] = next[d]; });");
+      const persistedRead = acc.indexOf("const persisted = lastSyncRef.current || {};");
+      const nc = acc.indexOf('const noticeChanged = diffScheduleDays(noticeBefore, noticeAfter).filter(c => c.role === "primary" || c.role === "backup");');
+      const sync = acc.indexOf("const r = await syncScheduleDays(next);");
+      assert.ok(persistedRead > 0 && before > persistedRead && nc > before && sync > nc, JSON.stringify({ persistedRead, before, nc, sync }));
+      assert.strictEqual(hpCount(acc, "lastSyncRef.current ="), 0, "acceptHolidayPlan never writes lastSyncRef (the sync's own state)");
+      const okAt = acc.indexOf("if (r && r.ok) {");
+      const clear = acc.indexOf("if (Object.keys(left).length) pendingNotices[year] = left; else delete pendingNotices[year];");
+      const keep = acc.indexOf("rows.days.forEach(d => { if (!Object.prototype.hasOwnProperty.call(keep, d)) keep[d] = noticeBefore[d]; });");
+      const blockedRet = acc.indexOf('if (r && r.blocked) { showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error"); return false; }');
+      assert.ok(okAt > sync && clear > okAt && blockedRet > clear && keep > blockedRet, JSON.stringify({ okAt, clear, blockedRet, keep }));
+      assert.ok(acc.includes("The change notices wait: press Accept ${year} again once the header shows Saved to send them."), "the failed write says the notices wait");
+    });
+    check("[P25] review fix A / B / C / E / F pins: one surgeon in both roles stops BEFORE the confirm (structural, nothing written); a swap with a started unit is refused (it would be written half); a full Accept that skips a started unit names the breaks of the year as written; kept notes and every replaced slot (grouped) are in the confirm", () => {
+      const rowsAt = acc.indexOf("const acc = holidayPlanAcceptRows(year, plan, cur, opts);");
+      const same = acc.indexOf("const same = acc.skipped.filter(s => s.samePerson);");
+      const sameStop = acc.indexOf("one surgeon cannot hold both roles of a unit (the database refuses the row). Swap one of them first.`, \"error\"); return false; }");
+      const swapStop = acc.indexOf("if (swap && started.length) {");
+      const written = acc.indexOf("const written = started.length ? holidayPlanWrittenCheck(year, plan, acc, holidayPlanInputs(year, ctxInputs)) : null;");
+      const cf = acc.indexOf('if (!confirm(parts.join("\\n\\n")))');
+      const snap = acc.indexOf("snapshots.capture(");
+      assert.ok(rowsAt > 0 && same > rowsAt && sameStop > same && swapStop > sameStop && written > swapStop && cf > written && snap > cf, JSON.stringify({ rowsAt, same, sameStop, swapStop, written, cf, snap }));
+      assert.ok(acc.slice(swapStop, written).includes("this swap would be written half") && acc.slice(swapStop, written).includes("return false;"), "the half-swap refusal writes nothing");
+      assert.ok(acc.includes("so the year as written BREAKS ${skipBreaks.length} more rule(s)"), "the confirm names the breaks a skipped started unit adds");
+      assert.ok(acc.includes("const conflictText = (list) => holidayPlanConflictLines(list, v => holderLabel(v, nameOf));") && acc.includes("will be REPLACED:\\n- ${conflictText(acc.conflicts).join(\"\\n- \")}"), "every replaced slot, grouped by unit + role + holder - no day cap");
+      assert.ok(!/t\.slice\(0, 12\)/.test(acc), "the old 12-line cap is gone");
+      assert.ok(acc.includes("Day notes kept as on file (the plan note is not added there)"), "kept notes are named");
+    });
+    check("P25 pins: no write without Accept - the panel only computes (helpers.holidayPlanInputs / planHolidays / holidayPlanCheck / holidayPlanSwapOptions / holidayPlanRecheck) and reaches the write path through onAccept in its two handlers; a swap that adds a broken rule asks first, naming it", () => {
+      ["fetch(", "db.", "syncScheduleDays", "snapshots.", "logAudit", "setSchedule", "sendEmailNotif", "addNotification"].forEach(n => assert.strictEqual(hpCount(panel, n), 0, "no " + n + " in HolidayPlanPanel"));
+      assert.strictEqual(hpCount(panel, "await onAccept("), 2, "onAccept from Accept and from a Re-check swap only");
+      assert.ok(panel.includes("const ok = await onAccept(plan.year, plan.assignments, { breaks: live.check.breaks.map(b => b.text), breakKeys: live.check.breaks.map(b => b.key) });"), "Accept hands over the plan and its breaks");
+      assert.ok(panel.includes('await onAccept(recheckYear, s.assignments, { mode: "swap", only: units, breaks: s.added.map(x => x.text), breakKeys: s.added.map(x => x.key) });'), "a Re-check swap writes the swap's units only, through the same path");
+      ["const result = planHolidays(year, inputs);", "const check = holidayPlanCheck(plan.year, plan.assignments, inputs);", "holidayPlanSwapOptions(plan.year, plan.assignments, a.unit.name, role, inputs).options", "try { return holidayPlanRecheck(recheckYear, { ...holidayPlanInputs(recheckYear, planState || {}), today }); }", "const inputs = { ...holidayPlanInputs(plan.year, planState || {}), today };"].forEach(n => assert.ok(panel.includes(n), n));
+      assert.ok(panel.includes("}, [plan, planState, today]);") && panel.includes("}, [recheckYear, planState, today]);"), "review fix B: today (Central) reaches the swap list and Re-check - no swap with a started unit");
+      assert.ok(panel.includes('data-testid="holplan-locks-note"') && panel.includes('shows up in Generate as a "lock violation" and is kept as it is'), "review fix L: the card says accepted units the usual rules refuse are lock violations in Generate, kept");
+      assert.ok(panel.includes("if (o.added.length && !confirm(`This ${o.kind === \"swap\" ? \"swap\" : \"replacement\"} (${o.unit} ${o.role}: ${o.text}) BREAKS ${o.added.length} rule(s):\\n- ${o.added.map(b => b.text).join(\"\\n- \")}"), "the swap confirm names each added rule");
+      assert.ok(panel.includes('disabled={busy || dirty || blockedNow}'), "Accept waits for saved units and a read schedule");
     });
   })();
 

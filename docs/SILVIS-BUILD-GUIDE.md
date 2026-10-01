@@ -85,7 +85,7 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 
 | id | name | code | pool |
 |---|---|---|---|
-| s1 | Khan | FAK | weekend primary when East allows (`primaryContribution: "weekends"`, 9/22); Mon/Wed auto-offered when East is clear (= eligible with a soft +1, `auto-offer-weekday` / `weights.noTargetWeekday` — audit RG-3, 9/23); never Tue/Thu as primary (backup any day since 9/22); East blocks primary only |
+| s1 | Khan | FAK | ⟶ 9/30 (Prompt 23): **weekdays preferred** (`primaryContribution: "weekdays"`; was weekend primary, 9/22), a **standalone Friday** allowed and **never a lone Sat/Sun** as primary (`standaloneFriday`, `noLoneWeekendDay`), **at most 2 weekends a month across DSG and Silvis** (soft `weekendCap`), Tue/Thu primary hard only **within 56 days** (`hardNeverWeekdaysNoticeDays`); Mon/Wed auto-offered when East is clear (= eligible with a soft +1, `auto-offer-weekday` / `weights.noTargetWeekday` — audit RG-3, 9/23); backup any day since 9/22; East blocks primary only |
 | s2 | Burchett | MAB | yes |
 | s3 | Acton | BDA | yes |
 | s4 | Philip | AFP | yes |
@@ -358,7 +358,7 @@ Hard blocks (any → `ok:false`): inactive on that date; `time_off` covering the
 *and, for primary only, the day before*, because the shift ends 07:00 on the vacation day — `groupRules.dayBeforeRules`, H; there are no no-call days); `availabilityMode` semantics violated (whitelist: any
 `available` row for that surgeon in that month makes uncovered days ineligible; `unavailable` rows always block;
 `backup_only` blocks primary; `no_backup` blocks backup); recurring `recurringUnavailable` (primary only since 9/22); `hardNeverWeekdays`
-(Khan: Tue/Thu; Acton: Tue since 9/22 evening, Prompt 12 X — both primary only, `hardNeverWeekdaysRoles`; Sarkar has none since 9/22 evening); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
+(Khan: Tue/Thu — since 9/30 hard only within 56 days of the placement, `hardNeverWeekdaysNoticeDays`, Prompt 23 below; Acton: Tue since 9/22 evening, Prompt 12 X — both primary only, `hardNeverWeekdaysRoles`; Sarkar has none since 9/22 evening); Khan **primary** on an East busy day (backup is allowed — `eastBlocksBackup:false`);
 Philip's day-before-Aledo (primary only — `aledoDayBeforeRoles`, H); Fierce's weekday pattern outside his derived weeks (primary: Tue/Thu none, Mon backup-only, Wed preferred,
 Fri/Sat/Sun only as one Fri+Sat+Sun block; backup every day since 9/22); Sarkar outside her windows (both roles; `daysPerWindowWeek` is a soft target since 9/22 evening); already
 holds the other role that day; `backupOptOut` on a backup slot (I); would exceed `maxConsecutiveDays` (primary-only count by default,
@@ -385,6 +385,41 @@ Soft penalties (weights configurable in `groupRules.weights`): `recurringAvoid` 
 Aledo week (strong), `prefer` rows (negative), weekend-style mismatch (block-style surgeon on a lone Sat, etc.), holiday
 preferences (`neverThanksgiving` is hard; `maxMajorHolidays` hard once reached; alternating-days preference soft),
 back-to-back weekends, backup on the day right after a primary day (mild), distance from monthly target.
+
+**Prompt 23 (Faraz 9/30) — four generic keys (Khan's new call preferences; rules doc §3 Khan, §8 item 23).**
+`primaryContribution: "weekdays"` (the mirror of `"weekends"`): a primary on a weekday (outside `weekendUnit.days`) or a
+standalone Friday → soft `weekday-primary` at −`weights.weekendContribution`; no block bonus, no backup term; never on a
+holiday-unit day; `weekendUnitPatterns` carries it as a unit-level term (skipPatternSoft). `standaloneFriday` +
+`noLoneWeekendDay`: the `friday` weekend pattern (§6) and the **hard** `lone-weekend-day:<Sat|Sun>` for primary (the partner
+day held — schedule or assume-slots — or a holiday cut, or a dated row / offer of his lifting it; a dynamic reason, in
+`HARD_REASONS`, the board's "weekday patterns and stated availability" category and the painter's confirm words).
+`weekendCap { perMonth, countsEast, roles, days, weight }`: soft `weekend-cap:<n>` at `weight` per weekend over n, a weekend
+counted once in its Saturday's month (Silvis `roles` on `days`, or East-busy — `rdEastBusyOn`: feed + overrides, standing,
+forecast ≥ threshold outside the coverage, never a home day), on the weekend's first held counted day, only when the East
+data do not already count it; a weekend not yet on `ctx.schedule` (a candidate) pays when the month then counts more than
+n (a candidate day of a weekend that already counts through another day he holds there pays nothing - review 2, 10/1),
+a held one when it is past n in the month's order (East weekends, then his locked weekends, then by date), so a finished
+schedule's terms add up to weight × (count − n) (review 10/1 - it read weight × (count − n) on every held weekend);
+`rules.weekendCapCounts(ctx, id, month)` lists the counted weekends. `hardNeverWeekdaysNoticeDays`:
+`hard-never-weekday` only for a date ≤ N days after `ctx.today`; beyond it the soft `hard-never-beyond-notice:<wd>` at
+`weights.hardNeverBeyondNotice` (code default 3 = medium: at the default `weekendContribution` 3 it equals the weekday bonus,
+so a far Tue/Thu nets 0 - allowed, never preferred; a higher `weekendContribution` makes it preferred again unless this weight
+rises too). A slot the surgeon already **holds** on the **standing** schedule reads the soft term inside the notice as well
+(review 10/1: `rdStatic` flags the notice-bound reason, `eligibility()` swaps it for the soft term when the standing holder
+of the evaluated slot and role is him) - a new placement (open slot, someone else's slot, a preview's own new row, every slot
+the generator places) stays hard. Review 2 (10/1): the standing schedule is **`ctx.heldSchedule`**, a `{ day: { primary,
+backup } }` snapshot `buildContext` takes of `input.heldSchedule`, else of `input.schedule` as given (`rules.heldSnapshot`;
+a copy - later in-place writes to `ctx.schedule` never change it; a non-object warns and holds nothing); `eligibility()`
+never reads the holder on `ctx.schedule`. Callers: the app's main context (saved rows) and Generate use the default; the day
+editor's draft context passes `heldSchedule: ctxInputs.schedule` (the saved rows); `scripts/publish-preview.js` passes the
+live rows to `buildLiveContext`, and `preflight()` installs the live holders from the plan (`plan.live`, else
+`standingOf(plan)` = the final map with the planned changes put back) for its evaluation and restores the ctx's own after;
+`generate()` narrows it for the run (`genRunHeld`: outside the range the caller's snapshot, inside it only the rows the run
+starts from - the locks / fixed slots `genSeedLocks` keeps - that the caller's snapshot holds with the same surgeon) and
+restores it in its `finally`, so `genEvaluate` / `genDiagnostics` read the run's own placements as new.
+**`ctx.today`** = `input.today`, else the Central date read once by
+`buildContext` (`rdTodayCentral`) — `eligibility()` never reads a clock; tests pin a fixed today (`test/seed-adapter.js`
+`SEED_TEST_TODAY` 2026-11-23). Malformed values warn once and are ignored (the notice: the rule stays hard everywhere).
 
 Every rule must be expressible in `call_schedule_data.data.surgeonRules` and editable in Setup — no surgeon-specific
 `if (name === "Philip")` in code. Fierce's derivation and Khan's East dependency are generic features
@@ -424,7 +459,7 @@ open 10/15 primary).
 **Pipeline for one candidate:**
 1. **Seed locks** — existing locked days, manual locks, Fierce derived weeks (both roles as applicable), imported assignments. Locks are never moved.
 2. **Build units** — each holiday (from `config.holidays.units[year]`) is a *holiday unit*: its days get **one primary and one backup who stick through the whole unit**; a holiday unit pre-empts any weekend unit it overlaps, and the leftover Fri/Sat/Sun days form a reduced weekend unit. Each remaining Fri/Sat/Sun triple is a *weekend unit*; every other day is a *day unit*. Holiday units are scored against the holiday pools (major/minor counts, tenure-normalized) and per-surgeon holiday rules (`neverThanksgiving`, `maxMajorHolidays`).
-3. **Primary pass** — order units by constraint tightness (fewest eligible candidates first; weekend units generally first). For each unit enumerate legal patterns: day unit → each eligible surgeon; weekend unit → `block(x)`, `split(x,y)`, `daily(x,y,z)` per §4 of the rules. Score = Σ soft penalties + target-deviation term + pattern penalty (`daily` is expensive; `split` cheap for split-style pairs; `block` cheap for block-style surgeons) + small jitter. Pick the min. If a unit has **no** legal pattern, leave it open and record `diagnostics.uncovered` with the blocking reasons per surgeon (the UI shows this — never silently skip).
+3. **Primary pass** — order units by constraint tightness (fewest eligible candidates first; weekend units generally first). For each unit enumerate legal patterns: day unit → each eligible surgeon; weekend unit → `block(x)`, `split(x,y)`, `daily(x,y,z)`, `friday(x; Sat-Sun as block(y) or daily(y,z))` (Prompt 23, a `standaloneFriday` surgeon on the roster) per §4 of the rules. Score = Σ soft penalties + target-deviation term + pattern penalty (`daily` is expensive; `split` cheap for split-style pairs; `block` cheap for block-style surgeons) + small jitter. Pick the min. If a unit has **no** legal pattern, leave it open and record `diagnostics.uncovered` with the blocking reasons per surgeon (the UI shows this — never silently skip).
 4. **Backup pass** — same as 3 with primary fixed; backup ≠ primary; backup placements are scored against the per-role backup targets (J); caps count primary only (K), so a backup placement never trips a cap (Philip's explicit `backupCap` is the one backup cap).
 5. **Repair pass** — for each open slot, try 1-hop and 2-hop swaps that free an eligible surgeon (mirrors Davenport's Phase-1B chain swaps) while keeping every move inside `eligibility()`.
 6. **Target smoothing** — per role, primary first: while any pool surgeon is above his primary (then backup) target and another below, move a *non-locked* day-unit slot of that role from high→low if eligibility holds, the soft score does not worsen beyond `weights.smoothingTolerance` and that role's total deviation strictly falls.
@@ -446,9 +481,39 @@ separately, and `diagnostics.impliedTargets` shows every level plus, per member,
 **Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
 (locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
 `diagnostics.fixedSlots`, and a held unlocked slot that breaks a rule is a fact in `diagnostics.fixedViolations`, never a
-hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups).
+hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
 Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
 the pool's open-slot count.
+
+**Prompt 23 (Faraz 9/30) — the `friday` weekend pattern.** For a full primary weekend unit, whenever an active surgeon
+carries `surgeonRules.<id>.standaloneFriday`, `rules.weekendUnitPatterns` adds the kind **`friday`**: one surgeon alone on the
+Friday + the Saturday–Sunday as their own reduced unit — a block of two by one surgeon, or two daily days (with
+`weights.patternDaily`) — offered when the Friday holder or the block-of-two holder carries the key. The key holder's Friday
+costs nothing (the Sarkar-Friday reading of a standalone day), anyone else's Friday their weekendStyle's daily member
+penalty; the Sat–Sun block of two is no mismatch for a key holder only — anyone else pays `weights.patternMismatch` once, a
+block-style holder included (+ `weekendBlockPenalty`). ⟶ *Review 10/1: the block-style holder's pair used to be free here
+(read like a holiday-CUT Sat–Sun, where his two days are his whole block), while per-day `eligibility()` charged
+`pattern-mismatch:block` on both days and `genStyleMismatch` flagged him - on a whole weekend his style wants the Friday too,
+so the unit choice now pays it like the other two (pinned together in `test/rules.test.js`).* The daily enumeration skips the
+shapes the kind covers. **Effect on the other surgeons' weekend units:** only weekends where the key holder (Khan) holds the
+Friday alone or the Sat+Sun pair change — then the rest of the weekend goes to someone else as a two-day block (Philip, block
+style, +3 — his style's mismatch; Acton / Burchett, split style, +3; or a daily Sat / Sun pair with `patternDaily`; Fierce
+never — his Fri–Sun is block-only) or as a lone Friday beside Khan's pair (Sarkar's window Fridays pair naturally at 0; a
+block- or split-style Friday costs its +3). With no key on the roster the enumeration — and the whole generate — is byte-identical to the pre-23
+engine (checked on Nov–Dec and Jan–Mar, three seeds each, 10/1). The generator writes the kind like any pattern
+(`diagnostics.weekendUnits[].kind`), counts its daily sub-pattern in `pattern-daily`, reads the key holder's legal primary
+shapes ({Fri}, {Sat, Sun}, {Fri, Sat, Sun}) as no style mismatch (`genStyleMismatch`), and `buildUnits` judges a surgeon
+blocked ONLY by `lone-weekend-day` with the partner day assumed (the allowed-slot count). ⟶ *Review 10/1:* `genFillWeekend`'s
+reduced-unit fallback (no full pattern) does the same - a Saturday / Sunday only such a surgeon can take is kept WITH its open
+partner when one surgeon blocked solo only by `lone-weekend-day` passes both days with the other assumed (that set is tried
+first, the plain solo set after it), so his pair is placed instead of the Saturday being dropped beside an open Friday
+(`test/generator-regression.js` "pair fixture", with its noLoneWeekendDay-off control). The other three keys (weekday
+bonus, weekend cap, Tue/Thu notice) reach the generator as ordinary soft terms through `eligibility()`; the notice is
+measured from `ctx.today`, which the app's Generate builds fresh per run (the Central date). **Trades card (review 10/1):**
+`tradeUnitOf` reads a `noLoneWeekendDay` holder's primary Sat + Sun as one "weekend-block" unit (name "weekend pair"; his
+Fri–Sun of block style stays the "weekend block"), so the unit paths apply - a member cannot give or trade one day of it, the
+scheduler confirms a split, the receiver is checked over both days with the other assumed (`test/data-layer.test.js` lifts
+the function). Not covered: the board's Take (one day at a time) and the day editor's clear (rules doc §8 item 23 (i), (m)).
 
 **Diagnostics** returned with every run: per-surgeon tallies (primary, backup, weekend days, holidays, consecutive max,
 month totals vs cap/target), a list of open slots with reasons, the soft penalties incurred (so Faraz can see *why*
@@ -623,7 +688,7 @@ even seeds), the fill-open-only October backfill runs (Prompt 12 T) and the fixt
 2. `primary !== backup` on every day.
 3. Locks (imports, manual, Fierce derived) are byte-identical in the output.
 4. No assignment on a `time_off` day or on the day before a vacation day.
-5. Khan: never Tue/Thu **as primary** (backup any day since 9/22); never **primary** on an East busy day (backup on an East day is legal).
+5. Khan: never Tue/Thu **as primary** (backup any day since 9/22) — ⟶ since 9/30 (Prompt 23) only inside his notice (56 days after the run's today; beyond it the day is allowed, soft), and never a lone Saturday or Sunday **as primary** (`noLoneWeekendDay`); never **primary** on an East busy day (backup on an East day is legal).
 6. Acton: never **primary** on a 2nd/4th Mon or Wed (backup allowed since 9/22); never **primary** on a Tuesday (X, 9/22 evening; backup allowed); never 2026-11-19..22 or 11-25..29; never Thanksgiving.
 7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); backup only on listed days in a month whose entry governs backup too (November, and December since 9/23); ≤ 2 consecutive primary days (real days); ≤ 8 **PRIMARY** days per month (backup never counts — K). Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).
 8. Philip: never **primary** the day before an Aledo day (H); never **primary** outside his listed weeks from 11/2026 (holiday-unit days included — small items 9/22); never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday; ≤ 4 consecutive primary days.
@@ -712,7 +777,8 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   §8 item 18 (Sarkar as backup inside her windows under the convex term).
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
   explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
-- **Khan contributes primary on weekends when available**; his backup count is balanced like everyone else's; East
+- **Khan contributes primary on weekends when available** (⟶ superseded 9/30, Prompt 23: weekdays preferred, at most 2
+  weekends a month across DSG and Silvis - §5); his backup count is balanced like everyone else's; East
   cross-reference covers all Davenport call (service weeks, nights, weekends, backup weeks, holiday coverage, forecast).
 - **Outside surgeons ("internal locums")**: roster entries of `type: "external"`, written in by hand in the day editor,
   never generated, tallied separately, exported like anyone else. Legacy `externalCover` stays for the Atwell import.
@@ -1728,7 +1794,9 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
 - **Preflight** (before any SQL): (a) `diagnostics.hardViolations` empty in both passes and the milestone's
   `uncovered` empty (backfill opens are listed); (b) `rules.eligibility` over every placed slot of both ranges on the
   FINAL schedule — a lock holder's `conflicts` are the known locked facts (the preview's `lockViolations`), any other
-  hard reason aborts; a ctx the builder could not complete (no East id resolved for an `eastBlocks` surgeon, a failed
+  hard reason aborts (review 2, 10/1: the rules' "already held" reading - a Khan Tue/Thu inside his notice - reads the
+  LIVE rows, `plan.live`, never the final map: a preview-new row inside the notice aborts, an unchanged live row passes);
+  a ctx the builder could not complete (no East id resolved for an `eastBlocks` surgeon, a failed
   Davenport roster read) **fails the preflight outright** — an incomplete ctx would evaluate Khan's East days `ok`
   and PASS silently; (c) every range day covered or listed open; (d) distinct roles. `--apply` refuses unless all pass.
 - **Verification on `--apply`**: the batch's final `SELECT` (snapshot id, snapshots before → after, audit id,
@@ -1784,3 +1852,128 @@ classification reads the RAISE text of the CLI's output whether or not the CLI e
 did not move is reported NOT VERIFIED (exit 1) by the re-read — the `DO` block rolled back in every case. Proof:
 `test/day-edit.test.js` (the live October rows as a fixture, before/after pinned, SQL pins, override gating, the
 sequential Khan Fri–Mon batch, verify-after-apply); CI step "Day-edit CLI tests".
+
+## 20. The yearly holiday plan (`helpers.js` `planHolidays`, Prompt 25, Faraz 9/30 — steps 1–5 built)
+
+The rules are `docs/SILVIS-CALL-RULES.md` §5 ("the yearly holiday plan"); this is the machinery. One pure function in
+the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no network, no writes):
+`planHolidays(year, { units, roster, surgeonRules, groupRules, history, east, vacations, seed })` →
+`{ year, assignments: [{ unit, primary, backup, why, blocked }], counts, relaxed, warnings, search }`.
+
+- **Inputs.** `units` = `holidays.units[year]` (or pass `holidays`); `roster` (pool = active, not `type: "external"`);
+  `surgeonRules` / `groupRules` as stored; `east` uses the app's `ctxInputs` names (`eastBusyDays`, `eastForecast`,
+  `eastOverrides`, `eastDerived`, `eastFeedCoverage`), so a later Setup card passes `ctxInputs` as it is; `vacations` =
+  `time_off` rows (a caller may append the East vacation ranges, as the 2027 report did with Khan's Davenport ranges);
+  `seed` = the last tie-break's RNG seed (default the year; mulberry32 with FNV-1a for strings, as `generator.js`).
+  `history` = `holidayPlanHistory({ schedule, holidays, groupRules })` — every stored unit somebody holds in the schedule
+  (split holders listed, an external cover kept as `ext:<label>`) plus `groupRules.holidayPlan.history`; without
+  `history` the planner builds it from `schedule` + `holidays`. `holidayPlanRules(groupRules)` reads the block with
+  `HOLIDAY_PLAN_DEFAULTS` per key (the `GROUP_CALL_DEFAULTS` pattern).
+- **One refusal logic.** `hplPrepare(year, opts)` reads the inputs once — the units, the pool, the history and the
+  lifetime counts, every hard limit below (`block[unit][id][role]`), the derived week's forced holders and the tier
+  shape — and both the search (`planHolidays`) and the judges of a given plan (`holidayPlanCheck`,
+  `holidayPlanSwapOptions`, `holidayPlanRecheck`, below) read it; there is no second copy of a rule.
+- **Hard limits** are computed once per (unit, surgeon, role) in the rules engine's vocabulary (`inactive`,
+  `holiday-opt-out:<name>`, `backup-opt-out`, `time-off:<day>`, `day-before-vacation`, `east-busy`,
+  `east-forecast-busy:<p>`, `max-major-holidays:<n>`, `derived-lock:<role>`, `derived-lock-held:<id>`) with
+  `rules.js`'s precedence (published > override > forecast; a standing day beats an override); each assignment carries
+  them as `blocked`. `planHolidays` does not call `rules.eligibility`: to the planner a plan day is the surgeon's own
+  availability (rule 1), so only this short list applies — `test/holiday-plan.test.js` C pins each item. (Once accepted
+  the rows are ordinary locks to `rules.js` / `generator.js`: Generate lists a waived rule in `lockViolations` and keeps
+  the slot — N1 pins it; rules doc §8 item 24 (d).)
+- **Search.** Per tier, a depth-first walk over the slots (unit by unit, primary then backup) under the pass's hard
+  rules — the shape per tier (n = the surgeons who can hold a slot of the tier: each serves floor(S/n)..ceil(S/n) of the
+  S = 2 × units slots, at most ceil(units/n) primaries), primary ≠ backup, the 12-month window within the plan, and in
+  pass 1 no repeat. Each complete tier plan is scored `[open, shape, repeats, load, primaryRate, sameHoliday,
+  unitLength]` and grouped by its per-surgeon (primaries, served) signature, keeping the best and every plan tied with
+  it; only the groups with the tier's best `[open, shape, repeats, load]` prefix can be in the best year (those terms
+  do not depend on the other tier). Every pair of major × minor groups is then scored with the alternation count in the
+  fifth place, and the seeded RNG picks uniformly among the plans still tied. Passes: 1 = everything hard; 2 = no repeat
+  soft (only when pass 1 has no plan); 3 = the shape soft and open slots allowed (only when pass 2 has none) — the result
+  says which (`search.pass`) and `relaxed` lists every repeat / shape miss kept. Six surgeons: at most 720 plans per tier,
+  a few milliseconds; a cap of 3,000,000 per tier warns (`truncated`).
+- **Output.** `why` per role holder (his rate or load, his role in the other tier, last year's units, a same-holiday or
+  relaxed note, a derived week); `counts[id]` = `before` (per tier: primary, any, eligible, primaryRate, load),
+  `lastYearDays`, `plan`; `warnings` name every refused input, a surgeon who can hold no unit of a tier, an alternation
+  miss and an OPEN slot with each surgeon's reasons; `search.cost` the winning vector.
+- **Proof:** `test/holiday-plan.test.js` (npm chain + CI step "Holiday plan tests"; `test/ci.test.js` pins the
+  alignment) — the data (seed block = defaults, the blob, Khan's 9/30 opt-out, the one revision entry), the history
+  builder, one section per rule, the 2027 plan on the seed inputs + the 2026 holders, and ten simulated years on the seed
+  rules (every limit, no repeat unless a derived week forces it, the rotation exact until a derived-week override and
+  caught up by the tenth year). `test/generator-regression.js` restates `holidaysOff` generically for the generator.
+- **Judging a plan (steps 3–5).** A plan is the planner's `assignments` shape or `{ <unit>: { primary, backup } }`.
+  `holidayPlanCheck(year, plan, opts)` → `{ ok, breaks, soft, open, cost, warnings }`: `breaks` (hard — each `{ rule,
+  unit, role, id, text, key }`) are `refused` (the `block` reasons for that slot), `not-in-pool`, `same-person`,
+  `max-major` (two majors of the plan inside the 12-month window, history included — the search's `majorOk`),
+  `no-repeat` and `shape`; `soft` is the alternation miss; `open` the open slots (not a break); `cost` is the planner's
+  vector computed exactly as the search scores a complete plan — for the planner's own plan it equals `search.cost`
+  (pinned). `holidayPlanSwapOptions(year, plan, unit, role, opts)` lists every swap of the slot's holder with another
+  filled slot's holder and every replacement by another pool member, each judged by the same check (`breaks`, `added`
+  vs the plan, `resolved`, `ok`), sorted fewest breaks → cost vector → listing order (deterministic; the seeded draw is
+  the planner's alone). `holidayPlanRecheck(year, opts + schedule)` reads the accepted slots (unit days whose row source
+  is `holiday-plan-<year>`; one holder per role, else the slot is reported mixed and skipped), judges each on the
+  current state with the slot rules (`refused`, `not-in-pool`, `same-person`, `max-major`) and suggests the first option
+  that clears it and adds no break (`valid`), else the first that clears it. `holidayPlanAcceptRows(year, plan,
+  schedule, { holidays | units, only, today })` builds the rows Accept writes — every planned role locked, source
+  `holiday-plan-<year>` (`holidayPlanSource`), note `holidayPlanNote` = "<unit> unit - holiday plan <year>", a roster
+  primary clears an external cover, an open plan role keeps what is on file (cleared if it would equal the other role),
+  a started unit skipped — and `conflicts`: every planned slot the row already holds differently (locked or not).
+  `holidayPlanInputs(year, state)` maps the app's state (`ctxInputs`) to the planner's opts: `time_off` + the away /
+  unreviewed East ranges (`derivedEastVacations`), `holidayPlanHistory` over the schedule (its warnings apart), the East
+  pieces as they are, seed = the year. `holidayPlanDefaultYear`, `holidayPlanUnitLines` (the notice lines).
+- **The card (`index-source.html` `HolidayPlanPanel`, inside `HolidaysCard`, rendered for `isScheduler` only — Setup is
+  the scheduler's view anyway).** Testids: `holplan` (the box), `holplan-year`, `holplan-run` ("Plan <year>"),
+  `holplan-preview` (`data-year`, `data-pass`), `holplan-row` (`data-unit`, `data-tier`) with `holplan-p` / `holplan-b`
+  (`data-id`), `holplan-swap` (`data-unit`, `data-role`; options labelled "keeps the rules" / "adds no break" / "BREAKS:
+  <rules>"), `holplan-why`, `holplan-counts` / `holplan-count-<id>`, `holplan-breaks` (`data-count`) /
+  `holplan-break` (`data-rule`), `holplan-soft`, `holplan-open`, `holplan-relaxed`, `holplan-warnings`,
+  `holplan-swapped`, `holplan-accept`, `holplan-reset`, `holplan-discard`, `holplan-recheck` ("Re-check <year>"),
+  `holplan-recheck-list` (`data-year`, `data-accepted`, `data-blocked`), `holplan-recheck-item` (`data-unit`,
+  `data-role`, `data-id`), `holplan-recheck-suggestion`, `holplan-recheck-apply`, `holplan-recheck-close`. The plan is
+  computed on Plan (inputs = the saved units; unsaved Holidays edits disable Accept); the check, the swap lists and the
+  Re-check are recomputed from the live `ctxInputs` on every render, so a vacation or an East refresh after Plan shows at
+  once. A swap whose `added` is not empty asks `confirm` naming each rule first. The panel itself never writes: its only
+  write is `onAccept`, from Accept and from a Re-check *Apply swap*.
+- **Accept (`acceptHolidayPlan(year, plan, meta)` in the App, the card's `onAccept`).** Refuses anyone but the scheduler
+  and an unread schedule (`refuseUnreadDay`); `holidayPlanAcceptRows` over the current map; ONE `confirm` naming the
+  broken rules (the card's check texts) and the conflicts (Cancel writes nothing); `snapshots.capture("holiday_plan")`
+  (label "Before a holiday plan Accept / swap"; a failed capture blocks); re-derived over the current map when a realtime
+  row landed meanwhile (a new conflict asks again); `pushUndo` + `setSchedule` + `syncScheduleDays(next)` — the same CAS
+  path as every schedule write (POST v1 for a new day, PATCH `?day&version` otherwise, the wipe guard, the conflict
+  reload); ONE audit row after the sync with its outcome (`holiday_plan.accept`, or `holiday_plan.swap` for a Re-check
+  swap — `{ year, source, units: [{ name, days, primary, backup }], days, changes, replaced, breaks (keys), snapshot,
+  outcome, error }`, roster ids, no amounts); once the days are on file the manual-edit notices (`addNotification` +
+  `sendEmailNotif` "manual_edit" to the roster holders whose slot changed hands, one message for the plan). No office
+  notice and no publish dialog (that stays Settings → Office notifications). `meta.mode "swap"` + `meta.only` write the
+  swap's units only.
+- **The accepted rows elsewhere.** `generator.js` keeps every slot with `primaryLocked` / `backupLocked` and a holder
+  while `respectLocks` is on (the default; with it off, Accept & Publish confirms every locked slot it would replace) —
+  `test/holiday-plan.test.js` N1 generates over Thanksgiving and Christmas / New Year's 2027 and finds the rows as
+  accepted. `tradeUnitOf` reads the unit from `rulesCtx.holidayByDay` (every stored unit of every year) and the holder,
+  never the row source, so a trade or a give of an accepted day moves the whole unit (N2 restates it and pins the source
+  text); `apply_trade` moves a locked slot only for the scheduler and clears its lock (source `trade`).
+- **Proof (steps 3–5):** `test/holiday-plan.test.js` J (the check: the planner's plans break nothing and score
+  `search.cost`, every break kind), K (the swap options: each = the check of its assignments, the ranking, a swap twice =
+  the original), M (the Accept rows, the conflicts, `only` / `today`, `holidayPlanInputs`, the default year), L (Re-check:
+  a newer vacation, East day, rule and roster change, each with its suggestion; applying it clears the slot; a hand-edited
+  or mixed unit), N (the generator, the trade unit); `test/data-layer.test.js` [P25] (scheduler-only, the confirm →
+  snapshot → sync → audit order, the CAS path only, one audit row with no amounts, the hand-edit notices only after the
+  write, no write in the panel but `onAccept`); `test/ui/smoke.mjs` "holiday plan" (Plan 2027 from the served rows, a
+  breaking swap asks and a dismissed one changes nothing, Accept with a failing snapshot writes nothing, Accept for real =
+  snapshot then one CAS write per unit day with both locks / the source / the note, one audit row, the notices; Re-check
+  with a mocked vacation; every write answered by the harness). The 2027 report (on the 10/1 live inputs, beside
+  Cowork's hand-worked plan) is outside the repo, in the gate folder of the 10/1 run.
+- **Review fixes (10/1).** `same-person` is structural, not a confirmable break (`sql/schema.sql` CHECK
+  `schedule_days_distinct_roles` refuses the row): `hplOptions` never offers a move leaving one surgeon in both roles of
+  a unit it touches (both units of a swap checked), `holidayPlanAcceptRows` skips such a unit (`samePerson: true`) and
+  `acceptHolidayPlan` stops before its confirm. `today` (Central) reaches `holidayPlanSwapOptions` / `holidayPlanRecheck`
+  (`opts.today`): no swap with a unit that starts on or before it; a blocked slot of a started unit is listed with
+  `started: true` and no suggestion. `holidayPlanAcceptRows` skips a unit that starts ON or before today (`started`,
+  with its holders on file), keeps a non-plan note already on a day (`keptNotes`); `holidayPlanWrittenCheck` judges the
+  year as Accept will leave it (a full Accept names the added breaks; a Re-check swap with a started partner is refused);
+  `holidayPlanConflictLines` groups the replaced slots by unit + role + holder. `holidayPlanRecheck` counts a holder as
+  accepted only where the role is locked on the plan row. `holidayPlanInputs` passes `east.eastClear` (the *home* East
+  vacation days) and `eastReason` skips the forecast there, as `rules.js`. Rule 4 also looks at Y + 1 when it is on file
+  (`repeatYears` / `repeatText`; never in the rates). The notices of an Accept diff the rows last persisted
+  (`lastSyncRef`, read only) and a failed / conflicted Accept keeps its "before" rows (`holidayNoticePendingRef`) for the
+  next Accept of that year that saves. Tests: holiday-plan D2–D5, F2b, I1, K3, L5, L6, M2–M3b, N1; data-layer [P25].

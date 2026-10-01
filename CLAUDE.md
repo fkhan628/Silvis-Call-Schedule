@@ -80,9 +80,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
   `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 20 suites: rules, east-feed, data-layer,
-  contrast, schema, importer, week-rows, exports, totals, pay, holidays, publish, day-edit, open-shifts, offers, offers-timeline,
-  edge-functions, ci, privacy, water-fill — then the generator regression as the 21st, then the build; `test/ci.test.js` keeps the chain, the
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 21 suites: rules, east-feed, data-layer,
+  contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
+  offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain, the
   workflow steps and the paths filter aligned, so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
@@ -135,7 +135,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   and its 3 / 6 / 9 / 12-month presets start at the first open slot on or after today (Prompt 12 AB); locks are never
   touched.
   Don't gold-plate exports or edge functions until the surgeons are on the live app.
-- Pending inputs: Sarkar's home email, Philip's monthly cap — see `docs/SILVIS-CALL-RULES.md §8`. (Answered, not
+- Pending inputs: Sarkar's home email, Philip's monthly cap, and the yearly holiday plan's defaults to confirm (§8 item 24:
+  Khan off Christmas in both roles, the 2026 minor holders from the office, the tie-2 reading, accepted plan units kept as
+  locks) — see `docs/SILVIS-CALL-RULES.md §8`. (Answered, not
   pending: Thu 10/15 primary — the 9/23 publish left it OPEN; Burchett took it with Khan as backup, set by the scheduler
   9/25 15:24 CDT, primary locked (the seed's `openQuestions` 1 is struck since 9/26; the seed row stays the import
   record); and Khan as backup on ordinary Tue/Thu — backup is open to everyone since 9/22.) Treat the open ones as

@@ -535,7 +535,8 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     // every code literal ("time-off:", "inactive") whatever its shape; only the comment's own hard.push("...") placeholder is excluded,
     // and the count is pinned so a new literal (of any spelling) has to be added to HARD_REASONS and here
     const pushed = [...new Set((rulesSrc.match(/hard\.push\("([^"]+)"/g) || []).map(m => /"([^"]+)"/.exec(m)[1]).filter(c => c !== "..."))];
-    assert.strictEqual(pushed.length, 31, "hard.push literal count changed - update HARD_REASONS, the vocabulary comment and this pin: " + pushed.join(", "));
+    // Prompt 23 B2 (9/30): 31 -> 32 - lone-weekend-day: (noLoneWeekendDay) joined HARD_REASONS, the vocabulary comment and helpers.js (category + painter words)
+    assert.strictEqual(pushed.length, 32, "hard.push literal count changed - update HARD_REASONS, the vocabulary comment and this pin: " + pushed.join(", "));
     pushed.forEach(c => assert.ok(R.HARD_REASONS.includes(c), "pushed code not in HARD_REASONS: " + c));
     ["whitelist-month", "outside-available-weeks", "bad-role:"].forEach(c => assert.ok(R.HARD_REASONS.includes(c), "code assigned outside hard.push missing: " + c));
   });
@@ -749,7 +750,13 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
       roster.forEach(n => assert.ok(!new RegExp("\\b" + n + "\\b").test(s.reason), s.day + " leaks " + n));
     });
     IMP.impRefuseNoteDenylist({ lastGenerate: rec });
-    assert.ok(Object.keys(rec.weekendKinds).length >= 4, "weekend kinds carried over: " + JSON.stringify(rec.weekendKinds));
+    // Prompt 23 B2 (9/30) - pin moved from ">= 4 kinds": a weekend filled with the new 'friday' pattern (Khan's standalone
+    // Friday, or his Sat+Sun pair beside another Friday) carries no kind in the record - openSlotWeekendKinds keeps block /
+    // split / daily, the vocabulary the board and the daily-reminder mirror read (the board shows such a weekend as plain
+    // "weekend"). Every other unit's kind is carried over, exactly.
+    const kept = (out.diagnostics.weekendUnits || []).filter(u => u.kind === "block" || u.kind === "split" || u.kind === "daily");
+    assert.deepStrictEqual(Object.keys(rec.weekendKinds).sort(), kept.map(u => u.friday).sort(), "weekend kinds carried over: " + JSON.stringify(rec.weekendKinds));
+    assert.ok(kept.length >= 3 && (out.diagnostics.weekendUnits || []).every(u => ["block", "split", "daily", "friday", "locked", "open", "unfilled"].indexOf(u.kind) >= 0), "every weekend unit has a known kind: " + JSON.stringify((out.diagnostics.weekendUnits || []).map(u => u.friday + ":" + u.kind)));
   });
   check("index-source.html: Accept & Publish stores lastGenerateFromDiagnostics(pv.diagnostics, ...) only after the CAS write succeeded (r.ok); the autosave watches lastGenerate; the board reads lastGenerate.weekendKinds", () => {
     const acc = appSrc.slice(appSrc.indexOf("const acceptMerged = async"), appSrc.indexOf("// --- Seed import"));

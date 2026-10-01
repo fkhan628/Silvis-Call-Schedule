@@ -322,17 +322,55 @@ step("F: preflight on a synthetic ctx (seed rules, no network)");
   const pfClean = PUB.preflight(ctxClean, fakePlan);
   ok(pfClean.ok, "seed week passes with its opens listed: hard remaining " + JSON.stringify(pfClean.hardRemaining) + " missing " + JSON.stringify(pfClean.missingDays));
   ok(Array.isArray(pfClean.lockedFacts), "locked facts are listed, not fatal");
-  // a hard violation planted in the FINAL schedule is caught: Khan primary on a Tuesday (hard-never-weekday), unlocked
+  // a hard violation planted in the FINAL schedule is caught: Acton primary on a Tuesday (hard-never-weekday), unlocked.
+  // Prompt 23 review (10/1): pin moved deliberately from Khan - his Tue/Thu rule carries a notice (hardNeverWeekdaysNoticeDays
+  // 56), and a slot he already HOLDS reads the soft term (it was placed when the notice allowed it); Acton's Tuesday rule has
+  // no notice, so a held Acton Tuesday is the hard violation the preflight must still catch.
   const planted = clone(base);
-  planted["2026-10-06"] = { primary: "s1", backup: base["2026-10-06"] ? (base["2026-10-06"].backup === "s1" ? "s2" : base["2026-10-06"].backup) : "s2", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null };
+  planted["2026-10-06"] = { primary: "s3", backup: "s2", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null };
   const ctxBad = mk(planted);
   const pfBad = PUB.preflight(ctxBad, { ok: true, days: ["2026-10-06"], final: planted, openSlots: [], aborts: [] });
   ok(!pfBad.ok, "the planted violation fails the preflight");
-  ok(pfBad.hardRemaining.some(h => h.day === "2026-10-06" && h.role === "primary" && h.id === "s1" && h.reasons.some(r => /hard-never-weekday/.test(r))), "...naming Khan / Tuesday: " + JSON.stringify(pfBad.hardRemaining));
+  ok(pfBad.hardRemaining.some(h => h.day === "2026-10-06" && h.role === "primary" && h.id === "s3" && h.reasons.some(r => /hard-never-weekday/.test(r))), "...naming Acton / Tuesday: " + JSON.stringify(pfBad.hardRemaining));
   // the same holder LOCKED is a locked fact (the app's import-holder reading), not a failure
   const lockedP = clone(planted); lockedP["2026-10-06"].primaryLocked = true; lockedP["2026-10-06"].source = "import";
   const pfLocked = PUB.preflight(mk(lockedP), { ok: true, days: ["2026-10-06"], final: lockedP, openSlots: [], aborts: [] });
-  ok(pfLocked.ok && pfLocked.lockedFacts.some(f => f.day === "2026-10-06" && f.id === "s1"), "a locked holder's conflicts are reported as locked facts: " + JSON.stringify(pfLocked.lockedFacts));
+  ok(pfLocked.ok && pfLocked.lockedFacts.some(f => f.day === "2026-10-06" && f.id === "s3"), "a locked holder's conflicts are reported as locked facts: " + JSON.stringify(pfLocked.lockedFacts));
+  // Prompt 23 review (10/1): a Khan Tuesday published beyond his 56-day notice (Tue 3/2/2027 - 99 days after the 11/23
+  // generation day) still passes the preflight when the CLI runs later, inside the notice (2/1/2027: 29 days out) - the held
+  // slot is a fact as far as the notice goes. The same slot handed to him NEW on 2/1 is the hard rule (the control).
+  {
+    const TUE = "2027-03-02";
+    const heldK = { [TUE]: { primary: "s1", backup: "s2", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null } };
+    const mkAt = (schedule, today) => R.buildContext(SA.seedToContextInput(seed, { eastDerived: [], eastFeedCoverage: EAST_COVER, eastBusyDays: {}, schedule, today }));
+    const pfHeld = PUB.preflight(mkAt(heldK, "2027-02-01"), { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [] });
+    ok(pfHeld.ok && pfHeld.hardRemaining.length === 0 && pfHeld.evaluated === 2, "a held Khan Tue inside the notice passes the preflight (no hard reason): " + JSON.stringify(pfHeld));
+    ok(PUB.preflight(mkAt(heldK, "2026-11-23"), { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [] }).ok, "...as it did on the generation day (beyond the notice)");
+    const rNew = R.eligibility(mkAt({}, "2027-02-01"), TUE, "primary", "s1");
+    ok(!rNew.ok && rNew.hard.some(h => /^hard-never-weekday:Tue/.test(h)), "control: the same Tuesday as a NEW placement on 2/1 is hard: " + JSON.stringify(rNew.hard));
+    // Review 2 (10/1) - pin moved deliberately: "held" is read on the LIVE rows, never on plan.final. The case above passes
+    // because that hand-built plan carries no change (standingOf: final minus the planned changes = the live rows); a
+    // preview-NEW Khan Tue inside the notice (live: primary OPEN; the plan's change OPEN -> s1) FAILS, although the ctx
+    // is built from plan.final where the row is his - a preview generated weeks before the publish cannot slip one through.
+    const planNew = { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [], changes: [{ day: TUE, role: "primary", from: null, to: "s1" }] };
+    const pfNew = PUB.preflight(mkAt(heldK, "2027-02-01"), planNew);
+    ok(!pfNew.ok && pfNew.hardRemaining.some(h => h.day === TUE && h.role === "primary" && h.id === "s1" && h.reasons.some(r => /^hard-never-weekday:Tue/.test(r))), "a preview-new Khan Tue inside the notice fails the preflight: " + JSON.stringify(pfNew.hardRemaining));
+    ok(PUB.preflight(mkAt(heldK, "2026-11-23"), planNew).ok, "...and passes when the preflight runs beyond the notice (as on the generation day)");
+    const ctxOwn = mkAt(heldK, "2027-02-01"), ownHeld = ctxOwn.heldSchedule;
+    PUB.preflight(ctxOwn, planNew);
+    ok(ctxOwn.heldSchedule === ownHeld && ctxOwn.heldSchedule[TUE].primary === "s1", "the preflight puts the ctx's own held snapshot back afterwards");
+    // the same through planPublish (plan.live = the live rows): live OPEN -> preview Khan fails; live Khan unchanged passes
+    const liveRow = (primary) => ({ day: TUE, primary_id: primary, backup_id: "s2", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 3, updated_by: "x" });
+    const prevK = { start: TUE, end: TUE, seed: 1, bestOf: 1, generatedAt: "2026-11-23T12:00:00Z", schedule: heldK, diagnostics: { hardViolations: [], uncovered: [] } };
+    const plOpen = PUB.planPublish(prevK, [liveRow(null)]);
+    eq([plOpen.ok, plOpen.changes.map(c => c.day + " " + c.role + " " + c.from + "->" + c.to), plOpen.live[TUE].primary], [true, [TUE + " primary null->s1"], null], "planPublish: the change OPEN -> Khan, plan.live keeps the live row");
+    const pfOpen = PUB.preflight(mkAt(plOpen.final, "2027-02-01"), plOpen);
+    ok(!pfOpen.ok && pfOpen.hardRemaining.some(h => h.day === TUE && h.id === "s1"), "planPublish -> preflight: the preview-new Khan Tue inside the notice fails: " + JSON.stringify(pfOpen.hardRemaining));
+    const plSame = PUB.planPublish(prevK, [liveRow("s1")]);
+    eq([plSame.ok, plSame.changes.length, plSame.skipped], [true, 0, [TUE]], "planPublish: Khan already live on the Tue - nothing to write");
+    ok(PUB.preflight(mkAt(plSame.final, "2027-02-01"), plSame).ok, "planPublish -> preflight: the unchanged live Khan Tue inside the notice passes");
+    eq(clone(PUB.standingOf(planNew)), { [TUE]: { primary: null, backup: "s2" } }, "standingOf: a hand-built plan's final with the planned change put back");
+  }
   // coverage check: a range day with no row and not listed open fails
   const pfMissing = PUB.preflight(ctxClean, { ok: true, days: ["2026-10-06", "2030-01-01"], final: base, openSlots: [], aborts: [] });
   ok(!pfMissing.ok && pfMissing.missingDays.includes("2030-01-01"), "an unlisted uncovered day fails the preflight");

@@ -401,7 +401,7 @@ function openSlotWeekendKinds(weekendUnits) {
    openSlotsMessageCurrent). */
 const OPEN_SLOT_REASON_TABLE = [
   ["vacations", ["time-off", "day-before-vacation"]],
-  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered"]],
+  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered", "lone-weekend-day"]],
   ["not available", ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"]], // Item E3 (9/25): East busy / forecast-busy / derived weeks, named for nobody
   ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],
   ["already on call that day", ["holds-other-role"]],
@@ -2729,6 +2729,977 @@ function defaultHolidayUnits(year, opts) {
   });
 }
 
+/* === YEARLY HOLIDAY PLAN (Prompt 25, Faraz 9/30: "copy Davenport's split of major and minor holidays"; "the generator
+   makes most of the decisions") ===
+   planHolidays(year, { units, roster, surgeonRules, groupRules, history, east, vacations, seed }) decides ONE primary and
+   ONE backup for every holiday unit of `year`, the whole year at once. Pure: no clock, no network, no writes; nothing
+   here locks or publishes (Setup > Holidays shows the plan and only the scheduler's Accept locks it - steps 3-5, the
+   block after this function).
+   Inputs:
+     units        the year's units [{ name, tier, days }] (call_schedule_data.data.holidays.units[year]); or pass
+                  `holidays` (the blob shape) and the year's list is read from it
+     roster       pool = every ACTIVE roster entry that is not type "external" (Sarkar included: "in for all rotations";
+                  poolMember is a TARGET flag - generator.js - and is not read here)
+     surgeonRules holidayRules.holidaysOff (+ neverThanksgiving), holidayRules.maxMajorHolidays (or the old
+                  preferences.maxMajorHolidays), backupOptOut, eastFeed (enabled / eastBlocksPrimary / eastBlocksBackup /
+                  deriveFrom), eastStanding
+     groupRules   holidayPlan (holidayPlanRules below; HOLIDAY_PLAN_DEFAULTS = the seed block), eastFeed.forecast.busyThreshold
+                  (default 0.5, as rules.js), dayBeforeRules.trailingEdgeRoles (default ['primary'], as rules.js)
+     history      [{ year, name, tier?, days?, primary: id | [ids], backup: id | [ids] }] - holidayPlanHistory() builds it
+                  from the schedule + groupRules.holidayPlan.history; without `history`, pass `schedule` + `holidays` and
+                  it is built here. Entries of `year` itself are ignored (the year being planned is never its own history -
+                  Davenport skips it too); only earlier years feed the rates; every other year feeds the 12-month window;
+                  the year before AND the year after (when on file - re-planning a year) feed rule 4.
+     east         the app's ctxInputs names: { eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage }
+                  + eastClear { id: days } - the 'home' East vacation days (holidayPlanInputs), where the forecast is not
+                  consulted (rules.js); a feed busy day, an override true and eastStanding still refuse there
+     vacations    time_off rows [{ person_id, start_date, end_date }] (a caller may append East vacation ranges as rows)
+     seed         the RNG seed of the last tie-break (default: the year)
+   Rule 1 - to the PLANNER a plan assignment counts as the surgeon's own availability for those days: windows,
+     weekday patterns, dated lists, offers, caps and run limits are not consulted. (Once accepted, rules.js and the
+     generator read the rows as ordinary locks, not as availability: Generate lists the waived ones as lockViolations
+     and keeps them; a trade of a plan unit still faces those rules - rules doc section 5.) What still refuses (rules.js
+     vocabulary): inactive, holiday-opt-out:<name> (both roles), backup-opt-out, time-off:<day> and day-before-vacation
+     (trailing-edge roles), east-busy (feed day / override true / eastStanding) and east-forecast-busy:<p> (outside the
+     published coverage, at or over the threshold, never on an override-false day) for the roles the surgeon's East
+     feature blocks, max-major-holidays:<n> (fewer than 12 calendar months between unit START months, symmetric, history
+     included - rules.js), and the derived East week: a unit on any day of a derived week takes the surgeon in that role
+     (derived-lock:<role> for his other role, derived-lock-held:<id> for everyone else, as rules.js).
+   Decisions, in order (lexicographic over complete plans; each later item only breaks ties of the earlier ones):
+     hard  - rule 1's limits; primary != backup on a unit; the tier shape (rule 2): per tier, n = the surgeons who can
+             hold at least one of its slots, each serves between floor(S/n) and ceil(S/n) of the tier's S = 2 x units
+             slots and holds at most ceil(units/n) primaries - so with 6 everyone holds exactly one major and one minor,
+             with fewer the extras are backups (a second primary would pass the cap), with more some sit out; and no
+             same holiday in the same role as last year - or as next year, when it is on file (rule 4,
+             groupRules.holidayPlan.noRepeatSameRole)
+     1. open slots, then shape misses (only when no plan meets the shape - pass 3, listed in `relaxed`)
+     2. repeats (only when no plan exists without one - pass 2, listed in `relaxed`)
+     3. tier load: sum of served x lifetime LOAD (units held in either role / units eligible, per tier) - the extra
+        slots go to the lowest load, the highest load sits out (rule 2)
+     4. alternation (rule 3, groupRules.holidayPlan.alternateTiers): surgeons primary in both tiers, or backup-only in
+        both, "where the pool allows"
+     5. primary rate (rule 3): the sum of the tier primaries' lifetime PRIMARY rate (units held as primary / units
+        eligible) - a tier's primaries go to the lowest rate
+     6. tie: a different holiday than last year (holders who had the same unit last year, either role)
+     7. tie: the longer unit to whoever had the shorter one last year (sum of last year's tier days x this year's)
+     8. tie: the seeded RNG (uniform over the plans still tied)
+   Copied from Davenport (davenport-ref index-source.html generateHolidayAssignments + config.js holidayRate): the two
+   tiers as separate pools with distinct surgeons inside a tier, holidayRate(count, eligible) with zero eligible -> 0
+   (never NaN), eligible = the recorded units of the tier dated within the surgeon's tenure (roster activeFrom /
+   activeTo; a unit nobody recorded is out of the denominator), the stored years before the one being planned counted
+   (Davenport skips the year it regenerates; a LATER year on file is left out of the rates here - it has not happened
+   before the planned one - and feeds only the 12-month window and rule 4), a unit held in both roles counted once,
+   the order lowest rate -> not last year's holiday -> random (seeded
+   here). Not copied: FAK's Christmas lock (Silvis: holidaysOff data), presets, the A / B night-before coverage and the
+   greedy one-holiday-at-a-time pick (this searches the whole year, so alternation and no-repeat hold where possible).
+   -> { year, assignments: [{ unit: { name, tier, days }, primary, backup, why: [text], blocked: [{ id, role, reasons }] }],
+        counts: { id: { name, before: { major|minor: { primary, any, eligible, primaryRate, load } }, lastYearDays,
+        plan: { major|minor: { primary, backup } } } }, relaxed: [text], warnings: [text],
+        search: { pass, tiedPlans, seed, leaves, truncated, cost } } */
+var HOLIDAY_PLAN_DEFAULTS = { alternateTiers: true, noRepeatSameRole: true, history: [] }; // = docs/silvis-seed.json groupRules.holidayPlan
+var HPL_TIERS = ["major", "minor"];
+var HPL_EPS = 1e-12;
+var HPL_MAX_LEAVES = 3000000;
+// holidayPlanRules(groupRules) -> { alternateTiers, noRepeatSameRole, history } from groupRules.holidayPlan; an absent or
+// non-boolean key reads as the default, a non-list history as [] (the GROUP_CALL_DEFAULTS pattern). Fresh copies.
+function holidayPlanRules(groupRules) {
+  var G = groupRules && typeof groupRules === "object" ? groupRules.holidayPlan : null;
+  var g = G && typeof G === "object" && !Array.isArray(G) ? G : {};
+  var bool = function (v, d) { return typeof v === "boolean" ? v : d; };
+  return {
+    alternateTiers: bool(g.alternateTiers, HOLIDAY_PLAN_DEFAULTS.alternateTiers),
+    noRepeatSameRole: bool(g.noRepeatSameRole, HOLIDAY_PLAN_DEFAULTS.noRepeatSameRole),
+    history: Array.isArray(g.history) ? g.history.slice() : []
+  };
+}
+function hplRate(count, eligible) { return eligible > 0 ? count / eligible : 0; } // Davenport config.js holidayRate
+function hplMonthIndex(iso) { return Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)); } // rules.js rdMonthIndex
+function hplIds(v) {
+  var list = Array.isArray(v) ? v : (v === null || v === undefined || v === "" ? [] : [v]), out = [];
+  list.forEach(function (x) { if (typeof x === "string" && x && out.indexOf(x) < 0) out.push(x); });
+  return out;
+}
+function hplDaySet(v) {
+  var out = new Set();
+  if (!v) return out;
+  if (typeof v === "object" && !(v instanceof Set) && !Array.isArray(v) && v.busy) v = v.busy;
+  if (v instanceof Set || Array.isArray(v)) v.forEach(function (d) { if (suIsIso(d)) out.add(d); });
+  else if (typeof v === "object") Object.keys(v).forEach(function (d) { if (suIsIso(d) && v[d]) out.add(d); });
+  return out;
+}
+function hplCmp(a, b) {
+  for (var i = 0; i < a.length; i++) { var d = a[i] - b[i]; if (d > HPL_EPS) return 1; if (d < -HPL_EPS) return -1; }
+  return 0;
+}
+// mulberry32 (generator.js genPrng's stream; strings hashed with FNV-1a)
+function hplPrng(seed) {
+  var a;
+  if (typeof seed === "number" && isFinite(seed) && Math.floor(seed) === seed) a = seed >>> 0;
+  else { var s = String(seed), h = 0x811c9dc5; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } a = h >>> 0; }
+  if (a === 0) a = 0x9e3779b9;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    var t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hplNormUnit(u) {
+  if (!u || typeof u !== "object" || typeof u.name !== "string" || !u.name || !Array.isArray(u.days)) return null;
+  var days = [];
+  u.days.forEach(function (d) { if (suIsIso(d) && days.indexOf(d) < 0) days.push(d); });
+  if (!days.length) return null;
+  days.sort();
+  return { name: u.name, tier: u.tier === "minor" ? "minor" : "major", days: days }; // rules.js: tier || "major"
+}
+// The stored units of a year, else the builder's (Setup's Add year pre-fill) for a year the blob does not carry.
+function hplUnitsOf(year, holidays, groupRules) {
+  var hol = holidays && typeof holidays === "object" ? holidays : {};
+  var stored = hol.units && typeof hol.units === "object" ? hol.units[String(year)] : null;
+  if (Array.isArray(stored)) return stored;
+  try {
+    var gh = groupRules && groupRules.holidays && typeof groupRules.holidays === "object" ? groupRules.holidays : {};
+    return defaultHolidayUnits(year, { tiers: hol.rules && hol.rules.tiers, mondayMinorAbsorbsWeekend: gh.mondayMinorAbsorbsWeekend === true });
+  } catch (e) { return []; }
+}
+function hplFindUnit(year, name, holidays, groupRules) {
+  var found = null;
+  hplUnitsOf(year, holidays, groupRules).forEach(function (x) { var n = hplNormUnit(x); if (!found && n && n.name === name) found = n; });
+  return found;
+}
+// holidayPlanHistory({ schedule, holidays, groupRules }) -> { entries: [{ year, name, tier, days, primary: [ids], backup:
+// [ids], source: 'schedule' | 'list' }], warnings }. 'schedule': every stored unit (holidays.units, every year) whose days
+// hold anyone in the schedule (in-memory shape; an external cover is 'ext:<label>'; split holders are all listed); a
+// unit nobody holds is no history (Davenport: nothing stored = out of the denominator). 'list': groupRules.holidayPlan.history,
+// the units before the app ([{ year, name, primary, backup }], roster ids), days from holidays.units or the builder; the
+// schedule wins a (year, name) both carry, with a warning when they differ. Sorted by first day. Pure.
+function holidayPlanHistory(opts) {
+  var o = opts || {};
+  var warnings = [], out = [], byKey = {};
+  var sched = o.schedule && typeof o.schedule === "object" ? o.schedule : {};
+  var hol = o.holidays && typeof o.holidays === "object" ? o.holidays : {};
+  var byYear = hol.units && typeof hol.units === "object" ? hol.units : {};
+  Object.keys(byYear).sort().forEach(function (yk) {
+    if (!/^\d{4}$/.test(yk) || !Array.isArray(byYear[yk])) return;
+    byYear[yk].forEach(function (raw) {
+      var u = hplNormUnit(raw);
+      if (!u || byKey[yk + "|" + u.name]) return;
+      var P = [], B = [];
+      u.days.forEach(function (d) {
+        var p = dayHolder(sched[d], "primary"), b = dayHolder(sched[d], "backup");
+        if (p && P.indexOf(p) < 0) P.push(p);
+        if (b && B.indexOf(b) < 0) B.push(b);
+      });
+      if (!P.length && !B.length) return;
+      var e = { year: Number(yk), name: u.name, tier: u.tier, days: u.days, primary: P, backup: B, source: "schedule" };
+      byKey[yk + "|" + u.name] = e; out.push(e);
+    });
+  });
+  holidayPlanRules(o.groupRules).history.forEach(function (h, i) {
+    var y = h && typeof h === "object" ? Number(h.year) : NaN;
+    var where = "groupRules.holidayPlan.history[" + i + "]";
+    if (!Number.isInteger(y) || y < 1000 || y > 9998 || typeof h.name !== "string" || !h.name) { warnings.push(where + ": ignored - needs { year, name, primary, backup }"); return; }
+    var u = hplFindUnit(y, h.name, hol, o.groupRules);
+    if (!u) { warnings.push(where + ": ignored - " + h.name + " is not a holiday unit of " + y); return; }
+    var P = hplIds(h.primary), B = hplIds(h.backup);
+    if (!P.length && !B.length) { warnings.push(where + " (" + u.name + " " + y + "): ignored - names nobody"); return; }
+    var prev = byKey[y + "|" + u.name];
+    if (prev) {
+      if (prev.primary.join(",") !== P.join(",") || prev.backup.join(",") !== B.join(",")) warnings.push(where + " (" + u.name + " " + y + ") differs from the schedule - the schedule wins");
+      return;
+    }
+    var e = { year: y, name: u.name, tier: u.tier, days: u.days, primary: P, backup: B, source: "list" };
+    byKey[y + "|" + u.name] = e; out.push(e);
+  });
+  out.sort(function (a, b) { return a.days[0] < b.days[0] ? -1 : a.days[0] > b.days[0] ? 1 : 0; });
+  return { entries: out, warnings: warnings };
+}
+var HPL_ROLES = ["primary", "backup"];
+function hplYear(year, fn) {
+  var Y = typeof year === "string" && /^\d{4}$/.test(year) ? Number(year) : year;
+  if (typeof Y !== "number" || !Number.isInteger(Y) || Y < 1000 || Y > 9998) throw new Error(fn + ": year must be a 4-digit year, got " + JSON.stringify(year));
+  return Y;
+}
+// hplPrepare(Y, opts) - everything a plan is judged by, read once: the year's units, the pool, the history and the
+// lifetime counts, every hard per-person limit (rule 1 + rule 5: block[ui][id][role] = the refusal reasons, the derived
+// East week's forced holders) and the tier shape (rule 2). planHolidays searches over it; holidayPlanCheck /
+// holidayPlanSwapOptions / holidayPlanRecheck judge a given plan by it - ONE refusal logic, never a second copy.
+function hplPrepare(Y, o) {
+  var warnings = [];
+  var groupRules = o.groupRules && typeof o.groupRules === "object" ? o.groupRules : {};
+  var surgeonRules = o.surgeonRules && typeof o.surgeonRules === "object" ? o.surgeonRules : {};
+  var R = holidayPlanRules(groupRules);
+  var ROLES = HPL_ROLES;
+  var rulesOf = function (id) { var r = surgeonRules[id]; return r && typeof r === "object" ? r : {}; };
+
+  // ---- the year's units
+  var unitsIn = Array.isArray(o.units) ? o.units : (o.holidays && o.holidays.units && Array.isArray(o.holidays.units[String(Y)]) ? o.holidays.units[String(Y)] : null);
+  if (!unitsIn) warnings.push("No holiday units for " + Y + " - nothing to plan (Setup > Holidays > Add year)");
+  var units = [];
+  (unitsIn || []).forEach(function (raw, i) {
+    var u = hplNormUnit(raw);
+    if (!u) { warnings.push("units[" + i + "]: ignored - needs { name, tier, days: ['YYYY-MM-DD'] }"); return; }
+    if (units.some(function (x) { return x.name === u.name; })) { warnings.push("units[" + i + "]: ignored - a second " + u.name + " unit"); return; }
+    units.push(u);
+  });
+  units.sort(function (a, b) { return a.days[0] < b.days[0] ? -1 : a.days[0] > b.days[0] ? 1 : 0; });
+
+  // ---- the pool
+  var rosterById = {}, pool = [], inPool = {};
+  (Array.isArray(o.roster) ? o.roster : []).forEach(function (r) {
+    if (!r || typeof r.id !== "string" || !r.id) return;
+    rosterById[r.id] = r;
+    if (r.active === false || r.type === "external" || inPool[r.id]) return;
+    pool.push(r.id); inPool[r.id] = true;
+  });
+  var nameOf = function (id) { var r = rosterById[id]; return r && r.name ? r.name : id; };
+  if (!pool.length) warnings.push("Nobody in the pool (no active roster surgeon) - every slot stays open");
+
+  // ---- history (rule 6)
+  var histIn;
+  if (Array.isArray(o.history)) histIn = o.history;
+  else { var hb = holidayPlanHistory({ schedule: o.schedule, holidays: o.holidays, groupRules: groupRules }); histIn = hb.entries; hb.warnings.forEach(function (w) { warnings.push(w); }); }
+  var hist = [], strangers = [], seenHist = {};
+  histIn.forEach(function (h, i) {
+    var y = h && typeof h === "object" ? Number(h.year) : NaN;
+    if (!Number.isInteger(y) || typeof h.name !== "string" || !h.name) { warnings.push("history[" + i + "]: ignored - needs { year, name, primary, backup }"); return; }
+    if (y === Y) return;
+    var found = hplFindUnit(y, h.name, o.holidays, groupRules);
+    var u = hplNormUnit({ name: h.name, tier: h.tier, days: h.days }) || found;
+    if (!u) { warnings.push("history[" + i + "]: ignored - " + h.name + " " + y + " has no days (not a holiday unit of " + y + ")"); return; }
+    if (h.tier !== "minor" && h.tier !== "major") u.tier = found ? found.tier : (HU_STANDARD_TIER[h.name] || "major"); // own days, no tier: the unit's
+    if (seenHist[y + "|" + u.name]) { warnings.push("history[" + i + "]: ignored - a second " + u.name + " " + y + " entry"); return; }
+    seenHist[y + "|" + u.name] = true;
+    var P = hplIds(h.primary), B = hplIds(h.backup);
+    P.concat(B).forEach(function (id) { if (!rosterById[id] && id.indexOf("ext:") !== 0 && strangers.indexOf(id) < 0) strangers.push(id); });
+    hist.push({ year: y, name: u.name, tier: h.tier === "minor" || h.tier === "major" ? h.tier : u.tier, days: u.days, primary: P, backup: B });
+  });
+  if (strangers.length) warnings.push("history names " + strangers.join(", ") + " - not on the roster, not counted");
+
+  // ---- lifetime counts per tier and role (Davenport's holidayRate, tenure-normalized)
+  var counts = {};
+  pool.forEach(function (id) {
+    counts[id] = { name: nameOf(id), before: {}, lastYearDays: { major: 0, minor: 0 }, plan: {} };
+    HPL_TIERS.forEach(function (t) { counts[id].before[t] = { primary: 0, any: 0, eligible: 0, primaryRate: 0, load: 0 }; counts[id].plan[t] = { primary: 0, backup: 0 }; });
+  });
+  var lastByName = {}, nextByName = {};
+  hist.forEach(function (e) {
+    if (e.year === Y - 1) lastByName[e.name] = e;
+    if (e.year === Y + 1) nextByName[e.name] = e;   // a later year on file: the no-repeat rule looks at it too (re-planning Y)
+    if (e.year > Y) return;                          // ...but it has not happened before Y: never in the rates
+    pool.forEach(function (id) {
+      var r = rosterById[id], c = counts[id].before[e.tier], d0 = e.days[0];
+      if ((!suIsIso(r.activeFrom) || d0 >= r.activeFrom) && (!suIsIso(r.activeTo) || d0 <= r.activeTo)) c.eligible++;
+      var isP = e.primary.indexOf(id) >= 0, isB = e.backup.indexOf(id) >= 0;
+      if (isP) c.primary++;
+      if (isP || isB) c.any++;
+      if (e.year === Y - 1 && (isP || isB)) counts[id].lastYearDays[e.tier] += e.days.length;
+    });
+  });
+  pool.forEach(function (id) { HPL_TIERS.forEach(function (t) { var c = counts[id].before[t]; c.primaryRate = hplRate(c.primary, c.eligible); c.load = hplRate(c.any, c.eligible); }); });
+
+  // ---- rule 1 / rule 5: the hard per-person limits
+  var vac = {};
+  (Array.isArray(o.vacations) ? o.vacations : []).forEach(function (row) {
+    if (!row || !inPool[row.person_id] || !suIsIso(row.start_date)) return;
+    var end = suIsIso(row.end_date) ? row.end_date : row.start_date, set = vac[row.person_id] || (vac[row.person_id] = new Set());
+    for (var d = row.start_date, k = 0; d <= end && k < 800; d = suAddDays(d, 1), k++) set.add(d);
+  });
+  var trailing = groupRules.dayBeforeRules && Array.isArray(groupRules.dayBeforeRules.trailingEdgeRoles) ? groupRules.dayBeforeRules.trailingEdgeRoles : ["primary"];
+  var east = o.east && typeof o.east === "object" ? o.east : {};
+  var fcRules = groupRules.eastFeed && groupRules.eastFeed.forecast;
+  var threshold = fcRules && typeof fcRules.busyThreshold === "number" ? fcRules.busyThreshold : 0.5;
+  var cov = east.eastFeedCoverage && suIsIso(east.eastFeedCoverage.from) && suIsIso(east.eastFeedCoverage.to) ? east.eastFeedCoverage : null;
+  var busy = {}, clear = {};
+  pool.forEach(function (id) { busy[id] = hplDaySet(east.eastBusyDays && east.eastBusyDays[id]); clear[id] = hplDaySet(east.eastClear && east.eastClear[id]); });
+  var standingOn = function (id, day) {
+    var list = rulesOf(id).eastStanding, md = day.slice(5);
+    return Array.isArray(list) && list.some(function (e) { return e && typeof e.name === "string" && e.name.trim() && Array.isArray(e.days) && e.days.indexOf(md) >= 0; });
+  };
+  var eastReason = function (id, day, role) {
+    var ef = rulesOf(id).eastFeed || {};
+    if (!ef.enabled || !(role === "primary" ? ef.eastBlocksPrimary : ef.eastBlocksBackup)) return null;
+    if (standingOn(id, day)) return "east-busy";
+    var ov = east.eastOverrides && east.eastOverrides[id] ? east.eastOverrides[id][day] : undefined;
+    if (ov === true) return "east-busy";
+    if (ov === false) return null;
+    if (busy[id].has(day)) return "east-busy";
+    if (clear[id].has(day)) return null;           // a 'home' East vacation day: the forecast is not consulted (rules.js fcApplies = !homeDay)
+    if (cov && day >= cov.from && day <= cov.to) return null;
+    var p = east.eastForecast && east.eastForecast[id] ? east.eastForecast[id][day] : undefined;
+    return typeof p === "number" && p >= threshold ? "east-forecast-busy:" + p.toFixed(2) : null;
+  };
+  var off = {}, maxMajor = {}, histMajor = {};
+  pool.forEach(function (id) {
+    var r = rulesOf(id), hr = r.holidayRules && typeof r.holidayRules === "object" ? r.holidayRules : {};
+    off[id] = Array.isArray(hr.holidaysOff) ? hr.holidaysOff.slice() : [];
+    if (hr.neverThanksgiving && off[id].indexOf("Thanksgiving") < 0) off[id].push("Thanksgiving");
+    maxMajor[id] = typeof hr.maxMajorHolidays === "number" ? hr.maxMajorHolidays : (r.preferences && typeof r.preferences.maxMajorHolidays === "number" ? r.preferences.maxMajorHolidays : null);
+    histMajor[id] = [];
+  });
+  hist.forEach(function (e) { if (e.tier === "major") pool.forEach(function (id) { if (e.primary.indexOf(id) >= 0 || e.backup.indexOf(id) >= 0) histMajor[id].push(hplMonthIndex(e.days[0])); }); });
+  var block = units.map(function (u) {
+    var m = {};
+    pool.forEach(function (id) {
+      var r = rosterById[id], res = { primary: [], backup: [] };
+      ROLES.forEach(function (role) {
+        var push = function (why) { if (res[role].indexOf(why) < 0) res[role].push(why); };
+        if ((suIsIso(r.activeFrom) && u.days[0] < r.activeFrom) || (suIsIso(r.activeTo) && u.days[u.days.length - 1] > r.activeTo)) push("inactive");
+        if (off[id].indexOf(u.name) >= 0) push("holiday-opt-out:" + u.name);
+        if (role === "backup" && rulesOf(id).backupOptOut === true) push("backup-opt-out");
+        u.days.forEach(function (d) {
+          var V = vac[id];
+          if (V && V.has(d)) push("time-off:" + d);
+          else if (V && trailing.indexOf(role) >= 0 && V.has(suAddDays(d, 1))) push("day-before-vacation");
+          var er = eastReason(id, d, role);
+          if (er) push(er);
+        });
+        if (u.tier === "major" && maxMajor[id] !== null) {
+          var mi = hplMonthIndex(u.days[0]), n = 1;
+          histMajor[id].forEach(function (x) { if (Math.abs(x - mi) < 12) n++; });
+          if (n > maxMajor[id]) push("max-major-holidays:" + maxMajor[id]);
+        }
+      });
+      m[id] = res;
+    });
+    return m;
+  });
+  // the derived East week (Fierce): a unit on any day of one takes him in that week's Silvis role (rules.js derived locks)
+  var derived = {};
+  (Array.isArray(east.eastDerived) ? east.eastDerived : []).forEach(function (w, i) {
+    if (!w || typeof w.surgeonId !== "string" || !suIsIso(w.weekMonday) || (w.silvisRole !== "primary" && w.silvisRole !== "backup")) { warnings.push("east.eastDerived[" + i + "]: ignored - needs { surgeonId, weekMonday, silvisRole }"); return; }
+    if (!inPool[w.surgeonId]) return;
+    var from = (rulesOf(w.surgeonId).eastFeed || {}).deriveFrom, map = derived[w.surgeonId] || (derived[w.surgeonId] = {});
+    for (var k = 0; k < 7; k++) { var d = suAddDays(w.weekMonday, k); if (suIsIso(from) && d < from) continue; map[d] = w.silvisRole; }
+  });
+  var forced = units.map(function () { return { primary: null, backup: null }; });
+  units.forEach(function (u, ui) {
+    pool.forEach(function (id) {
+      var map = derived[id];
+      if (!map) return;
+      var roles = [];
+      u.days.forEach(function (d) { if (map[d] && roles.indexOf(map[d]) < 0) roles.push(map[d]); });
+      if (!roles.length) return;
+      if (roles.length > 1) { warnings.push(nameOf(id) + "'s derived East weeks give him both roles on " + u.name + " " + Y + " - planned for primary only; check by hand"); roles = ["primary"]; }
+      var role = roles[0];
+      if (forced[ui][role] && forced[ui][role] !== id) { warnings.push(u.name + " " + Y + " " + role + ": derived East weeks name both " + nameOf(forced[ui][role]) + " and " + nameOf(id) + " - the first is kept"); return; }
+      forced[ui][role] = id;
+      var otherRole = role === "primary" ? "backup" : "primary";
+      if (block[ui][id][otherRole].indexOf("derived-lock:" + role) < 0) block[ui][id][otherRole].push("derived-lock:" + role);
+    });
+    ROLES.forEach(function (role) {
+      var f = forced[ui][role];
+      if (!f) return;
+      pool.forEach(function (id) { if (id !== f) block[ui][id][role].push("derived-lock-held:" + f); });
+      if (block[ui][f][role].length) warnings.push("The derived East week makes " + nameOf(f) + " the " + u.name + " " + Y + " " + role + " but " + block[ui][f][role].join(", ") + " - nobody can hold that slot");
+    });
+  });
+  var cand = units.map(function (u, ui) { var c = {}; ROLES.forEach(function (role) { c[role] = pool.filter(function (id) { return !block[ui][id][role].length; }); }); return c; });
+
+  // ---- rule 2: the tier shape
+  var tiers = {};
+  HPL_TIERS.forEach(function (t) {
+    var uis = [];
+    units.forEach(function (u, ui) { if (u.tier === t) uis.push(ui); });
+    var capable = pool.filter(function (id) { return uis.some(function (ui) { return cand[ui].primary.indexOf(id) >= 0 || cand[ui].backup.indexOf(id) >= 0; }); });
+    var n = capable.length, S = 2 * uis.length;
+    tiers[t] = { uis: uis, capable: capable, lo: n ? Math.floor(S / n) : 0, hi: n ? Math.ceil(S / n) : 0, pcap: n ? Math.ceil(uis.length / n) : 0 };
+    if (uis.length) pool.forEach(function (id) {
+      if (capable.indexOf(id) >= 0) return;
+      warnings.push(nameOf(id) + " can hold no " + t + " holiday of " + Y + " (" + uis.map(function (ui) { var rs = block[ui][id].primary.concat(block[ui][id].backup).filter(function (x, k, a) { return a.indexOf(x) === k; }); return units[ui].name + ": " + rs.join(", "); }).join("; ") + ")");
+    });
+  });
+  // rule 4: the years (Y - 1 and, when on file, Y + 1) in which he held this unit in this role - a repeat either way
+  var repeatYears = function (ui, role, id) {
+    var out = [], n = units[ui].name, a = lastByName[n], b = nextByName[n];
+    if (a && a[role].indexOf(id) >= 0) out.push(Y - 1);
+    if (b && b[role].indexOf(id) >= 0) out.push(Y + 1);
+    return out;
+  };
+  var repeatOf = function (ui, role, id) { return repeatYears(ui, role, id).length > 0; };
+  // "2026 and 2027", "2027 and 2028", "2026, 2027 and 2028" - the years of a repeat with the planned one
+  var repeatText = function (ui, role, id) { var ys = repeatYears(ui, role, id).concat([Y]).sort(); return ys.length === 2 ? ys[0] + " and " + ys[1] : ys.slice(0, -1).join(", ") + " and " + ys[ys.length - 1]; };
+  var heldLastYear = function (ui, id) { var e = lastByName[units[ui].name]; return !!(e && (e.primary.indexOf(id) >= 0 || e.backup.indexOf(id) >= 0)); };
+  return {
+    Y: Y, R: R, groupRules: groupRules, units: units, pool: pool, inPool: inPool, rosterById: rosterById, nameOf: nameOf,
+    hist: hist, lastByName: lastByName, nextByName: nextByName, counts: counts, block: block, forced: forced, cand: cand, tiers: tiers,
+    maxMajor: maxMajor, histMajor: histMajor, repeatOf: repeatOf, repeatYears: repeatYears, repeatText: repeatText, heldLastYear: heldLastYear, warnings: warnings
+  };
+}
+function planHolidays(year, opts) {
+  var Y = hplYear(year, "planHolidays");
+  var o = opts || {};
+  var P = hplPrepare(Y, o);
+  var warnings = P.warnings, relaxed = [];
+  var seed = o.seed === undefined || o.seed === null ? Y : o.seed;
+  var ROLES = HPL_ROLES;
+  var R = P.R, units = P.units, pool = P.pool, nameOf = P.nameOf, hist = P.hist, counts = P.counts, block = P.block, forced = P.forced;
+  var cand = P.cand, tiers = P.tiers, maxMajor = P.maxMajor, histMajor = P.histMajor, repeatOf = P.repeatOf, heldLastYear = P.heldLastYear;
+
+  // ---- the search: per tier every plan meeting the pass's hard rules, grouped by its per-surgeon (primaries, served)
+  // signature (all alternation needs); only the groups with the tier's best open / shape / repeat / load prefix can be
+  // part of the best year (those terms do not depend on the other tier), then every pair of groups is scored.
+  function enumerate(t, pass) {
+    var T = tiers[t], slots = [];
+    T.uis.forEach(function (ui) { slots.push({ ui: ui, role: "primary" }, { ui: ui, role: "backup" }); });
+    var shapeHard = pass < 3, allowOpen = pass === 3, repeatHard = pass === 1 && R.noRepeatSameRole;
+    var groups = new Map(), leaves = 0, truncated = false;
+    var assign = new Array(slots.length), served = {}, prim = {}, capableSet = {};
+    pool.forEach(function (id) { served[id] = 0; prim[id] = 0; });
+    T.capable.forEach(function (id) { capableSet[id] = true; });
+    function majorOk(id) {
+      if (t !== "major" || maxMajor[id] === null) return true;
+      var mine = [];
+      for (var k = 0; k < slots.length; k++) if (assign[k] === id) mine.push(hplMonthIndex(units[slots[k].ui].days[0]));
+      return mine.every(function (m, i) {
+        var n = 1;
+        mine.forEach(function (x, j) { if (j !== i && Math.abs(x - m) < 12) n++; });
+        histMajor[id].forEach(function (x) { if (Math.abs(x - m) < 12) n++; });
+        return n <= maxMajor[id];
+      });
+    }
+    function leaf() {
+      var open = 0, shape = 0, rep = 0, c2 = 0, t1 = 0, days = {}, c3 = 0, t2 = 0, sig = [];
+      for (var k = 0; k < slots.length; k++) {
+        var id = assign[k], s = slots[k];
+        if (!id) { open++; continue; }
+        if (R.noRepeatSameRole && repeatOf(s.ui, s.role, id)) rep++;
+        if (s.role === "primary") c2 += counts[id].before[t].primaryRate;
+        if (heldLastYear(s.ui, id)) t1++;
+        days[id] = (days[id] || 0) + units[s.ui].days.length;
+      }
+      pool.forEach(function (id) {
+        c3 += served[id] * counts[id].before[t].load;
+        if (!shapeHard && capableSet[id]) shape += Math.max(0, served[id] - T.hi) + Math.max(0, T.lo - served[id]) + Math.max(0, prim[id] - T.pcap);
+        t2 += counts[id].lastYearDays[t] * (days[id] || 0);
+        sig.push(prim[id] + "/" + served[id]);
+      });
+      var vec = [open, shape, rep, c3, c2, t1, t2], key = sig.join(","), g = groups.get(key);
+      if (!g) groups.set(key, { prim: pool.map(function (id) { return prim[id]; }), served: pool.map(function (id) { return served[id]; }), vec: vec, leaves: [assign.slice()] });
+      else { var c = hplCmp(vec, g.vec); if (c < 0) { g.vec = vec; g.leaves = [assign.slice()]; } else if (c === 0) g.leaves.push(assign.slice()); }
+    }
+    function dfs(k) {
+      if (truncated) return;
+      if (k === slots.length) {
+        if (shapeHard && T.capable.some(function (id) { return served[id] < T.lo; })) return;
+        if (++leaves > HPL_MAX_LEAVES) { truncated = true; return; }
+        leaf();
+        return;
+      }
+      if (shapeHard) { var need = 0; T.capable.forEach(function (id) { need += Math.max(0, T.lo - served[id]); }); if (need > slots.length - k) return; }
+      var s = slots[k], list = cand[s.ui][s.role];
+      for (var i = 0; i < list.length; i++) {
+        var id = list[i];
+        if (s.role === "backup" && assign[k - 1] === id) continue;                     // primary != backup on a unit
+        if (shapeHard && (served[id] >= T.hi || (s.role === "primary" && prim[id] >= T.pcap))) continue;
+        if (repeatHard && repeatOf(s.ui, s.role, id)) continue;
+        assign[k] = id; served[id]++; if (s.role === "primary") prim[id]++;
+        if (majorOk(id)) dfs(k + 1);
+        served[id]--; if (s.role === "primary") prim[id]--; assign[k] = undefined;
+      }
+      if (allowOpen) { assign[k] = null; dfs(k + 1); assign[k] = undefined; }
+    }
+    dfs(0);
+    var kept = [], bestPrefix = null;
+    groups.forEach(function (g) {
+      var p = g.vec.slice(0, 4), c = bestPrefix ? hplCmp(p, bestPrefix) : -1;
+      if (c < 0) { bestPrefix = p; kept = [g]; } else if (c === 0) kept.push(g);
+    });
+    return { slots: slots, groups: kept, leaves: leaves, truncated: truncated };
+  }
+  var passes = R.noRepeatSameRole ? [1, 2, 3] : [1, 3];
+  var used = null, pick = null, best = null, tiedPlans = 0, bestPair = null;
+  for (var pi = 0; pi < passes.length && !pick; pi++) {
+    var E = { major: enumerate("major", passes[pi]), minor: enumerate("minor", passes[pi]) };
+    if (!E.major.groups.length || !E.minor.groups.length) continue;
+    var tied = [];
+    best = null;
+    E.major.groups.forEach(function (gM) {
+      E.minor.groups.forEach(function (gm) {
+        var c1 = 0;
+        if (R.alternateTiers) pool.forEach(function (id, k) {
+          if (gM.prim[k] > 0 && gm.prim[k] > 0) c1++;
+          else if (gM.served[k] > 0 && gm.served[k] > 0 && gM.prim[k] === 0 && gm.prim[k] === 0) c1++;
+        });
+        var v = [gM.vec[0] + gm.vec[0], gM.vec[1] + gm.vec[1], gM.vec[2] + gm.vec[2], gM.vec[3] + gm.vec[3], c1, gM.vec[4] + gm.vec[4], gM.vec[5] + gm.vec[5], gM.vec[6] + gm.vec[6]];
+        var c = best ? hplCmp(v, best) : -1;
+        if (c < 0) { best = v; tied = [[gM, gm]]; } else if (c === 0) tied.push([gM, gm]);
+      });
+    });
+    tiedPlans = tied.reduce(function (s, p) { return s + p[0].leaves.length * p[1].leaves.length; }, 0);
+    var at = Math.floor(hplPrng(seed)() * tiedPlans);
+    for (var q = 0; q < tied.length && !pick; q++) {
+      var size = tied[q][0].leaves.length * tied[q][1].leaves.length;
+      if (at < size) { pick = { major: tied[q][0].leaves[Math.floor(at / tied[q][1].leaves.length)], minor: tied[q][1].leaves[at % tied[q][1].leaves.length] }; bestPair = tied[q]; }
+      else at -= size;
+    }
+    used = { pass: passes[pi], E: E };
+  }
+
+  // ---- the result
+  var assignments = units.map(function (u) { return { unit: { name: u.name, tier: u.tier, days: u.days.slice() }, primary: null, backup: null, why: [], blocked: [] }; });
+  if (pick) HPL_TIERS.forEach(function (t) { used.E[t].slots.forEach(function (s, k) { assignments[s.ui][s.role] = pick[t][k] || null; }); });
+  assignments.forEach(function (a) { ROLES.forEach(function (role) { if (a[role]) counts[a[role]].plan[a.unit.tier][role]++; }); });
+  var lastText = function (id, t) {
+    var parts = [];
+    hist.forEach(function (e) { if (e.year !== Y - 1 || e.tier !== t) return; if (e.primary.indexOf(id) >= 0) parts.push(e.name + " primary"); if (e.backup.indexOf(id) >= 0) parts.push(e.name + " backup"); });
+    return (Y - 1) + ": " + (parts.length ? parts.join(", ") : "no " + t + " holiday");
+  };
+  var otherTierText = function (id, t) {
+    var o2 = t === "major" ? "minor" : "major", c = counts[id].plan[o2];
+    return c.primary && c.backup ? "primary and backup in the " + o2 + " tier" : c.primary ? "primary in the " + o2 + " tier" : c.backup ? "backup in the " + o2 + " tier" : "no " + o2 + " holiday";
+  };
+  assignments.forEach(function (a, ui) {
+    var t = a.unit.tier;
+    ROLES.forEach(function (role) {
+      pool.forEach(function (id) { if (block[ui][id][role].length) a.blocked.push({ id: id, role: role, reasons: block[ui][id][role].slice() }); });
+      var id = a[role];
+      if (!id) {
+        a.why.push(role + " OPEN: nobody can hold it" + (cand[ui][role].length ? " within the plan's limits" : ""));
+        warnings.push("OPEN: " + a.unit.name + " " + Y + " " + role + " - " + (cand[ui][role].length ? "no plan fills it within the limits" : "every surgeon is refused (" + pool.map(function (x) { return nameOf(x) + ": " + block[ui][x][role].join(", "); }).join("; ") + ")"));
+        return;
+      }
+      var c = counts[id].before[t];
+      var parts = [];
+      if (forced[ui][role] === id) parts.push("derived East week (" + role + ")");
+      parts.push(role === "primary" ? t + " primary rate " + c.primary + "/" + c.eligible : t + " load " + c.any + "/" + c.eligible);
+      parts.push(otherTierText(id, t));
+      parts.push(lastText(id, t));
+      if (heldLastYear(ui, id)) parts.push("had " + a.unit.name + " in " + (Y - 1) + " too");
+      if (R.noRepeatSameRole && repeatOf(ui, role, id)) { parts.push("same role as " + P.repeatYears(ui, role, id).join(" and ") + " (relaxed)"); relaxed.push("no-repeat: " + nameOf(id) + " " + role + " " + a.unit.name + " " + P.repeatText(ui, role, id) + " - no plan exists without it"); }
+      a.why.push(role + " " + nameOf(id) + ": " + parts.join("; "));
+    });
+  });
+  if (used && used.pass === 3) HPL_TIERS.forEach(function (t) {
+    var T = tiers[t];
+    T.capable.forEach(function (id) {
+      var c = counts[id].plan[t], n = c.primary + c.backup;
+      if (n < T.lo || n > T.hi || c.primary > T.pcap) relaxed.push("shape: " + nameOf(id) + " holds " + n + " " + t + " holiday" + (n === 1 ? "" : "s") + " (" + c.primary + " primary) - expected " + (T.lo === T.hi ? T.lo : T.lo + "-" + T.hi) + " with at most " + T.pcap + " primary; no plan meets the shape");
+    });
+  });
+  if (best && best[4] > 0) {
+    var both = pool.filter(function (id) { var M = counts[id].plan.major, m = counts[id].plan.minor; return (M.primary > 0 && m.primary > 0) || (M.primary + M.backup > 0 && m.primary + m.backup > 0 && M.primary === 0 && m.primary === 0); });
+    warnings.push("Alternation not possible for " + both.map(nameOf).join(", ") + " (primary in one tier, backup in the other) - the pool and the limits leave no plan without it");
+  }
+  ["major", "minor"].forEach(function (t) { if (used && used.E[t].truncated) warnings.push("The " + t + " search stopped at " + HPL_MAX_LEAVES + " plans - the result is the best found, not proven best"); });
+  return {
+    year: Y, assignments: assignments, counts: counts, relaxed: relaxed, warnings: warnings,
+    search: {
+      pass: used ? used.pass : 0, tiedPlans: tiedPlans, seed: seed,
+      leaves: used ? { major: used.E.major.leaves, minor: used.E.minor.leaves } : { major: 0, minor: 0 },
+      truncated: !!(used && (used.E.major.truncated || used.E.minor.truncated)),
+      cost: best ? { open: best[0], shape: best[1], repeats: best[2], load: best[3], alternation: best[4], primaryRate: best[5], sameHoliday: best[6], unitLength: best[7] } : null
+    }
+  };
+}
+
+/* === THE HOLIDAY PLAN IN THE APP (Prompt 25 steps 3-5, Faraz 9/30: "nothing is locked or published without the
+   scheduler's Accept") ===
+   Setup > Holidays > Plan <year> previews planHolidays on the app's live state; the scheduler may swap holders, then
+   Accept locks the unit days (schedule_days, both roles locked, source 'holiday-plan-<year>') through the app's guarded
+   day-write path. Re-check <year> lists the accepted slots a newer East feed, vacation or rule now refuses. Everything
+   below is pure (no clock, network or writes) and judges a plan with hplPrepare - the planner's own refusal logic:
+     holidayPlanInputs(year, state)      the planHolidays opts from the app's state (ctxInputs + timeOffRows)
+     holidayPlanCheck(year, plan, opts)  which rules a plan breaks (+ its cost vector, the planner's ordering)
+     holidayPlanSwapOptions(year, plan, unit, role, opts)
+                                         every swap of that slot's holder with another slot's holder, and every
+                                         replacement by another pool member, judged and ranked
+     holidayPlanRecheck(year, opts)      the accepted slots (rows of source holiday-plan-<year>) the current state
+                                         refuses, each with the best swap by the same ranking
+     holidayPlanAcceptRows(year, plan, schedule, opts)
+                                         the schedule_days assignments Accept writes, and the slots it would replace
+     holidayPlanWrittenCheck(year, plan, acc, opts)
+                                         the breaks of the year as Accept will ACTUALLY leave it when a started unit
+                                         was skipped (its rows on file stay)
+     holidayPlanConflictLines(conflicts, label)
+                                         the confirm's replaced-slot lines, one per unit + role + holder change
+   A plan is planHolidays' assignments shape ([{ unit: { name } | name, primary, backup }]) or { <unit name>: { primary,
+   backup } }; a unit it does not name is open.
+   Breaks (hard - Accept names them in an explicit confirm; a swap that adds one asks first):
+     refused      rule 1 / rule 5 refusal reasons for that surgeon, slot and day (rules.js vocabulary: time-off:<day>,
+                  day-before-vacation, east-busy, east-forecast-busy:<p>, holiday-opt-out:<name>, backup-opt-out,
+                  max-major-holidays:<n>, derived-lock:<role>, derived-lock-held:<id>, inactive)
+     not-in-pool  the holder is not an active roster surgeon
+     max-major    two majors of the plan within 12 months for a surgeon with maxMajorHolidays (history included)
+     no-repeat    the same holiday in the same role as last year, or as next year when it is on file
+                  (groupRules.holidayPlan.noRepeatSameRole)
+     shape        the tier shape (rule 2): served outside floor(S/n)..ceil(S/n) or more than ceil(units/n) primaries
+   STRUCTURAL, never a confirmable break - same-person (one surgeon in both roles of a unit): sql/schema.sql CHECK
+     schedule_days_distinct_roles refuses such a row, so a confirm could only start a write that never lands (the sync
+     re-sends it forever while the other units land - a partial plan). holidayPlanCheck still names it (the card lists
+     it), but hplOptions never offers a move that leaves it on a unit, holidayPlanAcceptRows skips such a unit
+     (samePerson: true) and the app's acceptHolidayPlan stops BEFORE its confirm when one is found.
+   Soft (listed, never confirmed): alternation - primary in both tiers or backup-only in both (rule 3). Open slots are
+   listed apart (Accept leaves an open role as it is on file). */
+function holidayPlanSource(year) { return "holiday-plan-" + hplYear(year, "holidayPlanSource"); }
+// The schedule_days note of an accepted unit day: the unit and the plan only - no name, no reason (schedule_days is
+// anon-readable; CLAUDE.md: notes in anon-readable tables carry no reasons).
+function holidayPlanNote(unitName, year) { return String(unitName) + " unit - holiday plan " + hplYear(year, "holidayPlanNote"); }
+// The year Plan opens on: the first year after today's with units in the blob, else the latest year with units, else
+// next year.
+function holidayPlanDefaultYear(holidays, today) {
+  var units = holidays && holidays.units && typeof holidays.units === "object" ? holidays.units : {};
+  var ty = suIsIso(today) ? Number(today.slice(0, 4)) : null;
+  var years = Object.keys(units).filter(function (y) { return /^\d{4}$/.test(y) && Array.isArray(units[y]) && units[y].length; }).map(Number).sort(function (a, b) { return a - b; });
+  for (var i = 0; i < years.length; i++) if (ty === null || years[i] > ty) return years[i];
+  return years.length ? years[years.length - 1] : (ty === null ? null : ty + 1);
+}
+// The planHolidays opts from the app's state: ctxInputs (roster, surgeonRules, groupRules, holidays, schedule, the East
+// pieces, eastVacationRanges + eastVacationReviews) and timeOffRows. vacations = the time_off rows PLUS each East
+// surgeon's Davenport vacation ranges that are away or unreviewed (derivedEastVacations - what rules.js reads as a
+// vacation; 'home' ranges are not); east.eastClear = { id: [days] } - the days of each surgeon's 'home' ranges that no
+// away / unreviewed range of his covers (rules.js buildContext: an overlap goes to the vacation), where the planner
+// does not consult the forecast (rules.js fcApplies = !homeDay; the feed, an override true and eastStanding still
+// refuse - eastReason checks them first, as rules.js keeps a feed-busy day out of eastClear); history =
+// holidayPlanHistory over the schedule + groupRules.holidayPlan.history (its warnings in historyWarnings - planHolidays
+// does not repeat them when history is passed); seed = the year.
+function holidayPlanInputs(year, state) {
+  var Y = hplYear(year, "holidayPlanInputs");
+  var s = state && typeof state === "object" ? state : {};
+  var holidays = s.holidays && typeof s.holidays === "object" ? s.holidays : {};
+  var units = holidays.units && Array.isArray(holidays.units[String(Y)]) ? holidays.units[String(Y)] : null;
+  var hb = holidayPlanHistory({ schedule: s.schedule, holidays: holidays, groupRules: s.groupRules });
+  var day = function (v) { return typeof v === "string" ? v.slice(0, 10) : v; };
+  var vacations = (Array.isArray(s.timeOffRows) ? s.timeOffRows : []).filter(function (r) { return r && r.person_id; }).map(function (r) { return { person_id: r.person_id, start_date: day(r.start_date), end_date: day(r.end_date || r.start_date) }; });
+  var evr = s.eastVacationRanges && typeof s.eastVacationRanges === "object" ? s.eastVacationRanges : {};
+  var eastClear = {};
+  Object.keys(evr).sort().forEach(function (id) {
+    var home = [], away = {};
+    derivedEastVacations(evr[id], s.eastVacationReviews, id).ranges.forEach(function (r) {
+      if (r.state !== "home") {
+        vacations.push({ person_id: id, start_date: r.start, end_date: r.end, east: true });
+        for (var d = r.start, k = 0; d <= r.end && k < 800; d = suAddDays(d, 1), k++) away[d] = true;
+      } else {
+        for (var h = r.start, j = 0; h <= r.end && j < 800; h = suAddDays(h, 1), j++) if (home.indexOf(h) < 0) home.push(h);
+      }
+    });
+    var clear = home.filter(function (d) { return !away[d]; }).sort();
+    if (clear.length) eastClear[id] = clear;
+  });
+  return {
+    units: units, roster: Array.isArray(s.roster) ? s.roster : [], surgeonRules: s.surgeonRules || {}, groupRules: s.groupRules || {}, holidays: holidays,
+    history: hb.entries, historyWarnings: hb.warnings,
+    east: { eastBusyDays: s.eastBusyDays, eastForecast: s.eastForecast, eastOverrides: s.eastOverrides, eastDerived: s.eastDerived, eastFeedCoverage: s.eastFeedCoverage, eastClear: eastClear },
+    vacations: vacations, schedule: s.schedule && typeof s.schedule === "object" ? s.schedule : {}, seed: Y
+  };
+}
+// A plan (either shape) -> [{ primary, backup }] per unit of P (unknown unit names are reported, never guessed).
+function hplAssignByUi(P, plan) {
+  var byName = {}, unknown = [];
+  if (Array.isArray(plan)) plan.forEach(function (a) { if (!a) return; var n = a.unit && typeof a.unit === "object" ? a.unit.name : (typeof a.unit === "string" ? a.unit : a.name); if (typeof n === "string") byName[n] = a; });
+  else if (plan && typeof plan === "object") Object.keys(plan).forEach(function (n) { byName[n] = plan[n]; });
+  Object.keys(byName).forEach(function (n) { if (!P.units.some(function (u) { return u.name === n; })) unknown.push(n); });
+  var A = P.units.map(function (u) { var a = byName[u.name] || {}; return { primary: typeof a.primary === "string" && a.primary ? a.primary : null, backup: typeof a.backup === "string" && a.backup ? a.backup : null }; });
+  return { A: A, unknown: unknown };
+}
+function hplAssignOut(P, A) { return P.units.map(function (u, ui) { return { unit: { name: u.name, tier: u.tier, days: u.days.slice() }, primary: A[ui].primary, backup: A[ui].backup }; }); }
+function hplBreakKey(b) { return [b.rule, b.unit || "", b.role || "", b.id || "", b.tier || ""].join("|"); }
+// b names the slot (unit, role) - directly, or among the slots of a max-major break
+function hplBreakTouches(b, unit, role) { return (b.unit === unit && (b.role === role || !b.role)) || (Array.isArray(b.slots) && b.slots.some(function (s) { return s.unit === unit && s.role === role; })); }
+// hplEvaluate(P, A) -> { breaks, soft, open, vec } - the hard limits the plan breaks, the soft notes and the planner's cost
+// vector [open, shape, repeats, load, alternation, primaryRate, sameHoliday, unitLength] computed exactly as the
+// search scores a complete plan (planHolidays' leaf + pair terms).
+function hplEvaluate(P, A) {
+  var breaks = [], soft = [], open = [];
+  var Y = P.Y, nameOf = P.nameOf, units = P.units, pool = P.pool;
+  var served = {}, prim = {}, days = {};
+  HPL_TIERS.forEach(function (t) { served[t] = {}; prim[t] = {}; days[t] = {}; pool.forEach(function (id) { served[t][id] = 0; prim[t][id] = 0; days[t][id] = 0; }); });
+  var vec = [0, 0, 0, 0, 0, 0, 0, 0];
+  var push = function (b) { b.key = hplBreakKey(b); if (!breaks.some(function (x) { return x.key === b.key; })) breaks.push(b); };
+  units.forEach(function (u, ui) {
+    var a = A[ui] || {};
+    HPL_ROLES.forEach(function (role) {
+      var id = a[role] || null;
+      if (!id) { open.push({ unit: u.name, role: role }); vec[0]++; return; }
+      if (!P.inPool[id]) { push({ rule: "not-in-pool", unit: u.name, role: role, id: id, text: nameOf(id) + " (" + u.name + " " + role + ") is not an active roster surgeon" }); return; }
+      served[u.tier][id]++; if (role === "primary") prim[u.tier][id]++;
+      days[u.tier][id] += u.days.length;
+      var rs = P.block[ui][id][role];
+      if (rs.length) push({ rule: "refused", unit: u.name, role: role, id: id, reasons: rs.slice(), text: nameOf(id) + " cannot be the " + u.name + " " + Y + " " + role + ": " + rs.join(", ") });
+      if (P.R.noRepeatSameRole && P.repeatOf(ui, role, id)) { vec[2]++; push({ rule: "no-repeat", unit: u.name, role: role, id: id, text: nameOf(id) + " " + role + " on " + u.name + " in " + P.repeatText(ui, role, id) + " (no same holiday in the same role two years running)" }); }
+      if (role === "primary") vec[5] += P.counts[id].before[u.tier].primaryRate;
+      if (P.heldLastYear(ui, id)) vec[6]++;
+    });
+    if (a.primary && a.primary === a.backup) push({ rule: "same-person", unit: u.name, role: null, id: a.primary, text: nameOf(a.primary) + " is both primary and backup on " + u.name + " " + Y });
+  });
+  HPL_TIERS.forEach(function (t) {
+    var T = P.tiers[t];
+    pool.forEach(function (id) {
+      vec[3] += served[t][id] * P.counts[id].before[t].load;
+      vec[7] += P.counts[id].lastYearDays[t] * days[t][id];
+      if (T.capable.indexOf(id) < 0) return;
+      var miss = Math.max(0, served[t][id] - T.hi) + Math.max(0, T.lo - served[t][id]) + Math.max(0, prim[t][id] - T.pcap);
+      if (!miss) return;
+      vec[1] += miss;
+      push({ rule: "shape", unit: null, role: null, id: id, tier: t, text: nameOf(id) + " holds " + served[t][id] + " " + t + " holiday" + (served[t][id] === 1 ? "" : "s") + " (" + prim[t][id] + " primary) - the " + t + " tier gives each " + (T.lo === T.hi ? T.lo : T.lo + "-" + T.hi) + " with at most " + T.pcap + " primary" });
+    });
+  });
+  // two majors of the plan within 12 months (the search's majorOk; a history-only conflict is already a refusal)
+  pool.forEach(function (id) {
+    if (P.maxMajor[id] === null) return;
+    var mine = [];
+    units.forEach(function (u, ui) { if (u.tier !== "major") return; HPL_ROLES.forEach(function (role) { if (A[ui] && A[ui][role] === id) mine.push({ unit: u.name, role: role, m: hplMonthIndex(u.days[0]) }); }); });
+    var bad = mine.filter(function (x, i) {
+      var others = mine.filter(function (y, j) { return j !== i && Math.abs(y.m - x.m) < 12; }).length;
+      var n = 1 + others;
+      P.histMajor[id].forEach(function (h) { if (Math.abs(h - x.m) < 12) n++; });
+      return others > 0 && n > P.maxMajor[id];
+    });
+    if (bad.length) push({ rule: "max-major", unit: null, role: null, id: id, slots: bad.map(function (x) { return { unit: x.unit, role: x.role }; }), text: nameOf(id) + " holds " + bad.length + " major holidays within 12 months (" + bad.map(function (x) { return x.unit + " " + x.role; }).join(", ") + ") - at most " + P.maxMajor[id] + " per rolling 12 months" });
+  });
+  if (P.R.alternateTiers) pool.forEach(function (id) {
+    var Mp = prim.major[id], mp = prim.minor[id], Ms = served.major[id], ms = served.minor[id];
+    if (Mp > 0 && mp > 0) { vec[4]++; soft.push({ rule: "alternation", id: id, text: nameOf(id) + " is primary in both tiers" }); }
+    else if (Ms > 0 && ms > 0 && Mp === 0 && mp === 0) { vec[4]++; soft.push({ rule: "alternation", id: id, text: nameOf(id) + " is backup in both tiers" }); }
+  });
+  return { breaks: breaks, soft: soft, open: open, vec: vec };
+}
+function hplCostObj(v) { return { open: v[0], shape: v[1], repeats: v[2], load: v[3], alternation: v[4], primaryRate: v[5], sameHoliday: v[6], unitLength: v[7] }; }
+// holidayPlanCheck(year, plan, opts) -> { year, ok, breaks, soft, open, cost, warnings } (opts = planHolidays' opts)
+function holidayPlanCheck(year, plan, opts) {
+  var Y = hplYear(year, "holidayPlanCheck");
+  var P = hplPrepare(Y, opts || {});
+  var as = hplAssignByUi(P, plan);
+  var ev = hplEvaluate(P, as.A);
+  var warnings = P.warnings.slice();
+  as.unknown.forEach(function (n) { warnings.push("the plan names " + n + ", not a holiday unit of " + Y + " - ignored"); });
+  return { year: Y, ok: ev.breaks.length === 0, breaks: ev.breaks, soft: ev.soft, open: ev.open, cost: hplCostObj(ev.vec), warnings: warnings };
+}
+// Every move of slot (ui, role): a swap with each other filled slot's holder (that holder takes this slot, this holder
+// takes his) and a replacement by each other pool member - each judged by hplEvaluate. Sorted by the planner's order:
+// fewer breaks first, then the cost vector (hplCmp), then the listing order (units by date, primary before backup,
+// swaps before replacements, the pool in roster order) - deterministic; the planner's seeded RNG is not used here.
+// Never offered: a move that leaves one surgeon in both roles of a unit it touches (structural - the database's CHECK
+// schedule_days_distinct_roles refuses the row; for a swap both units are checked after the swap), and - with `today`
+// (Central ISO) - a swap with another unit that starts on or before today (holidayPlanAcceptRows leaves a started unit
+// as on file, so the swap would be written half; a replacement touches this unit only and stays offered).
+function hplOptions(P, A, ui, role, base, today) {
+  var cur = A[ui][role], u = P.units[ui], out = [], n = 0;
+  var baseKeys = base.breaks.map(function (b) { return b.key; });
+  var started = function (uj) { return !!today && P.units[uj].days[0] <= today; };
+  var twoRoles = function (B, uj) { return !!(B[uj].primary && B[uj].primary === B[uj].backup); };
+  var judge = function (B, o) {
+    var ev = hplEvaluate(P, B), keys = ev.breaks.map(function (b) { return b.key; });
+    o.assignments = hplAssignOut(P, B);
+    o.breaks = ev.breaks; o.soft = ev.soft; o.open = ev.open; o.cost = hplCostObj(ev.vec); o.vec = ev.vec;
+    o.added = ev.breaks.filter(function (b) { return baseKeys.indexOf(b.key) < 0; });
+    o.resolved = base.breaks.filter(function (b) { return keys.indexOf(b.key) < 0; });
+    o.ok = ev.breaks.length === 0; o.order = n++;
+    out.push(o);
+  };
+  var copy = function () { return A.map(function (x) { return { primary: x.primary, backup: x.backup }; }); };
+  if (cur) P.units.forEach(function (u2, uj) {
+    if (uj !== ui && started(uj)) return;
+    HPL_ROLES.forEach(function (r2) {
+      if (uj === ui && r2 === role) return;
+      var x = A[uj][r2];
+      if (!x || x === cur) return;
+      var B = copy(); B[ui][role] = x; B[uj][r2] = cur;
+      if (twoRoles(B, ui) || twoRoles(B, uj)) return;
+      judge(B, { kind: "swap", unit: u.name, role: role, id: x, from: cur, with: { unit: u2.name, role: r2, id: cur },
+        text: "swap with " + P.nameOf(x) + " (" + u2.name + " " + r2 + ")" });
+    });
+  });
+  P.pool.forEach(function (y) {
+    if (y === cur) return;
+    var B = copy(); B[ui][role] = y;
+    if (twoRoles(B, ui)) return;
+    judge(B, { kind: "replace", unit: u.name, role: role, id: y, from: cur, with: null, text: "replace with " + P.nameOf(y) });
+  });
+  out.sort(function (a, b) { return (a.breaks.length - b.breaks.length) || hplCmp(a.vec, b.vec) || (a.order - b.order); });
+  out.forEach(function (o) { delete o.vec; delete o.order; });
+  return out;
+}
+// holidayPlanSwapOptions(year, plan, unitName, role, opts) -> { year, unit, role, current, base: { breaks, soft, cost },
+//   options: [{ kind: 'swap' | 'replace', unit, role, id, from, with, text, assignments, breaks, soft, open, cost, added,
+//   resolved, ok }] } - the Setup card's swap control and Re-check's suggestion read the same list. opts.today (Central
+//   ISO, optional): no swap with a unit that starts on or before it (hplOptions).
+function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
+  var Y = hplYear(year, "holidayPlanSwapOptions");
+  if (role !== "primary" && role !== "backup") throw new Error("holidayPlanSwapOptions: role must be primary or backup, got " + JSON.stringify(role));
+  var o = opts || {};
+  var P = hplPrepare(Y, o);
+  var A = hplAssignByUi(P, plan).A;
+  var ui = -1; P.units.forEach(function (u, i) { if (u.name === unitName) ui = i; });
+  if (ui < 0) return { year: Y, unit: unitName, role: role, current: null, base: null, options: [], warnings: P.warnings.concat([unitName + " is not a holiday unit of " + Y]) };
+  var base = hplEvaluate(P, A);
+  return { year: Y, unit: unitName, role: role, current: A[ui][role], base: { breaks: base.breaks, soft: base.soft, cost: hplCostObj(base.vec) }, options: hplOptions(P, A, ui, role, base, suIsIso(o.today) ? o.today : null), warnings: P.warnings.slice() };
+}
+// holidayPlanRecheck(year, opts) -> { year, source, accepted: [{ unit, days, primary, backup, mixed }], blocked: [{ unit,
+//   role, id, days, breaks, suggestion, valid, started }], warnings }. opts = planHolidays' opts + `schedule` (in-memory
+//   map) + `today` (Central ISO, optional).
+//   Accepted = the unit days whose row source is holiday-plan-<year> (a hand edit or a trade turns a row 'manual' /
+//   'trade' - it is then an ordinary slot, the East conflict report's to watch), and on them a role only where it is
+//   LOCKED: Accept locks every role the plan sets, so an unlocked holder on a plan row is the one on file the plan left
+//   open - not an accepted slot (re-checking him would let Apply swap lock him). One holder per role across the unit's
+//   accepted days, else the slot is reported mixed and skipped. Each accepted slot is judged on the CURRENT state
+//   (vacations, East, rules, roster) with hplEvaluate's slot rules - refused, not-in-pool, same-person, max-major (the
+//   plan-level shape / no-repeat / alternation are not a newer feed's doing and are not re-reported). The suggestion
+//   is the first option of hplOptions that clears the slot's breaks and adds none (valid: true); failing that, the first
+//   that clears them (valid: false, its added breaks listed); else null. With `today`: no swap with a unit that starts
+//   on or before it (hplOptions - Accept would write it half), and a blocked slot of a unit that has itself started is
+//   listed with started: true and no suggestion (Accept leaves a started unit as on file; the day editor changes it).
+var HPL_SLOT_RULES = ["refused", "not-in-pool", "same-person", "max-major"];
+function holidayPlanRecheck(year, opts) {
+  var Y = hplYear(year, "holidayPlanRecheck");
+  var o = opts || {};
+  var P = hplPrepare(Y, o);
+  var src = holidayPlanSource(Y), sched = o.schedule && typeof o.schedule === "object" ? o.schedule : {};
+  var today = suIsIso(o.today) ? o.today : null;
+  var warnings = P.warnings.slice(), accepted = [], A = [];
+  P.units.forEach(function (u) {
+    var rec = { unit: { name: u.name, tier: u.tier, days: u.days.slice() }, days: [], primary: null, backup: null, mixed: [] };
+    HPL_ROLES.forEach(function (role) {
+      var ids = [];
+      u.days.forEach(function (d) {
+        var a = sched[d];
+        if (!a || a.source !== src) return;
+        if (rec.days.indexOf(d) < 0) rec.days.push(d);
+        if (!a[role + "Locked"]) return;          // the plan locks every role it sets; an unlocked holder is the file's
+        var h = dayHolder(a, role);
+        if (h && ids.indexOf(h) < 0) ids.push(h);
+      });
+      if (ids.length === 1) rec[role] = ids[0];
+      else if (ids.length > 1) { rec.mixed.push(role); warnings.push(u.name + " " + Y + " " + role + ": the accepted days hold " + ids.map(P.nameOf).join(" and ") + " - not one holder; that slot is not re-checked"); }
+    });
+    rec.days.sort();
+    if (rec.days.length) accepted.push(rec);
+    A.push({ primary: rec.primary, backup: rec.backup });
+  });
+  var base = hplEvaluate(P, A), blocked = [];
+  P.units.forEach(function (u, ui) {
+    HPL_ROLES.forEach(function (role) {
+      var id = A[ui][role];
+      if (!id) return;
+      var mine = base.breaks.filter(function (b) { return HPL_SLOT_RULES.indexOf(b.rule) >= 0 && hplBreakTouches(b, u.name, role); });
+      if (!mine.length) return;
+      var keys = mine.map(function (b) { return b.key; });
+      var started = !!today && u.days[0] <= today;
+      var list = started ? [] : hplOptions(P, A, ui, role, base, today);
+      var clears = function (op) { return !op.breaks.some(function (b) { return keys.indexOf(b.key) >= 0; }); };
+      var pick = null, valid = false;
+      for (var i = 0; i < list.length && !pick; i++) if (clears(list[i]) && !list[i].added.length) { pick = list[i]; valid = true; }
+      for (var j = 0; j < list.length && !pick; j++) if (clears(list[j])) pick = list[j];
+      var rec = accepted.filter(function (x) { return x.unit.name === u.name; })[0];
+      blocked.push({ unit: { name: u.name, tier: u.tier, days: u.days.slice() }, role: role, id: id, days: rec ? rec.days.slice() : [], breaks: mine, suggestion: pick, valid: valid, started: started });
+    });
+  });
+  return { year: Y, source: src, accepted: accepted, blocked: blocked, warnings: warnings };
+}
+// holidayPlanAcceptRows(year, plan, schedule, opts) -> { year, source, rows: { day: assignment }, days, units: [{ name,
+//   tier, days, primary, backup }], skipped: [{ unit, why[, samePerson, id][, started, primary, backup] }], conflicts:
+//   [{ day, unit, role, from, to, locked, clash }], keptNotes: [{ day, unit, note }], changes }. opts: { units | holidays
+//   (the year's units), only: [unit names] (a Re-check swap writes its units only), today (Central ISO) }.
+//   Skipped (nothing written for the unit), in this order: nothing planned; a unit whose first day is ON or before today
+//   (started: true - a 24-hour shift under way or past is left as on file whatever the plan names; primary / backup =
+//   its holders on file, one per role across its days, else null - holidayPlanWrittenCheck judges the year with them);
+//   one surgeon in both roles (samePerson: true - structural, sql/schema.sql CHECK schedule_days_distinct_roles would
+//   refuse every day of it; the app stops before its confirm).
+//   Each unit day: the plan's holder in each planned role, locked; source holiday-plan-<year>; note holidayPlanNote,
+//   except that a note already on the day that is not a holiday-plan note is KEPT (keptNotes - the confirm names them);
+//   a roster primary clears an external cover; a role the plan leaves open keeps what is on file (unless that holder is
+//   the plan's holder of the other role - then it is cleared, a conflict with clash: true). conflicts = every planned
+//   slot whose row already holds someone else (locked or not - a published holder) - Accept refuses them unless the
+//   scheduler confirms replacing them. changes = the (day, role) holder changes.
+var HPL_NOTE_RE = /^.+ unit - holiday plan \d{4}$/;
+function holidayPlanAcceptRows(year, plan, schedule, opts) {
+  var Y = hplYear(year, "holidayPlanAcceptRows");
+  var o = opts || {};
+  var unitsIn = Array.isArray(o.units) ? o.units : (o.holidays && o.holidays.units && Array.isArray(o.holidays.units[String(Y)]) ? o.holidays.units[String(Y)] : []);
+  var units = [];
+  unitsIn.forEach(function (raw) { var u = hplNormUnit(raw); if (u && !units.some(function (x) { return x.name === u.name; })) units.push(u); });
+  units.sort(function (a, b) { return a.days[0] < b.days[0] ? -1 : a.days[0] > b.days[0] ? 1 : 0; });
+  var A = hplAssignByUi({ units: units }, plan).A;
+  var only = Array.isArray(o.only) ? o.only : null, today = suIsIso(o.today) ? o.today : null;
+  var src = holidayPlanSource(Y), sched = schedule && typeof schedule === "object" ? schedule : {};
+  var rows = {}, written = [], skipped = [], conflicts = [], keptNotes = [], changes = 0;
+  units.forEach(function (u, ui) {
+    if (only && only.indexOf(u.name) < 0) return;
+    var a = A[ui];
+    if (!a.primary && !a.backup) { skipped.push({ unit: u.name, why: "nothing planned" }); return; }
+    if (today && u.days[0] <= today) {
+      var onFile = {};
+      HPL_ROLES.forEach(function (role) {
+        var ids = [];
+        u.days.forEach(function (d) { var h = dayHolder(sched[d], role); if (ids.indexOf(h) < 0) ids.push(h); });
+        onFile[role] = ids.length === 1 ? ids[0] : null;
+      });
+      skipped.push({ unit: u.name, why: "starts " + u.days[0] + ", " + (u.days[0] === today ? "today" : "before today") + " - left as on file", started: true, primary: onFile.primary, backup: onFile.backup });
+      return;
+    }
+    // after the started check: a started unit is left as on file whatever the plan names for it
+    if (a.primary === a.backup) { skipped.push({ unit: u.name, why: "primary and backup are the same surgeon", samePerson: true, id: a.primary }); return; }
+    u.days.forEach(function (d) {
+      var cur = sched[d] || null;
+      var oldNote = cur && typeof cur.note === "string" && cur.note.trim() ? cur.note : null;
+      var keepNote = !!oldNote && !HPL_NOTE_RE.test(oldNote);
+      if (keepNote) keptNotes.push({ day: d, unit: u.name, note: oldNote });
+      var next = { primary: cur && cur.primary || null, backup: cur && cur.backup || null, primaryLocked: !!(cur && cur.primaryLocked), backupLocked: !!(cur && cur.backupLocked), source: src, externalCover: cur && cur.externalCover || null, note: keepNote ? oldNote : holidayPlanNote(u.name, Y) };
+      HPL_ROLES.forEach(function (role) {
+        var id = a[role];
+        if (!id) return;
+        var from = dayHolder(cur, role);
+        if (from !== id) { changes++; if (from) conflicts.push({ day: d, unit: u.name, role: role, from: from, to: id, locked: !!(cur && cur[role + "Locked"]), clash: false }); }
+        next[role] = id; next[role + "Locked"] = true;
+        if (role === "primary") next.externalCover = null;
+      });
+      HPL_ROLES.forEach(function (role) {
+        if (a[role]) return;
+        var other = role === "primary" ? "backup" : "primary";
+        if (next[role] && next[role] === next[other]) { conflicts.push({ day: d, unit: u.name, role: role, from: next[role], to: null, locked: !!next[role + "Locked"], clash: true }); next[role] = null; next[role + "Locked"] = false; changes++; }
+      });
+      rows[d] = next;
+    });
+    written.push({ name: u.name, tier: u.tier, days: u.days.slice(), primary: a.primary, backup: a.backup });
+  });
+  return { year: Y, source: src, rows: rows, days: Object.keys(rows).sort(), units: written, skipped: skipped, conflicts: conflicts, keptNotes: keptNotes, changes: changes };
+}
+// holidayPlanWrittenCheck(year, plan, acc, opts) -> { year, plan: [assignments], started: [unit names], breaks, added }
+//   acc = holidayPlanAcceptRows' result for `plan`; opts = planHolidays' opts. The year as Accept will ACTUALLY leave it:
+//   the plan, except each unit acc skipped because it started (acc.skipped[].started), which keeps its holders on file.
+//   breaks = holidayPlanCheck of that year; added = the ones the plan as given does not break (a swap with a started
+//   unit written half, a shape the skipped unit leaves short) - Accept names them in its confirm, never silent.
+function holidayPlanWrittenCheck(year, plan, acc, opts) {
+  var Y = hplYear(year, "holidayPlanWrittenCheck");
+  var P = hplPrepare(Y, opts || {});
+  var A = hplAssignByUi(P, plan).A;
+  var kept = {};
+  (acc && Array.isArray(acc.skipped) ? acc.skipped : []).forEach(function (s) { if (s && s.started && typeof s.unit === "string") kept[s.unit] = s; });
+  var W = P.units.map(function (u, ui) { var k = kept[u.name]; return k ? { primary: k.primary || null, backup: k.backup || null } : { primary: A[ui].primary, backup: A[ui].backup }; });
+  var given = hplEvaluate(P, A), written = hplEvaluate(P, W);
+  var keys = given.breaks.map(function (b) { return b.key; });
+  return { year: Y, plan: hplAssignOut(P, W), started: P.units.filter(function (u) { return !!kept[u.name]; }).map(function (u) { return u.name; }), breaks: written.breaks, added: written.breaks.filter(function (b) { return keys.indexOf(b.key) < 0; }) };
+}
+// holidayPlanConflictLines(conflicts, label) -> [text] - the Accept confirm's replaced slots grouped by unit + role +
+//   holder change (+ locked / held): "Thanksgiving P locked to Khan -> Sarkar (11/25-11/28, 4 days)", so every replaced
+//   slot fits (at most one line per unit, role and holder - never capped by day). label(v) names a holder (the app's
+//   holderLabel: an id, 'ext:<name>', null -> OPEN); the default prints the value.
+function holidayPlanConflictLines(conflicts, label) {
+  var lb = typeof label === "function" ? label : function (v) { return v === null || v === undefined || v === "" ? "OPEN" : String(v); };
+  var groups = [], byKey = {};
+  (Array.isArray(conflicts) ? conflicts : []).forEach(function (c) {
+    if (!c || !suIsIso(c.day)) return;
+    var k = [c.unit, c.role, c.from, c.to, c.locked ? 1 : 0].join("|");
+    var g = byKey[k];
+    if (!g) { g = byKey[k] = { unit: c.unit, role: c.role, from: c.from, to: c.to, locked: !!c.locked, days: [] }; groups.push(g); }
+    if (g.days.indexOf(c.day) < 0) g.days.push(c.day);
+  });
+  return groups.map(function (g) {
+    g.days.sort();
+    var run = g.days.every(function (d, i) { return i === 0 || suAddDays(g.days[i - 1], 1) === d; });
+    var span = g.days.length === 1 ? fmtMD(g.days[0]) : (run ? fmtMD(g.days[0]) + "-" + fmtMD(g.days[g.days.length - 1]) : g.days.map(fmtMD).join(", ")) + ", " + g.days.length + " days";
+    return g.unit + " " + (g.role === "primary" ? "P" : "B") + " " + (g.locked ? "locked to" : "held by") + " " + lb(g.from) + " -> " + lb(g.to) + " (" + span + ")";
+  });
+}
+// One line per written unit for the change notice: "Thanksgiving 11/25-11/28: P Sarkar, B Khan".
+function holidayPlanUnitLines(units, nameOf) {
+  var nm = typeof nameOf === "function" ? nameOf : function (x) { return x; };
+  return (units || []).map(function (u) {
+    var span = u.days.length > 1 ? fmtMD(u.days[0]) + "-" + fmtMD(u.days[u.days.length - 1]) : fmtMD(u.days[0]);
+    return u.name + " " + span + ": " + [u.primary ? "P " + nm(u.primary) : null, u.backup ? "B " + nm(u.backup) : null].filter(Boolean).join(", ");
+  });
+}
+
 /* ---- East vacation reviews (Prompt 15 part 2, 9/23) ----
    The person's Davenport vacation ranges (east-feed.js eastVacations(rows, code):
    [{ start, end }]) meet the east_vacation_reviews rows ({ person_id, start, end,
@@ -2994,6 +3965,7 @@ const OFFER_CONFIRM_WORDS = {
   "not-recurring-available": "not one of your recurring available days",
   "weekday-pattern": "your weekday pattern",
   "weekend-block-only": "a standalone weekend day (you take Fri-Sun as a block)",
+  "lone-weekend-day": "a Saturday or Sunday on its own (your weekend days come as a pair)", // Prompt 23 B2: a shape rule of his own - a saved offer lifts it like the pattern family (W)
   "day-before-aledo": "the day before an Aledo day",
   "whitelist-month": "outside the days you listed for that month",
   "outside-available-weeks": "outside your listed weeks",
@@ -3529,17 +4501,35 @@ function offerRulesWords(rules, groupRules) {
   const G = groupRules && typeof groupRules === "object" ? groupRules : {};
   const out = [];
   if (!R) return ["No rules of yours are on file - the scheduler places you by the group defaults."];
+  // Prompt 23 A (9/30): a pattern's start / end bound it (rules.js matchesPattern ANDs them) - say so, or a dated
+  // change (Acton's 2027 outreach days) reads as two contradicting rules.
+  const mdy = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[2]) + "/" + Number(m[3]) + "/" + m[1] : String(d || ""); };
+  const bounds = (p) => (p.start ? " from " + mdy(p.start) : "") + (p.end ? " until " + mdy(p.end) : "");
   const nthWords = (p) => {
     if (!p || !p.weekday) return "";
-    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday;
-    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth;
-    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday";
-    return "every " + p.weekday;
+    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday + bounds(p);
+    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth + bounds(p);
+    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday" + bounds(p);
+    return "every " + p.weekday + bounds(p);
   };
   const listOf = (v) => (Array.isArray(v) ? v : []).map(nthWords).filter(Boolean).join(", ");
   const md = (d) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[1]) + "/" + Number(m[2]) : String(d || ""); };
+  // Prompt 23 B1 (9/30): the contribution key, said plainly (weekends: Prompt 12 L; weekdays: Prompt 23)
+  if (R.primaryContribution === "weekdays") out.push("Preferred: weekday primary (Mon-Thu, or a Friday on its own).");
+  else if (R.primaryContribution === "weekends") out.push("Preferred: weekend primary (a full Fri-Sun block).");
   if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? " (offered automatically when East is clear)" : "") + ".");
-  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + ".");
+  // Prompt 23 B4: with hardNeverWeekdaysNoticeDays the rule is hard only that many days ahead (a soft penalty beyond it)
+  const nd = R.hardNeverWeekdaysNoticeDays;
+  const noticeOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
+  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days; further ahead only as a last resort" : "") + ".");
+  // Prompt 23 B2 / B3. Review (10/1): one sentence for the PRIMARY weekend shapes - with standaloneFriday they are {Fri},
+  // {Sat, Sun} and {Fri, Sat, Sun} (rules.js), so the weekendStyle line below then speaks of BACKUP weekends only (it used
+  // to say "Weekends: Fri-Sun as one block" beside "a Friday may stand alone").
+  const sfOn = R.standaloneFriday === true, nlOn = R.noLoneWeekendDay === true;
+  if (sfOn) out.push("Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun" + (nlOn ? " - never a Saturday or Sunday alone" : "") + ".");
+  else if (nlOn) out.push("Saturday and Sunday come as a pair (never one alone as primary).");
+  const wcap = R.weekendCap;
+  if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? ", East weekends included" : "") + " (preferred, not a hard limit).");
   if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
   if (Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.length) out.push("Unavailable on " + listOf(R.recurringUnavailable) + ".");
   if (Array.isArray(R.recurringAvoid) && R.recurringAvoid.length) out.push("Prefer not: " + listOf(R.recurringAvoid) + ".");
@@ -3561,7 +4551,7 @@ function offerRulesWords(rules, groupRules) {
     if (ef.deriveFrom || ef.statedWeeks) out.push("Your East weeks derive your Silvis week: East primary week = Silvis backup all week, East backup week = Silvis primary all week.");
   }
   if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
-  if (R.weekendStyle) out.push("Weekends: " + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
+  if (R.weekendStyle) out.push((sfOn ? "Backup weekends: " : "Weekends: ") + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
   const cap = R.monthlyCap;
   if (typeof cap === "number") out.push("Cap: " + cap + " primary days a month.");
   else if (cap && typeof cap === "object" && typeof cap.primary === "number") out.push("Cap: " + cap.primary + " primary days a month" + (typeof cap.preferred === "number" ? " (" + cap.preferred + " preferred)" : "") + (cap.countsEastDays ? ", East primary-week days included" : "") + ".");
@@ -4717,6 +5707,8 @@ if (typeof module !== "undefined" && module.exports) {
     generateShareHTML, buildPrintableCalendarHTML,
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
+    HOLIDAY_PLAN_DEFAULTS, holidayPlanRules, holidayPlanHistory, planHolidays,
+    holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanWrittenCheck, holidayPlanConflictLines, holidayPlanUnitLines,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,

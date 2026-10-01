@@ -3481,6 +3481,114 @@ function CallSchedule() {
       showToast("Some generated days did not save yet - they retry automatically; publish once the header shows Saved.", "error");
     }
   };
+  // --- Holiday plan (Prompt 25 steps 3-5, Faraz 9/30: nothing is locked or published without the scheduler's Accept) ---
+  // The ONE write path of Setup > Holidays > Plan <year> (Accept) and Re-check <year> (a suggested swap, meta.mode
+  // "swap"). It mirrors acceptPreview: ONE confirm BEFORE anything - it names every rule the plan breaks (the card's
+  // holidayPlanCheck texts) and every planned slot the row on file already holds differently (locked or published -
+  // helpers.holidayPlanAcceptRows conflicts; OK replaces them, Cancel writes nothing); the snapshot FIRST (a failed capture
+  // BLOCKS - nothing is locked); a re-derivation over the current map when a realtime row landed while the snapshot was
+  // saving (a new conflict asks again); then the merged map through syncScheduleDays - the per-day CAS on version, the
+  // wipe guard, the conflict reload - like every schedule write; ONE audit row after the write, with its outcome
+  // (holiday_plan.accept / holiday_plan.swap: the year, the units with roster ids, the replaced slots, the broken rule
+  // keys, the snapshot counts - no amounts); and the manual-edit notices a hand edit of these days would send
+  // (saveDayEdit: addNotification + sendEmailNotif 'manual_edit' to every holder whose slot changed hands) as ONE note for
+  // the plan instead of one per day. The office notice stays Settings > Office notifications > Publish and notify
+  // office. Rows: both roles locked, source holiday-plan-<year>, note "<unit> unit - holiday plan <year>" (no name, no
+  // reason - schedule_days is anon-readable; a note already on a day that is not a plan note is kept and named in the
+  // confirm). Returns true once the days are on file.
+  // Review fixes (10/1): A - one surgeon in both roles of a unit is STRUCTURAL (the database's distinct-roles CHECK
+  // refuses the row; the sync would re-send it forever while the other units land - a partial plan): it stops here
+  // BEFORE the confirm. B / C - a unit that starts today or has started is left as on file: a swap with one is refused
+  // (it would be written half), and a full Accept judges the year as it will ACTUALLY stand (helpers
+  // holidayPlanWrittenCheck) and names the breaks the skipped unit adds. F - the replaced slots are grouped by unit +
+  // role + holder (helpers holidayPlanConflictLines), never cut off by day. G - the change notices diff the rows last
+  // PERSISTED (lastSyncRef - read only) against the plan rows, and a failed / conflicted Accept keeps its "before" rows
+  // in holidayNoticePendingRef so the next Accept of that year that saves still sends them.
+  const holidayNoticePendingRef = useRef({}); // { year: { day: assignment before the first Accept that did not save } }
+  const acceptHolidayPlan = async (year, plan, meta) => {
+    const m = meta || {};
+    const swap = m.mode === "swap";
+    if (!isScheduler || isPublicMode) { showToast("Only the scheduler can lock holiday units.", "error"); return false; }
+    if (refuseUnreadDay()) return false; // an Accept over the unread (empty) map would read every unit day as unheld
+    const opts = { holidays, today: todayCentral(), only: Array.isArray(m.only) ? m.only : null };
+    const cur = scheduleRef.current || schedule;
+    const acc = holidayPlanAcceptRows(year, plan, cur, opts);
+    const same = acc.skipped.filter(s => s.samePerson);
+    if (same.length) { showToast(`Nothing was locked: ${same.map(s => s.unit + " has " + nameOf(s.id) + " as primary AND backup").join("; ")} - one surgeon cannot hold both roles of a unit (the database refuses the row). Swap one of them first.`, "error"); return false; }
+    const started = acc.skipped.filter(s => s.started);
+    if (swap && started.length) { showToast(`Nothing was written: ${started.map(s => s.unit + " (" + s.why + ")").join("; ")} - this swap would be written half. Change those days in the day editor.`, "error"); return false; }
+    if (!acc.days.length) { showToast(`Nothing to lock for ${year}${acc.skipped.length ? " - " + acc.skipped.map(s => s.unit + ": " + s.why).join("; ") : ""}.`, "info"); return false; }
+    const written = started.length ? holidayPlanWrittenCheck(year, plan, acc, holidayPlanInputs(year, ctxInputs)) : null;
+    const skipBreaks = written ? written.added : [];
+    const conflictText = (list) => holidayPlanConflictLines(list, v => holderLabel(v, nameOf));
+    const breaks = Array.isArray(m.breaks) ? m.breaks : [];
+    const parts = [];
+    if (breaks.length) parts.push(`This plan BREAKS ${breaks.length} rule(s):\n- ${breaks.join("\n- ")}`);
+    if (skipBreaks.length) parts.push(`${started.map(s => s.unit).join(", ")} ${started.length === 1 ? "has" : "have"} started and stay${started.length === 1 ? "s" : ""} as on file, so the year as written BREAKS ${skipBreaks.length} more rule(s):\n- ${skipBreaks.map(b => b.text).join("\n- ")}`);
+    if (acc.conflicts.length) parts.push(`${acc.conflicts.length} planned slot(s) are already held differently on file and will be REPLACED:\n- ${conflictText(acc.conflicts).join("\n- ")}`);
+    if (acc.keptNotes.length) parts.push(`Day notes kept as on file (the plan note is not added there): ${acc.keptNotes.map(k => fmtMD(k.day) + " \"" + String(k.note).slice(0, 60) + "\"").join("; ")}.`);
+    if (acc.skipped.length) parts.push(`Left as on file: ${acc.skipped.map(s => s.unit + " (" + s.why + ")").join("; ")}.`);
+    parts.push(`${swap ? "Apply this swap" : "Accept the " + year + " holiday plan"}: lock ${acc.days.length} day(s) of ${acc.units.length} unit(s) (${acc.units.map(u => u.name).join(", ")}), both roles, for every viewer. A backup snapshot is saved first.${acc.conflicts.length ? " OK replaces the held slots listed above;" : ""} Cancel writes nothing.`);
+    if (!confirm(parts.join("\n\n"))) { showToast("Nothing was written - the plan is kept.", "info"); return false; }
+    setSaveStatus("Saving backup snapshot");
+    const snap = await snapshots.capture("holiday_plan");
+    if (!snap.ok) {
+      showToast("Couldn't save a backup snapshot - NOTHING was locked; the plan is kept. (" + (snap.error || "unknown") + ")", "error");
+      setSaveStatus("");
+      return false;
+    }
+    // Re-derive from the CURRENT map: a realtime row may have landed while the snapshot was in flight.
+    let base = cur, rows = acc;
+    if ((scheduleRef.current || schedule) !== cur) {
+      base = scheduleRef.current || schedule;
+      rows = holidayPlanAcceptRows(year, plan, base, opts);
+      const seen = new Set(acc.conflicts.map(c => c.day + "|" + c.role + "|" + c.from));
+      const fresh = rows.conflicts.filter(c => !seen.has(c.day + "|" + c.role + "|" + c.from));
+      if (fresh.length && !confirm(`The schedule changed while the snapshot was saving - ${fresh.length} more planned slot(s) are now held differently:\n- ${conflictText(fresh).join("\n- ")}\n\nReplace them too?`)) { showToast("Nothing was written - the plan is kept.", "info"); setSaveStatus(""); return false; }
+    }
+    const next = { ...base, ...rows.rows };
+    const changed = diffScheduleDays(base, next).filter(c => c.role === "primary" || c.role === "backup");
+    // The notices' "before": per plan day, the row a failed / conflicted Accept of this year left pending, else the row
+    // LAST PERSISTED (lastSyncRef, read before the sync moves it) - never the local map, which a failed Accept already moved.
+    const pendingNotices = holidayNoticePendingRef.current;
+    const pend = pendingNotices[year] || {};
+    const persisted = lastSyncRef.current || {};
+    const noticeBefore = {}, noticeAfter = {};
+    rows.days.forEach(d => { noticeBefore[d] = Object.prototype.hasOwnProperty.call(pend, d) ? pend[d] : (persisted[d] || null); noticeAfter[d] = next[d]; });
+    const noticeChanged = diffScheduleDays(noticeBefore, noticeAfter).filter(c => c.role === "primary" || c.role === "backup");
+    pushUndo(base, next);
+    setSchedule(next);
+    scheduleRef.current = next;
+    noteSnapshotTaken();
+    setSaveStatus(swap ? "Saving the holiday swap" : "Saving the holiday plan");
+    const r = await syncScheduleDays(next);
+    // Audited AFTER the CAS sync with its outcome: a wipe-blocked or failed write must not leave a row saying it was locked.
+    const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
+    const unitList = rows.units.map(u => ({ name: u.name, days: u.days, primary: u.primary, backup: u.backup }));
+    logAudit(swap ? "holiday_plan.swap" : "holiday_plan.accept", `${swap ? "Holiday plan " + year + ": swap applied" : "Accepted the " + year + " holiday plan"} - ${rows.days.length} day(s) locked: ${unitList.map(u => u.name + " " + (u.primary || "-") + "/" + (u.backup || "-")).join(", ")}${rows.conflicts.length ? "; " + rows.conflicts.length + " held slot(s) replaced" : ""}${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`,
+      { year, source: rows.source, units: unitList, days: rows.days.length, changes: changed.length, replaced: rows.conflicts.map(c => ({ day: c.day, role: c.role, from: c.from, to: c.to, locked: c.locked })), breaks: (Array.isArray(m.breakKeys) ? m.breakKeys : []).concat(skipBreaks.map(b => b.key)), snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
+    if (r && r.ok) {
+      setSaveStatus(swap ? "Holiday swap saved" : "Holiday plan saved"); setTimeout(() => setSaveStatus(""), 2000);
+      const left = {};
+      Object.keys(pend).forEach(d => { if (rows.days.indexOf(d) < 0) left[d] = pend[d]; });
+      if (Object.keys(left).length) pendingNotices[year] = left; else delete pendingNotices[year];
+      const affected = [...new Set(noticeChanged.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];
+      if (affected.length) {
+        const msg = manualEditMsg([`Holiday plan ${year}${swap ? " (swap)" : ""} - locked:`].concat(holidayPlanUnitLines(rows.units, nameOf)), userProfile?.display_name || nameOf(mySurgeon));
+        addNotification("manual_edit", swap ? "Holiday swap " + year : "Holiday plan " + year, msg, { year, affected, surgeon_id: affected[0] });
+        sendEmailNotif("manual_edit", { message: msg, subject: `Holiday plan ${year}${swap ? " - swap" : ""}` }, affected);
+      }
+      showToast(`Locked ${rows.days.length} holiday day(s) of ${year}${changed.length ? "" : " (the holders were already on file)"}. The office notice is Settings > Office notifications > Publish and notify office.`, "success");
+      return true;
+    }
+    if (r && r.blocked) { showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error"); return false; }
+    // failed or conflict: keep each day's "before" (the earliest wins) - the next Accept of this year that saves sends the notices
+    const keep = { ...pend };
+    rows.days.forEach(d => { if (!Object.prototype.hasOwnProperty.call(keep, d)) keep[d] = noticeBefore[d]; });
+    pendingNotices[year] = keep;
+    if (!(r && r.conflict)) showToast(`Some holiday days did not save yet - they retry automatically. The change notices wait: press Accept ${year} again once the header shows Saved to send them.`, "error");
+    return false;
+  };
   // --- Seed import (docs/silvis-seed.json through importer.js) ---
   const fetchLiveForImport = async () => {
     const get = async (q, label) => {
@@ -3863,12 +3971,20 @@ function CallSchedule() {
       return held.length > 1 ? { kind: "holiday", name: hol.name, days: held } : null;
     }
     const P = rulesCtx.per ? rulesCtx.per[holderId] : null;
-    if (!P || P.weekendStyle !== "block") return null;
+    if (!P) return null;
     const dow = parse(day).getDay();
     if (dow !== 5 && dow !== 6 && dow !== 0) return null;
     const fri = fmt(addD(parse(day), dow === 5 ? 0 : dow === 6 ? -1 : -2));
     const days = [fri, fmt(addD(parse(fri), 1)), fmt(addD(parse(fri), 2))];
-    if (days.some(d => rulesCtx.holidayByDay[d])) return null; // a holiday unit takes precedence over the weekend it overlaps (s5)
+    if (days.some(d => rulesCtx.holidayByDay && rulesCtx.holidayByDay[d])) return null; // a holiday unit takes precedence over the weekend it overlaps (s5)
+    // Prompt 23 review (10/1): a noLoneWeekendDay holder's PRIMARY Saturday + Sunday are one commitment (rules.js: never a
+    // lone Sat / Sun as primary - hard lone-weekend-day), so the pair moves as a unit - with his Friday too when he holds
+    // it and is block style (the block below). The same "weekend-block" kind, so tradeUnitTag / tradeGroupOf group the rows.
+    if (role === "primary" && P.noLoneWeekend && dow !== 5 && holds(days[1]) && holds(days[2])) {
+      if (P.weekendStyle === "block" && holds(days[0])) return { kind: "weekend-block", name: "weekend block", days };
+      return { kind: "weekend-block", name: "weekend pair", days: days.slice(1) };
+    }
+    if (P.weekendStyle !== "block") return null;
     return days.every(holds) ? { kind: "weekend-block", name: "weekend block", days } : null;
   };
   // Item C (Faraz 9/23 evening): the suggested counter-parties for `fromId` giving `day`/`role` away - the pure
@@ -4815,6 +4931,7 @@ function CallSchedule() {
     before_import: "Before JSON import",
     periodic_session: "Periodic (session start)",
     generate_publish: "Before Accept & Publish",
+    holiday_plan: "Before a holiday plan Accept / swap",
     seed_import: "Before seed import (app)",
     before_seed_import: "Before seed import (importer)",
   }[r] || r || "manual");
@@ -6456,7 +6573,8 @@ function CallSchedule() {
 
           <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)"
             summary={cardSummary(holidays === undefined ? "Not imported yet" : (Object.keys((holidays && holidays.units) || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet"))}>
-            <HolidaysCard css={css} dk={dk} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported} daysUnread={loaded && !daysReadOk}/>
+            <HolidaysCard css={css} dk={dk} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} isScheduler={isScheduler && !isPublicMode} planState={ctxInputs} today={todayStr} onAcceptPlan={acceptHolidayPlan}
+              onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported} daysUnread={loaded && !daysReadOk}/>
           </Collapsible>
 
           {/* Call pay (Faraz 9/27): the rates + pay-model flags - the scheduler's only (this whole block is isScheduler) */}
@@ -8720,7 +8838,10 @@ function DayEditor(props) {
     };
   }, []); // eslint-disable-line
 
-  const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } } }), [ctxInputs, day, draft]);
+  // Review 2 (10/1): heldSchedule = the SAVED rows - the rules' "already held" reading (a hardNeverWeekdaysNoticeDays
+  // Tue/Thu he holds reads the soft term inside the notice) must not take the draft's own pick as held: his saved holder
+  // reads soft, a newly picked Khan Tue/Thu inside the notice reads hard and goes through the Override panel.
+  const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } }, heldSchedule: ctxInputs.schedule }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
   // Item E3 (Faraz 9/25): the East lines - the East-vacation review state and its diamond included - are the
@@ -10371,7 +10492,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
 // - a minor holiday on a Monday absorbs the weekend before it (Sat-Mon) when
 // groupRules.holidays.mondayMinorAbsorbsWeekend is true. Every unit and day
 // stays editable; the stored days are what the engine reads.
-function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported, daysUnread }) {
+function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported, daysUnread, isScheduler, planState, today, onAcceptPlan }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   // Review 9/28: daysUnread = a finished load holds no read of schedule_days - the coverage / held counts read the
   // empty map (every unit OPEN, 0/0 held), so they say "not loaded" and the Edit buttons (goToDay) are disabled.
@@ -10454,6 +10575,193 @@ function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf,
         <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
       </div>
       <p data-testid="holidays-prefill-hint" style={{ fontSize: 11, color: "#5B6B82", margin: "6px 0 0" }}>{(groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true) ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."}</p>
+      {isScheduler && <HolidayPlanPanel css={css} dk={dk} holidays={holidays} planState={planState} nameOf={nameOf} today={today} dirty={dirty} daysUnread={daysUnread} rulesImported={rulesImported} onAccept={onAcceptPlan} showToast={showToast}/>}
+    </div>
+  );
+}
+
+// --- The yearly holiday plan (Prompt 25 steps 3-5, Faraz 9/30: "the generator makes most of the decisions";
+// nothing is locked or published without the scheduler's Accept). The scheduler's only (HolidaysCard renders it for
+// isScheduler; the App's acceptHolidayPlan refuses anyone else). All judging is helpers.js - the planner's own logic:
+//   Plan <year>     planHolidays on the app's live state (holidayPlanInputs: the blob's units, roster, rules, history
+//                   = holidayPlanHistory over the schedule + groupRules.holidayPlan.history, the East pieces of
+//                   ctxInputs, vacations = time_off + the away / unreviewed East ranges, seed = the year) -> per unit
+//                   primary / backup with the why, each surgeon's counts (before / plan, per tier), relaxed, warnings.
+//                   Nothing is written.
+//   swap            each slot's select lists holidayPlanSwapOptions (a swap with another holder, or a replacement), each
+//                   judged by holidayPlanCheck; a move that ADDS a broken rule asks first, naming it (Cancel keeps the
+//                   plan) - never a silent break. The current plan's breaks stay listed; Accept names them again. Never
+//                   listed: a move leaving one surgeon in both roles of a unit (structural - the database refuses it) and,
+//                   with today, a swap with a unit that has started (Accept would write it half).
+//   Accept <year>   onAccept (the App's acceptHolidayPlan: confirm -> snapshot -> CAS sync -> audit -> notices).
+//   Re-check <year> holidayPlanRecheck on the live state: every accepted slot (rows of source holiday-plan-<year>) a
+//                   newer East feed, vacation or rule refuses, with the best swap; read-only - "Apply swap" goes
+//                   through the same onAccept path (mode swap, the swap's units only) with its confirm.
+// The plan's inputs are the SAVED units (an unsaved Holidays edit disables Accept: save first).
+function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, daysUnread, rulesImported, onAccept, showToast }) {
+  const Tk = THEME[dk ? "dark" : "light"];
+  const unitYears = Object.keys((holidays && holidays.units) || {}).filter(y => /^\d{4}$/.test(y) && Array.isArray(holidays.units[y]) && holidays.units[y].length).sort();
+  const defaultYear = holidayPlanDefaultYear(holidays, today);
+  const [yearPick, setYearPick] = React.useState("");
+  const year = yearPick || (defaultYear ? String(defaultYear) : "");
+  const [plan, setPlan] = React.useState(null);      // { year, result, base: [assignments], assignments, historyWarnings, swaps: [text] }
+  const [recheckYear, setRecheckYear] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  // judged on the LIVE state on every render (a vacation or an East refresh after Plan is seen at once)
+  // today (Central): no swap with a unit that starts on or before it - Accept leaves a started unit as on file, so the swap
+  // would be written half (review fix B)
+  const live = React.useMemo(() => {
+    if (!plan) return null;
+    try {
+      const inputs = { ...holidayPlanInputs(plan.year, planState || {}), today };
+      const check = holidayPlanCheck(plan.year, plan.assignments, inputs);
+      const swaps = {};
+      plan.assignments.forEach(a => ["primary", "backup"].forEach(role => { swaps[a.unit.name + "|" + role] = holidayPlanSwapOptions(plan.year, plan.assignments, a.unit.name, role, inputs).options; }));
+      return { check, swaps };
+    } catch (e) { console.warn("holiday plan check failed", e); return { error: String(e && e.message || e) }; }
+  }, [plan, planState, today]);
+  const recheck = React.useMemo(() => {
+    if (!recheckYear) return null;
+    try { return holidayPlanRecheck(recheckYear, { ...holidayPlanInputs(recheckYear, planState || {}), today }); }
+    catch (e) { console.warn("holiday plan re-check failed", e); return { error: String(e && e.message || e) }; }
+  }, [recheckYear, planState, today]);
+  const runPlan = () => {
+    if (!year) { showToast("No year with holiday units - add a year above first.", "error"); return; }
+    try {
+      const inputs = holidayPlanInputs(year, planState || {});
+      if (!inputs.units) { showToast(`No saved holiday units for ${year} - add and save the year above first.`, "error"); return; }
+      const result = planHolidays(year, inputs);
+      setPlan({ year: Number(year), result, base: result.assignments, assignments: result.assignments.map(a => ({ ...a, unit: { ...a.unit } })), historyWarnings: inputs.historyWarnings || [], swaps: [] });
+      setRecheckYear(null);
+    } catch (e) { console.warn("planHolidays failed", e); showToast("The holiday plan failed: " + String(e && e.message || e).slice(0, 160), "error"); }
+  };
+  const applySwap = (o) => {
+    if (!o || !plan) return;
+    if (o.added.length && !confirm(`This ${o.kind === "swap" ? "swap" : "replacement"} (${o.unit} ${o.role}: ${o.text}) BREAKS ${o.added.length} rule(s):\n- ${o.added.map(b => b.text).join("\n- ")}\n\nApply it anyway? Accept will name the rule again; Cancel keeps the plan as it is.`)) return;
+    setPlan(p => ({ ...p, assignments: o.assignments, swaps: p.swaps.concat([o.unit + " " + o.role + ": " + o.text]) }));
+  };
+  const accept = async () => {
+    if (!plan || !live || !live.check || busy) return;
+    setBusy(true);
+    try {
+      const ok = await onAccept(plan.year, plan.assignments, { breaks: live.check.breaks.map(b => b.text), breakKeys: live.check.breaks.map(b => b.key) });
+      if (ok) { setPlan(null); setRecheckYear(plan.year); }
+    } finally { setBusy(false); }
+  };
+  const applyRecheck = async (b) => {
+    const s = b && b.suggestion;
+    if (!s || busy) return;
+    setBusy(true);
+    try {
+      const units = [s.unit].concat(s.with && s.with.unit !== s.unit ? [s.with.unit] : []);
+      await onAccept(recheckYear, s.assignments, { mode: "swap", only: units, breaks: s.added.map(x => x.text), breakKeys: s.added.map(x => x.key) });
+    } finally { setBusy(false); }
+  };
+  const who = (id) => id ? <span>{nameOf(id)}</span> : <span style={{ color: Tk.open, fontWeight: 800 }}>OPEN</span>;
+  const span = (days) => days.length > 1 ? fmtMD(days[0]) + "-" + fmtMD(days[days.length - 1]) : fmtMD(days[0]);
+  const box = { border: "1px solid " + Tk.border, borderRadius: 8, padding: "8px 10px", marginTop: 10 };
+  const note = { fontSize: 11, color: Tk.muted, margin: "4px 0" };
+  const blockedNow = !!daysUnread || !rulesImported;
+  const changedFromBase = plan ? plan.assignments.some((a, i) => a.primary !== plan.base[i].primary || a.backup !== plan.base[i].backup) : false;
+  const planCounts = (id, t) => { let p = 0, b = 0; (plan ? plan.assignments : []).forEach(a => { if (a.unit.tier !== t) return; if (a.primary === id) p++; if (a.backup === id) b++; }); return p + "P / " + b + "B"; };
+  return (
+    <div data-testid="holplan" style={box}>
+      <div style={{ ...css.subT, margin: "0 0 4px" }}>Yearly holiday plan</div>
+      <p style={note}>The planner decides one primary and one backup per unit for the whole year (Davenport's major / minor split: everyone one major and one minor where the pool allows, primary in one tier and backup in the other, the tier's primaries to the lowest lifetime primary rate, no same holiday in the same role two years running). Plan shows it - nothing is written; swaps re-check every rule; Accept locks the unit days for everyone.</p>
+      <p data-testid="holplan-locks-note" style={note}>Accepted units are kept as locks. A slot the usual day rules would refuse (a monthly window, a listed week, a run limit) shows up in Generate as a "lock violation" and is kept as it is; a trade of a holiday unit still has to keep those rules.</p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select data-testid="holplan-year" value={year} onChange={e => { setYearPick(e.target.value); setPlan(null); setRecheckYear(null); }} style={{ ...css.inp, padding: "3px 6px", fontSize: 12, width: 90, fontFamily: mono }}>
+          {unitYears.length === 0 && <option value="">no year</option>}
+          {unitYears.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <button data-testid="holplan-run" onClick={runPlan} disabled={!year || blockedNow || busy} style={{ ...css.btn(true), padding: "5px 12px", opacity: (!year || blockedNow || busy) ? 0.5 : 1 }}>Plan {year || "-"}</button>
+        <button data-testid="holplan-recheck" onClick={() => { setRecheckYear(Number(year)); }} disabled={!year || blockedNow || busy} style={{ ...css.mini(false), opacity: (!year || blockedNow || busy) ? 0.5 : 1 }}>Re-check {year || "-"}</button>
+        {daysUnread && <span style={{ fontSize: 11, color: Tk.warnText }}>Schedule not loaded - Plan, Re-check and Accept wait for it.</span>}
+        {!rulesImported && <span style={{ fontSize: 11, color: Tk.warnText }}>Rules are not imported yet.</span>}
+      </div>
+      {plan && live && live.error && <div style={{ ...css.errBox, marginTop: 8 }}>Couldn't judge the plan: {live.error}</div>}
+      {plan && live && live.check && (
+        <div data-testid="holplan-preview" data-year={plan.year} data-pass={plan.result.search.pass} style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: Tk.text, marginBottom: 4 }}>
+            <strong>Plan {plan.year}</strong> &middot; pass {plan.result.search.pass}{plan.result.search.pass === 1 ? " (every rule kept)" : plan.result.search.pass === 2 ? " (a repeat was unavoidable)" : " (the tier shape could not be kept)"} &middot; {plan.result.search.tiedPlans} tied plan(s), seed {String(plan.result.search.seed)}{changedFromBase && <> &middot; <span data-testid="holplan-swapped" style={{ color: Tk.warnText, fontWeight: 700 }}>{plan.swaps.length} swap(s) by the scheduler</span></>}
+          </div>
+          <div className="table-wrap" style={css.tableWrap}>
+            <table className="setup-table" data-testid="holplan-table">
+              <thead><tr><th>Unit</th><th>Days</th><th>Primary</th><th>Backup</th><th>Why</th></tr></thead>
+              <tbody>
+                {plan.assignments.map((a, i) => {
+                  const planned = plan.result.assignments[i];
+                  const cell = (role) => {
+                    const opts = live.swaps[a.unit.name + "|" + role] || [];
+                    return (
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <span data-testid={role === "primary" ? "holplan-p" : "holplan-b"} data-id={a[role] || ""} style={{ fontWeight: 700 }}>{who(a[role])}</span>
+                        {a[role] !== planned[role] && <span style={{ fontSize: 10, color: Tk.warnText, marginLeft: 4 }}>(planned {planned[role] ? nameOf(planned[role]) : "OPEN"})</span>}
+                        <select data-testid="holplan-swap" data-unit={a.unit.name} data-role={role} value="" disabled={busy} onChange={e => { const k = e.target.value; if (k !== "") applySwap(opts[Number(k)]); }} style={{ ...css.inp, padding: "1px 4px", fontSize: 11, width: 150, marginLeft: 6 }}>
+                          <option value="">swap...</option>
+                          {opts.map((o, k) => <option key={k} value={String(k)}>{o.text}{o.added.length ? " - BREAKS: " + o.added.map(b => b.rule).join(", ") : o.ok ? " - keeps the rules" : " - adds no break"}</option>)}
+                        </select>
+                      </td>
+                    );
+                  };
+                  const whyLines = planned.why.filter(w => (a.primary === planned.primary && /^primary /.test(w)) || (a.backup === planned.backup && /^backup /.test(w)));
+                  return (
+                    <tr key={a.unit.name} data-testid="holplan-row" data-unit={a.unit.name} data-tier={a.unit.tier}>
+                      <td>{a.unit.name} <span style={{ fontSize: 10, color: Tk.muted }}>{a.unit.tier}</span></td>
+                      <td style={{ fontFamily: mono, fontSize: 11, whiteSpace: "nowrap" }}>{span(a.unit.days)}</td>
+                      {cell("primary")}
+                      {cell("backup")}
+                      <td data-testid="holplan-why" style={{ fontSize: 11, color: Tk.muted, lineHeight: 1.45 }}>{whyLines.map((w, k) => <div key={k}>{w}</div>)}{whyLines.length < 2 && <div style={{ fontStyle: "italic" }}>{a.primary !== planned.primary || a.backup !== planned.backup ? "changed by a swap - judged by the rules below" : ""}</div>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="table-wrap" style={{ ...css.tableWrap, marginTop: 8 }}>
+            <table className="setup-table" data-testid="holplan-counts">
+              <thead><tr><th>Surgeon</th><th>Major before (P / held / eligible)</th><th>Minor before</th><th>Major plan</th><th>Minor plan</th></tr></thead>
+              <tbody>
+                {Object.keys(plan.result.counts).map(id => {
+                  const c = plan.result.counts[id];
+                  const bf = (t) => c.before[t].primary + " / " + c.before[t].any + " / " + c.before[t].eligible;
+                  return <tr key={id} data-testid={"holplan-count-" + id}><td>{nameOf(id)}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{bf("major")}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{bf("minor")}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{planCounts(id, "major")}</td><td style={{ fontFamily: mono, fontSize: 11 }}>{planCounts(id, "minor")}</td></tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div data-testid="holplan-breaks" data-count={live.check.breaks.length} style={{ marginTop: 8, fontSize: 12, color: live.check.breaks.length ? Tk.open : Tk.success, fontWeight: 600 }}>
+            {live.check.breaks.length === 0 ? "Every rule kept." : <>This plan breaks {live.check.breaks.length} rule(s) - Accept asks you to confirm each:{live.check.breaks.map(b => <div key={b.key} data-testid="holplan-break" data-rule={b.rule} style={{ fontWeight: 400 }}>- {b.text}</div>)}</>}
+          </div>
+          {live.check.soft.length > 0 && <div data-testid="holplan-soft" style={{ ...note, color: Tk.warnText }}>Preferences not met: {live.check.soft.map(s => s.text).join("; ")}.</div>}
+          {live.check.open.length > 0 && <div data-testid="holplan-open" style={{ ...note, color: Tk.open }}>Open: {live.check.open.map(x => x.unit + " " + x.role).join(", ")} - Accept leaves an open role as it is on file.</div>}
+          <div data-testid="holplan-relaxed" style={note}>Relaxed: {plan.result.relaxed.length ? plan.result.relaxed.join("; ") : "nothing (every rule held)"}.</div>
+          {(plan.historyWarnings.length + plan.result.warnings.length) > 0 && <div data-testid="holplan-warnings" style={{ ...css.warnBox, marginTop: 6 }}>{plan.historyWarnings.concat(plan.result.warnings).map((w, k) => <div key={k}>{w}</div>)}</div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+            <button data-testid="holplan-accept" onClick={accept} disabled={busy || dirty || blockedNow} title={dirty ? "Save the holiday units first - the plan reads the saved units" : "Lock every planned unit day (both roles) for everyone"} style={{ ...css.btn(true), padding: "5px 14px", opacity: (busy || dirty || blockedNow) ? 0.5 : 1 }}>{busy ? "Saving" : "Accept " + plan.year + " - lock " + plan.assignments.filter(a => a.primary || a.backup).length + " unit(s)"}</button>
+            {changedFromBase && <button data-testid="holplan-reset" onClick={() => setPlan(p => ({ ...p, assignments: p.base.map(a => ({ ...a, unit: { ...a.unit } })), swaps: [] }))} disabled={busy} style={css.mini(false)}>Back to the planner's plan</button>}
+            <button data-testid="holplan-discard" onClick={() => setPlan(null)} disabled={busy} style={css.mini(false)}>Discard</button>
+            {dirty && <span style={{ fontSize: 11, color: Tk.warnText }}>Unsaved holiday edits - save them, then Plan again.</span>}
+          </div>
+        </div>
+      )}
+      {recheck && recheck.error && <div style={{ ...css.errBox, marginTop: 8 }}>Couldn't re-check: {recheck.error}</div>}
+      {recheck && !recheck.error && (
+        <div data-testid="holplan-recheck-list" data-year={recheck.year} data-blocked={recheck.blocked.length} data-accepted={recheck.accepted.length} style={{ marginTop: 8, fontSize: 12, color: Tk.text }}>
+          <div style={{ fontWeight: 700 }}>Re-check {recheck.year}</div>
+          {recheck.accepted.length === 0 ? <p style={note}>Nothing accepted for {recheck.year} yet - no schedule day carries the plan source ({recheck.source}).</p>
+          : recheck.blocked.length === 0 ? <p style={{ ...note, color: Tk.success }}>All {recheck.accepted.length} accepted unit(s) still pass every rule on the current East feed, vacations and rules.</p>
+          : recheck.blocked.map(b => (
+            <div key={b.unit.name + b.role} data-testid="holplan-recheck-item" data-unit={b.unit.name} data-role={b.role} data-id={b.id} style={{ border: "1px solid " + Tk.border, borderRadius: 6, padding: "6px 8px", marginTop: 6 }}>
+              <div><strong>{b.unit.name} {span(b.unit.days)}</strong> {b.role} {nameOf(b.id)}: {b.breaks.map(x => x.reasons ? x.reasons.join(", ") : x.text).join("; ")}</div>
+              <div data-testid="holplan-recheck-suggestion" style={{ fontSize: 11, color: b.valid ? Tk.success : Tk.warnText, marginTop: 2 }}>{b.suggestion ? "Suggested: " + b.suggestion.text + (b.valid ? " - keeps every rule" : " - BREAKS: " + b.suggestion.added.map(x => x.text).join("; ")) : b.started ? "This unit has started - Accept leaves it as on file; change a day in the day editor." : "No swap clears it - open the day editor or change the plan by hand."}</div>
+              {b.suggestion && <button data-testid="holplan-recheck-apply" onClick={() => applyRecheck(b)} disabled={busy || blockedNow} style={{ ...css.mini(false), marginTop: 4, opacity: (busy || blockedNow) ? 0.5 : 1 }}>Apply swap (confirm, snapshot first)</button>}
+            </div>
+          ))}
+          {recheck.warnings.length > 0 && <div style={{ ...css.warnBox, marginTop: 6 }}>{recheck.warnings.map((w, k) => <div key={k}>{w}</div>)}</div>}
+          <button data-testid="holplan-recheck-close" onClick={() => setRecheckYear(null)} style={{ ...css.mini(false), marginTop: 6 }}>Close</button>
+        </div>
+      )}
     </div>
   );
 }
