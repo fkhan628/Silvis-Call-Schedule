@@ -39,7 +39,10 @@ backup slots — for every pool member, with per-surgeon caps and explicit targe
 first, then backup.
 One 24-h day = **one shift** — no partial or weighted shifts; totals are a running yearly tally. Time off is
 **vacations only** (no no-call days), self-entered with **no approval**, refused over a day the surgeon is already on call
-(DB trigger + client check — trade first). Holidays are the same six as Davenport, as **units** with one primary + one
+(DB trigger + client check — trade first), and refused when fewer than `groupRules.vacations.minSurgeonsAround` (default 2)
+active surgeons would stay around on one of its days — the vacation guard (Prompt 27, 9/30): the scheduler may override after a
+confirm (logged in the audit row); its `time_off` trigger is report-first until applied (`docs/SCHEMA-REVIEW.md`), the client
+check is the gate until then. Holidays are the same six as Davenport, as **units** with one primary + one
 backup sticking through the unit. **Call pay (Faraz 9/27 - reverses the 9/21 "no compensation logic and no $ display"
 rule):** the app tracks **primary** call pay only (backup is never paid) - stipend per primary shift, a call-in rate
 (weekday or weekend/holiday) when called in, an activation rate for the hours worked (model: `helpers.js` `payForDay` /
@@ -132,7 +135,7 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   and its 3 / 6 / 9 / 12-month presets start at the first open slot on or after today (Prompt 12 AB); locks are never
   touched.
   Don't gold-plate exports or edge functions until the surgeons are on the live app.
-- Pending inputs: Sarkar's home email, Philip's monthly cap, and the yearly holiday plan's defaults to confirm (§8 item 23:
+- Pending inputs: Sarkar's home email, Philip's monthly cap, and the yearly holiday plan's defaults to confirm (§8 item 24:
   Khan off Christmas in both roles, the 2026 minor holders from the office, the tie-2 reading, accepted plan units kept as
   locks) — see `docs/SILVIS-CALL-RULES.md §8`. (Answered, not
   pending: Thu 10/15 primary — the 9/23 publish left it OPEN; Burchett took it with Khan as backup, set by the scheduler

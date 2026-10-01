@@ -89,9 +89,11 @@ ok(!("holidayPlanNote" in imp.blob.groupRules), "holidayPlanNote is dropped from
 eq(imp.blob.surgeonRules.s1.holidayRules, { holidaysOff: ["Christmas"] }, "blob s1.holidayRules = the rule only (holidaysOffNote dropped)");
 ok(IMP.impFindContactValues(seed.groupRules.holidayPlan).length === 0 && !seed.roster.some((r) => JSON.stringify(seed.groupRules.holidayPlan).indexOf(r.name) >= 0), "the block carries no contact-like value and no roster name (the blob is anon-readable)");
 
-step("A3: openQuestions 20 and ONE 2026-09-30 revision entry for Prompt 25, the last");
-const q20 = seed.openQuestions.filter((t) => /^20\. Holiday plan \(Prompt 25, Faraz 9\/30\)/.test(t));
-eq(q20.length, 1, "one openQuestions entry 20");
+step("A3: openQuestions 21 and ONE 2026-09-30 revision entry for Prompt 25, the last");
+// pin moved deliberately 10/1 (merge with Prompt 23, which shipped first and took openQuestions 20 / rules doc section 8 item 23):
+// the holiday plan's entry is 21 (section 8 item 24); kept intent - one entry, its text, the last revision entry
+const q20 = seed.openQuestions.filter((t) => /^21\. Holiday plan \(Prompt 25, Faraz 9\/30\)/.test(t));
+eq(q20.length, 1, "one openQuestions entry 21");
 ok(/Khan off Christmas in BOTH roles/.test(q20[0]) && /Faraz to confirm/.test(q20[0]) && /holidayPlan\.history/.test(q20[0]) && /2026 Memorial Day, July 4th and Labor Day/.test(q20[0]), "it names the Christmas default to confirm and the 2026 minors awaited for the history list");
 ok(/\(c\) tie 2 .* is read as the sum over the pool of last year's days in the tier x this year's days/.test(q20[0]) && /\(d\) Should rules\.js read an accepted holiday-plan row as the holder's own availability .*Default taken: no - kept as locks, listed as lock violations/.test(q20[0]), "review fixes M / L: the tie-2 reading and the lock question are recorded as defaults to confirm");
 const rev = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /Prompt 25/.test(t));

@@ -149,6 +149,23 @@
 // it) and uncovered[].note ("no offer and no rule allows it" when nobody did).
 // With no period touching the range nothing here changes the output
 // (test/generator-regression.js pins the byte-identical run).
+//
+// Prompt 23 (Faraz 9/30, Khan's new call preferences) - the rules live in rules.js
+// and reach the generator through eligibility() / weekendUnitPatterns() like every
+// other term: the soft weekday-primary (primaryContribution "weekdays"), the soft
+// weekend-cap:<n> (weekendCap; counted once per weekend, on its first held day), the
+// soft hard-never-beyond-notice:<wd> (hardNeverWeekdaysNoticeDays - the notice is
+// measured from ctx.today, so Generate uses the day it runs) and the hard
+// lone-weekend-day:<wd> (noLoneWeekendDay). This file adds only bookkeeping: a
+// 'friday' weekend pattern (standaloneFriday - one surgeon on the Friday, the
+// Saturday-Sunday as their own reduced unit) is written like any other pattern,
+// counts its daily Sat/Sun sub-pattern in the pattern-daily penalty, and its key
+// holder's legal primary shapes ({Fri}, {Sat, Sun}, {Fri, Sat, Sun}) are no style
+// mismatch (genStyleMismatch); buildUnits' allowed-slot count judges a surgeon
+// blocked ONLY by lone-weekend-day with the partner day assumed, and (review 10/1)
+// genFillWeekend's reduced-unit fallback keeps such a surgeon's Sat + Sun together
+// instead of dropping both. With none of the keys on the roster the output is
+// byte-identical to the pre-23 engine.
 
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -626,7 +643,14 @@ function buildUnits(ctx, startDate, endDate) {
         for (var k = 0; k < u.present.length; k++) {
           var d = u.present[k];
           if (!genSlotOpen(ctx.schedule[d], role)) continue;
-          if (R.eligibility(ctx, d, role, ids[i], { asBlockMember: u.present.length === 3 }).ok) { can = true; countAllowed(d, ids[i], role); }
+          var re = R.eligibility(ctx, d, role, ids[i], { asBlockMember: u.present.length === 3 });
+          // Prompt 23 B2: a surgeon blocked ONLY by lone-weekend-day may take the day with its partner (Sat + Sun) - judge
+          // him with the partner assumed (no other surgeon's reading changes: only noLoneWeekendDay raises the code)
+          if (!re.ok && re.hard.length && re.hard.every(function (h) { return h.indexOf("lone-weekend-day:") === 0; })) {
+            var partner = genWeekday(d) === "Sat" ? genAddDays(d, 1) : genAddDays(d, -1);
+            if (u.present.indexOf(partner) >= 0) re = R.eligibility(ctx, d, role, ids[i], { asBlockMember: u.present.length === 3, assume: [{ date: partner, role: role }] });
+          }
+          if (re.ok) { can = true; countAllowed(d, ids[i], role); }
         }
         if (can) n++;
       }
@@ -962,6 +986,15 @@ function genStyleMismatch(G, unit, role, members) {
   var W = G.ctx.schedule, out = [];
   var ids = [members.fri, members.sat, members.sun].filter(function (v, i, a) { return v && a.indexOf(v) === i; });
   ids.forEach(function (id) {
+    // Prompt 23 B2: a standaloneFriday surgeon's PRIMARY shapes are {Fri}, {Sat, Sun} and {Fri, Sat, Sun} of a whole
+    // weekend (whatever his weekendStyle); a weekend a holiday unit cuts carries no shape test for him (rules.js reads
+    // the same). Any other holding of his is a mismatch.
+    if (role === "primary" && G.ctx.per[id].standaloneFriday) {
+      if (unit.present.length < 3) return;
+      var h = unit.present.map(function (d) { return W[d][role] === id; });
+      if (!((h[0] && !h[1] && !h[2]) || (!h[0] && h[1] && h[2]) || (h[0] && h[1] && h[2]))) out.push(id);
+      return;
+    }
     if (G.ctx.per[id].weekendStyle !== "block") return;
     var holdsAll = unit.present.every(function (d) { return W[d][role] === id; });
     if (!holdsAll) out.push(id);
@@ -990,7 +1023,34 @@ function genFillWeekend(G, S, unit, role, rng) {
       for (var i = 0; i < ctx.activeIds.length; i++) if (R.eligibility(ctx, d, role, ctx.activeIds[i]).ok) return true;
       return false;
     });
-    if (fillable.length && fillable.length < unit.present.length) { used = fillable; partial = true; patterns = R.weekendUnitPatterns(ctx, unit.friday, role, used); }
+    // Prompt 23 review (10/1): a Saturday / Sunday only a noLoneWeekendDay surgeon can take fails every solo check with
+    // lone-weekend-day, yet the PAIR is legal for him (buildUnits and weekendUnitPatterns judge him with the partner
+    // assumed). Such a day is kept together with its open partner when one surgeon blocked solo ONLY by lone-weekend-day
+    // passes both days with the other assumed - so the pair stays in the reduced unit instead of both days being dropped
+    // (one open Friday, not an open Friday + Saturday). The pair-kept set is tried first; when it yields no pattern the
+    // solo set below runs exactly as before. Nobody with the key on the roster -> nothing here runs (byte-identical).
+    var tries = [];
+    if (ctx.activeIds.some(function (id) { return ctx.per[id] && ctx.per[id].noLoneWeekend; })) {
+      var pairKept = unit.present.filter(function (d) {
+        if (fillable.indexOf(d) >= 0) return false;
+        var wd = genWeekday(d);
+        if (wd !== "Sat" && wd !== "Sun") return false;
+        var p = wd === "Sat" ? genAddDays(d, 1) : genAddDays(d, -1);
+        if (unit.present.indexOf(p) < 0 || !genSlotOpen(W[p], role)) return false;
+        for (var i = 0; i < ctx.activeIds.length; i++) {
+          var id = ctx.activeIds[i], r0 = R.eligibility(ctx, d, role, id);
+          if (r0.ok || !r0.hard.length || !r0.hard.every(function (h) { return h.indexOf("lone-weekend-day:") === 0; })) continue;
+          if (R.eligibility(ctx, d, role, id, { assume: [{ date: p, role: role }] }).ok && R.eligibility(ctx, p, role, id, { assume: [{ date: d, role: role }] }).ok) return true;
+        }
+        return false;
+      });
+      if (pairKept.length) tries.push(unit.present.filter(function (d) { return fillable.indexOf(d) >= 0 || pairKept.indexOf(d) >= 0; }));
+    }
+    tries.push(fillable);
+    for (var ti = 0; ti < tries.length && !patterns.length; ti++) {
+      var t = tries[ti];
+      if (t.length && t.length < unit.present.length) { used = t; partial = true; patterns = R.weekendUnitPatterns(ctx, unit.friday, role, used); }
+    }
   }
   if (!patterns.length) {
     diag.roles[role] = { kind: "open", members: genMembersOf(W, unit, role), penalty: 0, fallback: true, styleMismatch: [], openDays: open.slice() };
@@ -1023,7 +1083,8 @@ function genFillWeekend(G, S, unit, role, rng) {
     kind: best.kind, members: members, penalty: best.penalty, fallback: !!(best.fallback || partial || mismatch.length),
     styleMismatch: mismatch, partial: partial, openDays: unit.present.filter(function (d) { return genSlotOpen(W[d], role); })
   };
-  if (best.kind === "daily") S.patternPenalties.push({ day: unit.friday, role: role, id: null, reason: "pattern-daily", weight: G.W.patternDaily });
+  // Prompt 23 B2: a 'friday' pattern whose Saturday-Sunday are two daily days carries the daily-pattern penalty too
+  if (best.kind === "daily" || (best.kind === "friday" && best.fallback)) S.patternPenalties.push({ day: unit.friday, role: role, id: null, reason: "pattern-daily", weight: G.W.patternDaily });
   return !partial;
 }
 
@@ -1829,6 +1890,7 @@ if (typeof module !== "undefined") {
     GEN_SCORE_WEIGHTS: GEN_SCORE_WEIGHTS,
     GEN_DEVIATION_CONVEXITY: GEN_DEVIATION_CONVEXITY,
     genWaterFill: genWaterFill,
+    genStyleMismatch: genStyleMismatch, // Prompt 23 review (10/1): test/rules.test.js pins it beside the unit choice and per-day eligibility
     genAddDays: genAddDays,
     genWeekday: genWeekday,
     genDaysList: genDaysList

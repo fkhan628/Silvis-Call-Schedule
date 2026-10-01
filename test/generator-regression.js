@@ -33,7 +33,9 @@
 // must be byte-identical to the standard seed-1 run - and, since the P2 review
 // fix stage, seven more: Acton offering every November day on seeds 1-3 with
 // the share taper and its untapered control (6 runs at bestOf 2) and a one-week
-// Christmas run at bestOf 1 for the holiday-unit unplaced reason).
+// Christmas run at bestOf 1 for the holiday-unit unplaced reason); since Prompt 23
+// (9/30) the notice fixture's two one-week runs, and since its review (10/1) the
+// two three-day weekend-pair runs (noLoneWeekendDay on / off) - 27 in the summary.
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -251,9 +253,38 @@ function datedRowLifts(id, d, role, extraRows) {
   if (SEED_ROWS[id][role].has(d)) return true;
   return (extraRows || []).some((r) => r.person_id === id && d >= r.start_date && d <= (r.end_date || r.start_date) && ((r.kind === "available" && (!r.role || r.role === "any" || r.role === role)) || (r.kind === "backup_only" && role === B)));
 }
-const W_STATS = { forbiddenNoRow: 0, liftedByRow: 0 }; // placements on a hardNeverWeekdays day: without a row (must stay 0) / with one
+// Prompt 23 B4 (Faraz 9/30): hardNeverWeekdays restated NOTICE-BOUND - hard only for a date at most
+// surgeonRules.<id>.hardNeverWeekdaysNoticeDays days after the day the placement is made (the ctx's today: this harness builds
+// its ctx through test/seed-adapter.js, whose fixed today is 2026-11-23 - never the clock); a past date is inside the notice;
+// no key = hard on every date (Acton). Beyond the notice the day is ALLOWED (a soft penalty in the engine - no assertion here),
+// so the restated item 5 below applies inside the notice only. Khan's edge 2027-01-18 falls inside R3 Jan-Mar: Nov-Dec and
+// 1/1-1/18 read his Tue/Thu hard, 1/19 on soft.
+const TODAY = SA.SEED_TEST_TODAY;
+eq(ctx.today, TODAY, "the harness ctx reads the adapter's fixed today " + TODAY + " (never the clock)");
+const NOTICE = {}; IDS.forEach((id) => { const n = SR[id].hardNeverWeekdaysNoticeDays; NOTICE[id] = typeof n === "number" ? n : null; });
+eq(IDS.filter((id) => NOTICE[id] !== null).map((id) => CODE[id] + ":" + NOTICE[id]), ["FAK:56"], "seed: Khan is the one surgeon with a hardNeverWeekdays notice (56 days)");
+eq(addDays(TODAY, NOTICE[KHAN]), "2027-01-18", "the notice edge falls inside R3 Jan-Mar");
+const withinNotice = (id, d) => NOTICE[id] === null || dayNum(d) - dayNum(TODAY) <= NOTICE[id];
+const W_STATS = { forbiddenNoRow: 0, liftedByRow: 0, beyondNotice: [] }; // placements on a hardNeverWeekdays day: without a row inside the notice (must stay 0) / with one / beyond the notice (allowed, recorded)
 const X_STATS = { actonTuePrimary: [] }; // item X (9/22 evening): every generated Acton PRIMARY on a non-holiday Tuesday, across all runs (must stay empty)
-const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
+// Prompt 23 A (Faraz 9/30, Acton's message): his outreach days change from January 2027 - restated with the dates: through
+// 12/31/2026 the 2nd/4th Monday and Wednesday; from 1/1/2027 the 2nd Monday (Maquoketa) and the 2nd, 3rd and 4th Wednesday
+// (Maquoketa 3rd, Aledo 2nd/4th). Before Prompt 23: ["Mon", "Wed"] x [2, 4] on every date.
+const actonBlockedRecurring = (d) => d <= "2026-12-31" ? (["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d))) : ((weekday(d) === "Mon" && nthOf(d) === 2) || (weekday(d) === "Wed" && [2, 3, 4].includes(nthOf(d))));
+eq(SR[ACTON].recurringUnavailable.map((p) => p.weekday + ":" + p.nth.join("/") + ":" + (p.start || "") + ":" + (p.end || "")), ["Mon:2/4::2026-12-31", "Mon:2:2027-01-01:", "Wed:2/4::", "Wed:3:2027-01-01:"], "seed: Acton's dated outreach entries (Prompt 23 A) - the restatement above follows them");
+// Prompt 23 B2 (Faraz 9/30): noLoneWeekendDay restated - a generated PRIMARY of such a surgeon on a Saturday or Sunday has the
+// partner day as his primary too (the merged view), unless the day or its partner is a holiday-unit day (a cut weekend) or a
+// dated row / offer / home day of his covers the day. standaloneFriday: his primary shapes {Fri}, {Sat, Sun}, {Fri, Sat, Sun}
+// of a whole weekend (any holding of a cut or range-clipped weekend) are legal - item 11 accepts them without a fallback flag.
+const NO_LONE = new Set(IDS.filter((id) => SR[id].noLoneWeekendDay === true)), SF = new Set(IDS.filter((id) => SR[id].standaloneFriday === true));
+eq([[...NO_LONE], [...SF]], [[KHAN], [KHAN]], "seed: Khan is the one noLoneWeekendDay / standaloneFriday surgeon");
+const sfShapeOk = (view, present, role, id) => {
+  if (role !== P || !SF.has(id)) return false;
+  if (present.length < 3) return true;
+  const h = present.map((x) => holder(view, x, role) === id);
+  return (h[0] && !h[1] && !h[2]) || (!h[0] && h[1] && h[2]) || (h[0] && h[1] && h[2]);
+};
+const P23_STATS = { loneChecked: 0, standaloneFridays: 0, satSunPairs: 0, fullBlocks: 0, capMonthsOver: [], capTerms: 0 };
 const otherRoleOf = (role) => (role === P ? B : P);
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
 function isAledoDay(d) {
@@ -328,7 +359,8 @@ const REASON_PREFIXES = [
   "whitelist-month", "not-recurring-available", "outside-available-weeks", "outside-window",
   "east-busy", "east-forecast-busy:", "derived-lock:", "derived-lock-held:", "slot-locked:", "external-cover", "holds-other-role",
   "monthly-cap:", "max-consecutive:", "backup-cap:", "backup-weekend-cap:", "max-major-holidays:",
-  "not-offered" // Prompt 14 P2 (9/23): a submitted surgeon in exhaustive mode off his offered days / roles (both roles - never a primary-only reason)
+  "not-offered", // Prompt 14 P2 (9/23): a submitted surgeon in exhaustive mode off his offered days / roles (both roles - never a primary-only reason)
+  "lone-weekend-day:" // Prompt 23 B2 (9/30): a noLoneWeekendDay surgeon's lone Saturday / Sunday as PRIMARY (primary-only)
 ]; // window-week-max: left the vocabulary 9/22 evening (Prompt 12 N: the window-week count is soft)
 // These two mean the GENERATOR (not a rule) left the slot open - always a failure.
 const PLACEHOLDER_REASONS = ["eligible-but-not-placed", "holiday-unit:eligible-but-unit-not-filled"];
@@ -345,7 +377,7 @@ function reasonOk(r) {
 // weekday; hard-never-weekday joins for a surgeon whose roles list is primary only;
 // the trailing edge and day-before-Aledo are pinned primary-only above; East never
 // blocks backup (eastBlocksBackup false).
-const PRIMARY_ONLY_FOR_BACKUP = ["recurring-unavailable:", "weekday-not-allowed:", "whitelist-month", "not-recurring-available", "outside-available-weeks", "day-before-aledo", "day-before-vacation", "east-busy", "east-forecast-busy:"]
+const PRIMARY_ONLY_FOR_BACKUP = ["recurring-unavailable:", "weekday-not-allowed:", "whitelist-month", "not-recurring-available", "outside-available-weeks", "day-before-aledo", "day-before-vacation", "east-busy", "east-forecast-busy:", "lone-weekend-day:"]
   .concat(WD.every((w) => FIERCE_WP[w].backup === true) ? ["weekday-pattern:", "weekend-block-only"] : []);
 function primaryOnlyReasonForBackup(id, r, day) {
   const core = String(r).split("@")[0];
@@ -551,10 +583,22 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       // item 5, generic since Prompt 12 W (9/22 evening): surgeonRules.<id>.hardNeverWeekdays blocks the roles the
       // surgeon's hardNeverWeekdaysRoles list names (primary only by default) unless a dated row of his covers that
       // date and role. Before W this was the Khan-only line ok(!["Tue", "Thu"].includes(weekday(d))) - no row lifted it.
+      // Prompt 23 B4: notice-bound - beyond the surgeon's hardNeverWeekdaysNoticeDays the day is allowed (recorded, never asserted)
       if (!isHoliday(d) && HARD_NEVER[id].has(weekday(d)) && hardNeverApplies(id, role)) {
         const lifted = datedRowLifts(id, d, role, extraRows) || offerLifts(id, d, role);
-        if (lifted) W_STATS.liftedByRow++; else W_STATS.forbiddenNoRow++;
-        ok(lifted, CODE[id] + " " + role + " on a " + weekday(d) + " (" + d + ") his hardNeverWeekdays forbid, with no dated row of his for that date and role (W)");
+        if (!withinNotice(id, d) && !lifted) W_STATS.beyondNotice.push(CODE[id] + " " + d + " " + role);
+        else {
+          if (lifted) W_STATS.liftedByRow++; else W_STATS.forbiddenNoRow++;
+          ok(lifted, CODE[id] + " " + role + " on a " + weekday(d) + " (" + d + ", " + (dayNum(d) - dayNum(TODAY)) + " days after today " + TODAY + ", inside his notice) his hardNeverWeekdays forbid, with no dated row of his for that date and role (W, Prompt 23 B4)");
+        }
+      }
+      // Prompt 23 B2: noLoneWeekendDay - a generated Sat / Sun primary has its partner day too (see the restatement above)
+      if (role === P && NO_LONE.has(id) && (weekday(d) === "Sat" || weekday(d) === "Sun") && !isHoliday(d)) {
+        const partner = weekday(d) === "Sat" ? addDays(d, 1) : addDays(d, -1);
+        if (!isHoliday(partner) && !datedRowLifts(id, d, role, extraRows) && !offerLifts(id, d, role) && !(extraHome && extraHome[id] && extraHome[id].has(d))) {
+          P23_STATS.loneChecked++;
+          ok(holder(view, partner, P) === id, CODE[id] + " PRIMARY on a lone " + weekday(d) + " " + d + " (partner " + partner + " is " + holder(view, partner, P) + ") - noLoneWeekendDay (Prompt 23 B2)");
+        }
       }
       if (id === KHAN && role === P) ok(!KHAN_NO_PRIMARY.has(d), "Khan PRIMARY on an East busy/forecast-busy day");
       // item 6 (9/22: outreach days and the governed October restrict primary only)
@@ -612,7 +656,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
         const fri = fridayOf(d);
         const present = [0, 1, 2].map((k) => addDays(fri, k)).filter((x) => days.includes(x) && !isHoliday(x));
         const holdsAll = present.every((x) => holder(view, x, role) === id);
-        if (!holdsAll) {
+        if (!holdsAll && !sfShapeOk(view, present, role, id)) { // Prompt 23 B2: a standaloneFriday surgeon's {Fri} / {Sat, Sun} primary shapes are no lone day
           const wu = D.weekendUnits.find((w) => w.friday === fri);
           ok(wu && wu.roles[role] && wu.roles[role].fallback === true, CODE[id] + " holds a lone weekend day (" + d + " " + role + ") in a unit not flagged fallback");
         }
@@ -800,34 +844,50 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     eq(D.score.total, Math.round(total * 1000) / 1000, "score.total = sum of parts x weights");
   }
 
-  // quality-1 (Nov-Dec, the milestone range with the real forecast): Khan's main
-  // contribution is weekends. Among the weekends where he is primary-eligible all
-  // three days (in range, no holiday day, no East busy / forecast-busy day, no
-  // vacation edge, no lock to someone else) he must hold at least one full
-  // Fri+Sat+Sun primary block per run: a no-target surgeon must not become the
-  // backup sink. Not asserted for Oct (locked import) or Jan-Mar: there the feed
-  // carries forecast doubt (0 < p < threshold = east-forecast soft, +2 per day)
-  // on every weekend and, from 2027-02-22, no data at all (east-unknown, +1 per
-  // day), which legitimately ranks him behind surgeons at 0 soft. Since 9/22
-  // (Prompt 12 L) surgeonRules.primaryContribution = "weekends" is modelled by
-  // rules.js (weekend-primary / weekend-backup softs, weights.weekendContribution);
-  // the bestOf-200 pin below the run loop checks the primary-over-backup outcome.
-  if (range.name.indexOf("R2") === 0) {
-    const khanWeekends = khanOpenWeekends(days);
-    ok(khanWeekends.length >= 1, "Nov-Dec must offer Khan at least one eligible weekend (fixture drift?)");
-    const khanBlock = khanWeekends.some((trio) => trio.every((d) => out.schedule[d].primary === KHAN));
-    // WF x P15 (9/23 rebase): a fixture HOME range hands him weekday primaries (the east-clear bonus, and the P15 home
-    // fixture forces Tue 12/15). Under the water-filled share those count against his primary share, and once the share is
-    // met the convex deviation ranks him behind the under-target surgeons on the remaining open weekends (12/4; a 12/18
-    // block would also break max-consecutive after 12/15-12/17) - on every seed tried, not a seed accident. So for a run
-    // WITH fixture home days the ONE accepted reason for no block is that his primary share is already met in every month
-    // that offers him an open weekend; the pin stays strict for every other run (all 50 R2 seeds, the away fixture).
-    const homeDays = extraHome && extraHome[KHAN] ? Array.from(extraHome[KHAN]) : [];
-    if (!khanBlock && homeDays.length) {
-      const wkMonths = []; khanWeekends.forEach((t) => t.forEach((d) => { const m = monthOf(d); if (!wkMonths.includes(m)) wkMonths.push(m); }));
-      ok(homeDays.some((d) => out.schedule[d].primary === KHAN), "home fixture: Khan holds no weekend block and no primary on his home days " + homeDays.join(", ") + " either");
-      wkMonths.forEach((m) => { const T = D.tallies[KHAN].months[m]; ok(T.target && T.target.primary != null && T.primary >= T.target.primary, "home fixture: Khan holds no full weekend primary block in " + m + " although his primary share there is not met (" + T.primary + " < " + (T.target && T.target.primary) + "; open weekends " + khanWeekends.map((t) => t[0]).join(", ") + ")"); });
-    } else ok(khanBlock, "Khan holds no full weekend primary block although " + khanWeekends.length + " weekend(s) are open to him: " + khanWeekends.map((t) => t[0]).join(", "));
+  // quality-1 RETIRED by Prompt 23 (Faraz 9/30). It read: "Khan's main contribution is weekends - among the Nov-Dec weekends
+  // open to him he must hold at least one full Fri+Sat+Sun primary block per run" (with a home-fixture exception). His
+  // contribution is weekdays now (primaryContribution "weekdays") and his weekends are soft-capped at 2 a month across DSG and
+  // Silvis, so no run owes him a weekend. What every run owes instead, restated from the inputs (all ranges):
+  //   B3 - the weekend cap as a SOFT term: per month his weekends (a weekend by its Saturday, counted once) = Silvis PRIMARY on
+  //        its Sat or Sun in the merged view, or East-busy on one (KHAN_BUSY; the forecast at or over the threshold outside the
+  //        published coverage, never on a fixture HOME day - the engine does not consult the forecast there). The soft list
+  //        carries 'weekend-cap:2' at 10 on exactly the GENERATED carrier day (his Saturday, else his Sunday) of each weekend
+  //        the East data do not already count that is past the cap in its month's order - East weekends first, then his
+  //        weekends with a held day that is not generator-placed (a lock), then the rest by date - and nowhere else (Prompt 23
+  //        review 10/1: 10 per weekend over; it read 10 x (count - 2) on every carrier of the month). A month over the cap is
+  //        recorded for the summary, never failed (soft).
+  //   B2 - the shapes are counted for the summary (standalone Fridays, Sat-Sun pairs, full blocks); the hard pair rule is item 5b.
+  {
+    const capW = SR[KHAN].weekendCap;
+    eq([capW.perMonth, capW.countsEast, capW.roles, capW.weight, ctx.per[KHAN].weekendCap.weight], [2, true, [P], "strong", 10], "seed: Khan weekendCap 2 / countsEast / primary / strong = 10");
+    const homeK = extraHome && extraHome[KHAN] ? extraHome[KHAN] : null;
+    const eastCapDay = (d) => KHAN_BUSY.includes(d) || (typeof FORECAST[d] === "number" && FORECAST[d] >= THRESHOLD && !(d >= EAST_COVER.from && d <= EAST_COVER.to) && !(homeK && homeK.has(d)));
+    const eastWk = (sat) => eastCapDay(sat) || eastCapDay(addDays(sat, 1));
+    const silvisWk = (sat) => holder(view, sat, P) === KHAN || holder(view, addDays(sat, 1), P) === KHAN;
+    const monthCount = (m) => monthDays(m).filter((d) => weekday(d) === "Sat" && (eastWk(d) || silvisWk(d))).length;
+    // the month's order (review 10/1): 0 East-counted, 1 Silvis with a held day the generator did not place (a lock), 2 the rest
+    const fixedWk = (sat) => [sat, addDays(sat, 1)].some((x) => holder(view, x, P) === KHAN && !isPlaced(out, x, P));
+    const clsOf = (sat) => (eastWk(sat) ? 0 : silvisWk(sat) ? (fixedWk(sat) ? 1 : 2) : -1);
+    const expected = [];
+    days.forEach((d) => {
+      if ((weekday(d) !== "Sat" && weekday(d) !== "Sun") || holder(view, d, P) !== KHAN) return;
+      const sat = weekday(d) === "Sat" ? d : addDays(d, -1);
+      const carrier = holder(view, sat, P) === KHAN ? sat : addDays(sat, 1);
+      if (carrier !== d || !isPlaced(out, d, P) || eastWk(sat)) return;
+      const me = clsOf(sat);
+      const pos = monthDays(monthOf(sat)).filter((s2) => weekday(s2) === "Sat" && s2 !== sat && clsOf(s2) >= 0 && (clsOf(s2) < me || (clsOf(s2) === me && s2 < sat))).length + 1;
+      if (pos > capW.perMonth) expected.push(d + " weekend-cap:" + capW.perMonth + " 10");
+    });
+    const got = D.softPenalties.filter((s) => s.id === KHAN && /^weekend-cap:/.test(s.reason)).map((s) => s.day + " " + s.reason + " " + s.weight).sort();
+    eq(got, expected.sort(), "Prompt 23 B3: the weekend-cap soft terms are exactly the restated ones (carrier days of weekends the East data do not count, in months over 2)");
+    ok(!D.softPenalties.some((s) => s.id !== KHAN && /^weekend-cap:/.test(s.reason)), "Prompt 23 B3: nobody else carries a weekend-cap term");
+    ok(!D.hardViolations.some((v) => v.reasons.some((r) => /weekend-cap/.test(r))), "Prompt 23 B3: the cap is never a hard violation");
+    months.forEach((m) => { const c = monthCount(m); if (c > capW.perMonth) P23_STATS.capMonthsOver.push(range.name + " s" + seedNo + " " + m + ":" + c); });
+    P23_STATS.capTerms += got.length;
+    days.filter((d) => weekday(d) === "Fri" && days.includes(addDays(d, 2))).forEach((f) => {
+      const h = [0, 1, 2].map((k) => holder(view, addDays(f, k), P) === KHAN);
+      if (h[0] && !h[1] && !h[2]) P23_STATS.standaloneFridays++; else if (!h[0] && h[1] && h[2]) P23_STATS.satSunPairs++; else if (h[0] && h[1] && h[2]) P23_STATS.fullBlocks++;
+    });
   }
 
   // per-month counters (flagged only when a generator-placed day contributes)
@@ -928,7 +988,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       const rd = w.roles[role];
       if (!rd || rd.fallback) return;
       const members = [rd.members.fri, rd.members.sat, rd.members.sun].filter((v, i, a) => v && a.indexOf(v) === i);
-      members.forEach((id) => { if (BLOCK_STYLE.includes(id)) ok(w.present.every((d) => holder(view, d, role) === id), CODE[id] + " (block style) does not hold every present day of an unflagged " + rd.kind + " unit"); });
+      members.forEach((id) => { if (BLOCK_STYLE.includes(id)) ok(w.present.every((d) => holder(view, d, role) === id) || sfShapeOk(view, w.present, role, id), CODE[id] + " (block style) does not hold every present day of an unflagged " + rd.kind + " unit (Prompt 23: a standaloneFriday primary shape excepted)"); });
     });
   });
 
@@ -1232,36 +1292,30 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
   // Tue/Thu structural gap of rules doc section 8 item 15 (Khan: OR day, Fierce: Clinton, Burchett: off his December list).
   eq(soleCandidatePrimaries(big, PHILIP, "2026-12"), ["2026-12-22", "2026-12-29"], "X: Philip is the sole primary candidate on exactly Tue 12/22 and Tue 12/29 once Acton is off Tuesdays (was [] before X)");
 }
-// L (9/22, data-driven): Khan = weekend PRIMARY when East allows. On the milestone preview, among the weekends
-// open to him (khanOpenWeekends: primary-eligible all three days) the full-block PRIMARY weekends are at least
-// as many as the weekends where he holds ANY backup day, and over the run his weekend backup days are at most
-// half his weekend primary days (weekend = Fri/Sat/Sun in range outside a holiday unit, so his locked
-// Thanksgiving Fri-Sun does not pad the primary side). Pinned only for the surgeon(s) the seed marks.
-// The spec's thresholds ('>=' and 'at most half') held on the pre-L code at the boundary (2 vs 1 weekends, 3 vs 6
-// days: the 11/20-22 backup block), so the pins hold the OBSERVED post-L outcome - no backup weekend and no weekend
-// backup day at all - which is a real fail-before (review 9/22); the counts are printed so drift is visible.
+// L (9/22) RETIRED by Prompt 23 (Faraz 9/30) - it read "Khan = weekend PRIMARY when East allows": on the milestone preview his
+// full-block primary weekends >= his backup weekends (0 backup weekends), >= 3 weekend primary days, his weekend backups at
+// most half of them, the weekend-primary bonus in the soft list, and the seed's primaryContribution "weekends". His
+// contribution is WEEKDAYS now (the mirror term; the "weekends" mechanics stay pinned generically in test/rules.test.js on his
+// pre-9/30 rules). The milestone pins that replace it, data-driven:
+//   B1 - the preview's soft list carries his weekday-primary bonus (the term is in force) and NO weekend-primary /
+//        weekend-backup term anywhere (no surgeon carries "weekends" any more); never on a holiday-unit day.
+//   B2 - no lone Saturday / Sunday primary of his (item 5b holds per run; restated here by name on the preview).
+//   B3 - the weekend-cap terms are the restated ones (per run in checkRun); the counts are printed so drift is visible.
 {
   const DB = big.diagnostics, view = makeView(big), days = daysList(RANGES[1].start, RANGES[1].end);
-  const openWk = khanOpenWeekends(days);
-  const fullP = openWk.filter((trio) => trio.every((d) => holder(view, d, P) === KHAN)).length;
-  const anyB = openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).length;
+  CUR.range = "Prompt 23 (Khan, Nov-Dec bestOf 200 seed 1)"; CUR.seed = 1; CUR.day = "-";
   const wkDays = days.filter((d) => isWeekend(d) && !isHoliday(d));
   const kP = wkDays.filter((d) => holder(view, d, P) === KHAN).length, kB = wkDays.filter((d) => holder(view, d, B) === KHAN).length;
-  console.log("L (Khan weekends, Nov-Dec bestOf 200 seed 1): weekends open to him " + openWk.length + ", full-block primary " + fullP + ", with a backup day of his " + anyB + "; weekend days outside holiday units: primary " + kP + ", backup " + kB);
-  // T (9/22): the ER-panel author's November locks change the data under these pins - Fri 11/20 is Burchett's, so the 11/20-22 weekend
-  // is no longer open to Khan (two open weekends remain: 12/4 and 12/18), and the 11/6-8 primaries are all locked
-  // (Acton, Burchett, Burchett), so the only way he can serve that weekend is backup. The pins therefore hold L's own
-  // statements rather than the pre-T observed counts: he is never backup on a weekend he could have taken as primary
-  // (anyB 0), his full-block primary weekends are at least his backup weekends (spec '>='), he blocks at least one open
-  // weekend, and over the run his weekend backup days are at most half his weekend primary days (spec 'at most half').
-  ok(fullP >= 1 && fullP >= anyB && anyB === 0, "L: of the " + openWk.length + " weekends open to Khan he is full-block primary on " + fullP + " (>= 1 and >= his backup weekends expected) and holds a backup day on " + anyB + " (0 expected: " + openWk.filter((trio) => trio.some((d) => holder(view, d, B) === KHAN)).map((t) => t[0]).join(", ") + ")");
-  ok(kP >= 3 && kB * 2 <= kP, "L: Khan holds " + kB + " weekend backup days (at most half expected) against " + kP + " weekend primary days (>= 3 expected) in Nov-Dec: " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
-  ok(wkDays.filter((d) => holder(view, d, B) === KHAN).every((d) => holder(INPUT, d, P) != null || holder(INPUT, d, B) != null || !R.eligibility(ctx, d, P, KHAN, { asBlockMember: true }).ok), "L/T: every weekend backup day of Khan's lies on a day whose primary was locked to someone else (or East-busy for him): " + wkDays.filter((d) => holder(view, d, B) === KHAN).join(", "));
-  ok(DB.softPenalties.some((s) => s.id === KHAN && s.reason === "weekend-primary" && s.weight < 0), "L: the preview's soft list carries Khan's weekend-primary bonus (the term is in force)");
-  // holiday units are not weekend units (review 9/22): neither L term ever lands on a holiday-unit day
-  eq(DB.softPenalties.filter((s) => (s.reason === "weekend-primary" || s.reason === "weekend-backup") && isHoliday(s.day)).map((s) => s.day + " " + s.role + " " + s.reason), [], "L: no weekend-primary / weekend-backup term on a holiday-unit day");
-  eq(IDS.filter((id) => SR[id].primaryContribution === "weekends"), [KHAN], "seed: Khan is the one surgeon with primaryContribution weekends");
-  eq(seed.groupRules.weights.weekendContribution, 3, "seed: groupRules.weights.weekendContribution = 3 (medium)");
+  const kWeekdayP = days.filter((d) => !isWeekend(d) && !isHoliday(d) && holder(view, d, P) === KHAN).length;
+  console.log("Prompt 23 (Khan, Nov-Dec bestOf 200 seed 1): weekday primaries " + kWeekdayP + "; weekend days outside holiday units: primary " + kP + ", backup " + kB + "; weekends open to him for a full block " + khanOpenWeekends(days).length);
+  ok(DB.softPenalties.some((s) => s.id === KHAN && s.reason === "weekday-primary" && s.weight === -seed.groupRules.weights.weekendContribution), "B1: the preview's soft list carries Khan's weekday-primary bonus (-weekendContribution; the term is in force)");
+  eq(DB.softPenalties.filter((s) => s.reason === "weekend-primary" || s.reason === "weekend-backup").length, 0, "B1: no weekend-primary / weekend-backup term anywhere (no surgeon carries primaryContribution weekends)");
+  eq(DB.softPenalties.filter((s) => s.reason === "weekday-primary" && isHoliday(s.day)).map((s) => s.day), [], "B1: no weekday-primary term on a holiday-unit day");
+  ok(DB.softPenalties.filter((s) => s.reason === "weekday-primary").every((s) => s.id === KHAN && s.role === P && (!isWeekend(s.day) || (weekday(s.day) === "Fri" && holder(view, addDays(s.day, 1), P) !== KHAN && holder(view, addDays(s.day, 2), P) !== KHAN))), "B1: every weekday-primary term is a Khan PRIMARY on Mon-Thu or on a Friday whose Sat and Sun are not his");
+  eq(wkDays.filter((d) => holder(view, d, P) === KHAN && (weekday(d) === "Sat" || weekday(d) === "Sun") && !isHoliday(weekday(d) === "Sat" ? addDays(d, 1) : addDays(d, -1)) && holder(view, weekday(d) === "Sat" ? addDays(d, 1) : addDays(d, -1), P) !== KHAN), [], "B2: no lone Saturday / Sunday primary of Khan on the milestone preview");
+  eq(IDS.filter((id) => SR[id].primaryContribution === "weekdays"), [KHAN], "seed: Khan is the one surgeon with primaryContribution weekdays (Prompt 23 B1; was weekends)");
+  eq(IDS.filter((id) => SR[id].primaryContribution === "weekends"), [], "seed: nobody carries weekends any more");
+  eq(seed.groupRules.weights.weekendContribution, 3, "seed: groupRules.weights.weekendContribution = 3 (medium) - the weekday bonus reads the same weight");
 }
 // 9/22 positive sightings across the 150 runs + the bestOf-200 run
 CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
@@ -1549,7 +1603,8 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(X_STATS.actonTuePrimary.length, 0, "X: across every run the generator never placed Acton PRIMARY on a Tuesday - " + X_STATS.actonTuePrimary.length + " placement(s), first: " + X_STATS.actonTuePrimary.slice(0, 6).join(", "));
   ok(HARD_NEVER[ACTON].has("Tue") && hardNeverApplies(ACTON, P) && !hardNeverApplies(ACTON, B), "seed: Acton's hardNeverWeekdays forbid Tuesday PRIMARY only (item X) - the generic W pin covers him");
   ok(!("hardNeverWeekdaysReason" in SR[ACTON]), "seed: no hardNeverWeekdaysReason key for Acton (a *Reason key reaches the blob as a category token)");
-  eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays");
+  // Prompt 23 A (9/30): two dated Sunday entries now (to 12/31/2026 / from 1/1/2027) - pin moved from ["Sun"]
+  eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun", "Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays (two dated entries since Prompt 23 A)");
   ok(![...SEED_ROWS[ACTON].primary].some((d) => weekday(d) === "Tue"), "seed: none of Acton's dated primary rows is a Tuesday - nothing lifts the block in these runs, so the pin above is not vacuous");
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
@@ -1976,9 +2031,85 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
+// ---- Prompt 23 (Faraz 9/30): Khan's new call preferences, across every run + the notice edge in the GENERATOR ----
+// B4 in the generator: Tue 2027-01-26 (forecast 0.13 < threshold, no lock, no holiday, outside Sarkar's windows) with the other
+// four primary candidates carrying a primary-scoped unavailable row (Fierce: his Tuesday pattern) - Khan is the only possible
+// primary. today 2026-11-30 -> 57 days out: he is PLACED (allowed; the soft hard-never-beyond-notice:Tue rides in the soft
+// list); today 2026-12-01 -> 56 days out: the slot stays OPEN and his only reason is hard-never-weekday:Tue. The ctx's today is
+// the only difference between the two runs.
+{
+  const DAYN = "2027-01-26";
+  eq([weekday(DAYN), isHoliday(DAYN), KHAN_NO_PRIMARY.has(DAYN), SARKAR_WINDOW.has(DAYN)], ["Tue", false, false, false], "fixture: 1/26/2027 is an ordinary Tuesday for Khan (not East-busy, no holiday, outside Sarkar's windows)");
+  eq([dayNum(DAYN) - dayNum("2026-11-30"), dayNum(DAYN) - dayNum("2026-12-01")], [57, 56], "fixture arithmetic: 57 and 56 days out");
+  const rowsN = [BURCHETT, ACTON, PHILIP, SARKAR].map((id) => ({ person_id: id, kind: "unavailable", role: P, start_date: DAYN, end_date: DAYN }));
+  const runN = (today) => {
+    const inputN = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, today: today });
+    inputN.availabilityRows = inputN.availabilityRows.concat(rowsN);
+    const ctxN = R.buildContext(inputN);
+    if (ctxN.warnings.length) fail("buildContext warnings (notice fixture " + today + "): " + JSON.stringify(ctxN.warnings));
+    eq(ctxN.today, today, "the fixture ctx reads its own today");
+    CUR.range = "Prompt 23 B4 notice fixture today " + today; CUR.seed = 1; CUR.day = DAYN;
+    return GEN.generate(ctxN, "2027-01-25", "2027-01-31", { seed: 1, bestOf: 1 });
+  };
+  const out57 = runN("2026-11-30");
+  eq(out57.schedule[DAYN].primary, KHAN, "B4: 57 days out the generator places Khan on the Tuesday nobody else may take");
+  ok(out57.diagnostics.softPenalties.some((s) => s.day === DAYN && s.id === KHAN && s.reason === "hard-never-beyond-notice:Tue" && s.weight === 3), "B4: ...and the soft hard-never-beyond-notice:Tue (weights.hardNeverBeyondNotice 3) rides in the soft list");
+  eq(out57.diagnostics.hardViolations, [], "B4: no hard violation beyond the notice");
+  const out56 = runN("2026-12-01");
+  eq(out56.schedule[DAYN].primary, null, "B4: 56 days out the Tuesday stays open");
+  const u56 = out56.diagnostics.uncovered.find((u) => u.day === DAYN && u.role === P);
+  ok(!!u56, "B4: ...listed uncovered");
+  eq(u56 && u56.reasons[KHAN], ["hard-never-weekday:Tue"], "B4: ...and Khan's only reason is the OR-day rule inside the notice");
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+// Prompt 23 review (10/1) - B2 in the weekend fill: a Sat + Sun only the noLoneWeekendDay surgeon can take stay together.
+// Weekend 3/5-3/7/2027: the other five take Fri 3/5 off (a vacation) and have a backup_only row on Sat 3/6; Khan is East-busy
+// on Fri 3/5. No full pattern exists (nobody may take the Friday), and Khan - the only one for the Saturday - fails it solo
+// with lone-weekend-day. The reduced unit keeps the Saturday WITH its Sunday: Khan takes Sat + Sun and only the Friday stays
+// open (before the fix both the Friday and the Saturday stayed open - the Saturday was dropped from the reduced unit and the
+// Sunday went to someone else). Control: without noLoneWeekendDay the same inputs give the same Sat + Sun to Khan.
+{
+  const FRI = "2027-03-05", SAT = "2027-03-06", SUN = "2027-03-07";
+  eq([weekday(FRI), isHoliday(FRI) || isHoliday(SAT) || isHoliday(SUN), KHAN_NO_PRIMARY.has(SAT), KHAN_NO_PRIMARY.has(SUN), SARKAR_WINDOW.has(FRI)], ["Fri", false, false, false, false], "fixture: 3/5/2027 is an ordinary weekend, Khan free on Sat / Sun, outside Sarkar's windows");
+  const others = [BURCHETT, ACTON, PHILIP, FIERCE, SARKAR];
+  const runPair = (noLone) => {
+    const srX = SA.seedToSurgeonRules(seed);
+    if (!noLone) delete srX[KHAN].noLoneWeekendDay;
+    const inputX = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY.concat([FRI]) }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, surgeonRules: srX });
+    inputX.timeOffRows = (inputX.timeOffRows || []).concat(others.map((id) => ({ person_id: id, start_date: FRI, end_date: FRI, kind: "vacation" })));
+    inputX.availabilityRows = inputX.availabilityRows.concat(others.map((id) => ({ person_id: id, kind: "backup_only", role: null, start_date: SAT, end_date: SAT })));
+    const ctxX = R.buildContext(inputX);
+    if (ctxX.warnings.length) fail("buildContext warnings (pair fixture " + noLone + "): " + JSON.stringify(ctxX.warnings));
+    eq(ctxX.per[KHAN].noLoneWeekend, noLone, "the fixture ctx reads noLoneWeekendDay " + noLone);
+    CUR.range = "Prompt 23 review pair fixture noLoneWeekendDay " + noLone; CUR.seed = 1; CUR.day = SAT;
+    return GEN.generate(ctxX, FRI, SUN, { seed: 1, bestOf: 1 });
+  };
+  [true, false].forEach((noLone) => {
+    const o = runPair(noLone);
+    eq([o.schedule[FRI].primary, o.schedule[SAT].primary, o.schedule[SUN].primary], [null, KHAN, KHAN], "B2 pair (noLoneWeekendDay " + noLone + "): Sat + Sun primary go to Khan, the Friday stays open");
+    eq(o.diagnostics.uncovered.filter((u) => u.role === P).map((u) => u.day), [FRI], "B2 pair (noLoneWeekendDay " + noLone + "): only the Friday primary is uncovered");
+    const uF = o.diagnostics.uncovered.find((u) => u.day === FRI && u.role === P);
+    eq(uF && uF.reasons[KHAN], ["east-busy"], "B2 pair (noLoneWeekendDay " + noLone + "): Khan's reason for the Friday is East");
+    eq(o.diagnostics.hardViolations, [], "B2 pair (noLoneWeekendDay " + noLone + "): no hard violation");
+    const wu = o.diagnostics.weekendUnits.find((w) => w.friday === FRI);
+    ok(!!(wu && wu.roles.primary && wu.roles.primary.partial), "B2 pair (noLoneWeekendDay " + noLone + "): the weekend is a reduced (partial) fill: " + JSON.stringify(wu && wu.roles.primary));
+  });
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+// Across every run of the file: the pair rule was actually exercised (some generated Sat / Sun primary of Khan was checked
+// against its partner), and the beyond-notice Tue/Thu placements, the shapes and the months over the soft cap are printed.
+{
+  CUR.range = "Prompt 23 summary"; CUR.seed = "-"; CUR.day = "-";
+  ok(P23_STATS.loneChecked > 0, "B2: at least one generated Sat / Sun primary of Khan was checked against its partner across the runs (" + P23_STATS.loneChecked + ")");
+  ok(P23_STATS.standaloneFridays + P23_STATS.satSunPairs > 0, "B2: Khan's new shapes (a standalone Friday or a Sat-Sun pair) occur somewhere in the runs");
+  ok(W_STATS.beyondNotice.every((x) => x.indexOf("FAK ") === 0 && dayNum(x.split(" ")[1]) - dayNum(TODAY) > NOTICE[KHAN]), "B4: every hard-never placement without a row lies beyond Khan's notice (the per-slot pin fails first otherwise)");
+  console.log("Prompt 23 (all runs): Khan Tue/Thu primaries beyond the notice " + W_STATS.beyondNotice.length + (W_STATS.beyondNotice.length ? " (first: " + W_STATS.beyondNotice.slice(0, 4).join(", ") + ")" : "") + "; generated Sat/Sun primaries checked against the pair rule " + P23_STATS.loneChecked + "; shapes standalone Fridays " + P23_STATS.standaloneFridays + ", Sat-Sun pairs " + P23_STATS.satSunPairs + ", full blocks " + P23_STATS.fullBlocks + "; weekend-cap terms " + P23_STATS.capTerms + "; months over the soft cap " + P23_STATS.capMonthsOver.length + (P23_STATS.capMonthsOver.length ? " (first: " + P23_STATS.capMonthsOver.slice(0, 4).join(", ") + ")" : ""));
+  CUR.range = "-";
+}
+
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 23 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

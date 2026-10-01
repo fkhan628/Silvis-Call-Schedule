@@ -12,6 +12,7 @@
  *   node scripts/preview-generate.js [--start 2026-11-02] [--end 2027-01-03]
  *        [--bestOf 200] [--seed 7] [--out <report.md>]
  *        [--backfill 2026-10-15..2026-11-01]
+ *        [--rules-override <rules.json>] [--today YYYY-MM-DD]
  *   -h / --help prints the usage and exits 0; an unknown argument or a flag
  *   without its value is refused (exit 1) - neither runs a generate.
  *
@@ -30,6 +31,14 @@
  * input schedule), plus the backfill's own tally delta. The JSON gains
  * backfill: { range, schedule, diagnostics, openSlots, talliesDelta }. The
  * milestone sections are unchanged (the preview-diff tool reads .schedule).
+ *
+ * --rules-override <file> (Prompt 23, 9/30): a JSON file { "surgeonRules": { "<id>": { key: value | null, ... } },
+ * "groupRules": { key: value | null, ... } } applied to the blob IN MEMORY ONLY before buildContext - per surgeon (and
+ * for groupRules) each listed key replaces the live one, a null deletes it; unlisted keys stay live. Read-only like the
+ * rest of the script: it answers "what would Generate do once these values are set in Setup" (the Prompt 23 preview ran
+ * Khan's 9/30 keys before they were live). The report and the JSON name the file and every key it changed.
+ * --today YYYY-MM-DD (Prompt 23): the rules' today (ctx.today - the hardNeverWeekdaysNoticeDays notice is measured from
+ * it); absent = the Central date when the script runs, the same as the app's Generate.
  */
 const fs = require("fs");
 const os = require("os");
@@ -41,15 +50,17 @@ const EF = require(path.join(REPO, "east-feed.js"));
 const G = require(path.join(REPO, "generator.js"));
 
 function usage() {
-  console.log("usage: node scripts/preview-generate.js [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--bestOf N] [--seed N] [--out <report.md>] [--backfill YYYY-MM-DD..YYYY-MM-DD]\n" +
+  console.log("usage: node scripts/preview-generate.js [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--bestOf N] [--seed N] [--out <report.md>] [--backfill YYYY-MM-DD..YYYY-MM-DD] [--rules-override <rules.json>] [--today YYYY-MM-DD]\n" +
     "  Reads the LIVE anon-readable rows and runs generator.generate() - nothing is written to the database.\n" +
+    "  --rules-override: { surgeonRules: { id: { key: value|null } }, groupRules: { key: value|null } } applied to the blob in memory only (null deletes a key).\n" +
+    "  --today: the rules' today for the hardNeverWeekdays notice (default: the Central date now).\n" +
     "  --out defaults to <os tmpdir>/silvis-preview-<start>-to-<end>.md (+ .json beside it); writing under docs/ is an explicit choice:\n" +
     "  the committed docs/PREVIEW-*.{md,json} are the record of a publish and are never regenerated in place (a new range = a new file name).");
 }
 // The same contract as scripts/import-seed.js / east-forecast.js (audit T1, 9/23): -h/--help is help (exit 0), an
 // unknown token or a flag missing its value is refused (exit 1) - a typo can never start a live-data generate.
 function parseArgs(argv) {
-  const a = { start: "2026-11-02", end: "2027-01-03", bestOf: 200, seed: 7, out: null, backfill: null };
+  const a = { start: "2026-11-02", end: "2027-01-03", bestOf: 200, seed: 7, out: null, backfill: null, rulesOverride: null, today: null };
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
   const value = (i, flag) => { const v = argv[i]; if (v === undefined || /^--/.test(v)) { console.error("FAIL: " + flag + " needs a value"); usage(); process.exit(1); } return v; };
   for (let i = 0; i < argv.length; i++) {
@@ -60,6 +71,8 @@ function parseArgs(argv) {
     else if (t === "--seed") a.seed = Number(value(++i, t));
     else if (t === "--out") a.out = path.resolve(value(++i, t));
     else if (t === "--backfill") a.backfill = value(++i, t); // "YYYY-MM-DD..YYYY-MM-DD" (Prompt 12 T)
+    else if (t === "--rules-override") a.rulesOverride = path.resolve(value(++i, t)); // Prompt 23: in-memory blob override (read-only)
+    else if (t === "--today") a.today = value(++i, t); // Prompt 23: the rules' today (ctx.today)
     else if (t === "-h" || t === "--help") { usage(); process.exit(0); }
     else { console.error("unknown argument: " + t); usage(); process.exit(1); }
   }
@@ -69,6 +82,17 @@ function parseArgs(argv) {
     const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(a.backfill);
     if (!m || m[1] > m[2]) { console.error("FAIL: --backfill wants YYYY-MM-DD..YYYY-MM-DD (got " + a.backfill + ")"); process.exit(1); }
     a.backfill = { start: m[1], end: m[2] };
+  }
+  const realDay = (s) => { if (!isDate(s)) return false; const t = Date.parse(s + "T00:00:00Z"); return !isNaN(t) && new Date(t).toISOString().slice(0, 10) === s; };
+  if (a.today !== null && !realDay(a.today)) { console.error("FAIL: --today wants a real YYYY-MM-DD day (got " + a.today + ")"); process.exit(1); }
+  if (a.rulesOverride !== null) {
+    let o;
+    try { o = JSON.parse(fs.readFileSync(a.rulesOverride, "utf8")); } catch (e) { console.error("FAIL: --rules-override " + a.rulesOverride + " is not a readable JSON file (" + e.message + ")"); process.exit(1); }
+    const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    if (!isObj(o) || Object.keys(o).some((k) => k !== "surgeonRules" && k !== "groupRules") || (o.surgeonRules !== undefined && (!isObj(o.surgeonRules) || Object.values(o.surgeonRules).some((v) => !isObj(v)))) || (o.groupRules !== undefined && !isObj(o.groupRules))) {
+      console.error("FAIL: --rules-override wants { surgeonRules: { id: { key: value|null } }, groupRules: { key: value|null } }"); process.exit(1);
+    }
+    a.rulesOverrideData = o;
   }
   if (!a.out) a.out = path.join(os.tmpdir(), `silvis-preview-${a.start}-to-${a.end}.md`);
   return a;
@@ -80,6 +104,7 @@ const BEST_OF = ARGS.bestOf;
 const SEED = ARGS.seed;
 const OUT = ARGS.out;
 const BACKFILL_RANGE = ARGS.backfill;
+const TODAY = ARGS.today; // Prompt 23: null = the Central date (rules.js reads it once per context)
 
 const cfg = fs.readFileSync(path.join(REPO, "config.js"), "utf8");
 const URL = (cfg.match(/SUPABASE_URL\s*=\s*"([^"]+)"/) || [])[1];
@@ -112,6 +137,21 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     rest("east_overrides?select=*"),
   ]);
   const blob = (blobRows[0] && blobRows[0].data) || {};
+  // Prompt 23 (9/30): --rules-override - listed keys replace the live ones IN MEMORY (null deletes); nothing is written.
+  const overrideApplied = [];
+  if (ARGS.rulesOverrideData) {
+    const o = ARGS.rulesOverrideData;
+    blob.surgeonRules = Object.assign({}, blob.surgeonRules || {});
+    Object.keys(o.surgeonRules || {}).forEach((id) => {
+      if (!blob.surgeonRules[id]) throw new Error("--rules-override names surgeon " + id + " that the live blob does not have");
+      const r = blob.surgeonRules[id] = Object.assign({}, blob.surgeonRules[id]);
+      Object.keys(o.surgeonRules[id]).forEach((k) => { const v = o.surgeonRules[id][k]; if (v === null) delete r[k]; else r[k] = v; overrideApplied.push("surgeonRules." + id + "." + k + (v === null ? " (deleted)" : "")); });
+    });
+    if (o.groupRules) {
+      blob.groupRules = Object.assign({}, blob.groupRules || {});
+      Object.keys(o.groupRules).forEach((k) => { const v = o.groupRules[k]; if (v === null) delete blob.groupRules[k]; else blob.groupRules[k] = v; overrideApplied.push("groupRules." + k + (v === null ? " (deleted)" : "")); });
+    }
+  }
   const roster = blob.roster || [];
   const surgeonRules = blob.surgeonRules || {};
   const groupRules = blob.groupRules || {};
@@ -164,6 +204,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     }
   }
   const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, rangeStart: START, rangeEnd: END };
+  if (TODAY) input.today = TODAY; // Prompt 23: else rules.js reads the Central date
   const ctx = R.buildContext(input);
   const t1 = Date.now();
   const result = G.generate(ctx, START, END, { seed: SEED, bestOf: BEST_OF, respectLocks: true });
@@ -175,7 +216,8 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const L = [];
   L.push(`# Generate preview ${START} -> ${END}`);
   L.push("");
-  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole).join(", ") || "none"}.*`);
+  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole).join(", ") || "none"}; rules today ${ctx.today || "-"}${TODAY ? " (--today)" : " (the Central date)"}.*`);
+  if (overrideApplied.length) { L.push(""); L.push(`**Rules override (in memory only - nothing saved): ${md(ARGS.rulesOverride)}** - ${md(overrideApplied.join(", "))}.`); }
   L.push("");
   if (dg.score) { L.push("## Score"); L.push(""); L.push("```"); L.push(JSON.stringify(dg.score, null, 2)); L.push("```"); L.push(""); }
 
@@ -274,6 +316,20 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     L.push("");
   }
 
+  // Prompt 23 (9/30): weekend caps (surgeonRules.<id>.weekendCap, soft) - per month the weekends the cap counts on the merged
+  // schedule (a weekend by its Saturday: S = Silvis, E = East); a month over its perMonth is marked. rules.js decides.
+  const capRows = [];
+  if (typeof R.weekendCapCounts === "function") {
+    const months = []; for (let d = START; d <= END; d = new Date(Date.parse(d + "T00:00:00Z") + 86400000).toISOString().slice(0, 10)) { const m = d.slice(0, 7); if (!months.includes(m)) months.push(m); }
+    for (const s of roster) for (const m of months) { const c = R.weekendCapCounts(ctx, s.id, m, merged); if (c) capRows.push({ id: s.id, month: m, perMonth: c.perMonth, weekends: c.weekends }); }
+  }
+  if (capRows.length) {
+    L.push("## Weekend caps (soft; a weekend counts once, in its Saturday's month)"); L.push("");
+    L.push("| Surgeon | Month | Weekends | Cap | Saturdays (S = Silvis, E = East) |"); L.push("|---|---|---|---|---|");
+    for (const r of capRows) L.push(`| ${nameOf(r.id)} | ${r.month} | ${r.weekends.length}${r.weekends.length > r.perMonth ? " (over)" : ""} | ${r.perMonth} | ${r.weekends.map(w => w.saturday.slice(5) + " " + (w.silvis ? "S" : "") + (w.east ? "E" : "")).join(", ") || "-"} |`);
+    L.push("");
+  }
+
   for (const key of ["holidayUnits", "weekendUnits", "lockViolations", "eastConflicts", "eastForecast", "eastUnknownDays", "impliedTargets", "warnings"]) {
     if (dg[key] == null) continue;
     L.push(`## diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(dg[key], null, 1).slice(0, 12000)); L.push("```"); L.push("");
@@ -333,6 +389,6 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
 
   fs.writeFileSync(OUT, L.join("\n"), "utf8");
   const jsonOut = OUT.replace(/\.md$/, ".json");
-  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), schedule: sched, diagnostics: dg, backfill }, null, 1), "utf8");
+  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), rulesToday: ctx.today || null, rulesOverride: overrideApplied.length ? { file: ARGS.rulesOverride, keys: overrideApplied } : null, weekendCaps: capRows, schedule: sched, diagnostics: dg, backfill }, null, 1), "utf8");
   console.log(`report: ${OUT}\njson:   ${jsonOut}\nopen slots: ${unc.length} | soft penalties: ${soft.length} | generate ${t2 - t1} ms` + (backfill ? `\nbackfill ${backfill.range.start}..${backfill.range.end}: ${backfill.openSlots.length} open input slots, ${backfill.openSlots.filter(r => r.placed).length} filled, ${backfill.openSlots.filter(r => !r.placed).length} still open | generate ${backfill.generateMs} ms` : ""));
 })().catch(e => { console.error("FAIL:", e && e.stack || e); process.exit(1); });

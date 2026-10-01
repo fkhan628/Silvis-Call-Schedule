@@ -401,7 +401,7 @@ function openSlotWeekendKinds(weekendUnits) {
    openSlotsMessageCurrent). */
 const OPEN_SLOT_REASON_TABLE = [
   ["vacations", ["time-off", "day-before-vacation"]],
-  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered"]],
+  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered", "lone-weekend-day"]],
   ["not available", ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"]], // Item E3 (9/25): East busy / forecast-busy / derived weeks, named for nobody
   ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],
   ["already on call that day", ["holds-other-role"]],
@@ -3965,6 +3965,7 @@ const OFFER_CONFIRM_WORDS = {
   "not-recurring-available": "not one of your recurring available days",
   "weekday-pattern": "your weekday pattern",
   "weekend-block-only": "a standalone weekend day (you take Fri-Sun as a block)",
+  "lone-weekend-day": "a Saturday or Sunday on its own (your weekend days come as a pair)", // Prompt 23 B2: a shape rule of his own - a saved offer lifts it like the pattern family (W)
   "day-before-aledo": "the day before an Aledo day",
   "whitelist-month": "outside the days you listed for that month",
   "outside-available-weeks": "outside your listed weeks",
@@ -4219,6 +4220,203 @@ function vacationLeadNote(start, today, rules) {
   if (days >= weeks * 7) return null;
   return { through: suAddDays(today, weeks * 7 - 1), weeks, days };
 }
+
+/* ═══ Vacation guard (Faraz 9/30, Prompt 27: "a warning when people are taking vacations and a warning that stops vacations
+ * if more than 4 people are on vacation. Need at least 2 surgeons around") ═══
+ * DATA: groupRules.vacations.minSurgeonsAround - a whole number 0-99; absent / junk -> VACATION_GUARD_DEFAULTS (the
+ * OP_NOTICE_DEFAULTS / GROUP_CALL_DEFAULTS pattern: the live blob needs no edit). With six active surgeons and the default
+ * 2, at most four are off on any day. Counted per calendar day over the ACTIVE roster surgeons (a roster entry with
+ * active !== false and type !== "external" - the app's poolSurgeons). A surgeon is OFF on a day inside one of his time_off
+ * rows, or inside one of his East (Davenport) vacation ranges that is not reviewed 'home' - an unreviewed range counts as
+ * away, as everywhere else in the app (the caller passes eastAway from eastVacPeople: { id: [{ start, end, state }] }).
+ * A vacation is refused when, on a day it takes the person off (he is active and not off that day already - by another
+ * row of his or an East vacation; on an edit, the edited row's own days were his already), fewer than minSurgeonsAround
+ * would stay around. The database's time_off trigger (time_off_vacation_guard, sql/migrations/2026-09-30-vacation-guard.sql)
+ * applies the same rule; vacationGuardMessage builds its VACATION_TOO_FEW_AROUND text, so the client's refusal and the
+ * database's read the same. The scheduler may enter one anyway (the client asks him first - confirmText; the trigger lets
+ * silvis_is_sched() through). One difference, on the safe side: the client matches a 'home' review to the merged Davenport
+ * range exactly (helpers.derivedEastVacations), the trigger reads any 'home' review covering the day - a stale 'home' row
+ * of a changed range can only make the database the more lenient of the two, never refuse what the client allowed.
+ * Review fixes 10/1: (1) eastReviewsLoaded false (the app: the East review rows are not loaded - eastVacReviewState is not
+ * 'ok') - another surgeon's East range does not count toward a refusal (it may be reviewed 'home'; it stays in alsoOff,
+ * pending: true, and the scheduler's line says "(East - reviews not loaded)"), the person's own East range still exempts his
+ * days (the lenient side); the database's trigger stays authoritative. (6) A range of over ten years (VG_MAX_DAYS) is
+ * refused as a typing slip (tooLong) for everyone - the trigger checks every day of any range, so the client may not skip one.
+ * Pure: nothing here reads the clock, the DOM or the network. */
+const VACATION_GUARD_DEFAULTS = { minSurgeonsAround: 2 };
+const VG_CODE = "VACATION_TOO_FEW_AROUND";
+const VG_TAIL = " - pick other dates or ask the scheduler";
+const VG_MAX_DAYS = 3660;   // a range of over ten years (end - start >= 3660 days) is a typing slip, not a vacation: refused as such (tooLong), never counted day by day
+// vacationRules(groupRules) -> { minSurgeonsAround }: a whole number 0-99, anything else (a "2" string, 2.5, -1, absent) -> 2.
+function vacationRules(groupRules) {
+  const G = groupRules && typeof groupRules === "object" ? groupRules.vacations : null;
+  const v = G && typeof G === "object" && !Array.isArray(G) ? G.minSurgeonsAround : undefined;
+  return { minSurgeonsAround: typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 99 ? v : VACATION_GUARD_DEFAULTS.minSurgeonsAround };
+}
+function vgIso(v) { const s = typeof v === "string" ? v.slice(0, 10) : ""; return suIsIso(s) ? s : null; }
+// vgDaysLabel(days) -> the ISO days (sorted, unique) as runs of consecutive days: one day "3/18", two "3/18, 3/19", three
+// or more "3/18-3/20"; runs joined by ", ". The trigger writes the same (to_char FMMM/FMDD).
+function vgDaysLabel(days) {
+  const list = Array.from(new Set((Array.isArray(days) ? days : []).filter(suIsIso))).sort();
+  const runs = [];
+  list.forEach((d) => {
+    const last = runs[runs.length - 1];
+    if (last && suAddDays(last.e, 1) === d) { last.e = d; last.n++; } else runs.push({ s: d, e: d, n: 1 });
+  });
+  return runs.map((r) => r.n === 1 ? fmtMD(r.s) : r.n === 2 ? fmtMD(r.s) + ", " + fmtMD(r.e) : fmtMD(r.s) + "-" + fmtMD(r.e)).join(", ");
+}
+function vgRangeLabel(s, e) { return s === e ? fmtMD(s) : fmtMD(s) + "-" + fmtMD(e); }
+// vacationGuardMessage(overDays, activeCount, minAround) -> the database's refusal, word for word:
+//   "VACATION_TOO_FEW_AROUND: on 3/18, 3/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"
+// overDays [{ day, around }]: grouped by the count, the groups in the order of their first day, each group's days as
+// vgDaysLabel runs ("on 3/18, 3/20 only 1; on 3/19 only 0 of 6 ..."). "" for no day.
+function vacationGuardMessage(overDays, activeCount, minAround) {
+  const list = (Array.isArray(overDays) ? overDays : []).filter((x) => x && suIsIso(x.day) && typeof x.around === "number")
+    .slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+  if (!list.length) return "";
+  const groups = [];
+  list.forEach((x) => { let g = groups.find((gg) => gg.around === x.around); if (!g) { g = { around: x.around, days: [] }; groups.push(g); } g.days.push(x.day); });
+  return VG_CODE + ": on " + groups.map((g) => vgDaysLabel(g.days) + " only " + g.around).join("; on ") + " of " + activeCount + " surgeons would be around (minimum " + minAround + ")" + VG_TAIL;
+}
+// vgMerge(ranges, same?) -> the ranges sorted, overlapping and adjacent ones merged (the first range's other keys kept);
+// with same(a, b) only ranges it accepts are merged (the East ranges of one state - an away range never takes an unreviewed
+// neighbour's gloss, or the other way round).
+function vgMerge(ranges, same) {
+  const out = [];
+  ranges.slice().sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0).forEach((r) => {
+    const last = out.length ? out.filter((x) => typeof same !== "function" || same(x, r)).pop() : null;
+    if (last && r.start <= suAddDays(last.end, 1)) { if (r.end > last.end) last.end = r.end; } else out.push(Object.assign({}, r));
+  });
+  return out.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+}
+// vgTooLongMessage(days) -> the refusal of a range of over ten years (review 10/1 item 6; the client's own words - the
+// database has no such refusal, its trigger checks every day): "That range is 3661 days long (over ten years) - check the
+// dates; a vacation that long is not saved."
+function vgTooLongMessage(days) { return "That range is " + days + " days long (over ten years) - check the dates; a vacation that long is not saved."; }
+// vacationGuard({ personId, start, end, timeOffRows, eastAway, roster, groupRules, excludeId, eastReviewsLoaded }) ->
+//   { ok, minAround, active, personId, personActive, start, end, eastPending, tooLong,
+//     days: [{ day, off: [ids, roster order - the person included when active], around, checked, over }],
+//     overDays: [the days with over], fewest, fewestDays: [the days with the fewest around],
+//     alsoOff: [{ id, ranges: [{ start, end, east, state?, pending? }] }] - every OTHER active surgeon off on any of the days,
+//              with his whole ranges that touch them (time_off rows merged, East ranges apart and merged per state, roster
+//              order; pending: an East range shown but NOT counted - eastReviewsLoaded false),
+//     message, confirmText }
+//   timeOffRows: time_off rows ({ id, person_id, start_date, end_date }); excludeId: the row being edited (left out of the
+//   count; when it is the same person's, its own days are not checked - the trigger's NEW-minus-OLD days). eastReviewsLoaded
+//   (default true): false = the East review rows are not loaded, so an East range may be reviewed 'home' unseen - another
+//   surgeon's East range is then not counted (never a refusal on a guess), the person's own still exempts his days. ok is
+//   true with no days for a missing / inverted range; a range of over ten years (end - start >= VG_MAX_DAYS) is ok false,
+//   tooLong true, no days, message = vgTooLongMessage, no confirmText (refused for everyone, the scheduler too). Otherwise
+//   message = vacationGuardMessage(overDays) ("" when ok); confirmText = the scheduler's question ("... - enter it anyway?").
+function vacationGuard(o) {
+  const opts = o && typeof o === "object" ? o : {};
+  const min = vacationRules(opts.groupRules).minSurgeonsAround;
+  const active = (Array.isArray(opts.roster) ? opts.roster : []).filter((r) => r && typeof r === "object" && r.id && r.active !== false && r.type !== "external").map((r) => String(r.id));
+  const pid = opts.personId !== undefined && opts.personId !== null && opts.personId !== "" ? String(opts.personId) : null;
+  const act = new Set(active);
+  const pending = opts.eastReviewsLoaded === false;
+  const out = { ok: true, minAround: min, active: active.length, personId: pid, personActive: !!(pid && act.has(pid)), start: null, end: null, eastPending: pending, tooLong: false,
+    days: [], overDays: [], fewest: null, fewestDays: [], alsoOff: [], message: "", confirmText: "" };
+  const start = vgIso(opts.start), end = vgIso(opts.end);
+  if (!start || !end || end < start) return out;
+  out.start = start; out.end = end;
+  if (suDaysBetween(start, end) >= VG_MAX_DAYS) {
+    out.ok = false; out.tooLong = true; out.message = vgTooLongMessage(suDaysBetween(start, end) + 1);
+    return out;
+  }
+  const rows = Array.isArray(opts.timeOffRows) ? opts.timeOffRows : [];
+  const exId = opts.excludeId !== undefined && opts.excludeId !== null && opts.excludeId !== "" ? opts.excludeId : null;
+  const exRow = exId !== null ? rows.find((r) => r && r.id === exId) : null;
+  const exS = exRow && pid && String(exRow.person_id) === pid ? vgIso(exRow.start_date) : null;
+  const exE = exS ? (vgIso(exRow.end_date) || exS) : null;
+  const src = {};   // active id -> [{ start, end, east, state? }]
+  rows.forEach((r) => {
+    if (!r || typeof r !== "object" || (exId !== null && r.id === exId)) return;
+    const id = r.person_id === undefined || r.person_id === null ? "" : String(r.person_id);
+    if (!act.has(id)) return;
+    const s = vgIso(r.start_date), e = vgIso(r.end_date) || s;
+    if (!s || e < s) return;
+    (src[id] = src[id] || []).push({ start: s, end: e, east: false });
+  });
+  const ea = opts.eastAway && typeof opts.eastAway === "object" && !Array.isArray(opts.eastAway) ? opts.eastAway : {};
+  Object.keys(ea).forEach((id) => {
+    if (!act.has(id) || !Array.isArray(ea[id])) return;
+    ea[id].forEach((r) => {
+      if (!r || typeof r !== "object" || r.state === "home") return;
+      const s = vgIso(r.start), e = vgIso(r.end);
+      if (!s || !e || e < s) return;
+      const x = { start: s, end: e, east: true, state: r.state === "away" ? "away" : "unreviewed" };
+      if (pending) x.pending = true;
+      (src[id] = src[id] || []).push(x);
+    });
+  });
+  // offOn: another surgeon counts as off by a time_off row or a counted East range; selfOn: the person himself is off already
+  // by any of his ranges, a pending East range included (it only ever exempts his day - never a refusal on a guess)
+  const offOn = (id, d) => (src[id] || []).some((r) => !r.pending && d >= r.start && d <= r.end);
+  const selfOn = (id, d) => (src[id] || []).some((r) => d >= r.start && d <= r.end);
+  for (let d = start; d <= end; d = suAddDays(d, 1)) {
+    const others = active.filter((id) => id !== pid && offOn(id, d));
+    const selfOff = out.personActive && selfOn(pid, d);
+    const checked = out.personActive && !selfOff && !(exS && d >= exS && d <= exE);
+    const off = out.personActive ? active.filter((id) => id === pid || others.indexOf(id) >= 0) : others;
+    const around = active.length - off.length;
+    out.days.push({ day: d, off, around, checked, over: checked && around < min });
+  }
+  out.overDays = out.days.filter((x) => x.over);
+  out.ok = out.overDays.length === 0;
+  out.fewest = out.days.reduce((m, x) => (m === null || x.around < m ? x.around : m), null);
+  out.fewestDays = out.days.filter((x) => x.around === out.fewest).map((x) => x.day);
+  active.forEach((id) => {
+    if (id === pid || !src[id]) return;
+    // merged first (a vacation entered as two adjacent rows reads as one), then the ranges that touch the days
+    const ranges = vgMerge(src[id].filter((r) => !r.east)).concat(vgMerge(src[id].filter((r) => r.east), (a, b) => a.state === b.state))
+      .filter((r) => r.start <= end && r.end >= start)
+      .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+    if (ranges.length) out.alsoOff.push({ id, ranges });
+  });
+  if (!out.ok) {
+    out.message = vacationGuardMessage(out.overDays, active.length, min);
+    out.confirmText = out.message.slice(0, out.message.length - VG_TAIL.length) + ". As the scheduler you may still enter it - enter it anyway?";
+  }
+  return out;
+}
+// vacationGuardLine(g, nameOf, { mine, personName, showEast }) -> the Time off form's line while a vacation is typed (the
+// others in roster order):
+//   "Also off: Burchett 3/18-3/20, Acton 3/15-3/21 - after yours, 3 of 6 are around 3/18-3/20"
+//   "Nobody else is off then - after Acton's, 5 of 6 are around 3/18-3/20" (entered for someone else: "after <Name>'s")
+// " - under the minimum of 2" is appended when the vacation would be refused. showEast (the scheduler only - East details
+// are his, Item E3) lists each range as it is and glosses an East one "(East)" / "(East, unreviewed)" / "(East - reviews not
+// loaded)" (pending: shown, not counted). Everyone else sees one merged list of days per person - the time_off and counted
+// East ranges merged, no East word, a pending East range left out (review 10/1 items 1 and 3). A tooLong guard reads its
+// message. "" with no days.
+function vacationGuardLine(g, nameOf, opts) {
+  if (g && g.tooLong) return g.message || "";
+  if (!g || !g.start || !Array.isArray(g.days) || !g.days.length || !g.active) return "";
+  const o = opts || {};
+  const name = typeof nameOf === "function" ? nameOf : (id) => id;
+  const gloss = (r) => !r.east ? "" : r.pending ? " (East - reviews not loaded)" : " (East" + (r.state === "unreviewed" ? ", unreviewed" : "") + ")";
+  const others = [];
+  (g.alsoOff || []).forEach((a) => {
+    const ranges = o.showEast ? (a.ranges || []) : vgMerge((a.ranges || []).filter((r) => !r.pending).map((r) => ({ start: r.start, end: r.end })));
+    if (ranges.length) others.push(name(a.id) + " " + ranges.map((r) => vgRangeLabel(r.start, r.end) + (o.showEast ? gloss(r) : "")).join(", "));
+  });
+  const lead = others.length ? "Also off: " + others.join(", ") : "Nobody else is off then";
+  const whose = o.mine ? "after yours" : "after " + (o.personName || name(g.personId)) + "'s";
+  return lead + " - " + whose + ", " + g.fewest + " of " + g.active + " " + (g.fewest === 1 ? "is" : "are") + " around " + vgDaysLabel(g.fewestDays) + (g.ok ? "" : " - under the minimum of " + g.minAround);
+}
+// vacationGuardOverride(g) -> what a scheduler's override leaves behind (review 10/1 item 5: the audit row's
+// detail.vacation_guard_override and the toast) - the short days and the count:
+//   { days: "3/18, 3/19", around: 1, active: 6, minimum: 2 }   (around = the fewest around on those days)
+// null when nothing was overridden (an ok guard, a tooLong one - never overridable - or no over-limit day).
+function vacationGuardOverride(g) {
+  if (!g || g.ok || g.tooLong || !Array.isArray(g.overDays) || !g.overDays.length) return null;
+  return { days: vgDaysLabel(g.overDays.map((x) => x.day)), around: g.overDays.reduce((m, x) => Math.min(m, x.around), g.active), active: g.active, minimum: g.minAround };
+}
+// vacationGuardOverrideText(ov) -> "under the minimum on 3/18, 3/19 (1 of 6 around, minimum 2)"; "" for null.
+function vacationGuardOverrideText(ov) {
+  if (!ov || typeof ov !== "object") return "";
+  return "under the minimum on " + ov.days + " (" + ov.around + " of " + ov.active + " around, minimum " + ov.minimum + ")";
+}
 // tradesWaitingOn(rows, personId, today, tagOf) -> the PENDING trade / give proposals addressed to personId (the ones only
 // they can answer: Accept / Decline), ONE row per proposal, in the order given. [] without a person. With `tagOf` (the
 // app's tradeUnitTag: { kind, start, n } off a row's unit stamp), the rows of a weekend-block / holiday-unit proposal (same
@@ -4303,17 +4501,35 @@ function offerRulesWords(rules, groupRules) {
   const G = groupRules && typeof groupRules === "object" ? groupRules : {};
   const out = [];
   if (!R) return ["No rules of yours are on file - the scheduler places you by the group defaults."];
+  // Prompt 23 A (9/30): a pattern's start / end bound it (rules.js matchesPattern ANDs them) - say so, or a dated
+  // change (Acton's 2027 outreach days) reads as two contradicting rules.
+  const mdy = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[2]) + "/" + Number(m[3]) + "/" + m[1] : String(d || ""); };
+  const bounds = (p) => (p.start ? " from " + mdy(p.start) : "") + (p.end ? " until " + mdy(p.end) : "");
   const nthWords = (p) => {
     if (!p || !p.weekday) return "";
-    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday;
-    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth;
-    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday";
-    return "every " + p.weekday;
+    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday + bounds(p);
+    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth + bounds(p);
+    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday" + bounds(p);
+    return "every " + p.weekday + bounds(p);
   };
   const listOf = (v) => (Array.isArray(v) ? v : []).map(nthWords).filter(Boolean).join(", ");
   const md = (d) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[1]) + "/" + Number(m[2]) : String(d || ""); };
+  // Prompt 23 B1 (9/30): the contribution key, said plainly (weekends: Prompt 12 L; weekdays: Prompt 23)
+  if (R.primaryContribution === "weekdays") out.push("Preferred: weekday primary (Mon-Thu, or a Friday on its own).");
+  else if (R.primaryContribution === "weekends") out.push("Preferred: weekend primary (a full Fri-Sun block).");
   if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? " (offered automatically when East is clear)" : "") + ".");
-  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + ".");
+  // Prompt 23 B4: with hardNeverWeekdaysNoticeDays the rule is hard only that many days ahead (a soft penalty beyond it)
+  const nd = R.hardNeverWeekdaysNoticeDays;
+  const noticeOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
+  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days; further ahead only as a last resort" : "") + ".");
+  // Prompt 23 B2 / B3. Review (10/1): one sentence for the PRIMARY weekend shapes - with standaloneFriday they are {Fri},
+  // {Sat, Sun} and {Fri, Sat, Sun} (rules.js), so the weekendStyle line below then speaks of BACKUP weekends only (it used
+  // to say "Weekends: Fri-Sun as one block" beside "a Friday may stand alone").
+  const sfOn = R.standaloneFriday === true, nlOn = R.noLoneWeekendDay === true;
+  if (sfOn) out.push("Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun" + (nlOn ? " - never a Saturday or Sunday alone" : "") + ".");
+  else if (nlOn) out.push("Saturday and Sunday come as a pair (never one alone as primary).");
+  const wcap = R.weekendCap;
+  if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? ", East weekends included" : "") + " (preferred, not a hard limit).");
   if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
   if (Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.length) out.push("Unavailable on " + listOf(R.recurringUnavailable) + ".");
   if (Array.isArray(R.recurringAvoid) && R.recurringAvoid.length) out.push("Prefer not: " + listOf(R.recurringAvoid) + ".");
@@ -4335,7 +4551,7 @@ function offerRulesWords(rules, groupRules) {
     if (ef.deriveFrom || ef.statedWeeks) out.push("Your East weeks derive your Silvis week: East primary week = Silvis backup all week, East backup week = Silvis primary all week.");
   }
   if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
-  if (R.weekendStyle) out.push("Weekends: " + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
+  if (R.weekendStyle) out.push((sfOn ? "Backup weekends: " : "Weekends: ") + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
   const cap = R.monthlyCap;
   if (typeof cap === "number") out.push("Cap: " + cap + " primary days a month.");
   else if (cap && typeof cap === "object" && typeof cap.primary === "number") out.push("Cap: " + cap.primary + " primary days a month" + (typeof cap.preferred === "number" ? " (" + cap.preferred + " preferred)" : "") + (cap.countsEastDays ? ", East primary-week days included" : "") + ".");
@@ -5053,5 +5269,7 @@ if (typeof module !== "undefined" && module.exports) {
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
     offerFreezeRollcall, offerFreezeWords, offerFreezeDay, offerHeadsUpWords,
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
+    VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, VG_MAX_DAYS, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuard, vacationGuardLine,
+    vacationGuardOverride, vacationGuardOverrideText,
   };
 }
