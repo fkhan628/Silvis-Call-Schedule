@@ -3590,11 +3590,11 @@ function holidayPlanRecheck(year, opts) {
 //   tier, days, primary, backup }], skipped: [{ unit, why[, samePerson, id][, started, primary, backup] }], conflicts:
 //   [{ day, unit, role, from, to, locked, clash }], keptNotes: [{ day, unit, note }], changes }. opts: { units | holidays
 //   (the year's units), only: [unit names] (a Re-check swap writes its units only), today (Central ISO) }.
-//   Skipped (nothing written for the unit): nothing planned; one surgeon in both roles (samePerson: true - structural,
-//   sql/schema.sql CHECK schedule_days_distinct_roles would refuse every day of it; the app stops before its confirm);
-//   a unit whose first day is ON or before today (started: true - a 24-hour shift under way or past is left as on file;
-//   primary / backup = its holders on file, one per role across its days, else null - holidayPlanWrittenCheck judges
-//   the year with them).
+//   Skipped (nothing written for the unit), in this order: nothing planned; a unit whose first day is ON or before today
+//   (started: true - a 24-hour shift under way or past is left as on file whatever the plan names; primary / backup =
+//   its holders on file, one per role across its days, else null - holidayPlanWrittenCheck judges the year with them);
+//   one surgeon in both roles (samePerson: true - structural, sql/schema.sql CHECK schedule_days_distinct_roles would
+//   refuse every day of it; the app stops before its confirm).
 //   Each unit day: the plan's holder in each planned role, locked; source holiday-plan-<year>; note holidayPlanNote,
 //   except that a note already on the day that is not a holiday-plan note is KEPT (keptNotes - the confirm names them);
 //   a roster primary clears an external cover; a role the plan leaves open keeps what is on file (unless that holder is
@@ -3617,7 +3617,6 @@ function holidayPlanAcceptRows(year, plan, schedule, opts) {
     if (only && only.indexOf(u.name) < 0) return;
     var a = A[ui];
     if (!a.primary && !a.backup) { skipped.push({ unit: u.name, why: "nothing planned" }); return; }
-    if (a.primary === a.backup) { skipped.push({ unit: u.name, why: "primary and backup are the same surgeon", samePerson: true, id: a.primary }); return; }
     if (today && u.days[0] <= today) {
       var onFile = {};
       HPL_ROLES.forEach(function (role) {
@@ -3628,6 +3627,8 @@ function holidayPlanAcceptRows(year, plan, schedule, opts) {
       skipped.push({ unit: u.name, why: "starts " + u.days[0] + ", " + (u.days[0] === today ? "today" : "before today") + " - left as on file", started: true, primary: onFile.primary, backup: onFile.backup });
       return;
     }
+    // after the started check: a started unit is left as on file whatever the plan names for it
+    if (a.primary === a.backup) { skipped.push({ unit: u.name, why: "primary and backup are the same surgeon", samePerson: true, id: a.primary }); return; }
     u.days.forEach(function (d) {
       var cur = sched[d] || null;
       var oldNote = cur && typeof cur.note === "string" && cur.note.trim() ? cur.note : null;

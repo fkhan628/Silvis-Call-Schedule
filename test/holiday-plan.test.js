@@ -744,6 +744,8 @@ step("M2b: review fix A - one surgeon in both roles of a unit is structural: hol
   ok(!same.days.some((d) => d === "2027-12-24" || d === "2027-12-25") && !same.units.some((u) => u.name === "Christmas"), "...no Christmas row, no Christmas unit written");
   eq(same.days.length, 15, "the other five units are written (17 - 2 days)");
   ok(same.days.every((d) => same.rows[d].primary !== same.rows[d].backup), "no written row holds one surgeon twice");
+  const sameStarted = H.holidayPlanAcceptRows(2027, withSlot(P27.assignments, "Memorial Day", "backup", ACTON), {}, { units: seed.holidays.units["2027"], today: "2027-06-01" });
+  eq(sameStarted.skipped.map((s) => [s.unit, !!s.started, !!s.samePerson]), [["Memorial Day", true, false]], "a unit that has started is left as on file whatever the plan names for it (started, not samePerson - it never blocks an Accept)");
 }
 
 step("M2c: review fix F - holidayPlanConflictLines groups the replaced slots by unit + role + holder change, so every one fits the confirm");
