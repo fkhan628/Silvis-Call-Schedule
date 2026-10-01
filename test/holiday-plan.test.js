@@ -19,7 +19,13 @@
 //   state -> the planner's opts) + holidayPlanDefaultYear.
 // Section L - holidayPlanRecheck: accepted slots a newer vacation / East day / rule / roster change refuses, each with
 //   the best swap; applying it clears the slot.
-// Section N - the accepted rows: the generator keeps them (both roles locked); a trade or a give moves the whole unit.
+// Section N - the accepted rows: the generator keeps them (both roles locked) and lists the waived rules as lock
+//   violations; a trade or a give moves the whole unit.
+// Prompt 25 review fixes (10/1): A same-person is structural (K3, M2b); B / C started units - no half swap, the year as
+//   written (K3, L5, M2, M2d); D a plan row's unlocked holder is not accepted (L6); E kept notes (M2); F grouped
+//   replaced-slot lines (M2c); H home East vacation days (M3, M3b); I no repeat against the next year (F2b); J binding
+//   vacations (I1); K the load alone (D2, D3), two in the pool (D4), the shape relaxed with every slot filled (D5);
+//   L lock violations (N1).
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -87,6 +93,7 @@ step("A3: openQuestions 20 and ONE 2026-09-30 revision entry for Prompt 25, the 
 const q20 = seed.openQuestions.filter((t) => /^20\. Holiday plan \(Prompt 25, Faraz 9\/30\)/.test(t));
 eq(q20.length, 1, "one openQuestions entry 20");
 ok(/Khan off Christmas in BOTH roles/.test(q20[0]) && /Faraz to confirm/.test(q20[0]) && /holidayPlan\.history/.test(q20[0]) && /2026 Memorial Day, July 4th and Labor Day/.test(q20[0]), "it names the Christmas default to confirm and the 2026 minors awaited for the history list");
+ok(/\(c\) tie 2 .* is read as the sum over the pool of last year's days in the tier x this year's days/.test(q20[0]) && /\(d\) Should rules\.js read an accepted holiday-plan row as the holder's own availability .*Default taken: no - kept as locks, listed as lock violations/.test(q20[0]), "review fixes M / L: the tie-2 reading and the lock question are recorded as defaults to confirm");
 const rev = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /Prompt 25/.test(t));
 eq(rev.length, 1, "one _meta.revisions entry for Prompt 25");
 eq(seed._meta.revisions[seed._meta.revisions.length - 1], rev[0], "it is the last entry");
@@ -233,25 +240,56 @@ wellFormed(plan(2027, { history: H26(["a", "b"], ["c", "d"], ["e", "f"]) }), ["a
 
 step("D2: five - the extra slot of each tier is a BACKUP to the lowest lifetime load");
 {
-  // 2026 majors: Alpha 2 of 3, Charlie 2 of 3, Bravo and Delta 1 of 3, Echo 0 of 3 -> Echo takes the extra major
-  const p = plan(2027, { roster: R6.slice(0, 5), history: H26(["a", "b"], ["c", "d"], ["c", "a"]) });
-  const c = p.counts;
-  eq(["a", "b", "c", "d", "e"].map((id) => c[id].plan.major.primary + c[id].plan.major.backup), [1, 1, 1, 1, 2], "Echo (load 0/3, the lowest) holds two majors, everyone else one");
-  ok(c.e.plan.major.backup >= 1 && c.e.plan.major.primary <= 1, "the extra one is a backup: " + JSON.stringify(c.e.plan.major));
-  eq(["a", "b", "c", "d", "e"].map((id) => c[id].plan.minor.primary + c[id].plan.minor.backup).sort(), [1, 1, 1, 1, 2], "the minors: one surgeon holds two");
-  ok(p.assignments.every((a) => a.primary && a.backup && a.primary !== a.backup), "full, primary != backup");
-  eq(p.relaxed, [], "nothing relaxed (the shape for five IS one or two per tier)");
+  // review fix K: a Y-2 history (2025 only) - no 2026 entry, so tie 1 (same holiday as last year) and tie 2 (last year's
+  // days) are neutral and only the load term decides. 2025 majors: Alpha 2 of 3 (TG + NY primary), Charlie 2 of 3 (XM
+  // primary + NY backup), Bravo and Delta 1 of 3, Echo 0 of 3 -> Echo takes the extra major
+  const H25 = (tg, xm, ny) => [{ year: 2025, name: "Thanksgiving", primary: tg[0], backup: tg[1] }, { year: 2025, name: "Christmas", primary: xm[0], backup: xm[1] }, { year: 2025, name: NY, primary: ny[0], backup: ny[1] }];
+  for (let s = 1; s <= 6; s++) {
+    const p = plan(2027, { roster: R6.slice(0, 5), history: H25(["a", "b"], ["c", "d"], ["a", "c"]), seed: s });
+    const c = p.counts;
+    if (s === 1) eq(["a", "b", "c", "d", "e"].map((id) => [c[id].before.major.any, c[id].lastYearDays.major]), [[2, 0], [1, 0], [2, 0], [1, 0], [0, 0]], "loads 2/1/2/1/0 of 3; nobody has 2026 days (tie 2 neutral)");
+    eq(["a", "b", "c", "d", "e"].map((id) => c[id].plan.major.primary + c[id].plan.major.backup), [1, 1, 1, 1, 2], "seed " + s + ": Echo (load 0/3, the lowest) holds two majors, everyone else one");
+    ok(c.e.plan.major.backup >= 1 && c.e.plan.major.primary <= 1, "seed " + s + ": the extra one is a backup: " + JSON.stringify(c.e.plan.major));
+    eq(["a", "b", "c", "d", "e"].map((id) => c[id].plan.minor.primary + c[id].plan.minor.backup).sort(), [1, 1, 1, 1, 2], "seed " + s + ": the minors: one surgeon holds two");
+    ok(p.assignments.every((a) => a.primary && a.backup && a.primary !== a.backup), "seed " + s + ": full, primary != backup");
+    eq([p.relaxed, p.search.cost.sameHoliday, p.search.cost.unitLength], [[], 0, 0], "seed " + s + ": nothing relaxed (the shape for five IS one or two per tier); both ties zero");
+  }
 }
 
 step("D3: seven - the highest lifetime load sits a tier out");
 {
   const r7 = R6.concat([{ id: "g", name: "Golf", active: true }]);
-  // 2026 majors: Golf held all three (load 3/3) -> he sits the 2027 majors out
-  const hist = [{ year: 2026, name: "Thanksgiving", primary: "g", backup: "a" }, { year: 2026, name: "Christmas", primary: "g", backup: "b" }, { year: 2026, name: NY, primary: "g", backup: "c" }];
-  const p = plan(2027, { roster: r7, history: hist });
-  eq(p.counts.g.plan.major, { primary: 0, backup: 0 }, "Golf sits the majors out");
-  eq(["a", "b", "c", "d", "e", "f"].map((id) => p.counts[id].plan.major.primary + p.counts[id].plan.major.backup), [1, 1, 1, 1, 1, 1], "the other six hold one major each");
-  eq(["a", "b", "c", "d", "e", "f", "g"].map((id) => p.counts[id].plan.minor.primary + p.counts[id].plan.minor.backup).sort(), [0, 1, 1, 1, 1, 1, 1], "the minors (no history): one of the seven sits out");
+  // review fix K: 2025 majors (a Y-2 history - ties 1 and 2 neutral): Golf held all three (load 3/3) -> he sits the 2027 majors out
+  const hist = [{ year: 2025, name: "Thanksgiving", primary: "g", backup: "a" }, { year: 2025, name: "Christmas", primary: "g", backup: "b" }, { year: 2025, name: NY, primary: "g", backup: "c" }];
+  for (let s = 1; s <= 6; s++) {
+    const p = plan(2027, { roster: r7, history: hist, seed: s });
+    eq(p.counts.g.plan.major, { primary: 0, backup: 0 }, "seed " + s + ": Golf sits the majors out");
+    eq(["a", "b", "c", "d", "e", "f"].map((id) => p.counts[id].plan.major.primary + p.counts[id].plan.major.backup), [1, 1, 1, 1, 1, 1], "seed " + s + ": the other six hold one major each");
+    eq(["a", "b", "c", "d", "e", "f", "g"].map((id) => p.counts[id].plan.minor.primary + p.counts[id].plan.minor.backup).sort(), [0, 1, 1, 1, 1, 1, 1], "seed " + s + ": the minors (no history): one of the seven sits out");
+    eq([p.search.cost.sameHoliday, p.search.cost.unitLength], [0, 0], "seed " + s + ": both ties zero - only the load decided");
+  }
+}
+
+step("D4: review fix K - two in the pool: every unit filled, primary != backup, over several seeds");
+for (let s = 1; s <= 6; s++) {
+  const p = plan(2027, { roster: R6.slice(0, 2), seed: s });
+  ok(p.assignments.every((a) => a.primary && a.backup && a.primary !== a.backup), "seed " + s + ": " + JSON.stringify(holders(p)));
+  eq([p.search.pass, p.relaxed], [1, []], "seed " + s + ": the shape for two (three slots each per tier, at most two primaries) holds");
+}
+
+step("D5: review fix K - every slot can be filled but the shape cannot be kept: Foxtrot's derived weeks make him primary on Christmas AND New Year's");
+{
+  const o = { surgeonRules: { f: { eastFeed: { enabled: true } } }, east: { eastDerived: [{ surgeonId: "f", weekMonday: "2027-12-20", silvisRole: "primary" }, { surgeonId: "f", weekMonday: "2027-12-27", silvisRole: "primary" }] } };
+  for (let s = 1; s <= 4; s++) {
+    const p = plan(2027, Object.assign({ seed: s }, o));
+    eq([byName(p, "Christmas").primary, byName(p, NY).primary], ["f", "f"], "seed " + s + ": the derived weeks hold");
+    ok(p.assignments.every((a) => a.primary && a.backup && a.primary !== a.backup), "seed " + s + ": every slot filled");
+    eq(p.search.pass, 3, "seed " + s + ": pass 3 - no plan keeps the shape (Foxtrot's second major primary passes the cap)");
+    const shapes = p.relaxed.filter((r) => /^shape: /.test(r));
+    eq(shapes.length, 2, "seed " + s + ": two 'shape:' entries: " + JSON.stringify(p.relaxed));
+    ok(shapes.some((r) => /^shape: Foxtrot holds 2 major holidays \(2 primary\) - expected 1 with at most 1 primary; no plan meets the shape$/.test(r)) && shapes.some((r) => / holds 0 major holidays \(0 primary\) - expected 1 with at most 1 primary; no plan meets the shape$/.test(r)), "seed " + s + ": Foxtrot over, one surgeon without a major");
+    eq(p.search.cost.open, 0, "seed " + s + ": no open slot");
+  }
 }
 
 /* =================================================================== E */
@@ -317,6 +355,34 @@ step("F2: relaxed only when no plan exists - and said so");
   hist.filter((h) => h.name !== "Thanksgiving").forEach((h) => { const a = byName(p, h.name); ok(a.primary !== h.primary && a.backup !== h.backup, h.name + ": no other repeat"); });
   const q = plan(2027, { surgeonRules: sr, east: { eastBusyDays: busy }, history: hist, groupRules: { holidayPlan: { noRepeatSameRole: false } } });
   eq([byName(q, "Thanksgiving").primary, q.relaxed, q.search.pass], ["a", [], 1], "noRepeatSameRole false: the same plan is no relaxation");
+}
+
+step("F2b: review fix I - re-planning a year with the NEXT year on file: no same holiday in the same role as next year either (rates untouched)");
+{
+  const h26 = H26(["a", "b"], ["c", "d"], ["e", "f"]);
+  for (let s = 1; s <= 4; s++) {
+    const p0 = plan(2027, { history: h26, seed: s });
+    const h28 = p0.assignments.map((a) => ({ year: 2028, name: a.unit.name, primary: a.primary, backup: a.backup }));
+    const p1 = plan(2027, { history: h26.concat(h28), seed: s });
+    p1.assignments.forEach((a) => { const n = h28.find((x) => x.name === a.unit.name); ok(a.primary !== n.primary && a.backup !== n.backup, "seed " + s + ": " + a.unit.name + " repeats a 2028 role: " + JSON.stringify([a.primary, a.backup, n.primary, n.backup])); });
+    eq([p1.search.pass, p1.relaxed], [1, []], "seed " + s + ": pass 1, nothing relaxed");
+    eq(p1.counts, Object.assign({}, p0.counts, Object.fromEntries(Object.keys(p0.counts).map((id) => [id, Object.assign({}, p0.counts[id], { plan: p1.counts[id].plan })]))), "seed " + s + ": the 2028 entries change no rate, load or last-year day (a later year is never in the rates)");
+    if (s === 1) {
+      const chk = H.holidayPlanCheck(2027, p0.assignments, { units: UNITS(2027), roster: R6, surgeonRules: {}, groupRules: {}, history: h26.concat(h28) });
+      eq(chk.breaks.filter((b) => b.rule === "no-repeat").length, 12, "the plan 2028 copies breaks no-repeat on all 12 slots");
+      ok(chk.breaks.filter((b) => b.rule === "no-repeat").every((b) => / in 2027 and 2028 \(no same holiday in the same role two years running\)$/.test(b.text)), "...each named '2027 and 2028': " + chk.breaks[0].text);
+    }
+  }
+  // forced: only Alpha may be the 2027 Thanksgiving primary, and he holds the 2028 one (and in the second case the 2026 one too)
+  const ef = { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: false };
+  const sr = {}, busy = {};
+  ["b", "c", "d", "e", "f"].forEach((id) => { sr[id] = { eastFeed: ef }; busy[id] = ["2027-11-25"]; });
+  const tg28 = { year: 2028, name: "Thanksgiving", primary: "a", backup: "b" };
+  const p = plan(2027, { surgeonRules: sr, east: { eastBusyDays: busy }, history: H26(["b", "c"], ["d", "e"], ["f", "a"]).concat([tg28]) });
+  eq([byName(p, "Thanksgiving").primary, p.relaxed, p.search.pass], ["a", ["no-repeat: Alpha primary Thanksgiving 2027 and 2028 - no plan exists without it"], 2], "relaxed names the repeat against 2028, pass 2");
+  ok(byName(p, "Thanksgiving").why.some((w) => /same role as 2028 \(relaxed\)/.test(w)), "the why says 2028");
+  const q = plan(2027, { surgeonRules: sr, east: { eastBusyDays: busy }, history: H26(["a", "c"], ["d", "e"], ["f", "b"]).concat([tg28]) });
+  eq(q.relaxed, ["no-repeat: Alpha primary Thanksgiving 2026, 2027 and 2028 - no plan exists without it"], "both neighbours: '2026, 2027 and 2028'");
 }
 
 step("F3: tie 1 - a different holiday than last year (either role)");
@@ -432,13 +498,21 @@ step("I1: ten simulated years (2027-2036) on the seed rules - rotation, alternat
   const ids = seed.roster.map((r) => r.id);
   const KHAN = "s1", BURCHETT = "s2", ACTON = "s3", PHILIP = "s4", FIERCE = "s5", SARKAR = "s6";
   // East: Khan forecast-busy over July 4th 2029 and New Year's 2030; Fierce's derived weeks - Silvis PRIMARY over Christmas
-  // 2032 (an even year, against the rotation) and Silvis BACKUP over Mon 5/30 of Memorial Day 2033; vacations: Burchett over
-  // Labor Day 2032, Sarkar over Christmas 2034.
+  // 2032 (an even year, against the rotation) and Silvis BACKUP over Mon 5/30 of Memorial Day 2033; vacations (review fix
+  // J: on slots the rotation gives them - the run without vacations below pins that, so the check stays binding):
+  // Burchett over Memorial Day 2032, Sarkar over Thanksgiving 2034.
   const fc = {}; daysOf(2029, "July 4th").concat(daysOf(2030, NY)).forEach((d) => { fc[d] = 0.8; });
   const east = { eastForecast: { [KHAN]: fc }, eastDerived: [{ surgeonId: FIERCE, weekMonday: "2032-12-20", silvisRole: "primary" }, { surgeonId: FIERCE, weekMonday: "2033-05-30", silvisRole: "backup" }] };
   const FORCED = { "2032|Christmas|primary": FIERCE, "2033|Memorial Day|backup": FIERCE };
-  const lab32 = daysOf(2032, "Labor Day");
-  const vacations = [{ person_id: BURCHETT, start_date: lab32[0], end_date: lab32[lab32.length - 1] }, { person_id: SARKAR, start_date: "2034-12-24", end_date: "2034-12-25" }];
+  const md32 = daysOf(2032, "Memorial Day"), tg34 = daysOf(2034, "Thanksgiving");
+  const vacations = [{ person_id: BURCHETT, start_date: md32[0], end_date: md32[md32.length - 1] }, { person_id: SARKAR, start_date: tg34[0], end_date: tg34[tg34.length - 1] }];
+  {
+    const hist0 = H26([KHAN, PHILIP], [ACTON, FIERCE], [BURCHETT, KHAN]), got = {};
+    for (let y = 2027; y <= 2036; y++) {
+      H.planHolidays(y, { units: U(y), roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, history: hist0, east: east, vacations: [] }).assignments.forEach((a) => { got[y + "|" + a.unit.name] = a.primary; hist0.push({ year: y, name: a.unit.name, primary: a.primary, backup: a.backup }); });
+    }
+    eq([got["2032|Memorial Day"], got["2034|Thanksgiving"]], [BURCHETT, SARKAR], "without the vacations Burchett is the Memorial Day 2032 primary and Sarkar the Thanksgiving 2034 primary - so the vacations below must move them");
+  }
   const history = H26([KHAN, PHILIP], [ACTON, FIERCE], [BURCHETT, KHAN]);
   const life = {}; ids.forEach((id) => { life[id] = { major: 0, minor: 0 }; });
   history.forEach((h) => { life[h.primary].major++; });
@@ -460,8 +534,8 @@ step("I1: ten simulated years (2027-2036) on the seed rules - rotation, alternat
       ok(!(n === "Thanksgiving" && (a.primary === ACTON || a.backup === ACTON)), y + ": Acton on Thanksgiving");
       ok(!(n === "Christmas" && (a.primary === KHAN || a.backup === KHAN)), y + ": Khan on Christmas");
       ok(!((y === 2029 && n === "July 4th") || (y === 2030 && n === NY)) || a.primary !== KHAN, y + ": Khan primary on a forecast-busy " + n);
-      ok(!(y === 2032 && n === "Labor Day") || (a.primary !== BURCHETT && a.backup !== BURCHETT), y + ": Burchett on his vacation");
-      ok(!(y === 2034 && n === "Christmas") || (a.primary !== SARKAR && a.backup !== SARKAR), y + ": Sarkar on her vacation");
+      ok(!(y === 2032 && n === "Memorial Day") || (a.primary !== BURCHETT && a.backup !== BURCHETT), y + ": Burchett on his vacation");
+      ok(!(y === 2034 && n === "Thanksgiving") || (a.primary !== SARKAR && a.backup !== SARKAR), y + ": Sarkar on her vacation");
       if (a.unit.tier === "major" && (a.primary === PHILIP || a.backup === PHILIP)) philipMajors.push(hplMonth(a.unit.days[0]));
       if (a.primary) life[a.primary][a.unit.tier]++;
       history.push({ year: y, name: n, primary: a.primary, backup: a.backup });
@@ -552,8 +626,9 @@ step("K1: holidayPlanSwapOptions - every swap with another holder and every repl
 {
   const s = H.holidayPlanSwapOptions(2027, P27.assignments, "Thanksgiving", "primary", O27());
   eq(s.current, SARKAR, "the slot's holder");
-  eq(s.options.filter((o) => o.kind === "swap").length, 10, "10 swaps (every other filled slot: 12 minus this one minus her Memorial Day backup)");
-  eq(s.options.filter((o) => o.kind === "replace").length, 5, "5 replacements (the pool minus Sarkar)");
+  // review fix A: one surgeon in both roles of a unit is structural (the database's CHECK refuses the row) - never offered
+  eq(s.options.filter((o) => o.kind === "swap").length, 8, "8 swaps (every other filled slot: 12 minus this one minus her Memorial Day backup, minus Khan's Labor Day primary (Khan would hold both Thanksgiving roles) and Acton's Memorial Day primary (Sarkar would hold both Memorial Day roles))");
+  eq(s.options.filter((o) => o.kind === "replace").length, 4, "4 replacements (the pool minus Sarkar, minus Khan - the Thanksgiving backup)");
   s.options.forEach((o, i) => {
     const k = H.holidayPlanCheck(2027, o.assignments, O27());
     eq(keysOf(o.breaks), keysOf(k.breaks), "option " + i + " (" + o.text + "): its breaks = holidayPlanCheck of its assignments");
@@ -574,12 +649,37 @@ step("K1: holidayPlanSwapOptions - every swap with another holder and every repl
 step("K2: holidayPlanSwapOptions - an open slot offers replacements only; a bad role throws; an unknown unit lists nothing");
 {
   const s = H.holidayPlanSwapOptions(2027, withSlot(P27.assignments, "July 4th", "backup", null), "July 4th", "backup", O27());
-  ok(s.current === null && s.options.length === 6 && s.options.every((o) => o.kind === "replace"), "open: the six pool members");
+  ok(s.current === null && s.options.length === 5 && s.options.every((o) => o.kind === "replace") && !s.options.some((o) => o.id === BURCHETT), "open: the pool members but Burchett (the July 4th primary - never both roles)");
   ok(s.options[0].ok, "...the first one keeps every rule (the holder the planner left out): " + s.options[0].text);
   let threw = null; try { H.holidayPlanSwapOptions(2027, P27.assignments, "Christmas", "both", O27()); } catch (e) { threw = e.message; }
   eq(threw, 'holidayPlanSwapOptions: role must be primary or backup, got "both"', "role checked");
   const u = H.holidayPlanSwapOptions(2027, P27.assignments, "Easter", "primary", O27());
   ok(u.options.length === 0 && u.warnings.indexOf("Easter is not a holiday unit of 2027") >= 0, "unknown unit");
+}
+
+step("K3: review fix A - no swap or replacement ever leaves one surgeon in both roles of a unit (structural: sql/schema.sql CHECK schedule_days_distinct_roles); review fix B - with today, no swap with a started unit");
+{
+  let n = 0;
+  P27.assignments.forEach((a) => ["primary", "backup"].forEach((role) => {
+    H.holidayPlanSwapOptions(2027, P27.assignments, a.unit.name, role, O27()).options.forEach((o) => {
+      n++;
+      ok(o.assignments.every((x) => !x.primary || x.primary !== x.backup), a.unit.name + " " + role + ": '" + o.text + "' leaves " + JSON.stringify(o.assignments.find((x) => x.primary && x.primary === x.backup)) + " with one surgeon in both roles");
+      ok(!o.added.some((b) => b.rule === "same-person"), a.unit.name + " " + role + ": '" + o.text + "' adds same-person");
+    });
+  }));
+  ok(n > 100, "every option of every slot of the 2027 plan checked (" + n + ")");
+  const xm = H.holidayPlanSwapOptions(2027, P27.assignments, "Christmas", "primary", O27()).options;
+  eq(xm.filter((o) => o.id === BURCHETT).map((o) => o.text), ["swap with Burchett (Christmas backup)"], "Christmas primary: Burchett (the Christmas backup) only by trading roles with Philip - no 'replace with Burchett', no 'swap with Burchett (July 4th primary)'");
+  // a plan that already holds the clash: only moves that clear it are offered on that unit
+  const clash = withSlot(P27.assignments, "Christmas", "backup", PHILIP);
+  const fix = H.holidayPlanSwapOptions(2027, clash, "Christmas", "backup", O27()).options;
+  ok(fix.length > 0 && fix.every((o) => o.assignments.find((x) => x.unit.name === "Christmas").backup !== PHILIP) && fix.every((o) => o.resolved.some((b) => b.rule === "same-person")), "Christmas Philip / Philip: every backup move clears it");
+  // review fix B: today 2027-08-15 - Memorial Day and July 4th have started; Labor Day has not
+  const lab = H.holidayPlanSwapOptions(2027, P27.assignments, "Labor Day", "primary", O27({ today: "2027-08-15" })).options;
+  ok(lab.length > 0 && !lab.some((o) => o.kind === "swap" && ["Memorial Day", "July 4th"].indexOf(o.with.unit) >= 0), "no swap with Memorial Day / July 4th (started): " + lab.map((o) => o.text).join("; "));
+  ok(lab.some((o) => o.kind === "replace"), "...replacements stay offered (they touch Labor Day only)");
+  ok(H.holidayPlanSwapOptions(2027, P27.assignments, "Labor Day", "primary", O27()).options.some((o) => o.kind === "swap" && o.with.unit === "Memorial Day"), "...without today the Memorial Day swap is offered (the filter is today's)");
+  ok(H.holidayPlanSwapOptions(2027, P27.assignments, "Labor Day", "primary", O27({ today: "2027-07-03" })).options.every((o) => o.kind !== "swap" || o.with.unit !== "July 4th"), "a unit starting today counts as started");
 }
 
 /* =================================================================== M (before L: L re-checks rows M builds) */
@@ -619,8 +719,63 @@ step("M2: holidayPlanAcceptRows - a held slot is a conflict (locked or published
   eq([half.rows["2027-11-28"].backup, half.rows["2027-11-28"].backupLocked], [null, false], "...unless he is the plan's primary that day - cleared");
   eq(half.conflicts.filter((c) => c.clash), [{ day: "2027-11-28", unit: "Thanksgiving", role: "backup", from: SARKAR, to: null, locked: true, clash: true }], "...and named as a clash");
   eq(half.days, ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"], "only: Thanksgiving's days alone");
-  const past = H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2027-07-04" });
-  eq(past.skipped, [{ unit: "Memorial Day", why: "starts 2027-05-29, before today - left as on file" }, { unit: "July 4th", why: "starts 2027-07-03, before today - left as on file" }], "a unit that started before today is left as on file");
+  const past = H.holidayPlanAcceptRows(2027, P27.assignments, { "2027-07-03": { primary: KHAN, backup: SARKAR }, "2027-07-04": { primary: KHAN, backup: SARKAR }, "2027-07-05": { primary: KHAN, backup: ACTON } }, { units: seed.holidays.units["2027"], today: "2027-07-04" });
+  eq(past.skipped, [
+    { unit: "Memorial Day", why: "starts 2027-05-29, before today - left as on file", started: true, primary: null, backup: null },
+    { unit: "July 4th", why: "starts 2027-07-03, before today - left as on file", started: true, primary: KHAN, backup: null }
+  ], "a unit that started before today is left as on file - with its holders on file (one per role, else null: Sarkar / Acton split the backup)");
+  ok(!past.days.some((d) => d <= "2027-07-05"), "...and none of its days is written");
+  // review fix C: a unit that STARTS today is under way (07:00 -> 07:00) - left as on file too
+  const startsToday = H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2027-09-04" });
+  eq(startsToday.skipped.map((x) => [x.unit, x.why, x.started]), [["Memorial Day", "starts 2027-05-29, before today - left as on file", true], ["July 4th", "starts 2027-07-03, before today - left as on file", true], ["Labor Day", "starts 2027-09-04, today - left as on file", true]], "Labor Day starts today (Sat 9/4): skipped");
+  eq(startsToday.days[0], "2027-11-25", "the first day written is Thanksgiving's");
+  eq(H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2027-09-03" }).days.slice(0, 3), ["2027-09-04", "2027-09-05", "2027-09-06"], "the day before, Labor Day is still written");
+  // review fix E: a note already on a unit day that is not a holiday-plan note is kept (and listed for the confirm)
+  eq([r.rows["2027-11-25"].note, r.rows["2027-11-26"].note], ["x", "Thanksgiving unit - holiday plan 2027"], "the 11/25 note 'x' is kept; an empty note gets the plan note");
+  eq(r.keptNotes, [{ day: "2027-11-25", unit: "Thanksgiving", note: "x" }], "keptNotes names it");
+  const replan = H.holidayPlanAcceptRows(2027, P27.assignments, { "2027-11-25": { primary: SARKAR, backup: KHAN, note: "Thanksgiving unit - holiday plan 2026" } }, { units: seed.holidays.units["2027"], only: ["Thanksgiving"] });
+  eq([replan.rows["2027-11-25"].note, replan.keptNotes], ["Thanksgiving unit - holiday plan 2027", []], "an older holiday-plan note is the plan's own - replaced, not kept");
+}
+
+step("M2b: review fix A - one surgeon in both roles of a unit is structural: holidayPlanAcceptRows skips the unit (the database's CHECK would refuse every day of it)");
+{
+  const same = H.holidayPlanAcceptRows(2027, withSlot(P27.assignments, "Christmas", "backup", PHILIP), {}, { units: seed.holidays.units["2027"] });
+  eq(same.skipped, [{ unit: "Christmas", why: "primary and backup are the same surgeon", samePerson: true, id: PHILIP }], "Christmas (Philip / Philip) is skipped, named");
+  ok(!same.days.some((d) => d === "2027-12-24" || d === "2027-12-25") && !same.units.some((u) => u.name === "Christmas"), "...no Christmas row, no Christmas unit written");
+  eq(same.days.length, 15, "the other five units are written (17 - 2 days)");
+  ok(same.days.every((d) => same.rows[d].primary !== same.rows[d].backup), "no written row holds one surgeon twice");
+}
+
+step("M2c: review fix F - holidayPlanConflictLines groups the replaced slots by unit + role + holder change, so every one fits the confirm");
+{
+  const sched = {};
+  ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"].forEach((d) => { sched[d] = { primary: KHAN, backup: BURCHETT, primaryLocked: true, backupLocked: false }; });
+  sched["2027-11-28"].backup = ACTON;
+  ["2027-12-24", "2027-12-25"].forEach((d) => { sched[d] = { primary: null, backup: null, externalCover: "Locum", primaryLocked: true }; });
+  const r = H.holidayPlanAcceptRows(2027, P27.assignments, sched, { units: seed.holidays.units["2027"] });
+  eq(r.conflicts.length, 10, "10 replaced slots (4 Thanksgiving primaries, 4 backups, 2 Christmas covers)");
+  const names = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s6: "Sarkar" };
+  const label = (v) => v === null ? "OPEN" : String(v).indexOf("ext:") === 0 ? String(v).slice(4) + " (external)" : names[v];
+  eq(H.holidayPlanConflictLines(r.conflicts, label), [
+    "Thanksgiving P locked to Khan -> Sarkar (11/25-11/28, 4 days)",
+    "Thanksgiving B held by Burchett -> Khan (11/25-11/27, 3 days)",
+    "Thanksgiving B held by Acton -> Khan (11/28)",
+    "Christmas P locked to Locum (external) -> Philip (12/24-12/25, 2 days)"
+  ], "four lines for ten slots - none left out");
+  eq(H.holidayPlanConflictLines([{ day: "2027-05-29", unit: "Memorial Day", role: "backup", from: "s1", to: "s6", locked: false }, { day: "2027-05-31", unit: "Memorial Day", role: "backup", from: "s1", to: "s6", locked: false }]), ["Memorial Day B held by s1 -> s6 (5/29, 5/31, 2 days)"], "days that are not a run are listed; the default label prints the value");
+  eq(H.holidayPlanConflictLines([]), [], "nothing to replace: no line");
+}
+
+step("M2d: review fix B - holidayPlanWrittenCheck: a full Accept that skips a started unit is judged as it will stand (its holders on file)");
+{
+  const onFile = Object.assign({}, ACC.rows);
+  ["2027-05-29", "2027-05-30", "2027-05-31"].forEach((d) => { onFile[d] = Object.assign({}, onFile[d], { primary: BURCHETT, backup: SARKAR }); });
+  const acc = H.holidayPlanAcceptRows(2027, P27.assignments, onFile, { units: seed.holidays.units["2027"], today: "2027-06-01" });
+  eq(acc.skipped.map((s) => [s.unit, s.started, s.primary, s.backup]), [["Memorial Day", true, BURCHETT, SARKAR]], "Memorial Day has started - Burchett / Sarkar on file stay");
+  const wc = H.holidayPlanWrittenCheck(2027, P27.assignments, acc, O27());
+  eq(wc.added.map((b) => [b.rule, b.id, b.tier]).sort(), [["shape", BURCHETT, "minor"], ["shape", ACTON, "minor"]], "the year as written: Burchett holds two minor primaries, Acton none - named");
+  eq(wc.plan.find((a) => a.unit.name === "Memorial Day").primary, BURCHETT, "...the written plan carries the file's holders");
+  eq(H.holidayPlanWrittenCheck(2027, P27.assignments, H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2026-10-01" }), O27()).added, [], "nothing skipped: nothing added");
 }
 
 step("M3: holidayPlanInputs - the planHolidays opts from the app's state (time_off + East away / unreviewed ranges; history from the schedule; seed = year)");
@@ -647,6 +802,29 @@ step("M3: holidayPlanInputs - the planHolidays opts from the app's state (time_o
   eq(holders(p), holders(H.planHolidays(2027, O27({ vacations: inp.vacations, east: inp.east }))), "planHolidays on the inputs = on the same opts by hand");
   ok(blockedOf(p, "Labor Day", KHAN, "primary").indexOf("east-busy") >= 0, "the East busy day reaches the planner (Khan's Labor Day primary refused)");
   eq(H.holidayPlanInputs(2028, state).units, null, "a year without stored units: units null (planHolidays then warns 'nothing to plan')");
+  eq(inp.east.eastClear, { s1: ["2027-05-07", "2027-05-08", "2027-05-09"] }, "review fix H: the home range's days reach the planner as east.eastClear");
+}
+
+step("M3b: review fix H - a forecast-busy day inside a 'home' East vacation range does not refuse (rules.js fcApplies = !homeDay); the feed still does");
+{
+  const fc = { s1: { "2027-07-03": 0.8, "2027-07-04": 0.8, "2027-07-05": 0.8 } };
+  const state = (reviews, extra) => Object.assign({ roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, timeOffRows: [], eastBusyDays: {}, eastForecast: fc, eastOverrides: {}, eastDerived: [], eastFeedCoverage: { from: "2026-08-24", to: "2026-11-15" }, eastVacationRanges: { s1: [{ start: "2027-07-02", end: "2027-07-06" }] }, eastVacationReviews: reviews }, extra || {});
+  const home = [{ person_id: "s1", start: "2027-07-02", end: "2027-07-06", decision: "home" }];
+  const hp = H.planHolidays(2027, H.holidayPlanInputs(2027, state(home)));
+  eq(blockedOf(hp, "July 4th", KHAN, "primary"), [], "home: Khan's July 4th primary is not blocked (the forecast is not consulted on a home day)");
+  const rx = H.holidayPlanInputs(2027, state(home));
+  const noRange = H.planHolidays(2027, Object.assign({}, rx, { east: Object.assign({}, rx.east, { eastClear: {} }) }));
+  eq(blockedOf(noRange, "July 4th", KHAN, "primary"), ["east-forecast-busy:0.80"], "without the home range the same forecast refuses (the case the fix covers)");
+  eq(blockedOf(H.planHolidays(2027, H.holidayPlanInputs(2027, state([]))), "July 4th", KHAN, "primary"), ["time-off:2027-07-03", "east-forecast-busy:0.80", "time-off:2027-07-04", "time-off:2027-07-05"], "unreviewed: the range is a vacation (time-off on every unit day) and no home day, so the forecast is read too");
+  const feed = H.planHolidays(2027, H.holidayPlanInputs(2027, state(home, { eastBusyDays: { s1: new Set(["2027-07-04"]) } })));
+  eq(blockedOf(feed, "July 4th", KHAN, "primary"), ["east-busy"], "a feed busy day inside the home range still refuses (the feed wins - rules.js keeps it out of eastClear)");
+  const ov = H.planHolidays(2027, H.holidayPlanInputs(2027, state(home, { eastOverrides: { s1: { "2027-07-05": true } } })));
+  eq(blockedOf(ov, "July 4th", KHAN, "primary"), ["east-busy"], "...and an override true");
+  // the same day judged by the rules engine itself: no east-forecast-busy on a home day, east-forecast-busy without the range
+  const ctxIn = (reviews, ranges) => SA.seedToContextInput(seed, { eastDerived: [], eastBusyDays: {}, eastForecast: fc, eastFeedCoverage: { from: "2026-08-24", to: "2026-11-15" }, eastVacationRanges: ranges, eastVacationReviews: reviews });
+  const hardOf = (ci) => { const e = R.eligibility(R.buildContext(ci), "2027-07-04", "primary", KHAN); return (e.hard || e.reasons || []).filter((x) => /^east/.test(x)); };
+  eq(hardOf(ctxIn(home, { s1: [{ start: "2027-07-02", end: "2027-07-06" }] })), [], "rules.js: home day - no East refusal for Khan's primary on 7/4");
+  eq(hardOf(ctxIn([], {})), ["east-forecast-busy:0.80"], "rules.js: no range - east-forecast-busy:0.80 (the planner now agrees on both)");
 }
 
 step("M4: holidayPlanDefaultYear - the first year after today's with units, else the latest, else next year");
@@ -707,6 +885,42 @@ step("L4: only rows still carrying the plan source are re-checked; a unit whose 
   eq(m.accepted.find((a) => a.unit.name === "Christmas").mixed, ["primary"], "...and flagged on the unit");
 }
 
+step("L5: review fix B - Re-check with today never suggests a swap with a unit that has started (Apply would write it half); a started blocked unit gets no suggestion");
+{
+  const east = { eastBusyDays: { s1: ["2027-09-05"] } };
+  const before = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, east }));
+  eq(before.blocked.map((b) => [b.unit.name, b.role, b.id, b.suggestion.text]), [["Labor Day", "primary", KHAN, "swap with Acton (Memorial Day primary)"]], "without today: the swap with Acton's Memorial Day primary ranks first");
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, east, today: "2027-08-15" }));
+  const b = rc.blocked[0];
+  eq([rc.blocked.length, b.unit.name, b.role, b.id, b.started], [1, "Labor Day", "primary", KHAN, false], "today 2027-08-15: Khan's Labor Day primary is blocked (the feed's 9/5)");
+  eq([b.valid, b.suggestion.text, b.suggestion.with], [true, "swap with Philip (Labor Day backup)", { unit: "Labor Day", role: "backup", id: KHAN }], "the valid swap is with the Labor Day backup (Khan's East day blocks his primary only)");
+  const all = H.holidayPlanSwapOptions(2027, rc.accepted.map((a) => ({ unit: a.unit, primary: a.primary, backup: a.backup })), "Labor Day", "primary", O27({ east, today: "2027-08-15" })).options;
+  ok(!all.some((o) => o.kind === "swap" && ["Memorial Day", "July 4th"].indexOf(o.with.unit) >= 0), "no listed swap touches Memorial Day or July 4th");
+  // the half write the fix prevents: the old suggestion applied on 8/15 writes Labor Day alone and breaks the shape
+  const half = H.holidayPlanAcceptRows(2027, before.blocked[0].suggestion.assignments, ACC.rows, { units: seed.holidays.units["2027"], only: ["Labor Day", "Memorial Day"], today: "2027-08-15" });
+  eq([half.days, half.skipped.map((s) => [s.unit, s.started, s.primary, s.backup])], [["2027-09-04", "2027-09-05", "2027-09-06"], [["Memorial Day", true, ACTON, SARKAR]]], "(the old suggestion on 8/15: Memorial Day is skipped, Labor Day written alone)");
+  const wc = H.holidayPlanWrittenCheck(2027, before.blocked[0].suggestion.assignments, half, O27({ schedule: ACC.rows, east }));
+  eq(wc.added.map((x) => x.text), ["Khan holds 0 minor holidays (0 primary) - the minor tier gives each 1 with at most 1 primary", "Acton holds 2 minor holidays (2 primary) - the minor tier gives each 1 with at most 1 primary"], "holidayPlanWrittenCheck names the shape breaks the half write leaves (the app refuses such a swap outright)");
+  eq(wc.started, ["Memorial Day"], "...and the started unit");
+  // a blocked slot of a unit that has itself started: listed, no suggestion
+  const late = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, east, today: "2027-09-05" }));
+  eq(late.blocked.map((x) => [x.unit.name, x.started, x.suggestion]), [["Labor Day", true, null]], "today 9/5 (Labor Day under way): listed with started: true and no suggestion");
+}
+
+step("L6: review fix D - a role the plan left open keeps the (unlocked) holder on file; Re-check does not read him as an accepted slot");
+{
+  const sched = { "2027-11-25": { primary: null, backup: BURCHETT, primaryLocked: false, backupLocked: false, source: "generated" }, "2027-11-26": { primary: null, backup: BURCHETT, primaryLocked: false, backupLocked: false, source: "generated" }, "2027-11-27": { primary: null, backup: BURCHETT, primaryLocked: false, backupLocked: false, source: "generated" }, "2027-11-28": { primary: null, backup: BURCHETT, primaryLocked: false, backupLocked: false, source: "generated" } };
+  const half = H.holidayPlanAcceptRows(2027, withSlot(P27.assignments, "Thanksgiving", "backup", null), sched, { units: seed.holidays.units["2027"], only: ["Thanksgiving"] });
+  eq([half.rows["2027-11-25"].source, half.rows["2027-11-25"].backup, half.rows["2027-11-25"].backupLocked, half.rows["2027-11-25"].primaryLocked], ["holiday-plan-2027", BURCHETT, false, true], "the row: plan source, Burchett kept unlocked, the planned primary locked");
+  const all = Object.assign({}, ACC.rows, half.rows);
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: all, vacations: [{ person_id: BURCHETT, start_date: "2027-11-26", end_date: "2027-11-26" }] }));
+  const tg = rc.accepted.find((a) => a.unit.name === "Thanksgiving");
+  eq([tg.primary, tg.backup, tg.days.length], [SARKAR, null, 4], "accepted Thanksgiving: Sarkar (locked) only - Burchett is the file's holder, not the plan's");
+  ok(!rc.blocked.some((b) => b.id === BURCHETT && b.unit.name === "Thanksgiving"), "Burchett's vacation inside Thanksgiving is not a Re-check item (nothing the plan set) - " + JSON.stringify(rc.blocked.map((b) => [b.unit.name, b.role, b.id])));
+  const locked = clone(all); ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"].forEach((d) => { locked[d].backupLocked = true; });
+  eq(H.holidayPlanRecheck(2027, O27({ schedule: locked })).accepted.find((a) => a.unit.name === "Thanksgiving").backup, BURCHETT, "(a locked holder on a plan row reads as accepted - the plan locks every role it sets)");
+}
+
 /* =================================================================== N */
 step("N1: the generator never touches the accepted rows (both roles locked) - Thanksgiving and Christmas / New Year's 2027 runs");
 {
@@ -719,6 +933,20 @@ step("N1: the generator never touches the accepted rows (both roles locked) - Th
       const g = out.schedule[d], a = ACC.rows[d];
       eq([g.primary, g.backup, g.primaryLocked, g.backupLocked, g.source, g.note], [a.primary, a.backup, true, true, "holiday-plan-2027", a.note], s + ".." + e + ": " + d + " kept as accepted");
     });
+  });
+  // review fix L (documented, engine unchanged): rules.js reads an accepted row as an ordinary LOCK, not as the holder's
+  // own availability (rule 1 is the planner's), so Generate lists the slots its rules would refuse as lockViolations -
+  // and keeps them. Memorial Day .. July 4th 2027: Sarkar's Memorial Day backup is outside her monthly windows, Burchett's
+  // three-day July 4th primary passes his two-day run limit.
+  const mj = GEN.generate(ctx, "2027-05-29", "2027-07-05", { seed: 7, bestOf: 3, timeBudgetMs: 1500 });
+  const lv = (mj.diagnostics.lockViolations || []).map((v) => [v.day, v.role, v.id, v.reasons.join(",")]);
+  eq(lv, [
+    ["2027-05-29", "backup", SARKAR, "outside-window"], ["2027-05-30", "backup", SARKAR, "outside-window"], ["2027-05-31", "backup", SARKAR, "outside-window"],
+    ["2027-07-03", "primary", BURCHETT, "max-consecutive:2"], ["2027-07-04", "primary", BURCHETT, "max-consecutive:2"], ["2027-07-05", "primary", BURCHETT, "max-consecutive:2"]
+  ], "Generate over Memorial Day .. July 4th lists the waived rules of the accepted slots as lock violations");
+  ACC.days.filter((d) => d >= "2027-05-29" && d <= "2027-07-05").forEach((d) => {
+    const g = mj.schedule[d], a = ACC.rows[d];
+    eq([g.primary, g.backup, g.primaryLocked, g.backupLocked, g.source], [a.primary, a.backup, true, true, "holiday-plan-2027"], "...and keeps " + d + " as accepted (a lock violation is a fact, never changed)");
   });
 }
 

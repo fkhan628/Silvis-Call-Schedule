@@ -7176,7 +7176,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P25 pins: ONE audit row (holiday_plan.accept / holiday_plan.swap) with the year, the units (roster ids), the replaced slots, the broken rule keys, the snapshot counts and the outcome - no amounts", () => {
       assert.strictEqual(hpCount(acc, "logAudit("), 1, "one audit call");
-      assert.ok(acc.includes("{ year, source: rows.source, units: unitList, days: rows.days.length, changes: changed.length, replaced: rows.conflicts.map(c => ({ day: c.day, role: c.role, from: c.from, to: c.to, locked: c.locked })), breaks: Array.isArray(m.breakKeys) ? m.breakKeys : [], snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null }"), "the detail");
+      assert.ok(acc.includes("{ year, source: rows.source, units: unitList, days: rows.days.length, changes: changed.length, replaced: rows.conflicts.map(c => ({ day: c.day, role: c.role, from: c.from, to: c.to, locked: c.locked })), breaks: (Array.isArray(m.breakKeys) ? m.breakKeys : []).concat(skipBreaks.map(b => b.key)), snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null }"), "the detail (review fix B: the broken rule keys include the ones a skipped started unit adds)");
       assert.ok(!/\$\s*\d|amount|stipend|rate/i.test(acc.slice(acc.indexOf("logAudit("), acc.indexOf("if (r && r.ok) {", acc.indexOf("logAudit(")))), "no amount, rate or pay word in the audit call");
     });
     check("P25 pins: the notices are a hand edit's (one manual_edit in-app note + one manual_edit e-mail to the holders whose slot changed hands), only once the days are on file; no office notice, no broadcast", () => {
@@ -7185,14 +7185,46 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(ok > 0 && note > ok && mail > note, `ok=${ok} note=${note} mail=${mail}`);
       assert.strictEqual(hpCount(acc, "addNotification("), 1); assert.strictEqual(hpCount(acc, "sendEmailNotif("), 1);
       ["office-notifications", "schedule_published", "publishRef.current()", "pendingOpenShiftsNoticeRef"].forEach(n => assert.strictEqual(hpCount(acc, n), 0, "no " + n));
-      assert.ok(acc.includes('const affected = [...new Set(changed.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];'), "affected = roster holders before / after a changed slot");
+      assert.ok(acc.includes('const affected = [...new Set(noticeChanged.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];'), "affected = roster holders before / after a changed slot (review fix G: against the rows last persisted)");
+    });
+    check("[P25] review fix G pins: the notices diff the rows LAST PERSISTED (lastSyncRef, read before the sync - never written here) or the 'before' a failed / conflicted Accept left pending, against the plan rows; a failed / conflicted Accept keeps its before-rows (earliest wins) for the next Accept of the year that saves; a saved Accept clears its days", () => {
+      assert.ok(HP.includes("  const holidayNoticePendingRef = useRef({});"), "the pending-notice ref, declared once at the component's top level");
+      const before = acc.indexOf("rows.days.forEach(d => { noticeBefore[d] = Object.prototype.hasOwnProperty.call(pend, d) ? pend[d] : (persisted[d] || null); noticeAfter[d] = next[d]; });");
+      const persistedRead = acc.indexOf("const persisted = lastSyncRef.current || {};");
+      const nc = acc.indexOf('const noticeChanged = diffScheduleDays(noticeBefore, noticeAfter).filter(c => c.role === "primary" || c.role === "backup");');
+      const sync = acc.indexOf("const r = await syncScheduleDays(next);");
+      assert.ok(persistedRead > 0 && before > persistedRead && nc > before && sync > nc, JSON.stringify({ persistedRead, before, nc, sync }));
+      assert.strictEqual(hpCount(acc, "lastSyncRef.current ="), 0, "acceptHolidayPlan never writes lastSyncRef (the sync's own state)");
+      const okAt = acc.indexOf("if (r && r.ok) {");
+      const clear = acc.indexOf("if (Object.keys(left).length) pendingNotices[year] = left; else delete pendingNotices[year];");
+      const keep = acc.indexOf("rows.days.forEach(d => { if (!Object.prototype.hasOwnProperty.call(keep, d)) keep[d] = noticeBefore[d]; });");
+      const blockedRet = acc.indexOf('if (r && r.blocked) { showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error"); return false; }');
+      assert.ok(okAt > sync && clear > okAt && blockedRet > clear && keep > blockedRet, JSON.stringify({ okAt, clear, blockedRet, keep }));
+      assert.ok(acc.includes("The change notices wait: press Accept ${year} again once the header shows Saved to send them."), "the failed write says the notices wait");
+    });
+    check("[P25] review fix A / B / C / E / F pins: one surgeon in both roles stops BEFORE the confirm (structural, nothing written); a swap with a started unit is refused (it would be written half); a full Accept that skips a started unit names the breaks of the year as written; kept notes and every replaced slot (grouped) are in the confirm", () => {
+      const rowsAt = acc.indexOf("const acc = holidayPlanAcceptRows(year, plan, cur, opts);");
+      const same = acc.indexOf("const same = acc.skipped.filter(s => s.samePerson);");
+      const sameStop = acc.indexOf("one surgeon cannot hold both roles of a unit (the database refuses the row). Swap one of them first.`, \"error\"); return false; }");
+      const swapStop = acc.indexOf("if (swap && started.length) {");
+      const written = acc.indexOf("const written = started.length ? holidayPlanWrittenCheck(year, plan, acc, holidayPlanInputs(year, ctxInputs)) : null;");
+      const cf = acc.indexOf('if (!confirm(parts.join("\\n\\n")))');
+      const snap = acc.indexOf("snapshots.capture(");
+      assert.ok(rowsAt > 0 && same > rowsAt && sameStop > same && swapStop > sameStop && written > swapStop && cf > written && snap > cf, JSON.stringify({ rowsAt, same, sameStop, swapStop, written, cf, snap }));
+      assert.ok(acc.slice(swapStop, written).includes("this swap would be written half") && acc.slice(swapStop, written).includes("return false;"), "the half-swap refusal writes nothing");
+      assert.ok(acc.includes("so the year as written BREAKS ${skipBreaks.length} more rule(s)"), "the confirm names the breaks a skipped started unit adds");
+      assert.ok(acc.includes("const conflictText = (list) => holidayPlanConflictLines(list, v => holderLabel(v, nameOf));") && acc.includes("will be REPLACED:\\n- ${conflictText(acc.conflicts).join(\"\\n- \")}"), "every replaced slot, grouped by unit + role + holder - no day cap");
+      assert.ok(!/t\.slice\(0, 12\)/.test(acc), "the old 12-line cap is gone");
+      assert.ok(acc.includes("Day notes kept as on file (the plan note is not added there)"), "kept notes are named");
     });
     check("P25 pins: no write without Accept - the panel only computes (helpers.holidayPlanInputs / planHolidays / holidayPlanCheck / holidayPlanSwapOptions / holidayPlanRecheck) and reaches the write path through onAccept in its two handlers; a swap that adds a broken rule asks first, naming it", () => {
       ["fetch(", "db.", "syncScheduleDays", "snapshots.", "logAudit", "setSchedule", "sendEmailNotif", "addNotification"].forEach(n => assert.strictEqual(hpCount(panel, n), 0, "no " + n + " in HolidayPlanPanel"));
       assert.strictEqual(hpCount(panel, "await onAccept("), 2, "onAccept from Accept and from a Re-check swap only");
       assert.ok(panel.includes("const ok = await onAccept(plan.year, plan.assignments, { breaks: live.check.breaks.map(b => b.text), breakKeys: live.check.breaks.map(b => b.key) });"), "Accept hands over the plan and its breaks");
       assert.ok(panel.includes('await onAccept(recheckYear, s.assignments, { mode: "swap", only: units, breaks: s.added.map(x => x.text), breakKeys: s.added.map(x => x.key) });'), "a Re-check swap writes the swap's units only, through the same path");
-      ["const result = planHolidays(year, inputs);", "const check = holidayPlanCheck(plan.year, plan.assignments, inputs);", "holidayPlanSwapOptions(plan.year, plan.assignments, a.unit.name, role, inputs).options", "try { return holidayPlanRecheck(recheckYear, holidayPlanInputs(recheckYear, planState || {})); }"].forEach(n => assert.ok(panel.includes(n), n));
+      ["const result = planHolidays(year, inputs);", "const check = holidayPlanCheck(plan.year, plan.assignments, inputs);", "holidayPlanSwapOptions(plan.year, plan.assignments, a.unit.name, role, inputs).options", "try { return holidayPlanRecheck(recheckYear, { ...holidayPlanInputs(recheckYear, planState || {}), today }); }", "const inputs = { ...holidayPlanInputs(plan.year, planState || {}), today };"].forEach(n => assert.ok(panel.includes(n), n));
+      assert.ok(panel.includes("}, [plan, planState, today]);") && panel.includes("}, [recheckYear, planState, today]);"), "review fix B: today (Central) reaches the swap list and Re-check - no swap with a started unit");
+      assert.ok(panel.includes('data-testid="holplan-locks-note"') && panel.includes('shows up in Generate as a "lock violation" and is kept as it is'), "review fix L: the card says accepted units the usual rules refuse are lock violations in Generate, kept");
       assert.ok(panel.includes("if (o.added.length && !confirm(`This ${o.kind === \"swap\" ? \"swap\" : \"replacement\"} (${o.unit} ${o.role}: ${o.text}) BREAKS ${o.added.length} rule(s):\\n- ${o.added.map(b => b.text).join(\"\\n- \")}"), "the swap confirm names each added rule");
       assert.ok(panel.includes('disabled={busy || dirty || blockedNow}'), "Accept waits for saved units and a read schedule");
     });
