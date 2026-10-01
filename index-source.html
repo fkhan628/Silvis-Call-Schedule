@@ -5632,7 +5632,9 @@ function CallSchedule() {
     return out;
   }, [view, boardSlots, rulesCtx, activeSurgeons, schedule]);
   const boardRows = useMemo(() => obBoardRows(boardSlots, { today: todayStr, horizonDays: obHorizon === "all" ? null : obHorizon, role: obRole, weekendOnly: obWeekend }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
-  const boardUnitText = (u) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : "weekend" + (u.pattern ? " " + u.pattern : "");
+  // the weekend words are helpers.js OPEN_SLOT_PATTERN_WORDS (the Copy list's openSlotsLine reads the same table) - 'friday'
+  // reads "weekend, Friday separate" since the 10/1 follow-ups, an unknown pattern plain "weekend"
+  const boardUnitText = (u) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : openSlotPatternWords(u.pattern);
   const boardCopyList = async () => {
     const text = boardRows.map(s => openSlotsLine(s)).join("\n");
     if (!text) { showToast("Nothing to copy - no open shift matches the filters.", "info"); return; }

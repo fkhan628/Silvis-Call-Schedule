@@ -890,7 +890,10 @@ One pure definition — `openSlots(schedule, from, to, today, opts)` in
 the Prompt 12 rule that days before today are never open) where the role is unassigned: **primary** = no `primary_id`
 AND no `external_cover`; **backup** = no `backup_id`; a day with NO row inside the range is open in both roles; sorted
 by day then role (primary before backup); invalid inputs → `[]`, never throws. `opts` is optional:
-`{ holidayByDay, weekendKinds: { '<friday>': 'block'|'split'|'daily' }, reasons: { 'YYYY-MM-DD|primary': string } }`;
+`{ holidayByDay, weekendKinds: { '<friday>': 'block'|'split'|'daily'|'friday' }, reasons: { 'YYYY-MM-DD|primary': string } }`
+('friday' - Prompt 23 B2's pattern - kept since the 10/1 follow-ups; `OPEN_SLOT_PATTERN_WORDS` words the four for the board's Unit
+column and `openSlotsLine`: "weekend block" / "weekend split" / "weekend daily" / "weekend, Friday separate", an
+unknown pattern plain "weekend");
 `from`/`to` must be real calendar days (`'2026-13-40'` → `[]`). `unit` is decided per day, as the generator builds its
 units: `{ kind: 'holiday', name }` on a holiday-unit day, else `{ kind: 'weekend', pattern, friday }` on any Fri/Sat/Sun
 (including the leftover days of a weekend a holiday pre-empts — the generator's reduced weekend unit; `tradeUnitOf`
@@ -911,7 +914,7 @@ After this prompt there is no second place that decides what "open" means.
 
 **Why it is open (Prompt 13 part 4).** Accept & Publish, once the CAS write of the generated days succeeded, stores
 `helpers.lastGenerateFromDiagnostics(diagnostics, at)` as blob key `call_schedule_data.data.lastGenerate =
-{ at, range: { start, end }, openSlots: [{ day, role, reason }], weekendKinds: { '<friday>': 'block'|'split'|'daily' } }`
+{ at, range: { start, end }, openSlots: [{ day, role, reason }], weekendKinds: { '<friday>': 'block'|'split'|'daily'|'friday' } }`
 (next to `lastPublished`: in the state bundle, read back by `adoptBlob`, kept across every autosave). Nothing else from
 the diagnostics is persisted. Each `reason` is `helpers.openSlotReason(reasonsById)` — the per-surgeon hard codes of
 `diagnostics.uncovered[i].reasons` reduced by PREFIX to a fixed category table (`vacations`; `weekday patterns and

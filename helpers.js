@@ -295,7 +295,8 @@ function slotIsOpen(dateStr, holder, today) {
    before backup. Invalid inputs -> [] (never throws).
    opts (all optional):
      holidayByDay  { 'YYYY-MM-DD': { name, days } }  (rulesCtx.holidayByDay)
-     weekendKinds  { '<friday>': 'block'|'split'|'daily' }  (openSlotWeekendKinds(diagnostics.weekendUnits))
+     weekendKinds  { '<friday>': 'block'|'split'|'daily'|'friday' }  (openSlotWeekendKinds(diagnostics.weekendUnits);
+                   'friday' since the 10/1 follow-ups - Prompt 23 B2's pattern, OPEN_SLOT_PATTERN_WORDS below)
      reasons       { 'YYYY-MM-DD|primary': string }  (openSlotKey; the last generate's operational reasons)
    unit is decided PER DAY, as generator.js buildUnits builds its units:
    { kind: 'holiday', name } on a holiday-unit day, else { kind: 'weekend',
@@ -318,6 +319,17 @@ const OPEN_SLOT_ROLES = ["primary", "backup"];
 function openSlotKey(day, role) { return day + "|" + role; }
 // A real calendar day in ISO form: suIsIso shape AND it survives a parse/fmt round trip.
 function openSlotIsDay(s) { return suIsIso(s) && fmt(parse(s)) === s; }
+// The words of a weekend unit's pattern - the board's Unit column (index-source boardUnitText), the Copy list and the
+// group e-mails (openSlotsLine): one entry per generator weekend kind (generator.js weekendUnitPatterns - block / split /
+// daily, and Prompt 23 B2's 'friday': one surgeon on the Friday alone, the Saturday + Sunday a reduced unit of their own,
+// one surgeon's pair or two daily days - the kinds map does not carry which, so the words say only that the Friday is
+// separate). The pattern is the weekend's PRIMARY kind (diagnostics.weekendUnits[].kind), shown on both roles' slots as
+// before. An absent / unknown pattern reads plain "weekend". The daily-reminder mirror (edge-functions/daily-reminder/
+// index.ts, deployed v7) knows block / split / daily only and reads 'friday' as unknown - plain "weekend" in the Monday
+// e-mail, exactly the text before - until its prepared v8 is deployed (10/1 follow-ups, item 2).
+const OPEN_SLOT_PATTERN_WORDS = { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday separate" };
+function openSlotPatternKnown(k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(OPEN_SLOT_PATTERN_WORDS, k); }
+function openSlotPatternWords(pattern) { return openSlotPatternKnown(pattern) ? OPEN_SLOT_PATTERN_WORDS[pattern] : "weekend"; }
 function openSlotUnit(day, holidayByDay, weekendKinds) {
   const hol = holidayByDay && typeof holidayByDay === "object" ? holidayByDay[day] : null;
   if (hol && typeof hol === "object") return { kind: "holiday", name: hol.name || null };
@@ -326,7 +338,7 @@ function openSlotUnit(day, holidayByDay, weekendKinds) {
   const friday = dow === 5 ? day : suAddDays(day, dow === 6 ? -1 : -2);
   const kinds = weekendKinds && typeof weekendKinds === "object" ? weekendKinds : {};
   const k = kinds[friday];
-  return { kind: "weekend", pattern: k === "block" || k === "split" || k === "daily" ? k : null, friday: friday };
+  return { kind: "weekend", pattern: openSlotPatternKnown(k) ? k : null, friday: friday };
 }
 function openSlots(schedule, from, to, today, opts) {
   if (!openSlotIsDay(from) || !openSlotIsDay(to) || from > to) return [];
@@ -361,12 +373,13 @@ function openSlotCounts(list) {
   (Array.isArray(list) ? list : []).forEach(s => { if (s && (s.role === "primary" || s.role === "backup")) { out[s.role]++; out.total++; } });
   return out;
 }
-// openSlotWeekendKinds(diagnostics.weekendUnits | { '<friday>': kind }) -> { '<friday>': 'block'|'split'|'daily' }
-// (locked / open / unfilled units carry no pattern and are left out). The map
-// form is the persisted lastGenerate.weekendKinds (part 4), validated the same way.
+// openSlotWeekendKinds(diagnostics.weekendUnits | { '<friday>': kind }) -> { '<friday>': 'block'|'split'|'daily'|'friday' }
+// (locked / open / unfilled units carry no pattern and are left out; 'friday' kept since the 10/1 follow-ups - the
+// kinds OPEN_SLOT_PATTERN_WORDS words). The map form is the persisted lastGenerate.weekendKinds (part 4), validated the
+// same way.
 function openSlotWeekendKinds(weekendUnits) {
   const out = {};
-  const keep = (friday, kind) => { if (suIsIso(friday) && (kind === "block" || kind === "split" || kind === "daily")) out[friday] = kind; };
+  const keep = (friday, kind) => { if (suIsIso(friday) && openSlotPatternKnown(kind)) out[friday] = kind; };
   if (Array.isArray(weekendUnits)) weekendUnits.forEach(u => { if (u && typeof u === "object") keep(u.friday, u.kind); });
   else if (weekendUnits && typeof weekendUnits === "object") Object.keys(weekendUnits).forEach(f => keep(f, weekendUnits[f]));
   return out;
@@ -533,7 +546,7 @@ function openSlotsLine(slot, nameOfUnit) {
   let unitText = "";
   if (typeof nameOfUnit === "function") unitText = u ? String(nameOfUnit(u) || "") : "";
   else if (u && u.kind === "holiday") unitText = "holiday: " + (u.name || "unit");
-  else if (u && u.kind === "weekend") unitText = "weekend" + (u.pattern ? " " + u.pattern : "");
+  else if (u && u.kind === "weekend") unitText = openSlotPatternWords(u.pattern);
   const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
   return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
 }
@@ -5949,7 +5962,7 @@ if (typeof module !== "undefined" && module.exports) {
     GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow, GROUP_CALL_SHARE_CSS, GROUP_CALL_PRINT_CSS,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
-    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
+    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, OPEN_SLOT_PATTERN_WORDS, openSlotPatternWords, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, openSlotReasonCurrent, openSlotsMessageCurrent, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     undoEntry, undoNoteWrite, undoApply, undoMessage,

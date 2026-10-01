@@ -972,7 +972,12 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     cleared, so re-saving (e.g. re-locking) his own saved Tue/Thu inside the notice from the CLI is judged as a new
     placement and refused without `--override`. Clearing one day of his Sat/Sun pair in the
     editor leaves the partner day lone without a warning (the editor judges the edited day only). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
-    as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). (k) **Consequence
+    as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). ⟶ *Done 10/1
+    (follow-ups of the 10/1 queue), client half:* the board's Unit column, its Copy list and the publish / "Email the group
+    now" e-mails word it "weekend, Friday separate" (`helpers.OPEN_SLOT_PATTERN_WORDS`; `lastGenerate.weekendKinds` now
+    keeps `friday`). The Monday cron e-mail (daily-reminder, deployed v7) still reads it as plain "weekend" until its
+    prepared v8 is deployed (branch `feat/weekend-pair-claim`). The pattern is the weekend's **primary** kind, shown on its
+    backup slots too, like block / split / daily before it. (k) **Consequence
     for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
     periods generated more than eight weeks ahead (the Jan – Jun 2027 period is generated around 11/23: its January dates
     through 1/18 stay hard for him, later ones soft).
