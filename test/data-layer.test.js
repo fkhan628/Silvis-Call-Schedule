@@ -2647,7 +2647,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(L.softTag({ reason: "pattern-daily", weight: 2 }), "daily weekend pattern");
     // review 10/1: plain words on the claim sheet / board chip for the soft codes a claim can carry; softTag keeps its tags
     [["avoid-row", "a day stated as one to avoid", "avoid"], ["recurring-avoid:Tue", "a weekday set to avoid (Tue)", "avoid: Tue"],
-      ["auto-offer-weekday", "an auto-offered weekday (East clear)", "auto-offer"], ["pattern-mismatch:split", "not the preferred weekend style (split)", "style: split"],
+      ["auto-offer-weekday", "an auto-offered weekday", "auto-offer"], ["pattern-mismatch:split", "not the preferred weekend style (split)", "style: split"],
       ["under-target", "under the monthly target", "under target"]].forEach(([c, w, t]) => {
       assert.strictEqual(L.reasonLabel(c, nameOf), w, c);
       assert.strictEqual(L.softTag({ reason: c, weight: 1 }), t, c + " (tag)");
@@ -2675,6 +2675,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(rawSoftTag, [], "soft codes softTag prints raw: " + rawSoftTag.join(", "));
     const rawSoftLabel = softCodes.filter(c => PLAIN.indexOf(c) < 0 && L.reasonLabel(c, nameOf) === c);
     assert.deepStrictEqual(rawSoftLabel, [], "soft codes reasonLabel prints raw: " + rawSoftLabel.join(", "));
+    // Item E4 (review 10/1 smoke): a code eastMaskedReasons does NOT mask reaches non-schedulers as is, so its words never
+    // name East (the first draft's "an auto-offered weekday (East clear)" leaked on the board chip and the claim sheet)
+    const keysOf = (name) => JSON.parse(e4Lift("const " + name + " = ", ";\n").slice(("const " + name + " = ").length, -2));
+    const eastHard = keysOf("EAST_HARD_REASON_KEYS"), eastSoft = keysOf("EAST_SOFT_REASON_KEYS");
+    assert.ok(eastHard.indexOf("east-busy") >= 0 && eastSoft.indexOf("east-clear") >= 0, "the East key lists lifted: " + JSON.stringify([eastHard, eastSoft]));
+    const keyOf = (c) => c.split(":")[0];
+    const eastWords = /East|Davenport/i;
+    const leakHard = R.HARD_REASONS.map(withArg).filter(c => eastHard.indexOf(keyOf(c)) < 0 && eastWords.test(L.reasonLabel(c, nameOf)));
+    assert.deepStrictEqual(leakHard, [], "unmasked hard codes whose words name East: " + leakHard.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
+    const leakSoft = softCodes.filter(c => eastSoft.indexOf(keyOf(c)) < 0 && (eastWords.test(L.reasonLabel(c, nameOf)) || eastWords.test(L.softTag({ reason: c, weight: 1 }))));
+    assert.deepStrictEqual(leakSoft, [], "unmasked soft codes whose words name East: " + leakSoft.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
   });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */

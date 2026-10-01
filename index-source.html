@@ -8576,9 +8576,10 @@ const REASON_WORDS = {
   // offers (Prompt 14 U3c, 9/23): the hard reason of an exhaustive surgeon off his offered days + the two soft ones
   "not-offered": "not among the days offered (only these days)", "offered": "offered day (bonus)", "outside-offers": "outside the offered days (penalty)",
   // long words for soft codes a claim can carry (review of the 10/1 follow-ups) - reasonLabel reads these on the claim
-  // sheet and the board chip; softTag keeps its own short tags (its cases come first)
+  // sheet and the board chip; softTag keeps its own short tags (its cases come first). Item E4: these reach non-schedulers
+  // unmasked (none is an EAST_*_REASON_KEYS code), so no word names East
   "avoid-row": "a day stated as one to avoid", "recurring-avoid": "a weekday set to avoid",
-  "auto-offer-weekday": "an auto-offered weekday (East clear)", "pattern-mismatch": "not the preferred weekend style",
+  "auto-offer-weekday": "an auto-offered weekday", "pattern-mismatch": "not the preferred weekend style",
   "under-target": "under the monthly target",
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
