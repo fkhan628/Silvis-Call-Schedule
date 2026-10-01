@@ -68,12 +68,14 @@ afterwards; the editor keeps query history).*
 
 Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
 phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
-**Each three-month period freezes six weeks before that period starts**: what you painted inside that period is what
-the generator places first, then it fills the gaps; the app e-mails you six weeks (42 days - new from 9/27), 14 days and 3 days before the freeze if you have
-entered nothing for that period (it honours your e-mail preference). From six weeks before the freeze, if you have not
-answered for a period yet, you see a notice on My schedule (and on the Calendar in the last 14 days) with a "Choose
-shifts" button, plus a count on the Paint offers button. **Or tell the app to go by your rules** for that
-period ("Go by my rules"): your recurring rules in Setup → Rules place you and you hear nothing more. When you submit,
+**Each period (six months since 9/30 - the next is Jan 2027 – Jun 2027) freezes six weeks before it starts**: what you
+painted inside that period is what the generator places first, then it fills the gaps. **Two weeks before the freeze and
+once more 3 days before, everyone in the pool gets the heads-up** (Prompt 26, 9/30 - whatever you have entered; it honours
+your e-mail preference): enter your vacations for the period; if there are days you'd like to work, or can't, paint them
+too; otherwise there is nothing to do - the schedule follows your rules. The same note sits on My schedule from two weeks
+before the freeze (and on the Calendar while it is urgent) with "Enter vacations" and "Paint days (optional)" buttons; there
+is no count on the Paint offers button any more. **Or tell the app to go by your rules** for that period ("Go by my
+rules"): your recurring rules in Setup → Rules place you - you still get the heads-up, since vacations matter for everyone. When you submit,
 say whether the list is **"only these days"** (you are never placed on a day you did not list) or **"my preferred days
 — use my rules to fill gaps"** (the default: your days first, your rules cover what is still open, and your publish
 e-mail names every day you did not list — trade if needed). Vacations, East days, derived weeks, windows and caps still

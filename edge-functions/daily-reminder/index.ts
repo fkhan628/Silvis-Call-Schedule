@@ -1017,7 +1017,7 @@ function offersClosedText(p, summary, nameOf) {
   const label = String(o.label || "next period");
   const freeze = ofmDayLabel(o.offers_close_at);
   return {
-    subject: "Silvis call - " + label + " frozen " + freeze + ": " + painted.length + " painted days, " + vacations.length + " added vacations, " + following.length + " following their rules",
+    subject: "Silvis call - " + label + " frozen " + freeze + ": " + painted.length + (painted.length === 1 ? " surgeon" : " surgeons") + " painted days, " + vacations.length + " added vacations, " + following.length + " following their rules",
     lead: label + " (" + ofmDayLabel(o.start_day) + " to " + ofmDayLabel(o.end_day) + ") froze on " + freeze,
     sections: [
       { heading: "Painted days", items: painted.map(function (r) { return nm(r.id) + " - " + r.offered + " day" + (r.offered === 1 ? "" : "s"); }) },
@@ -1063,7 +1063,7 @@ function buildOffersReminder(name: string | null, words: { subject: string; text
   // editable in Setup -> Rules) - never a literal, so editing the rule keeps the words right.
   const offsets = p.remind_days.length ? p.remind_days.join(" and ") : String(p.days_to_close);
   const footer = p.audience === "coordinator"
-    ? `this heads-up goes to the office coordinators with the first reminder, ${p.days_to_close} day${p.days_to_close === 1 ? "" : "s"} before a period's freeze; ask the scheduler to stop it.`
+    ? `this heads-up goes to the office coordinators with the first reminder, ${p.days_to_close} day${p.days_to_close === 1 ? "" : "s"} before a period's freeze; to stop it, turn off \"Schedule published, open shifts, shifts taken\" under Settings in the app (an office account that follows a surgeon), or ask the scheduler.`
     : `this reminder goes out ${offsets} day${offsets === "1" ? "" : "s"} before a period's freeze to every pool surgeon; turn schedule updates off under Settings in the app to stop it.`;
   const f = OFFERS_REMINDER_FRAME;
   return { subject: words.subject, html: offersFrame(f.title, f.color, name, escHtml(words.text), f.cta, footer) };

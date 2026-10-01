@@ -1764,6 +1764,16 @@ check("P26 runOffers source pins: the reminder branch is the replay's - remindDa
   const i = drSrc.indexOf("async function runOffers("), j = drSrc.indexOf("\n// ------", i);
   const r = drSrc.slice(i, j);
   [
+    // review 9/30: the replay's own bookkeeping lines are pinned on the runner too (a mutation of the runner's prefsById /
+    // emailById lines - e.g. dropping a surgeon's opt-out - used to pass both suites unnoticed)
+    'rest("notification_preferences?select=person_id,schedule_updates_email"),',
+    "const prefsById: Record<string, any> = {};",
+    "for (const p of (Array.isArray(prefRows) ? prefRows : [])) if (p?.person_id) prefsById[String(p.person_id)] = p;",
+    "const emailById: Record<string, string | null> = {};",
+    "for (const row of (Array.isArray(profiles) ? profiles : [])) {",
+    "const email = typeof row.email === \"string\" && row.email.trim() ? row.email.trim() : null;",
+    "if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;",
+    "if (!words) continue;",
     "const remindDays: number[] = t.remind_on.map((d: string) => otmDaysBetween(d, t.offers_close_at)).sort((a: number, b: number) => b - a);",
     "const optedOut = (pid: string | null) => !!(pid && prefsById[pid] && prefsById[pid].schedule_updates_email === false);",
     "const kind = offersReminderKind(plan.days_to_close, remindDays);",
@@ -1825,7 +1835,8 @@ check("P26 close summary words: subject 'Silvis call - <period> frozen <freeze>:
   if (!OFM) throw new Error("@offersMail block did not load");
   const s = { painted: [{ id: "s1", offered: 2 }, { id: "s2", offered: 1 }], vacations: [{ id: "s1", ranges: ["1/4-1/12"] }, { id: "s5", ranges: ["3/1-3/10", "6/29-6/30"] }, { id: "s6", ranges: ["2/14"] }], following: ["s3", "s4"] };
   const w = OFM.offersClosedText(P26_PERIOD, s, (id) => P26_NAMES[id] || id);
-  assert.strictEqual(w.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 2 painted days, 3 added vacations, 2 following their rules");
+  // pin moved deliberately 9/30 (review of Prompt 26): the counts are SURGEONS - the subject says so (it read "1 painted days")
+  assert.strictEqual(w.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 2 surgeons painted days, 3 added vacations, 2 following their rules");
   assert.strictEqual(w.lead, "Jan 2027 - Jun 2027 (Mon 1/4 to Wed 6/30) froze on Mon 11/23");
   assert.deepStrictEqual(w.sections, [
     { heading: "Painted days", items: ["Khan - 2 days", "Burchett - 1 day"] },
@@ -1836,7 +1847,7 @@ check("P26 close summary words: subject 'Silvis call - <period> frozen <freeze>:
   assert.ok(!P26_FORBIDDEN.test(all), "no retired word in the roll call: " + all);
   assert.ok(/Nothing was generated or published/.test(w.tail), "the close still says nothing was generated or published");
   const empty = OFM.offersClosedText(P26_PERIOD, { painted: [], vacations: [], following: ["s1", "s2"] }, (id) => P26_NAMES[id]);
-  assert.strictEqual(empty.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 0 painted days, 0 added vacations, 2 following their rules");
+  assert.strictEqual(empty.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 0 surgeons painted days, 0 added vacations, 2 following their rules");
 });
 
 check("P26 runOffers close source pins: time_off is read (service role, the period's range, select person_id,start_date,end_date) BEFORE the compare-and-swap, never written; the summary is offersCloseSummary(roll, offersVacationRanges(...)) rendered by buildOffersClosed from offersClosedText; entry.summary and the audit detail carry roster ids only; buildOffersClosed has no 'Never answered' / 'Submitted' / 'Go by my rules' section left", () => {
@@ -1898,6 +1909,21 @@ check("P26 (merge of the two halves): the cron's FIRST heads-up = helpers.offerH
     assert.deepStrictEqual([cron.subject, cron.text], [app.subject, app.body], "the same first heads-up for " + p.label);
     assert.strictEqual(OFM.ofmDayLabel(p.offers_close_at), H20.offerFreezeDay(p.offers_close_at), "the same freeze day for " + p.offers_close_at);
   }
+});
+check("P26 (review 9/30): the freeze roll call's vacations read the same in the cron's close summary (offersVacationRanges) and the app's Periods box / Close now (helpers.offerFreezeRollcall) - clipped to the period, merged where they overlap or touch", () => {
+  if (!OFM) throw new Error("the @offersMail block did not load");
+  const ids = ["s1", "s2", "s3", "s4"];
+  const rows = [
+    { person_id: "s1", start_date: "2026-12-28", end_date: "2027-01-08" }, { person_id: "s1", start_date: "2027-01-09", end_date: "2027-01-12" },   // straddles the start; touching
+    { person_id: "s2", start_date: "2027-03-01", end_date: "2027-03-10" }, { person_id: "s2", start_date: "2027-03-05", end_date: "2027-03-12" },   // overlapping
+    { person_id: "s2", start_date: "2027-06-29", end_date: "2027-07-04" },                                                                          // straddles the end
+    { person_id: "s3", start_date: "2027-02-14", end_date: "2027-02-14" },                                                                          // one day
+    { person_id: "s4", start_date: "2027-07-01", end_date: "2027-07-09" },                                                                          // outside
+  ];
+  const cron = OFM.offersVacationRanges(rows, P26_PERIOD.start_day, P26_PERIOD.end_day, ids);
+  const app = H20.offerFreezeRollcall(P26_PERIOD, [], rows, ids);
+  ids.forEach((id) => assert.deepStrictEqual((app.find((r) => r.id === id) || {}).vacations || [], cron[id] || [], "the same ranges for " + id));
+  assert.deepStrictEqual(cron.s1, [{ start: "2027-01-04", end: "2027-01-12" }], "fixture: clipped and merged");
 });
 
 (async () => {

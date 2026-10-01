@@ -4696,7 +4696,7 @@ function CallSchedule() {
     const { subject, body } = offerHeadsUpWords({ label: p.label, closeAt: close });
     // the effective offsets (groupRules.offerPeriods.remindDaysBeforeClose, largest first): the first is the heads-up, the
     // smallest of two or more the one-line last call
-    const ds = (() => { const lst = groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose; return (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0).sort((x, y) => y - x); })();
+    const ds = (() => { const lst = groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose; return (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter((n, i, a) => typeof n === "number" && isFinite(n) && n > 0 && a.indexOf(n) === i).sort((x, y) => y - x); })();
     const cadence = ds.length ? ` (the morning run sends it ${ds[0]} day${ds[0] === 1 ? "" : "s"} before the freeze${ds.length > 1 ? `, with a one-line last call ${ds[ds.length - 1]} day${ds[ds.length - 1] === 1 ? "" : "s"} before` : ""})` : "";
     const message = `${body}\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page${cadence}.`;
     const detail = "Enter vacations under Time off; paint days (optional): " + window.location.origin + window.location.pathname + "#offers";
@@ -10611,7 +10611,7 @@ function PeriodsSection({ css, periods, offers, timeOff, roster, groupRules, tod
               <button type="button" data-testid="prd-generate" onClick={() => onGenerate(p)} disabled={busy} title={"Run Generate over " + day(p.start_day) + " - " + day(p.end_day) + " (the existing preview flow: offered days first, the gaps by the rules; Accept & Publish is below)"} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>Generate this period</button>
             </div>
             <div style={{ fontSize: 12, color: PRD_MUTED, marginBottom: 6 }}>
-              Offers close <strong>{close || "-"}</strong>{inWords(daysTo(close))} - publish by <strong>{pub || "-"}</strong>{inWords(daysTo(pub))} - <span data-testid="prd-summary">painted days: {nPainted}, added vacations: {nVac}, following their rules: {nRules}</span>.
+              Offers close <strong>{close || "-"}</strong>{inWords(daysTo(close))} - publish by <strong>{pub || "-"}</strong>{inWords(daysTo(pub))} - <span data-testid="prd-summary">{nPainted} {nPainted === 1 ? "surgeon" : "surgeons"} painted days, {nVac} added vacations, {nRules} following their rules</span>.
             </div>
             {(lead.periods[p.id || day(p.start_day)] || []).map(w => <div key={w.kind} data-testid="prd-lead-warn" data-kind={w.kind} style={{ ...css.warnBox, padding: "5px 9px", marginBottom: 6 }}>{leadWords(w)}</div>)}
             <div className="table-wrap" style={css.tableWrap}>

@@ -7910,10 +7910,13 @@ try {
           if (r.offered > 0 && !new RegExp(`painted ${r.offered} days?`).test(r.text)) return `${r.id}: no 'painted ${r.offered} day(s)' in '${r.text}'`;
           if (r.vac.length && !(r.text.includes("added vacations ") && r.vac.every(k => { const [s, e] = k.split(".."); return r.text.includes(s === e ? mdOf(s) : mdOf(s) + "-" + mdOf(e)); }))) return `${r.id}: the vacations ${JSON.stringify(r.vac)} are not named in '${r.text}'`;
           if (kind === "rules" && !/following their rules/.test(r.text)) return `${r.id}: no 'following their rules' in '${r.text}'`;
-          if (/not started|never answered|missing|rules only/i.test(r.text)) return `${r.id}: an old word in '${r.text}'`;
+          // review 9/30: the row text joins the cells, so 'following their rules' + the mode cell 'only these days' reads 'rules only' -
+          // the retired status word is 'rules only' NOT followed by the mode's 'these days'
+          if (/not started|never answered|missing|rules only(?! these days)/i.test(r.text)) return `${r.id}: an old word in '${r.text}'`;
           return null;
         };
-        const summaryOf = (rows) => `painted days: ${rows.filter(r => r.offered > 0).length}, added vacations: ${rows.filter(r => r.vac.length > 0).length}, following their rules: ${rows.filter(r => r.kind === "rules").length}`;
+        // pin moved deliberately 9/30 (review of Prompt 26): the summary counts surgeons and says so
+        const summaryOf = (rows) => { const np = rows.filter(r => r.offered > 0).length; return `${np} ${np === 1 ? "surgeon" : "surgeons"} painted days, ${rows.filter(r => r.vac.length > 0).length} added vacations, ${rows.filter(r => r.kind === "rules").length} following their rules`; };
         await page.waitForSelector("[data-testid=periods-section]", { timeout: 5000 });
         await page.waitForSelector(boxSel(per.id), { timeout: 5000 });
         // (a) the seed period's table against the stores

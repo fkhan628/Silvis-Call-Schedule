@@ -367,7 +367,7 @@ check("E7 (9/27 ship): urgent reads noticeUrgentDaysBeforeClose (default 14), ne
 // ADDED VACATIONS (a time_off row overlapping the period's days); everyone else is "following their rules" - never "missing",
 // "not started" or "never answered". helpers.offerFreezeRollcall = offerRollcall's rows (status unchanged) + vacations + kind;
 // offerFreezeWords = the words; offerHeadsUpWords = the first reminder's subject / body (the Periods Remind button sends it).
-check("E8 (Prompt 26): offerFreezeRollcall - offerRollcall's rows plus the vacations overlapping the period (own dates, sorted, deduplicated; start_date / end_date or start / end) and kind painted / vacations / rules", () => {
+check("E8 (Prompt 26): offerFreezeRollcall - offerRollcall's rows plus the vacations overlapping the period (clipped to it and merged where they overlap or touch - the cron's reading, review 9/30; start_date / end_date or start / end) and kind painted / vacations / rules", () => {
   const P1 = SP[1]; // Jan 2027 - Jun 2027 (2027-01-04 .. 2027-06-30)
   const ids = ["s1", "s2", "s3", "s4", "s5", "s6"];
   const offers = [{ person_id: "s2", day: "2027-01-10", role_pref: "either" }, { person_id: "s2", day: "2027-01-10", role_pref: "primary" }, { person_id: "s2", day: "2027-02-03", role_pref: "backup" }, { person_id: "s3", day: "2026-12-30", role_pref: "primary" }];
@@ -381,13 +381,15 @@ check("E8 (Prompt 26): offerFreezeRollcall - offerRollcall's rows plus the vacat
     { person_id: "s6", start_date: "2027-05-10", end_date: "2027-05-01" },   // ends before it starts: skipped
     { person_id: "s6", start_date: "05/10/2027", end_date: "2027-05-12" },   // not ISO: skipped
     { start_date: "2027-02-01", end_date: "2027-02-02" },                    // no person: skipped
+    { person_id: "s3", start_date: "2027-03-02", end_date: "2027-03-04" },   // touches 3/1: merged into one range (review 9/30)
   ];
   const roll = H.offerFreezeRollcall(P1, offers, timeOff, ids);
   eq(roll.map(r => ({ id: r.id, status: r.status, offered: r.offered })), H.offerRollcall(P1, offers, ids), "id / status / offered are offerRollcall's, unchanged");
   eq(roll.map(r => [r.id, r.kind, r.vacations]), [
     ["s1", "rules", []],
-    ["s2", "painted", [{ start: "2027-06-28", end: "2027-07-04" }]],
-    ["s3", "vacations", [{ start: "2026-12-28", end: "2027-01-05" }, { start: "2027-03-01", end: "2027-03-01" }]],
+    // pin moved deliberately 9/30 (review of Prompt 26): clipped to 1/4 - 6/30 and merged (3/1 + 3/2-3/4 touch), as the cron renders it
+    ["s2", "painted", [{ start: "2027-06-28", end: "2027-06-30" }]],
+    ["s3", "vacations", [{ start: "2027-01-04", end: "2027-01-05" }, { start: "2027-03-01", end: "2027-03-04" }]],
     ["s4", "rules", []],
     ["s5", "rules", []],
     ["s6", "rules", []],

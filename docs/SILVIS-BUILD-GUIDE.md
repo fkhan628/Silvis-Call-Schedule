@@ -1051,8 +1051,9 @@ is the generation window: the days inside the next period **freeze six weeks bef
 (`offers_close_at` = start − `closeWeeksBeforeStart` weeks, editable per period; 9/27: this line said "before the current
 period ends", true only when periods run back to back), the schedule is due four weeks before
 (`publish_by`), and reminders go out 14 and 3 days before the freeze (`groupRules.offerPeriods.remindDaysBeforeClose` - `[14, 3]` since Faraz's 9/30 decision, set live 9/30 20:32 CDT; `[42, 14, 3]` from 9/27 to 9/30; the built-in default is 14 and 3) to anyone with nothing entered for that period who
-has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
-not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
+has not chosen **"go by my rules"** (until 9/30 - since Prompt 26 the reminders go to every pool surgeon whatever the status;
+see the head of this section). Status per surgeon per period is derived, never typed: submitted / rules-only /
+not started (shown since 9/30 as painted days / following their rules). A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
 others) sends the reminders and the close summary; it never generates or publishes. **Data (part 1, applied live
 2026-09-22 15:15; `sql/migrations/2026-09-22-offers-periods.sql`, mirrored in `sql/schema.sql`):** `call_offers`
 (`person_id`, `day`, `role_pref` primary / backup / either, operational `note`, `entered_by` = the roster id or

@@ -2899,7 +2899,8 @@ function offerPoolIds(roster) {
 // offerRollcall(period, offers, ids) -> [{ id, status, offered }] in ids order: status = offerStatus (submitted /
 // rules_only / not_started) and offered = the number of DISTINCT days the person offered inside [start_day, end_day]
 // (end inclusive; a timestamp-shaped day is read by its date; a role_pref never counts twice); [] when the period
-// has no usable dates or ids is not a list. The reminder goes to status not_started; the close summary names all.
+// has no usable dates or ids is not a list. Since Prompt 26 (9/30) the heads-up reminder goes to every pool surgeon whatever
+// the status, and the freeze roll call is offerFreezeRollcall (painted days / added vacations / following their rules).
 function offerRollcall(period, offers, ids) {
   const b = opBounds(period);
   if (!b || !Array.isArray(ids)) return [];
@@ -3153,8 +3154,9 @@ function offerPeriodLeadWarnings(args) {
 }
 // offerFreezeRollcall(period, offers, timeOff, ids) -> the scheduler's roll call at the freeze (Prompt 26): offerRollcall's
 // rows ({ id, status, offered }, ids order, status unchanged) plus vacations = the person's time_off rows overlapping
-// [start_day, end_day] as [{ start, end }] (the row's own dates, not clipped; sorted, duplicates dropped; start_date /
-// end_date, or start / end as aliases; a row without both ISO dates or ending before it starts is skipped) and kind =
+// [start_day, end_day] as [{ start, end }] - CLIPPED to the period and MERGED where they overlap or touch (review 9/30: the
+// daily-reminder close summary's offersVacationRanges reading, pinned equal in test/edge-functions.test.js); start_date /
+// end_date, or start / end as aliases; a row without both ISO dates or ending before it starts is skipped - and kind =
 // 'painted' (offered days inside the period), else 'vacations' (none painted, a vacation overlaps), else 'rules'
 // (following their rules). [] when the period has no usable dates or ids is not a list.
 function offerFreezeRollcall(period, offers, timeOff, ids) {
@@ -3166,10 +3168,16 @@ function offerFreezeRollcall(period, offers, timeOff, ids) {
     const s = opDay(r.start_date !== undefined ? r.start_date : r.start), e = opDay(r.end_date !== undefined ? r.end_date : r.end);
     if (!s || !e || e < s || s > b.end || e < b.start) return;
     const k = String(r.person_id), list = vac[k] = vac[k] || [];
-    if (!list.some(x => x.start === s && x.end === e)) list.push({ start: s, end: e });
+    list.push({ start: s < b.start ? b.start : s, end: e > b.end ? b.end : e });
   });
+  const merge = (rows) => {
+    const sorted = rows.slice().sort((x, y) => (x.start !== y.start ? (x.start < y.start ? -1 : 1) : (x.end < y.end ? -1 : x.end > y.end ? 1 : 0)));
+    const out = [];
+    sorted.forEach(x => { const last = out.length ? out[out.length - 1] : null; if (last && x.start <= suAddDays(last.end, 1)) { if (x.end > last.end) last.end = x.end; } else out.push({ start: x.start, end: x.end }); });
+    return out;
+  };
   return offerRollcall(period, offers, ids).map(r => {
-    const v = (vac[r.id] || []).slice().sort((x, y) => (x.start !== y.start ? (x.start < y.start ? -1 : 1) : (x.end < y.end ? -1 : x.end > y.end ? 1 : 0)));
+    const v = merge(vac[r.id] || []);
     return { id: r.id, status: r.status, offered: r.offered, vacations: v, kind: r.offered > 0 ? "painted" : v.length ? "vacations" : "rules" };
   });
 }
