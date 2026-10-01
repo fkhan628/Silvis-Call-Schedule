@@ -1213,7 +1213,10 @@ summary line** by default (`<label> - freezes 10/2 - nothing yet - preferred day
 rules"), so the day list keeps at least 45 % of a 390 x 844 viewport (the smoke measures it); **Change** expands the
 toggle **"Only these days"** / **"These are my preferred days - use my rules to fill gaps"** (default) with one
 explaining line and **"Go by my rules for <label>"** (shown until the person has offers inside the period; its confirm
-speaks that person's rules in words from `surgeonRules` — `helpers.offerRulesWords`, data-driven, no name branch); a
+speaks that person's rules in words from `surgeonRules` — `helpers.offerRulesWords`, data-driven, no name branch; its
+never-on notice sentence says "allowed further ahead" only where no other day rule of a covered role closes the day and
+names the roles the engine applies - `helpers.suHnOtherDayRules`, the predicate the Setup summary's notice clause reads,
+10/1 follow-ups); a
 dirty mode keeps the box open, a Save or Discard folds it. A rules-only surgeon who paints a day inside the period
 comes off the list by that save (the derived status would contradict it otherwise). Smoke (`test/ui/smoke.mjs`, both
 themes, 390 px + 1180): paint five days with three brushes including a range, the Tue/Thu confirmation counted once

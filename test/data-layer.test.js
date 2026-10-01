@@ -7818,6 +7818,58 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suSumMonths(["2026-12", "2026-10", "2027-01", "2026-11", "x"]), "Oct-Dec 2026, Jan 2027, x");
       assert.strictEqual(H.suSumMonths(["2026-10", "2026-12"]), "Oct, Dec 2026");
     });
+    // Follow-ups 10/1 item 5 (the 10/1 queue report): offerRulesWords (the painter's "Go by my rules" words) is as truthful
+    // as suRulesSummary's notice clause - "allowed further ahead" only where no other day rule of a covered role closes the
+    // day (suHnOtherDayRules, which both read now) - and names the roles rules.js applies (the key's, else the default).
+    check("Follow-ups 10/1 (5): offerRulesWords' notice sentence qualified beside another day rule (suHnOtherDayRules, shared with suRulesSummary); the seed text unchanged; the default roles named; agrees with the summary", () => {
+      const G0 = seed.groupRules;
+      const never = (rules, g) => H.offerRulesWords(rules, g || G0).filter(s => /^Never (primary|backup|primary\/backup) on (Mon|Tue|Wed|Thu|Fri|Sat|Sun)/.test(s));
+      const Wg = (w, g) => Object.assign({}, g || G0, { weights: Object.assign({}, (g || G0).weights, w) });
+      const closed = Object.assign({}, G0, { backupPolicy: Object.assign({}, G0.backupPolicy, { openToEveryone: false }) });
+      const s1 = seed.surgeonRules.s1;
+      // the seed's sentences, unchanged (s1 has no other day rule; s3 has a governed month but no notice)
+      assert.deepStrictEqual(never(s1), ["Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."]);
+      assert.deepStrictEqual(never(seed.surgeonRules.s3), ["Never primary on Tue."]);
+      assert.deepStrictEqual(never(s1, Wg({ hardNeverBeyondNotice: 0 })), ["Never primary on Tue, Thu within 56 days; allowed further ahead."]);
+      // s1 plus each other day rule of primary: qualified
+      const Q = "Never primary on Tue, Thu within 56 days; further ahead allowed with a soft penalty where your other day rules allow it.";
+      [["recurringAvailable", { recurringAvailable: [{ weekday: "Mon" }] }], ["the whitelist-recurring mode", { availabilityMode: "whitelist-recurring" }],
+        ["availableWindows", { availableWindows: [{ start: "2027-01-04", end: "2027-03-28" }] }], ["availableWeeks", { availableWeeks: ["2027-01-04"] }],
+        ["explicitListMonths", { explicitListMonths: ["2027-01"] }], ["a weekdayPattern", { outsideDerivedWeeks: { weekdayPattern: { Mon: { primary: true } } } }]
+      ].forEach(([k, add]) => assert.deepStrictEqual(never(Object.assign({}, s1, add)), [Q], k));
+      assert.deepStrictEqual(never(Object.assign({}, s1, { recurringAvailable: [{ weekday: "Mon" }] }), Wg({ hardNeverBeyondNotice: 0 })), ["Never primary on Tue, Thu within 56 days; further ahead your other day rules decide."], "weight 0");
+      assert.deepStrictEqual(never(Object.assign({}, s1, { explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] })), ["Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."], "a month governed for backup only does not close his primary day");
+      // backup-only coverage: the recurring list closes backup only while backup is NOT open to everyone
+      const bk = { hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"], hardNeverWeekdaysNoticeDays: 10, recurringAvailable: [{ weekday: "Mon" }] };
+      assert.deepStrictEqual(never(bk), ["Never backup on Tue within 10 days; allowed further ahead, with a soft penalty."], "backup open: the recurring list does not close backup");
+      assert.deepStrictEqual(never(bk, closed), ["Never backup on Tue within 10 days; further ahead allowed with a soft penalty where your other day rules allow it."]);
+      // the roles key absent: rules.js's default (primary while backup is open, both otherwise) - it used to name none
+      assert.deepStrictEqual(never({ hardNeverWeekdays: ["Tue"] }), ["Never primary on Tue."]);
+      assert.deepStrictEqual(never({ hardNeverWeekdays: ["Tue"] }, closed), ["Never primary/backup on Tue."]);
+      // the shared predicate
+      assert.deepStrictEqual(H.suHnOtherDayRules({}, G0), { primary: false, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWeeks: ["2027-01-04"] }, G0), { primary: true, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWeeks: ["2027-01-04"] }, closed), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWindows: [{ start: "2027-01-04", end: "2027-01-10" }] }, G0), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] }, G0), { primary: false, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules(null, null), { primary: false, backup: false });
+      assert.deepStrictEqual(H.suSumGoverned({ explicitListMonths: ["2027-01", { month: "2027-02" }, { month: "2027-03", roles: ["backup"] }, 7] }, true), { primary: ["2027-01"], both: ["2027-02"], backup: ["2027-03"] });
+      // agreement: offerRulesWords qualifies exactly when suRulesSummary's line of a covered role does
+      const others = [{}, { recurringAvailable: [{ weekday: "Mon" }] }, { availabilityMode: "whitelist-recurring" }, { availableWindows: [{ start: "2027-01-04", end: "2027-01-10" }] },
+        { availableWeeks: ["2027-01-04"] }, { explicitListMonths: ["2027-01"] }, { explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] }, { outsideDerivedWeeks: { weekdayPattern: { Mon: { primary: true, backup: true } } } }];
+      const rolesSets = [undefined, ["primary"], ["backup"], ["primary", "backup"]];
+      let n = 0;
+      [G0, closed, Wg({ hardNeverBeyondNotice: 0 }), Wg({ hardNeverBeyondNotice: 0 }, closed)].forEach((g, gi) => rolesSets.forEach(roles => others.forEach(o => {
+        const rules = Object.assign({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysNoticeDays: 10 }, roles ? { hardNeverWeekdaysRoles: roles } : {}, o);
+        const ow = never(rules, g); assert.strictEqual(ow.length, 1, JSON.stringify(rules));
+        const oq = /where your other day rules allow it|your other day rules decide/.test(ow[0]);
+        const sum = H.suRulesSummary(rules, { names, holidayNames: HOL, groupRules: g }).filter(l => l.family === "Primary" || l.family === "Backup").map(l => l.text).join(" | ");
+        const sq = /where the other day rules allow it|left to the other day rules/.test(sum);
+        assert.strictEqual(oq, sq, "group #" + gi + " " + JSON.stringify(rules) + ": offerRulesWords '" + ow[0] + "' vs summary '" + sum + "'");
+        n++;
+      })));
+      assert.strictEqual(n, 4 * 4 * 8, "the whole matrix ran");
+    });
     check("P24 summary review 10/1: every day-limiting rule on its own (a recurring list with an allow-list, an allow-list with a weekday pattern); the soft pairs read with the weights (others first, the weekday / weekend preference, the notice); the style words soft, backup-only under a lone Friday, 'daily' a lone day fine", () => {
       const fam = (rules, f, inf) => (H.suRulesSummary(rules, inf || info).find(l => l.family === f) || {}).text;
       const S = seed.surgeonRules;

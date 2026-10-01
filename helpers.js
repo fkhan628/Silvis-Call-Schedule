@@ -4637,7 +4637,18 @@ function offerRulesWords(rules, groupRules) {
   // the weights as rules.js reads them (the group's over the defaults), no penalty named when that weight is 0
   const nd = R.hardNeverWeekdaysNoticeDays;
   const noticeOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
-  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days; allowed further ahead" + (suSumWeights(G).hardNeverBeyondNotice ? ", with a soft penalty" : "") : "") + ".");
+  // 10/1 follow-ups (item 5): the roles named are the ones rules.js applies - the key's, else its default (primary while
+  // backup is open to everyone, both otherwise; it used to name none, which read as both); and "allowed further ahead"
+  // only where no other day rule of a covered role (a recurring list, a weekday pattern, windows, listed weeks, a governed
+  // month - suHnOtherDayRules, the clause suRulesSummary reads) closes the day - else those rules decide out there
+  const hnBackupOpen = !(G.backupPolicy && G.backupPolicy.openToEveryone === false);
+  const hnRoles = Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles : (hnBackupOpen ? ["primary"] : ["primary", "backup"]);
+  const hnOther = suHnOtherDayRules(R, G);
+  const hnQualified = hnRoles.some(r => (r === "primary" || r === "backup") && hnOther[r]);
+  const hnSoft = !!suSumWeights(G).hardNeverBeyondNotice;
+  const hnFar = hnQualified ? (hnSoft ? "; further ahead allowed with a soft penalty where your other day rules allow it" : "; further ahead your other day rules decide")
+    : "; allowed further ahead" + (hnSoft ? ", with a soft penalty" : "");
+  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + hnRoles.join("/") + " on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days" + hnFar : "") + ".");
   // Prompt 23 B2 / B3. Review (10/1): one sentence for the PRIMARY weekend shapes - with standaloneFriday they are {Fri},
   // {Sat, Sun} and {Fri, Sat, Sun} (rules.js), so the weekendStyle line below then speaks of BACKUP weekends only (it used
   // to say "Weekends: Fri-Sun as one block" beside "a Friday may stand alone").
@@ -4822,6 +4833,43 @@ const SU_SUM_MODE_WORDS = {
   "whitelist-windows": "only inside date windows",
   "derived-from-east-plus-weekday-pattern": "East-derived weeks plus a weekday pattern",
 };
+// suSumGoverned(rules, backupOpen) -> { primary, both, backup }: the governed months (rules.js rdGovernedMonths) by the
+// roles they govern - a plain entry = primary only while backup is open (both otherwise), an object entry = its roles
+// (both when none are given). Lifted out of suRulesSummary by the 10/1 follow-ups (item 5) for suHnOtherDayRules.
+function suSumGoverned(rules, backupOpen) {
+  const R = suSumObj(rules) ? rules : {};
+  const governed = { primary: [], both: [], backup: [] };
+  (Array.isArray(R.explicitListMonths) ? R.explicitListMonths : []).forEach(e => {
+    let m, roles;
+    if (typeof e === "string") { m = e; roles = backupOpen ? ["primary"] : ["primary", "backup"]; }
+    else if (suSumObj(e) && e.month) { m = e.month; roles = Array.isArray(e.roles) && e.roles.length ? e.roles : ["primary", "backup"]; }
+    else return;
+    const p = roles.indexOf("primary") >= 0, b = roles.indexOf("backup") >= 0;
+    (p && b ? governed.both : p ? governed.primary : governed.backup).push(m);
+  });
+  return governed;
+}
+// suHnOtherDayRules(rules, groupRules) -> { primary, backup }: true for a role when ANOTHER day rule of that role could
+// close a never-on weekday beyond its notice (Prompt 24 review fix 2, 10/1 - rules.js applies each rule on its own, so
+// "allowed further ahead" is only true where none of them closes the day): for primary a recurring list or the
+// whitelist-recurring mode, a weekday pattern, date windows, listed weeks, a month governed for primary; for backup a
+// weekday pattern, date windows, a month governed for backup, and the recurring list / listed weeks only while backup is
+// NOT open to everyone (rules.js isPrimary). The weekday allow-list leaves a never-on day to the never-on rule, so it is
+// not one. suRulesSummary's notice clause and offerRulesWords both read it (10/1 follow-ups, item 5). Pure.
+function suHnOtherDayRules(rules, groupRules) {
+  const R = suSumObj(rules) ? rules : {};
+  const G = suSumObj(groupRules) ? groupRules : {};
+  const backupOpen = !(G.backupPolicy && G.backupPolicy.openToEveryone === false);
+  const recOn = R.availabilityMode === "whitelist-recurring" || (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length > 0);
+  const wp = !!(R.outsideDerivedWeeks && suSumObj(R.outsideDerivedWeeks.weekdayPattern));
+  const win = Array.isArray(R.availableWindows) && R.availableWindows.length > 0;
+  const weeksOn = Array.isArray(R.availableWeeks) && R.availableWeeks.length > 0;
+  const gov = suSumGoverned(R, backupOpen);
+  return {
+    primary: recOn || wp || win || weeksOn || gov.primary.length > 0 || gov.both.length > 0,
+    backup: wp || win || gov.both.length > 0 || gov.backup.length > 0 || (!backupOpen && (recOn || weeksOn)),
+  };
+}
 function suRulesSummary(rules, info) {
   const R = suSumObj(rules) ? rules : {};
   const I = suSumObj(info) ? info : {};
@@ -4857,15 +4905,8 @@ function suRulesSummary(rules, info) {
   const alDayBefore = !!al && al.hardAvoidDayBefore !== false;
   const windows = Array.isArray(R.availableWindows) ? R.availableWindows : [];
   // governed months (rules.js rdGovernedMonths): a plain entry = primary only while backup is open, an object entry = its roles
-  const governed = { primary: [], both: [], backup: [] };
-  (Array.isArray(R.explicitListMonths) ? R.explicitListMonths : []).forEach(e => {
-    let m, roles;
-    if (typeof e === "string") { m = e; roles = backupOpen ? ["primary"] : ["primary", "backup"]; }
-    else if (suSumObj(e) && e.month) { m = e.month; roles = Array.isArray(e.roles) && e.roles.length ? e.roles : ["primary", "backup"]; }
-    else return;
-    const p = roles.indexOf("primary") >= 0, b = roles.indexOf("backup") >= 0;
-    (p && b ? governed.both : p ? governed.primary : governed.backup).push(m);
-  });
+  const governed = suSumGoverned(R, backupOpen);
+  const hnOther = suHnOtherDayRules(R, G); // the other day rules per role (the notice clause below; offerRulesWords reads the same)
 
   // Availability: the listed weeks, the windows, the governed months. The mode is a label - rules.js reads only
   // "whitelist-recurring" (the Primary line); the others take their days from the keys below / the other lines, so the
@@ -4924,8 +4965,7 @@ function suRulesSummary(rules, info) {
   if (Array.isArray(R.availableWeeks) && R.availableWeeks.length) pr.push("only in the listed weeks");
   if (!pr.length) pr.push("any day");
   const never = [];
-  const weeksOn = Array.isArray(R.availableWeeks) && R.availableWeeks.length > 0;
-  const neverPrim = neverWords(recOn || !!wp || windows.length > 0 || weeksOn || governed.primary.length > 0 || governed.both.length > 0);
+  const neverPrim = neverWords(hnOther.primary);
   if (neverPrim && hnPrim) never.push(neverPrim);
   (Array.isArray(R.recurringUnavailable) ? R.recurringUnavailable : []).forEach(p => never.push(suSumPattern(p)));
   if (never.length) pr.push("never " + never.join(", "));
@@ -4952,7 +4992,7 @@ function suRulesSummary(rules, info) {
     if (!backupOpen) bk.push("the primary day rules apply to backup too (group setting)");
     // backup: windows, the pattern and a governed month's backup mask close days for backup; the recurring list and the
     // listed weeks only while backup is not open to everyone (rules.js isPrimary)
-    const neverBk = neverWords(!!wp || windows.length > 0 || governed.both.length > 0 || governed.backup.length > 0 || (!backupOpen && (recOn || weeksOn)));
+    const neverBk = neverWords(hnOther.backup);
     if (neverBk && hnRoles.indexOf("backup") >= 0) bk.push("never " + neverBk);
     if (wp) {
       const noB = [], blockB = [];
@@ -5985,7 +6025,7 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
-    suRulesSummary, suRulesUnknownKeys, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
+    suRulesSummary, suRulesUnknownKeys, suHnOtherDayRules, suSumGoverned, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,
     suRuleFieldHeld, suRuleRemoveConfirm, SU_RULE_VALUE_WORDS,
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
