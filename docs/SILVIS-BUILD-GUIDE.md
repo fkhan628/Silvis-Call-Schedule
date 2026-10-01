@@ -894,8 +894,10 @@ AND no `external_cover`; **backup** = no `backup_id`; a day with NO row inside t
 by day then role (primary before backup); invalid inputs → `[]`, never throws. `opts` is optional:
 `{ holidayByDay, weekendKinds: { '<friday>': 'block'|'split'|'daily'|'friday' }, reasons: { 'YYYY-MM-DD|primary': string } }`
 ('friday' - Prompt 23 B2's pattern - kept since the 10/1 follow-ups; `OPEN_SLOT_PATTERN_WORDS` words the four for the board's Unit
-column and `openSlotsLine`: "weekend block" / "weekend split" / "weekend daily" / "weekend, Friday separate", an
-unknown pattern plain "weekend");
+column and `openSlotsLine`: "weekend block" / "weekend split" / "weekend daily" / "weekend, Friday on its own", an
+unknown pattern plain "weekend"; `openSlotPatternWords(pattern, role)` takes the slot's role because 'friday' is a
+primary-only shape - a backup slot of such a weekend reads plain "weekend" (review of the 10/1 follow-ups); the board's
+`boardUnitText` is lifted and run by `test/open-shifts.test.js`);
 `from`/`to` must be real calendar days (`'2026-13-40'` → `[]`). `unit` is decided per day, as the generator builds its
 units: `{ kind: 'holiday', name }` on a holiday-unit day, else `{ kind: 'weekend', pattern, friday }` on any Fri/Sat/Sun
 (including the leftover days of a weekend a holiday pre-empts — the generator's reduced weekend unit; `tradeUnitOf`
@@ -906,7 +908,9 @@ operational wording from `opts.reasons`, trimmed, or `null` (a lock flag never h
 `'Fri 11/06 - primary (weekend block) - open'` (the board's Copy list: weekday, zero-padded `MM/DD`, role, the unit in
 parentheses, `- open`, and ` - <reason>` appended when the slot has one). Pinned by `test/open-shifts.test.js` against
 `test/fixtures/open-slots.json` (which also states the `schedule_days` column mapping); part 5 mirrors the function in
-TypeScript in `edge-functions/daily-reminder/index.ts` against the same fixture — this one function feeds everything:
+TypeScript in `edge-functions/daily-reminder/index.ts` against the same fixture (except the 'friday' pattern words until
+daily-reminder v8 is deployed - 10/1 follow-ups, item 2: the deployed v7 reads that kind as unknown, plain "weekend") —
+this one function feeds everything:
 the coverage strip (`suCoverageGlance` computes its open lists through it), the "only OPEN" filter (a memoized Set of
 `openSlotKey`s over the grid's span, a generator preview overlaid per day exactly as the cells draw it; `slotIsOpen`
 is the one predicate: `openSlots` applies it per slot as `slotIsOpen(d, dayHolder(a, role), today)` (P13R), and the cells render the same rule), a new **Open shifts** view

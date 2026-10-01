@@ -5633,8 +5633,9 @@ function CallSchedule() {
   }, [view, boardSlots, rulesCtx, activeSurgeons, schedule]);
   const boardRows = useMemo(() => obBoardRows(boardSlots, { today: todayStr, horizonDays: obHorizon === "all" ? null : obHorizon, role: obRole, weekendOnly: obWeekend }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
   // the weekend words are helpers.js OPEN_SLOT_PATTERN_WORDS (the Copy list's openSlotsLine reads the same table) - 'friday'
-  // reads "weekend, Friday separate" since the 10/1 follow-ups, an unknown pattern plain "weekend"
-  const boardUnitText = (u) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : openSlotPatternWords(u.pattern);
+  // reads "weekend, Friday on its own" since the 10/1 follow-ups on a primary slot (a backup slot plain "weekend": the shape
+  // is primary-only), an unknown pattern plain "weekend"; test/open-shifts.test.js lifts and runs this line
+  const boardUnitText = (u, role) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : openSlotPatternWords(u.pattern, role);
   const boardCopyList = async () => {
     const text = boardRows.map(s => openSlotsLine(s)).join("\n");
     if (!text) { showToast("Nothing to copy - no open shift matches the filters.", "info"); return; }
@@ -7044,7 +7045,7 @@ function CallSchedule() {
                         <tr key={key} data-slot={key} data-day={s.day} data-role={s.role}>
                           <td style={{whiteSpace:"nowrap",fontWeight:700}}>{DAY_HDR[parse(s.day).getDay()]} {fmtMD(s.day)}{s.day === todayStr ? <span style={{fontSize:10,color:T.muted,marginLeft:4,fontWeight:400}}>today</span> : null}</td>
                           <td style={{whiteSpace:"nowrap"}}><span style={{color:T.open,fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
-                          <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit)}</td>
+                          <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit, s.role)}</td>
                           <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>
                           <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
                           <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>
@@ -7088,7 +7089,7 @@ function CallSchedule() {
                     <div style={{fontSize:13,lineHeight:1.7}}>
                       <div><strong>{DAY_HDR[parse(claimSheet.day).getDay()]} {fmtMD(claimSheet.day)}</strong> - {sheetDate(claimSheet.day)}</div>
                       <div>Role: <strong>{claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"}</strong> - one 24-hour shift, 07:00 to 07:00.</div>
-                      <div>Unit: {boardUnitText(claimSheet.unit)}</div>
+                      <div>Unit: {boardUnitText(claimSheet.unit, claimSheet.role)}</div>
                     </div>
                     {claimSheet.mates.length > 0 && (
                       <div data-testid="claim-unit-mates" style={{...css.warnBox,marginTop:10}}>
@@ -8574,6 +8575,11 @@ const REASON_WORDS = {
   "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)", // Prompt 15 part 2, primary-only bonus
   // offers (Prompt 14 U3c, 9/23): the hard reason of an exhaustive surgeon off his offered days + the two soft ones
   "not-offered": "not among the days offered (only these days)", "offered": "offered day (bonus)", "outside-offers": "outside the offered days (penalty)",
+  // long words for soft codes a claim can carry (review of the 10/1 follow-ups) - reasonLabel reads these on the claim
+  // sheet and the board chip; softTag keeps its own short tags (its cases come first)
+  "avoid-row": "a day stated as one to avoid", "recurring-avoid": "a weekday set to avoid",
+  "auto-offer-weekday": "an auto-offered weekday (East clear)", "pattern-mismatch": "not the preferred weekend style",
+  "under-target": "under the monthly target",
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -8614,10 +8620,14 @@ function reasonLabel(code, nameOf) {
     case "backup-cap": return "backup cap of " + arg + " per month reached";
     case "backup-weekend-cap": return "backup weekend cap of " + arg + " reached";
     case "max-major-holidays": return "already holds " + arg + " major holiday(s) in 12 months";
-    // Prompt 23's codes, worded 10/1 (follow-up of the 10/1 queue; rules doc section 3 Khan items 2-4)
-    case "lone-weekend-day": return "a " + (arg === "Sun" ? "Sunday" : arg === "Sat" ? "Saturday" : "weekend day") + " on its own - weekend days come as a pair (Sat + Sun)";
-    case "weekend-cap": return "past the weekend cap of " + arg + " a month (penalty)";
-    case "hard-never-beyond-notice": return arg + " is a never-on day - allowed when set far enough ahead (penalty)";
+    // Prompt 23's codes, worded 10/1 (follow-up of the 10/1 queue; rules doc section 3 Khan items 2-4). Review 10/1: one
+    // clause each (no " - " or brackets of their own - the day editor prefixes "Name - ", the trade text appends " (M/D)",
+    // the claim sheet " (weight N)"); lone-weekend-day in the painter's words (a surgeon's own rule, primary only);
+    // hard-never-beyond-notice names both readings rules.js gives it (beyond the notice, or a slot he already holds on the
+    // standing schedule, however it was placed) without claiming how the slot was set
+    case "lone-weekend-day": return arg === "Sat" ? "a Saturday alone as primary, without its Sunday" : arg === "Sun" ? "a Sunday alone as primary, without its Saturday" : "a weekend day alone as primary, without its pair";
+    case "weekend-cap": return "past the soft weekend cap of " + arg + " a month";
+    case "hard-never-beyond-notice": return arg + " is a never-on day, allowed with a soft penalty far ahead or when already held";
     // a soft code with no words here reads its softTag (the claim sheet and the board chip label soft notes through this
     // function); an unknown code still prints raw (softTag's own fallback)
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : softTag({ reason: s });
@@ -8649,7 +8659,7 @@ function softTag(soft) {
     case "offered": return "offered day (bonus)";
     case "outside-offers": return "outside the offered days (penalty)";
     case "weekend-cap": return "over weekend cap " + arg;
-    case "hard-never-beyond-notice": return "never-on " + arg + " (set far ahead)";
+    case "hard-never-beyond-notice": return "never-on " + arg + ": far ahead or held"; // no brackets: the editor's dropdown wraps the tags in "(...)"
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }

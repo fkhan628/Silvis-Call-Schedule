@@ -322,14 +322,22 @@ function openSlotIsDay(s) { return suIsIso(s) && fmt(parse(s)) === s; }
 // The words of a weekend unit's pattern - the board's Unit column (index-source boardUnitText), the Copy list and the
 // group e-mails (openSlotsLine): one entry per generator weekend kind (generator.js weekendUnitPatterns - block / split /
 // daily, and Prompt 23 B2's 'friday': one surgeon on the Friday alone, the Saturday + Sunday a reduced unit of their own,
-// one surgeon's pair or two daily days - the kinds map does not carry which, so the words say only that the Friday is
-// separate). The pattern is the weekend's PRIMARY kind (diagnostics.weekendUnits[].kind), shown on both roles' slots as
-// before. An absent / unknown pattern reads plain "weekend". The daily-reminder mirror (edge-functions/daily-reminder/
-// index.ts, deployed v7) knows block / split / daily only and reads 'friday' as unknown - plain "weekend" in the Monday
-// e-mail, exactly the text before - until its prepared v8 is deployed (10/1 follow-ups, item 2).
-const OPEN_SLOT_PATTERN_WORDS = { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday separate" };
+// one surgeon's pair or two daily days - the kinds map does not carry which, so the words say only that the Friday stands
+// on its own - "a Friday on its own", the painter's and the Setup summary's name for the shape). The pattern is the
+// weekend's PRIMARY kind (diagnostics.weekendUnits[].kind), shown on both roles' slots as before - except 'friday', a
+// primary-only shape (rules.js builds it for primary only; generator.js records the primary kind): a BACKUP slot of such
+// a weekend reads plain "weekend" (pass the slot's role; review of the 10/1 follow-ups). An absent / unknown pattern reads
+// plain "weekend". The daily-reminder mirror (edge-functions/daily-reminder/index.ts, deployed v7) knows block / split /
+// daily only and reads 'friday' as unknown - plain "weekend" in the Monday e-mail, exactly the text before - until its
+// prepared v8 is deployed (10/1 follow-ups, item 2).
+const OPEN_SLOT_PATTERN_WORDS = { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday on its own" };
+const OPEN_SLOT_PRIMARY_ONLY_PATTERNS = { friday: true };
 function openSlotPatternKnown(k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(OPEN_SLOT_PATTERN_WORDS, k); }
-function openSlotPatternWords(pattern) { return openSlotPatternKnown(pattern) ? OPEN_SLOT_PATTERN_WORDS[pattern] : "weekend"; }
+function openSlotPatternWords(pattern, role) {
+  if (!openSlotPatternKnown(pattern)) return "weekend";
+  if (role === "backup" && Object.prototype.hasOwnProperty.call(OPEN_SLOT_PRIMARY_ONLY_PATTERNS, pattern)) return "weekend";
+  return OPEN_SLOT_PATTERN_WORDS[pattern];
+}
 function openSlotUnit(day, holidayByDay, weekendKinds) {
   const hol = holidayByDay && typeof holidayByDay === "object" ? holidayByDay[day] : null;
   if (hol && typeof hol === "object") return { kind: "holiday", name: hol.name || null };
@@ -546,7 +554,7 @@ function openSlotsLine(slot, nameOfUnit) {
   let unitText = "";
   if (typeof nameOfUnit === "function") unitText = u ? String(nameOfUnit(u) || "") : "";
   else if (u && u.kind === "holiday") unitText = "holiday: " + (u.name || "unit");
-  else if (u && u.kind === "weekend") unitText = openSlotPatternWords(u.pattern);
+  else if (u && u.kind === "weekend") unitText = openSlotPatternWords(u.pattern, s.role);
   const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
   return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
 }
@@ -556,7 +564,9 @@ function openSlotsLine(slot, nameOfUnit) {
 // in plain JS between the @openSlots-mirror markers of
 // edge-functions/daily-reminder/index.ts, checked against the same fixtures
 // (test/fixtures/open-slots.json + open-shifts-email.json) by
-// test/open-shifts.test.js - the Monday cron (5c) all send exactly this.
+// test/open-shifts.test.js - the Monday cron (5c) all send exactly this
+// (except the 'friday' pattern words until daily-reminder v8 is deployed - 10/1 follow-ups, item 2: the deployed v7
+// reads that kind as unknown, plain "weekend").
 //   subject  'N open shifts through M/D'  (fmtMD - no leading zeros; also the
 //            feed row's title)
 //   message  one lead line, then the slots grouped by their Monday week:
@@ -4646,7 +4656,7 @@ function offerRulesWords(rules, groupRules) {
   const hnOther = suHnOtherDayRules(R, G);
   const hnQualified = hnRoles.some(r => (r === "primary" || r === "backup") && hnOther[r]);
   const hnSoft = !!suSumWeights(G).hardNeverBeyondNotice;
-  const hnFar = hnQualified ? (hnSoft ? "; further ahead allowed with a soft penalty where your other day rules allow it" : "; further ahead your other day rules decide")
+  const hnFar = hnQualified ? (hnSoft ? "; allowed further ahead, with a soft penalty, where your other day rules allow it" : "; further ahead, your other day rules decide")
     : "; allowed further ahead" + (hnSoft ? ", with a soft penalty" : "");
   if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + hnRoles.join("/") + " on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days" + hnFar : "") + ".");
   // Prompt 23 B2 / B3. Review (10/1): one sentence for the PRIMARY weekend shapes - with standaloneFriday they are {Fri},
@@ -4855,7 +4865,10 @@ function suSumGoverned(rules, backupOpen) {
 // whitelist-recurring mode, a weekday pattern, date windows, listed weeks, a month governed for primary; for backup a
 // weekday pattern, date windows, a month governed for backup, and the recurring list / listed weeks only while backup is
 // NOT open to everyone (rules.js isPrimary). The weekday allow-list leaves a never-on day to the never-on rule, so it is
-// not one. suRulesSummary's notice clause and offerRulesWords both read it (10/1 follow-ups, item 5). Pure.
+// not one. Review of the 10/1 follow-ups: a recurringUnavailable entry that can fall on a never-on weekday (its weekday is
+// one of them, or it names none) closes that far day too (rules.js rdPatternRules: the hard recurring-unavailable) - for
+// primary, and for backup only while backup is NOT open to everyone (the same isPrimary gate). suRulesSummary's notice
+// clause and offerRulesWords both read it (10/1 follow-ups, item 5). Pure.
 function suHnOtherDayRules(rules, groupRules) {
   const R = suSumObj(rules) ? rules : {};
   const G = suSumObj(groupRules) ? groupRules : {};
@@ -4864,10 +4877,13 @@ function suHnOtherDayRules(rules, groupRules) {
   const wp = !!(R.outsideDerivedWeeks && suSumObj(R.outsideDerivedWeeks.weekdayPattern));
   const win = Array.isArray(R.availableWindows) && R.availableWindows.length > 0;
   const weeksOn = Array.isArray(R.availableWeeks) && R.availableWeeks.length > 0;
+  const hnDays = Array.isArray(R.hardNeverWeekdays) ? R.hardNeverWeekdays : [];
+  const ruHits = (p) => Array.isArray(p) ? p.some(ruHits) : suSumObj(p) && (!p.weekday || hnDays.indexOf(p.weekday) >= 0);
+  const ruOn = Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.some(ruHits);
   const gov = suSumGoverned(R, backupOpen);
   return {
-    primary: recOn || wp || win || weeksOn || gov.primary.length > 0 || gov.both.length > 0,
-    backup: wp || win || gov.both.length > 0 || gov.backup.length > 0 || (!backupOpen && (recOn || weeksOn)),
+    primary: recOn || wp || win || weeksOn || ruOn || gov.primary.length > 0 || gov.both.length > 0,
+    backup: wp || win || gov.both.length > 0 || gov.backup.length > 0 || (!backupOpen && (recOn || weeksOn || ruOn)),
   };
 }
 function suRulesSummary(rules, info) {

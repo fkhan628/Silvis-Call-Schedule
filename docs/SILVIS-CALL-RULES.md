@@ -958,12 +958,16 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     (i) **The day
     editor:** the first of his Sat/Sun pair saved alone reads `lone-weekend-day` until the partner is saved (an override with
     the visible warning, like any hard rule), and the editor showed the new codes raw (the UI's reason glosses were an
-    index-source follow-up). ⟶ *Done 10/1 (follow-ups of the 10/1 queue):* the reason glosses word them - `lone-weekend-day:Sat`
-    "a Saturday on its own - weekend days come as a pair (Sat + Sun)", `weekend-cap:2` "past the weekend cap of 2 a month
-    (penalty)" (tag "over weekend cap 2"), `hard-never-beyond-notice:Tue` "Tue is a never-on day - allowed when set far
-    enough ahead (penalty)" (tag "never-on Tue (set far ahead)"), `weekday-primary` "weekday primary (contribution bonus)";
-    a soft code with no long words reads its short tag on the claim sheet and the board chip instead of the raw code (the
-    dropdown option of an ineligible holder keeps the raw code by design). ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
+    index-source follow-up). ⟶ *Done 10/1 (follow-ups of the 10/1 queue; wording revised by its review):* the reason
+    glosses word them, one clause each (no dash or brackets of their own - the editor prefixes "Name - ", the trade text
+    appends the date in brackets) - `lone-weekend-day:Sat` "a Saturday alone as primary, without its Sunday" (the painter's
+    words: his own rule, primary only), `weekend-cap:2` "past the soft weekend cap of 2 a month" (tag "over weekend cap 2"),
+    `hard-never-beyond-notice:Tue` "Tue is a never-on day, allowed with a soft penalty far ahead or when already held" (tag
+    "never-on Tue: far ahead or held" - rules.js gives the term beyond the notice and to a slot he already holds on the
+    standing schedule, however it was placed, so the words claim neither), `weekday-primary` "weekday primary (contribution
+    bonus)"; a soft code with no long words reads its short tag on the claim sheet and the board chip instead of the raw code,
+    and the soft codes a claim can carry have long words there (`avoid-row`, `recurring-avoid`, `auto-offer-weekday`,
+    `pattern-mismatch`, `under-target`); the dropdown option of an ineligible holder keeps the raw code by design. ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
     holder (item (e)). ⟶ *Review 2 (10/1):* the editor judges "held" on the **saved** rows, not the draft: his saved day
     stays eligible even after the draft is switched to someone else and he is picked back (the first review's reading asked
     for the override there), while picking him **new** on a Tue/Thu inside the notice is hard and goes through the Override
@@ -974,10 +978,11 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     editor leaves the partner day lone without a warning (the editor judges the edited day only). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
     as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). ⟶ *Done 10/1
     (follow-ups of the 10/1 queue), client half:* the board's Unit column, its Copy list and the publish / "Email the group
-    now" e-mails word it "weekend, Friday separate" (`helpers.OPEN_SLOT_PATTERN_WORDS`; `lastGenerate.weekendKinds` now
+    now" e-mails word it "weekend, Friday on its own" (`helpers.OPEN_SLOT_PATTERN_WORDS`; `lastGenerate.weekendKinds` now
     keeps `friday`). The Monday cron e-mail (daily-reminder, deployed v7) still reads it as plain "weekend" until its
     prepared v8 is deployed (branch `feat/weekend-pair-claim`). The pattern is the weekend's **primary** kind, shown on its
-    backup slots too, like block / split / daily before it. (k) **Consequence
+    backup slots too, like block / split / daily before it - except `friday`, a primary-only shape: a backup slot of such a
+    weekend reads plain "weekend" (review 10/1). (k) **Consequence
     for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
     periods generated more than eight weeks ahead (the Jan – Jun 2027 period is generated around 11/23: its January dates
     through 1/18 stay hard for him, later ones soft).
