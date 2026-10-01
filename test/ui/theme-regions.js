@@ -21,6 +21,9 @@ const REGIONS = [
   { key: "sucheck", label: "SuCheck (every Setup checkbox label)", start: "function SuCheck(", end: "\n}\n", surface: { light: "#FFFFFF", dark: "#13294B" } },
   { key: "openshifts-board", label: "Open shifts board", start: 'data-testid="openshifts-card"', end: "{claimSheet && (", surface: { light: "#FFFFFF", dark: "#13294B" } },
   { key: "claim-sheet", label: "Claim sheet + open-shifts e-mail dialog", start: "{claimSheet && (", end: 'data-testid="ob-email-send"', surface: { light: "#FFFFFF", dark: "#16213E" } },
+  // Prompt 24 (10/1): Setup > Rules - the recurring-pattern lists and the rules editor (summary, fields, Advanced), rewritten on
+  // theme tokens; the region keeps a literal text colour from coming back (the pattern rows read 2:1 in dark mode before).
+  { key: "rules-editor", label: "Setup > Rules (pattern lists + rules editor)", start: "function PatternListEditor(", end: "// --- Availability statements", surface: { light: "#FFFFFF", dark: "#13294B" } },
 ];
 
 // The literal greys / red the six regions carried before B2 (the "old set"); the data-layer pin names each.

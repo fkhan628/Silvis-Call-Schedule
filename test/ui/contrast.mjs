@@ -14,9 +14,9 @@
 // on any row below its minimum; `node test/ui/contrast.mjs` prints it alone
 // (exit 1 on a failing row).
 //
-// Second table (Prompt 16 B2, 9/24): the SIX REGIONS of index-source.html that
+// Second table (Prompt 16 B2, 9/24): the REGIONS of index-source.html that
 // test/ui/theme-regions.js names (notification settings, publish diff, snapshot
-// list, SuCheck, open-shifts board, claim sheet). Every literal hex text colour
+// list, SuCheck, open-shifts board, claim sheet; Setup > Rules since Prompt 24). Every literal hex text colour
 // still written in one of them is measured against the region's surface in
 // BOTH themes - in dark mode as the dark <style> sheet would repaint it (or not:
 // an unmapped grey such as #3a4a58 stays and reads ~1.6:1 on the dark card).
@@ -74,6 +74,11 @@ export const contrastTable = (mod) => {
     add(theme, "orange text on its tint (bold chip)", T.accentText, T.accentTint, "label");
     add(theme, "OPEN red on card", T.open, T.surface, "text");
     add(theme, "OPEN red on page", T.open, T.bg, "text");
+    // Prompt 24 (10/1): the raised box (Setup > Rules - the summary in plain words, the pattern rows, the group rules box).
+    add(theme, "body text on the raised box", T.text, T.raised, "text");
+    add(theme, "muted text on the raised box", T.muted, T.raised, "text");
+    add(theme, "orange text on the raised box", T.accentText, T.raised, "text");
+    add(theme, "OPEN red on the raised box", T.open, T.raised, "text");
     // Prompt 16 B2: the success green (Saving / "No open shifts" / a sent test notification) is a token too.
     if (T.success) { add(theme, "success green on card", T.success, T.surface, "text"); add(theme, "success green on page", T.success, T.bg, "text"); }
     // HANDOFF 3.4 item 1 (9/27): the Backup role word on My schedule / Following rows, and the warning text
@@ -129,7 +134,7 @@ export const formatTable = (rows) => {
   return lines.join("\n");
 };
 
-// Prompt 16 B2 - the six regions: one row per literal text colour per theme. `src` defaults to the
+// Prompt 16 B2 - the regions: one row per literal text colour per theme. `src` defaults to the
 // working tree's index-source.html (a caller may pass another revision's text).
 export const regionTable = (src) => {
   const text = src !== undefined ? String(src) : fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
@@ -163,8 +168,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bad = rows.filter(r => !r.ok);
   console.log(bad.length ? `\n${bad.length} pair(s) below their minimum` : `\nall ${rows.length} pairs meet their minimum`);
   const reg = regionTable();
-  console.log("\nsix regions (Prompt 16 B2) - literal text colours still written in index-source.html:");
-  console.log(reg.length ? formatRegionTable(reg) : "  none - every text colour in the six regions is a theme token");
+  console.log("\nregions (Prompt 16 B2 + Setup > Rules) - literal text colours still written in index-source.html:");
+  console.log(reg.length ? formatRegionTable(reg) : "  none - every text colour in the regions is a theme token");
   const regBad = reg.filter(r => !r.ok);
   if (regBad.length) {
     const worst = regBad.slice().sort((a, b) => a.ratio - b.ratio)[0];

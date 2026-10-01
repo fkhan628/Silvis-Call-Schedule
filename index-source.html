@@ -73,6 +73,13 @@
     .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
     .setup-table input[type="text"], .setup-table input[type="number"], .setup-table input[type="date"], .setup-table select { font-size: 12px; padding: 3px 6px; }
+    /* Setup > Rules (Prompt 24): one rule per row - its controls, its "Remove rule" button on the right (layout only;
+       colours stay inline). On a phone the button sits above the controls so they get the full width. */
+    .rules-field { display: flex; align-items: flex-start; gap: 8px; }
+    .rules-field > .rules-field-body { flex: 1 1 auto; min-width: 0; }
+    .rules-field > .rules-field-remove { flex-shrink: 0; margin-top: 2px; }
+    .rules-sum-line { display: flex; gap: 8px; }
+    .rules-sum-line > .rules-sum-family { flex: 0 0 112px; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
        role letter, holiday name, weekend label and NOTE tag give way (line
        order = role, the cell title still spells everything out), the pill
@@ -109,6 +116,11 @@
       .trade-pick-wrap { flex: 1 1 100%; }
       /* the offer deadline notice (9/27; Prompt 26 9/30): on a phone the sentence takes the full width and "Enter vacations" / "Paint days (optional)" sit under it */
       .offer-notice-row .offer-notice-text { flex-basis: 100% !important; }
+      .rules-field { flex-direction: column-reverse; gap: 2px; }
+      .rules-field > .rules-field-body { width: 100%; }
+      .rules-field > .rules-field-remove { align-self: flex-end; margin-top: 0; }
+      .rules-sum-line { flex-direction: column; gap: 0; }
+      .rules-sum-line > .rules-sum-family { flex: none; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -9790,7 +9802,11 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
 }
 
 // --- Recurring pattern list with a live "next 8 matching dates" preview ---
-function PatternListEditor({ css, label, list, onChange, withWeight, today, hint }) {
+// Prompt 24: theme tokens (T) instead of light-only colours (the row read 2:1 in dark mode); a kind switch keeps the
+// pattern's start / end bounds and every other key (helpers.suPatternWithKind - the old switch dropped the bounds),
+// and the bounds are editable (from / until).
+function PatternListEditor({ css, T, label, list, onChange, withWeight, today, hint }) {
+  const TT = T || THEME.light;
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   const items = Array.isArray(list) ? list : [];
   // Prompt 16 B9 (g): the rows are plain pattern objects with no id, and keying them by index made a Remove shift
@@ -9800,12 +9816,8 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
   const idsRef = React.useRef([]);
   const ids = suPatternRowIds(idsRef.current, items.length); idsRef.current = ids;
   const update = (i, patch) => onChange(items.map((p, j) => j === i ? patch : p));
-  const setKind = (i, kind) => {
-    const p = items[i]; const n = { weekday: p.weekday || "Mon" };
-    if (kind === "nth") n.nth = [1]; else if (kind === "week") n.nthWeekOfMonth = 1; else if (kind === "before") n.beforeNthMonday = [2, 4]; else if (kind === "dates") { n.dates = []; delete n.weekday; }
-    if (p.weight) n.weight = p.weight; if (p.note) n.note = p.note;
-    update(i, n);
-  };
+  const setKind = (i, kind) => update(i, suPatternWithKind(items[i], kind));
+  const setBound = (i, k, v) => { const p = { ...items[i] }; if (v) p[k] = v; else delete p[k]; update(i, p); };
   const setValue = (i, text) => {
     const p = { ...items[i] }; const k = suPatternKind(p);
     if (k === "nth") p.nth = suIntList(text);
@@ -9815,31 +9827,34 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
     update(i, p);
   };
   const [texts, setTexts] = React.useState({});
+  const small = { fontSize: 11, color: TT.muted, display: "inline-flex", alignItems: "center", gap: 4 };
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ ...css.subT, margin: "8px 0 4px" }}>{label} <span style={{ fontWeight: 400, color: "#5B6B82" }}>({items.length})</span>{hint ? <span style={{ fontWeight: 400, color: "#9aa4ae", marginLeft: 6, fontSize: 11 }}>{hint}</span> : null}</div>
+    <div style={{ marginBottom: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: TT.text, margin: "2px 0 4px" }}>{label} <span style={{ fontWeight: 400, color: TT.muted }}>({items.length})</span>{hint ? <span style={{ fontWeight: 400, color: TT.muted, marginLeft: 6, fontSize: 11 }}>{hint}</span> : null}</div>
       {items.map((p, i) => {
         const kind = suPatternKind(p);
         const text = texts[ids[i]] !== undefined ? texts[ids[i]] : suPatternValueText(p);
         const next = suNextMatchingDates(typeof matchesPattern === "function" ? matchesPattern : null, p, today, 8);
         return (
-          <div key={ids[i]} data-testid="pattern-row" style={{ border: "1px solid #e8ecf0", borderRadius: 6, padding: "6px 8px", marginBottom: 6, background: "#fafbfc" }}>
+          <div key={ids[i]} data-testid="pattern-row" style={{ border: "1px solid " + TT.border, borderRadius: 6, padding: "6px 8px", marginBottom: 6, background: TT.raised }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               {kind !== "dates" && <select value={p.weekday || "Mon"} onChange={e => update(i, { ...p, weekday: e.target.value })} style={{ ...inp, width: 70 }}>{SU_WEEKDAYS.map(w => <option key={w} value={w}>{w}</option>)}</select>}
-              <select value={kind} onChange={e => setKind(i, e.target.value)} style={{ ...inp, width: 190 }}>
+              <select value={kind} onChange={e => setKind(i, e.target.value)} style={{ ...inp, width: 190, maxWidth: "100%" }}>
                 <option value="every">every week</option>
                 <option value="nth">nth of the month (1-5)</option>
                 <option value="week">week of month (Mon-Sun week containing the nth Wed)</option>
                 <option value="before">the day before the nth Monday</option>
                 <option value="dates">explicit dates</option>
               </select>
-              {kind !== "every" && <input type="text" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [ids[i]]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, fontFamily: mono }} />}
+              {kind !== "every" && <input type="text" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [ids[i]]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, maxWidth: "100%", fontFamily: mono }} />}
+              <label style={small}>from <input type="date" data-testid="pattern-start" value={p.start || ""} onChange={e => setBound(i, "start", e.target.value)} style={inp} /></label>
+              <label style={small}>until <input type="date" data-testid="pattern-end" value={p.end || ""} onChange={e => setBound(i, "end", e.target.value)} style={inp} /></label>
               {withWeight && <select value={p.weight || "medium"} onChange={e => update(i, { ...p, weight: e.target.value })} style={{ ...inp, width: 90 }}>{["low", "medium", "strong"].map(w => <option key={w} value={w}>{w}</option>)}</select>}
-              <input type="text" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px" }} />
+              <input type="text" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px", minWidth: 0 }} />
               <button onClick={() => { idsRef.current = ids.filter((_, j) => j !== i); onChange(items.filter((_, j) => j !== i)); }} style={css.danger}>Remove</button>
             </div>
-            <div data-testid="pattern-preview" style={{ fontSize: 11, color: "#5B6B82", marginTop: 4, fontFamily: mono }}>
-              <span style={{ fontFamily: font, color: "#5B6B82" }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: "#a83232", fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
+            <div data-testid="pattern-preview" style={{ fontSize: 11, color: TT.muted, marginTop: 4, fontFamily: mono }}>
+              <span style={{ fontFamily: font, color: TT.muted }}>{suPatternLabel(p)} - next 8: </span>{next.error ? <span data-testid="pattern-error" style={{ color: TT.open, fontFamily: font }}>pattern is invalid - the rules engine refused it ({next.error})</span> : next.length ? next.join(", ") : "no matching date in the next two years"}
             </div>
           </div>
         );
@@ -9850,23 +9865,71 @@ function PatternListEditor({ css, label, list, onChange, withWeight, today, hint
 }
 
 // --- Rules editor: per-surgeon form over surgeonRules[id] + groupRules ---
+// Prompt 24 (Faraz 9/30: "the rules section in the settings is overwhelming"). Per surgeon: a read-only summary in
+// plain words (helpers.suRulesSummary over the draft), then only the rules that surgeon uses (helpers.SU_RULE_FIELDS:
+// a key present with a value other than its default) under the groups of the "Add a rule" menu, which lists the rest;
+// Remove returns a rule to the menu. The field set stays stable while editing (a value cleared to its default does not
+// make its field vanish under the cursor): it is re-read from the data on a pick and a Revert, Add / Remove change it,
+// and a key the draft starts using (Apply JSON) shows its field at once. One collapsed Advanced section holds the
+// per-surgeon JSON editor, the group rules, the weights (their own collapsed group) and the group JSON editor. UI only:
+// the same draft, the same set / toggleList writes and the same save() (contact check; neverThanksgiving from holidaysOff).
+// Colours are THEME tokens only (test/ui/theme-regions.js region "rules-editor").
+const RULE_MODE_WORDS = {
+  "": "(open - every day unless a rule blocks it)",
+  "weekends-plus-weekdays": "weekends plus listed weekdays",
+  "whitelist-recurring": "only listed recurring days (primary)",
+  "blacklist-recurring": "every day except listed recurring days",
+  "whitelist-weeks": "only listed weeks (primary)",
+  "whitelist-windows": "only inside date windows",
+  "derived-from-east-plus-weekday-pattern": "East-derived weeks plus a weekday pattern",
+};
+const RULE_WEIGHT_WORDS = {
+  low: "Low", medium: "Medium", strong: "Strong", preferred: "Preferred day (bonus)",
+  patternDaily: "Weekend split into single days", patternMismatch: "Weekend style not followed", backToBackWeekend: "Weekends back to back",
+  backupAfterPrimary: "Backup the day after own primary", noTargetWeekday: "Allowed weekday (others first)", eastUnknown: "East call not known",
+  eastForecastBelowThreshold: "East forecast under the threshold", smoothingTolerance: "Share smoothing tolerance", longRunPerDay: "Long run, per extra day",
+  weekendContribution: "Prefers weekends / weekdays", eastClear: "Home during an East vacation (bonus)", offerBonus: "Offered day (bonus)",
+  outsideOffers: "Day outside the offers", offerBonusOverShare: "Offered day above the share", deviationConvexity: "Share deviation curve",
+  hardNeverBeyondNotice: "Never-day beyond the notice",
+};
+function ruleWeightLabel(k) {
+  if (RULE_WEIGHT_WORDS[k]) return RULE_WEIGHT_WORDS[k];
+  const s = String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function RuField({ T, label, children, width, hint, testid }) {
+  return (
+    <div data-testid={testid || undefined} style={{ display: "inline-flex", flexDirection: "column", gap: 2, marginRight: 10, marginBottom: 6, width: width || "auto", maxWidth: "100%", verticalAlign: "top" }}>
+      <span style={{ fontSize: 10, color: T.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+      {children}
+      {hint ? <span style={{ fontSize: 10.5, color: T.muted }}>{hint}</span> : null}
+    </div>
+  );
+}
 function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, onSaveSurgeon, onSaveGroup, showToast, today }) {
+  const T = THEME[dk ? "dark" : "light"];
   const ids = (roster || []).map(s => s.id);
   const [sel, setSel] = React.useState(ids[0] || "");
   const [draft, setDraft] = React.useState(() => suClone(surgeonRules[ids[0]] || {}));
   const [dirty, setDirty] = React.useState(false);
+  const [shown, setShown] = React.useState(() => new Set(suRuleFieldsUsed(surgeonRules[ids[0]] || {})));
   const [rawOpen, setRawOpen] = React.useState(false);
   const [rawText, setRawText] = React.useState("");
   const [rawErr, setRawErr] = React.useState("");
+  const [advOpen, setAdvOpen] = React.useState(false);
+  const [weightsOpen, setWeightsOpen] = React.useState(false);
   const [group, setGroup] = React.useState(() => suClone(groupRules || {}));
   const [groupDirty, setGroupDirty] = React.useState(false);
   const [groupRawOpen, setGroupRawOpen] = React.useState(false);
   const [groupRaw, setGroupRaw] = React.useState("");
   const [groupRawErr, setGroupRawErr] = React.useState("");
-  React.useEffect(() => { if (!dirty) setDraft(suClone(surgeonRules[sel] || {})); }, [surgeonRules, sel]); // eslint-disable-line
+  // an outside reload (the blob refreshed, a save landed) re-reads the draft while it is clean; the field set only grows
+  // here (a field just added and not yet filled must not vanish on a background refresh)
+  React.useEffect(() => { if (!dirty) { setDraft(suClone(surgeonRules[sel] || {})); setShown(s0 => new Set([...s0, ...suRuleFieldsUsed(surgeonRules[sel] || {})])); } }, [surgeonRules, sel]); // eslint-disable-line
   React.useEffect(() => { if (!groupDirty) setGroup(suClone(groupRules || {})); }, [groupRules]); // eslint-disable-line
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
-  const pick = (id) => { if (dirty && !confirm("Discard the unsaved changes to this surgeon's rules?")) return; setSel(id); setDraft(suClone(surgeonRules[id] || {})); setDirty(false); setRawOpen(false); setRawErr(""); };
+  const pick = (id) => { if (dirty && !confirm("Discard the unsaved changes to this surgeon's rules?")) return; setSel(id); setDraft(suClone(surgeonRules[id] || {})); setShown(new Set(suRuleFieldsUsed(surgeonRules[id] || {}))); setDirty(false); setRawOpen(false); setRawErr(""); };
+  const revert = () => { setDraft(suClone(surgeonRules[sel] || {})); setShown(new Set(suRuleFieldsUsed(surgeonRules[sel] || {}))); setDirty(false); };
   const get = (path, dflt) => { let o = draft; for (const k of path.split(".")) { if (!o || typeof o !== "object") return dflt; o = o[k]; } return o === undefined ? dflt : o; };
   const set = (path, value) => {
     setDirty(true);
@@ -9879,6 +9942,8 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   };
   // dflt: the engine default the checkboxes display when the key is absent - the toggle starts from the same list, and emptying it drops the key (back to the default) rather than saving [].
   const toggleList = (path, item, on, dflt) => { const cur = get(path, dflt || []); const list = Array.isArray(cur) ? cur.filter(x => x !== item) : []; if (on) list.push(item); if (dflt && !list.length) { set(path, undefined); return; } set(path, list); };
+  const addRule = (id) => { const f = suRuleField(id); if (!f) return; setShown(s0 => { const n = new Set(s0); n.add(id); return n; }); if (f.start !== undefined) { setDirty(true); setDraft(d => suRuleFieldAdd(f, d)); } };
+  const removeRule = (f) => { setShown(s0 => { const n = new Set(s0); n.delete(f.id); return n; }); if (suRuleFieldHasKeys(f, draft)) { setDirty(true); setDraft(d => suRuleFieldRemove(f, d)); } };
   const save = () => {
     const leaks = suContactPaths(draft);
     if (leaks.length) { showToast("Refused: the rules would carry contact-looking data at " + leaks.join(", ") + " (the blob is public).", "error"); return; }
@@ -9897,19 +9962,213 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
     } catch (e) { console.warn("Rules JSON not applied:", e); setRawErr(String(e && e.message || e)); }
   };
   const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? (draft.monthlyCap === null ? "none" : "number") : "default";
-  // 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCap.primary). A legacy
-  // 'total' value is shown in the field and rewritten as 'primary' on the first edit.
+  // The cap is on PRIMARY days (monthlyCap.primary). A legacy 'total' value is shown in the field and rewritten as 'primary' on the first edit.
   const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : (typeof draft.monthlyCap === "number" ? { primary: draft.monthlyCap } : {});
   const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : (typeof capObj.total === "number" ? capObj.total : undefined);
   const setCapPrimary = (v) => { if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined); set("monthlyCap.primary", v); };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
+  const nameOf = {}; (roster || []).forEach(x => { if (x && x.id) nameOf[x.id] = x.name || x.id; });
   const gset = (path, value) => { setGroupDirty(true); setGroup(g => { const n = suClone(g) || {}; let o = n; const parts = path.split("."); for (let i = 0; i < parts.length - 1; i++) { if (!o[parts[i]] || typeof o[parts[i]] !== "object") o[parts[i]] = {}; o = o[parts[i]]; } if (value === undefined) delete o[parts[parts.length - 1]]; else o[parts[parts.length - 1]] = value; return n; }); };
   const gget = (path, dflt) => { let o = group; for (const k of path.split(".")) { if (!o || typeof o !== "object") return dflt; o = o[k]; } return o === undefined ? dflt : o; };
   // Weight keys: the engine defaults plus any numeric extra the blob carries (a prose "note" key is not a weight).
   const weightKeys = Array.from(new Set(Object.keys(typeof defaultWeights === "function" ? defaultWeights() : {}).concat(Object.keys(gget("weights", {}) || {}).filter(k => typeof gget("weights." + k, null) === "number"))));
-  const box = { border: "1px solid #e8ecf0", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: dk ? "#1a2540" : "#fafbfc" };
+  const box = { border: "1px solid " + T.border, borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: T.surface };
+  const lbl = { fontSize: 10, color: T.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 };
+  const quiet = { fontSize: 11, color: T.muted, marginRight: 6 };
+  const numVal = (path) => { const v = get(path, ""); return v === null || v === undefined ? "" : v; };
+  const numSet = (path) => (e) => set(path, e.target.value === "" ? undefined : Number(e.target.value));
+  const roleChecks = (path, dflt) => ["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={(get(path, dflt) || []).indexOf(r) >= 0} onChange={v => toggleList(path, r, v, dflt)} />);
+  const usedNow = new Set(suRuleFieldsUsed(draft));
+  const displayed = SU_RULE_FIELDS.filter(f => shown.has(f.id) || usedNow.has(f.id));
+  const menu = SU_RULE_FIELDS.filter(f => !(shown.has(f.id) || usedNow.has(f.id)));
+  const summary = sel ? suRulesSummary(draft, { names: nameOf, holidayNames: holNames, groupRules: group }) : [];
+  const jsonOnly = suRulesJsonOnly(draft);
+
+  // One rule's controls (the controls the panel had before, relabelled; the same keys and writes).
+  const renderField = (id) => {
+    switch (id) {
+      case "availabilityMode": return (
+        <RuField T={T} label="Availability mode" hint="only 'only listed recurring days' changes the scheduling; the others are labels">
+          <select data-testid="rules-avail-mode" value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260, maxWidth: "100%" }}>
+            {SU_MODES.map(m => <option key={m} value={m}>{RULE_MODE_WORDS[m] || m}</option>)}
+            {(() => { const v = get("availabilityMode", ""); return v && SU_MODES.indexOf(v) < 0 ? <option value={v}>{v}</option> : null; })()}
+          </select>
+        </RuField>
+      );
+      case "availableWeeks": return (
+        <RuField T={T} label="Listed weeks (Mondays, comma separated)" width="100%" hint="primary only in these weeks, from the month of the first one">
+          <input type="text" data-testid="rules-weeks" value={(get("availableWeeks", []) || []).join(", ")} onChange={e => set("availableWeeks", suIsoList(e.target.value).length ? suIsoList(e.target.value) : undefined)} style={{ ...inp, width: "100%", fontFamily: mono }} />
+        </RuField>
+      );
+      case "availableWindows": return (
+        <div>
+          <div style={lbl}>Date windows <span style={{ textTransform: "none", fontWeight: 400 }}>- only these date ranges, both roles</span></div>
+          {(get("availableWindows", []) || []).map((w, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+              <input type="date" value={w.start || ""} onChange={e => { const l = suClone(get("availableWindows", [])); l[i] = { ...l[i], start: e.target.value }; set("availableWindows", l); }} style={inp} />
+              <span style={{ fontSize: 11, color: T.text }}>to</span>
+              <input type="date" value={w.end || ""} onChange={e => { const l = suClone(get("availableWindows", [])); l[i] = { ...l[i], end: e.target.value }; set("availableWindows", l); }} style={inp} />
+              <button onClick={() => { const l = suClone(get("availableWindows", [])).filter((_, j) => j !== i); set("availableWindows", l.length ? l : undefined); }} style={css.danger}>Remove</button>
+            </div>
+          ))}
+          <button onClick={() => set("availableWindows", (get("availableWindows", []) || []).concat([{ start: today, end: suAddDays(today, 5) }]))} style={css.mini(false)}>Add window</button>
+        </div>
+      );
+      case "daysPerWindowWeek": return (
+        <div>
+          <SuCheck label="Days per window week (soft target)" title="A week off the target is a warning in the Generate report, never a block." checked={!!draft.daysPerWindowWeek} onChange={v => set("daysPerWindowWeek", v ? { target: 2, countsBackup: false } : undefined)} testid="rules-window-week" />
+          {draft.daysPerWindowWeek && <div>
+            <RuField T={T} label="Primary days per window week" hint="blank = none"><input data-testid="rules-window-week-target" type="number" min="0" max="7" value={get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", "")} onChange={e => { ["min", "max", "minIsSoft"].forEach(k => { if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined); }); set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 60 }} /></RuField>
+            <SuCheck label="backup days count" checked={get("daysPerWindowWeek.countsBackup", false) === true} onChange={v => set("daysPerWindowWeek.countsBackup", v)} />
+            {(get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && <div style={{ fontSize: 11, color: T.open }}>older min / max values are ignored by the scheduler; editing the target drops them</div>}
+          </div>}
+        </div>
+      );
+      case "weekdays": return (
+        <div>
+          <div style={lbl}>Weekdays allowed for primary <span style={{ textTransform: "none", fontWeight: 400 }}>- Fri-Sun stay open; the other weekdays are off</span></div>
+          {["Mon", "Tue", "Wed", "Thu"].map(w => <SuCheck key={w} label={w} checked={(get("weekdays.allowed", []) || []).indexOf(w) >= 0} onChange={v => toggleList("weekdays.allowed", w, v)} />)}
+          <SuCheck label="others go first on equal terms" title="A small penalty on these weekdays, so another surgeon takes such a day on otherwise equal terms." checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
+        </div>
+      );
+      case "hardNeverWeekdays": return (
+        <div>
+          <div style={lbl}>Never on</div>
+          <div>{SU_WEEKDAYS.map(w => <SuCheck key={w} label={w} checked={(get("hardNeverWeekdays", []) || []).indexOf(w) >= 0} onChange={v => toggleList("hardNeverWeekdays", w, v)} />)}</div>
+          <div><span style={quiet}>applies to</span>{roleChecks("hardNeverWeekdaysRoles", ["primary"])}<span style={quiet}>(default: primary only; one role stays ticked)</span></div>
+          <RuField T={T} label="Hard only within (days)" hint="blank = always hard; further out the day is allowed as a last resort"><input data-testid="rules-hard-never-notice" type="number" min="0" max="365" value={numVal("hardNeverWeekdaysNoticeDays")} onChange={numSet("hardNeverWeekdaysNoticeDays")} style={{ ...inp, width: 80 }} /></RuField>
+        </div>
+      );
+      case "recurringAvailable": return <PatternListEditor css={css} T={T} label="Recurring days available" hint="primary only on these days" list={get("recurringAvailable", [])} onChange={l => set("recurringAvailable", l.length ? l : undefined)} today={today} />;
+      case "recurringUnavailable": return <PatternListEditor css={css} T={T} label="Recurring days off" hint="never primary on these days" list={get("recurringUnavailable", [])} onChange={l => set("recurringUnavailable", l.length ? l : undefined)} today={today} />;
+      case "recurringAvoid": return <PatternListEditor css={css} T={T} label="Recurring days to avoid" hint="soft: a penalty, never a block" list={get("recurringAvoid", [])} onChange={l => set("recurringAvoid", l.length ? l : undefined)} withWeight today={today} />;
+      case "outsideDerivedWeeks": return (
+        <div>
+          <div style={lbl}>Weekday pattern outside East weeks <span style={{ textTransform: "none", fontWeight: 400 }}>- per weekday: allowed, not allowed or only inside a Fri+Sat+Sun block</span></div>
+          <div className="table-wrap" style={css.tableWrap}>
+            <table className="setup-table">
+              <thead><tr><th>Day</th><th>Primary</th><th>Backup</th><th>Preferred</th><th>Where</th></tr></thead>
+              <tbody>
+                {SU_WEEKDAYS.map(w => {
+                  const pd = (wp || {})[w] || {};
+                  const opt = (role) => <select value={pd[role] === true ? "yes" : pd[role] === "weekend-block-only" ? "block" : "no"} onChange={e => { const v = e.target.value; set("outsideDerivedWeeks.weekdayPattern." + w + "." + role, v === "yes" ? true : v === "block" ? "weekend-block-only" : false); }} style={{ ...inp, width: 150 }}><option value="yes">allowed</option><option value="no">not allowed</option><option value="block">Fri+Sat+Sun block only</option></select>;
+                  return (
+                    <tr key={w}><td style={{ fontWeight: 700 }}>{w}</td><td>{opt("primary")}</td><td>{opt("backup")}</td>
+                      <td><input type="checkbox" checked={!!pd.preferred} onChange={e => set("outsideDerivedWeeks.weekdayPattern." + w + ".preferred", e.target.checked || undefined)} /></td>
+                      <td><input type="text" value={pd.where || ""} onChange={e => set("outsideDerivedWeeks.weekdayPattern." + w + ".where", e.target.value || undefined)} style={{ ...inp, width: 160 }} /></td></tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+      case "aledo": return (
+        <div>
+          <PatternListEditor css={css} T={T} label="Clinic days" hint="the day before a clinic day is blocked" list={get("aledo.weekdays", [])} onChange={l => set("aledo.weekdays", l)} today={today} />
+          <SuCheck label="the day before a clinic day is a hard block (primary)" checked={get("aledo.hardAvoidDayBefore", true) !== false} onChange={v => set("aledo.hardAvoidDayBefore", v)} />
+          <RuField T={T} label="Avoid the whole clinic week (soft)"><select value={get("aledo.avoidWholeWeek", "") || ""} onChange={e => set("aledo.avoidWholeWeek", e.target.value || undefined)} style={{ ...inp, width: 110 }}><option value="">off</option><option value="low">low</option><option value="medium">medium</option><option value="strong">strong</option></select></RuField>
+        </div>
+      );
+      case "weekendStyle": return (
+        <RuField T={T} label="Weekend style" hint="soft: how this surgeon's weekends are shaped">
+          <select data-testid="rules-weekend-style" value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 200, maxWidth: "100%" }}><option value="">(none)</option><option value="block">one block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="daily">single days</option><option value="saturday-only">Saturday only (older setting)</option></select>
+        </RuField>
+      );
+      case "primaryContribution": return (
+        <RuField T={T} label="Prefers" hint="soft: weekends = full Fri-Sun primary blocks first, weekend backup last; weekdays = Mon-Thu or a lone Friday first">
+          <select data-testid="rules-primary-contribution" value={get("primaryContribution", "")} onChange={e => set("primaryContribution", e.target.value || undefined)} style={{ ...inp, width: 200, maxWidth: "100%" }}><option value="">(none)</option><option value="weekends">weekends</option><option value="weekdays">weekdays</option>{(() => { const v = get("primaryContribution", ""); return v && v !== "weekends" && v !== "weekdays" ? <option value={v}>{String(v)} (not known)</option> : null; })()}</select>
+        </RuField>
+      );
+      case "standaloneFriday": return <SuCheck testid="rules-standalone-friday" label="A Friday may stand alone (primary)" title="Sat + Sun then form their own weekend for someone else." checked={draft.standaloneFriday === true} onChange={v => set("standaloneFriday", v ? true : undefined)} />;
+      case "noLoneWeekendDay": return <SuCheck testid="rules-no-lone-weekend" label="No lone Saturday or Sunday (primary, hard)" title="Holding one of the two needs the other." checked={draft.noLoneWeekendDay === true} onChange={v => set("noLoneWeekendDay", v ? true : undefined)} />;
+      case "weekendCap": return (
+        <div>
+          <RuField T={T} label="Weekends per month (soft)" hint="a weekend counts once, in the month of its Saturday"><input data-testid="rules-weekend-cap-month" type="number" min="0" max="5" value={numVal("weekendCap.perMonth")} onChange={numSet("weekendCap.perMonth")} style={{ ...inp, width: 70 }} /></RuField>
+          <SuCheck testid="rules-weekend-cap-east" label="East weekends count" checked={get("weekendCap.countsEast", false) === true} onChange={v => set("weekendCap.countsEast", v ? true : undefined)} />
+          <span style={quiet}>counts</span>{roleChecks("weekendCap.roles", ["primary"])}
+        </div>
+      );
+      case "weekendBlockPenalty": return (
+        <RuField T={T} label="Discourage multi-day weekends" hint="soft: a penalty on every block or split this surgeon is in">
+          <select data-testid="rules-weekend-block-penalty" value={get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", ""))} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select>
+        </RuField>
+      );
+      case "weekendsAvailable": return (
+        <div>
+          <div style={lbl}>Weekends under the recurring list <span style={{ textTransform: "none", fontWeight: 400 }}>- open on Fri-Sun besides the listed days</span></div>
+          {draft.weekendsAvailable && typeof draft.weekendsAvailable === "object" ? ["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={!!draft.weekendsAvailable[r]} onChange={v => set("weekendsAvailable." + r, v)} />) : <span style={quiet}>every weekend, both roles</span>}
+        </div>
+      );
+      case "splitPartner": return (
+        <RuField T={T} label="Split partner" hint="recorded only - the scheduler does not use it">
+          <select value={get("splitPartner", "")} onChange={e => set("splitPartner", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option>{(roster || []).filter(x => x.id !== sel).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+        </RuField>
+      );
+      case "maxConsecutiveDays": return (
+        <RuField T={T} label="Most primary days in a row" hint="hard; blank = the group default"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+      );
+      case "maxConsecutiveAnyRole": return (
+        <RuField T={T} label="Most days in a row, any role" hint="soft: a growing penalty beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+      );
+      case "holidayUnitCountsAsOneDay": return <SuCheck label="A holiday unit counts as one day for the days-in-a-row limits" title="Unchecked: every day of the unit counts." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />;
+      case "monthlyTarget": return (
+        <RuField T={T} label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+      );
+      case "monthlyCap": return (
+        <div>
+          <RuField T={T} label="Monthly cap">
+            <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { primary: capPrimaryVal || 8 }); }} style={{ ...inp, width: 200 }}>
+              <option value="default">group default</option><option value="none">no cap</option><option value="number">a number</option>
+            </select>
+          </RuField>
+          {capMode === "number" && <>
+            <RuField T={T} label="Primary days per month" hint="hard; backup days never count"><input type="number" min="1" max="31" data-testid="rules-cap-primary" value={capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal} onChange={e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="Preferred at most (soft)"><input type="number" min="0" max="31" value={capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred} onChange={e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+            <SuCheck label="East primary-week days count toward it" checked={capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days"} onChange={v => set("monthlyCap.countsEastDays", v ? true : undefined)} />
+          </>}
+        </div>
+      );
+      case "preferAlternateDays": return <SuCheck label="Prefers alternate days (soft)" title="A penalty on a primary whose day before or after is also this surgeon's primary." checked={draft.preferAlternateDays === true} onChange={v => set("preferAlternateDays", v ? true : undefined)} testid="rules-prefer-alternate-days" />;
+      case "handoffPartnerRequired": return <SuCheck label="Flag a primary with no handoff the next day (report only)" title="The Generate report warns when the day after a primary is the same surgeon or open." checked={!!draft.handoffPartnerRequired} onChange={v => set("handoffPartnerRequired", v || undefined)} />;
+      case "backupOptOut": return <SuCheck label="Does not take backup" title="A hard block on every backup slot, holidays included; primary is unaffected." checked={draft.backupOptOut === true} onChange={v => set("backupOptOut", v ? true : undefined)} testid="rules-backup-opt-out" />;
+      case "backupCap": return (
+        <div>
+          <RuField T={T} label="Backup days per month" hint="blank = none"><input data-testid="rules-backup-cap-days" type="number" min="0" max="31" value={numVal("backupCap.perMonthDays")} onChange={numSet("backupCap.perMonthDays")} style={{ ...inp, width: 70 }} /></RuField>
+          <RuField T={T} label="Backup weekends per month" hint="blank = none"><input data-testid="rules-backup-cap-weekends" type="number" min="0" max="5" value={numVal("backupCap.weekendsPerMonth")} onChange={numSet("backupCap.weekendsPerMonth")} style={{ ...inp, width: 70 }} /></RuField>
+        </div>
+      );
+      case "eastFeed": return (
+        <div>
+          <SuCheck testid="rules-east-enabled" label="East (Davenport) call applies to this surgeon" checked={!!get("eastFeed.enabled", false)} onChange={v => set("eastFeed.enabled", v)} />
+          {get("eastFeed.enabled", false) && <>
+            <div>
+              <SuCheck label="East call days block Silvis primary" checked={!!get("eastFeed.eastBlocksPrimary", false)} onChange={v => set("eastFeed.eastBlocksPrimary", v)} />
+              <SuCheck label="East call days block Silvis backup" checked={!!get("eastFeed.eastBlocksBackup", false)} onChange={v => set("eastFeed.eastBlocksBackup", v)} />
+              <SuCheck label="East backup weeks count as busy" checked={get("eastFeed.eastBackupCountsAsBusy", true) !== false} onChange={v => set("eastFeed.eastBackupCountsAsBusy", v)} />
+              <SuCheck testid="rules-east-forecast" label="Use the East forecast while Davenport is unpublished" checked={!!get("eastFeed.forecast", false)} onChange={v => set("eastFeed.forecast", v)} />
+            </div>
+            <RuField T={T} label="Derive Silvis weeks from" hint="East primary week = Silvis backup all week; East backup week = Silvis primary"><input type="date" value={get("eastFeed.deriveFrom", "") || ""} onChange={e => set("eastFeed.deriveFrom", e.target.value || undefined)} style={inp} /></RuField>
+            <RuField T={T} label="Stated East primary weeks (Mondays)" width={300}><input type="text" value={(get("eastFeed.statedWeeks.eastPrimary", []) || []).join(", ")} onChange={e => set("eastFeed.statedWeeks.eastPrimary", suIsoList(e.target.value))} style={{ ...inp, width: "100%", fontFamily: mono }} /></RuField>
+            <RuField T={T} label="Stated East backup weeks (Mondays)" width={300}><input type="text" value={(get("eastFeed.statedWeeks.eastBackup", []) || []).join(", ")} onChange={e => set("eastFeed.statedWeeks.eastBackup", suIsoList(e.target.value))} style={{ ...inp, width: "100%", fontFamily: mono }} /></RuField>
+          </>}
+        </div>
+      );
+      case "holidaysOff": return (
+        <div>
+          <div style={lbl}>Never covers</div>
+          {holNames.map(h => <SuCheck key={h} label={h} checked={(get("holidayRules.holidaysOff", []) || []).indexOf(h) >= 0} onChange={v => toggleList("holidayRules.holidaysOff", h, v)} />)}
+        </div>
+      );
+      case "maxMajorHolidays": return (
+        <RuField T={T} label="Most major holidays in 12 months" hint="hard; blank = no limit"><input data-testid="rules-max-major" type="number" min="0" max="3" value={(() => { const a = get("holidayRules.maxMajorHolidays", null); if (typeof a === "number") return a; const b = get("preferences.maxMajorHolidays", null); return typeof b === "number" ? b : ""; })()} onChange={e => set("holidayRules.maxMajorHolidays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+      );
+      default: return <span style={quiet}>{id}</span>;
+    }
+  };
+
   return (
     <div data-testid="rules-editor">
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
@@ -9917,186 +10176,106 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         {(roster || []).filter(x => x.type !== "external").map(x => <button key={x.id} data-testid={"rules-pick-" + x.id} onClick={() => pick(x.id)} style={css.mini(sel === x.id)}>{x.name} <span style={{ fontFamily: mono, fontSize: 10 }}>{x.id}</span>{surgeonRules[x.id] ? "" : " (no rules)"}</button>)}
       </div>
       {!sel ? null : <>
-        <div style={box}>
-          <div style={css.subT}>Availability and shape - {s.name || sel}</div>
-          <SuField label="Availability mode"><select value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260 }}>{SU_MODES.map(m => <option key={m} value={m}>{m || "(open - every day unless blocked)"}</option>)}</select></SuField>
-          <SuField label="Weekend style"><select data-testid="rules-weekend-style" value={get("weekendStyle", "")} onChange={e => set("weekendStyle", e.target.value || undefined)} style={{ ...inp, width: 190 }}><option value="">(none)</option><option value="block">block (Fri+Sat+Sun)</option><option value="split">split (Fri+Sun / Sat)</option><option value="daily">daily (standalone days)</option><option value="saturday-only">saturday-only (legacy)</option></select></SuField>
-          <SuField label="Primary contribution" hint="soft; weekends = a bonus for a full Fri-Sun primary block and a penalty for a weekend backup (weights.weekendContribution)"><select data-testid="rules-primary-contribution" value={get("primaryContribution", "")} onChange={e => set("primaryContribution", e.target.value || undefined)} style={{ ...inp, width: 190 }}><option value="">(none)</option><option value="weekends">weekends (Prompt 12 L)</option></select></SuField>
-          <SuField label="Fri-Sun block penalty" hint="soft; added to every multi-day block or split membership of this surgeon"><select data-testid="rules-weekend-block-penalty" value={get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", ""))} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select></SuField>
-          <SuCheck label="prefer alternate days (soft)" title="Prompt 12 N (9/22 evening): a medium penalty on a primary whose day before or after is this surgeon's own primary." checked={draft.preferAlternateDays === true} onChange={v => set("preferAlternateDays", v ? true : undefined)} testid="rules-prefer-alternate-days" />
-          <SuField label="Split partner"><select value={get("splitPartner", "")} onChange={e => set("splitPartner", e.target.value || undefined)} style={{ ...inp, width: 130 }}><option value="">(none)</option>{(roster || []).filter(x => x.id !== sel).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></SuField>
-          <SuField label="Max consecutive days" hint="blank = group default; hard, primary days only"><input type="number" min="1" max="14" value={get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", "")} onChange={e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-          <SuField label="Max consecutive any role (soft)" hint="blank = none; primary or backup, a penalty that grows per day beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-          <SuCheck label="a holiday unit counts as one day for the consecutive limits" title="Prompt 12 A (9/22): a per-surgeon opt-in (Khan: his 4-day Thanksgiving unit vs his max 3). Unchecked = real days." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />
-          <SuField label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-          <div>
-            <SuField label="Monthly cap">
-              <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { primary: capPrimaryVal || 8 }); }} style={{ ...inp, width: 200 }}>
-                <option value="default">group default</option><option value="none">no cap (explicit null)</option><option value="number">a number</option>
-              </select>
-            </SuField>
-            {capMode === "number" && <>
-              <SuField label="Primary days per month" hint="hard; backup days never count"><input type="number" min="1" max="31" data-testid="rules-cap-primary" value={capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal} onChange={e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-              <SuField label="Preferred (soft)"><input type="number" min="0" max="31" value={capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred} onChange={e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-              <SuCheck label="count East primary-week days toward the cap" checked={capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days"} onChange={v => set("monthlyCap.countsEastDays", v ? true : undefined)} />
-            </>}
-          </div>
-          <div style={{ marginTop: 4 }}>
-            <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Hard never on</span>
-            {SU_WEEKDAYS.map(w => <SuCheck key={w} label={w} checked={(get("hardNeverWeekdays", []) || []).indexOf(w) >= 0} onChange={v => toggleList("hardNeverWeekdays", w, v)} />)}
-            <span style={{ fontSize: 10, color: "#5B6B82", marginRight: 6 }}>applies to</span>
-            {["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={(get("hardNeverWeekdaysRoles", ["primary"]) || []).indexOf(r) >= 0} onChange={v => toggleList("hardNeverWeekdaysRoles", r, v, ["primary"])} />)}
-            <span style={{ fontSize: 10, color: "#5B6B82" }}>(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)</span>
-          </div>
-          <div>
-            <SuCheck label="Does not take backup" title="9/22: backup is open to everyone unless the surgeon explicitly opts out. Checked = a hard block on every backup slot, holiday units included; primary is unaffected." checked={draft.backupOptOut === true} onChange={v => set("backupOptOut", v ? true : undefined)} testid="rules-backup-opt-out" />
-          </div>
-          <div>
-            <SuCheck label="weekday allow-list (Mon-Thu; weekends stay pool days)" checked={!!draft.weekdays} onChange={v => set("weekdays", v ? { allowed: [], autoOffer: true } : undefined)} />
-            {draft.weekdays && <>
-              {["Mon", "Tue", "Wed", "Thu"].map(w => <SuCheck key={w} label={w} checked={(get("weekdays.allowed", []) || []).indexOf(w) >= 0} onChange={v => toggleList("weekdays.allowed", w, v)} />)}
-              <SuCheck label="offer those days (soft +1, weights.noTargetWeekday)" title="Eligible with a soft +1 (auto-offer-weekday): on otherwise equal terms another surgeon takes the day. Set groupRules.weights.noTargetWeekday to 0 for equal footing." checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
-            </>}
-          </div>
-          <div>
-            <SuCheck label="weekends available under a recurring whitelist" checked={!!draft.weekendsAvailable} onChange={v => set("weekendsAvailable", v ? { primary: true, backup: true } : undefined)} />
-            {draft.weekendsAvailable && typeof draft.weekendsAvailable === "object" && ["primary", "backup"].map(r => <SuCheck key={r} label={r} checked={!!draft.weekendsAvailable[r]} onChange={v => set("weekendsAvailable." + r, v)} />)}
-          </div>
-        </div>
-
-        <div style={box}>
-          <PatternListEditor css={css} label="Recurring available (whitelist days)" list={get("recurringAvailable", [])} onChange={l => set("recurringAvailable", l.length ? l : undefined)} today={today} />
-          <PatternListEditor css={css} label="Recurring unavailable (hard)" list={get("recurringUnavailable", [])} onChange={l => set("recurringUnavailable", l.length ? l : undefined)} today={today} />
-          <PatternListEditor css={css} label="Recurring avoid (soft)" list={get("recurringAvoid", [])} onChange={l => set("recurringAvoid", l.length ? l : undefined)} withWeight today={today} />
-        </div>
-
-        <div style={box}>
-          <div style={css.subT}>Dated whitelists</div>
-          <SuField label="Available weeks (Mondays, comma separated)" width="100%" hint="whitelist-weeks: governs from the month of the first Monday onward">
-            <input type="text" value={(get("availableWeeks", []) || []).join(", ")} onChange={e => set("availableWeeks", suIsoList(e.target.value).length ? suIsoList(e.target.value) : undefined)} style={{ ...inp, width: "100%", fontFamily: mono }} />
-          </SuField>
-          <div style={css.subT}>Availability windows <span style={{ fontWeight: 400, color: "#5B6B82" }}>(whitelist-windows: only these date ranges)</span></div>
-          {(get("availableWindows", []) || []).map((w, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-              <input type="date" value={w.start || ""} onChange={e => { const l = suClone(get("availableWindows", [])); l[i] = { ...l[i], start: e.target.value }; set("availableWindows", l); }} style={inp} />
-              <span style={{ fontSize: 11 }}>to</span>
-              <input type="date" value={w.end || ""} onChange={e => { const l = suClone(get("availableWindows", [])); l[i] = { ...l[i], end: e.target.value }; set("availableWindows", l); }} style={inp} />
-              <button onClick={() => { const l = suClone(get("availableWindows", [])).filter((_, j) => j !== i); set("availableWindows", l.length ? l : undefined); }} style={css.danger}>Remove</button>
+        <div data-testid="rules-summary" style={{ border: "1px solid " + T.border, borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: T.raised }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.text, marginBottom: 6 }}>{s.name || sel} - in plain words{dirty ? <span style={{ fontWeight: 400, color: T.accentText }}> (with the unsaved changes)</span> : null}</div>
+          {summary.map(l => (
+            <div key={l.family} data-testid="rules-summary-line" data-family={l.family} className="rules-sum-line" style={{ fontSize: 12.5, lineHeight: 1.45, marginBottom: 4 }}>
+              <span className="rules-sum-family" style={{ fontWeight: 700, color: T.muted }}>{l.family}</span>
+              <span style={{ flex: "1 1 auto", minWidth: 0, color: T.text }}>{l.text}</span>
             </div>
           ))}
-          <button onClick={() => set("availableWindows", (get("availableWindows", []) || []).concat([{ start: today, end: suAddDays(today, 5) }]))} style={css.mini(false)}>Add window</button>
-          <div style={{ marginTop: 8 }}>
-            <SuCheck label="days per window week" title="Prompt 12 N (9/22 evening): a SOFT target of primary days per Mon-Sun window week; a week off target is a diagnostics warning, never a violation. Older min / max keys are ignored by the engine (one warning) - the first edit here drops them." checked={!!draft.daysPerWindowWeek} onChange={v => set("daysPerWindowWeek", v ? { target: 2, countsBackup: false } : undefined)} testid="rules-window-week" />
-            {draft.daysPerWindowWeek && <>
-              <SuField label="Target primary days per window week (soft)" hint="blank = none"><input data-testid="rules-window-week-target" type="number" min="0" max="7" value={get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", "")} onChange={e => { ["min", "max", "minIsSoft"].forEach(k => { if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined); }); set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 60 }} /></SuField>
-              <SuCheck label="backup days count" checked={get("daysPerWindowWeek.countsBackup", false) === true} onChange={v => set("daysPerWindowWeek.countsBackup", v)} />
-              {(get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && <span style={{ fontSize: 10, color: "#c04040" }}>legacy min / max keys present - ignored by the engine; edit the target to drop them</span>}
-            </>}
-            <SuCheck label="handoff partner required (diagnostics: warns when the day after a primary is the same surgeon or open)" checked={!!draft.handoffPartnerRequired} onChange={v => set("handoffPartnerRequired", v || undefined)} />
+        </div>
+
+        <div style={box}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
+            <div style={{ flex: "1 1 auto", fontSize: 12.5, fontWeight: 700, color: T.text }}>Rules in use <span style={{ fontWeight: 400, color: T.muted }}>({displayed.length})</span></div>
+            <select data-testid="rules-add" aria-label="Add a rule" value="" onChange={e => { if (e.target.value) addRule(e.target.value); }} style={{ ...inp, width: 230, maxWidth: "100%" }}>
+              <option value="">Add a rule...</option>
+              {SU_RULE_GROUPS.map(g => { const fs = menu.filter(f => f.group === g.id); return fs.length ? <optgroup key={g.id} label={g.label}>{fs.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</optgroup> : null; })}
+            </select>
           </div>
+          {displayed.length === 0 && <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>No rules set for this surgeon - the group defaults apply. Add one from the menu.</div>}
+          {SU_RULE_GROUPS.map(g => {
+            const fs = displayed.filter(f => f.group === g.id);
+            if (!fs.length) return null;
+            return (
+              <div key={g.id} data-testid={"rules-group-" + g.id} style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 2 }}>{g.label}</div>
+                {fs.map(f => (
+                  <div key={f.id} data-testid={"rules-field-" + f.id} className="rules-field" style={{ padding: "6px 0 2px", borderTop: "1px solid " + T.border }}>
+                    <div className="rules-field-body">{renderField(f.id)}</div>
+                    <button data-testid={"rules-remove-" + f.id} className="rules-field-remove" onClick={() => removeRule(f)} title="Remove this rule - the default applies again" style={css.mini(false)}>Remove rule</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {jsonOnly.length > 0 && <div data-testid="rules-json-only" style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>Also on file, edited as JSON under Advanced: {jsonOnly.join(", ")}.</div>}
         </div>
 
-        <div style={box}>
-          <div style={css.subT}>Weekday pattern outside East-derived weeks <span style={{ fontWeight: 400, color: "#5B6B82" }}>(per weekday: allowed / not / only inside a Fri+Sat+Sun block)</span></div>
-          <SuCheck label="use a weekday pattern" checked={!!wp} onChange={v => set("outsideDerivedWeeks", v ? { canBePrimary: true, weekdayPattern: {} } : undefined)} />
-          {wp && (
-            <div className="table-wrap" style={css.tableWrap}>
-              <table className="setup-table">
-                <thead><tr><th>Day</th><th>Primary</th><th>Backup</th><th>Preferred</th><th>Where</th></tr></thead>
-                <tbody>
-                  {SU_WEEKDAYS.map(w => {
-                    const pd = wp[w] || {};
-                    const opt = (role) => <select value={pd[role] === true ? "yes" : pd[role] === "weekend-block-only" ? "block" : "no"} onChange={e => { const v = e.target.value; set("outsideDerivedWeeks.weekdayPattern." + w + "." + role, v === "yes" ? true : v === "block" ? "weekend-block-only" : false); }} style={{ ...inp, width: 150 }}><option value="yes">allowed</option><option value="no">not allowed</option><option value="block">Fri+Sat+Sun block only</option></select>;
-                    return (
-                      <tr key={w}><td style={{ fontWeight: 700 }}>{w}</td><td>{opt("primary")}</td><td>{opt("backup")}</td>
-                        <td><input type="checkbox" checked={!!pd.preferred} onChange={e => set("outsideDerivedWeeks.weekdayPattern." + w + ".preferred", e.target.checked || undefined)} /></td>
-                        <td><input type="text" value={pd.where || ""} onChange={e => set("outsideDerivedWeeks.weekdayPattern." + w + ".where", e.target.value || undefined)} style={{ ...inp, width: 160 }} /></td></tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div style={box}>
-          <div style={css.subT}>Clinic day-before rule (Aledo pattern)</div>
-          <SuCheck label="has clinic days that block the day before" checked={!!draft.aledo} onChange={v => set("aledo", v ? { weekdays: [], avoidWholeWeek: "strong", hardAvoidDayBefore: true } : undefined)} />
-          {draft.aledo && <>
-            <PatternListEditor css={css} label="Clinic days" list={get("aledo.weekdays", [])} onChange={l => set("aledo.weekdays", l)} today={today} />
-            <SuCheck label="the day before a clinic day is a hard block (primary)" checked={get("aledo.hardAvoidDayBefore", true) !== false} onChange={v => set("aledo.hardAvoidDayBefore", v)} />
-            <SuField label="Avoid the whole clinic week (soft)"><select value={get("aledo.avoidWholeWeek", "") || ""} onChange={e => set("aledo.avoidWholeWeek", e.target.value || undefined)} style={{ ...inp, width: 110 }}><option value="">off</option><option value="low">low</option><option value="medium">medium</option><option value="strong">strong</option></select></SuField>
-          </>}
-          <div style={css.subT}>Backup caps</div>
-          <SuField label="Backup days per month" hint="blank = none"><input type="number" min="0" max="31" value={get("backupCap.perMonthDays", "") === null ? "" : get("backupCap.perMonthDays", "")} onChange={e => set("backupCap.perMonthDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-          <SuField label="Backup weekends per month" hint="blank = none"><input type="number" min="0" max="5" value={get("backupCap.weekendsPerMonth", "") === null ? "" : get("backupCap.weekendsPerMonth", "")} onChange={e => set("backupCap.weekendsPerMonth", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-        </div>
-
-        <div style={box}>
-          <div style={css.subT}>Holiday rules</div>
-          <span style={{ fontSize: 10, color: "#5B6B82", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginRight: 8 }}>Never covers</span>
-          {holNames.map(h => <SuCheck key={h} label={h} checked={(get("holidayRules.holidaysOff", []) || []).indexOf(h) >= 0} onChange={v => toggleList("holidayRules.holidaysOff", h, v)} />)}
-          <div><SuField label="Max major holidays (rolling 12 months)" hint="blank = no limit"><input type="number" min="0" max="3" value={get("holidayRules.maxMajorHolidays", null) === null ? "" : get("holidayRules.maxMajorHolidays", "")} onChange={e => set("holidayRules.maxMajorHolidays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField></div>
-        </div>
-
-        <div style={box}>
-          <div style={css.subT}>East (Davenport) feed</div>
-          <SuCheck label="East feed applies to this surgeon" checked={!!get("eastFeed.enabled", false)} onChange={v => set("eastFeed.enabled", v)} />
-          {get("eastFeed.enabled", false) && <>
-            <div>
-              <SuCheck label="East busy days block Silvis PRIMARY" checked={!!get("eastFeed.eastBlocksPrimary", false)} onChange={v => set("eastFeed.eastBlocksPrimary", v)} />
-              <SuCheck label="East busy days block Silvis BACKUP" checked={!!get("eastFeed.eastBlocksBackup", false)} onChange={v => set("eastFeed.eastBlocksBackup", v)} />
-              <SuCheck label="East backup call counts as busy" checked={get("eastFeed.eastBackupCountsAsBusy", true) !== false} onChange={v => set("eastFeed.eastBackupCountsAsBusy", v)} />
-              <SuCheck label="use the East forecast while Davenport is unpublished" checked={!!get("eastFeed.forecast", false)} onChange={v => set("eastFeed.forecast", v)} />
-            </div>
-            <SuField label="Derive Silvis weeks from" hint="blank = no derived weeks (East-primary week = Silvis backup all week; East-backup week = Silvis primary)"><input type="date" value={get("eastFeed.deriveFrom", "") || ""} onChange={e => set("eastFeed.deriveFrom", e.target.value || undefined)} style={inp} /></SuField>
-            <SuField label="Stated East-primary weeks (Mondays)" width={300}><input type="text" value={(get("eastFeed.statedWeeks.eastPrimary", []) || []).join(", ")} onChange={e => set("eastFeed.statedWeeks.eastPrimary", suIsoList(e.target.value))} style={{ ...inp, width: "100%", fontFamily: mono }} /></SuField>
-            <SuField label="Stated East-backup weeks (Mondays)" width={300}><input type="text" value={(get("eastFeed.statedWeeks.eastBackup", []) || []).join(", ")} onChange={e => set("eastFeed.statedWeeks.eastBackup", suIsoList(e.target.value))} style={{ ...inp, width: "100%", fontFamily: mono }} /></SuField>
-          </>}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
           <button data-testid="rules-save" onClick={save} disabled={!dirty} style={{ ...css.btn(true), padding: "6px 14px", opacity: dirty ? 1 : 0.5 }}>Save rules for {s.name || sel}</button>
-          {dirty && <button onClick={() => { setDraft(suClone(surgeonRules[sel] || {})); setDirty(false); }} style={css.mini(false)}>Revert</button>}
-          <button onClick={() => { setRawText(JSON.stringify(draft, null, 2)); setRawOpen(o => !o); setRawErr(""); }} style={css.mini(rawOpen)}>{rawOpen ? "Hide JSON" : "Edit as JSON (everything else)"}</button>
-          <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved" : "Saved to surgeonRules." + sel + " (autosave)"}</span>
+          {dirty && <button data-testid="rules-revert" onClick={revert} style={css.mini(false)}>Revert</button>}
+          <span data-testid="rules-status" style={{ fontSize: 11, color: dirty ? T.accentText : T.muted }}>{dirty ? "Unsaved" : "Saved"}</span>
         </div>
-        {rawOpen && (
-          <div style={{ marginBottom: 10 }}>
-            <textarea data-testid="rules-raw" value={rawText} onChange={e => setRawText(e.target.value)} spellCheck={false} style={{ ...inp, width: "100%", minHeight: 220, fontFamily: mono, fontSize: 11 }} />
-            {rawErr && <div style={css.errBox}>Not applied: {rawErr}</div>}
-            <button onClick={applyRaw} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON to the form</button>
-          </div>
-        )}
       </>}
 
-      <div style={{ ...box, borderColor: "#c8d8e8" }}>
-        <div style={css.subT}>Group rules</div>
-        {/* K (9/22): bound to defaultMonthlyCap.primary; a legacy 'total' value is shown and replaced on the first edit */}
-        <SuField label="Default monthly cap (primary days)" hint="blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-primary" value={(() => { const p = gget("defaultMonthlyCap.primary", null); if (typeof p === "number") return p; const t = gget("defaultMonthlyCap.total", null); return typeof t === "number" ? t : ""; })()} onChange={e => { if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined); gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></SuField>
-        <SuField label="Default max consecutive"><input type="number" min="1" max="14" value={gget("defaultMaxConsecutiveDays", "")} onChange={e => gset("defaultMaxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>
-        <SuField label="Forecast busy threshold (0-1)"><input type="number" min="0" max="1" step="0.05" value={gget("eastFeed.forecast.busyThreshold", "")} onChange={e => gset("eastFeed.forecast.busyThreshold", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 80 }} /></SuField>
-        <div>
-          <SuCheck label="backup days count toward consecutive runs" checked={!!gget("countBackupInConsecutive", false)} onChange={v => gset("countBackupInConsecutive", v)} />
-          <SuCheck label="backup must differ from primary" checked={gget("backupDistinctFromPrimary", true) !== false} onChange={v => gset("backupDistinctFromPrimary", v)} />
-          <SuCheck label="holiday units waive weekday rules" checked={gget("holidays.ignoreWeekdayRules", true) !== false} onChange={v => gset("holidays.ignoreWeekdayRules", v)} />
-        </div>
-        <div style={css.subT}>Weights</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {weightKeys.map(k => <SuField key={k} label={k}><input type="number" step="0.5" value={gget("weights." + k, "") === null ? "" : gget("weights." + k, "")} placeholder={String((typeof defaultWeights === "function" ? defaultWeights() : {})[k] === undefined ? "" : defaultWeights()[k])} onChange={e => gset("weights." + k, e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></SuField>)}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button data-testid="group-save" onClick={() => { const leaks = suContactPaths(group); if (leaks.length) { showToast("Refused: contact-looking data at " + leaks.join(", "), "error"); return; } onSaveGroup(group); setGroupDirty(false); }} disabled={!groupDirty} style={{ ...css.btn(true), padding: "6px 14px", opacity: groupDirty ? 1 : 0.5 }}>Save group rules</button>
-          {groupDirty && <button onClick={() => { setGroup(suClone(groupRules || {})); setGroupDirty(false); }} style={css.mini(false)}>Revert</button>}
-          <button onClick={() => { setGroupRaw(JSON.stringify(group, null, 2)); setGroupRawOpen(o => !o); setGroupRawErr(""); }} style={css.mini(groupRawOpen)}>{groupRawOpen ? "Hide JSON" : "Edit as JSON"}</button>
-        </div>
-        {groupRawOpen && (
-          <div style={{ marginTop: 8 }}>
-            <textarea value={groupRaw} onChange={e => setGroupRaw(e.target.value)} spellCheck={false} style={{ ...inp, width: "100%", minHeight: 200, fontFamily: mono, fontSize: 11 }} />
-            {groupRawErr && <div style={css.errBox}>Not applied: {groupRawErr}</div>}
-            <button onClick={() => { try { const o = JSON.parse(groupRaw); if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("groupRules must be a JSON object"); const leaks = suContactPaths(o); if (leaks.length) throw new Error("contact-looking data at " + leaks.join(", ")); setGroup(o); setGroupDirty(true); setGroupRawOpen(false); setGroupRawErr(""); } catch (e) { console.warn("Group rules JSON not applied:", e); setGroupRawErr(String(e && e.message || e)); } }} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON</button>
+      <div data-testid="rules-advanced" data-open={advOpen ? "1" : "0"} style={{ border: "1px solid " + T.border, borderRadius: 8, padding: "4px 12px", marginBottom: 10, background: T.surface }}>
+        <button data-testid="rules-advanced-toggle" type="button" aria-expanded={advOpen} onClick={() => setAdvOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "transparent", border: "none", padding: "6px 0", cursor: "pointer", fontFamily: font, textAlign: "left", minHeight: 36 }}>
+          <span aria-hidden="true" style={{ fontSize: 11, color: T.muted, transition: "transform .15s", transform: advOpen ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block", width: 10, flexShrink: 0 }}>&#9654;</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.text }}>Advanced</span>
+          <span style={{ fontSize: 11.5, color: groupDirty ? T.accentText : T.muted }}>{groupDirty ? "group rules unsaved" : "group rules, weights, edit as JSON"}</span>
+        </button>
+        {advOpen && <div style={{ paddingBottom: 8 }}>
+          {sel && <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.text, margin: "6px 0 4px" }}>{s.name || sel}'s rules as JSON</div>
+            <button data-testid="rules-raw-toggle" onClick={() => { setRawText(JSON.stringify(draft, null, 2)); setRawOpen(o => !o); setRawErr(""); }} style={css.mini(rawOpen)}>{rawOpen ? "Hide JSON" : "Edit as JSON"}</button>
+            <span style={{ ...quiet, marginLeft: 8 }}>every key, the ones without a field too</span>
+            {rawOpen && (
+              <div style={{ marginTop: 6 }}>
+                <textarea data-testid="rules-raw" value={rawText} onChange={e => setRawText(e.target.value)} spellCheck={false} style={{ ...inp, width: "100%", minHeight: 220, fontFamily: mono, fontSize: 11, boxSizing: "border-box" }} />
+                {rawErr && <div style={css.errBox}>Not applied: {rawErr}</div>}
+                <button data-testid="rules-raw-apply" onClick={applyRaw} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON to the form</button>
+                <span style={{ ...quiet, marginLeft: 8 }}>then Save rules for {s.name || sel}</span>
+              </div>
+            )}
+          </div>}
+
+          <div data-testid="rules-group-box" style={{ ...box, background: T.raised }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: T.text, marginBottom: 6 }}>Group rules</div>
+            {/* bound to defaultMonthlyCap.primary; a legacy 'total' value is shown and replaced on the first edit */}
+            <RuField T={T} label="Default monthly cap (primary days)" hint="blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-primary" value={(() => { const p = gget("defaultMonthlyCap.primary", null); if (typeof p === "number") return p; const t = gget("defaultMonthlyCap.total", null); return typeof t === "number" ? t : ""; })()} onChange={e => { if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined); gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="Default most primary days in a row"><input type="number" min="1" max="14" value={gget("defaultMaxConsecutiveDays", "")} onChange={e => gset("defaultMaxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="East forecast: busy at or above (0-1)"><input type="number" min="0" max="1" step="0.05" value={gget("eastFeed.forecast.busyThreshold", "")} onChange={e => gset("eastFeed.forecast.busyThreshold", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 80 }} /></RuField>
+            <div>
+              <SuCheck label="backup days count toward days in a row" checked={!!gget("countBackupInConsecutive", false)} onChange={v => gset("countBackupInConsecutive", v)} />
+              <SuCheck label="backup must differ from primary" checked={gget("backupDistinctFromPrimary", true) !== false} onChange={v => gset("backupDistinctFromPrimary", v)} />
+              <SuCheck label="holiday units waive weekday rules" checked={gget("holidays.ignoreWeekdayRules", true) !== false} onChange={v => gset("holidays.ignoreWeekdayRules", v)} />
+            </div>
+            <div data-testid="rules-weights" data-open={weightsOpen ? "1" : "0"} style={{ marginTop: 6 }}>
+              <button data-testid="rules-weights-toggle" type="button" aria-expanded={weightsOpen} onClick={() => setWeightsOpen(o => !o)} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "transparent", border: "none", padding: "4px 0", cursor: "pointer", fontFamily: font, minHeight: 32 }}>
+                <span aria-hidden="true" style={{ fontSize: 11, color: T.muted, transition: "transform .15s", transform: weightsOpen ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block", width: 10 }}>&#9654;</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>Weights</span>
+                <span style={{ fontSize: 11, color: T.muted }}>how much each soft rule counts</span>
+              </button>
+              {weightsOpen && <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                {weightKeys.map(k => <RuField key={k} T={T} label={ruleWeightLabel(k)} width={150}><input type="number" step="0.5" value={gget("weights." + k, "") === null ? "" : gget("weights." + k, "")} placeholder={String((typeof defaultWeights === "function" ? defaultWeights() : {})[k] === undefined ? "" : defaultWeights()[k])} onChange={e => gset("weights." + k, e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>)}
+              </div>}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+              <button data-testid="group-save" onClick={() => { const leaks = suContactPaths(group); if (leaks.length) { showToast("Refused: contact-looking data at " + leaks.join(", "), "error"); return; } onSaveGroup(group); setGroupDirty(false); }} disabled={!groupDirty} style={{ ...css.btn(true), padding: "6px 14px", opacity: groupDirty ? 1 : 0.5 }}>Save group rules</button>
+              {groupDirty && <button data-testid="group-revert" onClick={() => { setGroup(suClone(groupRules || {})); setGroupDirty(false); }} style={css.mini(false)}>Revert</button>}
+              <button data-testid="group-raw-toggle" onClick={() => { setGroupRaw(JSON.stringify(group, null, 2)); setGroupRawOpen(o => !o); setGroupRawErr(""); }} style={css.mini(groupRawOpen)}>{groupRawOpen ? "Hide JSON" : "Edit group rules as JSON"}</button>
+            </div>
+            {groupRawOpen && (
+              <div style={{ marginTop: 8 }}>
+                <textarea data-testid="group-raw" value={groupRaw} onChange={e => setGroupRaw(e.target.value)} spellCheck={false} style={{ ...inp, width: "100%", minHeight: 200, fontFamily: mono, fontSize: 11, boxSizing: "border-box" }} />
+                {groupRawErr && <div style={css.errBox}>Not applied: {groupRawErr}</div>}
+                <button data-testid="group-raw-apply" onClick={() => { try { const o = JSON.parse(groupRaw); if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("groupRules must be a JSON object"); const leaks = suContactPaths(o); if (leaks.length) throw new Error("contact-looking data at " + leaks.join(", ")); setGroup(o); setGroupDirty(true); setGroupRawOpen(false); setGroupRawErr(""); } catch (e) { console.warn("Group rules JSON not applied:", e); setGroupRawErr(String(e && e.message || e)); } }} style={{ ...css.btn(true), padding: "5px 12px", marginTop: 6 }}>Apply JSON</button>
+              </div>
+            )}
           </div>
-        )}
+        </div>}
       </div>
     </div>
   );
