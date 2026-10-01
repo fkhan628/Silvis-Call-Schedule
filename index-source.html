@@ -3433,8 +3433,8 @@ function CallSchedule() {
     }
   };
   // --- Holiday plan (Prompt 25 steps 3-5, Faraz 9/30: nothing is locked or published without the scheduler's Accept) ---
-  // The ONE write path of Setup > Holidays > Plan <year> (Accept; meta.mode "swap" + meta.only write a few units only,
-  // for a later Re-check). It mirrors acceptPreview: ONE confirm BEFORE anything - it names every rule the plan breaks (the card's
+  // The ONE write path of Setup > Holidays > Plan <year> (Accept) and Re-check <year> (a suggested swap, meta.mode
+  // "swap"). It mirrors acceptPreview: ONE confirm BEFORE anything - it names every rule the plan breaks (the card's
   // holidayPlanCheck texts) and every planned slot the row on file already holds differently (locked or published -
   // helpers.holidayPlanAcceptRows conflicts; OK replaces them, Cancel writes nothing); the snapshot FIRST (a failed capture
   // BLOCKS - nothing is locked); a re-derivation over the current map when a realtime row landed while the snapshot was
@@ -10238,6 +10238,9 @@ function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf,
 //                   judged by holidayPlanCheck; a move that ADDS a broken rule asks first, naming it (Cancel keeps the
 //                   plan) - never a silent break. The current plan's breaks stay listed; Accept names them again.
 //   Accept <year>   onAccept (the App's acceptHolidayPlan: confirm -> snapshot -> CAS sync -> audit -> notices).
+//   Re-check <year> holidayPlanRecheck on the live state: every accepted slot (rows of source holiday-plan-<year>) a
+//                   newer East feed, vacation or rule refuses, with the best swap; read-only - "Apply swap" goes
+//                   through the same onAccept path (mode swap, the swap's units only) with its confirm.
 // The plan's inputs are the SAVED units (an unsaved Holidays edit disables Accept: save first).
 function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, daysUnread, rulesImported, onAccept, showToast }) {
   const Tk = THEME[dk ? "dark" : "light"];
@@ -10246,6 +10249,7 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
   const [yearPick, setYearPick] = React.useState("");
   const year = yearPick || (defaultYear ? String(defaultYear) : "");
   const [plan, setPlan] = React.useState(null);      // { year, result, base: [assignments], assignments, historyWarnings, swaps: [text] }
+  const [recheckYear, setRecheckYear] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   // judged on the LIVE state on every render (a vacation or an East refresh after Plan is seen at once)
   const live = React.useMemo(() => {
@@ -10258,6 +10262,11 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
       return { check, swaps };
     } catch (e) { console.warn("holiday plan check failed", e); return { error: String(e && e.message || e) }; }
   }, [plan, planState]);
+  const recheck = React.useMemo(() => {
+    if (!recheckYear) return null;
+    try { return holidayPlanRecheck(recheckYear, holidayPlanInputs(recheckYear, planState || {})); }
+    catch (e) { console.warn("holiday plan re-check failed", e); return { error: String(e && e.message || e) }; }
+  }, [recheckYear, planState]);
   const runPlan = () => {
     if (!year) { showToast("No year with holiday units - add a year above first.", "error"); return; }
     try {
@@ -10265,6 +10274,7 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
       if (!inputs.units) { showToast(`No saved holiday units for ${year} - add and save the year above first.`, "error"); return; }
       const result = planHolidays(year, inputs);
       setPlan({ year: Number(year), result, base: result.assignments, assignments: result.assignments.map(a => ({ ...a, unit: { ...a.unit } })), historyWarnings: inputs.historyWarnings || [], swaps: [] });
+      setRecheckYear(null);
     } catch (e) { console.warn("planHolidays failed", e); showToast("The holiday plan failed: " + String(e && e.message || e).slice(0, 160), "error"); }
   };
   const applySwap = (o) => {
@@ -10277,7 +10287,16 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
     setBusy(true);
     try {
       const ok = await onAccept(plan.year, plan.assignments, { breaks: live.check.breaks.map(b => b.text), breakKeys: live.check.breaks.map(b => b.key) });
-      if (ok) setPlan(null);
+      if (ok) { setPlan(null); setRecheckYear(plan.year); }
+    } finally { setBusy(false); }
+  };
+  const applyRecheck = async (b) => {
+    const s = b && b.suggestion;
+    if (!s || busy) return;
+    setBusy(true);
+    try {
+      const units = [s.unit].concat(s.with && s.with.unit !== s.unit ? [s.with.unit] : []);
+      await onAccept(recheckYear, s.assignments, { mode: "swap", only: units, breaks: s.added.map(x => x.text), breakKeys: s.added.map(x => x.key) });
     } finally { setBusy(false); }
   };
   const who = (id) => id ? <span>{nameOf(id)}</span> : <span style={{ color: Tk.open, fontWeight: 800 }}>OPEN</span>;
@@ -10292,12 +10311,13 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
       <div style={{ ...css.subT, margin: "0 0 4px" }}>Yearly holiday plan</div>
       <p style={note}>The planner decides one primary and one backup per unit for the whole year (Davenport's major / minor split: everyone one major and one minor where the pool allows, primary in one tier and backup in the other, the tier's primaries to the lowest lifetime primary rate, no same holiday in the same role two years running). Plan shows it - nothing is written; swaps re-check every rule; Accept locks the unit days for everyone.</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <select data-testid="holplan-year" value={year} onChange={e => { setYearPick(e.target.value); setPlan(null); }} style={{ ...css.inp, padding: "3px 6px", fontSize: 12, width: 90, fontFamily: mono }}>
+        <select data-testid="holplan-year" value={year} onChange={e => { setYearPick(e.target.value); setPlan(null); setRecheckYear(null); }} style={{ ...css.inp, padding: "3px 6px", fontSize: 12, width: 90, fontFamily: mono }}>
           {unitYears.length === 0 && <option value="">no year</option>}
           {unitYears.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
         <button data-testid="holplan-run" onClick={runPlan} disabled={!year || blockedNow || busy} style={{ ...css.btn(true), padding: "5px 12px", opacity: (!year || blockedNow || busy) ? 0.5 : 1 }}>Plan {year || "-"}</button>
-        {daysUnread && <span style={{ fontSize: 11, color: Tk.warnText }}>Schedule not loaded - Plan and Accept wait for it.</span>}
+        <button data-testid="holplan-recheck" onClick={() => { setRecheckYear(Number(year)); }} disabled={!year || blockedNow || busy} style={{ ...css.mini(false), opacity: (!year || blockedNow || busy) ? 0.5 : 1 }}>Re-check {year || "-"}</button>
+        {daysUnread && <span style={{ fontSize: 11, color: Tk.warnText }}>Schedule not loaded - Plan, Re-check and Accept wait for it.</span>}
         {!rulesImported && <span style={{ fontSize: 11, color: Tk.warnText }}>Rules are not imported yet.</span>}
       </div>
       {plan && live && live.error && <div style={{ ...css.errBox, marginTop: 8 }}>Couldn't judge the plan: {live.error}</div>}
@@ -10364,6 +10384,23 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
             <button data-testid="holplan-discard" onClick={() => setPlan(null)} disabled={busy} style={css.mini(false)}>Discard</button>
             {dirty && <span style={{ fontSize: 11, color: Tk.warnText }}>Unsaved holiday edits - save them, then Plan again.</span>}
           </div>
+        </div>
+      )}
+      {recheck && recheck.error && <div style={{ ...css.errBox, marginTop: 8 }}>Couldn't re-check: {recheck.error}</div>}
+      {recheck && !recheck.error && (
+        <div data-testid="holplan-recheck-list" data-year={recheck.year} data-blocked={recheck.blocked.length} data-accepted={recheck.accepted.length} style={{ marginTop: 8, fontSize: 12, color: Tk.text }}>
+          <div style={{ fontWeight: 700 }}>Re-check {recheck.year}</div>
+          {recheck.accepted.length === 0 ? <p style={note}>Nothing accepted for {recheck.year} yet - no schedule day carries the plan source ({recheck.source}).</p>
+          : recheck.blocked.length === 0 ? <p style={{ ...note, color: Tk.success }}>All {recheck.accepted.length} accepted unit(s) still pass every rule on the current East feed, vacations and rules.</p>
+          : recheck.blocked.map(b => (
+            <div key={b.unit.name + b.role} data-testid="holplan-recheck-item" data-unit={b.unit.name} data-role={b.role} data-id={b.id} style={{ border: "1px solid " + Tk.border, borderRadius: 6, padding: "6px 8px", marginTop: 6 }}>
+              <div><strong>{b.unit.name} {span(b.unit.days)}</strong> {b.role} {nameOf(b.id)}: {b.breaks.map(x => x.reasons ? x.reasons.join(", ") : x.text).join("; ")}</div>
+              <div data-testid="holplan-recheck-suggestion" style={{ fontSize: 11, color: b.valid ? Tk.success : Tk.warnText, marginTop: 2 }}>{b.suggestion ? "Suggested: " + b.suggestion.text + (b.valid ? " - keeps every rule" : " - BREAKS: " + b.suggestion.added.map(x => x.text).join("; ")) : "No swap clears it - open the day editor or change the plan by hand."}</div>
+              {b.suggestion && <button data-testid="holplan-recheck-apply" onClick={() => applyRecheck(b)} disabled={busy || blockedNow} style={{ ...css.mini(false), marginTop: 4, opacity: (busy || blockedNow) ? 0.5 : 1 }}>Apply swap (confirm, snapshot first)</button>}
+            </div>
+          ))}
+          {recheck.warnings.length > 0 && <div style={{ ...css.warnBox, marginTop: 6 }}>{recheck.warnings.map((w, k) => <div key={k}>{w}</div>)}</div>}
+          <button data-testid="holplan-recheck-close" onClick={() => setRecheckYear(null)} style={{ ...css.mini(false), marginTop: 6 }}>Close</button>
         </div>
       )}
     </div>

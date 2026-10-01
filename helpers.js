@@ -2915,7 +2915,7 @@ function hplYear(year, fn) {
 // hplPrepare(Y, opts) - everything a plan is judged by, read once: the year's units, the pool, the history and the
 // lifetime counts, every hard per-person limit (rule 1 + rule 5: block[ui][id][role] = the refusal reasons, the derived
 // East week's forced holders) and the tier shape (rule 2). planHolidays searches over it; holidayPlanCheck /
-// holidayPlanSwapOptions judge a given plan by it - ONE refusal logic, never a second copy.
+// holidayPlanSwapOptions / holidayPlanRecheck judge a given plan by it - ONE refusal logic, never a second copy.
 function hplPrepare(Y, o) {
   var warnings = [];
   var groupRules = o.groupRules && typeof o.groupRules === "object" ? o.groupRules : {};
@@ -3278,13 +3278,15 @@ function planHolidays(year, opts) {
    scheduler's Accept") ===
    Setup > Holidays > Plan <year> previews planHolidays on the app's live state; the scheduler may swap holders, then
    Accept locks the unit days (schedule_days, both roles locked, source 'holiday-plan-<year>') through the app's guarded
-   day-write path. Everything
+   day-write path. Re-check <year> lists the accepted slots a newer East feed, vacation or rule now refuses. Everything
    below is pure (no clock, network or writes) and judges a plan with hplPrepare - the planner's own refusal logic:
      holidayPlanInputs(year, state)      the planHolidays opts from the app's state (ctxInputs + timeOffRows)
      holidayPlanCheck(year, plan, opts)  which rules a plan breaks (+ its cost vector, the planner's ordering)
      holidayPlanSwapOptions(year, plan, unit, role, opts)
                                          every swap of that slot's holder with another slot's holder, and every
                                          replacement by another pool member, judged and ranked
+     holidayPlanRecheck(year, opts)      the accepted slots (rows of source holiday-plan-<year>) the current state
+                                         refuses, each with the best swap by the same ranking
      holidayPlanAcceptRows(year, plan, schedule, opts)
                                          the schedule_days assignments Accept writes, and the slots it would replace
    A plan is planHolidays' assignments shape ([{ unit: { name } | name, primary, backup }]) or { <unit name>: { primary,
@@ -3348,6 +3350,8 @@ function hplAssignByUi(P, plan) {
 }
 function hplAssignOut(P, A) { return P.units.map(function (u, ui) { return { unit: { name: u.name, tier: u.tier, days: u.days.slice() }, primary: A[ui].primary, backup: A[ui].backup }; }); }
 function hplBreakKey(b) { return [b.rule, b.unit || "", b.role || "", b.id || "", b.tier || ""].join("|"); }
+// b names the slot (unit, role) - directly, or among the slots of a max-major break
+function hplBreakTouches(b, unit, role) { return (b.unit === unit && (b.role === role || !b.role)) || (Array.isArray(b.slots) && b.slots.some(function (s) { return s.unit === unit && s.role === role; })); }
 // hplEvaluate(P, A) -> { breaks, soft, open, vec } - the hard limits the plan breaks, the soft notes and the planner's cost
 // vector [open, shape, repeats, load, alternation, primaryRate, sameHoliday, unitLength] computed exactly as the
 // search scores a complete plan (planHolidays' leaf + pair terms).
@@ -3455,7 +3459,7 @@ function hplOptions(P, A, ui, role, base) {
 }
 // holidayPlanSwapOptions(year, plan, unitName, role, opts) -> { year, unit, role, current, base: { breaks, soft, cost },
 //   options: [{ kind: 'swap' | 'replace', unit, role, id, from, with, text, assignments, breaks, soft, open, cost, added,
-//   resolved, ok }] } - the Setup card's swap control reads it.
+//   resolved, ok }] } - the Setup card's swap control and Re-check's suggestion read the same list.
 function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
   var Y = hplYear(year, "holidayPlanSwapOptions");
   if (role !== "primary" && role !== "backup") throw new Error("holidayPlanSwapOptions: role must be primary or backup, got " + JSON.stringify(role));
@@ -3466,9 +3470,62 @@ function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
   var base = hplEvaluate(P, A);
   return { year: Y, unit: unitName, role: role, current: A[ui][role], base: { breaks: base.breaks, soft: base.soft, cost: hplCostObj(base.vec) }, options: hplOptions(P, A, ui, role, base), warnings: P.warnings.slice() };
 }
+// holidayPlanRecheck(year, opts) -> { year, source, accepted: [{ unit, days, primary, backup, mixed }], blocked: [{ unit,
+//   role, id, days, breaks, suggestion, valid }], warnings }. opts = planHolidays' opts + `schedule` (in-memory map).
+//   Accepted = the unit days whose row source is holiday-plan-<year> (a hand edit or a trade turns a row 'manual' /
+//   'trade' - it is then an ordinary slot, the East conflict report's to watch); one holder per role across the unit's
+//   accepted days, else the slot is reported mixed and skipped. Each accepted slot is judged on the CURRENT state
+//   (vacations, East, rules, roster) with hplEvaluate's slot rules - refused, not-in-pool, same-person, max-major (the
+//   plan-level shape / no-repeat / alternation are not a newer feed's doing and are not re-reported). The suggestion
+//   is the first option of hplOptions that clears the slot's breaks and adds none (valid: true); failing that, the first
+//   that clears them (valid: false, its added breaks listed); else null.
+var HPL_SLOT_RULES = ["refused", "not-in-pool", "same-person", "max-major"];
+function holidayPlanRecheck(year, opts) {
+  var Y = hplYear(year, "holidayPlanRecheck");
+  var o = opts || {};
+  var P = hplPrepare(Y, o);
+  var src = holidayPlanSource(Y), sched = o.schedule && typeof o.schedule === "object" ? o.schedule : {};
+  var warnings = P.warnings.slice(), accepted = [], A = [];
+  P.units.forEach(function (u) {
+    var rec = { unit: { name: u.name, tier: u.tier, days: u.days.slice() }, days: [], primary: null, backup: null, mixed: [] };
+    HPL_ROLES.forEach(function (role) {
+      var ids = [];
+      u.days.forEach(function (d) {
+        var a = sched[d];
+        if (!a || a.source !== src) return;
+        if (rec.days.indexOf(d) < 0) rec.days.push(d);
+        var h = dayHolder(a, role);
+        if (h && ids.indexOf(h) < 0) ids.push(h);
+      });
+      if (ids.length === 1) rec[role] = ids[0];
+      else if (ids.length > 1) { rec.mixed.push(role); warnings.push(u.name + " " + Y + " " + role + ": the accepted days hold " + ids.map(P.nameOf).join(" and ") + " - not one holder; that slot is not re-checked"); }
+    });
+    rec.days.sort();
+    if (rec.days.length) accepted.push(rec);
+    A.push({ primary: rec.primary, backup: rec.backup });
+  });
+  var base = hplEvaluate(P, A), blocked = [];
+  P.units.forEach(function (u, ui) {
+    HPL_ROLES.forEach(function (role) {
+      var id = A[ui][role];
+      if (!id) return;
+      var mine = base.breaks.filter(function (b) { return HPL_SLOT_RULES.indexOf(b.rule) >= 0 && hplBreakTouches(b, u.name, role); });
+      if (!mine.length) return;
+      var keys = mine.map(function (b) { return b.key; });
+      var list = hplOptions(P, A, ui, role, base);
+      var clears = function (op) { return !op.breaks.some(function (b) { return keys.indexOf(b.key) >= 0; }); };
+      var pick = null, valid = false;
+      for (var i = 0; i < list.length && !pick; i++) if (clears(list[i]) && !list[i].added.length) { pick = list[i]; valid = true; }
+      for (var j = 0; j < list.length && !pick; j++) if (clears(list[j])) pick = list[j];
+      var rec = accepted.filter(function (x) { return x.unit.name === u.name; })[0];
+      blocked.push({ unit: { name: u.name, tier: u.tier, days: u.days.slice() }, role: role, id: id, days: rec ? rec.days.slice() : [], breaks: mine, suggestion: pick, valid: valid });
+    });
+  });
+  return { year: Y, source: src, accepted: accepted, blocked: blocked, warnings: warnings };
+}
 // holidayPlanAcceptRows(year, plan, schedule, opts) -> { year, source, rows: { day: assignment }, days, units: [{ name,
 //   tier, days, primary, backup }], skipped: [{ unit, why }], conflicts: [{ day, unit, role, from, to, locked, clash }],
-//   changes }. opts: { units | holidays (the year's units), only: [unit names] (write those units only),
+//   changes }. opts: { units | holidays (the year's units), only: [unit names] (a Re-check swap writes its units only),
 //   today (Central; a unit whose first day is before it is skipped - a started or past unit is left as on file) }.
 //   Each unit day: the plan's holder in each planned role, locked; source holiday-plan-<year>; note holidayPlanNote;
 //   a roster primary clears an external cover; a role the plan leaves open keeps what is on file (unless that holder is
@@ -4868,7 +4925,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
     HOLIDAY_PLAN_DEFAULTS, holidayPlanRules, holidayPlanHistory, planHolidays,
-    holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanAcceptRows, holidayPlanUnitLines,
+    holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanUnitLines,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,

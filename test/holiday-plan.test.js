@@ -11,12 +11,14 @@
 //   primary rate (rule 3), F no repeat + the tie-breaks (rule 4), G the derived East week (rule 5).
 // Section H - the 2027 plan on the seed inputs and the 2026 holders as published 9/23 (the report's table).
 // Section I - ten simulated years on the seed rules (rotation, alternation, no repeat, every limit).
-// Prompt 25 step 3 (the plan in the app - Setup > Holidays > Plan / swap / Accept):
+// Prompt 25 steps 3-5 (the plan in the app - Setup > Holidays > Plan / Accept / Re-check):
 // Section J - holidayPlanCheck: the planner's own plans break nothing and score the search's own cost vector; every
 //   break kind (refused, same-person, no-repeat, shape, max-major, not-in-pool), open slots apart, alternation soft.
 // Section K - holidayPlanSwapOptions: every swap / replacement of a slot, each judged by the same check, ranked.
 // Section M - holidayPlanAcceptRows (the rows Accept writes, the conflicts it must confirm) + holidayPlanInputs (the app
 //   state -> the planner's opts) + holidayPlanDefaultYear.
+// Section L - holidayPlanRecheck: accepted slots a newer vacation / East day / rule / roster change refuses, each with
+//   the best swap; applying it clears the slot.
 // Section N - the accepted rows: the generator keeps them (both roles locked); a trade or a give moves the whole unit.
 "use strict";
 const assert = require("assert");
@@ -477,7 +479,7 @@ step("I1: ten simulated years (2027-2036) on the seed rules - rotation, alternat
 }
 
 /* ===================================================================
-   Prompt 25 steps 3-5 - the plan in the app: holidayPlanCheck (J), holidayPlanSwapOptions (K),
+   Prompt 25 steps 3-5 - the plan in the app: holidayPlanCheck (J), holidayPlanSwapOptions (K), holidayPlanRecheck (L),
    holidayPlanAcceptRows + holidayPlanInputs (M), and what the generator / a trade do with the accepted rows (N). */
 const R = require("../rules.js");
 const GEN = require("../generator.js");
@@ -580,7 +582,7 @@ step("K2: holidayPlanSwapOptions - an open slot offers replacements only; a bad 
   ok(u.options.length === 0 && u.warnings.indexOf("Easter is not a holiday unit of 2027") >= 0, "unknown unit");
 }
 
-/* =================================================================== M */
+/* =================================================================== M (before L: L re-checks rows M builds) */
 step("M1: holidayPlanAcceptRows - every unit day, both roles locked, source holiday-plan-2027, the unit-only note; nothing to replace on an empty map");
 const ACC = H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2026-10-01" });
 {
@@ -652,6 +654,58 @@ eq(H.holidayPlanDefaultYear(seed.holidays, "2026-10-01"), 2027, "2027 from 10/1/
 eq(H.holidayPlanDefaultYear(seed.holidays, "2027-03-01"), 2027, "no later year: the latest with units");
 eq(H.holidayPlanDefaultYear({ units: {} }, "2026-10-01"), 2027, "no units at all: next year");
 eq(H.holidayPlanDefaultYear({ units: { "2027": [], "2028": [{ name: "Christmas", days: ["2028-12-24"] }] } }, "2026-10-01"), 2028, "a year with an empty list does not count");
+
+/* =================================================================== L */
+step("L1: holidayPlanRecheck - a freshly accepted plan: six accepted units, nothing blocked");
+{
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows }));
+  eq(rc.accepted.map((a) => [a.unit.name, a.primary, a.backup, a.days.length]), P27.assignments.map((a) => [a.unit.name, a.primary, a.backup, a.unit.days.length]), "the accepted units read back from the rows");
+  eq([rc.blocked, rc.warnings], [[], []], "nothing blocked, no warning");
+  eq(H.holidayPlanRecheck(2027, O27({ schedule: {} })).accepted, [], "nothing accepted on an empty map");
+}
+
+step("L2: a newer vacation blocks an accepted slot - named with the planner's reasons and the best valid swap; applying the swap clears it");
+{
+  const vac = [{ person_id: SARKAR, start_date: "2027-11-27", end_date: "2027-11-27" }];
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, vacations: vac }));
+  eq(rc.blocked.map((b) => [b.unit.name, b.role, b.id, b.breaks.map((x) => x.reasons)]), [["Thanksgiving", "primary", SARKAR, [["day-before-vacation", "time-off:2027-11-27"]]]], "Sarkar's Thanksgiving primary");
+  const b = rc.blocked[0];
+  eq([b.valid, b.suggestion.text, b.suggestion.added], [true, "swap with Fierce (New Year's primary)", []], "the suggestion: the first valid swap by the planner's order");
+  eq(b.days, ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"], "the accepted days");
+  const units = [b.suggestion.unit, b.suggestion.with.unit];
+  const fix = H.holidayPlanAcceptRows(2027, b.suggestion.assignments, ACC.rows, { units: seed.holidays.units["2027"], only: units });
+  eq(fix.days.length, 6, "the swap writes the two units only (Thanksgiving 4 days + New Year's 2)");
+  eq(fix.conflicts.map((c) => [c.unit, c.role, c.from, c.to, c.locked]).filter((x, i, a) => a.findIndex((y) => y.join() === x.join()) === i), [["Thanksgiving", "primary", SARKAR, FIERCE, true], ["New Year's", "primary", FIERCE, SARKAR, true]], "it replaces two locked holders - the confirm names them");
+  const after = H.holidayPlanRecheck(2027, O27({ schedule: Object.assign({}, ACC.rows, fix.rows), vacations: vac }));
+  eq(after.blocked, [], "re-check after the swap: nothing blocked");
+}
+
+step("L3: a newer East day and a newer rule block accepted slots; a deactivated surgeon is not-in-pool");
+{
+  const east = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, east: { eastBusyDays: { s1: ["2027-09-05"] } } }));
+  eq(east.blocked.map((b) => [b.unit.name, b.role, b.id, b.breaks[0].reasons]), [["Labor Day", "primary", KHAN, ["east-busy"]]], "a feed busy day on Khan's Labor Day primary");
+  ok(east.blocked[0].valid && east.blocked[0].suggestion.ok, "...with a valid suggestion: " + east.blocked[0].suggestion.text);
+  const sr = clone(seed.surgeonRules); sr.s3.holidayRules = { holidaysOff: ["Thanksgiving", "New Year's"] };
+  const rule = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, surgeonRules: sr }));
+  eq(rule.blocked.map((b) => [b.unit.name, b.role, b.id, b.breaks[0].reasons]), [["New Year's", "backup", ACTON, ["holiday-opt-out:New Year's"]]], "Acton's new New Year's opt-out");
+  const roster = clone(seed.roster); roster.find((r) => r.id === FIERCE).active = false;
+  const gone = H.holidayPlanRecheck(2027, O27({ schedule: ACC.rows, roster: roster }));
+  eq(gone.blocked.map((b) => [b.unit.name, b.role, b.id, b.breaks.map((x) => x.rule)]), [["July 4th", "backup", FIERCE, ["not-in-pool"]], ["New Year's", "primary", FIERCE, ["not-in-pool"]]], "Fierce deactivated: both his slots");
+  ok(gone.blocked.every((b) => b.suggestion && b.suggestion.kind === "replace"), "...the suggestions replace him (nobody can swap into a pool he left): " + gone.blocked.map((b) => b.suggestion && b.suggestion.text).join("; "));
+}
+
+step("L4: only rows still carrying the plan source are re-checked; a unit whose accepted days disagree is named, never guessed");
+{
+  const sched = clone(ACC.rows);
+  ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"].forEach((d) => { sched[d].source = "manual"; });
+  const vac = [{ person_id: SARKAR, start_date: "2027-11-27", end_date: "2027-11-27" }];
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: sched, vacations: vac }));
+  ok(!rc.accepted.some((a) => a.unit.name === "Thanksgiving") && rc.blocked.length === 0, "hand-edited Thanksgiving (source manual) is an ordinary slot now - not re-checked");
+  const mixed = clone(ACC.rows); mixed["2027-12-25"].primary = BURCHETT;
+  const m = H.holidayPlanRecheck(2027, O27({ schedule: mixed }));
+  ok(m.warnings.indexOf("Christmas 2027 primary: the accepted days hold Philip and Burchett - not one holder; that slot is not re-checked") >= 0, "mixed: " + JSON.stringify(m.warnings));
+  eq(m.accepted.find((a) => a.unit.name === "Christmas").mixed, ["primary"], "...and flagged on the unit");
+}
 
 /* =================================================================== N */
 step("N1: the generator never touches the accepted rows (both roles locked) - Thanksgiving and Christmas / New Year's 2027 runs");
