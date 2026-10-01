@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-bHPBTvGGxtZxGAE7LhYCydIhN62m8kKdi1757xkldr0=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-bkstYhgTrN2akSgLwssHrtvfzai+V3LGydJWDN8ZNIE=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-uxiRS3xMhCnfboc6cPNmEgZK6W6Mb140JNRXSOZOCRk=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-u8sEF50hQcQu3nG/YZuvlPE5vfLx7xjtUznyPsNVSNw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -73,6 +73,13 @@
     .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
     .setup-table input[type="text"], .setup-table input[type="number"], .setup-table input[type="date"], .setup-table select { font-size: 12px; padding: 3px 6px; }
+    /* Setup > Rules (Prompt 24): one rule per row - its controls, its "Remove rule" button on the right (layout only;
+       colours stay inline). On a phone the button sits above the controls so they get the full width. */
+    .rules-field { display: flex; align-items: flex-start; gap: 8px; }
+    .rules-field > .rules-field-body { flex: 1 1 auto; min-width: 0; }
+    .rules-field > .rules-field-remove { flex-shrink: 0; margin-top: 2px; }
+    .rules-sum-line { display: flex; gap: 8px; }
+    .rules-sum-line > .rules-sum-family { flex: 0 0 112px; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
        role letter, holiday name, weekend label and NOTE tag give way (line
        order = role, the cell title still spells everything out), the pill
@@ -109,6 +116,11 @@
       .trade-pick-wrap { flex: 1 1 100%; }
       /* the offer deadline notice (9/27; Prompt 26 9/30): on a phone the sentence takes the full width and "Enter vacations" / "Paint days (optional)" sit under it */
       .offer-notice-row .offer-notice-text { flex-basis: 100% !important; }
+      .rules-field { flex-direction: column-reverse; gap: 2px; }
+      .rules-field > .rules-field-body { width: 100%; }
+      .rules-field > .rules-field-remove { align-self: flex-end; margin-top: 0; }
+      .rules-sum-line { flex-direction: column; gap: 0; }
+      .rules-sum-line > .rules-sum-family { flex: none; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -119,7 +131,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.01c";
+    var APP_VERSION = "2026.10.01d";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -18945,6 +18957,7 @@ function UsersCard({
 }
 function PatternListEditor({
   css,
+  T,
   label,
   list,
   onChange,
@@ -18952,6 +18965,7 @@ function PatternListEditor({
   today,
   hint
 }) {
+  const TT = T || THEME.light;
   const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
     padding: "3px 6px",
     fontSize: 12
@@ -18961,18 +18975,11 @@ function PatternListEditor({
   const ids = suPatternRowIds(idsRef.current, items.length);
   idsRef.current = ids;
   const update = (i, patch) => onChange(items.map((p, j) => j === i ? patch : p));
-  const setKind = (i, kind) => {
-    const p = items[i];
-    const n = {
-      weekday: p.weekday || "Mon"
-    };
-    if (kind === "nth") n.nth = [1];else if (kind === "week") n.nthWeekOfMonth = 1;else if (kind === "before") n.beforeNthMonday = [2, 4];else if (kind === "dates") {
-      n.dates = [];
-      delete n.weekday;
-    }
-    if (p.weight) n.weight = p.weight;
-    if (p.note) n.note = p.note;
-    update(i, n);
+  const setKind = (i, kind) => update(i, suPatternWithKind(items[i], kind));
+  const setBound = (i, k, v) => {
+    const p = _objectSpread({}, items[i]);
+    if (v) p[k] = v;else delete p[k];
+    update(i, p);
   };
   const setValue = (i, text) => {
     const p = _objectSpread({}, items[i]);
@@ -18984,23 +18991,33 @@ function PatternListEditor({
     update(i, p);
   };
   const [texts, setTexts] = React.useState({});
+  const small = {
+    fontSize: 11,
+    color: TT.muted,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4
+  };
   return React.createElement("div", {
     style: {
-      marginBottom: 10
+      marginBottom: 6
     }
   }, React.createElement("div", {
-    style: _objectSpread(_objectSpread({}, css.subT), {}, {
-      margin: "8px 0 4px"
-    })
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: TT.text,
+      margin: "2px 0 4px"
+    }
   }, label, " ", React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#5B6B82"
+      color: TT.muted
     }
   }, "(", items.length, ")"), hint ? React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#9aa4ae",
+      color: TT.muted,
       marginLeft: 6,
       fontSize: 11
     }
@@ -19012,11 +19029,11 @@ function PatternListEditor({
       key: ids[i],
       "data-testid": "pattern-row",
       style: {
-        border: "1px solid #e8ecf0",
+        border: "1px solid " + TT.border,
         borderRadius: 6,
         padding: "6px 8px",
         marginBottom: 6,
-        background: "#fafbfc"
+        background: TT.raised
       }
     }, React.createElement("div", {
       style: {
@@ -19026,6 +19043,7 @@ function PatternListEditor({
         alignItems: "center"
       }
     }, kind !== "dates" && React.createElement("select", {
+      "aria-label": "Weekday",
       value: p.weekday || "Mon",
       onChange: e => update(i, _objectSpread(_objectSpread({}, p), {}, {
         weekday: e.target.value
@@ -19037,10 +19055,12 @@ function PatternListEditor({
       key: w,
       value: w
     }, w))), React.createElement("select", {
+      "aria-label": "Repeats",
       value: kind,
       onChange: e => setKind(i, e.target.value),
       style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 190
+        width: 190,
+        maxWidth: "100%"
       })
     }, React.createElement("option", {
       value: "every"
@@ -19054,6 +19074,7 @@ function PatternListEditor({
       value: "dates"
     }, "explicit dates")), kind !== "every" && React.createElement("input", {
       type: "text",
+      "aria-label": "Which ones",
       value: text,
       placeholder: kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4",
       onChange: e => {
@@ -19064,9 +19085,27 @@ function PatternListEditor({
       },
       style: _objectSpread(_objectSpread({}, inp), {}, {
         width: kind === "dates" ? 260 : 70,
+        maxWidth: "100%",
         fontFamily: mono
       })
-    }), withWeight && React.createElement("select", {
+    }), React.createElement("label", {
+      style: small
+    }, "from ", React.createElement("input", {
+      type: "date",
+      "data-testid": "pattern-start",
+      value: p.start || "",
+      onChange: e => setBound(i, "start", e.target.value),
+      style: inp
+    })), React.createElement("label", {
+      style: small
+    }, "until ", React.createElement("input", {
+      type: "date",
+      "data-testid": "pattern-end",
+      value: p.end || "",
+      onChange: e => setBound(i, "end", e.target.value),
+      style: inp
+    })), withWeight && React.createElement("select", {
+      "aria-label": "Weight",
       value: p.weight || "medium",
       onChange: e => update(i, _objectSpread(_objectSpread({}, p), {}, {
         weight: e.target.value
@@ -19079,13 +19118,15 @@ function PatternListEditor({
       value: w
     }, w))), React.createElement("input", {
       type: "text",
+      "aria-label": "Operational note",
       value: p.note || "",
       placeholder: "operational note (public)",
       onChange: e => update(i, _objectSpread(_objectSpread({}, p), {}, {
         note: e.target.value
       })),
       style: _objectSpread(_objectSpread({}, inp), {}, {
-        flex: "1 1 160px"
+        flex: "1 1 160px",
+        minWidth: 0
       })
     }), React.createElement("button", {
       onClick: () => {
@@ -19097,19 +19138,19 @@ function PatternListEditor({
       "data-testid": "pattern-preview",
       style: {
         fontSize: 11,
-        color: "#5B6B82",
+        color: TT.muted,
         marginTop: 4,
         fontFamily: mono
       }
     }, React.createElement("span", {
       style: {
         fontFamily: font,
-        color: "#5B6B82"
+        color: TT.muted
       }
     }, suPatternLabel(p), " - next 8: "), next.error ? React.createElement("span", {
       "data-testid": "pattern-error",
       style: {
-        color: "#a83232",
+        color: TT.open,
         fontFamily: font
       }
     }, "pattern is invalid - the rules engine refused it (", next.error, ")") : next.length ? next.join(", ") : "no matching date in the next two years"));
@@ -19120,6 +19161,84 @@ function PatternListEditor({
     }]),
     style: css.mini(false)
   }, "Add pattern"));
+}
+const RULE_MODE_WORDS = {
+  "": "(open - every day unless a rule blocks it)",
+  "weekends-plus-weekdays": "weekends plus listed weekdays",
+  "whitelist-recurring": "only listed recurring days (primary)",
+  "blacklist-recurring": "every day except listed recurring days",
+  "whitelist-weeks": "only listed weeks (primary)",
+  "whitelist-windows": "only inside date windows",
+  "derived-from-east-plus-weekday-pattern": "East-derived weeks plus a weekday pattern"
+};
+const RULE_WEIGHT_WORDS = {
+  low: "Low",
+  medium: "Medium",
+  strong: "Strong",
+  preferred: "Preferred day (bonus)",
+  patternDaily: "Weekend split into single days",
+  patternMismatch: "Weekend style not followed",
+  backToBackWeekend: "Weekends back to back",
+  backupAfterPrimary: "Backup the day after own primary",
+  noTargetWeekday: "Allowed weekday (others first)",
+  eastUnknown: "East call not known",
+  eastForecastBelowThreshold: "East forecast under the threshold",
+  smoothingTolerance: "Share smoothing tolerance",
+  longRunPerDay: "Long run, per extra day",
+  weekendContribution: "Prefers weekends / weekdays",
+  eastClear: "Home during an East vacation (bonus)",
+  offerBonus: "Offered day (bonus)",
+  outsideOffers: "Day outside the offers",
+  offerBonusOverShare: "Offered day above the share",
+  deviationConvexity: "Share deviation curve",
+  hardNeverBeyondNotice: "Never-day beyond the notice"
+};
+function ruleWeightLabel(k) {
+  if (RULE_WEIGHT_WORDS[k]) return RULE_WEIGHT_WORDS[k];
+  const s = String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function RuField({
+  T,
+  label,
+  children,
+  width,
+  hint,
+  testid
+}) {
+  const autoId = React.useId();
+  const kids = React.Children.toArray(children);
+  const one = kids.length === 1 && React.isValidElement(kids[0]) && ["input", "select", "textarea"].indexOf(kids[0].type) >= 0 ? kids[0] : null;
+  const id = one ? one.props.id || "rufield" + autoId : undefined;
+  return React.createElement("div", {
+    "data-testid": testid || undefined,
+    style: {
+      display: "inline-flex",
+      flexDirection: "column",
+      gap: 2,
+      marginRight: 10,
+      marginBottom: 6,
+      width: width || "auto",
+      maxWidth: "100%",
+      verticalAlign: "top"
+    }
+  }, React.createElement("label", {
+    htmlFor: id,
+    style: {
+      fontSize: 10,
+      color: T.muted,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      letterSpacing: 0.5
+    }
+  }, label), one ? React.cloneElement(one, {
+    id
+  }) : children, hint ? React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: T.muted
+    }
+  }, hint) : null);
 }
 function RulesEditor({
   css,
@@ -19133,20 +19252,28 @@ function RulesEditor({
   showToast,
   today
 }) {
+  const T = THEME[dk ? "dark" : "light"];
   const ids = (roster || []).map(s => s.id);
   const [sel, setSel] = React.useState(ids[0] || "");
   const [draft, setDraft] = React.useState(() => suClone(surgeonRules[ids[0]] || {}));
   const [dirty, setDirty] = React.useState(false);
+  const [shown, setShown] = React.useState(() => new Set(suRuleFieldsUsed(surgeonRules[ids[0]] || {})));
+  const [addPick, setAddPick] = React.useState("");
   const [rawOpen, setRawOpen] = React.useState(false);
   const [rawText, setRawText] = React.useState("");
   const [rawErr, setRawErr] = React.useState("");
+  const [advOpen, setAdvOpen] = React.useState(false);
+  const [weightsOpen, setWeightsOpen] = React.useState(false);
   const [group, setGroup] = React.useState(() => suClone(groupRules || {}));
   const [groupDirty, setGroupDirty] = React.useState(false);
   const [groupRawOpen, setGroupRawOpen] = React.useState(false);
   const [groupRaw, setGroupRaw] = React.useState("");
   const [groupRawErr, setGroupRawErr] = React.useState("");
   React.useEffect(() => {
-    if (!dirty) setDraft(suClone(surgeonRules[sel] || {}));
+    if (!dirty) {
+      setDraft(suClone(surgeonRules[sel] || {}));
+      setShown(s0 => new Set([...s0, ...suRuleFieldsUsed(surgeonRules[sel] || {})]));
+    }
   }, [surgeonRules, sel]);
   React.useEffect(() => {
     if (!groupDirty) setGroup(suClone(groupRules || {}));
@@ -19159,9 +19286,16 @@ function RulesEditor({
     if (dirty && !confirm("Discard the unsaved changes to this surgeon's rules?")) return;
     setSel(id);
     setDraft(suClone(surgeonRules[id] || {}));
+    setShown(new Set(suRuleFieldsUsed(surgeonRules[id] || {})));
     setDirty(false);
     setRawOpen(false);
     setRawErr("");
+    setAddPick("");
+  };
+  const revert = () => {
+    setDraft(suClone(surgeonRules[sel] || {}));
+    setShown(new Set(suRuleFieldsUsed(surgeonRules[sel] || {})));
+    setDirty(false);
   };
   const get = (path, dflt) => {
     let o = draft;
@@ -19194,6 +19328,32 @@ function RulesEditor({
       return;
     }
     set(path, list);
+  };
+  const addRule = id => {
+    const f = suRuleField(id);
+    if (!f) return;
+    setShown(s0 => {
+      const n = new Set(s0);
+      n.add(id);
+      return n;
+    });
+    if (f.start !== undefined) {
+      setDirty(true);
+      setDraft(d => suRuleFieldAdd(f, d));
+    }
+  };
+  const removeRule = f => {
+    const msg = suRuleRemoveConfirm(f, draft, ((roster || []).find(x => x.id === sel) || {}).name || sel);
+    if (msg && !confirm(msg)) return;
+    setShown(s0 => {
+      const n = new Set(s0);
+      n.delete(f.id);
+      return n;
+    });
+    if (suRuleFieldHasKeys(f, draft)) {
+      setDirty(true);
+      setDraft(d => suRuleFieldRemove(f, d));
+    }
   };
   const save = () => {
     const leaks = suContactPaths(draft);
@@ -19234,6 +19394,10 @@ function RulesEditor({
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
+  const nameOf = {};
+  (roster || []).forEach(x => {
+    if (x && x.id) nameOf[x.id] = x.name || x.id;
+  });
   const gset = (path, value) => {
     setGroupDirty(true);
     setGroup(g => {
@@ -19258,11 +19422,748 @@ function RulesEditor({
   };
   const weightKeys = Array.from(new Set(Object.keys(typeof defaultWeights === "function" ? defaultWeights() : {}).concat(Object.keys(gget("weights", {}) || {}).filter(k => typeof gget("weights." + k, null) === "number"))));
   const box = {
-    border: "1px solid #e8ecf0",
+    border: "1px solid " + T.border,
     borderRadius: 8,
     padding: "10px 12px",
     marginBottom: 10,
-    background: dk ? "#1a2540" : "#fafbfc"
+    background: T.surface
+  };
+  const lbl = {
+    fontSize: 10,
+    color: T.muted,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 2
+  };
+  const quiet = {
+    fontSize: 11,
+    color: T.muted,
+    marginRight: 6
+  };
+  const numVal = path => {
+    const v = get(path, "");
+    return v === null || v === undefined ? "" : v;
+  };
+  const numSet = path => e => set(path, e.target.value === "" ? undefined : Number(e.target.value));
+  const roleChecks = (path, dflt) => ["primary", "backup"].map(r => React.createElement(SuCheck, {
+    key: r,
+    label: r,
+    checked: (get(path, dflt) || []).indexOf(r) >= 0,
+    onChange: v => toggleList(path, r, v, dflt)
+  }));
+  const usedNow = new Set(suRuleFieldsUsed(draft));
+  const displayed = SU_RULE_FIELDS.filter(f => shown.has(f.id) || usedNow.has(f.id));
+  const menu = SU_RULE_FIELDS.filter(f => !(shown.has(f.id) || usedNow.has(f.id)));
+  const summary = sel ? suRulesSummary(draft, {
+    names: nameOf,
+    holidayNames: holNames,
+    groupRules: group
+  }) : [];
+  const jsonOnly = suRulesJsonOnly(draft);
+  const renderField = id => {
+    switch (id) {
+      case "availabilityMode":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Availability mode",
+          hint: "a label, except 'only listed recurring days' (that one limits primary)"
+        }, React.createElement("select", {
+          "data-testid": "rules-avail-mode",
+          value: get("availabilityMode", ""),
+          onChange: e => set("availabilityMode", e.target.value || undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 260,
+            maxWidth: "100%"
+          })
+        }, SU_MODES.map(m => React.createElement("option", {
+          key: m,
+          value: m
+        }, RULE_MODE_WORDS[m] || m)), (() => {
+          const v = get("availabilityMode", "");
+          return v && SU_MODES.indexOf(v) < 0 ? React.createElement("option", {
+            value: v
+          }, v) : null;
+        })()));
+      case "availableWeeks":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Listed weeks (Mondays, comma separated)",
+          width: "100%",
+          hint: "primary only in these weeks, from the month of the first one"
+        }, React.createElement("input", {
+          type: "text",
+          "data-testid": "rules-weeks",
+          value: (get("availableWeeks", []) || []).join(", "),
+          onChange: e => set("availableWeeks", suIsoList(e.target.value).length ? suIsoList(e.target.value) : undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: "100%",
+            fontFamily: mono
+          })
+        }));
+      case "availableWindows":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Date windows ", React.createElement("span", {
+          style: {
+            textTransform: "none",
+            fontWeight: 400
+          }
+        }, "- only these date ranges, both roles")), (get("availableWindows", []) || []).map((w, i) => React.createElement("div", {
+          key: i,
+          style: {
+            display: "flex",
+            gap: 6,
+            alignItems: "center",
+            marginBottom: 4,
+            flexWrap: "wrap"
+          }
+        }, React.createElement("input", {
+          type: "date",
+          value: w.start || "",
+          onChange: e => {
+            const l = suClone(get("availableWindows", []));
+            l[i] = _objectSpread(_objectSpread({}, l[i]), {}, {
+              start: e.target.value
+            });
+            set("availableWindows", l);
+          },
+          style: inp
+        }), React.createElement("span", {
+          style: {
+            fontSize: 11,
+            color: T.text
+          }
+        }, "to"), React.createElement("input", {
+          type: "date",
+          value: w.end || "",
+          onChange: e => {
+            const l = suClone(get("availableWindows", []));
+            l[i] = _objectSpread(_objectSpread({}, l[i]), {}, {
+              end: e.target.value
+            });
+            set("availableWindows", l);
+          },
+          style: inp
+        }), React.createElement("button", {
+          onClick: () => {
+            const l = suClone(get("availableWindows", [])).filter((_, j) => j !== i);
+            set("availableWindows", l.length ? l : undefined);
+          },
+          style: css.danger
+        }, "Remove"))), React.createElement("button", {
+          onClick: () => set("availableWindows", (get("availableWindows", []) || []).concat([{
+            start: today,
+            end: suAddDays(today, 5)
+          }])),
+          style: css.mini(false)
+        }, "Add window"));
+      case "daysPerWindowWeek":
+        return React.createElement("div", null, React.createElement(SuCheck, {
+          label: "Days per window week (soft target)",
+          title: "A week off the target is a warning in the Generate report, never a block.",
+          checked: !!draft.daysPerWindowWeek,
+          onChange: v => set("daysPerWindowWeek", v ? {
+            target: 2,
+            countsBackup: false
+          } : undefined),
+          testid: "rules-window-week"
+        }), draft.daysPerWindowWeek && React.createElement("div", null, React.createElement(RuField, {
+          T: T,
+          label: "Primary days per window week",
+          hint: "blank = none"
+        }, React.createElement("input", {
+          "data-testid": "rules-window-week-target",
+          type: "number",
+          min: "0",
+          max: "7",
+          value: get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", ""),
+          onChange: e => {
+            ["min", "max", "minIsSoft"].forEach(k => {
+              if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined);
+            });
+            set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value));
+          },
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 60
+          })
+        })), React.createElement(SuCheck, {
+          label: "backup days count",
+          checked: get("daysPerWindowWeek.countsBackup", false) === true,
+          onChange: v => set("daysPerWindowWeek.countsBackup", v)
+        }), (get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && React.createElement("div", {
+          style: {
+            fontSize: 11,
+            color: T.open
+          }
+        }, "older min / max values are ignored by the scheduler; editing the target drops them")));
+      case "weekdays":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Weekdays allowed for primary ", React.createElement("span", {
+          style: {
+            textTransform: "none",
+            fontWeight: 400
+          }
+        }, "- Fri-Sun stay open; the other weekdays are off")), ["Mon", "Tue", "Wed", "Thu"].map(w => React.createElement(SuCheck, {
+          key: w,
+          label: w,
+          checked: (get("weekdays.allowed", []) || []).indexOf(w) >= 0,
+          onChange: v => toggleList("weekdays.allowed", w, v)
+        })), React.createElement(SuCheck, {
+          label: "others go first on equal terms",
+          title: "A small penalty on these weekdays, so another surgeon takes such a day on otherwise equal terms - unless a weekday preference outweighs it.",
+          checked: get("weekdays.autoOffer", true) !== false,
+          onChange: v => set("weekdays.autoOffer", v)
+        }));
+      case "hardNeverWeekdays":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Never on"), React.createElement("div", null, SU_WEEKDAYS.map(w => React.createElement(SuCheck, {
+          key: w,
+          label: w,
+          checked: (get("hardNeverWeekdays", []) || []).indexOf(w) >= 0,
+          onChange: v => toggleList("hardNeverWeekdays", w, v)
+        }))), React.createElement("div", null, React.createElement("span", {
+          style: quiet
+        }, "applies to"), roleChecks("hardNeverWeekdaysRoles", ["primary"]), React.createElement("span", {
+          style: quiet
+        }, "(default: primary only; one role stays ticked)")), React.createElement(RuField, {
+          T: T,
+          label: "Hard only within (days)",
+          hint: "blank = always hard; further out the day is allowed with a soft penalty"
+        }, React.createElement("input", {
+          "data-testid": "rules-hard-never-notice",
+          type: "number",
+          min: "0",
+          max: "365",
+          value: numVal("hardNeverWeekdaysNoticeDays"),
+          onChange: numSet("hardNeverWeekdaysNoticeDays"),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 80
+          })
+        })));
+      case "recurringAvailable":
+        return React.createElement(PatternListEditor, {
+          css: css,
+          T: T,
+          label: "Recurring days available",
+          hint: "primary only on these days",
+          list: get("recurringAvailable", []),
+          onChange: l => set("recurringAvailable", l.length ? l : undefined),
+          today: today
+        });
+      case "recurringUnavailable":
+        return React.createElement(PatternListEditor, {
+          css: css,
+          T: T,
+          label: "Recurring days off",
+          hint: "never primary on these days",
+          list: get("recurringUnavailable", []),
+          onChange: l => set("recurringUnavailable", l.length ? l : undefined),
+          today: today
+        });
+      case "recurringAvoid":
+        return React.createElement(PatternListEditor, {
+          css: css,
+          T: T,
+          label: "Recurring days to avoid",
+          hint: "soft: a penalty, never a block",
+          list: get("recurringAvoid", []),
+          onChange: l => set("recurringAvoid", l.length ? l : undefined),
+          withWeight: true,
+          today: today
+        });
+      case "outsideDerivedWeeks":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Weekday pattern outside East weeks ", React.createElement("span", {
+          style: {
+            textTransform: "none",
+            fontWeight: 400
+          }
+        }, "- per weekday: allowed, not allowed or only inside a Fri+Sat+Sun block")), React.createElement("div", {
+          className: "table-wrap",
+          style: css.tableWrap
+        }, React.createElement("table", {
+          className: "setup-table"
+        }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Day"), React.createElement("th", null, "Primary"), React.createElement("th", null, "Backup"), React.createElement("th", null, "Preferred"), React.createElement("th", null, "Where"))), React.createElement("tbody", null, SU_WEEKDAYS.map(w => {
+          const pd = (wp || {})[w] || {};
+          const opt = role => React.createElement("select", {
+            value: pd[role] === true ? "yes" : pd[role] === "weekend-block-only" ? "block" : "no",
+            onChange: e => {
+              const v = e.target.value;
+              set("outsideDerivedWeeks.weekdayPattern." + w + "." + role, v === "yes" ? true : v === "block" ? "weekend-block-only" : false);
+            },
+            style: _objectSpread(_objectSpread({}, inp), {}, {
+              width: 150
+            })
+          }, React.createElement("option", {
+            value: "yes"
+          }, "allowed"), React.createElement("option", {
+            value: "no"
+          }, "not allowed"), React.createElement("option", {
+            value: "block"
+          }, "Fri+Sat+Sun block only"));
+          return React.createElement("tr", {
+            key: w
+          }, React.createElement("td", {
+            style: {
+              fontWeight: 700
+            }
+          }, w), React.createElement("td", null, opt("primary")), React.createElement("td", null, opt("backup")), React.createElement("td", null, React.createElement("input", {
+            type: "checkbox",
+            checked: !!pd.preferred,
+            onChange: e => set("outsideDerivedWeeks.weekdayPattern." + w + ".preferred", e.target.checked || undefined)
+          })), React.createElement("td", null, React.createElement("input", {
+            type: "text",
+            value: pd.where || "",
+            onChange: e => set("outsideDerivedWeeks.weekdayPattern." + w + ".where", e.target.value || undefined),
+            style: _objectSpread(_objectSpread({}, inp), {}, {
+              width: 160
+            })
+          })));
+        })))));
+      case "aledo":
+        return React.createElement("div", null, React.createElement(PatternListEditor, {
+          css: css,
+          T: T,
+          label: "Clinic days",
+          hint: "the day before a clinic day is blocked",
+          list: get("aledo.weekdays", []),
+          onChange: l => set("aledo.weekdays", l),
+          today: today
+        }), React.createElement(SuCheck, {
+          label: "the day before a clinic day is a hard block (primary)",
+          checked: get("aledo.hardAvoidDayBefore", true) !== false,
+          onChange: v => set("aledo.hardAvoidDayBefore", v)
+        }), React.createElement(RuField, {
+          T: T,
+          label: "Avoid the whole clinic week (soft)"
+        }, React.createElement("select", {
+          value: get("aledo.avoidWholeWeek", "") || "",
+          onChange: e => set("aledo.avoidWholeWeek", e.target.value || undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 110
+          })
+        }, React.createElement("option", {
+          value: ""
+        }, "off"), React.createElement("option", {
+          value: "low"
+        }, "low"), React.createElement("option", {
+          value: "medium"
+        }, "medium"), React.createElement("option", {
+          value: "strong"
+        }, "strong"))));
+      case "weekendStyle":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Weekend style",
+          hint: "soft: how this surgeon's weekends are shaped"
+        }, React.createElement("select", {
+          "data-testid": "rules-weekend-style",
+          value: get("weekendStyle", ""),
+          onChange: e => set("weekendStyle", e.target.value || undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 200,
+            maxWidth: "100%"
+          })
+        }, React.createElement("option", {
+          value: ""
+        }, "(none)"), React.createElement("option", {
+          value: "block"
+        }, "one block (Fri+Sat+Sun)"), React.createElement("option", {
+          value: "split"
+        }, "split (Fri+Sun / Sat)"), React.createElement("option", {
+          value: "daily"
+        }, "single days"), React.createElement("option", {
+          value: "saturday-only"
+        }, "Saturday only (older setting)")));
+      case "primaryContribution":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Prefers",
+          hint: "soft: weekends = full Fri-Sun primary blocks first, weekend backup discouraged; weekdays = Mon-Thu or a lone Friday first"
+        }, React.createElement("select", {
+          "data-testid": "rules-primary-contribution",
+          value: get("primaryContribution", ""),
+          onChange: e => set("primaryContribution", e.target.value || undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 200,
+            maxWidth: "100%"
+          })
+        }, React.createElement("option", {
+          value: ""
+        }, "(none)"), React.createElement("option", {
+          value: "weekends"
+        }, "weekends"), React.createElement("option", {
+          value: "weekdays"
+        }, "weekdays"), (() => {
+          const v = get("primaryContribution", "");
+          return v && v !== "weekends" && v !== "weekdays" ? React.createElement("option", {
+            value: v
+          }, String(v), " (not known)") : null;
+        })()));
+      case "standaloneFriday":
+        return React.createElement(SuCheck, {
+          testid: "rules-standalone-friday",
+          label: "A Friday may stand alone (primary)",
+          title: "Sat + Sun then form their own weekend for someone else.",
+          checked: draft.standaloneFriday === true,
+          onChange: v => set("standaloneFriday", v ? true : undefined)
+        });
+      case "noLoneWeekendDay":
+        return React.createElement(SuCheck, {
+          testid: "rules-no-lone-weekend",
+          label: "No lone Saturday or Sunday (primary, hard)",
+          title: "Holding one of the two needs the other.",
+          checked: draft.noLoneWeekendDay === true,
+          onChange: v => set("noLoneWeekendDay", v ? true : undefined)
+        });
+      case "weekendCap":
+        return React.createElement("div", null, React.createElement(RuField, {
+          T: T,
+          label: "Weekends per month (soft)",
+          hint: "starts at 2 a month when added and applies at once; a weekend counts once, in the month of its Saturday"
+        }, React.createElement("input", {
+          "data-testid": "rules-weekend-cap-month",
+          type: "number",
+          min: "0",
+          max: "5",
+          value: numVal("weekendCap.perMonth"),
+          onChange: numSet("weekendCap.perMonth"),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })), React.createElement(SuCheck, {
+          testid: "rules-weekend-cap-east",
+          label: "East weekends count",
+          checked: get("weekendCap.countsEast", false) === true,
+          onChange: v => set("weekendCap.countsEast", v ? true : undefined)
+        }), React.createElement("span", {
+          style: quiet
+        }, "counts"), roleChecks("weekendCap.roles", ["primary"]));
+      case "weekendBlockPenalty":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Discourage multi-day weekends",
+          hint: "soft: a penalty on every block or split this surgeon is in"
+        }, React.createElement("select", {
+          "data-testid": "rules-weekend-block-penalty",
+          value: (() => {
+            const v = get("weekendBlockPenalty", null);
+            return v === null ? "" : v === "" ? "__blank" : String(v);
+          })(),
+          onChange: e => set("weekendBlockPenalty", e.target.value === "" ? undefined : e.target.value === "__blank" ? "" : /^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 130
+          })
+        }, React.createElement("option", {
+          value: ""
+        }, "none"), React.createElement("option", {
+          value: "medium"
+        }, "medium"), React.createElement("option", {
+          value: "strong"
+        }, "strong"), (() => {
+          const v = get("weekendBlockPenalty", null);
+          return v === null || v === undefined || v === "medium" || v === "strong" ? null : v === "" ? React.createElement("option", {
+            value: "__blank"
+          }, "blank - read as medium") : React.createElement("option", {
+            value: String(v)
+          }, "custom: ", String(v));
+        })()));
+      case "weekendsAvailable":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Weekends under the recurring list ", React.createElement("span", {
+          style: {
+            textTransform: "none",
+            fontWeight: 400
+          }
+        }, "- open on Fri-Sun besides the listed days")), draft.weekendsAvailable && typeof draft.weekendsAvailable === "object" ? ["primary", "backup"].map(r => React.createElement(SuCheck, {
+          key: r,
+          label: r,
+          checked: !!draft.weekendsAvailable[r],
+          onChange: v => set("weekendsAvailable." + r, v)
+        })) : React.createElement("span", {
+          style: quiet
+        }, "every weekend, both roles"));
+      case "splitPartner":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Split partner",
+          hint: "recorded only - the scheduler does not use it"
+        }, React.createElement("select", {
+          value: get("splitPartner", ""),
+          onChange: e => set("splitPartner", e.target.value || undefined),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 130
+          })
+        }, React.createElement("option", {
+          value: ""
+        }, "(none)"), (roster || []).filter(x => x.id !== sel).map(x => React.createElement("option", {
+          key: x.id,
+          value: x.id
+        }, x.name))));
+      case "maxConsecutiveDays":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Most primary days in a row",
+          hint: "hard; blank = the group default"
+        }, React.createElement("input", {
+          type: "number",
+          min: "1",
+          max: "14",
+          value: get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", ""),
+          onChange: e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        }));
+      case "maxConsecutiveAnyRole":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Most days in a row, any role",
+          hint: "soft: a growing penalty beyond it"
+        }, React.createElement("input", {
+          "data-testid": "rules-max-consec-any",
+          type: "number",
+          min: "1",
+          max: "14",
+          value: get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", ""),
+          onChange: e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        }));
+      case "holidayUnitCountsAsOneDay":
+        return React.createElement(SuCheck, {
+          label: "A holiday unit counts as one day for the days-in-a-row limits",
+          title: "Unchecked: every day of the unit counts.",
+          checked: draft.holidayUnitCountsAsOneDay === true,
+          onChange: v => set("holidayUnitCountsAsOneDay", v ? true : undefined),
+          testid: "rules-holiday-unit-one-day"
+        });
+      case "monthlyTarget":
+        return React.createElement(RuField, {
+          T: T,
+          label: "Monthly target",
+          hint: "blank = equal share; a number = primary target"
+        }, React.createElement("input", {
+          "data-testid": "rules-monthly-target",
+          type: "number",
+          min: "0",
+          max: "31",
+          value: get("monthlyTarget", null) === null ? "" : get("monthlyTarget", ""),
+          onChange: e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        }));
+      case "monthlyCap":
+        return React.createElement("div", null, React.createElement(RuField, {
+          T: T,
+          label: "Monthly cap"
+        }, React.createElement("select", {
+          "data-testid": "rules-cap-mode",
+          value: capMode,
+          onChange: e => {
+            const v = e.target.value;
+            if (v === "default") set("monthlyCap", undefined);else if (v === "none") set("monthlyCap", null);else set("monthlyCap", {
+              primary: capPrimaryVal || 8
+            });
+          },
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 200
+          })
+        }, React.createElement("option", {
+          value: "default"
+        }, "group default"), React.createElement("option", {
+          value: "none"
+        }, "no cap"), React.createElement("option", {
+          value: "number"
+        }, "a number"))), capMode === "number" && React.createElement(React.Fragment, null, React.createElement(RuField, {
+          T: T,
+          label: "Primary days per month",
+          hint: "hard; backup days never count"
+        }, React.createElement("input", {
+          type: "number",
+          min: "1",
+          max: "31",
+          "data-testid": "rules-cap-primary",
+          value: capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal,
+          onChange: e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Preferred at most (soft)"
+        }, React.createElement("input", {
+          type: "number",
+          min: "0",
+          max: "31",
+          value: capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred,
+          onChange: e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })), React.createElement(SuCheck, {
+          label: "East primary-week days count toward it",
+          checked: capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days",
+          onChange: v => set("monthlyCap.countsEastDays", v ? true : undefined)
+        })));
+      case "preferAlternateDays":
+        return React.createElement(SuCheck, {
+          label: "Prefers alternate days (soft)",
+          title: "A penalty on a primary whose day before or after is also this surgeon's primary.",
+          checked: draft.preferAlternateDays === true,
+          onChange: v => set("preferAlternateDays", v ? true : undefined),
+          testid: "rules-prefer-alternate-days"
+        });
+      case "handoffPartnerRequired":
+        return React.createElement(SuCheck, {
+          label: "Flag a primary with no handoff the next day (report only)",
+          title: "The Generate report warns when the day after a primary is the same surgeon or open.",
+          checked: !!draft.handoffPartnerRequired,
+          onChange: v => set("handoffPartnerRequired", v || undefined)
+        });
+      case "backupOptOut":
+        return React.createElement(SuCheck, {
+          label: "Does not take backup",
+          title: "A hard block on every backup slot, holidays included; primary is unaffected.",
+          checked: draft.backupOptOut === true,
+          onChange: v => set("backupOptOut", v ? true : undefined),
+          testid: "rules-backup-opt-out"
+        });
+      case "backupCap":
+        return React.createElement("div", null, React.createElement(RuField, {
+          T: T,
+          label: "Backup days per month",
+          hint: "blank = none"
+        }, React.createElement("input", {
+          "data-testid": "rules-backup-cap-days",
+          type: "number",
+          min: "0",
+          max: "31",
+          value: numVal("backupCap.perMonthDays"),
+          onChange: numSet("backupCap.perMonthDays"),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Backup weekends per month",
+          hint: "blank = none"
+        }, React.createElement("input", {
+          "data-testid": "rules-backup-cap-weekends",
+          type: "number",
+          min: "0",
+          max: "5",
+          value: numVal("backupCap.weekendsPerMonth"),
+          onChange: numSet("backupCap.weekendsPerMonth"),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })));
+      case "eastFeed":
+        return React.createElement("div", null, React.createElement(SuCheck, {
+          testid: "rules-east-enabled",
+          label: "East (Davenport) call applies to this surgeon",
+          checked: !!get("eastFeed.enabled", false),
+          onChange: v => set("eastFeed.enabled", v)
+        }), get("eastFeed.enabled", false) && React.createElement(React.Fragment, null, React.createElement("div", null, React.createElement(SuCheck, {
+          label: "East call days block Silvis primary",
+          checked: !!get("eastFeed.eastBlocksPrimary", false),
+          onChange: v => set("eastFeed.eastBlocksPrimary", v)
+        }), React.createElement(SuCheck, {
+          label: "East call days block Silvis backup",
+          checked: !!get("eastFeed.eastBlocksBackup", false),
+          onChange: v => set("eastFeed.eastBlocksBackup", v)
+        }), React.createElement(SuCheck, {
+          label: "East backup weeks count as busy",
+          checked: get("eastFeed.eastBackupCountsAsBusy", true) !== false,
+          onChange: v => set("eastFeed.eastBackupCountsAsBusy", v)
+        }), React.createElement(SuCheck, {
+          testid: "rules-east-forecast",
+          label: "Use the East forecast while Davenport is unpublished",
+          checked: !!get("eastFeed.forecast", false),
+          onChange: v => set("eastFeed.forecast", v)
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Derive Silvis weeks from",
+          hint: "East primary week = Silvis backup all week; East backup week = Silvis primary"
+        }, React.createElement("input", {
+          type: "date",
+          value: get("eastFeed.deriveFrom", "") || "",
+          onChange: e => set("eastFeed.deriveFrom", e.target.value || undefined),
+          style: inp
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Stated East primary weeks (Mondays)",
+          width: 300
+        }, React.createElement("input", {
+          type: "text",
+          value: (get("eastFeed.statedWeeks.eastPrimary", []) || []).join(", "),
+          onChange: e => set("eastFeed.statedWeeks.eastPrimary", suIsoList(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: "100%",
+            fontFamily: mono
+          })
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Stated East backup weeks (Mondays)",
+          width: 300
+        }, React.createElement("input", {
+          type: "text",
+          value: (get("eastFeed.statedWeeks.eastBackup", []) || []).join(", "),
+          onChange: e => set("eastFeed.statedWeeks.eastBackup", suIsoList(e.target.value)),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: "100%",
+            fontFamily: mono
+          })
+        }))));
+      case "holidaysOff":
+        return React.createElement("div", null, React.createElement("div", {
+          style: lbl
+        }, "Never covers"), holNames.map(h => React.createElement(SuCheck, {
+          key: h,
+          label: h,
+          checked: (get("holidayRules.holidaysOff", []) || []).indexOf(h) >= 0,
+          onChange: v => toggleList("holidayRules.holidaysOff", h, v)
+        })));
+      case "maxMajorHolidays":
+        return (React.createElement(RuField, {
+            T: T,
+            label: "Most major holidays in 12 months",
+            hint: "hard; blank = no limit"
+          }, React.createElement("input", {
+            "data-testid": "rules-max-major",
+            type: "number",
+            min: "0",
+            max: "3",
+            value: (() => {
+              const a = get("holidayRules.maxMajorHolidays", null);
+              if (typeof a === "number") return a;
+              const b = get("preferences.maxMajorHolidays", null);
+              return typeof b === "number" ? b : "";
+            })(),
+            onChange: e => {
+              if (e.target.value === "") {
+                setDirty(true);
+                setDraft(d => suRuleFieldRemove(suRuleField("maxMajorHolidays"), d));
+              } else set("holidayRules.maxMajorHolidays", Number(e.target.value));
+            },
+            style: _objectSpread(_objectSpread({}, inp), {}, {
+              width: 70
+            })
+          }))
+        );
+      default:
+        return React.createElement("span", {
+          style: quiet
+        }, id);
+    }
   };
   return React.createElement("div", {
     "data-testid": "rules-editor"
@@ -19285,600 +20186,159 @@ function RulesEditor({
       fontSize: 10
     }
   }, x.id), surgeonRules[x.id] ? "" : " (no rules)"))), !sel ? null : React.createElement(React.Fragment, null, React.createElement("div", {
-    style: box
+    "data-testid": "rules-summary",
+    style: {
+      border: "1px solid " + T.border,
+      borderRadius: 8,
+      padding: "10px 12px",
+      marginBottom: 10,
+      background: T.raised
+    }
   }, React.createElement("div", {
-    style: css.subT
-  }, "Availability and shape - ", s.name || sel), React.createElement(SuField, {
-    label: "Availability mode"
-  }, React.createElement("select", {
-    value: get("availabilityMode", ""),
-    onChange: e => set("availabilityMode", e.target.value || undefined),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 260
-    })
-  }, SU_MODES.map(m => React.createElement("option", {
-    key: m,
-    value: m
-  }, m || "(open - every day unless blocked)")))), React.createElement(SuField, {
-    label: "Weekend style"
-  }, React.createElement("select", {
-    "data-testid": "rules-weekend-style",
-    value: get("weekendStyle", ""),
-    onChange: e => set("weekendStyle", e.target.value || undefined),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 190
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "(none)"), React.createElement("option", {
-    value: "block"
-  }, "block (Fri+Sat+Sun)"), React.createElement("option", {
-    value: "split"
-  }, "split (Fri+Sun / Sat)"), React.createElement("option", {
-    value: "daily"
-  }, "daily (standalone days)"), React.createElement("option", {
-    value: "saturday-only"
-  }, "saturday-only (legacy)"))), React.createElement(SuField, {
-    label: "Primary contribution",
-    hint: "soft; weekends = a bonus for a full Fri-Sun primary block and a penalty for a weekend backup (weights.weekendContribution)"
-  }, React.createElement("select", {
-    "data-testid": "rules-primary-contribution",
-    value: get("primaryContribution", ""),
-    onChange: e => set("primaryContribution", e.target.value || undefined),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 190
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "(none)"), React.createElement("option", {
-    value: "weekends"
-  }, "weekends (Prompt 12 L)"))), React.createElement(SuField, {
-    label: "Fri-Sun block penalty",
-    hint: "soft; added to every multi-day block or split membership of this surgeon"
-  }, React.createElement("select", {
-    "data-testid": "rules-weekend-block-penalty",
-    value: get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", "")),
-    onChange: e => set("weekendBlockPenalty", e.target.value === "" ? undefined : /^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 130
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "none"), React.createElement("option", {
-    value: "medium"
-  }, "medium"), React.createElement("option", {
-    value: "strong"
-  }, "strong"), (() => {
-    const v = get("weekendBlockPenalty", "");
-    return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : React.createElement("option", {
-      value: String(v)
-    }, "custom: ", String(v));
-  })())), React.createElement(SuCheck, {
-    label: "prefer alternate days (soft)",
-    title: "Prompt 12 N (9/22 evening): a medium penalty on a primary whose day before or after is this surgeon's own primary.",
-    checked: draft.preferAlternateDays === true,
-    onChange: v => set("preferAlternateDays", v ? true : undefined),
-    testid: "rules-prefer-alternate-days"
-  }), React.createElement(SuField, {
-    label: "Split partner"
-  }, React.createElement("select", {
-    value: get("splitPartner", ""),
-    onChange: e => set("splitPartner", e.target.value || undefined),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 130
-    })
-  }, React.createElement("option", {
-    value: ""
-  }, "(none)"), (roster || []).filter(x => x.id !== sel).map(x => React.createElement("option", {
-    key: x.id,
-    value: x.id
-  }, x.name)))), React.createElement(SuField, {
-    label: "Max consecutive days",
-    hint: "blank = group default; hard, primary days only"
-  }, React.createElement("input", {
-    type: "number",
-    min: "1",
-    max: "14",
-    value: get("maxConsecutiveDays", "") === null ? "" : get("maxConsecutiveDays", ""),
-    onChange: e => set("maxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })), React.createElement(SuField, {
-    label: "Max consecutive any role (soft)",
-    hint: "blank = none; primary or backup, a penalty that grows per day beyond it"
-  }, React.createElement("input", {
-    "data-testid": "rules-max-consec-any",
-    type: "number",
-    min: "1",
-    max: "14",
-    value: get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", ""),
-    onChange: e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })), React.createElement(SuCheck, {
-    label: "a holiday unit counts as one day for the consecutive limits",
-    title: "Prompt 12 A (9/22): a per-surgeon opt-in (Khan: his 4-day Thanksgiving unit vs his max 3). Unchecked = real days.",
-    checked: draft.holidayUnitCountsAsOneDay === true,
-    onChange: v => set("holidayUnitCountsAsOneDay", v ? true : undefined),
-    testid: "rules-holiday-unit-one-day"
-  }), React.createElement(SuField, {
-    label: "Monthly target",
-    hint: "blank = equal share; a number = primary target"
-  }, React.createElement("input", {
-    "data-testid": "rules-monthly-target",
-    type: "number",
-    min: "0",
-    max: "31",
-    value: get("monthlyTarget", null) === null ? "" : get("monthlyTarget", ""),
-    onChange: e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })), React.createElement("div", null, React.createElement(SuField, {
-    label: "Monthly cap"
-  }, React.createElement("select", {
-    "data-testid": "rules-cap-mode",
-    value: capMode,
-    onChange: e => {
-      const v = e.target.value;
-      if (v === "default") set("monthlyCap", undefined);else if (v === "none") set("monthlyCap", null);else set("monthlyCap", {
-        primary: capPrimaryVal || 8
-      });
-    },
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 200
-    })
-  }, React.createElement("option", {
-    value: "default"
-  }, "group default"), React.createElement("option", {
-    value: "none"
-  }, "no cap (explicit null)"), React.createElement("option", {
-    value: "number"
-  }, "a number"))), capMode === "number" && React.createElement(React.Fragment, null, React.createElement(SuField, {
-    label: "Primary days per month",
-    hint: "hard; backup days never count"
-  }, React.createElement("input", {
-    type: "number",
-    min: "1",
-    max: "31",
-    "data-testid": "rules-cap-primary",
-    value: capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal,
-    onChange: e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })), React.createElement(SuField, {
-    label: "Preferred (soft)"
-  }, React.createElement("input", {
-    type: "number",
-    min: "0",
-    max: "31",
-    value: capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred,
-    onChange: e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })), React.createElement(SuCheck, {
-    label: "count East primary-week days toward the cap",
-    checked: capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days",
-    onChange: v => set("monthlyCap.countsEastDays", v ? true : undefined)
-  }))), React.createElement("div", {
     style: {
-      marginTop: 4
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: T.text,
+      marginBottom: 6
     }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: "#5B6B82",
-      fontWeight: 600,
-      textTransform: "uppercase",
-      letterSpacing: 0.5,
-      marginRight: 8
-    }
-  }, "Hard never on"), SU_WEEKDAYS.map(w => React.createElement(SuCheck, {
-    key: w,
-    label: w,
-    checked: (get("hardNeverWeekdays", []) || []).indexOf(w) >= 0,
-    onChange: v => toggleList("hardNeverWeekdays", w, v)
-  })), React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: "#5B6B82",
-      marginRight: 6
-    }
-  }, "applies to"), ["primary", "backup"].map(r => React.createElement(SuCheck, {
-    key: r,
-    label: r,
-    checked: (get("hardNeverWeekdaysRoles", ["primary"]) || []).indexOf(r) >= 0,
-    onChange: v => toggleList("hardNeverWeekdaysRoles", r, v, ["primary"])
-  })), React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: "#5B6B82"
-    }
-  }, "(default: primary only - backup is open to everyone since 9/22; at least one role stays ticked)")), React.createElement("div", null, React.createElement(SuCheck, {
-    label: "Does not take backup",
-    title: "9/22: backup is open to everyone unless the surgeon explicitly opts out. Checked = a hard block on every backup slot, holiday units included; primary is unaffected.",
-    checked: draft.backupOptOut === true,
-    onChange: v => set("backupOptOut", v ? true : undefined),
-    testid: "rules-backup-opt-out"
-  })), React.createElement("div", null, React.createElement(SuCheck, {
-    label: "weekday allow-list (Mon-Thu; weekends stay pool days)",
-    checked: !!draft.weekdays,
-    onChange: v => set("weekdays", v ? {
-      allowed: [],
-      autoOffer: true
-    } : undefined)
-  }), draft.weekdays && React.createElement(React.Fragment, null, ["Mon", "Tue", "Wed", "Thu"].map(w => React.createElement(SuCheck, {
-    key: w,
-    label: w,
-    checked: (get("weekdays.allowed", []) || []).indexOf(w) >= 0,
-    onChange: v => toggleList("weekdays.allowed", w, v)
-  })), React.createElement(SuCheck, {
-    label: "offer those days (soft +1, weights.noTargetWeekday)",
-    title: "Eligible with a soft +1 (auto-offer-weekday): on otherwise equal terms another surgeon takes the day. Set groupRules.weights.noTargetWeekday to 0 for equal footing.",
-    checked: get("weekdays.autoOffer", true) !== false,
-    onChange: v => set("weekdays.autoOffer", v)
-  }))), React.createElement("div", null, React.createElement(SuCheck, {
-    label: "weekends available under a recurring whitelist",
-    checked: !!draft.weekendsAvailable,
-    onChange: v => set("weekendsAvailable", v ? {
-      primary: true,
-      backup: true
-    } : undefined)
-  }), draft.weekendsAvailable && typeof draft.weekendsAvailable === "object" && ["primary", "backup"].map(r => React.createElement(SuCheck, {
-    key: r,
-    label: r,
-    checked: !!draft.weekendsAvailable[r],
-    onChange: v => set("weekendsAvailable." + r, v)
-  })))), React.createElement("div", {
-    style: box
-  }, React.createElement(PatternListEditor, {
-    css: css,
-    label: "Recurring available (whitelist days)",
-    list: get("recurringAvailable", []),
-    onChange: l => set("recurringAvailable", l.length ? l : undefined),
-    today: today
-  }), React.createElement(PatternListEditor, {
-    css: css,
-    label: "Recurring unavailable (hard)",
-    list: get("recurringUnavailable", []),
-    onChange: l => set("recurringUnavailable", l.length ? l : undefined),
-    today: today
-  }), React.createElement(PatternListEditor, {
-    css: css,
-    label: "Recurring avoid (soft)",
-    list: get("recurringAvoid", []),
-    onChange: l => set("recurringAvoid", l.length ? l : undefined),
-    withWeight: true,
-    today: today
-  })), React.createElement("div", {
-    style: box
-  }, React.createElement("div", {
-    style: css.subT
-  }, "Dated whitelists"), React.createElement(SuField, {
-    label: "Available weeks (Mondays, comma separated)",
-    width: "100%",
-    hint: "whitelist-weeks: governs from the month of the first Monday onward"
-  }, React.createElement("input", {
-    type: "text",
-    value: (get("availableWeeks", []) || []).join(", "),
-    onChange: e => set("availableWeeks", suIsoList(e.target.value).length ? suIsoList(e.target.value) : undefined),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: "100%",
-      fontFamily: mono
-    })
-  })), React.createElement("div", {
-    style: css.subT
-  }, "Availability windows ", React.createElement("span", {
+  }, s.name || sel, " - in plain words", dirty || groupDirty ? React.createElement("span", {
+    "data-testid": "rules-summary-unsaved",
     style: {
       fontWeight: 400,
-      color: "#5B6B82"
+      color: T.accentText
     }
-  }, "(whitelist-windows: only these date ranges)")), (get("availableWindows", []) || []).map((w, i) => React.createElement("div", {
-    key: i,
+  }, " (with the unsaved changes)") : null), summary.map(l => React.createElement("div", {
+    key: l.family,
+    "data-testid": "rules-summary-line",
+    "data-family": l.family,
+    className: "rules-sum-line",
     style: {
-      display: "flex",
-      gap: 6,
-      alignItems: "center",
+      fontSize: 12.5,
+      lineHeight: 1.45,
       marginBottom: 4
     }
-  }, React.createElement("input", {
-    type: "date",
-    value: w.start || "",
-    onChange: e => {
-      const l = suClone(get("availableWindows", []));
-      l[i] = _objectSpread(_objectSpread({}, l[i]), {}, {
-        start: e.target.value
-      });
-      set("availableWindows", l);
-    },
-    style: inp
-  }), React.createElement("span", {
+  }, React.createElement("span", {
+    className: "rules-sum-family",
     style: {
-      fontSize: 11
+      fontWeight: 700,
+      color: T.muted
     }
-  }, "to"), React.createElement("input", {
-    type: "date",
-    value: w.end || "",
-    onChange: e => {
-      const l = suClone(get("availableWindows", []));
-      l[i] = _objectSpread(_objectSpread({}, l[i]), {}, {
-        end: e.target.value
-      });
-      set("availableWindows", l);
-    },
-    style: inp
-  }), React.createElement("button", {
-    onClick: () => {
-      const l = suClone(get("availableWindows", [])).filter((_, j) => j !== i);
-      set("availableWindows", l.length ? l : undefined);
-    },
-    style: css.danger
-  }, "Remove"))), React.createElement("button", {
-    onClick: () => set("availableWindows", (get("availableWindows", []) || []).concat([{
-      start: today,
-      end: suAddDays(today, 5)
-    }])),
-    style: css.mini(false)
-  }, "Add window"), React.createElement("div", {
+  }, l.family), React.createElement("span", {
     style: {
-      marginTop: 8
+      flex: "1 1 auto",
+      minWidth: 0,
+      color: T.text
     }
-  }, React.createElement(SuCheck, {
-    label: "days per window week",
-    title: "Prompt 12 N (9/22 evening): a SOFT target of primary days per Mon-Sun window week; a week off target is a diagnostics warning, never a violation. Older min / max keys are ignored by the engine (one warning) - the first edit here drops them.",
-    checked: !!draft.daysPerWindowWeek,
-    onChange: v => set("daysPerWindowWeek", v ? {
-      target: 2,
-      countsBackup: false
-    } : undefined),
-    testid: "rules-window-week"
-  }), draft.daysPerWindowWeek && React.createElement(React.Fragment, null, React.createElement(SuField, {
-    label: "Target primary days per window week (soft)",
-    hint: "blank = none"
-  }, React.createElement("input", {
-    "data-testid": "rules-window-week-target",
-    type: "number",
-    min: "0",
-    max: "7",
-    value: get("daysPerWindowWeek.target", "") === null ? "" : get("daysPerWindowWeek.target", ""),
-    onChange: e => {
-      ["min", "max", "minIsSoft"].forEach(k => {
-        if (get("daysPerWindowWeek." + k, undefined) !== undefined) set("daysPerWindowWeek." + k, undefined);
-      });
-      set("daysPerWindowWeek.target", e.target.value === "" ? undefined : Number(e.target.value));
-    },
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 60
-    })
-  })), React.createElement(SuCheck, {
-    label: "backup days count",
-    checked: get("daysPerWindowWeek.countsBackup", false) === true,
-    onChange: v => set("daysPerWindowWeek.countsBackup", v)
-  }), (get("daysPerWindowWeek.min", undefined) !== undefined || get("daysPerWindowWeek.max", undefined) !== undefined) && React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: "#c04040"
-    }
-  }, "legacy min / max keys present - ignored by the engine; edit the target to drop them")), React.createElement(SuCheck, {
-    label: "handoff partner required (diagnostics: warns when the day after a primary is the same surgeon or open)",
-    checked: !!draft.handoffPartnerRequired,
-    onChange: v => set("handoffPartnerRequired", v || undefined)
-  }))), React.createElement("div", {
+  }, l.text)))), React.createElement("div", {
     style: box
   }, React.createElement("div", {
-    style: css.subT
-  }, "Weekday pattern outside East-derived weeks ", React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 2
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: "1 1 auto",
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: T.text
+    }
+  }, "Rules in use ", React.createElement("span", {
     style: {
       fontWeight: 400,
-      color: "#5B6B82"
+      color: T.muted
     }
-  }, "(per weekday: allowed / not / only inside a Fri+Sat+Sun block)")), React.createElement(SuCheck, {
-    label: "use a weekday pattern",
-    checked: !!wp,
-    onChange: v => set("outsideDerivedWeeks", v ? {
-      canBePrimary: true,
-      weekdayPattern: {}
-    } : undefined)
-  }), wp && React.createElement("div", {
-    className: "table-wrap",
-    style: css.tableWrap
-  }, React.createElement("table", {
-    className: "setup-table"
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Day"), React.createElement("th", null, "Primary"), React.createElement("th", null, "Backup"), React.createElement("th", null, "Preferred"), React.createElement("th", null, "Where"))), React.createElement("tbody", null, SU_WEEKDAYS.map(w => {
-    const pd = wp[w] || {};
-    const opt = role => React.createElement("select", {
-      value: pd[role] === true ? "yes" : pd[role] === "weekend-block-only" ? "block" : "no",
-      onChange: e => {
-        const v = e.target.value;
-        set("outsideDerivedWeeks.weekdayPattern." + w + "." + role, v === "yes" ? true : v === "block" ? "weekend-block-only" : false);
-      },
-      style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 150
-      })
-    }, React.createElement("option", {
-      value: "yes"
-    }, "allowed"), React.createElement("option", {
-      value: "no"
-    }, "not allowed"), React.createElement("option", {
-      value: "block"
-    }, "Fri+Sat+Sun block only"));
-    return React.createElement("tr", {
-      key: w
-    }, React.createElement("td", {
-      style: {
-        fontWeight: 700
-      }
-    }, w), React.createElement("td", null, opt("primary")), React.createElement("td", null, opt("backup")), React.createElement("td", null, React.createElement("input", {
-      type: "checkbox",
-      checked: !!pd.preferred,
-      onChange: e => set("outsideDerivedWeeks.weekdayPattern." + w + ".preferred", e.target.checked || undefined)
-    })), React.createElement("td", null, React.createElement("input", {
-      type: "text",
-      value: pd.where || "",
-      onChange: e => set("outsideDerivedWeeks.weekdayPattern." + w + ".where", e.target.value || undefined),
-      style: _objectSpread(_objectSpread({}, inp), {}, {
-        width: 160
-      })
-    })));
-  }))))), React.createElement("div", {
-    style: box
-  }, React.createElement("div", {
-    style: css.subT
-  }, "Clinic day-before rule (Aledo pattern)"), React.createElement(SuCheck, {
-    label: "has clinic days that block the day before",
-    checked: !!draft.aledo,
-    onChange: v => set("aledo", v ? {
-      weekdays: [],
-      avoidWholeWeek: "strong",
-      hardAvoidDayBefore: true
-    } : undefined)
-  }), draft.aledo && React.createElement(React.Fragment, null, React.createElement(PatternListEditor, {
-    css: css,
-    label: "Clinic days",
-    list: get("aledo.weekdays", []),
-    onChange: l => set("aledo.weekdays", l),
-    today: today
-  }), React.createElement(SuCheck, {
-    label: "the day before a clinic day is a hard block (primary)",
-    checked: get("aledo.hardAvoidDayBefore", true) !== false,
-    onChange: v => set("aledo.hardAvoidDayBefore", v)
-  }), React.createElement(SuField, {
-    label: "Avoid the whole clinic week (soft)"
-  }, React.createElement("select", {
-    value: get("aledo.avoidWholeWeek", "") || "",
-    onChange: e => set("aledo.avoidWholeWeek", e.target.value || undefined),
+  }, "(", displayed.length, ")")), React.createElement("select", {
+    "data-testid": "rules-add",
+    "aria-label": "Choose a rule to add",
+    value: menu.some(f => f.id === addPick) ? addPick : "",
+    onChange: e => setAddPick(e.target.value),
     style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 110
+      width: 230,
+      maxWidth: "100%"
     })
   }, React.createElement("option", {
     value: ""
-  }, "off"), React.createElement("option", {
-    value: "low"
-  }, "low"), React.createElement("option", {
-    value: "medium"
-  }, "medium"), React.createElement("option", {
-    value: "strong"
-  }, "strong")))), React.createElement("div", {
-    style: css.subT
-  }, "Backup caps"), React.createElement(SuField, {
-    label: "Backup days per month",
-    hint: "blank = none"
-  }, React.createElement("input", {
-    type: "number",
-    min: "0",
-    max: "31",
-    value: get("backupCap.perMonthDays", "") === null ? "" : get("backupCap.perMonthDays", ""),
-    onChange: e => set("backupCap.perMonthDays", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
+  }, "Choose a rule to add..."), SU_RULE_GROUPS.map(g => {
+    const fs = menu.filter(f => f.group === g.id);
+    return fs.length ? React.createElement("optgroup", {
+      key: g.id,
+      label: g.label
+    }, fs.map(f => React.createElement("option", {
+      key: f.id,
+      value: f.id
+    }, f.label))) : null;
+  })), React.createElement("button", {
+    "data-testid": "rules-add-button",
+    type: "button",
+    disabled: !menu.some(f => f.id === addPick),
+    onClick: () => {
+      const id = addPick;
+      setAddPick("");
+      addRule(id);
+    },
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      opacity: menu.some(f => f.id === addPick) ? 1 : 0.5
     })
-  })), React.createElement(SuField, {
-    label: "Backup weekends per month",
-    hint: "blank = none"
-  }, React.createElement("input", {
-    type: "number",
-    min: "0",
-    max: "5",
-    value: get("backupCap.weekendsPerMonth", "") === null ? "" : get("backupCap.weekendsPerMonth", ""),
-    onChange: e => set("backupCap.weekendsPerMonth", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  }))), React.createElement("div", {
-    style: box
-  }, React.createElement("div", {
-    style: css.subT
-  }, "Holiday rules"), React.createElement("span", {
+  }, "Add")), displayed.length === 0 && React.createElement("div", {
     style: {
-      fontSize: 10,
-      color: "#5B6B82",
-      fontWeight: 600,
-      textTransform: "uppercase",
-      letterSpacing: 0.5,
-      marginRight: 8
+      fontSize: 12,
+      color: T.muted,
+      marginTop: 6
     }
-  }, "Never covers"), holNames.map(h => React.createElement(SuCheck, {
-    key: h,
-    label: h,
-    checked: (get("holidayRules.holidaysOff", []) || []).indexOf(h) >= 0,
-    onChange: v => toggleList("holidayRules.holidaysOff", h, v)
-  })), React.createElement("div", null, React.createElement(SuField, {
-    label: "Max major holidays (rolling 12 months)",
-    hint: "blank = no limit"
-  }, React.createElement("input", {
-    type: "number",
-    min: "0",
-    max: "3",
-    value: get("holidayRules.maxMajorHolidays", null) === null ? "" : get("holidayRules.maxMajorHolidays", ""),
-    onChange: e => set("holidayRules.maxMajorHolidays", e.target.value === "" ? undefined : Number(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: 70
-    })
-  })))), React.createElement("div", {
-    style: box
-  }, React.createElement("div", {
-    style: css.subT
-  }, "East (Davenport) feed"), React.createElement(SuCheck, {
-    label: "East feed applies to this surgeon",
-    checked: !!get("eastFeed.enabled", false),
-    onChange: v => set("eastFeed.enabled", v)
-  }), get("eastFeed.enabled", false) && React.createElement(React.Fragment, null, React.createElement("div", null, React.createElement(SuCheck, {
-    label: "East busy days block Silvis PRIMARY",
-    checked: !!get("eastFeed.eastBlocksPrimary", false),
-    onChange: v => set("eastFeed.eastBlocksPrimary", v)
-  }), React.createElement(SuCheck, {
-    label: "East busy days block Silvis BACKUP",
-    checked: !!get("eastFeed.eastBlocksBackup", false),
-    onChange: v => set("eastFeed.eastBlocksBackup", v)
-  }), React.createElement(SuCheck, {
-    label: "East backup call counts as busy",
-    checked: get("eastFeed.eastBackupCountsAsBusy", true) !== false,
-    onChange: v => set("eastFeed.eastBackupCountsAsBusy", v)
-  }), React.createElement(SuCheck, {
-    label: "use the East forecast while Davenport is unpublished",
-    checked: !!get("eastFeed.forecast", false),
-    onChange: v => set("eastFeed.forecast", v)
-  })), React.createElement(SuField, {
-    label: "Derive Silvis weeks from",
-    hint: "blank = no derived weeks (East-primary week = Silvis backup all week; East-backup week = Silvis primary)"
-  }, React.createElement("input", {
-    type: "date",
-    value: get("eastFeed.deriveFrom", "") || "",
-    onChange: e => set("eastFeed.deriveFrom", e.target.value || undefined),
-    style: inp
-  })), React.createElement(SuField, {
-    label: "Stated East-primary weeks (Mondays)",
-    width: 300
-  }, React.createElement("input", {
-    type: "text",
-    value: (get("eastFeed.statedWeeks.eastPrimary", []) || []).join(", "),
-    onChange: e => set("eastFeed.statedWeeks.eastPrimary", suIsoList(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: "100%",
-      fontFamily: mono
-    })
-  })), React.createElement(SuField, {
-    label: "Stated East-backup weeks (Mondays)",
-    width: 300
-  }, React.createElement("input", {
-    type: "text",
-    value: (get("eastFeed.statedWeeks.eastBackup", []) || []).join(", "),
-    onChange: e => set("eastFeed.statedWeeks.eastBackup", suIsoList(e.target.value)),
-    style: _objectSpread(_objectSpread({}, inp), {}, {
-      width: "100%",
-      fontFamily: mono
-    })
-  })))), React.createElement("div", {
+  }, "No rules set for this surgeon - the group defaults apply. Add one from the menu."), SU_RULE_GROUPS.map(g => {
+    const fs = displayed.filter(f => f.group === g.id);
+    if (!fs.length) return null;
+    return React.createElement("div", {
+      key: g.id,
+      "data-testid": "rules-group-" + g.id,
+      style: {
+        marginTop: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: T.muted,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+        marginBottom: 2
+      }
+    }, g.label), fs.map(f => React.createElement("div", {
+      key: f.id,
+      "data-testid": "rules-field-" + f.id,
+      className: "rules-field",
+      style: {
+        padding: "6px 0 2px",
+        borderTop: "1px solid " + T.border
+      }
+    }, React.createElement("div", {
+      className: "rules-field-body"
+    }, renderField(f.id)), React.createElement("button", {
+      "data-testid": "rules-remove-" + f.id,
+      className: "rules-field-remove",
+      onClick: () => removeRule(f),
+      "aria-label": "Remove rule: " + f.label,
+      title: "Remove this rule - the default applies again",
+      style: css.mini(false)
+    }, "Remove rule"))));
+  }), jsonOnly.length > 0 && React.createElement("div", {
+    "data-testid": "rules-json-only",
+    style: {
+      fontSize: 11.5,
+      color: T.muted,
+      marginTop: 8
+    }
+  }, "Also on file, edited as JSON under Advanced: ", jsonOnly.join(", "), ".")), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
       alignItems: "center",
       flexWrap: "wrap",
-      marginBottom: 6
+      marginBottom: 10
     }
   }, React.createElement("button", {
     "data-testid": "rules-save",
@@ -19889,26 +20349,95 @@ function RulesEditor({
       opacity: dirty ? 1 : 0.5
     })
   }, "Save rules for ", s.name || sel), dirty && React.createElement("button", {
-    onClick: () => {
-      setDraft(suClone(surgeonRules[sel] || {}));
-      setDirty(false);
-    },
+    "data-testid": "rules-revert",
+    onClick: revert,
     style: css.mini(false)
-  }, "Revert"), React.createElement("button", {
+  }, "Revert"), React.createElement("span", {
+    "data-testid": "rules-status",
+    style: {
+      fontSize: 11,
+      color: dirty ? T.accentText : T.muted
+    }
+  }, dirty ? "Unsaved" : "Saved"))), React.createElement("div", {
+    "data-testid": "rules-advanced",
+    "data-open": advOpen ? "1" : "0",
+    style: {
+      border: "1px solid " + T.border,
+      borderRadius: 8,
+      padding: "4px 12px",
+      marginBottom: 10,
+      background: T.surface
+    }
+  }, React.createElement("button", {
+    "data-testid": "rules-advanced-toggle",
+    type: "button",
+    "aria-expanded": advOpen,
+    onClick: () => setAdvOpen(o => !o),
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      width: "100%",
+      background: "transparent",
+      border: "none",
+      padding: "6px 0",
+      cursor: "pointer",
+      fontFamily: font,
+      textAlign: "left",
+      minHeight: 36
+    }
+  }, React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      transition: "transform .15s",
+      transform: advOpen ? "rotate(90deg)" : "rotate(0deg)",
+      display: "inline-block",
+      width: 10,
+      flexShrink: 0
+    }
+  }, "▶"), React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: T.text
+    }
+  }, "Advanced"), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: groupDirty ? T.accentText : T.muted
+    }
+  }, groupDirty ? "group rules unsaved" : "group rules, weights, edit as JSON")), advOpen && React.createElement("div", {
+    style: {
+      paddingBottom: 8
+    }
+  }, sel && React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: T.text,
+      margin: "6px 0 4px"
+    }
+  }, s.name || sel, "'s rules as JSON"), React.createElement("button", {
+    "data-testid": "rules-raw-toggle",
     onClick: () => {
       setRawText(JSON.stringify(draft, null, 2));
       setRawOpen(o => !o);
       setRawErr("");
     },
     style: css.mini(rawOpen)
-  }, rawOpen ? "Hide JSON" : "Edit as JSON (everything else)"), React.createElement("span", {
+  }, rawOpen ? "Hide JSON" : "Edit as JSON"), React.createElement("span", {
+    style: _objectSpread(_objectSpread({}, quiet), {}, {
+      marginLeft: 8
+    })
+  }, "every key, the ones without a field too"), rawOpen && React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: "#5B6B82"
-    }
-  }, dirty ? "Unsaved" : "Saved to surgeonRules." + sel + " (autosave)")), rawOpen && React.createElement("div", {
-    style: {
-      marginBottom: 10
+      marginTop: 6
     }
   }, React.createElement("textarea", {
     "data-testid": "rules-raw",
@@ -19919,23 +20448,36 @@ function RulesEditor({
       width: "100%",
       minHeight: 220,
       fontFamily: mono,
-      fontSize: 11
+      fontSize: 11,
+      boxSizing: "border-box"
     })
   }), rawErr && React.createElement("div", {
     style: css.errBox
   }, "Not applied: ", rawErr), React.createElement("button", {
+    "data-testid": "rules-raw-apply",
     onClick: applyRaw,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "5px 12px",
       marginTop: 6
     })
-  }, "Apply JSON to the form"))), React.createElement("div", {
+  }, "Apply JSON to the form"), React.createElement("span", {
+    style: _objectSpread(_objectSpread({}, quiet), {}, {
+      marginLeft: 8
+    })
+  }, "then Save rules for ", s.name || sel))), React.createElement("div", {
+    "data-testid": "rules-group-box",
     style: _objectSpread(_objectSpread({}, box), {}, {
-      borderColor: "#c8d8e8"
+      background: T.raised
     })
   }, React.createElement("div", {
-    style: css.subT
-  }, "Group rules"), React.createElement(SuField, {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: T.text,
+      marginBottom: 6
+    }
+  }, "Group rules"), React.createElement(RuField, {
+    T: T,
     label: "Default monthly cap (primary days)",
     hint: "blank = none; backup days never count"
   }, React.createElement("input", {
@@ -19956,8 +20498,9 @@ function RulesEditor({
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 70
     })
-  })), React.createElement(SuField, {
-    label: "Default max consecutive"
+  })), React.createElement(RuField, {
+    T: T,
+    label: "Default most primary days in a row"
   }, React.createElement("input", {
     type: "number",
     min: "1",
@@ -19967,8 +20510,9 @@ function RulesEditor({
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 70
     })
-  })), React.createElement(SuField, {
-    label: "Forecast busy threshold (0-1)"
+  })), React.createElement(RuField, {
+    T: T,
+    label: "East forecast: busy at or above (0-1)"
   }, React.createElement("input", {
     type: "number",
     min: "0",
@@ -19980,7 +20524,7 @@ function RulesEditor({
       width: 80
     })
   })), React.createElement("div", null, React.createElement(SuCheck, {
-    label: "backup days count toward consecutive runs",
+    label: "backup days count toward days in a row",
     checked: !!gget("countBackupInConsecutive", false),
     onChange: v => gset("countBackupInConsecutive", v)
   }), React.createElement(SuCheck, {
@@ -19992,16 +20536,60 @@ function RulesEditor({
     checked: gget("holidays.ignoreWeekdayRules", true) !== false,
     onChange: v => gset("holidays.ignoreWeekdayRules", v)
   })), React.createElement("div", {
-    style: css.subT
-  }, "Weights"), React.createElement("div", {
+    "data-testid": "rules-weights",
+    "data-open": weightsOpen ? "1" : "0",
+    style: {
+      marginTop: 6
+    }
+  }, React.createElement("button", {
+    "data-testid": "rules-weights-toggle",
+    type: "button",
+    "aria-expanded": weightsOpen,
+    onClick: () => setWeightsOpen(o => !o),
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 8,
+      background: "transparent",
+      border: "none",
+      padding: "4px 0",
+      cursor: "pointer",
+      fontFamily: font,
+      minHeight: 32
+    }
+  }, React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      transition: "transform .15s",
+      transform: weightsOpen ? "rotate(90deg)" : "rotate(0deg)",
+      display: "inline-block",
+      width: 10
+    }
+  }, "▶"), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: T.text
+    }
+  }, "Weights"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: T.muted
+    }
+  }, "how much each soft rule counts")), weightsOpen && React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
-      gap: 4
+      gap: 4,
+      marginTop: 4
     }
-  }, weightKeys.map(k => React.createElement(SuField, {
+  }, weightKeys.map(k => React.createElement(RuField, {
     key: k,
-    label: k
+    T: T,
+    label: ruleWeightLabel(k),
+    width: 150
   }, React.createElement("input", {
     type: "number",
     step: "0.5",
@@ -20011,12 +20599,13 @@ function RulesEditor({
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 70
     })
-  })))), React.createElement("div", {
+  }))))), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
       alignItems: "center",
-      flexWrap: "wrap"
+      flexWrap: "wrap",
+      marginTop: 8
     }
   }, React.createElement("button", {
     "data-testid": "group-save",
@@ -20035,23 +20624,26 @@ function RulesEditor({
       opacity: groupDirty ? 1 : 0.5
     })
   }, "Save group rules"), groupDirty && React.createElement("button", {
+    "data-testid": "group-revert",
     onClick: () => {
       setGroup(suClone(groupRules || {}));
       setGroupDirty(false);
     },
     style: css.mini(false)
   }, "Revert"), React.createElement("button", {
+    "data-testid": "group-raw-toggle",
     onClick: () => {
       setGroupRaw(JSON.stringify(group, null, 2));
       setGroupRawOpen(o => !o);
       setGroupRawErr("");
     },
     style: css.mini(groupRawOpen)
-  }, groupRawOpen ? "Hide JSON" : "Edit as JSON")), groupRawOpen && React.createElement("div", {
+  }, groupRawOpen ? "Hide JSON" : "Edit group rules as JSON")), groupRawOpen && React.createElement("div", {
     style: {
       marginTop: 8
     }
   }, React.createElement("textarea", {
+    "data-testid": "group-raw",
     value: groupRaw,
     onChange: e => setGroupRaw(e.target.value),
     spellCheck: false,
@@ -20059,11 +20651,13 @@ function RulesEditor({
       width: "100%",
       minHeight: 200,
       fontFamily: mono,
-      fontSize: 11
+      fontSize: 11,
+      boxSizing: "border-box"
     })
   }), groupRawErr && React.createElement("div", {
     style: css.errBox
   }, "Not applied: ", groupRawErr), React.createElement("button", {
+    "data-testid": "group-raw-apply",
     onClick: () => {
       try {
         const o = JSON.parse(groupRaw);
@@ -20083,7 +20677,7 @@ function RulesEditor({
       padding: "5px 12px",
       marginTop: 6
     })
-  }, "Apply JSON"))));
+  }, "Apply JSON"))))));
 }
 function AvailabilityCard({
   css,
