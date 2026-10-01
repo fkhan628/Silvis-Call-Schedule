@@ -1186,6 +1186,10 @@ let failSaveOffers = false;
 // availability GETs of ONE page (npStore.page - the step's surgeon page): the served rows (fixture or the live anon read) minus
 // the single-day backup_only rows cleared (clearedKeys "<person>|<day>") plus the rows added. npStore.served caches that page's
 // last served list (NP007 reads its ranges). subs maps a page's JWT sub to its roster id (the 'app' stamp). The step resets it.
+// Known limits of the mock (review 10/1; none is exercised by today's assertions): NP008 reads liveEarlyByDay (the live schedule
+// read early in the run), not the schedule rows served to the page; the offers-side NP009 sees backup_only rows only on
+// npStore.page (on any other page it never fires). Re-marking a cleared served day writes a NEW row with the caller's stamp and a
+// null note (as save_no_primary inserts one) - the cleared served row stays hidden.
 const npStore = { page: null, added: [], clearedKeys: new Set(), served: [], subs: {} };
 const npWrites = []; // every save_offers call that carried No primary days and passed: { who, sub, add, clear, result }
 const NP_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
@@ -1229,8 +1233,7 @@ const npRpc = (b, who, sub, offersAfter) => {
     });
     adds.forEach(d => {
       if (vis().some(r => d >= r.s && d <= r.e)) return; // covered by a row already (kept)
-      const k = who + "|" + d;
-      if (npStore.clearedKeys.has(k)) { npStore.clearedKeys.delete(k); added++; return; } // a served single row comes back
+      // a cleared served row stays cleared: the function inserts a NEW row (caller's stamp, note null) - never the old one back
       npStore.added.push({ id: crypto.randomUUID(), person_id: who, kind: "backup_only", role: "any", start_date: d, end_date: d, note: null, source: src, created_by: by, created_at: new Date().toISOString() });
       added++;
     });
@@ -6044,10 +6047,12 @@ try {
   // -> the first month starting after every served period (nothing frozen there) -> his live single-day backup_only rows in
   // that month read 'own' (Jackson County, when the month holds one; else a logged skip) -> two free rows marked (draft 'add',
   // pill 'No primary', '2 unsaved') -> Save = exactly ONE rpc/save_offers { p_person s2, p_rows [], p_clear [], p_np_add
-  // [D1, D2], p_np_clear [] }, no set_offer_mode, no direct availability write, ONE audit 'Burchett: no primary on M/D, M/D
-  // (<label>)' -> reload: both read 'own' (the npStore overlay serves what the mock wrote) -> Either pasted onto D1, D2 asks
+  // [D1, D2], p_np_clear [] }, no set_offer_mode, no direct availability write, ONE audit 'Burchett: no primary on M/D, M/D'
+  // -> reload: both read 'own' (the npStore overlay serves what the mock wrote) -> Either pasted onto D1, D2 asks
   // ONCE to lift both (dismissed: nothing drafted, '2 No primary day(s) left out') -> Clear D1 -> Save = ONE save_offers
-  // { p_np_add [], p_np_clear [D1] } + audit 'Burchett: no primary lifted on M/D (...)' -> reload: D1 '', D2 'own'. The smoke
+  // { p_np_add [], p_np_clear [D1] } + audit 'Burchett: no primary lifted on M/D' (the painter's period is named only for a day
+  // inside it - review 10/1) -> reload: D1 '', D2 'own' -> with s2 'Only these days' on the served period, its month's legend and
+  // hint say paint Backup too (review 10/1), the month after every period keeps 'backup still fine'. The smoke
   // asserts the request bodies and the audit; the database probe (sql/probes/no-primary-probe.sql) proves the server's side.
   {
     const NP_UID = "00000000-0000-4000-8000-00000000e2e2";
@@ -6076,7 +6081,8 @@ try {
       return npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
     };
     const reloadNp = async () => { await npp.reload({ waitUntil: "domcontentloaded" }); await npp.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 }); await npp.waitForSelector("text=Synced", { timeout: 30000 }); await npp.waitForTimeout(800); };
-    const labelSuffix = async () => { const id = await npp.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-period-id")).catch(() => null); const p = id ? periodStore.find(x => x.id === id) : null; return p ? " (" + p.label + ")" : ""; };
+    // review 10/1: the painter's period names the audit text only when a saved day lies inside it (the days here are after it)
+    const labelSuffix = async (days) => { const id = await npp.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-period-id")).catch(() => null); const p = id ? periodStore.find(x => x.id === id) : null; return p && (days || []).some(d => d >= String(p.start_day).slice(0, 10) && d <= String(p.end_day).slice(0, 10)) ? " (" + p.label + ")" : ""; };
     try {
       await loadWithRetry(npp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (No primary)");
       await npp.waitForSelector("text=Synced", { timeout: 30000 });
@@ -6122,7 +6128,7 @@ try {
       else if (counts1.n < 2 || !/ no primary/.test(counts1.text)) fail("No primary (s2): the header count should carry the marked days: " + JSON.stringify(counts1));
       else ok(`No primary (s2): ${D1} and ${D2} marked - data-noprimary own, data-np-draft add, pill 'No primary', '2 unsaved'; header '${counts1.text.slice(0, 80)}'`);
       // 5. Save = ONE save_offers carrying the days; 6. ONE audit naming them
-      const suffix = await labelSuffix();
+      const suffix = await labelSuffix([D1, D2]);
       const b5 = writes.length;
       await npp.click("[data-testid=ofp-save]");
       await waitFor(() => writesSince(b5, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
@@ -6168,7 +6174,7 @@ try {
       const r1c = await rowOf(D1);
       if (r1c.draft !== "clear" || r1c.np !== "" || r1c.pill !== "will lift No primary") fail(`No primary (s2): Clear on ${D1} should draft a lift ('will lift No primary', data-np-draft clear): ` + JSON.stringify(r1c));
       else ok(`No primary (s2): Clear on ${D1} drafts the lift ('will lift No primary')`);
-      const suffix8 = await labelSuffix();
+      const suffix8 = await labelSuffix([D1]);
       const b8 = writes.length;
       await npp.click("[data-testid=ofp-save]");
       await waitFor(() => writesSince(b8, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
@@ -6191,7 +6197,33 @@ try {
       await npp.locator(`[data-testid=ofp-day][data-day="${D2}"]`).scrollIntoViewIfNeeded();
       await npp.screenshot({ path: path.join(OUT, "no-primary-390.png"), fullPage: false });
       ok("screenshot test/ui/out/no-primary-390.png");
+      // 10. review 10/1: inside an "Only these days" (exhaustive) period a No primary day is not an offer (backup there needs a
+      // Backup offer), so the legend and the hint say paint Backup too; after every period (the month above) they keep "backup
+      // still fine". s2's saved mode in the served period is set to exhaustive for this check only and restored right after (the
+      // later steps restate the store at run time).
+      const readLegend = () => npp.$eval("[data-testid=ofp-legend]", el => ({ exh: el.getAttribute("data-exh"), text: el.innerText.replace(/\s+/g, " ").trim() })).catch(() => null);
+      const legendOut = await readLegend();
       await npp.click("[data-testid=ofp-close]");
+      if (!offerPeriod) console.log("     (No primary (s2): no served period - the 'Only these days' legend check is skipped)");
+      else {
+        const hadMode = Object.prototype.hasOwnProperty.call(offerPeriod.offer_modes, "s2"), savedModeS2 = offerPeriod.offer_modes.s2;
+        try {
+          offerPeriod.offer_modes.s2 = "exhaustive";
+          await reloadNp();
+          const exhMonth = await openAt(String(offerPeriod.start_day).slice(0, 7));
+          await npp.click("[data-testid=ofp-brush-noprimary]"); await npp.waitForTimeout(150);
+          const legendExh = await readLegend();
+          const hintExh = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+          const wantExh = "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
+          if (!legendOut || legendOut.exh !== "0" || !/backup still fine/.test(legendOut.text)) fail(`No primary (s2): after every period (${target}) the legend should keep 'backup still fine' (data-exh 0): ` + JSON.stringify(legendOut));
+          else if (!legendExh || legendExh.exh !== "1" || legendExh.text !== wantExh) fail(`No primary (s2): in ${exhMonth} (${offerPeriod.label}, s2 'Only these days') the legend should say paint Backup too: ` + JSON.stringify(legendExh));
+          else if (hintExh !== "Tap a day to mark yourself No primary (\"Only these days\" is on: paint Backup too for backup); tap again to take it back.") fail(`No primary (s2): in ${exhMonth} the tap hint reads '${hintExh}'`);
+          else ok(`No primary (s2): 'Only these days' on ${offerPeriod.label} -> in ${exhMonth} the legend and the hint say paint Backup too (data-exh 1); after every period (${target}) 'backup still fine'`);
+          await npp.click("[data-testid=ofp-close]");
+        } finally {
+          if (hadMode) offerPeriod.offer_modes.s2 = savedModeS2; else delete offerPeriod.offer_modes.s2;
+        }
+      }
     } catch (e) {
       fail("No primary (s2): " + errLine(e));
       try { await npp.screenshot({ path: path.join(OUT, "failure-no-primary.png"), fullPage: false }); } catch (e2) {}

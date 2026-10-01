@@ -4868,9 +4868,16 @@ function CallSchedule() {
           return { ok: false, error: describeDbError(t2) };
         }
       }
-      logAudit("offers.save", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, period ? period.label : null), summary);
+      // Review 10/1: the period's label goes into the Activity log text only when this Save changed its mode or a day inside it -
+      // a No primary mark months after the period (or an offer outside it) no longer reads as a change inside that period.
+      const perStart = period && period.start_day ? String(period.start_day).slice(0, 10) : "", perEnd = period && period.end_day ? String(period.end_day).slice(0, 10) : "";
+      const inPer = (d) => !!perStart && !!perEnd && String(d) >= perStart && String(d) <= perEnd;
+      const auditLabel = period && (withMode || diff.insert.concat(diff.update).some(r => inPer(r.day)) || diff.delete.concat(npAdd, npClear).some(inPer)) ? period.label : null;
+      logAudit("offers.save", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, auditLabel), summary);
       loadOffers(true); loadPeriods(true); // canonicalize (realtime would also catch it)
-      if (npCount > 0) loadAvailability(true); // the No primary rows the function wrote / removed
+      // the No primary rows the function wrote / removed - awaited (review 10/1: the sheet drops its No primary draft on ok, so a
+      // just-marked day would flash free until the re-read lands); at most 8 s, and loadAvailability never throws
+      if (npCount > 0) { let npTimer = null; await Promise.race([loadAvailability(true), new Promise(res => { npTimer = setTimeout(res, 8000); })]); clearTimeout(npTimer); }
       return { ok: true };
     } catch (e) {
       console.warn("Paint offers: commit threw", e);
@@ -8142,6 +8149,10 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const periodLabel = period ? String(period.label || (period.start_day + " - " + period.end_day)) : "";
   const periodClose = period && period.offers_close_at ? String(period.offers_close_at).slice(0, 10) : null;
   const inPeriod = (ds) => !!period && ds >= String(period.start_day).slice(0, 10) && ds <= String(period.end_day).slice(0, 10);
+  // Prompt 28 review (10/1): inside a period the person runs as "Only these days" (exhaustive) a No primary day is NOT an offer -
+  // backup there needs a Backup offer too (rules.js: not-offered), so the legend, the tap hint and the replace note say so for such
+  // a day (the sheet's own period reads the drafted mode); everywhere else the plain words hold.
+  const exhDay = (ds) => { const per = periodFor(ds, periods || []); if (!per) return false; const m = period && per.id === period.id ? shownMode : ((per.offer_modes && typeof per.offer_modes === "object" ? per.offer_modes[pid] : null) || "preferred"); return m === "exhaustive"; };
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
   const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
@@ -8184,6 +8195,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     return out;
   }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np]);
   const rowByDay = React.useMemo(() => { const m = {}; days.forEach(r => { m[r.ds] = r; }); return m; }, [days]);
+  const npExh = days.some(r => exhDay(r.ds)); // the shown month holds a day of an "Only these days" period (Prompt 28 review)
 
   // Running counts: the shown month by brush (draft applied) and the next period against the person's cap.
   const monthCounts = React.useMemo(() => {
@@ -8261,6 +8273,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
       if (!confirm(liftMsg)) { const dropL = new Set(liftsLeft.map(l => l.ds)); ok = ok.filter(ds => !dropL.has(ds)); notes.push(nl + " No primary day(s) left out"); }
     }
     const replaced = ok.filter(ds => outs[ds] && outs[ds].replaced).length;
+    const replacedExh = ok.filter(ds => outs[ds] && outs[ds].replaced && exhDay(ds)).length; // Prompt 28 review: off backup too there
     if (ok.length) {
       setDraft(p => { const n = { ...p }; ok.forEach(ds => setDraftDay(n, ds, outs[ds].offer)); return n; });
       setNpDraft(p => { const n = { ...p }; ok.forEach(ds => setNpDraftDay(n, ds, outs[ds].np)); return n; });
@@ -8268,7 +8281,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     const hintParts = [];
     if (skipped.length) hintParts.push("Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : ""));
     notes.forEach(t => hintParts.push(t));
-    if (replaced) hintParts.push("No primary replaced the offer on " + replaced + " day(s)");
+    if (replaced) hintParts.push("No primary replaced the offer on " + replaced + " day(s)" + (replacedExh ? " - with \"Only these days\" on, a day with no offer is off backup too: paint Backup to keep it" : ""));
     setHint(hintParts.join(" - "));
   };
   const tapDay = (ds) => {
@@ -8298,8 +8311,9 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     else setPasteText("");
   };
 
-  // One line per pending entry (the error box names them all): an offer change and a No primary change on the same day are two lines.
-  const describeDraft = () => dirtyDays.slice().sort().flatMap(ds => (ds in draft ? [dayText(ds) + ": " + (draft[ds] ? brushWord(draft[ds]) : "clear")] : []).concat(ds in npDraft ? [dayText(ds) + ": " + (npDraft[ds] ? "no primary" : "lift no primary")] : [])).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
+  // One line per pending entry (the error box names them all): one line per drafted day - an offer change and a No primary change on
+  // the same day share it ("Tue 1/12: clear, no primary"; review 10/1: the box's count then agrees with "N unsaved" and "Save (N)").
+  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (ds in draft ? [draft[ds] ? brushWord(draft[ds]) : "clear"] : []).concat(ds in npDraft ? [npDraft[ds] ? "no primary" : "lift no primary"] : []).join(", ")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
   const doSave = async () => {
     if (!dirtyCount || busy) return;
     setBusy(true); setCommitError(null); setSavedNote("");
@@ -8362,7 +8376,11 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty); // one line by default; "Change" or a dirty mode opens the box
   const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`
     : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
-  const npHint = `Tap a day to mark ${asScheduler && person ? person.name : "yourself"} No primary (backup is still fine); tap again to take it back.`; // Prompt 28: the No primary brush armed, Range off
+  const npWho = asScheduler && person ? person.name : "yourself";
+  const npHint = npExh ? `Tap a day to mark ${npWho} No primary ("Only these days" is on: paint Backup too for backup); tap again to take it back.` // Prompt 28 review: exhaustive
+    : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`; // Prompt 28: the No primary brush armed, Range off
+  const npLegend = npExh ? "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change."
+    : "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
 
   if (!person) {
     return (
@@ -8411,7 +8429,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
             : <span>{armed === "noprimary" && !rangeMode ? npHint : rangeHint}</span>}
         </div>
         {/* Prompt 28: the No primary legend - only while that brush is armed (the day list keeps the phone's height) */}
-        {armed === "noprimary" && <div data-testid="ofp-legend" style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.35 }}>No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. "Set by the scheduler" days only he can change.</div>}
+        {armed === "noprimary" && <div data-testid="ofp-legend" data-exh={npExh ? "1" : "0"} style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.35 }}>{npLegend}</div>}
         {!ctx && <div role="alert" data-testid="ofp-rules-unavailable" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Rules unavailable{ctxError ? " (" + String(ctxError).slice(0, 120) + ")" : ""} - only past and frozen days are greyed; the database still refuses a vacation day.</div>}
       </div>
 

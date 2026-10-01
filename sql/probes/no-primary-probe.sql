@@ -7,19 +7,24 @@
 -- runs it in a single implicit transaction; there is no BEGIN/COMMIT here on purpose). Every case records its observation
 -- in a temp table and the LAST statement raises an exception whose message carries the results ('PROBE_RESULTS
 -- A1=...;END' - the ';END' sentinel marks where the CLI's own suffix begins), so the fixtures, the throwaway auth users and
--- every row a case wrote roll back. After every run verify-rls.sh section 16 counts leftovers (must be 0).
+-- every row a case wrote roll back. After every run verify-rls.sh section 16 counts leftovers by the probe's identity - its
+-- tagged rows and s3's rows in its window, never another person's (must be 0).
 --
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/no-primary-probe.sql
 --   (scripts/verify-rls.sh section 16 runs it, grades each case by name and checks nothing persisted)
 --
--- BEFORE the migration the first block raises 'PROBE_SETUP: save_no_primary is absent - sql/migrations/2026-10-01-no-primary-days.sql
--- is not applied' (nothing else runs - that is every case's BEFORE result). AFTER it every case below must read as listed.
--- The roster is READ from the live blob (call_schedule_data 'main': s3's name in the NP008 / NP009 texts, the office's roster
--- check), never written.
+-- The first block checks for a fixture collision FIRST (review 10/1: before the migration too, so the apply script's step 3 and
+-- its --dry-run stop on a live row in the probe window before anything is applied) and raises 'PROBE_SETUP: live rows already
+-- sit in the probe window ...' on one; then, BEFORE the migration, it raises 'PROBE_SETUP: save_no_primary is absent -
+-- sql/migrations/2026-10-01-no-primary-days.sql is not applied' (nothing else runs - that is every case's BEFORE result).
+-- AFTER it every case below must read as listed. The roster is READ from the live blob (call_schedule_data 'main': s3's name
+-- in the NP008 / NP009 texts, the office's roster check), never written.
 --
--- Fixtures are FAR-FUTURE days in 2030-11 plus the past day 2020-04-06 (no live day is touched; the setup refuses to run when
--- availability, call_offers, schedule_days, time_off or call_periods already hold anything in 2030-11, or an availability row
--- covers 2020-04-06), written as postgres with no signed-in user (RLS bypassed; the guards let the rows through):
+-- Fixtures are FAR-FUTURE days in 2030-11 plus the past day 2020-04-06 (no live day is touched). The collision guard looks
+-- only at what the fixtures and the readbacks can meet: s3's availability / call_offers / time_off rows in 2030-11 (an
+-- availability row of s3 over 2020-04-06 too), any schedule_days row in 2030-11 (the fixtures' 11/05-11/06 and NP008's reads)
+-- and any call_periods row overlapping it - never another surgeon's statement (a long Setup range of s5 reaching 2030 is no
+-- collision). Written as postgres with no signed-in user (RLS bypassed; the guards let the rows through):
 --   call_periods  'probe np open'   2030-11-01..2030-11-15, offers close 2030-09-01, upcoming
 --                 'probe np frozen' 2030-11-16..2030-11-30, offers close 2026-09-01 (past), upcoming
 --   schedule_days (source 'probe-noprimary') 11/05 primary s3; 11/06 primary s2, backup s3
@@ -71,6 +76,7 @@
 --   C2  C: the same for 'zz' -> ERR OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only
 --   C3  C: npd('zz', {11/15}, null) -> ERR NP003 NO_PRIMARY_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only
 --   C4  C: marks s3 on 11/22 (frozen) -> ERR NP006 NO_PRIMARY_FROZEN: offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/22)
+--   C5  C: npd(null, {11/15}, null) (names nobody, the account unlinked) -> ERR NP001 NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)
 --   A1  A: marks s3 on 11/23 (frozen - the scheduler is exempt) -> ok np_added=1 src=email-relay by=scheduler
 --   A2  A: clears s3's frozen single day 11/21 -> ok np_cleared=1
 --   A3  A: marks s3 on 11/5 (s3 holds primary) -> ERR NP008 NO_PRIMARY_ON_CALL: <name> holds primary on 11/5 - trade those days first, then mark them No primary
@@ -79,7 +85,7 @@
 --   A6  A: marks s3 on 11/11 (covered by the range) -> ok np_added=0 np_kept=1
 --   N1  anon: npd('s3', {11/15}, null) -> ERR 42501 permission denied for function save_no_primary
 --   N2  postgres, no signed-in user: npd('s3', {11/15}, null) -> ERR NP001 NO_PRIMARY_NOT_LINKED: sign in with an account that is linked to a roster entry to mark no-primary days
--- 42 cases.
+-- 43 cases.
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -94,16 +100,17 @@ declare
   coord    uuid := gen_random_uuid();
   admin_u  uuid := gen_random_uuid();
 begin
+  -- the collision guard first (before the absent check: a dry run must see it), on what the fixtures can meet only
+  if exists (select 1 from public.availability where person_id = 's3' and start_date <= '2030-11-30' and end_date >= '2030-11-01')
+     or exists (select 1 from public.availability where person_id = 's3' and '2020-04-06' between start_date and end_date)
+     or exists (select 1 from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30')
+     or exists (select 1 from public.time_off where person_id = 's3' and start_date <= '2030-11-30' and end_date >= '2030-11-01')
+     or exists (select 1 from public.schedule_days where day between '2030-11-01' and '2030-11-30')
+     or exists (select 1 from public.call_periods where start_day <= '2030-11-30' and end_day >= '2030-11-01') then
+    raise exception 'PROBE_SETUP: live rows already sit in the probe window (availability / call_offers / time_off rows of s3 in 2030-11 or an availability row of s3 over 2020-04-06, schedule_days / call_periods in 2030-11) - the probe fixtures would collide';
+  end if;
   if to_regprocedure('public.save_no_primary(text, date[], date[])') is null then
     raise exception 'PROBE_SETUP: save_no_primary is absent - sql/migrations/2026-10-01-no-primary-days.sql is not applied';
-  end if;
-  if exists (select 1 from public.availability where start_date <= '2030-11-30' and end_date >= '2030-11-01')
-     or exists (select 1 from public.availability where '2020-04-06' between start_date and end_date)
-     or exists (select 1 from public.call_offers where day between '2030-11-01' and '2030-11-30')
-     or exists (select 1 from public.schedule_days where day between '2030-11-01' and '2030-11-30')
-     or exists (select 1 from public.time_off where start_date <= '2030-11-30' and end_date >= '2030-11-01')
-     or exists (select 1 from public.call_periods where start_day <= '2030-11-30' and end_day >= '2030-11-01') then
-    raise exception 'PROBE_SETUP: live rows already sit in 2030-11 (availability / call_offers / schedule_days / time_off / call_periods) or an availability row covers 2020-04-06 - the probe fixtures would collide';
   end if;
   insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
                           created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change, is_sso_user)
@@ -293,7 +300,7 @@ do $$ declare u text; r jsonb; begin
   execute 'reset role';
 end $$;
 
--- C1-C4: as the COORDINATOR C (never linked) - the office relays for a roster surgeon and is frozen like him
+-- C1-C5: as the COORDINATOR C (never linked) - the office relays for a roster surgeon, is frozen like him and must name him
 do $$ declare u text; r jsonb; begin
   select v into u from probe_ctx where k = 'coord';
   execute 'set local role authenticated';
@@ -315,6 +322,10 @@ do $$ declare u text; r jsonb; begin
     r := public.save_offers('s3', '[]'::jsonb, null, null, null, '{2030-11-22}', null);
     insert into probe_results values ('C4', 'ok np_added=' || (r->>'np_added'));
   exception when others then insert into probe_results values ('C4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_no_primary(null, '{2030-11-15}', null);
+    insert into probe_results values ('C5', 'saved (NO refusal)');
+  exception when others then insert into probe_results values ('C5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 

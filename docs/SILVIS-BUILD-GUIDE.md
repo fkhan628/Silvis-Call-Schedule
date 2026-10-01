@@ -281,7 +281,7 @@ Proof: `sql/probes/vacation-guard-probe.sql` (rolled back; 20 cases in its heade
 
 - **No-primary days (2026-10-01, Prompt 28, report-first, NOT applied; `sql/migrations/2026-10-01-no-primary-days.sql`, revision t).** Faraz 10/1: surgeons mark their own no-primary days. `save_offers` gains two optional parameters `p_np_add date[]` / `p_np_clear date[]` (the five-argument signature is dropped and re-created with seven, so an older build's five-key call resolves to it; still `security invoker`) and calls the NEW `save_no_primary(p_person, p_add, p_clear)` (`security definer`, `search_path = public, pg_temp`) inside the same transaction: one `availability` row per day, kind `backup_only`, role `any`, note NULL, source `app` / `office-relay` / `email-relay` - surgeons still cannot write `availability` under RLS (no policy changes). Refusals NP001-NP009 (`NO_PRIMARY_*`): not linked, not yours, unknown person (the office), bad day, past (everyone), frozen (not the scheduler), part of a longer range (everyone), holds primary that day (everyone), and an offer conflict (a primary / either offer on a no-primary day after the Save).
 
-Proof: `sql/probes/no-primary-probe.sql` (rolled back; 42 cases; PROBE_SETUP before the apply), `sql/probes/no-primary-precheck.sql` (read-only), `scripts/verify-rls.sh` section 16 (`SILVIS_NO_PRIMARY_APPLIED=1` on the run right after the apply), one command: Faraz's apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts carry machine paths and do not live in the repo; he runs it from the repo root and pastes the log back), the record in `docs/SCHEMA-REVIEW.md` "2026-10-01 - no-primary days"; applied: _to be filled after the apply_.
+Proof: `sql/probes/no-primary-probe.sql` (rolled back; 43 cases; its collision guard first, then PROBE_SETUP before the apply), `sql/probes/no-primary-precheck.sql` (read-only), `scripts/verify-rls.sh` section 16 (`SILVIS_NO_PRIMARY_APPLIED=1` on the run right after the apply), one command: Faraz's apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts carry machine paths and do not live in the repo; he runs it from the repo root and pastes the log back), the record in `docs/SCHEMA-REVIEW.md` "2026-10-01 - no-primary days"; applied: _to be filled after the apply_.
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
@@ -1157,7 +1157,7 @@ through `readAuthOnlyTable` (authenticated-only tables: no fresh token = the rea
 adopted), on load, on the 60-s poll and on realtime changes to either table; My schedule also shows the person's own
 future offers and their status on the next period. The sheet: a vertical day list (one row per day, min 52 px,
 safe-area padding), month ‹ › from the current Central month forward without limit (‹ is disabled on the current month); brushes Primary / Backup / Either /
-Clear / No primary (Prompt 28) (`css.brush` + `OFFER_BRUSH` tokens in `app-styles.js`: the armed chip is a gradient with white text, which the
+No primary (Prompt 28) / Clear (`css.brush` + `OFFER_BRUSH` tokens in `app-styles.js`: the armed chip is a gradient with white text, which the
 dark stylesheet exempts); tap = paint the armed brush, tap again with the same brush = clear; a **Range** toggle turns
 taps into start / end (same day twice = one day; the hint line names the step and offers "x cancel start"); a
 paste-a-date-list box reusing `suParseDateList` (rows become drafts with the armed brush, never writes). Each row shows
@@ -1251,7 +1251,9 @@ take the brush like the others (a batch over an already-marked day changes nothi
 (not for the scheduler, as OF003), both roles blocked, and **a day he holds as primary** on the saved schedule ("you hold
 primary that day - trade it first", `NO_PRIMARY_HELD_WORDS`, NP008) - the row's `data-np-why` names it while the brush is
 armed. A legend (`ofp-legend`, only while the brush is armed) and the hint ("Tap a day to mark yourself No primary (backup
-is still fine); tap again to take it back.") explain it; each row carries `data-noprimary` own / range, `data-np-draft`
+is still fine); tap again to take it back.") explain it - review 10/1: when the shown month holds a day of a period the person
+runs as "Only these days" (exhaustive; the sheet's own period reads the drafted mode) a No primary day is not an offer there, so
+the legend (`data-exh="1"`), the hint and the "replaced the offer" note say paint Backup too instead; each row carries `data-noprimary` own / range, `data-np-draft`
 add / clear and the pill `ofp-np-pill` ("No primary", "No primary (set by the scheduler)", "will lift No primary");
 `data-state` keeps meaning the OFFER (a saved No primary day with no offer reads `free`); the header adds "N no primary"
 (`data-month-noprimary`). A No primary day is not an offer: the period count, the derived status and "Go by my rules" keep

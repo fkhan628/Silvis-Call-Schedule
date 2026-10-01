@@ -41,11 +41,13 @@
 --   NP007 NO_PRIMARY_RANGE: <days> is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements
 --   NP008 NO_PRIMARY_ON_CALL: <name> holds primary on <days> - trade those days first, then mark them No primary
 --   NP009 NO_PRIMARY_OFFER_CONFLICT: <name> offers primary on <days> and marks it No primary - keep one of the two (nothing was saved)
--- NP009 is enforced in both directions: save_no_primary refuses a day it MARKS that carries a primary / either offer of the
--- person (it sees the offers this Save wrote earlier in the transaction), and save_offers refuses a day it OFFERS as primary /
--- either that carries a backup_only row of the person after the Save (a range from Setup, or a single day the Save did not
--- lift). Only days touched by THIS Save are checked; pre-existing inconsistent rows never fail an unrelated Save (the
--- pre-check lists them).
+-- NP009 is enforced in both directions by the two RPCs: save_no_primary refuses a day it MARKS that carries a primary /
+-- either offer of the person (it sees the offers this Save wrote earlier in the transaction), and save_offers refuses a day it
+-- OFFERS as primary / either that carries a backup_only row of the person after the Save (a range from Setup, or a single day
+-- the Save did not lift). Only days touched by THIS Save are checked; pre-existing inconsistent rows never fail an unrelated
+-- Save (the pre-check lists them). Not covered (review 10/1, SCHEMA-REVIEW residual 6): a direct call_offers REST write (the
+-- call_offers policies are unchanged) and claim_open_slot's offer upsert skip NP009 - harmless for the schedule (rules.js
+-- blocks primary on a backup_only day) and the pre-check's offer-conflict section lists such a day.
 --
 -- Who it binds. A linked surgeon for himself; the office coordinator for a roster id (NP003 - the OS004 expression word for
 -- word); the scheduler (admin / scheduler) for anyone. Decisions: past days bind the scheduler too (like OF001 - a past row is
@@ -54,8 +56,10 @@
 -- not by the scheduler either (he edits it in Setup); a held PRIMARY on schedule_days refuses the mark for everyone (the
 -- vacation rule's "edit the schedule first"), a held backup does not ("backup is fine"); a vacation day is NOT refused (a
 -- no-primary row only restricts, rules.js never lifts the vacation for a dated row; the painter never offers it). Two Saves of
--- one person serialise on a transaction advisory lock taken before every availability read. The function writes no audit or
--- notification row (the client's offers.save is the one audit row) and nothing but public.availability.
+-- one person serialise on a transaction advisory lock taken before every availability read - save_no_primary takes it, and
+-- save_offers takes the same lock before its first write (review 10/1), so an offer Save's NP009 read and a concurrent mark of
+-- the same person run one after the other (the lock is re-entrant: the nested call takes it again). The function writes no
+-- audit or notification row (the client's offers.save is the one audit row) and nothing but public.availability.
 --
 -- Blast radius. Every Save from the apply on resolves to the new save_offers: an older build's five-key call resolves to the
 -- seven-argument function (the two new parameters default to null) and behaves as before, except that the offers-side NP009
@@ -74,7 +78,7 @@
 -- without save_offers (the drop and the create commit together).
 -- Order: 1. pre-check sql/probes/no-primary-precheck.sql (read-only; the functions row must read np_fn=no offers5=yes
 -- offers7=no overloads=1); 2. probe BEFORE sql/probes/no-primary-probe.sql (expects PROBE_SETUP: save_no_primary is absent
--- ...); 3. this file; 4. probe AFTER (42 cases, each as its header lists); 5. SILVIS_NO_PRIMARY_APPLIED=1 bash
+-- ...); 3. this file; 4. probe AFTER (43 cases, each as its header lists); 5. SILVIS_NO_PRIMARY_APPLIED=1 bash
 -- scripts/verify-rls.sh (sections 1-16 green); 6. the record step in docs/SCHEMA-REVIEW.md "2026-10-01 - no-primary days".
 -- The client that sends p_np_add / p_np_clear ships AFTER the apply (the pre-apply function would refuse a seven-key call:
 -- PGRST202, nothing saved); it sends the two keys only when non-empty, so its offer Saves work before the apply and after a
@@ -234,6 +238,9 @@ begin
   if bad is not null then
     raise exception 'OFFERS_BAD_ROW: % (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved', bad using errcode = 'OS003';
   end if;
+  -- Prompt 28 (review 10/1): save_no_primary's per-person lock, before the first write - this Save's NP009 read below and a
+  -- concurrent no-primary mark of the same person run one after the other (re-entrant: the nested call takes it again).
+  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));
 
   -- Who entered it is a fact of the call, never a client field.
   if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;

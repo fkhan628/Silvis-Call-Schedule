@@ -554,8 +554,18 @@ check("the engine reads a No primary row the way the painter promises: rules.eli
   const p = R.eligibility(ctx, day, "primary", "s2", { claim: true }), b = R.eligibility(ctx, day, "backup", "s2", { claim: true });
   assert.ok(p.hard.indexOf("backup-only-row") >= 0, "primary must be hard backup-only-row: " + JSON.stringify(p.hard));
   assert.ok(b.hard.indexOf("backup-only-row") < 0 && b.hard.indexOf("unavailable-row") < 0, "backup must not be blocked by the row: " + JSON.stringify(b.hard));
-  // a No primary day is NOT an offer: the period status stays not_started
-  eq(H.offerStatus({ id: "p", start_day: per.start, end_day: per.end }, [], "s2"), "not_started");
+  // a No primary day is NOT an offer (review 10/1: the old line asked offerStatus with no rows at all, which never saw the
+  // availability row - vacuous). Shown where it matters, in "Only these days" (exhaustive) mode with an offer on another day:
+  // without a Backup offer that day backup is hard not-offered (the generator view, no claim) - with one it is not. The painter's
+  // legend says so for such a month (index-source.html npExh); ONBOARDING's "Only these days" line states the same.
+  const exhPer = { id: "p", start_day: per.start, end_day: per.end, status: "upcoming", offers_close_at: "2026-11-23", rules_only_ids: [], offer_modes: { s2: "exhaustive" } };
+  const other = { person_id: "s2", day: "2027-01-14", role_pref: "either" };
+  const exh = (offers) => R.buildContext(Object.assign({}, base, { periods: [exhPer], offers, availabilityRows: [NPR("s2", day, day)] }));
+  const bNo = R.eligibility(exh([other]), day, "backup", "s2"), bYes = R.eligibility(exh([other, { person_id: "s2", day, role_pref: "backup" }]), day, "backup", "s2");
+  assert.ok(bNo.hard.indexOf("not-offered") >= 0, "exhaustive, no Backup offer on the No primary day: backup must be hard not-offered: " + JSON.stringify(bNo.hard));
+  eq(bYes.hard, [], "exhaustive, a Backup offer on the No primary day: backup is open");
+  eq(H.offerStatus(exhPer, [other], "s2"), "submitted", "the status comes from the offer on another day, never from the No primary row");
+  eq(H.offerStatus(exhPer, [], "s2"), "not_started", "with no offer the status stays not_started whatever No primary rows exist (the row is not an offer)");
 });
 
 /* ---------------- D. claim-as-offer migration ---------------- */

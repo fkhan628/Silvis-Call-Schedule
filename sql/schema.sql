@@ -1101,7 +1101,9 @@ create trigger call_offers_delete_guard_trg
 --   (still security invoker - the five-argument signature is dropped right before the create, so an older build's five-key
 --   call resolves to the seven-argument function; the drop line stays here on purpose: a wholesale re-run on a database that
 --   still has the five-argument function must not leave two overloads), then refuses a day it offers as primary / either
---   that carries a backup_only row afterwards (NP009). The client writes the audit row offers.save after ok.
+--   that carries a backup_only row afterwards (NP009); it takes save_no_primary's per-person advisory lock before its first
+--   write (review 10/1), so that read and a concurrent mark of the same person serialise. The client writes the audit row
+--   offers.save after ok.
 -- Tokens: NP001 NO_PRIMARY_NOT_LINKED, NP002 NO_PRIMARY_NOT_YOURS, NP003 NO_PRIMARY_UNKNOWN_PERSON, NP004 NO_PRIMARY_BAD_DAY,
 --   NP005 NO_PRIMARY_PAST (everyone), NP006 NO_PRIMARY_FROZEN (not the scheduler), NP007 NO_PRIMARY_RANGE (everyone),
 --   NP008 NO_PRIMARY_ON_CALL (a held primary, everyone), NP009 NO_PRIMARY_OFFER_CONFLICT.
@@ -1319,6 +1321,9 @@ begin
   if bad is not null then
     raise exception 'OFFERS_BAD_ROW: % (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved', bad using errcode = 'OS003';
   end if;
+  -- Prompt 28 (review 10/1): save_no_primary's per-person lock, before the first write - this Save's NP009 read below and a
+  -- concurrent no-primary mark of the same person run one after the other (re-entrant: the nested call takes it again).
+  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));
 
   -- Who entered it is a fact of the call, never a client field.
   if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;

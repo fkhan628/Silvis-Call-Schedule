@@ -15,7 +15,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, **prepared 2026-09-30 - report-first, NOT APPLIED** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
-| `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons / the office write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01, NOT APPLIED - section at the end); RLS unchanged (no surgeon write policy). |
+| `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01, NOT APPLIED - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
@@ -2055,7 +2055,10 @@ roster id; the office coordinator `office-relay` / its profile id; the scheduler
 SINGLE-day `backup_only` rows on the named days whatever their source (`setup`, `seed`, `app`, the relays) - Burchett's own rows
 from Setup are his to clear; a day already covered by any `backup_only` row of the person (single or range) is not duplicated
 (`kept`). The function writes no audit or notification row: the client's `offers.save` is the one audit row per Save
-("Burchett: no primary on 1/6, 1/15").
+("Burchett: no primary on 1/6, 1/15"). Accepted in review (10/1): on the office's path `created_by` is the coordinator's
+`auth.users` uuid, so that uuid sits in the anon-readable `availability` table - an account id, not contact data (CLAUDE.md's
+rule holds), with precedent (Setup's `addAvailabilityRows` writes `authUser.id` for an unlinked scheduler); writing a literal
+such as `office` instead would change the probe's C1 and is left to Faraz.
 
 **Decisions for Faraz** (taken as readings; each is data-free and can be reversed in the function):
 
@@ -2065,8 +2068,8 @@ from Setup are his to clear; a day already covered by any `backup_only` row of t
    vacation for a dated row. The painter never offers it (a vacation greys both roles); Clear stays allowed there.
 4. **Only a held PRIMARY is refused** ("backup is fine"); a held backup day may be marked.
 5. **The office's roster check works as `OS004`** (`NP003`); the scheduler may relay for any id.
-6. **Either on a no-primary day is replaced by nothing**, not turned into Backup (paint Backup if wanted) - the rules doc's
-   section 8 item 25.
+6. **No primary painted over an Either offer removes the offer** - it is not turned into a Backup offer (paint Backup too if
+   wanted); the other way round, Primary or Either painted on a No primary day lifts the mark - the rules doc's section 8 item 25.
 7. **A cleared seed-sourced row comes back on the next seed apply** (the importer re-creates its `source = 'seed'` rows)
    unless `surgeonRules.s2.explicitBackupOnly` is edited too.
 8. **NP009 also binds older builds' Saves**: the old painter already skips primary / either on a `backup-only-row` day and shows
@@ -2095,16 +2098,25 @@ work before the apply and after a rollback.
 `save_offers`). (3) A schedule edit and a no-primary mark for the same day are not serialised against each other (the day
 editor's eligibility warning shows the result). (4) The client reads `availability` unpaged (`config.js` `db.query`;
 PostgREST max-rows, Supabase default 1000) and each marked day adds a row - the pre-check prints the total; a paged read (the
-`PAY_PAGE` pattern) is a follow-up before the table nears the cap. (5) `save_offers`' own `NP009` check reads `availability`
-without the per-person advisory lock (the spec's body), so two Saves of one person committed at the same instant from two
-devices - one offering primary on a day, the other marking it No primary - could both pass; harmless for the schedule
-(`eligibility` blocks primary on a `backup_only` day) and the pre-check's "offer conflict" section lists such a day.
+`PAY_PAGE` pattern) is a follow-up before the table nears the cap. (5) closed in review (10/1): `save_offers` now takes
+`save_no_primary`'s per-person advisory lock before its first write (the lock is re-entrant, so the nested call takes it again),
+so its own `NP009` read and a concurrent mark of the same person from another device run one after the other - before, two
+Saves committed at the same instant (one offering primary on a day, the other marking it No primary) could both pass. (6) NP009
+binds the two RPCs only: a direct `call_offers` REST write (the `call_offers_insert` / `_update` policies are unchanged) and
+`claim_open_slot`'s offer upsert can still put a primary / either offer on a day the person's own `backup_only` row covers -
+harmless for the schedule (`eligibility` blocks primary on a `backup_only` day) and the pre-check's "offer conflict" section
+lists such a day. (7) No horizon or size cap in `save_no_primary`: a signed-in surgeon can mark days years ahead and thousands in
+one call (each one an anon-readable row), which brings residual 4's unpaged read nearer its cap; the paged read is the fix (a cap
+such as today + 548 days would need the probe's 2030 fixtures moved, and is Faraz's call).
 
 **What could break.** The probe and verify-rls section 16 were written against an AFTER picture observed OFFLINE only: on
 2026-10-01 the migration, the probe, the pre-check and the five older probes ran on PGlite (WASM PostgreSQL 18) with stubbed
 Supabase roles, `auth.uid()` and the live-shaped roster - every one of the 42 cases read its header string, the leftover count
 was 0, a failure inside the migration left the database unchanged, the rollback lines restored the five-argument function, and
-section 16 graded the real output 45 / 0. What PGlite cannot show: there the functions' owner is a superuser (live: the
+section 16 graded the real output 45 / 0. Re-run after the review fixes (10/1, the lock in `save_offers`, the collision guard
+moved first and narrowed, C5, 16d by the probe's identity): every one of the 43 cases read its header string, a live-like long
+`avoid` statement of s5 reaching 2031 no longer stops the probe nor reads as a leftover, a row of s3 in the window stops the
+probe BEFORE the migration (the dry run sees it), and section 16 graded the real output 46 / 0. What PGlite cannot show: there the functions' owner is a superuser (live: the
 `postgres` role, which bypasses RLS as the owner of `availability` - no `force row level security` anywhere), Supabase's own
 `auth.uid()` and grants, and PostgREST (the HTTP codes of 16a / 16b, the schema-cache reload). The live database is what the
 apply proves - P1 and S1 for the definer's write, 16b for the cache; section 16 grades exact strings and names any difference
@@ -2165,8 +2177,11 @@ order by ord, person_id;
 **The probe** (`sql/probes/no-primary-probe.sql`; one batch, a temp results table, the last statement raises
 `PROBE_RESULTS ...;END`, so everything rolls back; `PROBE_SETUP: save_no_primary is absent ...` before the migration - every
 case's BEFORE). Throwaway auth users `probe-noprimary-<uuid>@example.test` (surgeon S linked to s3, an unlinked coordinator C,
-an admin A linked to s1); fixtures in 2030-11 plus the past day 2020-04-06 (the setup refuses to run over live rows there):
-periods `probe np open` (11/1-11/15, open) and `probe np frozen` (11/16-11/30, offers closed 2026-09-01); s3 holds primary on
+an admin A linked to s1); fixtures in 2030-11 plus the past day 2020-04-06. The setup's collision guard runs FIRST - before the
+absent check, so the apply script's step 3 and its `--dry-run` stop on a live row in the window before anything is applied
+(review 10/1) - and looks only at what the fixtures can meet: s3's `availability` / `call_offers` / `time_off` rows in 2030-11
+(an `availability` row of s3 over 2020-04-06 too), any `schedule_days` row in 2030-11 and any period overlapping it (never
+another surgeon's statement - a long Setup range of s5 reaching 2030 is no collision). Fixtures: periods `probe np open` (11/1-11/15, open) and `probe np frozen` (11/16-11/30, offers closed 2026-09-01); s3 holds primary on
 11/5 and backup on 11/6; s3's `backup_only` single days 11/8 and 11/21, a range 11/10-11/12, an `unavailable` row 11/9; offers
 primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers('s3', ...)` positional, `npd` =
 `save_no_primary`; `<name>` = s3's roster name.
@@ -2207,6 +2222,7 @@ primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers(
 | C2 | C: the same for 'zz' | `ERR OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only` |
 | C3 | C: npd('zz', {11/15}, null) | `ERR NP003 NO_PRIMARY_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only` |
 | C4 | C: marks s3 on 11/22 (frozen) | `ERR NP006 NO_PRIMARY_FROZEN: offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/22)` |
+| C5 | C: npd(null, {11/15}, null) (names nobody, the account unlinked) | `ERR NP001 NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)` |
 | A1 | A: marks s3 on 11/23 (frozen - the scheduler is exempt) | `ok np_added=1 src=email-relay by=scheduler` |
 | A2 | A: clears s3's frozen single day 11/21 | `ok np_cleared=1` |
 | A3 | A: marks s3 on 11/5 (s3 holds primary) | `ERR NP008 NO_PRIMARY_ON_CALL: <name> holds primary on 11/5 - trade those days first, then mark them No primary` |
@@ -2222,7 +2238,7 @@ primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers(
    reported (the availability total, the backup_only rows per person, offer conflicts, a primary held on a no-primary day).
 2. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/no-primary-probe.sql` -> `PROBE_SETUP: save_no_primary is absent ...`.
 3. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-no-primary-days.sql`.
-4. Probe AFTER: every case as the table lists (42 cases).
+4. Probe AFTER: every case as the table lists (43 cases).
 5. `SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-16 green (the flag makes the probe's PROBE_SETUP and the
    anon 404s a FAIL; 16b is the gate before the client push; section 16 counts the leftovers either way).
 6. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; table (a)'s `availability` row;
@@ -2236,9 +2252,13 @@ primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers(
 carry machine paths and do not live in the repo), run from the repo root on the commit its header names, with the CLI dir
 linked by `supabase link --project-ref bzhsroegtagqhutbnsrp` - `--dry-run` first (steps 1-3 only, nothing applied). It prints
 the branch, HEAD, the migration's sha256, the workdir and the linked ref first, refuses to run unless the ref is
-`bzhsroegtagqhutbnsrp`, `sql/` / `scripts/` are committed and the migration's sha256 is the reviewed one, stops at the first
+`bzhsroegtagqhutbnsrp`, `sql/` / `scripts/` are committed and the migration's sha256 is the reviewed one (since the review of
+10/1 the probe's, the pre-check's and `scripts/verify-rls.sh`'s too - the files that grade the apply), stops at the first
 failure, asks for a typed APPLY before the migration, writes everything to a timestamped log beside itself and ends with a
-"PASTE THIS BACK TO CLAUDE CODE" block; the record step is done from that block.
+"PASTE THIS BACK TO CLAUDE CODE" block; the record step is done from that block. Its CLI calls pass `--agent=yes` (review
+10/1): the CLI's `-o json` is a bare array in a plain terminal and the `{boundary, rows, warning}` envelope when it detects an
+AI agent, so the flag makes every run read the same shape - and its parsers accept both. A stop after the migration applied
+prints the rollback lines below.
 
 **Rolling back** (nothing else refers to `save_no_primary`; the five-argument text is the coordinator file's):
 

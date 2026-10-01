@@ -4075,13 +4075,30 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("const out = offerPaintCell(cellOf(r), brush, { single });"), "every paint goes through helpers.offerPaintCell");
       assert.ok(src.includes("is marked No primary - offer ${roleWord(brush)} there and lift it?") && src.includes("of these days are marked No primary (") && src.includes("there and lift the block?"), "the lift question (once per batch)");
       assert.ok(src.includes("No primary replaced the offer on "), "the hint names replaced offers");
-      assert.ok(src.includes("const npHint = `Tap a day to mark ${asScheduler && person ? person.name : \"yourself\"} No primary (backup is still fine); tap again to take it back.`;"), "the No primary tap hint (relay names the surgeon)");
+      // pin moved deliberately 10/1 (review of Prompt 28): the hint has an "Only these days" variant (npExh) and names the person
+      // through npWho; kept intent: the relay names the surgeon and the plain words stay "backup is still fine".
+      assert.ok(src.includes("const npWho = asScheduler && person ? person.name : \"yourself\";") && src.includes("    : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`;"), "the No primary tap hint (relay names the surgeon)");
       assert.ok(src.includes("{armed === \"noprimary\" && !rangeMode ? npHint : rangeHint}"), "npHint replaces rangeHint while No primary is armed and Range is off");
+    });
+    // Review 10/1 (Prompt 28, confirmed finding): in an "Only these days" (exhaustive) period a No primary day is not an offer - the
+    // generator places him on backup there only with a Backup offer (rules.js not-offered) - so the legend, the hint and the replace
+    // note must not say "backup still fine" for such a month. The mode is read per day (periodFor), the sheet's own period through
+    // the drafted mode (shownMode); a day outside any period, or in a preferred / rules-only one, keeps the plain words.
+    check("P28 review: the legend, the tap hint and the replace note follow the period's mode - an 'Only these days' month says paint Backup too; elsewhere 'backup still fine'", () => {
+      assert.ok(src.includes("const exhDay = (ds) => { const per = periodFor(ds, periods || []); if (!per) return false; const m = period && per.id === period.id ? shownMode : ((per.offer_modes && typeof per.offer_modes === \"object\" ? per.offer_modes[pid] : null) || \"preferred\"); return m === \"exhaustive\"; };"), "exhDay reads the day's period mode (the drafted mode for the sheet's own period)");
+      assert.ok(src.includes("const npExh = days.some(r => exhDay(r.ds));"), "npExh = the shown month holds an exhaustive day");
+      assert.ok(src.includes("const npHint = npExh ? `Tap a day to mark ${npWho} No primary (\"Only these days\" is on: paint Backup too for backup); tap again to take it back.`"), "the hint's exhaustive variant");
+      assert.ok(src.includes("const npLegend = npExh ? \"No primary = not on primary. \\\"Only these days\\\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\"\n    : \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\";"), "the legend's two variants");
+      assert.ok(src.includes("data-testid=\"ofp-legend\" data-exh={npExh ? \"1\" : \"0\"}") && src.includes(">{npLegend}</div>}"), "the legend renders npLegend and says which variant it shows");
+      assert.ok(src.includes("const replacedExh = ok.filter(ds => outs[ds] && outs[ds].replaced && exhDay(ds)).length;") && src.includes("(replacedExh ? \" - with \\\"Only these days\\\" on, a day with no offer is off backup too: paint Backup to keep it\" : \"\")"), "the replace note warns per replaced exhaustive day");
+      assert.strictEqual((src.match(/backup still fine/g) || []).length, 1, "'backup still fine' is said once (the plain legend), never unconditionally");
     });
     check("P28 pins: the testids / attributes (ofp-brush-noprimary, ofp-legend, ofp-np-pill own / range / lift, data-noprimary, data-np-draft, data-np-why, data-month-noprimary), the legend words, data-state keeps its offer meaning", () => {
       ["data-testid={\"ofp-brush-\" + k}", "data-testid=\"ofp-legend\"", "data-testid=\"ofp-np-pill\" data-np=\"own\"", "data-testid=\"ofp-np-pill\" data-np=\"range\"", "data-testid=\"ofp-np-pill\" data-np=\"lift\"", "data-noprimary={effN ? \"own\" : r.npRange ? \"range\" : \"\"}", "data-np-draft={npDrafted ? (npDraft[ds] ? \"add\" : \"clear\") : \"\"}", "data-np-why={npWhy}", "data-month-noprimary={monthCounts.noprimary}"].forEach(t => assert.ok(src.includes(t), "missing " + t));
       assert.ok(src.includes("{armed === \"noprimary\" && <div data-testid=\"ofp-legend\""), "the legend shows only while the No primary brush is armed");
-      assert.ok(src.includes(">No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.</div>"), "the legend words");
+      // pin moved deliberately 10/1 (review of Prompt 28): the words moved into npLegend (two variants, pinned in the review check
+      // below); kept intent: the plain legend reads exactly these words.
+      assert.ok(src.includes(": \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\";"), "the legend words");
       assert.ok(src.includes("data-state={grey && !drafted ? \"blocked\" : drafted ? \"draft\" : eff ? \"saved\" : \"free\"}") && src.includes("const drafted = offerDrafted || npDrafted;"), "data-state: draft = either draft holds the day; saved = a saved OFFER");
       assert.ok(src.includes("will lift No primary"), "a drafted lift of a saved No primary reads 'will lift No primary'");
       assert.ok(src.includes("\" - saved No primary: Clear can take it back\""), "a greyed row with a saved own No primary says Clear can take it back");
@@ -4090,8 +4107,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P28 pins: Save stays ONE rpc/save_offers - p_np_add / p_np_clear added only when non-empty; the one offers.save audit site goes through helpers.offersAuditSummary; availability re-read after a No primary Save; the error box drops the NO_PRIMARY_ token", () => {
       assert.ok(src.includes("if (npCount > 0) { payload.p_np_add = npAdd; payload.p_np_clear = npClear; }"), "the np keys ride only when non-empty (an offers-only Save keeps the five keys the pre-apply function knows)");
-      assert.ok(src.includes("logAudit(\"offers.save\", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, period ? period.label : null), summary);"), "the one audit site names the No primary days through offersAuditSummary");
-      assert.ok(src.includes("if (npCount > 0) loadAvailability(true);"), "the availability rows are re-read after a No primary Save");
+      // pins moved deliberately 10/1 (review of Prompt 28): the label is auditLabel (only when the Save changed the mode or a day
+      // inside the period) and the availability re-read is awaited (bounded 8 s) so the marks do not flash; kept intent: ONE audit
+      // site through offersAuditSummary, availability re-read after a No primary Save.
+      assert.ok(src.includes("logAudit(\"offers.save\", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, auditLabel), summary);"), "the one audit site names the No primary days through offersAuditSummary");
+      assert.ok(src.includes("const auditLabel = period && (withMode || diff.insert.concat(diff.update).some(r => inPer(r.day)) || diff.delete.concat(npAdd, npClear).some(inPer)) ? period.label : null;"), "the period label only for a mode change or a changed day inside the period");
+      assert.ok(src.includes("if (npCount > 0) { let npTimer = null; await Promise.race([loadAvailability(true), new Promise(res => { npTimer = setTimeout(res, 8000); })]); clearTimeout(npTimer); }"), "the availability rows are re-read (awaited, at most 8 s) after a No primary Save");
       assert.ok(src.includes("({noPrimaryErrorWords(commitError.msg)}) - your taps are kept; fix the issue and Save again."), "the painter's error box shows NP refusals in plain words");
       assert.ok(src.includes("r = await onCommit({ personId: pid, diff, np: { add: npDiff.add, clear: npDiff.clear }, mode, period: period || null, items });"), "the sheet hands the commit both diffs in one call");
       assert.ok(src.includes("const npDiff = noPrimaryDraftDiff(np.own, npLive);"), "the No primary diff through helpers.noPrimaryDraftDiff");
@@ -4099,7 +4120,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(/rest\/v1\/availability[^\n]*method: "(POST|PATCH|DELETE)"/.test(src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"))), false, "the painter's commit never writes availability directly");
     });
     const p28check = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
-    await p28check("P28 behaviour: commitOffersPaint (evaluated from the source) - an offers-only Save sends the five keys; a No primary Save sends ONE save_offers with p_rows [] + p_np_add / p_np_clear, ONE audit 'Burchett: no primary on 1/6, 1/15 (<label>)' and re-reads availability; a refusal returns the NO_PRIMARY_ text verbatim and writes no audit; nothing to write = no request", async () => {
+    await p28check("P28 behaviour: commitOffersPaint (evaluated from the source) - an offers-only Save sends the five keys; a No primary Save sends ONE save_offers with p_rows [] + p_np_add / p_np_clear, ONE audit 'Burchett: no primary on 1/6, 1/15' (the period's label only for a mode change or a day inside it) and re-reads availability; a refusal returns the NO_PRIMARY_ text verbatim and writes no audit; nothing to write = no request", async () => {
       const body = src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"));
       const dbe = src.slice(src.indexOf("const describeDbError = (err) => {"), src.indexOf("// Scheduler / admin person ids for targeted notifications."));
       assert.ok(body.length > 500 && dbe.length > 200, "commitOffersPaint / describeDbError not found");
@@ -4113,15 +4134,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         return { r, calls, audits, loads };
       };
       const none = { insert: [], update: [], delete: [], bad: [], count: 0 };
-      const per = { id: "p1", label: "Nov 2026 - Jan 2027" };
-      const a = await run({ personId: "s2", diff: { insert: [{ day: "2027-01-07", role_pref: "backup" }], update: [], delete: [], bad: [], count: 1 }, np: { add: [], clear: [] }, mode: null, period: per });
+      // pin moved deliberately 10/1 (review of Prompt 28): the period carries its days and its label reaches the Activity log text
+      // only for a mode change or a changed day inside it (the smoke logged "no primary on 2/1, 2/2 (Nov 2026 - Jan 2027)" for days
+      // after that period); kept intent: inside the period the offers-only text is byte-for-byte the old one.
+      const per = { id: "p1", label: "Nov 2026 - Jan 2027", start_day: "2026-11-02", end_day: "2027-01-03" };
+      const a = await run({ personId: "s2", diff: { insert: [{ day: "2026-12-07", role_pref: "backup" }], update: [], delete: [], bad: [], count: 1 }, np: { add: [], clear: [] }, mode: null, period: per });
       assert.strictEqual(a.calls.length, 1); assert.deepStrictEqual(Object.keys(a.calls[0].body), ["p_person", "p_rows", "p_clear", "p_period", "p_mode"], "an offers-only Save keeps the five keys");
-      assert.strictEqual(a.audits[0].s, "Burchett: 1 offer change(s) (Nov 2026 - Jan 2027)", "the offers-only summary is byte-for-byte the old text");
+      assert.strictEqual(a.audits[0].s, "Burchett: 1 offer change(s) (Nov 2026 - Jan 2027)", "the offers-only summary inside the period is byte-for-byte the old text");
       assert.ok(a.loads.indexOf("availability") < 0, "no availability re-read after an offers-only Save");
+      const a2 = await run({ personId: "s2", diff: { insert: [{ day: "2027-01-07", role_pref: "backup" }], update: [], delete: [], bad: [], count: 1 }, np: { add: [], clear: [] }, mode: null, period: per });
+      assert.strictEqual(a2.audits[0].s, "Burchett: 1 offer change(s)", "an offer outside the period names no period");
+      const a3 = await run({ personId: "s2", diff: none, np: null, mode: "exhaustive", period: per });
+      assert.strictEqual(a3.audits[0].s, "Burchett: 0 offer change(s), mode exhaustive (Nov 2026 - Jan 2027)", "a mode change names its period");
       const b = await run({ personId: "s2", diff: none, np: { add: ["2027-01-06", "2027-01-15"], clear: [] }, mode: null, period: per });
       assert.strictEqual(b.calls.length, 1, "ONE request"); assert.ok(/\/rest\/v1\/rpc\/save_offers$/.test(b.calls[0].url));
       assert.deepStrictEqual(b.calls[0].body, { p_person: "s2", p_rows: [], p_clear: [], p_period: null, p_mode: null, p_np_add: ["2027-01-06", "2027-01-15"], p_np_clear: [] });
-      assert.strictEqual(b.audits.length, 1); assert.strictEqual(b.audits[0].a, "offers.save"); assert.strictEqual(b.audits[0].s, "Burchett: no primary on 1/6, 1/15 (Nov 2026 - Jan 2027)", "the Activity log text");
+      assert.strictEqual(b.audits.length, 1); assert.strictEqual(b.audits[0].a, "offers.save"); assert.strictEqual(b.audits[0].s, "Burchett: no primary on 1/6, 1/15", "the Activity log text (days after the period: no period named)");
+      const b2 = await run({ personId: "s2", diff: none, np: { add: ["2026-12-01"], clear: ["2027-01-15"] }, mode: null, period: per });
+      assert.strictEqual(b2.audits[0].s, "Burchett: no primary on 12/1; no primary lifted on 1/15 (Nov 2026 - Jan 2027)", "a marked day inside the period names it");
       assert.deepStrictEqual([b.audits[0].d.np_add, b.audits[0].d.np_clear, b.audits[0].d.count], [["2027-01-06", "2027-01-15"], [], 0], "the audit detail carries the days (no amount, no contact)");
       assert.ok(b.loads.indexOf("availability") >= 0, "availability is re-read");
       const c = await run({ personId: "s2", diff: none, np: { add: [], clear: ["2027-01-06"] }, mode: null, period: null });

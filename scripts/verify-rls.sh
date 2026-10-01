@@ -1062,9 +1062,11 @@ echo "== 16. no-primary days (2026-10-01, Prompt 28): save_no_primary + save_off
 # its own transaction. NP001-NP009 NO_PRIMARY_* refuse before any write. 16a / 16b go over REST as anon and write nothing (refused before
 # the body is used): 401/403 = the function exists and anon holds no EXECUTE; 404 = not applied yet (16b: PGRST202 - the schema cache does
 # not know p_np_add / p_np_clear, the gate before the Prompt 28 client push). 16c runs sql/probes/no-primary-probe.sql through the linked
-# CLI (rolls itself back; 42 cases graded by name - its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP:
+# CLI (rolls itself back; 43 cases graded by name - its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP:
 # save_no_primary is absent - a PASS, like the anon 404s, unless SILVIS_NO_PRIMARY_APPLIED=1 (the run right after the apply), then each is a
-# FAIL. 16d counts the probe's leftovers either way.
+# FAIL; its collision guard (PROBE_SETUP: live rows already sit in the probe window) is always a FAIL. 16d counts the probe's leftovers
+# either way, by the probe's identity only (review 10/1): the rows only it writes (tagged) and s3's availability / call_offers rows in its
+# window - never another person's row, and never a ready-to-paste DELETE for a row that is not tagged.
 NPSTRICT16="${SILVIS_NO_PRIMARY_APPLIED:-}"
 # 16a. anon may not execute save_no_primary
 line=$(curl -s -o $T/vr16a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_no_primary" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_add":[],"p_clear":[]}')
@@ -1130,6 +1132,7 @@ if linked; then
     expect_err16 C2  OS004 "OFFERS_UNKNOWN_PERSON" "the office cannot relay through save_offers for an id that is not on the roster"
     expect_np16  C3  NP003 NO_PRIMARY_UNKNOWN_PERSON "zz is not a roster id - the office relays for a roster surgeon only" "nor through save_no_primary directly"
     expect_np16  C4  NP006 NO_PRIMARY_FROZEN "ask the scheduler (11/22)" "the office is frozen like a surgeon"
+    expect_np16  C5  NP001 NO_PRIMARY_NOT_LINKED "name the person (your account is not linked to a roster entry)" "an unlinked account that names nobody is refused (the office names the surgeon)"
     expect_eq16  A1  "ok np_added=1 src=email-relay by=scheduler"     "the scheduler marks a day inside a frozen period for a surgeon (exempt from the freeze; source email-relay)"
     expect_eq16  A2  "ok np_cleared=1"                                "the scheduler clears a frozen single day"
     expect_np16  A3  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5" "a held primary refuses the scheduler too (trade first)"
@@ -1139,20 +1142,41 @@ if linked; then
     expect_err16 N1  42501 "permission denied for function save_no_primary" "anon cannot execute save_no_primary"
     expect_np16  N2  NP001 NO_PRIMARY_NOT_LINKED "sign in with an account that is linked to a roster entry" "a session with no signed-in user is refused"
   fi
-  LEFTOVER16_SQL="select ((select count(*) from auth.users where email like 'probe-noprimary-%@example.test') + (select count(*) from public.availability where start_date <= '2030-11-30' and end_date >= '2030-11-01') + (select count(*) from public.availability where '2020-04-06' between start_date and end_date) + (select count(*) from public.call_offers where day between '2030-11-01' and '2030-11-30') + (select count(*) from public.schedule_days where source = 'probe-noprimary') + (select count(*) from public.time_off where note = 'probe-noprimary') + (select count(*) from public.call_periods where label like 'probe np %'))::int as leftover"
+  # 16d. leftovers, by the probe's identity only (review 10/1): tagged = rows only the probe writes (its users, its schedule_days /
+  # time_off / call_periods, its tagged availability / call_offers fixtures); in_window = s3's availability / call_offers rows in its
+  # window (2030-11; availability also over 2020-04-06) - the rows save_no_primary / save_offers write there carry no tag. The
+  # collision guard refuses to start while any in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent
+  # raise before the apply) they can only be the probe's; after a run that stopped at the guard they are live rows it never wrote -
+  # listed for review, never counted as a leftover and never given a DELETE (a probe row and a real entry of s3 look alike).
+  LEFTOVER16_SQL="select ((select count(*) from auth.users where email like 'probe-noprimary-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-noprimary') + (select count(*) from public.time_off where note = 'probe-noprimary') + (select count(*) from public.call_periods where label like 'probe np %') + (select count(*) from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary') + (select count(*) from public.call_offers where note = 'probe-noprimary'))::int as tagged, ((select count(*) from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date)) + (select count(*) from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30'))::int as in_window"
   r=$(q "$LEFTOVER16_SQL")
-  if ! echo "$r" | grep -q '"leftover"'; then
+  rflat16=$(echo "$r" | tr -d ' \n')
+  tagged16=$(echo "$rflat16" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win16=$(echo "$rflat16" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  passed16=""; echo "$out" | grep -qE 'PROBE_RESULTS .*;END|PROBE_SETUP: save_no_primary is absent' && passed16=1
+  if [ -z "$tagged16" ] || [ -z "$win16" ]; then
     bad "no-primary probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
-  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
-    ok "no-primary probe persisted nothing (leftover count 0: auth.users probe-noprimary-* / availability in 2030-11 or over 2020-04-06 / call_offers in 2030-11 / schedule_days source probe-noprimary / time_off probe-noprimary / call_periods probe np *)"
+  elif [ "$tagged16" = "0" ] && [ "$win16" = "0" ]; then
+    ok "no-primary probe persisted nothing (leftover count 0: auth.users probe-noprimary-* / schedule_days, time_off, availability, call_offers tagged probe-noprimary / call_periods probe np * / s3's availability and call_offers in 2030-11 or over 2020-04-06)"
   else
-    bad "no-primary probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
-    echo "      delete from public.availability where (start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date;"
-    echo "      delete from public.call_offers where day between '2030-11-01' and '2030-11-30';"
-    echo "      delete from public.schedule_days where source = 'probe-noprimary';"
-    echo "      delete from public.time_off where note = 'probe-noprimary';"
-    echo "      delete from public.call_periods where label like 'probe np %';"
-    echo "      delete from auth.users where email like 'probe-noprimary-%@example.test';   -- user_profiles rows cascade"
+    if [ "$tagged16" != "0" ]; then
+      bad "no-primary probe LEFT ROWS BEHIND (tagged=$tagged16 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary';"
+      echo "      delete from public.call_offers where note = 'probe-noprimary';"
+      echo "      delete from public.schedule_days where source = 'probe-noprimary';"
+      echo "      delete from public.time_off where note = 'probe-noprimary';"
+      echo "      delete from public.call_periods where label like 'probe np %';"
+      echo "      delete from auth.users where email like 'probe-noprimary-%@example.test';   -- user_profiles rows cascade"
+    fi
+    if [ "$win16" != "0" ]; then
+      if [ "$passed16" = "1" ]; then
+        bad "no-primary probe LEFT ROWS BEHIND (in_window=$win16 - s3's availability / call_offers rows in the probe window after a run that passed its collision guard): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real entry of s3 look alike), then report:"
+      else
+        echo "   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the probe stopped before writing anything (16c), so an untagged one is a live row, not a leftover; review them:"
+      fi
+      echo "      select * from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date);"
+      echo "      select * from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30';"
+    fi
   fi
 else
   echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"
