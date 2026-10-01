@@ -4136,6 +4136,45 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const f = await run({ personId: "s2", diff: none, np: null, mode: null, period: per });
       assert.deepStrictEqual([f.r, f.calls.length, f.audits.length], [{ ok: true, nothing: true }, 0, 0], "nothing to write: no request, no audit (a missing np reads as empty)");
     });
+    // Integrator (10/1): the two halves of Prompt 28 were built in parallel lanes - this pin makes them meet. The client's ONE
+    // save_offers body must use exactly the parameter names of the migration's save_offers (the np pair defaulted, so the
+    // offers-only five-key body resolves to the same function), every NO_PRIMARY_ refusal the migration raises (with its NP
+    // code) must reach the painter verbatim through describeDbError and lose its token in the error box, and the smoke mock
+    // must answer the migration's return keys and mirror its message texts.
+    check("P28 x migration (integrator): the commit's save_offers body = the migration's save_offers parameters (np pair defaulted); every NO_PRIMARY_ raise (token + NP code) passes describeDbError verbatim and loses its token in the error box; the smoke mock answers np_added / np_cleared / np_kept and mirrors the messages", () => {
+      const mig = fs.readFileSync(path.join(ROOT, "sql", "migrations", "2026-10-01-no-primary-days.sql"), "utf8").replace(/\r\n/g, "\n");
+      const sig = /\ncreate or replace function public\.save_offers\(([^)]*)\) returns jsonb\n/.exec(mig);
+      assert.ok(sig, "the migration's save_offers signature line");
+      const params = sig[1].split(",").map(p => p.trim());
+      const names = params.map(p => p.split(/\s+/)[0]);
+      assert.deepStrictEqual(names, ["p_person", "p_rows", "p_clear", "p_period", "p_mode", "p_np_add", "p_np_clear"], "the migration's save_offers parameters");
+      assert.deepStrictEqual(params.slice(5), ["p_np_add date[] default null", "p_np_clear date[] default null"], "the np pair is date[] with a default (a body without it resolves too)");
+      const body = src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"));
+      const pay = body.slice(body.indexOf("const payload = {"), body.indexOf("const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`"));
+      assert.ok(pay.length > 50, "the save_offers payload lines");
+      const sent = [...new Set([...pay.matchAll(/\b(p_[a-z_]+)\s*[:=]/g)].map(m => m[1]))];
+      assert.deepStrictEqual(sent, names, "the client sends exactly the migration's parameter names: " + sent.join(", "));
+      const raises = [...mig.matchAll(/raise exception '((NO_PRIMARY_[A-Z_]+): (?:[^']|'')*)'[^;\n]*using errcode = '(NP\d{3})'/g)];
+      assert.strictEqual(raises.length, 12, "twelve NO_PRIMARY_ raises (eleven in save_no_primary, NP009 once more in save_offers)");
+      const CODE = { NO_PRIMARY_NOT_LINKED: "NP001", NO_PRIMARY_NOT_YOURS: "NP002", NO_PRIMARY_UNKNOWN_PERSON: "NP003", NO_PRIMARY_BAD_DAY: "NP004", NO_PRIMARY_PAST: "NP005", NO_PRIMARY_FROZEN: "NP006", NO_PRIMARY_RANGE: "NP007", NO_PRIMARY_ON_CALL: "NP008", NO_PRIMARY_OFFER_CONFLICT: "NP009" };
+      assert.deepStrictEqual([...new Set(raises.map(m => m[2]))].sort(), Object.keys(CODE).sort(), "the nine tokens");
+      const dbe = src.slice(src.indexOf("const describeDbError = (err) => {"), src.indexOf("// Scheduler / admin person ids for targeted notifications."));
+      const describe = new Function("console", dbe + "\nreturn describeDbError;")({ warn: () => {} });
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      raises.forEach(m => {
+        const tmpl = m[1].replace(/''/g, "'"), token = m[2], code = m[3];
+        assert.strictEqual(code, CODE[token], token + " is raised with " + CODE[token] + " (got " + code + ")");
+        const msg = tmpl.replace(/%/g, "X");
+        assert.strictEqual(describe(JSON.stringify({ code, message: msg, details: null, hint: null })), msg, "describeDbError passes " + token + " verbatim");
+        const plain = H.noPrimaryErrorWords(msg);
+        assert.ok(plain.indexOf("NO_PRIMARY_") < 0 && plain.length > 10 && plain.charAt(0) === plain.charAt(0).toUpperCase(), "the error box drops the token: " + plain);
+        if (["NP004", "NP005", "NP006", "NP007", "NP008", "NP009"].includes(code) && tmpl.indexOf("%") >= 0) {
+          tmpl.split("%").filter(frag => frag.length >= 4).forEach(frag => assert.ok(smoke.includes(frag), "the smoke mock mirrors " + token + "'s text: " + JSON.stringify(frag)));
+        }
+      });
+      ["'np_added'", "'np_cleared'", "'np_kept'"].forEach(k => assert.ok(mig.includes(k), "the migration returns " + k));
+      assert.ok(smoke.includes("np_added: npDone.np_added, np_cleared: npDone.np_cleared, np_kept: npDone.np_kept"), "the smoke mock answers the migration's return keys");
+    });
     check("P28: the noprimary brush token clears contrast - white on its armed gradient's light end >= 4.5:1, its text on its tint >= 4.5:1", () => {
       const lum = (hex) => { const v = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
       const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };

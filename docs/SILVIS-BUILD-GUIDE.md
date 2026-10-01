@@ -281,7 +281,7 @@ Proof: `sql/probes/vacation-guard-probe.sql` (rolled back; 20 cases in its heade
 
 - **No-primary days (2026-10-01, Prompt 28, report-first, NOT applied; `sql/migrations/2026-10-01-no-primary-days.sql`, revision t).** Faraz 10/1: surgeons mark their own no-primary days. `save_offers` gains two optional parameters `p_np_add date[]` / `p_np_clear date[]` (the five-argument signature is dropped and re-created with seven, so an older build's five-key call resolves to it; still `security invoker`) and calls the NEW `save_no_primary(p_person, p_add, p_clear)` (`security definer`, `search_path = public, pg_temp`) inside the same transaction: one `availability` row per day, kind `backup_only`, role `any`, note NULL, source `app` / `office-relay` / `email-relay` - surgeons still cannot write `availability` under RLS (no policy changes). Refusals NP001-NP009 (`NO_PRIMARY_*`): not linked, not yours, unknown person (the office), bad day, past (everyone), frozen (not the scheduler), part of a longer range (everyone), holds primary that day (everyone), and an offer conflict (a primary / either offer on a no-primary day after the Save).
 
-Proof: `sql/probes/no-primary-probe.sql` (rolled back; 42 cases; PROBE_SETUP before the apply), `sql/probes/no-primary-precheck.sql` (read-only), `scripts/verify-rls.sh` section 16 (`SILVIS_NO_PRIMARY_APPLIED=1` on the run right after the apply), one command `bash scripts/apply-no-primary-days.sh` (Faraz runs it and pastes the log back), the record in `docs/SCHEMA-REVIEW.md` "2026-10-01 - no-primary days"; applied: _to be filled after the apply_.
+Proof: `sql/probes/no-primary-probe.sql` (rolled back; 42 cases; PROBE_SETUP before the apply), `sql/probes/no-primary-precheck.sql` (read-only), `scripts/verify-rls.sh` section 16 (`SILVIS_NO_PRIMARY_APPLIED=1` on the run right after the apply), one command: Faraz's apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts carry machine paths and do not live in the repo; he runs it from the repo root and pastes the log back), the record in `docs/SCHEMA-REVIEW.md` "2026-10-01 - no-primary days"; applied: _to be filled after the apply_.
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
@@ -1264,7 +1264,9 @@ token (`helpers.noPrimaryErrorWords`; `describeDbError` passes `NO_PRIMARY_[A-Z_
 `NO_PRIMARY_HELD_WORDS`. Tests: `test/offers.test.js` section F (every brush rule - replace, keep Backup, lift, clear, the
 read-only range, past / frozen / held primary - the draft diff, the four audit texts, the error words, the engine's reading
 of the row), `test/data-layer.test.js` [P28] (the source pins and `commitOffersPaint` evaluated: five keys for an
-offers-only Save, ONE request carrying the days, the audit text, a refusal shown verbatim), and the smoke step "No primary
+offers-only Save, ONE request carrying the days, the audit text, a refusal shown verbatim; and the cross-check against
+the migration - the body's keys are its `save_offers` parameters, every `NO_PRIMARY_` raise with its NP code reaches the
+error box, the smoke mock mirrors its texts and return keys), and the smoke step "No primary
 (s2)" (a surgeon page as Burchett marks two days, saves - ONE `save_offers` with `p_np_add` - reloads, the lift question
 once for two days, clears one; screenshot `no-primary-390.png`). Setup > Availability statements is unchanged.
 
