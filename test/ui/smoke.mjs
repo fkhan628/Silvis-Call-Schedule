@@ -739,7 +739,7 @@ const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, 
 // check holds at any hour. The harness-opened slot (live mode) is >= today + 3, never the shift day or today.
 // Prompt 22 (group call): the same up-front blob read also keeps groupRules / holidays - the group-call expectation below
 // is the page's own groupCallNow over them (read = false when the read failed: the group-call checks then say so).
-const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined, surgeonRules: undefined }; // surgeonRules: the Rules preview check (9/30)
+const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined, surgeonRules: undefined, roster: undefined }; // surgeonRules: the Rules preview check (9/30); roster: the vacation guard check (Prompt 27)
 const onCallRosterEarly = await (async () => {
   try {
     let d;
@@ -749,7 +749,7 @@ const onCallRosterEarly = await (async () => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       d = ((await r.json())[0] || {}).data; if (typeof d === "string") d = JSON.parse(d);
     }
-    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; gcBlobEarly.surgeonRules = d.surgeonRules; }
+    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; gcBlobEarly.surgeonRules = d.surgeonRules; gcBlobEarly.roster = d.roster; }
     const m = {}; ((d && d.roster) || []).forEach(x => { if (x && x.id) m[x.id] = x.name; });
     return m;
   } catch (e) { console.log("     (roster read for the on-call-now check failed: " + (e && e.message || e) + " - names are not compared)"); return null; }
@@ -5418,6 +5418,124 @@ try {
       if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
     }
     await np.close();
+  }
+
+  // ---- Prompt 27 (Faraz 9/30: "need at least 2 surgeons around"): the vacation guard on the Time off form, as a SURGEON ----
+  // A page as surgeon s2 (Burchett) whose time_off GET answers the served rows PLUS mocked rows in a far-future window
+  // (2031-06-10 .. 06-12 - no served schedule row, East range or vacation sits there), so nothing depends on the live data.
+  // The expectation is restated here from the served blob (gcBlobEarly: the roster's active surgeons - active !== false, not
+  // external - and groupRules.vacations.minSurgeonsAround, a whole number 0-99, else 2): with K = active - minimum other
+  // surgeons off, s2 is the one too many. The mocked rows: the first K-1 other active surgeons (roster order) off 6/10-6/12,
+  // the K-th off 6/11-6/12. Checks: the Time off card's vac-guard-note names the minimum; (1) 6/10 alone - vac-also-off reads
+  // "Also off: <K-1 names> 6/10-6/12 - after yours, <min> of <n> are around 6/10" (data-ok 1, no under-the-minimum words);
+  // (2) 6/10-6/11 - the line adds the K-th name, "... is around 6/11 - under the minimum of <min>" plus the surgeon's "it
+  // would be refused" words (data-ok 0); Add vacation -> vac-guard-refusal with the database's words ("VACATION_TOO_FEW_AROUND:
+  // on 6/11 only <min-1> of <n> surgeons would be around (minimum <min>) - pick other dates or ask the scheduler"), NO
+  // time_off / audit / notification write, NO dialog (the confirm is the scheduler's only) and no on-call refusal box.
+  // Screenshot test/ui/out/vacation-guard-390.png.
+  {
+    const VG_UID = "00000000-0000-4000-8000-00000000a627";
+    const VG_PROFILE = { id: VG_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-30T00:00:00Z" };
+    const VG_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VG_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const vgRoster = Array.isArray(gcBlobEarly.roster) ? gcBlobEarly.roster : [];
+    const vgActive = vgRoster.filter(r => r && r.id && r.active !== false && r.type !== "external");
+    const vgBlock = gcBlobEarly.groupRules && typeof gcBlobEarly.groupRules === "object" ? gcBlobEarly.groupRules.vacations : undefined;
+    const vgRule = vgBlock && typeof vgBlock === "object" && !Array.isArray(vgBlock) ? vgBlock.minSurgeonsAround : undefined;
+    const vgMin = typeof vgRule === "number" && Number.isInteger(vgRule) && vgRule >= 0 && vgRule <= 99 ? vgRule : 2;
+    const vgN = vgActive.length;
+    const vgOthers = vgActive.filter(r => r.id !== "s2");
+    const vgK = vgN - vgMin;
+    const vgMd = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    const VG_D1 = "2031-06-10", VG_D2 = "2031-06-11", VG_D3 = "2031-06-12";
+    if (!gcBlobEarly.read || !vgActive.some(r => r.id === "s2")) console.log(`     (vacation guard: ${gcBlobEarly.read ? "s2 is not an active surgeon in the served roster" : "the served blob was not read up front"} - the surgeon page check is skipped)`);
+    else if (vgK < 2 || vgK > vgOthers.length) console.log(`     (vacation guard: ${vgN} active surgeon(s) and minimum ${vgMin} leave no room for the K-1 / K picture (K = ${vgK}) - the surgeon page check is skipped)`);
+    else {
+      const early = vgOthers.slice(0, vgK - 1), last = vgOthers[vgK - 1];
+      const VG_ROWS = early.map((r, i) => ({ id: "00000000-0000-4000-8000-00000000a6" + String(30 + i), person_id: r.id, start_date: VG_D1, end_date: VG_D3, note: null, created_by: "harness", created_at: "2026-09-30T00:00:00Z" }))
+        .concat([{ id: "00000000-0000-4000-8000-00000000a639", person_id: last.id, start_date: VG_D2, end_date: VG_D3, note: null, created_by: "harness", created_at: "2026-09-30T00:00:00Z" }]);
+      const vgName = (r) => r.name || r.id;
+      const isAre = (n) => (n === 1 ? "is" : "are");
+      // the app lists the others in roster order: early (roster order) then last (after them - all three lists are vgOthers order)
+      const expOk = "Also off: " + early.map(r => vgName(r) + " " + vgMd(VG_D1) + "-" + vgMd(VG_D3)).join(", ") + " - after yours, " + vgMin + " of " + vgN + " " + isAre(vgMin) + " around " + vgMd(VG_D1);
+      const expNo = "Also off: " + early.map(r => vgName(r) + " " + vgMd(VG_D1) + "-" + vgMd(VG_D3)).concat([vgName(last) + " " + vgMd(VG_D2) + "-" + vgMd(VG_D3)]).join(", ") +
+        " - after yours, " + (vgMin - 1) + " of " + vgN + " " + isAre(vgMin - 1) + " around " + vgMd(VG_D2) + " - under the minimum of " + vgMin;
+      const expUnder = " - it would be refused: at least " + vgMin + " surgeons must stay around.";
+      const expMsg = "VACATION_TOO_FEW_AROUND: on " + vgMd(VG_D2) + " only " + (vgMin - 1) + " of " + vgN + " surgeons would be around (minimum " + vgMin + ") - pick other dates or ask the scheduler";
+      console.log(`     (vacation guard: ${vgN} active, minimum ${vgMin} (${vgRule === undefined ? "the code default" : "the served blob"}); mocked: ${early.map(r => r.id).join(", ")} off ${VG_D1}..${VG_D3}, ${last.id} off ${VG_D2}..${VG_D3})`);
+      const vgRoute = async ({ route, req, url, json }) => {
+        if (url.pathname.startsWith("/rest/v1/time_off") && req.method() === "GET") {
+          let rows = fixtureAnswer(url);
+          if (!rows) {
+            try {
+              const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+              if (!res.ok()) return false; // the default handler answers it (and the lines below fail loudly without the mocked rows)
+              rows = await res.json();
+            } catch (e) { return false; }
+          }
+          await json(200, (Array.isArray(rows) ? rows : []).concat(VG_ROWS));
+          return true;
+        }
+        return false;
+      };
+      const vp = await context.newPage();
+      watchPage(vp, "vacation-guard");
+      await vp.setViewportSize({ width: 390, height: 844 });
+      await vp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VG_JWT);
+      await vp.routeWebSocket((u) => String(u).includes("/realtime/v1/websocket"), () => {});
+      await vp.route((u) => u.hostname === SUPABASE_HOST, routeSupabaseAs(VG_PROFILE, vgRoute));
+      const vgDialogs = [];
+      vp.on("dialog", (d) => { vgDialogs.push(d.message()); d.dismiss().catch(() => {}); });
+      const readLine = () => vp.$eval("[data-testid=vac-also-off]", el => ({
+        ok: el.getAttribute("data-ok"),
+        text: ((el.querySelector("[data-testid=vac-also-off-text]") || el).textContent || "").replace(/\s+/g, " ").trim(),
+        under: el.querySelector("[data-testid=vac-also-off-under]") ? el.querySelector("[data-testid=vac-also-off-under]").textContent : null,
+      }));
+      try {
+        await loadWithRetry(vp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (vacation guard)");
+        await vp.waitForSelector("text=Synced", { timeout: 30000 });
+        await vp.waitForTimeout(500);
+        if ((await vp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the vacation guard page shows a Setup tab - it is being treated as the scheduler");
+        await vp.click('button[data-tab="timeoff"]');
+        await vp.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-add]", { timeout: 8000 });
+        const card = vp.locator("[data-testid=timeoff-card]");
+        const picked = await card.locator("select").first().inputValue();
+        const note = await vp.$eval("[data-testid=vac-guard-note]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+        const expNote = "At least " + vgMin + " surgeons must stay around on every day: an entry that would leave fewer is refused. The form shows who else is off before you save.";
+        if (picked !== "s2") fail(`Vacation guard (s2): the vacation form should have s2 picked, got '${picked}'`);
+        if (note !== expNote) fail(`Vacation guard (s2): the Time off card's note should read '${expNote}', got '${note}'`);
+        else ok(`Vacation guard (s2): the Time off card says '${note}'`);
+        const dates = card.locator("input[type=date]");
+        const b1 = writes.length;
+        // (1) the K-th surgeon off is allowed: the line, data-ok 1
+        await dates.nth(0).fill(VG_D1);
+        await dates.nth(1).fill(VG_D1);
+        await vp.waitForSelector("[data-testid=vac-also-off]", { timeout: 5000 });
+        await vp.waitForTimeout(200);
+        const l1 = await readLine();
+        if (l1.ok !== "1" || l1.text !== expOk || l1.under !== null) fail(`Vacation guard (s2): ${VG_D1} alone should read '${expOk}' (data-ok 1, no under-the-minimum words) - got ${JSON.stringify(l1)}`);
+        else ok(`Vacation guard (s2): typing ${VG_D1} shows '${l1.text}' before any save`);
+        // (2) one too many on 6/11: the line says so, then Add is refused with the database's words, nothing written
+        await dates.nth(1).fill(VG_D2);
+        await vp.waitForFunction(() => { const el = document.querySelector("[data-testid=vac-also-off]"); return !!el && el.getAttribute("data-ok") === "0"; }, null, { timeout: 5000 }).catch(() => {});
+        const l2 = await readLine();
+        if (l2.ok !== "0" || l2.text !== expNo || l2.under !== expUnder) fail(`Vacation guard (s2): ${VG_D1}..${VG_D2} should read '${expNo}' + '${expUnder}' (data-ok 0) - got ${JSON.stringify(l2)}`);
+        else ok(`Vacation guard (s2): typing ${VG_D1}..${VG_D2} shows '${l2.text}${l2.under}'`);
+        await vp.click("[data-testid=vac-add]");
+        await vp.waitForSelector("[data-testid=vac-guard-refusal]", { timeout: 5000 });
+        await vp.waitForTimeout(400);
+        const msg = await vp.$eval("[data-testid=vac-guard-message]", el => el.textContent.replace(/\s+/g, " ").trim());
+        const vgWrites = writes.slice(b1).filter(w => /\/rest\/v1\/(time_off|audit_log|notifications)|send-notification/.test(w.path));
+        if (msg !== expMsg) fail(`Vacation guard (s2): the refusal should read the database's words '${expMsg}', got '${msg}'`);
+        else if (vgWrites.length) fail("Vacation guard (s2): a write went out although the guard refused: " + JSON.stringify(vgWrites.map(w => w.method + " " + w.path)));
+        else if (vgDialogs.length) fail("Vacation guard (s2): a dialog opened for a surgeon (the confirm is the scheduler's only): " + JSON.stringify(vgDialogs));
+        else if (await vp.$("[data-testid=vac-conflict]")) fail("Vacation guard (s2): the on-call refusal showed for a range with no call day");
+        else ok(`Vacation guard (s2): Add vacation is refused before saving with '${msg}' - no time_off / audit / notification write, no dialog`);
+        await card.scrollIntoViewIfNeeded();
+        await vp.screenshot({ path: path.join(OUT, "vacation-guard-390.png"), fullPage: false });
+        ok("screenshot test/ui/out/vacation-guard-390.png");
+      } catch (e) { fail("Vacation guard (s2): the surgeon page check threw: " + errLine(e)); }
+      await vp.close();
+    }
   }
 
   // ---- Prompt 14 part 3a: the offer painter (My schedule -> Paint my offers; nav action; both themes) ----

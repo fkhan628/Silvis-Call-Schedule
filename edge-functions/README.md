@@ -188,7 +188,7 @@ Deployed from main 325b1e1 (served client 2026.09.30c) with `supabase functions 
 Wording, audience and labels only: no rule, offer, period, schema, RLS or engine change; the `@offerTimeline-mirror`
 block (and SQL `offer_status()`) is unchanged, so the cron's dates, the CAS close and the audit row's place are exactly
 as today. Deploy BEFORE the first reminder of the Jan 2027 - Jun 2027 period (Mon 11/9, 14 days before the Mon 11/23 freeze).
-**Prerequisite (review 9/30): apply the period fold (`docs/SCHEMA-REVIEW.md` 2026-09-30, `fold-jan-jun.sql`) before Mon 11/9 13:00 UTC** -
+**Prerequisite (review 9/30) - DONE: the period fold was applied by Faraz 2026-10-01 04:33:12Z** (`docs/SCHEMA-REVIEW.md` 2026-09-30), so the 11/9 heads-up names Jan 2027 - Jun 2027. The note kept for the record:
 until it runs the live rows are Jan 2027 (freeze 11/23) and Feb 2027 - Apr 2027 (freeze 12/21), so the 11/9 heads-up would name
 "Jan 2027" only and Feb - Apr would get its own heads-up cycle (12/7 with the coordinators, 12/18, close 12/21), with May - Jun 2027
 in no period. A dry run on 11/9 should show `reminder: "first"` for `Jan 2027 - Jun 2027`.
