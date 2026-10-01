@@ -739,7 +739,7 @@ const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, 
 // check holds at any hour. The harness-opened slot (live mode) is >= today + 3, never the shift day or today.
 // Prompt 22 (group call): the same up-front blob read also keeps groupRules / holidays - the group-call expectation below
 // is the page's own groupCallNow over them (read = false when the read failed: the group-call checks then say so).
-const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined };
+const gcBlobEarly = { read: false, groupRules: undefined, holidays: undefined, surgeonRules: undefined }; // surgeonRules: the Rules preview check (9/30)
 const onCallRosterEarly = await (async () => {
   try {
     let d;
@@ -749,7 +749,7 @@ const onCallRosterEarly = await (async () => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       d = ((await r.json())[0] || {}).data; if (typeof d === "string") d = JSON.parse(d);
     }
-    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; }
+    if (d && typeof d === "object") { gcBlobEarly.read = true; gcBlobEarly.groupRules = d.groupRules; gcBlobEarly.holidays = d.holidays; gcBlobEarly.surgeonRules = d.surgeonRules; }
     const m = {}; ((d && d.roster) || []).forEach(x => { if (x && x.id) m[x.id] = x.name; });
     return m;
   } catch (e) { console.log("     (roster read for the on-call-now check failed: " + (e && e.message || e) + " - names are not compared)"); return null; }
@@ -1110,11 +1110,20 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
   ] : []);
 // 9/27 offer deadline notice: an INDEPENDENT restatement of helpers.offerDeadlineNotices over the harness's stores, read
 // at call time: every served period with status upcoming, a close after today, the person neither submitted (a row
-// inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the seed's; 42
-// when absent); urgent = within groupRules.offerPeriods.noticeUrgentDaysBeforeClose days (the seed's; 14 when absent - its own
-// key since the 9/27 ship, NOT the reminder list, which is [42, 14, 3]). Sorted by close. Today is the Central date.
+// inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the served blob's,
+// the seed's as a fallback - see NOTICE_OP; 42 when absent); urgent = within groupRules.offerPeriods.noticeUrgentDaysBeforeClose
+// days (likewise; 14 when absent - its own key since the 9/27 ship, NOT the reminder list). Sorted by close. Today is the Central date.
 // `periods` defaults to periodStore; the notice step passes its own list (periodStore + two synthetic periods).
-const NOTICE_OP = (() => { try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; } })();
+// 9/30 (TASK 2): the served blob's groupRules.offerPeriods first (the page reads the live blob, and live settings move
+// ahead of the seed - Cowork set noticeDaysBeforeClose 42 -> 14 in Setup on 10/1 before the seed mirrored it), the
+// seed's only when the up-front blob read failed or carried no offerPeriods.
+const NOTICE_OP = (() => {
+  const served = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods;
+  if (served && typeof served === "object" && !Array.isArray(served)) return served;
+  console.log(`     (offer deadline notice: ${gcBlobEarly.read ? "the served blob carries no groupRules.offerPeriods" : "the up-front blob read failed"} - the seed's values are used)`);
+  try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; }
+})();
+const NOTICE_SRC = (() => { const s = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods; return s && typeof s === "object" && !Array.isArray(s) ? "the served blob" : "the seed"; })();
 const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 const expOfferNotices = (person, periods) => {
   const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42;
@@ -5245,8 +5254,8 @@ try {
   // shifts" opens the painter for s2 aimed at that period with zero offer writes; at 390 px no horizontal page scroll
   // and the button is >= 36 px tall; screenshots in both themes. The scheduler page (s1 is rules-only there) shows none.
   // Review 9/27: the served period closes 10/2, so this page gets its OWN period list (GET call_periods answered by the
-  // extra handler; periodStore and every other step are untouched): periodStore + two synthetic upcoming periods, one
-  // closing today+10 (urgent) and one today+30 (inside the window, NOT urgent), both after the last served end, s2
+  // extra handler; periodStore and every other step are untouched): periodStore + two synthetic upcoming periods (9/30: their
+  // closes follow the served notice window - see close1 / close2 below; 9/27 used today+10 urgent and today+30 calm), both after the last served end, s2
   // not_started on both - so the Calendar's "urgent rows only" branch is exercised on every run, whatever the date.
   {
     const NOTICE_UID = "00000000-0000-4000-8000-00000000d1e6";
@@ -5255,9 +5264,19 @@ try {
     const lastServedEnd = periodStore.map(p => p.end_day).sort().pop() || todayCentral;
     const synthBase = isoAddDays(lastServedEnd > isoAddDays(todayCentral, 60) ? lastServedEnd : isoAddDays(todayCentral, 60), 1);
     const synthPeriod = (n, start, end, close) => ({ id: "00000000-0000-4000-8000-0000000d1e6" + n, label: "Notice check " + n, start_day: start, end_day: end, offers_close_at: close, publish_by: isoAddDays(start, -28), status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "harness", created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" });
+    // 9/30 (TASK 2): the two synthetic closes follow the served notice window (NOTICE_OP) instead of fixed 10 / 30 days
+    // (30 fell outside the 14-day window Cowork set live on 10/1): one inside the urgent window, one inside the notice
+    // window but past the urgent one - when the configuration has such a band (noticeDays > urgentDays); otherwise the
+    // second closes past the notice window (so it must NOT show) and the non-urgent case is skipped with a note.
+    const nDays = typeof NOTICE_OP.noticeDaysBeforeClose === "number" && NOTICE_OP.noticeDaysBeforeClose >= 0 ? NOTICE_OP.noticeDaysBeforeClose : 42;
+    const uDays = typeof NOTICE_OP.noticeUrgentDaysBeforeClose === "number" && NOTICE_OP.noticeUrgentDaysBeforeClose >= 0 ? NOTICE_OP.noticeUrgentDaysBeforeClose : 14;
+    const urgentBand = Math.min(nDays, uDays) >= 1, calmBand = nDays > uDays;
+    const close1 = urgentBand ? Math.max(1, Math.min(nDays, uDays) - 4) : Math.max(1, nDays);
+    const close2 = calmBand ? uDays + Math.max(1, Math.floor((nDays - uDays) / 2)) : nDays + 10;
+    console.log(`     (offer deadline notice: window ${nDays} day(s), urgent ${uDays} from ${NOTICE_SRC}; synthetic closes today + ${close1} and + ${close2}${calmBand ? "" : " - no non-urgent band in this configuration, so that case is not exercised"})`);
     const noticePeriods = periodStore.concat([
-      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, 10)),
-      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, 30)),
+      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, close1)),
+      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, close2)),
     ]);
     const noticeRoute = async ({ req, url, json }) => {
       if (url.pathname.startsWith("/rest/v1/call_periods") && req.method() === "GET") { await json(200, noticePeriods.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1)); return true; }
@@ -5289,7 +5308,7 @@ try {
       const calRows = await np.$$eval("[data-testid=offer-deadline-notice][data-where=calendar] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
       const expCal = exp.filter(n => n.urgent).map(n => n.id);
       const hidden = exp.filter(n => !n.urgent).map(n => n.id);
-      if (!hidden.length || !expCal.length) fail(`Offer deadline notice (s2): the synthetic periods should give at least one urgent and one non-urgent row - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
+      if ((calmBand && !hidden.length) || (urgentBand && !expCal.length)) fail(`Offer deadline notice (s2): the synthetic periods should give ${urgentBand ? "an urgent row" : ""}${urgentBand && calmBand ? " and " : ""}${calmBand ? "a non-urgent row" : ""} - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
       if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within noticeUrgentDaysBeforeClose belong there`);
       else if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
       else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
@@ -5968,8 +5987,9 @@ try {
     // in-window note is pinned in data-layer (helpers.vacationLeadNote + the addVac / render guards).
     try {
       const leadDays = Math.round((Date.UTC(+VAC_A.slice(0, 4), +VAC_A.slice(5, 7) - 1, +VAC_A.slice(8, 10)) - Date.UTC(+todayIso.slice(0, 4), +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10))) / 86400000);
-      // the window the app reads: groupRules.offerPeriods.closeWeeksBeforeStart of the served blob (the seed's), a number > 0, else 6
-      const leadRule = ((JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules || {}).offerPeriods || {}).closeWeeksBeforeStart;
+      // the window the app reads: groupRules.offerPeriods.closeWeeksBeforeStart of the served blob (NOTICE_OP - the seed's only as a
+      // fallback, 9/30), a number > 0, else 6
+      const leadRule = NOTICE_OP.closeWeeksBeforeStart;
       const leadWeeks = typeof leadRule === "number" && isFinite(leadRule) && leadRule > 0 ? leadRule : 6;
       const inWindow = leadDays < leadWeeks * 7;
       const lead = await page.$eval("[data-testid=vac-lead-note]", el => (el.firstElementChild ? el.firstElementChild.textContent : el.textContent).replace(/\s+/g, " ").trim()).catch(() => null);
@@ -7138,9 +7158,32 @@ try {
       const previews = await page.$$eval("[data-testid=pattern-preview]", els => els.map(e => e.textContent));
       const first = previews[0] || "";
       const dates = first.match(/\d{4}-\d{2}-\d{2}/g) || [];
-      const dow = (s) => new Date(s + "T12:00:00").getUTCDay();
-      const nthOk = dates.every(d => dow(d) === 1 && ([2, 4].includes(Math.floor((Number(d.slice(8, 10)) - 1) / 7) + 1)));
-      if (dates.length !== 8 || !nthOk) fail("Rules: the first pattern preview should list the next 8 2nd/4th Mondays: " + first.slice(0, 200)); else ok(`Rules (Acton): pattern preview lists 8 dates, all 2nd/4th Mondays: ${dates[0]} .. ${dates[7]}`);
+      // 9/30 (TASK 2): the expectation is restated from the SERVED first pattern (Acton's recurringUnavailable[0] in the
+      // blob read up front) - weekday, nth of the month, start / end honoured - the next up-to-8 dates from today
+      // (Central), the preview's own scan (suNextMatchingDates over 730 days). Live settings move ahead of the seed:
+      // Cowork set Acton's 2027 outreach patterns on 10/1, and his first pattern (2nd / 4th Mon) now ends 2026-12-31.
+      // the page renders Acton's editors as recurringAvailable, recurringUnavailable, recurringAvoid (index-source RulesEditor), so
+      // previews[0] is the first pattern across those lists in that order (9/30 review)
+      const s3r = gcBlobEarly.read && gcBlobEarly.surgeonRules && gcBlobEarly.surgeonRules.s3 ? gcBlobEarly.surgeonRules.s3 : null;
+      const servedPat = s3r ? [].concat(Array.isArray(s3r.recurringAvailable) ? s3r.recurringAvailable : [], Array.isArray(s3r.recurringUnavailable) ? s3r.recurringUnavailable : [], Array.isArray(s3r.recurringAvoid) ? s3r.recurringAvoid : [])[0] || null : null;
+      const DOWS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const expPreview = (p) => {
+        // only a plain nth-weekday pattern is restated here (no dates / nthWeekOfMonth / beforeNthMonday / every)
+        if (!p || !p.weekday || !Array.isArray(p.nth) || Object.keys(p).some(k => !["weekday", "nth", "start", "end", "note", "weight"].includes(k))) return null;
+        const out = [];
+        for (let k = 0; k < 730 && out.length < 8; k++) {
+          const d = isoPlus(todayCentral, k), dd = Number(d.slice(8, 10));
+          if (DOWS[new Date(d + "T12:00:00Z").getUTCDay()] !== p.weekday || !p.nth.includes(Math.floor((dd - 1) / 7) + 1)) continue;
+          if (p.start && d < p.start) continue;
+          if (p.end && d > p.end) continue;
+          out.push(d);
+        }
+        return out;
+      };
+      const want = expPreview(servedPat);
+      if (!want) console.log(`     (Rules: Acton's first served pattern is not an nth-weekday pattern (${JSON.stringify(servedPat)}) - the preview's dates are not restated this run)`);
+      else if (JSON.stringify(dates) !== JSON.stringify(want)) fail(`Rules: the first pattern preview should list ${JSON.stringify(want)} (the served pattern ${JSON.stringify(servedPat)}: the next up-to-8 matching dates, start / end honoured) - got: ` + first.slice(0, 220));
+      else ok(`Rules (Acton): pattern preview lists the served first pattern's next ${want.length} date(s) (${servedPat.weekday} nth ${servedPat.nth.join("/")}${servedPat.start ? " from " + servedPat.start : ""}${servedPat.end ? " to " + servedPat.end : ""}): ${dates[0]} .. ${dates[dates.length - 1]}`);
       await page.locator("[data-testid=rules-editor]").screenshot({ path: path.join(OUT, "setup-rules-acton.png") });
       // save round trip: maxConsecutiveDays 3 -> 4 -> audit + blob autosave carries it, then back to 3
       let before = writes.length;
@@ -7795,9 +7838,10 @@ try {
         // (a2) 9/27 lead-time lines (helpers.offerPeriodLeadWarnings), restated from the stores - date-independent: the served
         // period is upcoming with its close 10/2 only 31 days before its 11/2 start (later than start - 6 weeks), so its
         // box MUST carry prd-lead-warn[data-kind=short-lead] naming 4 weeks (31 days); "create the next period" shows iff
-        // today >= (last end + 1) - 42 - noticeDaysBeforeClose (the seed's, 42 when absent).
+        // today >= (last end + 1) - 7 * closeWeeksBeforeStart - noticeDaysBeforeClose (NOTICE_OP: the served blob's, the seed's as a
+        // fallback; 6 weeks / 42 days when absent - 9/30 review: the close no longer hard-codes 42).
         const leadKinds = (id) => page.$$eval(`[data-testid=prd-period][data-period-id="${id}"] [data-testid=prd-lead-warn]`, els => els.map(e => ({ kind: e.getAttribute("data-kind"), text: e.textContent.replace(/\s+/g, " ").trim() })));
-        const expNextLine = () => { const lastEnd = periodStore.map(p => p.end_day).sort().pop(); const from = isoAddDays(lastEnd, 1), closeBy = isoAddDays(from, -42); const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42; return todayCentral >= isoAddDays(closeBy, -nd) ? { from, closeBy } : null; };
+        const expNextLine = () => { const lastEnd = periodStore.map(p => p.end_day).sort().pop(); const cw = typeof NOTICE_OP.closeWeeksBeforeStart === "number" && NOTICE_OP.closeWeeksBeforeStart > 0 ? NOTICE_OP.closeWeeksBeforeStart : 6; const from = isoAddDays(lastEnd, 1), closeBy = isoAddDays(from, -7 * cw); const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" && NOTICE_OP.noticeDaysBeforeClose >= 0 ? NOTICE_OP.noticeDaysBeforeClose : 42; return todayCentral >= isoAddDays(closeBy, -nd) ? { from, closeBy } : null; };
         const nextLine = () => page.$eval("[data-testid=periods-section] > [data-testid=prd-lead-warn][data-kind=next-missing]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
         try {
           const lk0 = await leadKinds(per.id);
