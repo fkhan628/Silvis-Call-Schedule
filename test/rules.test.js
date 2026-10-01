@@ -101,6 +101,22 @@ ok(!R.matchesPattern("2026-10-25", { start: "2026-10-19", end: "2026-10-24" }));
 ok(R.matchesPattern("2026-10-20", { weekday: "Tue", start: "2026-10-19", end: "2026-10-24" }), "weekday inside a range");
 ok(!R.matchesPattern("2026-10-20", {}), "an empty pattern never matches");
 ok(R.matchesPattern("2026-12-14", [{ weekday: "Tue", nth: [1] }, mon24]), "array = any");
+// Prompt 23 A (9/30, Acton's 2027 outreach days): a start / end on a weekday + nth pattern is ANDed with it - the engine
+// already read it (matchesPattern), so the change is data only. Verified here on his four live entries.
+step("matchesPattern start / end bound an nth pattern (Prompt 23 A)");
+const monTo26 = { weekday: "Mon", nth: [2, 4], end: "2026-12-31" }, mon2From27 = { weekday: "Mon", nth: [2], start: "2027-01-01" };
+const wed24 = { weekday: "Wed", nth: [2, 4] }, wed3From27 = { weekday: "Wed", nth: [3], start: "2027-01-01" };
+ok(R.matchesPattern("2026-12-28", monTo26) && R.matchesPattern("2026-12-31", { weekday: "Thu", end: "2026-12-31" }), "the end day itself is inside (inclusive)");
+ok(!R.matchesPattern("2027-01-25", monTo26), "the 4th Monday of January 2027 is past the end");
+ok(R.matchesPattern("2027-01-11", mon2From27) && !R.matchesPattern("2026-12-14", mon2From27), "the 2nd-Monday entry starts 1/1/2027");
+ok(!R.matchesPattern("2027-01-25", mon2From27), "...and never matches a 4th Monday");
+ok(R.matchesPattern("2027-01-20", wed3From27) && !R.matchesPattern("2026-12-16", wed3From27), "the 3rd-Wednesday entry starts 1/1/2027");
+ok(R.matchesPattern("2027-01-13", wed24) && R.matchesPattern("2027-01-27", wed24) && R.matchesPattern("2026-12-09", wed24), "the 2nd/4th Wednesday entry has no bound");
+const acton27 = [monTo26, mon2From27, wed24, wed3From27];
+eq(["2027-01-04", "2027-01-11", "2027-01-18", "2027-01-25", "2027-01-06", "2027-01-13", "2027-01-20", "2027-01-27"].map(d => R.matchesPattern(d, acton27)), [false, true, false, false, false, true, true, true], "January 2027 under his four entries: 2nd Monday, 2nd/3rd/4th Wednesday");
+eq(["2026-12-07", "2026-12-14", "2026-12-21", "2026-12-28", "2026-12-02", "2026-12-09", "2026-12-16", "2026-12-23"].map(d => R.matchesPattern(d, acton27)), [false, true, false, true, false, true, false, true], "December 2026: 2nd/4th Monday and 2nd/4th Wednesday as before");
+ok(R.matchesPattern("2026-12-27", { weekday: "Sun", beforeNthMonday: [2, 4], end: "2026-12-31" }) && !R.matchesPattern("2027-01-24", { weekday: "Sun", beforeNthMonday: [2, 4], end: "2026-12-31" }) && R.matchesPattern("2027-01-10", { weekday: "Sun", beforeNthMonday: [2], start: "2027-01-01" }), "the Sunday-before avoid follows: 12/27/2026 yes, 1/24/2027 no, 1/10/2027 yes");
+
 
 /* ------------------------------------------------ context builders */
 const EAST_COVER = { from: "2026-11-01", to: "2027-01-31" };
@@ -387,14 +403,25 @@ step("Acton recurring blacklist and avoid");
 // Pinned in January 2027, an ungoverned month: since Prompt 12 T (9/22) November is governed for both of his roles by
 // the ER-panel author's published list, so a November day off that list reads whitelist-month before anything recurring.
 blocked(R.eligibility(clean, "2027-01-11", P, ACTON), "recurring-unavailable:Mon", "2nd Monday");
-blocked(R.eligibility(clean, "2027-01-25", P, ACTON), "recurring-unavailable:Mon", "4th Monday");
+// Prompt 23 A FLIP (Faraz 9/30, Acton's 2027 outreach days): this line read blocked(1/25, "recurring-unavailable:Mon", "4th
+// Monday") - from January 2027 Maquoketa is the 2nd Monday and the 3rd Wednesday, Aledo the 2nd and 4th Wednesday, so the
+// 4th Monday is open in 2027 and stays blocked through 12/31/2026 (the seed's dated entries: start / end on the pattern).
+okElig(R.eligibility(clean, "2027-01-25", P, ACTON), "Prompt 23 A: a 2027 4th Monday is no outreach day any more");
+blocked(R.eligibility(clean, "2026-12-28", P, ACTON), "recurring-unavailable:Mon", "Prompt 23 A: the 4th Monday of December 2026 is still blocked (end 2026-12-31)");
 okElig(R.eligibility(clean, "2027-01-25", B, ACTON), "9/22: outreach days restrict primary only");
+okElig(R.eligibility(clean, "2027-01-11", B, ACTON), "9/22: outreach days restrict primary only (a 2027 2nd Monday)");
 blocked(R.eligibility(clean, "2027-01-13", P, ACTON), "recurring-unavailable:Wed", "2nd Wednesday");
+blocked(R.eligibility(clean, "2027-01-20", P, ACTON), "recurring-unavailable:Wed", "Prompt 23 A: the 3rd Wednesday from 1/1/2027 (Maquoketa)");
+okElig(R.eligibility(clean, "2026-12-16", P, ACTON), "Prompt 23 A: a 2026 3rd Wednesday stays open (start 2027-01-01)");
+blocked(R.eligibility(clean, "2027-01-27", P, ACTON), "recurring-unavailable:Wed", "4th Wednesday (Aledo from 2027)");
 okElig(R.eligibility(clean, "2027-01-18", P, ACTON), "3rd Monday is fine");
 okElig(R.eligibility(clean, "2027-01-06", P, ACTON), "1st Wednesday is fine");
 const sun8 = R.eligibility(clean, "2027-01-10", P, ACTON);
 okElig(sun8); hasSoft(sun8, "recurring-avoid:Sun", "Sunday before the 2nd Monday");
 eq(sun8.soft.find(s => s.reason === "recurring-avoid:Sun").weight, 3, "medium = 3");
+// Prompt 23 A: the Sunday before a Maquoketa Monday follows the outreach change - before the 4th Monday through 2026 only
+lacksSoft(R.eligibility(clean, "2027-01-24", P, ACTON), "recurring-avoid", "Prompt 23 A: the Sunday before a 2027 4th Monday is not avoided");
+hasSoft(R.eligibility(clean, "2026-12-27", P, ACTON), "recurring-avoid:Sun", "Prompt 23 A: the Sunday before the 4th Monday of December 2026 still is");
 const tue10 = R.eligibility(clean, "2027-01-12", P, ACTON);
 // Prompt 12 X FLIP (9/22 evening): before X this read okElig(tue10); hasSoft(tue10, "recurring-avoid:Tue") - Faraz made his
 // Tuesday a hard PRIMARY rule (surgeonRules.s3.hardNeverWeekdays ["Tue"], roles ["primary"]); the soft avoid left the seed.
@@ -1243,7 +1270,11 @@ eq(penOf("block", KHAN, KHAN, KHAN), -3, "block-style surgeon with primaryContri
 eq(penOf("block", FIERCE, FIERCE, FIERCE), 0, "block-style surgeon without the key in a block");
 eq(penOf("block", BURCHETT, BURCHETT, BURCHETT), null, "Burchett cannot block: max consecutive 2");
 eq(penOf("split", BURCHETT, ACTON, BURCHETT), 0, "the designed split pair");
-eq(penOf("split", ACTON, BURCHETT, ACTON), 3, "the mirror split costs Acton's recurring-avoid on Sunday 1/24 (before the 4th Monday)");
+// Prompt 23 A FLIP (9/30): this pin read penOf("split", ACTON, BURCHETT, ACTON) = 3 on 1/22-24 - Acton's recurring-avoid on
+// Sunday 1/24 (before the 4th Monday). From January 2027 he avoids only the Sunday before the 2nd Monday, so 1/24 is free
+// and the same mirror-split cost is pinned on 2/5-7 (Sunday 2/7 precedes the 2nd Monday 2/8; Burchett is away 1/9).
+eq(penOf("split", ACTON, BURCHETT, ACTON), 0, "Prompt 23 A: Sunday 1/24 is no longer avoided - the mirror split on 1/22-24 is free");
+eq(R.weekendUnitPatterns(clean, "2027-02-05").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 3, "the mirror split costs Acton's recurring-avoid on Sunday 2/7 (before the 2nd Monday 2/8)");
 eq(R.weekendUnitPatterns(clean, "2027-01-29").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 0, "on a weekend without that Sunday (1/31) the mirror split is free");
 eq(penOf("split", KHAN, BURCHETT, KHAN), 3, "block-style X in a split: one mismatch");
 eq(penOf("split", KHAN, ACTON, KHAN), 3);
@@ -1257,7 +1288,9 @@ const expectKBA = 5
   + softSum(R.eligibility(clean, "2027-01-23", P, BURCHETT, { skipPatternSoft: true })) + 0
   + softSum(R.eligibility(clean, "2027-01-24", P, ACTON, { skipPatternSoft: true })) + 3;
 eq(penOf("daily", KHAN, BURCHETT, ACTON), expectKBA, "daily penalty = patternDaily + per-member mismatch + soft sums");
-eq(expectKBA, 14, "Acton's Sunday-before-4th-Monday avoid (3) is inside it");
+// Prompt 23 A FLIP: this read eq(expectKBA, 14, "Acton's Sunday-before-4th-Monday avoid (3) is inside it") - 1/24 carries no
+// avoid from January 2027, so the same daily costs 11 (5 + Khan's Fri mismatch 3 + Acton's Sun mismatch 3).
+eq(expectKBA, 11, "Prompt 23 A: Acton's Sunday 1/24 carries no recurring-avoid any more (14 before)");
 const wpD = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, groupRules: Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { patternDaily: 9 }) }) }));
 eq(Math.min.apply(null, R.weekendUnitPatterns(wpD, "2027-01-22").filter(p => p.kind === "daily").map(p => p.penalty)), 15, "patternDaily weight is read from groupRules.weights");
 
@@ -1835,7 +1868,9 @@ step("Prompt 12 X seed: Acton's Tuesday is a hard PRIMARY rule - no reason key, 
 eq(seed.surgeonRules[ACTON].hardNeverWeekdays, ["Tue"], "X seed: s3.hardNeverWeekdays = [Tue]");
 eq(seed.surgeonRules[ACTON].hardNeverWeekdaysRoles, ["primary"], "X seed: s3.hardNeverWeekdaysRoles = [primary] (backup on Tuesdays stays allowed)");
 ok(!("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X seed: no hardNeverWeekdaysReason key (no reason may reach the anon-readable blob)");
-eq((seed.surgeonRules[ACTON].recurringAvoid || []).map(r => r.weekday), ["Sun"], "X seed: the Tuesday soft avoid (and its note) left; the Sunday avoid stays");
+// Prompt 23 A (9/30): the Sunday avoid is two dated entries now (before the 2nd/4th Monday to 12/31/2026, before the 2nd Monday
+// from 1/1/2027) - pin moved deliberately from ["Sun"]; still no Tuesday entry.
+eq((seed.surgeonRules[ACTON].recurringAvoid || []).map(r => r.weekday), ["Sun", "Sun"], "X seed: the Tuesday soft avoid (and its note) left; the Sunday avoid stays (two dated entries since Prompt 23 A)");
 ok(!/\bfamily\b/i.test(JSON.stringify([seed.surgeonRules[ACTON].hardNeverWeekdaysNote, seed.surgeonRules[ACTON].recurringAvoid, seed.surgeonRules[ACTON].notes.filter(n => /Tuesday/i.test(n))])), "X seed: the Tuesday rule carries no reason wording anywhere in s3 (the rules doc is the only place)");
 step("Prompt 12 X: Acton PRIMARY on an ordinary Tuesday is hard; BACKUP stays open; his own dated row lifts it (W); the Sunday avoid stays soft");
 const X_TUE = "2026-12-01"; // an ordinary Tuesday (December is ungoverned for him; no lock, no holiday)

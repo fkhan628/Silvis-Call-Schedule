@@ -657,7 +657,9 @@ eq(seed.surgeonRules[ACTON].holidayRules.neverThanksgivingNote, "off (stated 9/1
 // entirely (his Tuesday is now the hard primary rule s3.hardNeverWeekdays, with no reason key); the pins below read its absence.
 ok(!seed.surgeonRules[ACTON].recurringAvoid.some((r) => r.weekday === "Tue") && !("hardNeverWeekdaysReason" in seed.surgeonRules[ACTON]), "X: no Tuesday avoid entry and no hardNeverWeekdaysReason key in the seed (the rule carries no reason)");
 ok(!("neverThanksgivingNote" in plan.blob.surgeonRules[ACTON].holidayRules), "AA FLIP: neverThanksgivingNote is dropped from the blob (F)");
-eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => "note" in r), [false], "AA FLIP: only the Sunday avoid remains in the blob (X) and it carries no note (F: the token 'outreach')");
+// Prompt 23 A (9/30): the Sunday avoid is two dated entries now (to 12/31/2026 before the 2nd/4th Monday, from 1/1/2027 before the 2nd) - pin moved from [false]
+eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => "note" in r), [false, false], "AA FLIP: only the Sunday avoid remains in the blob (X; two dated entries since Prompt 23 A) and it carries no note (F: the token 'outreach')");
+eq(plan.blob.surgeonRules[ACTON].recurringAvoid.map((r) => r.weekday + ":" + (r.start || "") + ":" + (r.end || "")), ["Sun::2026-12-31", "Sun:2027-01-01:"], "Prompt 23 A: the dated bounds reach the blob (the note is the only key dropped)");
 ok(!/\b(hosts|family)\b/i.test(JSON.stringify(plan.blob)), "neither denylist token (hosts, family) anywhere in the blob");
 ok(!/\b(hosts|family)\b/i.test(sql), "neither denylist token (hosts, family) in the generated SQL");
 // (2) AA FLIP: no note-like string is left in the blob's surgeonRules at all (F: >= 8 survived as category tokens)
@@ -679,7 +681,9 @@ function invForNote(id, re) {
 eq([invForNote(BURCHETT, /Jackson County/).action, invForNote(BURCHETT, /Jackson County/).to], ["drop", null], "AA FLIP: Burchett 'DeWitt/Jackson County' -> drop (F: category outreach)");
 eq(invForNote(BURCHETT, /per month/).action, "drop", "Burchett cap restatement (primary+backup per month) dropped (F: as documentation; AA: like every note)");
 ok(!("notes" in plan.blob.surgeonRules[BURCHETT]), "AA FLIP: Burchett has no notes[] in the blob (F: tokens incl. outreach)");
-eq(plan.blob.surgeonRules[ACTON].recurringUnavailable.map((r) => "note" in r), [false, false], "AA FLIP: the 'outreach (Maquoketa)' entries carry no note (F: 'outreach')");
+// Prompt 23 A (9/30): four dated entries now (Mon 2/4 to 12/31/2026, Mon 2 from 1/1/2027, Wed 2/4, Wed 3 from 1/1/2027) - pin moved from [false, false]
+eq(plan.blob.surgeonRules[ACTON].recurringUnavailable.map((r) => "note" in r), [false, false, false, false], "AA FLIP: the 'outreach (Maquoketa)' entries carry no note (F: 'outreach')");
+eq(plan.blob.surgeonRules[ACTON].recurringUnavailable, [{ weekday: "Mon", nth: [2, 4], end: "2026-12-31" }, { weekday: "Mon", nth: [2], start: "2027-01-01" }, { weekday: "Wed", nth: [2, 4] }, { weekday: "Wed", nth: [3], start: "2027-01-01" }], "Prompt 23 A: the blob carries exactly the rules Cowork set live on 9/30 (the notes dropped)");
 ok(!("note" in plan.blob.surgeonRules[ACTON].recurringAvoid[0]), "AA FLIP: the Maquoketa carryover avoid carries no note (F: 'outreach')");
 ok(!("note" in plan.blob.surgeonRules[PHILIP].aledo), "AA FLIP: the Aledo day-before rule carries no note (F: 'outreach')");
 eq([invForNote(PHILIP, /Aledo/).action, invForNote(PHILIP, /no more full weeks/).action], ["drop", "drop"], "AA FLIP: Philip's notes[] -> drop (F: outreach / preference)");
@@ -703,7 +707,9 @@ eq(blobStrings.filter((x) => DENY.test(x.value)).map((x) => x.path), [], "no den
 const inv = plan.noteScrub.inventory;
 ok(Array.isArray(inv) && inv.length > 20, "inventory present (" + (inv && inv.length) + " entries)");
 ok(inv.some((e) => e.path === "surgeonRules.s3.holidayRules.neverThanksgivingNote" && e.action === "drop" && e.to === null), "AA FLIP: inventory: neverThanksgivingNote -> drop (F: category family)");
-ok(!inv.some((e) => e.path === "surgeonRules.s3.recurringAvoid[1].note") && inv.some((e) => e.path === "surgeonRules.s3.hardNeverWeekdaysNote" && e.action === "drop"), "X: inventory has no recurringAvoid[1] entry any more and drops s3.hardNeverWeekdaysNote (no reason reaches the blob)"); // Prompt 12 X FLIP: was 'recurringAvoid[1].note -> category family'
+// Prompt 23 A (9/30): recurringAvoid[1] exists again - the second dated SUNDAY entry (from 1/1/2027), not the Tuesday avoid X removed;
+// the pin now reads "no Tuesday entry" by content instead of by index
+ok(!seed.surgeonRules[ACTON].recurringAvoid.some((r) => r.weekday === "Tue") && inv.filter((e) => /^surgeonRules\.s3\.recurringAvoid\[\d\]\.note$/.test(e.path)).length === seed.surgeonRules[ACTON].recurringAvoid.length && inv.some((e) => e.path === "surgeonRules.s3.hardNeverWeekdaysNote" && e.action === "drop"), "X: no Tuesday avoid in the seed (its inventory entries are the Sunday avoids' notes, one per entry) and s3.hardNeverWeekdaysNote is dropped (no reason reaches the blob)"); // Prompt 12 X FLIP: was 'recurringAvoid[1].note -> category family'
 ok(inv.filter((e) => e.path.indexOf("groupRules.") === 0).every((e) => e.action === "drop"), "every groupRules entry is a drop");
 ok(inv.filter((e) => e.path.indexOf("holidays.") === 0).every((e) => e.action === "drop"), "every holidays entry is a drop");
 eq(inv.filter((e) => e.path.indexOf("holidays.") === 0).length, IMP.impFindKeys(seed.holidays, NOTE_KEY).length, "one drop per holidays note-like key");

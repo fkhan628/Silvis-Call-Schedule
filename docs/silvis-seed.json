@@ -580,7 +580,7 @@
       "name": "Acton",
       "poolMember": true,
       "backupOptOut": false,
-      "backupNote": "9/22: backup any day, 2nd/4th Monday and Wednesday included - the outreach rule restricts primary only; his soft avoids weigh low for backup and medium for primary.",
+      "backupNote": "9/22: backup any day, his outreach days included (2nd/4th Monday and Wednesday through 2026; from 1/1/2027 the 2nd Monday and the 2nd, 3rd and 4th Wednesday) - the outreach rule restricts primary only; his soft avoids weigh low for backup and medium for primary.",
       "availabilityMode": "blacklist-recurring",
       "hardNeverWeekdays": [
         "Tue"
@@ -596,6 +596,15 @@
             2,
             4
           ],
+          "end": "2026-12-31",
+          "note": "outreach (Maquoketa)"
+        },
+        {
+          "weekday": "Mon",
+          "nth": [
+            2
+          ],
+          "start": "2027-01-01",
           "note": "outreach (Maquoketa)"
         },
         {
@@ -604,9 +613,18 @@
             2,
             4
           ],
+          "note": "outreach (Aledo from Jan 2027)"
+        },
+        {
+          "weekday": "Wed",
+          "nth": [
+            3
+          ],
+          "start": "2027-01-01",
           "note": "outreach (Maquoketa)"
         }
       ],
+      "recurringUnavailableNote": "Faraz 9/30 (Prompt 23 A, Acton's message): from January 2027 Maquoketa is the 2nd Monday and the 3rd Wednesday, Aledo the 2nd and 4th Wednesday (previously the 2nd/4th Monday). Data only - matchesPattern ANDs a pattern's start / end with its weekday + nth, so the 4th Monday stops after 12/31/2026 and the 3rd Wednesday starts 1/1/2027. The same four entries are live since 9/30 (Cowork, Setup); the importer drops every note.",
       "recurringAvoid": [
         {
           "weekday": "Sun",
@@ -614,6 +632,16 @@
             2,
             4
           ],
+          "end": "2026-12-31",
+          "weight": "medium",
+          "note": "morning carryover before Maquoketa; matters less with a true handoff"
+        },
+        {
+          "weekday": "Sun",
+          "beforeNthMonday": [
+            2
+          ],
+          "start": "2027-01-01",
           "weight": "medium",
           "note": "morning carryover before Maquoketa; matters less with a true handoff"
         }
@@ -668,7 +696,8 @@
       "notes": [
         "Offered to send a full monthly date list like Burchett",
         "9/22 evening (Prompt 12 Y, Faraz): his November list is preferences, not a limit - his 9/17 message gave rules, never dates (the dates came through Burchett's 9/17 relay; the ER-panel author entered them 9/22). The relayed days stay LOCKED in existingAssignments (primary 11/2, 11/4, 11/6, 11/14, 11/15, 11/16, 11/18; backup 11/3, 11/17); November is NOT a governed month for him (no explicitListMonths entry, no explicitAvailable block - the importer would complete the month from the key alone), so his recurring rules govern the rest of it. That makes Thu 11/5 his: primary 11/4-11/6 (a run of 3, his max), locked, backup open to anyone eligible (open question 13 answered). 11/18 primary still precedes his 11/19 vacation (day-before rule): kept as a published fact, reported as a lock violation",
-        "not Tuesdays (primary), 9/22 evening"
+        "not Tuesdays (primary), 9/22 evening",
+        "9/30 (Prompt 23 A, his message relayed by Faraz): outreach days change from January 2027 - Maquoketa 2nd Monday and 3rd Wednesday, Aledo 2nd and 4th Wednesday (previously 2nd/4th Monday). recurringUnavailable carries the dated entries (Mon 2/4 to 12/31/2026, Mon 2 from 1/1/2027, Wed 2/4 throughout, Wed 3 from 1/1/2027); the Sunday-before-Maquoketa avoid follows (before the 2nd/4th Monday to 12/31/2026, before the 2nd Monday from 1/1/2027). Live since 9/30 (Cowork, Setup)."
       ],
       "explicitListMonths": [
         "2026-10"

@@ -164,8 +164,24 @@ decides the Trauma Director role.
 - ⟶ **9/23 (Faraz): vacation Thu 7/22 – Mon 8/2, 2027** — a fifth `time_off` range for s2 (both roles blocked, 7/21 blocks primary, like any vacation; source `burchett-via-faraz-2026-09-23`); no schedule exists for July 2027, so nothing conflicts, and the July 4th unit (7/3–7/5) is clear of it.
 
 ### Acton (s3) — recurring blacklist (primary)
-- **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.**
-- Avoid (soft, medium): the **Sunday immediately before a 2nd/4th Monday** (morning carryover before Maquoketa; "may not be as much of an issue" with a true handoff).
+- **Unavailable for primary on the 2nd & 4th Monday and Wednesday** (outreach in Maquoketa). These align with Burchett's available days — the two are designed to complement each other. ⟶ **9/22: backup on those days is allowed.** ⟶ **Through 12/31/2026 only — see 9/30 below.**
+- Avoid (soft, medium): the **Sunday immediately before a 2nd/4th Monday** (morning carryover before Maquoketa; "may not be as much of an issue" with a true handoff). ⟶ **From 1/1/2027 the Sunday before the 2nd Monday only (9/30 below).**
+- ⟶ **9/30 (Faraz, relaying Acton — Prompt 23 A): his outreach days change from January 2027.** *"I will be in Maquoketa 2nd
+  Monday and 3rd Wednesday. Aledo 2nd and 4th Wednesday. (Previously was doing 2nd/4th Monday)."* So, for **primary**:
+  through **12/31/2026** the 2nd/4th Monday and the 2nd/4th Wednesday as before; from **1/1/2027** the **2nd Monday** and the
+  **2nd, 3rd and 4th Wednesday** (the 4th Monday opens). Backup stays open on all of them. The Sunday-before-Maquoketa avoid
+  follows the Mondays: before the 2nd/4th Monday through 12/31/2026, before the 2nd Monday from 1/1/2027 (soft, medium).
+  **Data only — no code:** `rules.js matchesPattern` ANDs a pattern's `start` / `end` with its weekday + `nth` (verified and
+  pinned in `test/rules.test.js`, "matchesPattern start / end bound an nth pattern"), so the change is four dated
+  `recurringUnavailable` entries — `{ weekday: "Mon", nth: [2, 4], end: "2026-12-31" }`, `{ weekday: "Mon", nth: [2], start:
+  "2027-01-01" }`, `{ weekday: "Wed", nth: [2, 4] }`, `{ weekday: "Wed", nth: [3], start: "2027-01-01" }` — and two dated
+  `recurringAvoid` entries (`beforeNthMonday [2, 4]` with `end 2026-12-31`; `beforeNthMonday [2]` with `start 2027-01-01`).
+  **Live since 9/30** (Cowork, Setup → Rules; read back anon 10/1 01:33Z — the live blob carries exactly these rules and no
+  notes); the seed mirrors them with notes (`surgeonRules.s3.recurringUnavailableNote` and the entries' `note`, dropped by
+  the importer — the blob is public). The painter's "Go by my rules" words carry the bounds (`helpers.offerRulesWords`: "the
+  2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, ..."). Setup caveat: the pattern editor keeps `start` / `end` when the
+  weekday, the nth list, the weight or the note is edited, but **drops them when the pattern's kind is changed** (it builds a
+  new object) and its row label does not show them (its "next 8" preview does) — edit dated entries in *Edit as JSON*.
 - ⟶ **No Tuesdays for Acton — hard for primary** (Faraz 9/22 evening, at Acton's request); backup on Tuesdays allowed.
 - ⟶ **Seed keys (Prompt 12 X, 9/22 evening):** `surgeonRules.s3.hardNeverWeekdays: ["Tue"]`, `hardNeverWeekdaysRoles: ["primary"]` (the generic W read — `rules.js rdStatic`, reason `hard-never-weekday:Tue`, lifted for a date only by his own dated `available`/primary row; a lock is not a row, so his published Tue 9/22 keeps its holder with the rule in `conflicts`), `hardNeverWeekdaysNote` (dropped by the importer); no `hardNeverWeekdaysReason` key on purpose (⟶ 9/22 late, Prompt 12 AA: a `*Reason` key is dropped like every note-like key now — no category token reaches the blob for anyone); the old `recurringAvoid` Tuesday entry left the seed with its note. Data only — no code change; editable in Setup → Rules (hard never weekdays + roles).
 - Time off: **Nov 19–22** and **Nov 25–29**; never on Thanksgiving. Christmas or New Year's is fine (alternating days, like Burchett).

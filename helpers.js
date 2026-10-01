@@ -3332,12 +3332,16 @@ function offerRulesWords(rules, groupRules) {
   const G = groupRules && typeof groupRules === "object" ? groupRules : {};
   const out = [];
   if (!R) return ["No rules of yours are on file - the scheduler places you by the group defaults."];
+  // Prompt 23 A (9/30): a pattern's start / end bound it (rules.js matchesPattern ANDs them) - say so, or a dated
+  // change (Acton's 2027 outreach days) reads as two contradicting rules.
+  const mdy = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[2]) + "/" + Number(m[3]) + "/" + m[1] : String(d || ""); };
+  const bounds = (p) => (p.start ? " from " + mdy(p.start) : "") + (p.end ? " until " + mdy(p.end) : "");
   const nthWords = (p) => {
     if (!p || !p.weekday) return "";
-    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday;
-    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth;
-    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday";
-    return "every " + p.weekday;
+    if (p.nth !== undefined && p.nth !== null) return "the " + (Array.isArray(p.nth) ? p.nth : [p.nth]).join("/") + " " + p.weekday + bounds(p);
+    if (p.nthWeekOfMonth !== undefined && p.nthWeekOfMonth !== null) return p.weekday + " of week " + p.nthWeekOfMonth + bounds(p);
+    if (p.beforeNthMonday !== undefined && p.beforeNthMonday !== null) return p.weekday + " before the " + (Array.isArray(p.beforeNthMonday) ? p.beforeNthMonday : [p.beforeNthMonday]).join("/") + " Monday" + bounds(p);
+    return "every " + p.weekday + bounds(p);
   };
   const listOf = (v) => (Array.isArray(v) ? v : []).map(nthWords).filter(Boolean).join(", ");
   const md = (d) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[1]) + "/" + Number(m[2]) : String(d || ""); };

@@ -248,7 +248,11 @@ function datedRowLifts(id, d, role, extraRows) {
 }
 const W_STATS = { forbiddenNoRow: 0, liftedByRow: 0 }; // placements on a hardNeverWeekdays day: without a row (must stay 0) / with one
 const X_STATS = { actonTuePrimary: [] }; // item X (9/22 evening): every generated Acton PRIMARY on a non-holiday Tuesday, across all runs (must stay empty)
-const actonBlockedRecurring = (d) => ["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d));
+// Prompt 23 A (Faraz 9/30, Acton's message): his outreach days change from January 2027 - restated with the dates: through
+// 12/31/2026 the 2nd/4th Monday and Wednesday; from 1/1/2027 the 2nd Monday (Maquoketa) and the 2nd, 3rd and 4th Wednesday
+// (Maquoketa 3rd, Aledo 2nd/4th). Before Prompt 23: ["Mon", "Wed"] x [2, 4] on every date.
+const actonBlockedRecurring = (d) => d <= "2026-12-31" ? (["Mon", "Wed"].includes(weekday(d)) && [2, 4].includes(nthOf(d))) : ((weekday(d) === "Mon" && nthOf(d) === 2) || (weekday(d) === "Wed" && [2, 3, 4].includes(nthOf(d))));
+eq(SR[ACTON].recurringUnavailable.map((p) => p.weekday + ":" + p.nth.join("/") + ":" + (p.start || "") + ":" + (p.end || "")), ["Mon:2/4::2026-12-31", "Mon:2:2027-01-01:", "Wed:2/4::", "Wed:3:2027-01-01:"], "seed: Acton's dated outreach entries (Prompt 23 A) - the restatement above follows them");
 const otherRoleOf = (role) => (role === P ? B : P);
 // Philip: Aledo days = 1st/3rd Wednesday + the Friday of the Mon-Sun week containing the 3rd Wednesday.
 function isAledoDay(d) {
@@ -1541,7 +1545,8 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(X_STATS.actonTuePrimary.length, 0, "X: across every run the generator never placed Acton PRIMARY on a Tuesday - " + X_STATS.actonTuePrimary.length + " placement(s), first: " + X_STATS.actonTuePrimary.slice(0, 6).join(", "));
   ok(HARD_NEVER[ACTON].has("Tue") && hardNeverApplies(ACTON, P) && !hardNeverApplies(ACTON, B), "seed: Acton's hardNeverWeekdays forbid Tuesday PRIMARY only (item X) - the generic W pin covers him");
   ok(!("hardNeverWeekdaysReason" in SR[ACTON]), "seed: no hardNeverWeekdaysReason key for Acton (a *Reason key reaches the blob as a category token)");
-  eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays");
+  // Prompt 23 A (9/30): two dated Sunday entries now (to 12/31/2026 / from 1/1/2027) - pin moved from ["Sun"]
+  eq((SR[ACTON].recurringAvoid || []).map((r) => r.weekday), ["Sun", "Sun"], "seed: the Tuesday soft avoid left with its note; the Sunday avoid stays (two dated entries since Prompt 23 A)");
   ok(![...SEED_ROWS[ACTON].primary].some((d) => weekday(d) === "Tue"), "seed: none of Acton's dated primary rows is a Tuesday - nothing lifts the block in these runs, so the pin above is not vacuous");
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
