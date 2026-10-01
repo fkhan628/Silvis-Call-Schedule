@@ -326,7 +326,7 @@ Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon,
 | Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; **Khan never primary (East, every year)**; ⟶ 9/30: **Khan never backup either** (`holidaysOff`, default taken — Faraz to confirm; the holiday plan below); Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
-**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, Philip's one-major-holiday limit and, since 9/22, every explicit dated list (a governed month's list, Philip's listed weeks — see the small-items note below). ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed. ⟶ 9/22 (Prompt 12 small items): an **EXPLICIT dated list is never waived** — a governed month's list (`whitelist-month`) and Philip's weeks list (`outside-available-weeks`) stay hard on a holiday-unit day (Burchett's December list omits 12/24 on purpose, so he cannot hold the Christmas unit, and his both-role November list keeps him off Thanksgiving backup; Philip is not a Memorial Day 2027 primary candidate: Sat 5/29 and Sun 5/30 fall in his listed week of Mon 5/24, but Mon 5/31 does not, and a holiday unit needs every day clear); only the recurring weekday patterns above are waived.
+**The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, Philip's one-major-holiday limit and, since 9/22, every explicit dated list (a governed month's list, Philip's listed weeks — see the small-items note below). ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed. ⟶ 9/22 (Prompt 12 small items): an **EXPLICIT dated list is never waived** — a governed month's list (`whitelist-month`) and Philip's weeks list (`outside-available-weeks`) stay hard on a holiday-unit day (Burchett's December list omits 12/24 on purpose, so he cannot hold the Christmas unit, and his both-role November list keeps him off Thanksgiving backup; Philip is not a Memorial Day 2027 primary candidate: Sat 5/29 and Sun 5/30 fall in his listed week of Mon 5/24, but Mon 5/31 does not, and a holiday unit needs every day clear); only the recurring weekday patterns above are waived. ⟶ 10/1 (Prompt 25 review): **the yearly holiday plan's accepted units are the one exception** — the planner (below, rule 1) does not consult windows, dated lists, caps or run limits, so an accepted unit can stand where this paragraph would refuse the holder; the engine keeps such a unit as a lock and Generate lists it as a lock violation (see *After Accept* below).
 
 Burchett's stated Christmas preference ("2 days on then off") is satisfied by the two-day unit. Holiday fairness is
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
@@ -338,23 +338,33 @@ holiday unit of a year, the whole year at once. It is a proposal only: nothing i
 the scheduler's Accept in Setup → Holidays locks a plan** (Prompt 25 steps 3–5, built 10/1; the flow is below the rules).
 The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DEFAULTS` — the seed's block equals them):
 
-1. **Pool: every active roster surgeon** — Sarkar included ("in for all rotations"); an outside surgeon never. A plan
-   assignment counts as the surgeon's **own availability for those days** (like an offered day): windows, weekday
+1. **Pool: every active roster surgeon** — Sarkar included ("in for all rotations"); an outside surgeon never. **To the
+   planner** a plan assignment counts as the surgeon's **own availability for those days**: windows, weekday
    patterns, dated lists, offers, caps and run limits are not consulted. What still refuses (the rules engine's words):
    vacations (`time-off`, and `day-before-vacation` for primary), East busy days for the roles his East feature blocks
    (the feed, an override, `eastStanding`, the forecast at or over `groupRules.eastFeed.forecast.busyThreshold` outside
-   the published coverage), `holidaysOff`, `backupOptOut`, `maxMajorHolidays` and the derived East week (5 below).
+   the published coverage and never on a day of a *home* Davenport vacation range — as the engine), `holidaysOff`,
+   `backupOptOut`, `maxMajorHolidays` and the derived East week (5 below). **Once accepted, the rows are ordinary locks
+   to the rules engine and the generator — not the holder's availability:** Generate lists a waived rule as a lock
+   violation and keeps the unit, and a trade of a plan unit still faces windows, dated lists, caps and run limits
+   (*After Accept* below; whether the engine should read an accepted row as availability is §8 item 23 (d)).
 2. **The tiers split as at Davenport:** major = New Year's, Thanksgiving, Christmas; minor = Memorial Day, July 4th,
    Labor Day (each unit's `tier`). Each unit has a primary and a backup, so a tier has six slots a year. **With six in
    the pool everyone holds exactly one major and one minor.** With fewer, the extra slots are **backups**, to the lowest
    lifetime load (units held in either role ÷ units eligible, in that tier); with more, the highest load sits the tier out.
 3. **Primary in one tier, backup in the other** within a year, where the pool allows (`alternateTiers`; otherwise the plan
-   names who could not alternate). **Across years a tier's primaries go to the lowest lifetime primary rate in that tier**
-   — units held as primary ÷ units eligible, Davenport's tenure-normalized `holidayRate` (eligible = the recorded units
-   of the tier dated within the surgeon's `activeFrom` / `activeTo`; zero eligible reads 0, never NaN).
-4. **Nobody gets the same holiday in the same role two years running** (`noRepeatSameRole`) — relaxed only when no plan
-   exists, and then listed (`relaxed`). Ties, in order: a different holiday than last year (either role); the longer unit
-   to whoever had the shorter one last year (days held in the tier last year — no unit is 0 days); a seeded draw.
+   names who could not alternate). **Across years the primaries go to the lowest lifetime primary rate** — units held
+   as primary ÷ units eligible, per tier, Davenport's tenure-normalized `holidayRate` (eligible = the recorded units of
+   the tier dated within the surgeon's `activeFrom` / `activeTo`; zero eligible reads 0, never NaN). Because alternation
+   ties the two tiers together (a major primary is a minor backup), the plan picks the primaries by the lowest primary
+   rate **summed across both tiers** — so one tier can get a primary whose rate in that tier is higher than a colleague's
+   who is primary in the other.
+4. **Nobody gets the same holiday in the same role two years running** (`noRepeatSameRole`) — checked against the year
+   before and, when the year after is already on file (re-planning a year), against that year too; relaxed only when no
+   plan exists, and then listed (`relaxed`). Ties, in order: a different holiday than last year (either role); the longer
+   unit to whoever had the shorter one last year — **read (default taken, Faraz to confirm — §8 item 23 (c)) as the sum
+   over the pool of last year's days in the tier × this year's days**, the rearrangement reading (a surgeon with no unit
+   last year adds 0 whether counted as 0 days or left out); a seeded draw.
 5. **Hard per-person limits are data:** `holidaysOff` (Acton: Thanksgiving; **Khan: Christmas, both roles** — he is on
    Davenport call 12/24–12/25 every year; default taken 9/30, Faraz to confirm, seed `openQuestions` 20 — data only:
    `surgeonRules.s1.holidayRules.holidaysOff ["Christmas"]`, which the generator reads too, so once applied he is no
@@ -362,8 +372,10 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    than 12 apart, history included, the engine's window), and **Fierce's derived week**: a unit on any day of one of his
    derived East weeks takes him in that week's Silvis role and nobody else in it; if he is refused that slot (a vacation),
    it stays OPEN and the plan says so.
-6. **History:** lifetime counts come from the schedule (every stored unit somebody holds; the year being planned never
-   counts) plus `groupRules.holidayPlan.history`, the units before the app — `[{ year, name, primary, backup }]` with
+6. **History:** lifetime counts come from the schedule (every stored unit somebody holds; only the years BEFORE the one
+   being planned count — the planned year never, and a later year on file feeds only the `maxMajorHolidays` 12-month window
+   and rule 4)
+   plus `groupRules.holidayPlan.history`, the units before the app — `[{ year, name, primary, backup }]` with
    roster ids, **empty until the office supplies the 2026 minors** (seed `openQuestions` 20); the schedule wins a unit
    both carry. 2026 on record, verified on the live `schedule_days` rows 10/1: Thanksgiving Khan / Philip (the import
    locks), Christmas Acton / Fierce and New Year's Burchett / Khan (the 9/23 publish, generated, unlocked).
@@ -386,36 +398,58 @@ scheduler's only:
   group rules, the history (the schedule's units + `groupRules.holidayPlan.history`), the East feed / forecast /
   overrides / derived weeks the app already reads, and the vacations — the `time_off` rows **plus** each East
   surgeon's Davenport vacation ranges that are *away* or still *unreviewed* (what the rules engine reads as a vacation;
-  a *home* range is not). It shows, per unit, the primary and the backup with the planner's **why**; each surgeon's
+  a *home* range is not — on its days the forecast is not consulted either, as the engine). It shows, per unit, the
+  primary and the backup with the planner's **why**; each surgeon's
   counts (major / minor **before** — held as primary / held / eligible — and **in the plan**); what was relaxed; the
   warnings. **Nothing is written.**
 - **Swaps keep the rules.** Each slot has a *swap…* list: swap the holder with any other slot's holder, or replace him
   with any other pool surgeon. Every move is judged by the planner's own refusal logic (`holidayPlanCheck` — the same
-  limits as rules 1–5: a refusal reason, primary = backup, two majors inside Philip's 12 months, the same holiday and
-  role as last year, the tier shape) and the list says *keeps the rules* or *BREAKS: …*. A move that breaks a rule asks
+  limits as rules 1–5: a refusal reason, two majors inside Philip's 12 months, the same holiday and role as last (or
+  next) year, the tier shape) and the list says *keeps the rules* or *BREAKS: …*. A move that breaks a rule asks
   first, naming each rule; Cancel keeps the plan (never a silent break). An accepted rule-breaking move stays listed
   under the table, and Accept names it again. *Back to the planner's plan* undoes every swap. Preferences that are not
-  limits (alternation) are listed, never asked.
+  limits (alternation) are listed, never asked. ⟶ 10/1 review: **one surgeon in both roles of a unit is not a rule to
+  confirm past** — the database refuses such a day outright (`schedule_days_distinct_roles`), so no move that leaves it
+  is ever listed, and Accept stops before its confirm if a unit still has one (nothing is written). A swap with a unit
+  that starts today or has started is not listed either (Accept leaves that unit as on file, so the swap would land
+  half).
 - **Accept ‹year›** locks every planned unit day for everyone: **both roles locked, source `holiday-plan-‹year›`, note
-  "‹unit› unit - holiday plan ‹year›"** (the unit only — no name, no reason; `schedule_days` is anon-readable). One
+  "‹unit› unit - holiday plan ‹year›"** (the unit only — no name, no reason; `schedule_days` is anon-readable; a note
+  already on a unit day that is not a plan note is **kept**, and the confirm lists it). One
   confirm comes first and names every rule the plan breaks and every planned slot whose row already holds someone else
+  (one line per unit, role and holder — every replaced slot is listed)
   — **a different locked holder or a published (unlocked) holder is replaced only when the scheduler presses OK on that
-  confirm; Cancel writes nothing**. A unit that has already started is left as it is on file. Then, in order: a backup
+  confirm; Cancel writes nothing**. A unit that **starts today or has started** is left as it is on file (a 24-hour shift
+  under way is never rewritten); the confirm then also names any rule the year *as it will actually stand* breaks (the
+  started unit's holders on file next to the new ones), and a Re-check swap whose partner unit has started is refused
+  outright. Then, in order: a backup
   **snapshot** (a failed capture blocks — nothing is locked), the days through the normal schedule write (per-day
   compare-and-swap, the wipe guard, the "changed by someone else" reload), **one audit row** `holiday_plan.accept` (the
   year, the units with roster ids, the slots replaced, the broken rules, the snapshot counts — no amounts), and the
   notices a hand edit of those days would send — one in-app *Schedule changed* note and one e-mail (category *schedule
-  updates*) to the surgeons whose slot changed hands, one message for the whole plan. The office notice stays Settings
-  → Office notifications → *Publish and notify office*.
-- **After Accept the units behave like any locked unit:** Generate never touches them (locks are respected); a trade or
+  updates*) to the surgeons whose slot changed hands (judged against the rows last saved, not the screen), one message
+  for the whole plan. If the write fails or hits someone else's change, the notices are held and go out with the next
+  Accept of that year that saves (the failure toast says to press Accept again once the header shows *Saved*). The
+  office notice stays Settings → Office notifications → *Publish and notify office*.
+- **After Accept the units are kept as locks:** Generate never touches them (locks are respected); a trade or
   a give moves the whole unit (the trade card reads the unit from the holiday units, not from the row's source), and a
   locked slot moves only when the scheduler applies the trade (the database's rule for every lock). A hand edit or a
-  trade turns the day's source into `manual` / `trade`.
+  trade turns the day's source into `manual` / `trade`. **The rules engine reads them as locks, not as the holder's
+  availability** (rule 1 is the planner's alone): a slot the usual rules would refuse is listed by Generate as a **lock
+  violation** — kept as a fact, never changed — and the day editor shows it as a locked holder who breaks a rule. On the
+  2027 plan (verified 10/1): Sarkar's Memorial Day backup and Thanksgiving primary (`outside-window` — her windows; her
+  4-day Thanksgiving also passes her 2-day run limit, which the engine names once a window covers it), Burchett's
+  3-day July 4th primary (`max-consecutive:2`) and Philip's Christmas primary (`outside-available-weeks`). A trade of a
+  plan unit faces those rules like any trade (windows, dated lists, caps, run limits) — a holder-to-holder swap the plan
+  card calls rule-keeping can still be refused there. Whether the engine should read an accepted row as availability
+  instead is §8 item 23 (d).
 - **Re-check ‹year›** (read-only; shown after an Accept, or on its button) lists every accepted slot — a unit day still
-  carrying the plan's source — that the current state now refuses: a newer East day or forecast, a new vacation (a
+  carrying the plan's source, and on it a role the plan locked (a holder the plan left open on file is not the plan's)
+  — that the current state now refuses: a newer East day or forecast, a new vacation (a
   Davenport one included), a rule change (an opt-out, a 12-month limit) or a surgeon leaving the roster. Each comes with
   the best swap by the planner's own ordering (fewest broken rules, then the planner's cost terms) and whether it keeps
-  every rule. *Apply swap* goes through the same Accept path (its confirm, the snapshot first, audit
+  every rule; never a swap with a unit that has started, and no suggestion for a unit that has itself started (the
+  day editor changes it). *Apply swap* goes through the same Accept path (its confirm, the snapshot first, audit
   `holiday_plan.swap`, the same notices) and writes the swap's units only.
 
 ## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22; ⟶ water-filled share decided 9/23
@@ -779,10 +813,20 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     surgeons reading the rates are kept as built; Friday, holiday-unit days and the call-in requirement are switches Faraz sets
     with the rates. New: (i) the office coordinator reads pay read-only (Totals → Pay + CSV); (j) a per-surgeon "Paid by the
     call stipend" switch, default on (Faraz sets who is off).
-23. **The yearly holiday plan's two inputs (Prompt 25, Faraz 9/30; §5) — default taken, confirm.** (a) **Khan off
+23. **The yearly holiday plan's inputs and readings (Prompt 25, Faraz 9/30; §5) — default taken, confirm.** (a) **Khan off
     Christmas in both roles** (the standing Davenport Christmas call): `surgeonRules.s1.holidayRules.holidaysOff
     ["Christmas"]` in the seed — data only, the plan and the generator both read it; without it the standing East rule
     blocks only his Christmas primary. (b) **The 2026 Memorial Day, July 4th and Labor Day holders** (before the app),
     from the office, into `groupRules.holidayPlan.history` (`{ year, name, primary, backup }`, roster ids). Until then
     nobody has a minor on record: who is a 2027 minor primary or backup follows from the majors (rule 3), and which minor
-    each one gets is a seeded draw among equals. Seed `openQuestions` 20.
+    each one gets is a seeded draw among equals. ⟶ 10/1 (Prompt 25 review), two more: (c) **the reading of tie 2** ("the
+    longer unit to whoever had the shorter one last year"): default taken — the sum over the pool of last year's days in
+    the tier × this year's days (the rearrangement reading; a surgeon with no unit last year adds 0 either way). It gives
+    the 2027 majors Thanksgiving Sarkar / Khan and New Year's Fierce / Acton; a pairwise reading that leaves the
+    no-unit surgeon out ("of two surgeons who both had a unit, the one with fewer days gets the longer one") gives
+    Cowork's order instead (Thanksgiving Fierce, New Year's Sarkar). (d) **Should the rules engine read an accepted
+    holiday-plan row as the holder's own availability** (so Generate stops listing the waived ones and a trade of a plan
+    unit is judged like the plan)? Default taken: **no** — kept as locks, listed as lock violations (§5 *After Accept*);
+    changing it is an engine change (`rules.js`), not data. Known gap (review G): the change notices of an Accept whose
+    write failed wait for the next Accept of that year that saves — if nobody presses Accept again, they are not sent
+    on their own. Seed `openQuestions` 20.

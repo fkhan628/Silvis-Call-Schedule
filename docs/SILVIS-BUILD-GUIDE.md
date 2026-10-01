@@ -1804,8 +1804,10 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   `holiday-opt-out:<name>`, `backup-opt-out`, `time-off:<day>`, `day-before-vacation`, `east-busy`,
   `east-forecast-busy:<p>`, `max-major-holidays:<n>`, `derived-lock:<role>`, `derived-lock-held:<id>`) with
   `rules.js`'s precedence (published > override > forecast; a standing day beats an override); each assignment carries
-  them as `blocked`. `planHolidays` does not call `rules.eligibility`: a plan day is the surgeon's own availability
-  (rule 1), so only this short list applies — `test/holiday-plan.test.js` C pins each item.
+  them as `blocked`. `planHolidays` does not call `rules.eligibility`: to the planner a plan day is the surgeon's own
+  availability (rule 1), so only this short list applies — `test/holiday-plan.test.js` C pins each item. (Once accepted
+  the rows are ordinary locks to `rules.js` / `generator.js`: Generate lists a waived rule in `lockViolations` and keeps
+  the slot — N1 pins it; rules doc §8 item 23 (d).)
 - **Search.** Per tier, a depth-first walk over the slots (unit by unit, primary then backup) under the pass's hard
   rules — the shape per tier (n = the surgeons who can hold a slot of the tier: each serves floor(S/n)..ceil(S/n) of the
   S = 2 × units slots, at most ceil(units/n) primaries), primary ≠ backup, the 12-month window within the plan, and in
@@ -1888,3 +1890,17 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   snapshot then one CAS write per unit day with both locks / the source / the note, one audit row, the notices; Re-check
   with a mocked vacation; every write answered by the harness). The 2027 report (on the 10/1 live inputs, beside
   Cowork's hand-worked plan) is outside the repo, in the gate folder of the 10/1 run.
+- **Review fixes (10/1).** `same-person` is structural, not a confirmable break (`sql/schema.sql` CHECK
+  `schedule_days_distinct_roles` refuses the row): `hplOptions` never offers a move leaving one surgeon in both roles of
+  a unit it touches (both units of a swap checked), `holidayPlanAcceptRows` skips such a unit (`samePerson: true`) and
+  `acceptHolidayPlan` stops before its confirm. `today` (Central) reaches `holidayPlanSwapOptions` / `holidayPlanRecheck`
+  (`opts.today`): no swap with a unit that starts on or before it; a blocked slot of a started unit is listed with
+  `started: true` and no suggestion. `holidayPlanAcceptRows` skips a unit that starts ON or before today (`started`,
+  with its holders on file), keeps a non-plan note already on a day (`keptNotes`); `holidayPlanWrittenCheck` judges the
+  year as Accept will leave it (a full Accept names the added breaks; a Re-check swap with a started partner is refused);
+  `holidayPlanConflictLines` groups the replaced slots by unit + role + holder. `holidayPlanRecheck` counts a holder as
+  accepted only where the role is locked on the plan row. `holidayPlanInputs` passes `east.eastClear` (the *home* East
+  vacation days) and `eastReason` skips the forecast there, as `rules.js`. Rule 4 also looks at Y + 1 when it is on file
+  (`repeatYears` / `repeatText`; never in the rates). The notices of an Accept diff the rows last persisted
+  (`lastSyncRef`, read only) and a failed / conflicted Accept keeps its "before" rows (`holidayNoticePendingRef`) for the
+  next Accept of that year that saves. Tests: holiday-plan D2–D5, F2b, I1, K3, L5, L6, M2–M3b, N1; data-layer [P25].
