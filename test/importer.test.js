@@ -1806,8 +1806,11 @@ step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule
   // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the 9/29 entry is no longer the last - the 9/30 entry follows it
   // (the step below pins that one as the last and seedLastRevision 2026-09-30). Kept intent: the 9/29 entry sits right before
   // it, so nothing was appended between the two and the 9/29 entry was not moved.
-  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0])], [seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "9/29: the 9/29 entry sits right before the 9/30 (last) entry");
+  // pin moved deliberately again 9/30 (Prompt 25, branch feat/holiday-plan): a second 2026-09-30 entry (the holiday plan) now
+  // follows the fold entry and is the last (test/holiday-plan.test.js pins it), so the fold entry is found by its branch and
+  // sits second to last. Kept intent: the 9/29 entry sits right before the fold entry - nothing appended between them.
+  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/fold-jan-jun,/.test(t));
+  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0])], [seed._meta.revisions.length - 3, seed._meta.revisions.length - 2], "9/29: the 9/29 entry sits right before the 9/30 fold entry (second to last since the Prompt 25 entry)");
   ok(/groupRules\.groupCall/.test(rev929[0]) && /holidayUnitDaysAllDay/.test(rev929[0]) && /GROUP_CALL_DEFAULTS/.test(rev929[0]) && /seedCoreHash moves/.test(rev929[0]), "9/29: the entry names the block, the holiday reading, the code defaults and the core-hash move");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev929[0]), "9/29: the entry carries no amount and no contact-like value");
   const seedNo = clone(seed); delete seedNo.groupRules.groupCall; seedNo._meta.revisions = seedNo._meta.revisions.filter((t) => !/^2026-09-29 /.test(t));
@@ -1842,9 +1845,13 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   eq(dPre.tables.call_periods.rows, ["update Jan 2027 - Jun 2027 2027-01-04..2027-06-30 (close 2026-11-23, publish by 2026-12-07, status upcoming)"], "9/30: the update line names the widened row; no line for the live Feb - Apr row");
   ok(dPre.lines.some((l) => /a live period the seed lacks is never deleted/.test(l)), "9/30: the dry run says a live period the seed lacks is never deleted (the live fold's delete is fold-jan-jun.sql, report-first)");
   // the revision entry: one, dated 2026-09-30, the last; seedLastRevision reads it
-  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq(rev930.length, 1, "9/30: one _meta.revisions entry dated 2026-09-30");
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-30", rev930[0]], "9/30: it is the last entry, and seedLastRevision reads its date");
+  // pin moved deliberately 9/30 (Prompt 25, branch feat/holiday-plan): the seed now carries TWO 2026-09-30 entries - this fold
+  // entry and, right after it, the holiday-plan entry (the last; test/holiday-plan.test.js pins it as one entry, last). This
+  // step keeps pinning exactly one fold entry, found by its branch, now second to last; seedLastRevision still reads 2026-09-30.
+  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/fold-jan-jun,/.test(t));
+  eq(rev930.length, 1, "9/30: one _meta.revisions entry for the fold (dated 2026-09-30, branch feat/fold-jan-jun)");
+  eq(seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t)).length, 2, "9/30: two entries dated 2026-09-30 - the fold and the Prompt 25 holiday plan");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 2], /Prompt 25/.test(seed._meta.revisions[seed._meta.revisions.length - 1])], ["2026-09-30", rev930[0], true], "9/30: the fold entry sits right before the Prompt 25 entry (the last), and seedLastRevision reads 2026-09-30");
   eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev930[0]) && IMP.impFindContactValues(rev930[0]).length === 0, "9/30: the entry carries no amount and no contact-like value");
   ok(/Jan 2027 - Jun 2027/.test(rev930[0]) && /Feb 2027 - Apr 2027/.test(rev930[0]) && /lengthMonths 3 -> 6/.test(rev930[0]) && /remindDaysBeforeClose \[42, 14, 3\] -> \[14, 3\]/.test(rev930[0]) && /noticeDaysBeforeClose 42 -> 14/.test(rev930[0]) && /seedCoreHash moves/.test(rev930[0]), "9/30: the entry names the fold, the three moved keys and the core-hash move");

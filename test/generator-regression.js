@@ -163,6 +163,11 @@ const ORIGINAL_SCHEDULE_REF = ctx.schedule;
 const HOLIDAY = {}; const HOLIDAY_UNITS = [];
 Object.keys(seed.holidays.units).forEach((y) => seed.holidays.units[y].forEach((u) => { const unit = { name: u.name, tier: u.tier, days: u.days.slice().sort() }; HOLIDAY_UNITS.push(unit); unit.days.forEach((d) => { HOLIDAY[d] = unit; }); }));
 const isHoliday = (d) => !!HOLIDAY[d];
+// Holiday opt-outs (surgeonRules.<id>.holidayRules.holidaysOff + the old neverThanksgiving flag), every surgeon, both
+// roles - generic since 9/30 (Prompt 25: the seed's s1.holidaysOff ['Christmas'] joined Acton's Thanksgiving).
+const HOLIDAY_OFF = {};
+Object.keys(SR).forEach((id) => { const hr = SR[id].holidayRules || {}; HOLIDAY_OFF[id] = new Set((hr.holidaysOff || []).concat(hr.neverThanksgiving ? ["Thanksgiving"] : [])); });
+const optedOutOn = (id, d) => !!(HOLIDAY[d] && HOLIDAY_OFF[id] && HOLIDAY_OFF[id].has(HOLIDAY[d].name));
 // Vacations: the day itself blocks both roles, the day before blocks PRIMARY (dayBeforeRules.trailingEdgeRoles).
 const VAC = {}, DAY_BEFORE_VAC = {};
 IDS.forEach((id) => { VAC[id] = new Set(); DAY_BEFORE_VAC[id] = new Set(); });
@@ -541,6 +546,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       const id = e[role];
       // item 4
       ok(!vacHas(id, d), CODE[id] + " placed on a vacation day");
+      if (!lockedIn(d, role)) ok(!optedOutOn(id, d), CODE[id] + " placed " + role + " on " + d + ", a " + (HOLIDAY[d] && HOLIDAY[d].name) + " unit day he opted out of (holidaysOff)");
       if (role === P) ok(!edgeHas(id, d), CODE[id] + " placed PRIMARY the day before a vacation");
       // item 5, generic since Prompt 12 W (9/22 evening): surgeonRules.<id>.hardNeverWeekdays blocks the roles the
       // surgeon's hardNeverWeekdaysRoles list names (primary only by default) unless a dated row of his covers that
@@ -720,8 +726,10 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [7, DEFAULT_CAP - 1, null, null, 14 - 1 - fierceEastP], "clipPrimary MAB 7 / AFP 7 / BDA null / FAK null / NF 13 - East primary-week days in " + m);
     eq(I.members[FIERCE].eastPrimaryDays, fierceEastP, "Fierce members.eastPrimaryDays in " + m);
     // Khan's allowed backup count exactly: since 9/22 backup is open to him on every open in-range backup slot of the
-    // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block
-    eq(I.members[KHAN].allowedBackup, mdaysIn.filter((d) => baseOpen(d, B) && !vacHas(KHAN, d) && !rowBlocks(KHAN, d, B) && baseHolder(d, P) !== KHAN).length, "Khan allowedBackup = open in-range backup slots minus vacations (derived East ones included), fixture unavailable rows and his locked primaries in " + m);
+    // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block.
+    // Pin moved deliberately 9/30 (Prompt 25): minus the days of a holiday unit he opted out of (the seed's
+    // s1.holidayRules.holidaysOff ['Christmas'], Faraz to confirm) - 12/24 + 12/25 leave his December count.
+    eq(I.members[KHAN].allowedBackup, mdaysIn.filter((d) => baseOpen(d, B) && !vacHas(KHAN, d) && !rowBlocks(KHAN, d, B) && baseHolder(d, P) !== KHAN && !optedOutOn(KHAN, d)).length, "Khan allowedBackup = open in-range backup slots minus vacations (derived East ones included), fixture unavailable rows, his locked primaries and his holiday opt-outs in " + m);
     // Sarkar (N + J): primaryTarget = window target x the window weeks the range touches (null without one), NO
     // backupTarget, outside the pool; allowedPrimary exactly = the open in-range primary slots inside her windows
     const MS = I.members[SARKAR];

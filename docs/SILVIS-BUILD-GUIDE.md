@@ -1779,3 +1779,50 @@ classification reads the RAISE text of the CLI's output whether or not the CLI e
 did not move is reported NOT VERIFIED (exit 1) by the re-read — the `DO` block rolled back in every case. Proof:
 `test/day-edit.test.js` (the live October rows as a fixture, before/after pinned, SQL pins, override gating, the
 sequential Khan Fri–Mon batch, verify-after-apply); CI step "Day-edit CLI tests".
+
+## 20. The yearly holiday plan (`helpers.js` `planHolidays`, Prompt 25, Faraz 9/30 — steps 1–2 built)
+
+The rules are `docs/SILVIS-CALL-RULES.md` §5 ("the yearly holiday plan"); this is the machinery. One pure function in
+the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no network, no writes):
+`planHolidays(year, { units, roster, surgeonRules, groupRules, history, east, vacations, seed })` →
+`{ year, assignments: [{ unit, primary, backup, why, blocked }], counts, relaxed, warnings, search }`.
+
+- **Inputs.** `units` = `holidays.units[year]` (or pass `holidays`); `roster` (pool = active, not `type: "external"`);
+  `surgeonRules` / `groupRules` as stored; `east` uses the app's `ctxInputs` names (`eastBusyDays`, `eastForecast`,
+  `eastOverrides`, `eastDerived`, `eastFeedCoverage`), so a later Setup card passes `ctxInputs` as it is; `vacations` =
+  `time_off` rows (a caller may append the East vacation ranges, as the 2027 report did with Khan's Davenport ranges);
+  `seed` = the last tie-break's RNG seed (default the year; mulberry32 with FNV-1a for strings, as `generator.js`).
+  `history` = `holidayPlanHistory({ schedule, holidays, groupRules })` — every stored unit somebody holds in the schedule
+  (split holders listed, an external cover kept as `ext:<label>`) plus `groupRules.holidayPlan.history`; without
+  `history` the planner builds it from `schedule` + `holidays`. `holidayPlanRules(groupRules)` reads the block with
+  `HOLIDAY_PLAN_DEFAULTS` per key (the `GROUP_CALL_DEFAULTS` pattern).
+- **Hard limits** are computed once per (unit, surgeon, role) in the rules engine's vocabulary (`inactive`,
+  `holiday-opt-out:<name>`, `backup-opt-out`, `time-off:<day>`, `day-before-vacation`, `east-busy`,
+  `east-forecast-busy:<p>`, `max-major-holidays:<n>`, `derived-lock:<role>`, `derived-lock-held:<id>`) with
+  `rules.js`'s precedence (published > override > forecast; a standing day beats an override); each assignment carries
+  them as `blocked`. `planHolidays` does not call `rules.eligibility`: a plan day is the surgeon's own availability
+  (rule 1), so only this short list applies — `test/holiday-plan.test.js` C pins each item.
+- **Search.** Per tier, a depth-first walk over the slots (unit by unit, primary then backup) under the pass's hard
+  rules — the shape per tier (n = the surgeons who can hold a slot of the tier: each serves floor(S/n)..ceil(S/n) of the
+  S = 2 × units slots, at most ceil(units/n) primaries), primary ≠ backup, the 12-month window within the plan, and in
+  pass 1 no repeat. Each complete tier plan is scored `[open, shape, repeats, load, primaryRate, sameHoliday,
+  unitLength]` and grouped by its per-surgeon (primaries, served) signature, keeping the best and every plan tied with
+  it; only the groups with the tier's best `[open, shape, repeats, load]` prefix can be in the best year (those terms
+  do not depend on the other tier). Every pair of major × minor groups is then scored with the alternation count in the
+  fifth place, and the seeded RNG picks uniformly among the plans still tied. Passes: 1 = everything hard; 2 = no repeat
+  soft (only when pass 1 has no plan); 3 = the shape soft and open slots allowed (only when pass 2 has none) — the result
+  says which (`search.pass`) and `relaxed` lists every repeat / shape miss kept. Six surgeons: at most 720 plans per tier,
+  a few milliseconds; a cap of 3,000,000 per tier warns (`truncated`).
+- **Output.** `why` per role holder (his rate or load, his role in the other tier, last year's units, a same-holiday or
+  relaxed note, a derived week); `counts[id]` = `before` (per tier: primary, any, eligible, primaryRate, load),
+  `lastYearDays`, `plan`; `warnings` name every refused input, a surgeon who can hold no unit of a tier, an alternation
+  miss and an OPEN slot with each surgeon's reasons; `search.cost` the winning vector.
+- **Proof:** `test/holiday-plan.test.js` (npm chain + CI step "Holiday plan tests"; `test/ci.test.js` pins the
+  alignment) — the data (seed block = defaults, the blob, Khan's 9/30 opt-out, the one revision entry), the history
+  builder, one section per rule, the 2027 plan on the seed inputs + the 2026 holders, and ten simulated years on the seed
+  rules (every limit, no repeat unless a derived week forces it, the rotation exact until a derived-week override and
+  caught up by the tenth year). `test/generator-regression.js` restates `holidaysOff` generically for the generator.
+- **Not built (later steps of Prompt 25):** the Setup card that shows the plan beside the counts, and its Accept, which
+  would write the units as locks through the normal day-edit path (snapshot first, compare-and-swap, audit, the office
+  notice) — report-first, like every write to published rows. The 2027 report (on the 10/1 live inputs, beside Cowork's
+  hand-worked plan) is outside the repo, in the gate folder of the 10/1 run.

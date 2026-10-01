@@ -252,7 +252,12 @@ eq(seed.holidays.units["2026"].map((u) => ({ name: u.name, days: u.days })), [
 // outside every feed input - only the standing rule can know about it.
 step("D1: generator 2027-12-20 -> 2028-01-03: Khan is not primary on 12/24 or 12/25; one other surgeon holds the Christmas 2027 unit as primary on both days");
 {
-  const c = makeCtx({ schedule: {} });
+  // pin moved deliberately 9/30 (Prompt 25): D1 proves the standing East rule, so it runs on the seed rules WITHOUT the 9/30
+  // Christmas opt-out (s1.holidayRules.holidaysOff ['Christmas'], Faraz to confirm - seed openQuestions 20). With the opt-out
+  // Khan is refused both Christmas roles by holiday-opt-out and the candidate lines below could no longer tell the two rules
+  // apart; the opt-out on the seed's own rules is pinned at the end of this block.
+  const srNoXmasOff = clone(SA.seedToContextInput(seed).surgeonRules); delete srNoXmasOff.s1.holidayRules;
+  const c = makeCtx({ schedule: {}, surgeonRules: srNoXmasOff });
   const out = GEN.generate(c, "2027-12-20", "2028-01-03", { seed: 5, bestOf: 3, timeBudgetMs: 800 });
   const S = out.schedule, D = out.diagnostics;
   // (V review) The placement pins below are belt-and-braces: without the key other terms (the
@@ -280,7 +285,10 @@ step("D1: generator 2027-12-20 -> 2028-01-03: Khan is not primary on 12/24 or 12
   const candP = R.holidayUnitCandidates(c, xmas27, "primary"), candB = R.holidayUnitCandidates(c, xmas27, "backup");
   ok(candP.indexOf("s1") < 0, "Khan is not a Christmas 2027 primary candidate: " + candP);
   ok(candP.indexOf(p) >= 0, "the placed primary is a candidate: " + candP);
-  ok(candB.indexOf("s1") >= 0, "Khan IS a Christmas 2027 backup candidate: " + candB);
+  ok(candB.indexOf("s1") >= 0, "Khan IS a Christmas 2027 backup candidate (without the 9/30 opt-out): " + candB);
+  // 9/30 (Prompt 25): on the seed's own rules the opt-out takes him off BOTH Christmas roles (data only - holidaysOff)
+  const cSeed = makeCtx({ schedule: {} });
+  ok(R.holidayUnitCandidates(cSeed, xmas27, "backup").indexOf("s1") < 0 && R.holidayUnitCandidates(cSeed, xmas27, "primary").indexOf("s1") < 0, "9/30: with the seed's holidaysOff ['Christmas'] Khan is neither a Christmas 2027 primary nor a backup candidate");
 }
 
 /* =================================================================== E */

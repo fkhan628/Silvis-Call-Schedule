@@ -323,7 +323,7 @@ Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon,
 | July 4th | minor | Sat 7/4 (past) | 2027: **Sat 7/3 – Mon 7/5** (Sunday holiday observed Monday 7/5; the Monday absorbs the weekend — Faraz 9/22 late, Prompt 12 AC); 2028: Tue 7/4 alone |
 | Labor Day | minor | Mon 9/7 (past) | 2027: **Sat 9/4 – Mon 9/6** (Monday absorbs the weekend) |
 | Thanksgiving | major | **Thu 11/26 – Sun 11/29 (one unit; Khan primary — Faraz 9/21, confirmed by Faraz 9/22 evening; Prompt 12 Z)** | Acton never (opted out); Philip ≤ 1 major; backup: anyone not opted out. 2027: **Thu 11/25 – Sun 11/28** (Thu–Sun every year — Faraz 9/22 late, Prompt 12 AC) |
-| Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; **Khan never primary (East, every year)**; Burchett available 12/25–28 |
+| Christmas | major | Thu 12/24 + Fri 12/25 | Eve + Day as one unit; **Khan never primary (East, every year)**; ⟶ 9/30: **Khan never backup either** (`holidaysOff`, default taken — Faraz to confirm; the holiday plan below); Burchett available 12/25–28 |
 | New Year's | major | Thu 12/31 + Fri 1/1/2027 | Eve + Day as one unit; Burchett available 12/30–1/3 |
 
 **The day rules are not for holidays (Faraz 9/21 evening).** On a holiday-unit day the weekday-pattern rules do not apply — not Khan's Tue/Thu or Mon/Wed-only, not Burchett's recurring whitelist, not Acton's 2nd/4th Monday and Wednesday, not Fierce's Clinton days or Monday-backup-only, not Philip's Aledo weekday rules — for primary or backup. **Anyone can be backup (or primary) on a holiday unless they explicitly want that holiday off** (Acton: Thanksgiving). Still enforced on holidays: vacations, East call days and the East forecast, Fierce's derived-week locks, Sarkar's windows, monthly caps, Philip's one-major-holiday limit and, since 9/22, every explicit dated list (a governed month's list, Philip's listed weeks — see the small-items note below). ⟶ 9/22 (Prompt 12 A): a holiday unit counts as one day for the consecutive limits **only for a surgeon who opted in** (`surgeonRules.<id>.holidayUnitCountsAsOneDay` — Khan); everyone else counts real days. Encoded as `groupRules.holidays` plus per-surgeon `holidayRules.holidaysOff` in the seed. ⟶ 9/22 (Prompt 12 small items): an **EXPLICIT dated list is never waived** — a governed month's list (`whitelist-month`) and Philip's weeks list (`outside-available-weeks`) stay hard on a holiday-unit day (Burchett's December list omits 12/24 on purpose, so he cannot hold the Christmas unit, and his both-role November list keeps him off Thanksgiving backup; Philip is not a Memorial Day 2027 primary candidate: Sat 5/29 and Sun 5/30 fall in his listed week of Mon 5/24, but Mon 5/31 does not, and a holiday unit needs every day clear); only the recurring weekday patterns above are waived.
@@ -331,6 +331,51 @@ Seed key (Prompt 12 V): `surgeonRules.s1.eastStanding` (generic — any surgeon,
 Burchett's stated Christmas preference ("2 days on then off") is satisfied by the two-day unit. Holiday fairness is
 tracked separately from shift counts: major and minor counts per surgeon, lifetime, tenure-normalized — the same idea
 as the Davenport holiday pools.
+
+**⟶ 9/30 — the yearly holiday plan (Prompt 25, Faraz: "copy Davenport's split of major and minor holidays"; "the
+generator makes most of the decisions").** `helpers.js` `planHolidays` proposes one primary and one backup for every
+holiday unit of a year, the whole year at once. It is a proposal only: nothing is locked or published by it, and the
+Setup card that shows it and its Accept are a later step (Prompt 25 steps 1–2 are built: the planner and its report).
+The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DEFAULTS` — the seed's block equals them):
+
+1. **Pool: every active roster surgeon** — Sarkar included ("in for all rotations"); an outside surgeon never. A plan
+   assignment counts as the surgeon's **own availability for those days** (like an offered day): windows, weekday
+   patterns, dated lists, offers, caps and run limits are not consulted. What still refuses (the rules engine's words):
+   vacations (`time-off`, and `day-before-vacation` for primary), East busy days for the roles his East feature blocks
+   (the feed, an override, `eastStanding`, the forecast at or over `groupRules.eastFeed.forecast.busyThreshold` outside
+   the published coverage), `holidaysOff`, `backupOptOut`, `maxMajorHolidays` and the derived East week (5 below).
+2. **The tiers split as at Davenport:** major = New Year's, Thanksgiving, Christmas; minor = Memorial Day, July 4th,
+   Labor Day (each unit's `tier`). Each unit has a primary and a backup, so a tier has six slots a year. **With six in
+   the pool everyone holds exactly one major and one minor.** With fewer, the extra slots are **backups**, to the lowest
+   lifetime load (units held in either role ÷ units eligible, in that tier); with more, the highest load sits the tier out.
+3. **Primary in one tier, backup in the other** within a year, where the pool allows (`alternateTiers`; otherwise the plan
+   names who could not alternate). **Across years a tier's primaries go to the lowest lifetime primary rate in that tier**
+   — units held as primary ÷ units eligible, Davenport's tenure-normalized `holidayRate` (eligible = the recorded units
+   of the tier dated within the surgeon's `activeFrom` / `activeTo`; zero eligible reads 0, never NaN).
+4. **Nobody gets the same holiday in the same role two years running** (`noRepeatSameRole`) — relaxed only when no plan
+   exists, and then listed (`relaxed`). Ties, in order: a different holiday than last year (either role); the longer unit
+   to whoever had the shorter one last year (days held in the tier last year — no unit is 0 days); a seeded draw.
+5. **Hard per-person limits are data:** `holidaysOff` (Acton: Thanksgiving; **Khan: Christmas, both roles** — he is on
+   Davenport call 12/24–12/25 every year; default taken 9/30, Faraz to confirm, seed `openQuestions` 20 — data only:
+   `surgeonRules.s1.holidayRules.holidaysOff ["Christmas"]`, which the generator reads too, so once applied he is no
+   Christmas backup candidate there either), `maxMajorHolidays` (Philip: 1 per rolling 12 months — unit START months fewer
+   than 12 apart, history included, the engine's window), and **Fierce's derived week**: a unit on any day of one of his
+   derived East weeks takes him in that week's Silvis role and nobody else in it; if he is refused that slot (a vacation),
+   it stays OPEN and the plan says so.
+6. **History:** lifetime counts come from the schedule (every stored unit somebody holds; the year being planned never
+   counts) plus `groupRules.holidayPlan.history`, the units before the app — `[{ year, name, primary, backup }]` with
+   roster ids, **empty until the office supplies the 2026 minors** (seed `openQuestions` 20); the schedule wins a unit
+   both carry. 2026 on record, verified on the live `schedule_days` rows 10/1: Thanksgiving Khan / Philip (the import
+   locks), Christmas Acton / Fierce and New Year's Burchett / Khan (the 9/23 publish, generated, unlocked).
+
+How it decides (lexicographic over complete plans; each item only breaks ties of the ones before): the hard limits
+above, primary ≠ backup, the tier shape (rule 2) and no repeat (rule 4) → fewest open slots / shape misses (only when
+no plan keeps the shape) → fewest repeats (only when no plan avoids one) → tier load (extras to the lowest load, the
+highest sits out) → alternation → the primaries' summed primary rate → the three ties of rule 4. Keys:
+`groupRules.holidayPlan.alternateTiers` (true), `.noRepeatSameRole` (true), `.history` ([]); per surgeon
+`holidayRules.holidaysOff`, `holidayRules.maxMajorHolidays`, `backupOptOut`, `eastFeed`, `eastStanding`; group
+`eastFeed.forecast.busyThreshold`, `dayBeforeRules.trailingEdgeRoles`. Not copied from Davenport: FAK's Christmas lock
+(data here), its presets and the A / B night-before coverage. The architecture is in the build guide §20.
 
 ## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22; ⟶ water-filled share decided 9/23
 
@@ -693,3 +738,10 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     surgeons reading the rates are kept as built; Friday, holiday-unit days and the call-in requirement are switches Faraz sets
     with the rates. New: (i) the office coordinator reads pay read-only (Totals → Pay + CSV); (j) a per-surgeon "Paid by the
     call stipend" switch, default on (Faraz sets who is off).
+23. **The yearly holiday plan's two inputs (Prompt 25, Faraz 9/30; §5) — default taken, confirm.** (a) **Khan off
+    Christmas in both roles** (the standing Davenport Christmas call): `surgeonRules.s1.holidayRules.holidaysOff
+    ["Christmas"]` in the seed — data only, the plan and the generator both read it; without it the standing East rule
+    blocks only his Christmas primary. (b) **The 2026 Memorial Day, July 4th and Labor Day holders** (before the app),
+    from the office, into `groupRules.holidayPlan.history` (`{ year, name, primary, backup }`, roster ids). Until then
+    nobody has a minor on record: who is a 2027 minor primary or backup follows from the majors (rule 3), and which minor
+    each one gets is a seeded draw among equals. Seed `openQuestions` 20.

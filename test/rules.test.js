@@ -1317,8 +1317,14 @@ lacksSoft(R.eligibility(clean, "2026-11-06", P, KHAN, asBlock("2026-11-06", WK1)
 // "anyone can be on backup for holidays"); no weekend-primary when any of the weekend's Fri/Sat/Sun is a
 // holiday-unit day (a reduced weekend is never a full block, whatever genHoldsFullBlock says); a non-holiday day of
 // a reduced weekend still carries weekend-backup (the enumerator charges its backup term on reduced patterns too).
-const xmasB = R.eligibility(clean, "2026-12-25", B, KHAN);
-okElig(xmasB, "Khan backup on Christmas Day (a holiday-unit Friday) is eligible");
+// pin moved deliberately 9/30 (Prompt 25): the seed's s1.holidayRules.holidaysOff ['Christmas'] (Faraz to confirm - seed
+// openQuestions 20) now refuses Khan's Christmas backup, which would leave the weekend-backup check below vacuous (a blocked
+// result never reaches the dynamic softs). The opt-out is pinned here; the per-day L check runs on the seed rules WITHOUT
+// it (srNoXmasOff - the V block below reuses it), so it still proves that a holiday-unit Friday carries no weekend-backup.
+blocked(R.eligibility(clean, "2026-12-25", B, KHAN), "holiday-opt-out:Christmas", "9/30: the seed's Christmas opt-out refuses Khan's Christmas Day backup");
+const srNoXmasOff = clone(SA.seedToSurgeonRules(seed)); delete srNoXmasOff[KHAN].holidayRules;
+const xmasB = R.eligibility(makeCtx({ schedule: {}, surgeonRules: srNoXmasOff }), "2026-12-25", B, KHAN);
+okElig(xmasB, "Khan backup on Christmas Day (a holiday-unit Friday) is eligible without the 9/30 opt-out");
 lacksSoft(xmasB, "weekend-backup", "...and carries no weekend-backup: holiday units are not weekend units");
 lacksSoft(R.eligibility(clean, "2027-01-01", B, KHAN), "weekend-backup", "New Year's Day (unit Friday): no weekend-backup");
 lacksSoft(R.eligibility(clean, "2026-11-27", B, KHAN), "weekend-backup", "Thanksgiving Friday (unit day): no weekend-backup");
@@ -1392,7 +1398,9 @@ const DFAK = "s6";
 const sortedSet = s => [...s].sort();
 const eastCtx = (weekRows, opts) => {
   const kb = EF.deriveKhanBusyDays(weekRows, DFAK, Object.assign({ eastBackupCountsAsBusy: seed.surgeonRules[KHAN].eastFeed.eastBackupCountsAsBusy === true }, opts || {}));
-  return { kb, ctx: makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: kb } }) };
+  // 9/30 (Prompt 25), moved deliberately: the seed rules without the Christmas opt-out (srNoXmasOff), so the holidayCoverage
+  // row's 12/24 - 12/25 checks below stay about East ("backup stays eligible") and not about holidaysOff.
+  return { kb, ctx: makeCtx({ schedule: {}, surgeonRules: srNoXmasOff, eastBusyDays: { [KHAN]: kb } }) };
 };
 const busyPrimaryFreeBackup = (c, d, why) => { has(R.eligibility(c, d, P, KHAN).hard, "east-busy", why + ": primary must be east-busy on " + d); okElig(R.eligibility(c, d, B, KHAN), why + ": backup must stay eligible on " + d); lacks(R.eligibility(c, d, B, KHAN).hard, "east-busy", why + ": backup never cites east-busy"); };
 const freePrimaryAndBackup = (c, d, why) => { lacks(R.eligibility(c, d, P, KHAN).hard, "east-busy", why + ": primary must NOT be east-busy on " + d); okElig(R.eligibility(c, d, B, KHAN), why + ": backup eligible on " + d); };
@@ -1598,8 +1606,13 @@ const noFlag = R.buildContext(SA.seedToContextInput(noFlagSeed, { eastDerived: D
 step("V: seed - surgeonRules.s1.eastStanding is Christmas 12-24 + 12-25");
 eq(seed.surgeonRules[KHAN].eastStanding.map(e => ({ name: e.name, days: e.days })), [{ name: "Christmas", days: ["12-24", "12-25"] }], "seed: s1.eastStanding");
 step("V: Khan PRIMARY on 12/24 and 12/25 is hard east-busy every year (no feed busy day, no forecast)");
-const vClean = makeCtx({ schedule: {} });   // eastBusyDays {}, no forecast, coverage 2026-11-01..2027-01-31
+// pin moved deliberately 9/30 (Prompt 25): V is the standing East rule, so its context is the seed rules WITHOUT the 9/30
+// Christmas opt-out (s1.holidayRules.holidaysOff ['Christmas'], Faraz to confirm) - with it every Khan Christmas slot is refused
+// by holiday-opt-out and the "backup stays open" / "fixture" pins below could no longer tell the two rules apart. The opt-out
+// on the seed context is pinned right after.
+const vClean = makeCtx({ schedule: {}, surgeonRules: srNoXmasOff });   // eastBusyDays {}, no forecast, coverage 2026-11-01..2027-01-31
 eq(vClean.warnings.filter(w => /eastStanding/.test(w)), [], "a well-formed eastStanding list raises no warning");
+["2026-12-24", "2027-12-25"].forEach(d => blocked(R.eligibility(makeCtx({ schedule: {} }), d, B, KHAN), "holiday-opt-out:Christmas", "9/30: on the seed's own rules Khan's Christmas BACKUP " + d + " is refused by the opt-out (not by East)"));
 ["2026-12-24", "2026-12-25", "2027-12-24", "2027-12-25", "2028-12-24", "2028-12-25"].forEach(d => {
   const r = R.eligibility(vClean, d, P, KHAN);
   blocked(r, "east-busy", "standing East day " + d);
@@ -1666,7 +1679,7 @@ ok(vXmasP.indexOf(KHAN) < 0, "Khan is not a Christmas 2026 primary candidate: " 
 ok(vXmasP.length >= 2, "others remain primary candidates: " + vXmasP);
 ok(vXmasB.indexOf(KHAN) >= 0, "Khan IS a Christmas 2026 backup candidate: " + vXmasB);
 // and without the standing entry he is a primary candidate again (the exclusion is this rule, nothing else)
-const srNoSt = clone(SA.seedToContextInput(seed).surgeonRules); delete srNoSt[KHAN].eastStanding;
+const srNoSt = clone(srNoXmasOff); delete srNoSt[KHAN].eastStanding; // 9/30: from the no-opt-out rules, so the only difference is eastStanding
 const vNoSt = R.buildContext(SA.seedToContextInput(seed, { schedule: {}, surgeonRules: srNoSt, eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {} }));
 ok(R.holidayUnitCandidates(vNoSt, vUnits[0], P).indexOf(KHAN) >= 0, "fixture: without eastStanding he is a Christmas primary candidate (so the exclusion above is V's)");
 
