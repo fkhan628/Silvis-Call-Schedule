@@ -1890,6 +1890,15 @@ check("P26: no address in any offers response - the replayed dryRun entries (fir
   const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 7."));
   assert.ok(!/to every not_started|the not_started pool members/.test(dr) && /every\s+pool surgeon/.test(dr) && /coordinators/.test(dr), "sections 5 / 6: every pool surgeon (+ coordinators), not the not_started members");
 });
+check("P26 (merge of the two halves): the cron's FIRST heads-up = helpers.offerHeadsUpWords (the Periods 'Remind' button's subject and body) word for word, and the freeze day reads the same on both sides", () => {
+  if (!OFM) throw new Error("the @offersMail block did not load");
+  for (const p of [P26_PERIOD, { label: "Nov 2027 - Apr 2028", offers_close_at: "2027-09-20" }, { label: "Jul 2027 - Dec 2027", offers_close_at: "2027-05-20" }]) {
+    const cron = OFM.offersHeadsUpText("surgeon", "first", { label: p.label, offers_close_at: p.offers_close_at, days_to_close: 14 });
+    const app = H20.offerHeadsUpWords({ label: p.label, closeAt: p.offers_close_at });
+    assert.deepStrictEqual([cron.subject, cron.text], [app.subject, app.body], "the same first heads-up for " + p.label);
+    assert.strictEqual(OFM.ofmDayLabel(p.offers_close_at), H20.offerFreezeDay(p.offers_close_at), "the same freeze day for " + p.offers_close_at);
+  }
+});
 
 (async () => {
   for (const [name, fn] of ASYNC) {
