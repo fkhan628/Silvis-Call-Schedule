@@ -93,6 +93,15 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
+-- Revision 2026-10-01 t (no-primary days, sql/migrations/2026-10-01-no-primary-days.sql, report-first, NOT yet applied): Faraz 10/1 (Prompt 28)
+-- - surgeons mark their own no-primary days (Burchett: unavailable for primary, backup is fine). One NEW function save_no_primary(p_person,
+-- p_add, p_clear) (security definer, search_path public, pg_temp): one availability row per day, kind backup_only, role any, note null, source
+-- app / office-relay / email-relay; it clears the person's SINGLE-day backup_only rows of any source and never splits a range. save_offers
+-- gains two optional parameters p_np_add / p_np_clear and calls it inside its own transaction (still security invoker; the five-argument
+-- signature is dropped and re-created with seven, so an older build's five-key call resolves to it). Refusals NP001-NP009 (NO_PRIMARY_*: not
+-- linked, not yours, unknown person for the office, bad day, past (everyone), frozen (not the scheduler), part of a longer range (everyone),
+-- holds primary that day (everyone), an offer conflict - save_offers checks it too for the days it offers as primary / either). No table,
+-- column, policy or trigger change (availability has no trigger; its policies are unchanged).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -1063,7 +1072,7 @@ create trigger call_offers_delete_guard_trg
   for each row execute function public.call_offers_delete_guard();
 
 -- ============================================================================
--- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode) - the offer painter
+-- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode, p_np_add, p_np_clear) - the offer painter
 -- (2026-09-23, Prompt 14 part 3a; sql/migrations/2026-09-23-offer-mode-rpc.sql - applied live 2026-09-23 ~12:45 Central,
 -- the orchestrator runs it; probe sql/probes/offer-rpcs-probe.sql rolls itself back)
 --
@@ -1084,6 +1093,18 @@ create trigger call_offers_delete_guard_trg
 --   save_offers stamps entered_by = its profile id, source 'office-relay', and turns the transaction-local flag
 --   silvis.office_relay on around its delete / upsert so the call_offers policies admit the rows (security invoker kept);
 --   the freeze (OF003 / OM005) applies to it as to a surgeon.
+-- Prompt 28 (2026-10-01, revision t; sql/migrations/2026-10-01-no-primary-days.sql - report-first, NOT yet applied): no-primary
+--   days. save_no_primary(p_person, p_add, p_clear) - SECURITY DEFINER (search_path public, pg_temp) because a surgeon cannot
+--   write availability under RLS (no policy changes): one availability row per day, kind backup_only, role any, note null,
+--   source app / office-relay / email-relay and created_by as save_offers'; it deletes the person's SINGLE-day backup_only rows of
+--   any source and never splits a longer range. save_offers gains p_np_add / p_np_clear and calls it inside its own transaction
+--   (still security invoker - the five-argument signature is dropped right before the create, so an older build's five-key
+--   call resolves to the seven-argument function; the drop line stays here on purpose: a wholesale re-run on a database that
+--   still has the five-argument function must not leave two overloads), then refuses a day it offers as primary / either
+--   that carries a backup_only row afterwards (NP009). The client writes the audit row offers.save after ok.
+-- Tokens: NP001 NO_PRIMARY_NOT_LINKED, NP002 NO_PRIMARY_NOT_YOURS, NP003 NO_PRIMARY_UNKNOWN_PERSON, NP004 NO_PRIMARY_BAD_DAY,
+--   NP005 NO_PRIMARY_PAST (everyone), NP006 NO_PRIMARY_FROZEN (not the scheduler), NP007 NO_PRIMARY_RANGE (everyone),
+--   NP008 NO_PRIMARY_ON_CALL (a held primary, everyone), NP009 NO_PRIMARY_OFFER_CONFLICT.
 -- ============================================================================
 create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -1152,7 +1173,113 @@ revoke all on function public.set_offer_mode(uuid, text, text) from anon;
 grant execute on function public.set_offer_mode(uuid, text, text) to authenticated;
 comment on function public.set_offer_mode(uuid, text, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): one person''s offer mode on one period (exhaustive / preferred -> offer_modes[person], off rules_only_ids; rules_only -> on rules_only_ids, key dropped; refused with offers inside the period). Security definer because surgeons cannot write call_periods; a non-scheduler may only set their own - or, as a coordinator, another ROSTER person''s (OM007 otherwise) - and only before the freeze.';
 
-create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null) returns jsonb
+create or replace function public.save_no_primary(p_person text, p_add date[], p_clear date[]) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me       text := public.silvis_person_id();
+  sched    boolean := public.silvis_is_sched();
+  coord    boolean := public.silvis_is_coord();
+  who      text := nullif(btrim(p_person), '');
+  today_c  date := (now() at time zone 'America/Chicago')::date;
+  adds     date[];
+  clears   date[];
+  v_by     text;
+  v_src    text;
+  v_name   text;
+  frozen   record;
+  bad      text;
+  n_add    integer := 0;
+  n_clear  integer := 0;
+begin
+  if auth.uid() is null or (me is null and not sched and not coord) then
+    raise exception 'NO_PRIMARY_NOT_LINKED: sign in with an account that is linked to a roster entry to mark no-primary days' using errcode = 'NP001';
+  end if;
+  who := coalesce(who, me);
+  if who is null then
+    raise exception 'NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'NP001';
+  end if;
+  if who <> coalesce(me, '') and not sched and not coord then
+    raise exception 'NO_PRIMARY_NOT_YOURS: only the scheduler or the office can mark another surgeon''s no-primary days' using errcode = 'NP002';
+  end if;
+  -- The office relays for a roster id only (availability.person_id has no foreign key); the scheduler's relay is not checked (as OS004).
+  if coord and not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who) then
+    raise exception 'NO_PRIMARY_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'NP003';
+  end if;
+  -- One no-primary write per person at a time: two Saves from two devices serialise, and every read below sees the other's commit.
+  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));
+  if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
+    raise exception 'NO_PRIMARY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'NP004';
+  end if;
+  select coalesce(array_agg(distinct d order by d), '{}') into adds from unnest(coalesce(p_add, '{}'::date[])) d;
+  select coalesce(array_agg(distinct d order by d), '{}') into clears from unnest(coalesce(p_clear, '{}'::date[])) d;
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds) d where d = any(clears);
+  if bad is not null then
+    raise exception 'NO_PRIMARY_BAD_DAY: % is both marked and cleared in one save - nothing was saved', bad using errcode = 'NP004';
+  end if;
+  -- Past days stay as they were for every caller, the scheduler included (like OF001).
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds || clears) d where d < today_c;
+  if bad is not null then
+    raise exception 'NO_PRIMARY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'NP005';
+  end if;
+  -- The offers freeze (the OF003 reading: closed by date or no longer upcoming); the scheduler is exempt, the office is not.
+  if not sched then
+    select p.label, p.offers_close_at,
+           (select string_agg(to_char(x, 'FMMM/FMDD'), ', ' order by x) from unnest(adds || clears) x where x between p.start_day and p.end_day) as days
+      into frozen
+      from public.call_periods p
+     where exists (select 1 from unnest(adds || clears) x where x between p.start_day and p.end_day)
+       and (p.offers_close_at <= today_c or p.status <> 'upcoming')
+     order by p.start_day
+     limit 1;
+    if found then
+      raise exception 'NO_PRIMARY_FROZEN: offers for % closed on % - ask the scheduler (%)', frozen.label, frozen.offers_close_at, frozen.days using errcode = 'NP006';
+    end if;
+  end if;
+  -- A longer range is never split, not by the scheduler either: he edits it in Setup > Availability statements.
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(clears) d
+   where exists (select 1 from public.availability a where a.person_id = who and a.kind = 'backup_only' and a.start_date < a.end_date and d between a.start_date and a.end_date);
+  if bad is not null then
+    raise exception 'NO_PRIMARY_RANGE: % is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements', bad using errcode = 'NP007';
+  end if;
+  v_name := coalesce((select r ->> 'name' from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who limit 1), who);
+  -- A day he holds as PRIMARY on the saved schedule is traded first, for every caller (holding backup is fine).
+  select string_agg(to_char(s.day, 'FMMM/FMDD'), ', ' order by s.day) into bad from public.schedule_days s where s.day = any(adds) and s.primary_id = who;
+  if bad is not null then
+    raise exception 'NO_PRIMARY_ON_CALL: % holds primary on % - trade those days first, then mark them No primary', v_name, bad using errcode = 'NP008';
+  end if;
+  -- A primary / either offer on a day he marks (it sees the offers this Save wrote earlier in the transaction).
+  select string_agg(to_char(o.day, 'FMMM/FMDD'), ', ' order by o.day) into bad from public.call_offers o
+   where o.person_id = who and o.day = any(adds) and o.role_pref in ('primary', 'either');
+  if bad is not null then
+    raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';
+  end if;
+
+  -- Who entered it is a fact of the call, never a client field (save_offers' rule).
+  if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;
+
+  -- Clear: every SINGLE-day backup_only row of the person on those days, any role, any source ('setup', 'seed', the app's).
+  delete from public.availability a
+   where a.person_id = who and a.kind = 'backup_only' and a.start_date = a.end_date and a.start_date = any(clears);
+  get diagnostics n_clear = row_count;
+  -- Add: one row per day not already covered by ANY backup_only row of the person (single or range, any source); note
+  -- always null (an anon-readable table carries no reasons); role 'any'.
+  insert into public.availability (person_id, kind, role, start_date, end_date, note, source, created_by)
+  select who, 'backup_only', 'any', d, d, null, v_src, v_by
+    from unnest(adds) d
+   where not exists (select 1 from public.availability a
+                      where a.person_id = who and a.kind = 'backup_only' and d between a.start_date and a.end_date)
+  on conflict do nothing;
+  get diagnostics n_add = row_count;
+
+  return jsonb_build_object('ok', true, 'person_id', who, 'added', n_add, 'cleared', n_clear, 'kept', cardinality(adds) - n_add, 'source', v_src, 'created_by', v_by);
+end $$;
+revoke all on function public.save_no_primary(text, date[], date[]) from public;
+revoke all on function public.save_no_primary(text, date[], date[]) from anon;
+grant execute on function public.save_no_primary(text, date[], date[]) to authenticated;
+comment on function public.save_no_primary(text, date[], date[]) is 'Prompt 28 (2026-10-01): a person''s no-primary days - one availability row per day, kind backup_only, role any, note null (p_add), and the deletion of his SINGLE-day backup_only rows of any source (p_clear). Security definer because surgeons cannot write availability under RLS; called by save_offers inside its transaction (the painter''s one Save) and callable directly with the same checks: a linked surgeon for himself, the office coordinator for a roster id (NP003), the scheduler for anyone. Refusals before any write: NP001 NO_PRIMARY_NOT_LINKED, NP002 NO_PRIMARY_NOT_YOURS, NP003 NO_PRIMARY_UNKNOWN_PERSON, NP004 NO_PRIMARY_BAD_DAY, NP005 NO_PRIMARY_PAST (everyone), NP006 NO_PRIMARY_FROZEN (not the scheduler), NP007 NO_PRIMARY_RANGE (a longer range is never split), NP008 NO_PRIMARY_ON_CALL (a held primary), NP009 NO_PRIMARY_OFFER_CONFLICT (a primary / either offer that day). source app / office-relay / email-relay, created_by as save_offers. Writes no audit row: the client writes the audit row offers.save after ok.';
+
+drop function if exists public.save_offers(text, jsonb, date[], uuid, text);
+create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null, p_np_add date[] default null, p_np_clear date[] default null) returns jsonb
 language plpgsql security invoker set search_path = public as $$
 declare
   me        text := public.silvis_person_id();
@@ -1164,6 +1291,8 @@ declare
   n_up      integer := 0;
   n_del     integer := 0;
   bad       text;
+  np        jsonb;
+  v_name    text;
 begin
   if auth.uid() is null or (me is null and not sched and not coord) then
     raise exception 'OFFERS_NOT_LINKED: sign in with an account that is linked to a roster entry to save offers' using errcode = 'OS001';
@@ -1212,18 +1341,39 @@ begin
   get diagnostics n_up = row_count;
   if coord then perform set_config('silvis.office_relay', '', true); end if;
 
+  -- Prompt 28: the no-primary days, in this same transaction, through the definer sibling (surgeons cannot write
+  -- availability under RLS); a refusal there rolls the offer rows above back too.
+  if coalesce(cardinality(p_np_add), 0) + coalesce(cardinality(p_np_clear), 0) > 0 then
+    np := public.save_no_primary(who, p_np_add, p_np_clear);
+  end if;
+
+  -- Prompt 28 invariant: a day this Save offers as primary / either carries no no-primary row afterwards (a range from
+  -- Setup, or a single day the Save did not lift).
+  select string_agg(to_char(o.day, 'FMMM/FMDD'), ', ' order by o.day) into bad
+    from public.call_offers o
+   where o.person_id = who and o.role_pref in ('primary', 'either')
+     and o.day in (select (r->>'day')::date from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r)
+     and exists (select 1 from public.availability a
+                  where a.person_id = who and a.kind = 'backup_only' and o.day between a.start_date and a.end_date);
+  if bad is not null then
+    v_name := coalesce((select r ->> 'name' from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who limit 1), who);
+    raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';
+  end if;
+
   -- The mode, when the same Save changed it: inside this transaction, so a refused mode (OM001-OM006, checked by
   -- set_offer_mode itself) rolls the rows above back too - days + mode are one commit or nothing.
   if p_mode is not null then
     perform public.set_offer_mode(p_period, p_mode, who);
   end if;
 
-  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode);
+  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by,
+                            'source', v_src, 'mode', p_mode, 'np_added', coalesce((np->>'added')::int, 0),
+                            'np_cleared', coalesce((np->>'cleared')::int, 0), 'np_kept', coalesce((np->>'kept')::int, 0));
 end $$;
-revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from public;
-revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from anon;
-grant execute on function public.save_offers(text, jsonb, date[], uuid, text) to authenticated;
-comment on function public.save_offers(text, jsonb, date[], uuid, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): the offer painter''s one Save - upserts + deletes (+ the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed - a coordinator''s rows pass the policies through the transaction-local silvis.office_relay flag this function sets). entered_by / source come from the caller identity (own id / app; scheduler / email-relay; the coordinator''s profile id / office-relay - for a roster id only, OS004 otherwise); a row sent without a note keeps its note. The client writes the audit row offers.save after ok.';
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from public;
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from anon;
+grant execute on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) to authenticated;
+comment on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) is 'Prompt 14 part 3a (+ Prompt 16 A7, + Prompt 28): the offer painter''s one Save - upserts + deletes (+ the no-primary days through save_no_primary when p_np_add / p_np_clear carry days, + the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed - a coordinator''s rows pass the policies through the transaction-local silvis.office_relay flag this function sets). entered_by / source come from the caller identity (own id / app; scheduler / email-relay; the coordinator''s profile id / office-relay - for a roster id only, OS004 otherwise); a row sent without a note keeps its note. NP009 NO_PRIMARY_OFFER_CONFLICT when a day it offers as primary / either carries a backup_only row afterwards. The client writes the audit row offers.save after ok.';
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (

@@ -953,8 +953,10 @@ const SAVE_CODES_COORD = [SAVE_CODES[0], SAVE_CODES[1], ["OS004", "OFFERS_UNKNOW
 const COORD_ROSTER_CHECK = "not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who)";
 // one raise carries the token (message prefix; '' = an escaped quote inside it) and the errcode
 const raiseRe = (token, code) => new RegExp("raise exception '" + token + ": (?:[^']|'')*'[^;]*using errcode = '" + code + "';");
-function checkOfferRpcs(n, s, coord) {
+function checkOfferRpcs(n, s, coord, np) {
   // coord = the Prompt 16 A7 texts (a coordinator may relay for another person; the 2026-09-23 rpc migration keeps the older texts)
+  // np = the Prompt 28 save_offers text (seven arguments, the save_no_primary call, the offers-side NP009) - schema.sql only;
+  // the 2026-09-23 and coordinator files stay frozen as applied (np false)
   const mode = functionText(s, "set_offer_mode");
   ok(mode, n + ": no `create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null)` ... `end $$;` block");
   if (mode) {
@@ -995,12 +997,20 @@ function checkOfferRpcs(n, s, coord) {
   }
   ok(/revoke all on function public\.set_offer_mode\(uuid, text, text\) from public;\nrevoke all on function public\.set_offer_mode\(uuid, text, text\) from anon;\ngrant execute on function public\.set_offer_mode\(uuid, text, text\) to authenticated;/.test(s),
     n + ": set_offer_mode grants: revoke from public and anon, grant execute to authenticated");
-
+  checkSaveOffers(n, s, coord, np);
+}
+// pin moved deliberately 10/1 (Prompt 28): the save_offers half of checkOfferRpcs is its own function, because the no-primary
+// migration re-creates save_offers (and adds save_no_primary) without set_offer_mode. np = the Prompt 28 text: the seven-argument
+// signature and grants, the save_no_primary call (guarded by the cardinality condition, after the office-relay flag is cleared and
+// before set_offer_mode), the offers-side NP009 after it, no availability write, the np_* return keys. Kept intent: every older
+// pin reads as before for np = false (the 2026-09-23 and coordinator files, frozen as applied).
+const NP_SAVE_CALL = "  if coalesce(cardinality(p_np_add), 0) + coalesce(cardinality(p_np_clear), 0) > 0 then\n    np := public.save_no_primary(who, p_np_add, p_np_clear);\n  end if;";
+function checkSaveOffers(n, s, coord, np) {
   const save = functionText(s, "save_offers");
   ok(save, n + ": no `create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[])` ... `end $$;` block");
   if (save) {
-    ok(/^create or replace function public\.save_offers\(p_person text, p_rows jsonb, p_clear date\[\], p_period uuid default null, p_mode text default null\) returns jsonb\nlanguage plpgsql security invoker set search_path = public as \$\$/.test(save),
-      n + ": save_offers must be `returns jsonb`, `language plpgsql security invoker set search_path = public` with the optional p_period / p_mode (the combined days + mode Save; RLS + OF001-OF003 apply per row)");
+    ok((np ? /^create or replace function public\.save_offers\(p_person text, p_rows jsonb, p_clear date\[\], p_period uuid default null, p_mode text default null, p_np_add date\[\] default null, p_np_clear date\[\] default null\) returns jsonb\nlanguage plpgsql security invoker set search_path = public as \$\$/ : /^create or replace function public\.save_offers\(p_person text, p_rows jsonb, p_clear date\[\], p_period uuid default null, p_mode text default null\) returns jsonb\nlanguage plpgsql security invoker set search_path = public as \$\$/).test(save),
+      n + ": save_offers must be `returns jsonb`, `language plpgsql security invoker set search_path = public` with the optional p_period / p_mode" + (np ? " / p_np_add / p_np_clear (Prompt 28)" : "") + " (the combined days + mode Save; RLS + OF001-OF003 apply per row)");
     ok(!/security definer/.test(save), n + ": save_offers must NOT be security definer (nothing bypassed)");
     const firstWrite = save.indexOf("delete from public.call_offers");
     const insertAt = save.indexOf("insert into public.call_offers");
@@ -1031,15 +1041,41 @@ function checkOfferRpcs(n, s, coord) {
     const modeAt = save.indexOf("perform public.set_offer_mode(p_period, p_mode, who);");
     ok(modeAt > insertAt && /if p_mode is not null then\s+perform public\.set_offer_mode\(p_period, p_mode, who\);\s+end if;/.test(save),
       n + ": when p_mode is given the mode must be set THROUGH set_offer_mode inside the same transaction, after the rows (a refused mode rolls the rows back - days + mode are one commit or nothing)");
-    ok(/return jsonb_build_object\('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode\);/.test(save),
-      n + ": return shape must be {ok, person_id, upserted, deleted, entered_by, source, mode}");
+    if (np) {
+      ok(save.includes("  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by,\n                            'source', v_src, 'mode', p_mode, 'np_added', coalesce((np->>'added')::int, 0),\n                            'np_cleared', coalesce((np->>'cleared')::int, 0), 'np_kept', coalesce((np->>'kept')::int, 0));"),
+        n + ": return shape must be {ok, person_id, upserted, deleted, entered_by, source, mode, np_added, np_cleared, np_kept} (the np keys 0 when no day was sent)");
+      ok(/\n  np        jsonb;\n  v_name    text;\n/.test(save), n + ": save_offers declares np jsonb and v_name text (Prompt 28)");
+      const flagOff = save.indexOf("if coord then perform set_config('silvis.office_relay', '', true); end if;");
+      const callAt = save.indexOf(NP_SAVE_CALL);
+      const modeAt2 = save.indexOf("perform public.set_offer_mode(p_period, p_mode, who);");
+      ok(callAt > 0 && callAt > insertAt && callAt > flagOff && callAt < modeAt2, n + ": the no-primary days go through `np := public.save_no_primary(who, p_np_add, p_np_clear);`, guarded by the cardinality condition, after the upsert and the office-relay flag is cleared, before set_offer_mode (one transaction: a refusal there rolls the offer rows back too)");
+      eq((save.match(/public\.save_no_primary\(/g) || []).length, 1, n + ": save_offers calls save_no_primary exactly once;");
+      const np9 = save.match(raiseRe("NO_PRIMARY_OFFER_CONFLICT", "NP009"));
+      const np9At = np9 ? save.indexOf(np9[0]) : -1;
+      ok(np9At > callAt && np9At < modeAt2, n + ": the offers-side NP009 (a day this Save offers as primary / either that carries a backup_only row afterwards) is raised after the save_no_primary call and before set_offer_mode");
+      ok(save.includes("raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';"), n + ": the offers-side NP009 carries the shared message");
+      ok(save.includes("   where o.person_id = who and o.role_pref in ('primary', 'either')\n     and o.day in (select (r->>'day')::date from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r)\n     and exists (select 1 from public.availability a\n                  where a.person_id = who and a.kind = 'backup_only' and o.day between a.start_date and a.end_date);"),
+        n + ": NP009 on the offers side reads only the days THIS Save offers (p_rows) as primary / either, against any backup_only row of the person (single or range)");
+      eq((save.match(/using errcode = 'NP0/g) || []).length, 1, n + ": save_offers raises one NP code itself (NP009; the others are save_no_primary's);");
+      ok(!/(insert into|update|delete from) public\.availability/.test(save), n + ": save_offers never writes availability itself (it reads it; the definer sibling writes)");
+    } else {
+      ok(/return jsonb_build_object\('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode\);/.test(save),
+        n + ": return shape must be {ok, person_id, upserted, deleted, entered_by, source, mode}");
+      ok(!/save_no_primary|p_np_|NP00/.test(save), n + ": the frozen pre-Prompt-28 text carries no no-primary parameter, call or code");
+    }
   }
-  ok(/revoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from public;\nrevoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from anon;\ngrant execute on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) to authenticated;/.test(s),
-    n + ": save_offers grants (five-argument signature): revoke from public and anon, grant execute to authenticated");
+  if (np) {
+    ok(/revoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text, date\[\], date\[\]\) from public;\nrevoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text, date\[\], date\[\]\) from anon;\ngrant execute on function public\.save_offers\(text, jsonb, date\[\], uuid, text, date\[\], date\[\]\) to authenticated;/.test(s),
+      n + ": save_offers grants (seven-argument signature): revoke from public and anon, grant execute to authenticated");
+    ok(!/save_offers\(text, jsonb, date\[\], uuid, text\)\s+(from|to|is)\b/.test(s), n + ": no grant / revoke / comment may name the dropped five-argument save_offers");
+  } else {
+    ok(/revoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from public;\nrevoke all on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) from anon;\ngrant execute on function public\.save_offers\(text, jsonb, date\[\], uuid, text\) to authenticated;/.test(s),
+      n + ": save_offers grants (five-argument signature): revoke from public and anon, grant execute to authenticated");
+  }
   ok(!/save_offers\(text, jsonb, date\[\]\)\s+(from|to)\b/.test(s), n + ": no grant / revoke may still name the three-argument save_offers (it does not exist)");
 }
 step("P14 P3a: schema.sql carries set_offer_mode() + save_offers() (placement after the call_offers guards, header revision line)");
-checkOfferRpcs("schema.sql", schema, true);   // Prompt 16 A7: schema.sql mirrors the coordinator migration's texts
+checkOfferRpcs("schema.sql", schema, true, true);   // Prompt 16 A7: schema.sql mirrors the coordinator migration's set_offer_mode; Prompt 28: the no-primary migration's save_offers
 (function placement() {
   const guardTrg = schema.indexOf("for each row execute function public.call_offers_delete_guard();");
   const modeAt = schema.indexOf("create or replace function public.set_offer_mode(");
@@ -1053,14 +1089,21 @@ ok(/-- Revision 2026-09-23 i \(Prompt 14 part 3a, sql\/migrations\/2026-09-23-of
 step("P14 P3a: migration 2026-09-23-offer-mode-rpc.sql defines the two functions and nothing else, byte-identical to schema.sql");
 const rpcMig = read(RPC_MIGRATION);
 ok(!/\r/.test(rpcMig), "offer-mode-rpc migration has CRLF line endings");
-checkOfferRpcs("rpc migration", rpcMig, false);
+checkOfferRpcs("rpc migration", rpcMig, false, false);
 eq((rpcMig.match(/create or replace function/g) || []).length, 2, "the rpc migration must define set_offer_mode and save_offers and nothing else;");
 ok(!/drop table|create table|alter table|create policy|drop policy|create trigger/.test(rpcMig), "the rpc migration must be additive (no table / policy / trigger changes)");
 // the ONE drop allowed: save_offers' earlier three-argument draft (never applied live) - so no second overload can
 // ever leave PostgREST unable to resolve rpc/save_offers
 eq((rpcMig.match(/drop function/g) || []).length, 1, "the rpc migration may drop exactly one function (the never-applied three-argument save_offers);");
 ok(/^drop function if exists public\.save_offers\(text, jsonb, date\[\]\);\ncreate or replace function public\.save_offers\(/m.test(rpcMig), "the drop must be `drop function if exists public.save_offers(text, jsonb, date[]);` right before the create");
-ok(!/drop function/.test(schema.slice(schema.indexOf("create or replace function public.set_offer_mode("), schema.indexOf("create table if not exists public.notifications ("))), "schema.sql's offers-RPC section carries no drop (a from-scratch schema has nothing to drop)");
+// pin moved deliberately 10/1 (Prompt 28): the section carries exactly ONE drop, the five-argument save_offers, directly before the
+// save_offers create - a wholesale re-run on a database that still has the five-argument function must not leave two overloads
+// (PGRST203). Kept intent: no other drop in the offers-RPC section.
+{
+  const rpcSection = schema.slice(schema.indexOf("create or replace function public.set_offer_mode("), schema.indexOf("create table if not exists public.notifications ("));
+  eq((rpcSection.match(/drop function/g) || []).length, 1, "schema.sql's offers-RPC section carries exactly one drop (the five-argument save_offers, Prompt 28);");
+  ok(/^drop function if exists public\.save_offers\(text, jsonb, date\[\], uuid, text\);\ncreate or replace function public\.save_offers\(/m.test(rpcSection), "schema.sql: the one drop is `drop function if exists public.save_offers(text, jsonb, date[], uuid, text);` directly before the save_offers create");
+}
 // Prompt 16 A7 (2026-09-24-coordinator-role.sql) redefines both RPCs: schema.sql mirrors THAT file (the newest-migration pin
 // above enforces it); the 2026-09-23 file stays frozen as applied live 9/23 and is self-consistent (checkOfferRpcs above).
 ["set_offer_mode", "save_offers"].forEach((name) => {
@@ -1343,7 +1386,7 @@ step("P16 A7: the coordinator migration file - the role check, the helper, ten p
 const coordMig = read(COORD_MIGRATION);
 ok(!/\r/.test(coordMig), "coordinator migration has CRLF line endings");
 checkCoordPolicies("coordinator migration", coordMig);
-checkOfferRpcs("coordinator migration", coordMig, true);
+checkOfferRpcs("coordinator migration", coordMig, true, false);   // np false: frozen as applied (Prompt 28 re-creates save_offers in its own file)
 eq((coordMig.match(/^create policy /gm) || []).length, 10, "the coordinator migration must create exactly ten policies;");
 eq((coordMig.match(/^drop policy if exists /gm) || []).length, 10, "the coordinator migration must drop-if-exists exactly ten policies;");
 eq((coordMig.match(/create or replace function/g) || []).length, 3, "the coordinator migration must create silvis_is_coord, set_offer_mode and save_offers and nothing else;");
@@ -1357,7 +1400,10 @@ ok(!/directory of the six|home addresses/.test(coordMig), "no review phrasing in
 step("P16 A7: schema.sql mirrors the coordinator migration byte for byte (policies, DDL, helper, both RPCs), the inline checks read the new lists, the header records revision k");
 checkCoordPolicies("schema.sql", schema);
 Object.keys(COORD_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(coordMig, p), "policy " + p + ": schema.sql differs from the coordinator migration"));
-["set_offer_mode", "save_offers"].forEach((name) => ok(functionText(schema, name) === functionText(coordMig, name), name + "(): schema.sql differs from the coordinator migration (the newest migration touching it)"));
+// pin moved deliberately 10/1 (Prompt 28): save_offers leaves this list - sql/migrations/2026-10-01-no-primary-days.sql re-creates it
+// (seven arguments) and is now the newest migration touching it; schema.sql's save_offers / save_no_primary are pinned against that
+// file in the Prompt 28 block below. Kept intent: set_offer_mode still mirrors the coordinator migration byte for byte.
+["set_offer_mode"].forEach((name) => ok(functionText(schema, name) === functionText(coordMig, name), name + "(): schema.sql differs from the coordinator migration (the newest migration touching it)"));
 ok(sqlFunctionText(schema, "silvis_is_coord") === sqlFunctionText(coordMig, "silvis_is_coord"), "silvis_is_coord(): schema.sql differs from the coordinator migration");
 ok(schema.indexOf(COORD_HELPER) > schema.indexOf("create or replace function public.silvis_is_sched()") && schema.indexOf(COORD_HELPER) < schema.indexOf("create table if not exists public.call_schedule_data ("), "silvis_is_coord() sits right after silvis_is_sched() in schema.sql");
 ok(/role\s+text not null default 'viewer' check \(role in \('admin','scheduler','surgeon','viewer','coordinator'\)\),/.test(schema), "schema.sql's user_profiles inline role check must list coordinator (a from-scratch schema)");
@@ -2921,8 +2967,11 @@ Object.entries({ P1: "active=6 min=2", P2: "east=yes", P3: VG_AFTER_EQ.P3, P4: "
 
 step("vacation guard: verify-rls.sh section 15 - the graded probe, leftovers, PROBE_SETUP passing as not applied unless SILVIS_VACATION_GUARD_APPLIED=1; no REST write; graded against a faked CLI");
 ok(/^echo "== 15\. vacation guard \(2026-09-30, Prompt 27\): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 15 (vacation guard)");
-const s15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('echo "RESULT: '));
-ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, right before the RESULT line)");
+// pin moved deliberately 10/1 (Prompt 28): section 16 (no-primary days) follows section 15, so both slices end at section 16 when
+// it is present (else at the RESULT line) - every section-15 pin keeps judging section 15 alone (its no-curl pin would otherwise
+// count section 16's anon REST calls) and the faked run below never executes section 16.
+const s15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('echo "== 16. ') > vr.indexOf('echo "== 15. ') ? vr.indexOf('echo "== 16. ') : vr.indexOf('echo "RESULT: '));
+ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, right before section 16 or the RESULT line)");
 const s15code = s15.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 eq((s15code.match(/-X (POST|PATCH|DELETE|PUT)|curl /g) || []).length, 0, "section 15 goes over no REST call (the probe runs through the linked CLI);");
 ok(s15code.includes('VGSTRICT15="${SILVIS_VACATION_GUARD_APPLIED:-}"') && /if \[ "\$VGSTRICT15" = "1" \]; then bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent with SILVIS_VACATION_GUARD_APPLIED=1/.test(s15code) && /else ok "vacation guard probe: the trigger is absent \(before the migration: PROBE_SETUP\)"/.test(s15code), "PROBE_SETUP is the not-applied picture (a PASS) unless SILVIS_VACATION_GUARD_APPLIED=1 (a FAIL)");
@@ -2936,7 +2985,7 @@ ok(/expect_err15 K1 P0001 "ON_CALL_CONFLICT"/.test(s15code) && /expect_err15 K2 
 ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.includes("note like 'probe-vacguard%'") && s15code.includes("source = 'probe-vacguard'") && s15code.includes("data->>'probe' = 'vacguard'") && s15code.includes("decided_by = 'probe-vacguard'") && /LEFT ROWS BEHIND/.test(s15code), "section 15 counts leftovers over auth.users / time_off / schedule_days / east_feed / east_vacation_reviews and fails on non-zero");
 ok(/SILVIS_VACATION_GUARD_APPLIED=1 +grade section 15 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_VACATION_GUARD_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))) && /vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name section 15 and SILVIS_VACATION_GUARD_APPLIED");
 {
-  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('\necho\necho "RESULT: '));
+  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('\necho "== 16. ') > vr.indexOf('echo "== 15. ') ? vr.indexOf('\necho "== 16. ') : vr.indexOf('\necho\necho "RESULT: '));
   const run15 = (cliOut, strict, leftover) => {
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
       "SILVIS_VACATION_GUARD_APPLIED='" + (strict ? "1" : "") + "'\nlinked() { true; }\n" +
@@ -3040,5 +3089,353 @@ ok(/^\| `time_off` \|[^\n]*\*\*prepared 2026-09-30 - report-first, NOT APPLIED\*
   ok(/refused when fewer than `groupRules\.vacations\.minSurgeonsAround` \(default 2\)\nactive surgeons would stay around on one of its days/.test(claudeMd) && /the scheduler may override after a\nconfirm/.test(claudeMd) && /report-first until applied/.test(claudeMd), "CLAUDE.md's time-off summary names the vacation guard (the key, default 2, the scheduler's confirm, report-first until applied)");
 }
 console.log("- vacation guard: one trigger function + one trigger on time_off (report-first, NOT applied), mirrored (revision s), SQL text = helpers.vacationGuardMessage, probe + verify-rls section 15 graded against a faked CLI, docs pinned");
+
+// ---- Prompt 28 - no-primary days (2026-10-01, Faraz 10/1: "I do want them to be able to do that") ----
+// sql/migrations/2026-10-01-no-primary-days.sql (REPORT-FIRST, NOT APPLIED; revision t): ONE new security-definer function
+// save_no_primary(p_person, p_add, p_clear) - one availability row per no-primary day (kind backup_only, role any, note null), the
+// person's single-day backup_only rows cleared, never a range split - and save_offers re-created with p_np_add / p_np_clear (the
+// five-argument signature dropped; still security invoker), which calls it inside its own transaction and refuses a day it offers as
+// primary / either that carries a backup_only row afterwards (NP009). schema.sql mirrors both; sql/probes/no-primary-probe.sql proves
+// them (rolled back, 42 cases), sql/probes/no-primary-precheck.sql reads the facts (read-only), verify-rls.sh section 16 grades them
+// (PROBE_SETUP and the anon 404s pass as not applied unless SILVIS_NO_PRIMARY_APPLIED=1). Faraz's one-command apply scripts live
+// OUTSIDE the repo (Faraz 10/1: they carry machine paths), so no apply script is pinned here and none may sit under scripts/ (the
+// test/ci.test.js .sh pin keeps verify-rls.sh the only one). The record step moves these pins to the applied wording (the call pay
+// pattern) and pins the applied file's sha256.
+const NP_FILE = "2026-10-01-no-primary-days.sql";
+const NP_MIGRATION = path.join(ROOT, "sql", "migrations", NP_FILE);
+const NP_PROBE = path.join(ROOT, "sql", "probes", "no-primary-probe.sql");
+const NP_PRECHECK = path.join(ROOT, "sql", "probes", "no-primary-precheck.sql");
+const NP_SIGNATURE = "create or replace function public.save_no_primary(p_person text, p_add date[], p_clear date[]) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n";
+// the shared contract with the app lane: every refusal's exact text, in check order (NP001 twice, ... NP009), all before the first write
+const NP_RAISES = [
+  "raise exception 'NO_PRIMARY_NOT_LINKED: sign in with an account that is linked to a roster entry to mark no-primary days' using errcode = 'NP001';",
+  "raise exception 'NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'NP001';",
+  "raise exception 'NO_PRIMARY_NOT_YOURS: only the scheduler or the office can mark another surgeon''s no-primary days' using errcode = 'NP002';",
+  "raise exception 'NO_PRIMARY_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'NP003';",
+  "raise exception 'NO_PRIMARY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'NP004';",
+  "raise exception 'NO_PRIMARY_BAD_DAY: % is both marked and cleared in one save - nothing was saved', bad using errcode = 'NP004';",
+  "raise exception 'NO_PRIMARY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'NP005';",
+  "raise exception 'NO_PRIMARY_FROZEN: offers for % closed on % - ask the scheduler (%)', frozen.label, frozen.offers_close_at, frozen.days using errcode = 'NP006';",
+  "raise exception 'NO_PRIMARY_RANGE: % is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements', bad using errcode = 'NP007';",
+  "raise exception 'NO_PRIMARY_ON_CALL: % holds primary on % - trade those days first, then mark them No primary', v_name, bad using errcode = 'NP008';",
+  "raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';",
+];
+const NP_CODES = [["NP001", "NO_PRIMARY_NOT_LINKED"], ["NP002", "NO_PRIMARY_NOT_YOURS"], ["NP003", "NO_PRIMARY_UNKNOWN_PERSON"], ["NP004", "NO_PRIMARY_BAD_DAY"], ["NP005", "NO_PRIMARY_PAST"], ["NP006", "NO_PRIMARY_FROZEN"], ["NP007", "NO_PRIMARY_RANGE"], ["NP008", "NO_PRIMARY_ON_CALL"], ["NP009", "NO_PRIMARY_OFFER_CONFLICT"]];
+const NP_SOURCES_LINE = "if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;";
+const NP_DELETE = "  delete from public.availability a\n   where a.person_id = who and a.kind = 'backup_only' and a.start_date = a.end_date and a.start_date = any(clears);";
+const NP_INSERT = "  insert into public.availability (person_id, kind, role, start_date, end_date, note, source, created_by)\n  select who, 'backup_only', 'any', d, d, null, v_src, v_by\n    from unnest(adds) d\n   where not exists (select 1 from public.availability a\n                      where a.person_id = who and a.kind = 'backup_only' and d between a.start_date and a.end_date)\n  on conflict do nothing;";
+const NP_RETURN = "  return jsonb_build_object('ok', true, 'person_id', who, 'added', n_add, 'cleared', n_clear, 'kept', cardinality(adds) - n_add, 'source', v_src, 'created_by', v_by);";
+const NP_GRANTS = "revoke all on function public.save_no_primary(text, date[], date[]) from public;\nrevoke all on function public.save_no_primary(text, date[], date[]) from anon;\ngrant execute on function public.save_no_primary(text, date[], date[]) to authenticated;";
+// the probe's 42 cases and what section 16 grades for each: eq = the exact string; np = ERR <code> <token>: ... <substring> (the
+// NP008 / NP009 texts carry s3's roster name, written <name> in the probe header); err = ERR <code> ... <substring>
+const NP_NAME = "Acton";   // s3 in the live blob (the probe header writes <name>; the faked runs below substitute it)
+const NP_PROBE_CASES = {
+  P1: ["eq", "np_fn=yes np_definer=yes np_path=yes offers7=yes offers5=no offers_invoker=yes overloads=1 np_anon=no np_auth=yes offers_anon=no offers_auth=yes"],
+  S1: ["eq", "ok np_added=2 np_cleared=0 rows=2 src=app by=s3 role=any note=null"],
+  S2: ["eq", "ok np_added=0 np_kept=2 rows=2"],
+  S3: ["eq", "ok deleted=1 np_added=1 offer=none np=1"],
+  S4: ["eq", "ok np_added=1 offer=backup np=1"],
+  S5: ["eq", "ok upserted=1 np_cleared=1 offer=primary np=0"],
+  S6: ["np", "NP009", "NO_PRIMARY_OFFER_CONFLICT", "offers primary on 11/2 and marks it No primary - keep one of the two (nothing was saved)"],
+  S6s: ["eq", "offer=none np=1"],
+  S7: ["np", "NP009", "NO_PRIMARY_OFFER_CONFLICT", "offers primary on 11/13 and marks it No primary"],
+  S8: ["eq", "ok np_cleared=1 left=0"],
+  S9: ["np", "NP007", "NO_PRIMARY_RANGE", "11/11 is part of a longer no-primary range the scheduler set"],
+  S10: ["eq", "ok np_cleared=0 unavailable=1"],
+  S11: ["err", "42501", "row-level security policy for table \"availability\""],
+  S12: ["err", "42501", "row-level security policy for table \"availability\""],
+  S13: ["np", "NP009", "NO_PRIMARY_OFFER_CONFLICT", "offers primary on 11/10 and marks it No primary"],
+  V1: ["eq", "ok np_added=1"],
+  H1: ["np", "NP008", "NO_PRIMARY_ON_CALL", "holds primary on 11/5 - trade those days first, then mark them No primary"],
+  H2: ["eq", "ok np_added=1"],
+  D1: ["np", "NP005", "NO_PRIMARY_PAST", "4/6 is before today ("],
+  D2: ["np", "NP005", "NO_PRIMARY_PAST", "4/6 is before today ("],
+  F1: ["np", "NP006", "NO_PRIMARY_FROZEN", "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/20)"],
+  F2: ["np", "NP006", "NO_PRIMARY_FROZEN", "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/21)"],
+  B1: ["np", "NP008", "NO_PRIMARY_ON_CALL", "holds primary on 11/5 - trade those days first"],
+  B1s: ["eq", "offer_1101=none np_1115=0"],
+  B2: ["np", "NP004", "NO_PRIMARY_BAD_DAY", "11/15 is both marked and cleared in one save - nothing was saved"],
+  B3: ["np", "NP004", "NO_PRIMARY_BAD_DAY", "a day in the list is empty - nothing was saved"],
+  R1: ["err", "OS002", "OFFERS_NOT_YOURS"],
+  R2: ["np", "NP002", "NO_PRIMARY_NOT_YOURS", "only the scheduler or the office can mark another surgeon's no-primary days"],
+  R3: ["np", "NP009", "NO_PRIMARY_OFFER_CONFLICT", "offers primary on 11/13 and marks it No primary"],
+  O1: ["eq", "ok upserted=1 np_added=0"],
+  C1: ["eq", "ok np_added=1 src=office-relay by=self"],
+  C2: ["err", "OS004", "OFFERS_UNKNOWN_PERSON"],
+  C3: ["np", "NP003", "NO_PRIMARY_UNKNOWN_PERSON", "zz is not a roster id - the office relays for a roster surgeon only"],
+  C4: ["np", "NP006", "NO_PRIMARY_FROZEN", "ask the scheduler (11/22)"],
+  A1: ["eq", "ok np_added=1 src=email-relay by=scheduler"],
+  A2: ["eq", "ok np_cleared=1"],
+  A3: ["np", "NP008", "NO_PRIMARY_ON_CALL", "holds primary on 11/5"],
+  A4: ["np", "NP005", "NO_PRIMARY_PAST", "4/6 is before today ("],
+  A5: ["np", "NP007", "NO_PRIMARY_RANGE", "11/11 is part of a longer no-primary range"],
+  A6: ["eq", "ok np_added=0 np_kept=1"],
+  N1: ["err", "42501", "permission denied for function save_no_primary"],
+  N2: ["np", "NP001", "NO_PRIMARY_NOT_LINKED", "sign in with an account that is linked to a roster entry"],
+};
+const NP_CASES = Object.keys(NP_PROBE_CASES);
+const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// the top-level statements of a SQL file (comment lines dropped; a ';' inside a $$ body or a '...' literal does not end one)
+function topStatements(sql) {
+  const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const out = []; let cur = ""; let body = false; let str = false;
+  for (let i = 0; i < code.length; i++) {
+    if (!str && code.startsWith("$$", i)) { body = !body; cur += "$$"; i++; continue; }
+    if (!body && code[i] === "'") str = !str;
+    cur += code[i];
+    if (code[i] === ";" && !body && !str) { if (cur.trim()) out.push(cur.trim()); cur = ""; }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+function checkNoPrimaryFn(n, s) {
+  const fn = functionText(s, "save_no_primary");
+  ok(fn, n + ": no `create or replace function public.save_no_primary(...)` ... `end $$;` block");
+  if (!fn) return;
+  ok(fn.startsWith(NP_SIGNATURE), n + ": save_no_primary must read `" + NP_SIGNATURE.trim() + "` (security definer: a surgeon cannot write availability under RLS; search_path public, pg_temp)");
+  const del = fn.indexOf(NP_DELETE), ins = fn.indexOf(NP_INSERT);
+  ok(del > 0 && ins > del, n + ": the clear (single-day backup_only rows of the person on the named days, any source) then the add (one row per day not already covered by any backup_only row; backup_only / any / note null / v_src / v_by; on conflict do nothing)");
+  eq((fn.match(/(insert into|update|delete from) public\.availability/g) || []).length, 2, n + ": save_no_primary writes availability exactly twice (the delete and the insert);");
+  ok(!/(insert into|update|delete from) public\.(call_offers|schedule_days|time_off|call_periods|audit_log|notifications|call_schedule_data|user_profiles)\b/.test(fn) && !/audit_log|notifications/.test(fn), n + ": save_no_primary writes nothing but availability (no audit / feed row: the client's offers.save is the one audit row)");
+  let last = -1;
+  NP_RAISES.forEach((r) => {
+    const at = fn.indexOf(r);
+    ok(at > last, n + ": the refusal is missing or out of order (NP001 x2, NP002, NP003, NP004 x2, NP005, NP006, NP007, NP008, NP009):\n" + r);
+    ok(at < del, n + ": every refusal comes BEFORE the first write (fail closed):\n" + r);
+    if (at > last) last = at;
+  });
+  eq((fn.match(/using errcode = 'NP0/g) || []).length, NP_RAISES.length, n + ": exactly the eleven NP raises;");
+  ok(fn.includes("  if auth.uid() is null or (me is null and not sched and not coord) then\n    raise exception 'NO_PRIMARY_NOT_LINKED: sign in"), n + ": NP001 fires for anon (auth.uid() null) and for an unlinked caller who is neither the scheduler nor the office");
+  ok(fn.includes("  who := coalesce(who, me);") && fn.includes("  if who <> coalesce(me, '') and not sched and not coord then\n    raise exception 'NO_PRIMARY_NOT_YOURS"), n + ": the person defaults to the caller; NP002 for another person unless the scheduler or the office");
+  ok(fn.includes("  if coord and " + COORD_ROSTER_CHECK + " then\n    raise exception 'NO_PRIMARY_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'NP003';\n  end if;"), n + ": NP003 - the office relays for a roster id only (the OS004 expression word for word; gated on coord)");
+  const lock = fn.indexOf("  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));");
+  ok(lock > fn.indexOf(NP_RAISES[3]) && lock < fn.indexOf(NP_RAISES[4]), n + ": the per-person advisory lock is taken after NP003 and before every availability read (two Saves of one person serialise)");
+  ok(fn.includes("  today_c  date := (now() at time zone 'America/Chicago')::date;") && fn.includes("from unnest(adds || clears) d where d < today_c;"), n + ": NP005 reads the Central date, for marks and clears");
+  const gate = fn.indexOf("  if not sched then\n"), gateEnd = fn.indexOf("\n  end if;\n", gate);
+  eq((fn.match(/if not sched then/g) || []).length, 1, n + ": one scheduler exemption;");
+  eq((fn.slice(gate, gateEnd).match(/errcode = 'NP0\d\d'/g) || []), ["errcode = 'NP006'"], n + ": `not sched` gates NP006 (the freeze) only - past days, ranges, a held primary and offer conflicts bind the scheduler too;");
+  ok(fn.includes("       and (p.offers_close_at <= today_c or p.status <> 'upcoming')\n     order by p.start_day\n     limit 1;"), n + ": NP006 reads the OF003 freeze (closed by date or no longer upcoming); the earliest such period names the message");
+  ok(fn.includes("from unnest(clears) d\n   where exists (select 1 from public.availability a where a.person_id = who and a.kind = 'backup_only' and a.start_date < a.end_date and d between a.start_date and a.end_date);"), n + ": NP007 - a day to CLEAR covered by a longer backup_only range of the person (any role, any source)");
+  ok(fn.includes("from public.schedule_days s where s.day = any(adds) and s.primary_id = who;"), n + ": NP008 - a day to MARK he holds as PRIMARY on schedule_days (a held backup is fine; a clear is never refused)");
+  ok(fn.includes("   where o.person_id = who and o.day = any(adds) and o.role_pref in ('primary', 'either');"), n + ": NP009 - a day to MARK with a primary / either offer of the person");
+  ok(fn.includes("  " + NP_SOURCES_LINE), n + ": source / created_by come from the caller - save_offers' rule, one line");
+  ok(fn.includes(NP_RETURN), n + ": return shape {ok, person_id, added, cleared, kept, source, created_by}");
+  const kinds = fn.match(/\bkind = '[a-z_]+'/g) || [];
+  ok(kinds.length === 3 && kinds.every((x) => x === "kind = 'backup_only'") && !/p_kind|'(available|unavailable|avoid|prefer|no_backup)'/.test(fn), n + ": no kind parameter - the function only ever reads, writes and deletes backup_only rows");
+  ok(s.indexOf(NP_GRANTS) > s.indexOf(fn), n + ": save_no_primary grants: revoke from public and anon, grant execute to authenticated (an invoker's nested call needs it)");
+  ok(/^comment on function public\.save_no_primary\(text, date\[\], date\[\]\) is '[^\n]*NP009 NO_PRIMARY_OFFER_CONFLICT[^\n]*offers\.save[^\n]*';$/m.test(s), n + ": save_no_primary carries a comment naming its codes and the client's offers.save audit row");
+}
+
+step("Prompt 28: the migration - save_no_primary (NEW, security definer) + save_offers re-created with p_np_add / p_np_clear (five-argument signature dropped), report-first NOT APPLIED, no table / policy / trigger, ends with the schema-cache reload");
+const npMig = read(NP_MIGRATION);
+ok(!/\r/.test(npMig), "no-primary migration has CRLF line endings");
+ok(/^[\x00-\x7f]*$/.test(npMig), "the no-primary migration is ASCII only");
+ok(migFiles.includes(NP_FILE) && !PREPARED_NOT_MIRRORED.includes(NP_FILE), "sql/migrations/" + NP_FILE + " is a mirrored migration (not exempt)");
+const npHdr = npMig.slice(0, npMig.indexOf("create or replace function public.save_no_primary("));
+const npHdrFlat = npHdr.replace(/\n-- ?/g, " ");
+ok(/^-- REPORT-FIRST, NOT APPLIED \(/m.test(npHdr), "the migration header must say REPORT-FIRST, NOT APPLIED");
+ok(npHdrFlat.includes("\"I do want them to be able to do that\"") && npHdrFlat.includes("\"These are days I am at Jackson County - I need to be blocked out as unavailable for primary call. I can cover backup call these days\""), "the header quotes Faraz and Burchett (10/1)");
+ok(npHdr.includes("\n--   bash <run folder>/apply-no-primary-days.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-no-primary-days.sql   (what it runs)\n"), "the header carries the two apply lines (the one command - its script kept outside the repo - and what it runs)");
+ok(!/bash scripts\/apply-/.test(npHdr), "the migration header names no in-repo apply script (Faraz 10/1: apply scripts live outside the repo)");
+ok(npHdrFlat.includes("sql/probes/no-primary-precheck.sql") && npHdrFlat.includes("sql/probes/no-primary-probe.sql") && npHdrFlat.includes("PROBE_SETUP: save_no_primary is absent") && npHdrFlat.includes("SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh") && npHdrFlat.includes("docs/SCHEMA-REVIEW.md \"2026-10-01 - no-primary days\""), "the header gives the order: pre-check, probe BEFORE (PROBE_SETUP), the file, probe AFTER, strict verify-rls, the record step");
+NP_CODES.forEach(([c, t]) => ok(npHdrFlat.includes(c + " " + t + ": "), "the header lists " + c + " " + t + " with its message"));
+ok(npHdr.includes("\n--   drop function if exists public.save_offers(text, jsonb, date[], uuid, text, date[], date[]);\n--   -- re-create the five-argument save_offers from sql/migrations/2026-09-24-coordinator-role.sql (its create, grants, comment)\n--   drop function if exists public.save_no_primary(text, date[], date[]);\n--   notify pgrst, 'reload schema';\n"), "the header gives the rollback (drop the seven-argument save_offers, re-create the coordinator file's, drop save_no_primary, reload)");
+ok(/Blast radius/.test(npHdr) && /Who it binds/.test(npHdr) && /The decision/.test(npHdr) && npHdrFlat.includes("one implicit transaction") || npHdrFlat.includes("ONE implicit transaction"), "the header states the decision, whom it binds, the blast radius and that the file runs as one transaction");
+ok(!/^-- supersedes:/m.test(npMig) && !/^-- PREPARED FOLLOW-UP/m.test(npMig), "the no-primary migration has no supersedes line (no same-day migration redefines either function) and is not a NOT-MIRRORED follow-up");
+eq((npMig.match(/create or replace function/g) || []).length, 2, "the migration creates exactly two functions (save_no_primary, save_offers);");
+const npCode = npMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+eq((npCode.match(/drop function/g) || []).length, 1, "the migration drops exactly one function (the five-argument save_offers);");
+ok(/^drop function if exists public\.save_offers\(text, jsonb, date\[\], uuid, text\);\ncreate or replace function public\.save_offers\(/m.test(npCode), "the drop is `drop function if exists public.save_offers(text, jsonb, date[], uuid, text);` directly before the save_offers create (no two overloads: PGRST203)");
+ok(!/create table|alter table|drop table|create policy|drop policy|create trigger|drop trigger|create index/i.test(npCode), "the migration changes no table, policy, trigger or index");
+ok(npMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (a seven-key call needs the cache to know p_np_add / p_np_clear)");
+const npStmts = topStatements(npMig);
+eq(npStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
+  "create or replace function public.save_no_primary(p_person text, p_add date[], p_clear date[]) returns jsonb",
+  "revoke all on function public.save_no_primary(text, date[], date[]) from public;",
+  "revoke all on function public.save_no_primary(text, date[], date[]) from anon;",
+  "grant execute on function public.save_no_primary(text, date[], date[]) to authenticated;",
+  "comment on function public.save_no_primary(text, date[], date[]) is ...",
+  "drop function if exists public.save_offers(text, jsonb, date[], uuid, text);",
+  "create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null, p_np_add date[] default null, p_np_clear date[] default null) returns jsonb",
+  "revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from public;",
+  "revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from anon;",
+  "grant execute on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) to authenticated;",
+  "comment on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) is ...",
+  "notify pgrst, 'reload schema';",
+], "the migration is exactly: save_no_primary + grants + comment, the drop, save_offers + grants + comment, the reload;");
+checkNoPrimaryFn("no-primary migration", npMig);
+checkSaveOffers("no-primary migration", npMig, true, true);
+ok(functionText(npMig, "save_offers").includes("  " + NP_SOURCES_LINE), "save_offers' sources line is the one save_no_primary repeats");
+
+step("Prompt 28: schema.sql mirrors the migration (both functions byte for byte, grants, comments, the drop; save_no_primary right after set_offer_mode), revision t 'report-first, NOT yet applied' after revision s, the offers-RPC block names the new parameters and codes");
+checkNoPrimaryFn("schema.sql", schema);
+["save_no_primary", "save_offers"].forEach((name) => ok(functionText(schema, name) === functionText(npMig, name), name + "(): schema.sql differs from sql/migrations/" + NP_FILE + " (the newest migration touching it)"));
+npStmts.filter((st) => !/^notify pgrst/.test(st)).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this no-primary statement byte for byte:\n" + st.slice(0, 300)));
+{
+  const at = (t) => schema.indexOf(t);
+  const order = [at("comment on function public.set_offer_mode(uuid, text, text) is "), at("create or replace function public.save_no_primary("), at("grant execute on function public.save_no_primary(text, date[], date[]) to authenticated;"), at("comment on function public.save_no_primary(text, date[], date[]) is "),
+    at("drop function if exists public.save_offers(text, jsonb, date[], uuid, text);"), at("create or replace function public.save_offers("), at("comment on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) is "), at("create table if not exists public.notifications (")];
+  ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), "schema.sql order: set_offer_mode's comment, save_no_primary (+ grants + comment), the drop, save_offers (+ grants + comment), then the notifications table (" + order + ")");
+  eq((schema.match(/create or replace function public\.save_offers\(/g) || []).length, 1, "schema.sql defines save_offers once;");
+  eq((schema.match(/create or replace function public\.save_no_primary\(/g) || []).length, 1, "schema.sql defines save_no_primary once;");
+  const tAt = header.search(/^-- Revision 2026-10-01 t \(no-primary days, sql\/migrations\/2026-10-01-no-primary-days\.sql, report-first, NOT yet applied\): /m);
+  const sAt = header.search(/^-- Revision 2026-09-30 s /m);
+  ok(sAt > 0 && tAt > sAt, "schema.sql's header must record revision 2026-10-01 t (no-primary days; 'report-first, NOT yet applied' until the record step) after revision s");
+  const revT = header.slice(tAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(/save_no_primary\(p_person, p_add, p_clear\) \(security definer, search_path public, pg_temp\)/.test(revT) && /p_np_add \/ p_np_clear/.test(revT) && /five-argument signature is dropped and re-created with seven/.test(revT) && /NP001-NP009/.test(revT) && /No table, column, policy or trigger change/.test(revT), "revision t names the new definer, the two parameters, the dropped signature, the codes and that no table / policy / trigger changes");
+  ok(schema.includes("-- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode, p_np_add, p_np_clear) - the offer painter"), "the offers-RPC block comment's first line names save_offers' seven parameters");
+  const blk = schema.slice(schema.indexOf("-- set_offer_mode(p_period, p_mode, p_person) + save_offers("), schema.indexOf("create or replace function public.set_offer_mode("));
+  ok(blk.includes("-- Prompt 28 (2026-10-01, revision t; sql/migrations/2026-10-01-no-primary-days.sql - report-first, NOT yet applied)") && NP_CODES.every(([c, t]) => blk.includes(c + " " + t)), "the offers-RPC block comment carries the Prompt 28 paragraph and every NP code with its token");
+  ok(/the drop line stays here on purpose/.test(blk.replace(/\n-- +/g, " ")), "the block comment says why the drop line stays in schema.sql");
+}
+
+step("Prompt 28: the probe - self-rolling-back, PROBE_SETUP first, a collision guard on 2030-11 / 2020-04-06, three throwaway users, 42 cases each stating its AFTER string in the header");
+const npProbe = read(NP_PROBE);
+ok(!/\r/.test(npProbe) && /^[\x00-\x7f]*$/.test(npProbe), "the no-primary probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(npProbe), "the no-primary probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(npProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ngrant insert, select on probe_results to anon;"), "the probe collects into probe_results, granted to authenticated and anon (N1 runs as anon)");
+{
+  const lastDo = npProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(npProbe.slice(lastDo)), "the probe's last DO block raises 'PROBE_RESULTS %;END'");
+  const setupAt = npProbe.indexOf("raise exception 'PROBE_SETUP: save_no_primary is absent - sql/migrations/2026-10-01-no-primary-days.sql is not applied';");
+  const guardAt = npProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in 2030-11 (availability / call_offers / schedule_days / time_off / call_periods) or an availability row covers 2020-04-06 - the probe fixtures would collide';");
+  const usersAt = npProbe.indexOf("insert into auth.users");
+  ok(setupAt > 0 && npProbe.indexOf("if to_regprocedure('public.save_no_primary(text, date[], date[])') is null then") < setupAt && guardAt > setupAt && usersAt > guardAt, "the setup raises PROBE_SETUP (absent) first, then the collision guard, before any fixture");
+  const code = npProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ["select 1 from public.availability where start_date <= '2030-11-30' and end_date >= '2030-11-01'", "select 1 from public.availability where '2020-04-06' between start_date and end_date", "select 1 from public.call_offers where day between '2030-11-01' and '2030-11-30'", "select 1 from public.schedule_days where day between '2030-11-01' and '2030-11-30'", "select 1 from public.time_off where start_date <= '2030-11-30' and end_date >= '2030-11-01'", "select 1 from public.call_periods where start_day <= '2030-11-30' and end_day >= '2030-11-01'"].forEach((g) => ok(code.includes(g), "the collision guard checks: " + g));
+  ok(code.includes("'probe-noprimary-' || u || '@example.test'") && code.includes("update public.user_profiles set person_id = 's3', role = 'surgeon' where id = surgeon;") && code.includes("update public.user_profiles set role = 'coordinator' where id = coord;") && code.includes("update public.user_profiles set person_id = 's1', role = 'admin' where id = admin_u;"), "the throwaway users: surgeon S (s3), an unlinked coordinator C, an admin A (s1), probe-noprimary-<uuid>@example.test");
+  ok(code.includes("values ('probe np open', '2030-11-01', '2030-11-15', '2030-09-01', '2030-10-01', 'upcoming', 'probe'),\n         ('probe np frozen', '2030-11-16', '2030-11-30', '2026-09-01', '2026-09-15', 'upcoming', 'probe');") && code.includes("values ('2030-11-05', 's3', null, 'probe-noprimary'), ('2030-11-06', 's2', 's3', 'probe-noprimary');"), "the fixtures: an open and a frozen period, s3 primary 11/5 and backup 11/6 (source probe-noprimary)");
+  ok(code.includes("('s3', 'backup_only', 'any', '2030-11-10', '2030-11-12', 'probe-noprimary', 'setup', 'probe')") && code.includes("('s3', 'unavailable', 'any', '2030-11-09', '2030-11-09', 'probe-noprimary', 'setup', 'probe')") && code.includes("values ('s3', '2030-11-14', '2030-11-14', 'probe-noprimary', 'probe');"), "the fixtures: s3's Setup range, an unavailable row, a vacation");
+  const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]).concat(Array.from(code.matchAll(/\{(20[0-9]{2}-[0-9]{2}-[0-9]{2})/g)).map((m) => m[1]));
+  ok(days.length > 30 && days.every((d) => d.slice(0, 7) === "2030-11" || d === "2020-04-06" || ["2030-09-01", "2030-10-01", "2026-09-01", "2026-09-15"].includes(d)), "every day the probe touches is in 2030-11 or 2020-04-06 (period close / publish dates aside): " + days.filter((d) => !(d.slice(0, 7) === "2030-11" || d === "2020-04-06")).join(", "));
+  ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(code), "the probe never writes the blob");
+  NP_CASES.forEach((k) => ok(code.includes("values ('" + k + "', "), "the probe lacks case " + k));
+  ok(code.includes("execute 'set local role anon';\n  perform set_config('request.jwt.claims', '', true);") && code.includes("perform set_config('request.jwt.claims', '{}', true);\n  begin\n    r := public.save_no_primary('s3', '{2030-11-15}', null);\n    insert into probe_results values ('N2', "), "N1 runs as anon, N2 as postgres with no signed-in user");
+  ok(code.includes("r := public.save_offers('s3', '[{\"day\":\"2030-11-01\",\"role_pref\":\"backup\"}]'::jsonb, null);\n    insert into probe_results values ('O1', "), "O1 calls save_offers in the old three-argument shape");
+}
+const npProbeHdr = npProbe.slice(0, npProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(npProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(npProbeHdr) && /\n-- 42 cases\.\n/.test(npProbeHdr), "the probe header: report-first / not applied, nothing persisted, 42 cases");
+const NP_AFTER = {};
+npProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+s?)\s+.* -> (.*)$/); if (m) NP_AFTER[m[1]] = m[2]; });
+eq(Object.keys(NP_AFTER).sort(), NP_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
+NP_CASES.forEach((k) => {
+  const [kind, a, b, c] = NP_PROBE_CASES[k], h = NP_AFTER[k] || "";
+  ok(kind === "eq" ? h === a : kind === "np" ? h.startsWith("ERR " + a + " " + b + ": ") && h.includes(c) : h.startsWith("ERR " + a + " ") && h.includes(b), "the probe header's AFTER for " + k + " (" + h + ") must agree with what section 16 grades (" + NP_PROBE_CASES[k].join(" | ") + ")");
+});
+
+step("Prompt 28: the pre-check - ONE read-only SELECT (the functions gate, the availability total, backup_only rows per person with a note COUNT, offer conflicts, a primary held on a no-primary day)");
+const npPre = read(NP_PRECHECK);
+ok(!/\r/.test(npPre) && /^[\x00-\x7f]*$/.test(npPre), "the pre-check is LF and ASCII");
+{
+  const hdr = npPre.slice(0, npPre.indexOf("with today as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
+  ok(hdr.includes("np_fn=no offers5=yes offers7=no overloads=1") && hdr.includes("np_fn=yes offers5=no offers7=yes overloads=1"), "the header states the gate before and after the apply");
+  const code = npPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with today as (") && code.endsWith("order by ord, person_id;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, person_id");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code), "the pre-check writes, locks and changes nothing");
+  ok(code.includes("'np_fn=' || case when to_regprocedure('public.save_no_primary(text, date[], date[])') is null then 'no' else 'yes' end") && code.includes("to_regprocedure('public.save_offers(text, jsonb, date[], uuid, text)')") && code.includes("to_regprocedure('public.save_offers(text, jsonb, date[], uuid, text, date[], date[])')") && code.includes("where n.nspname = 'public' and p.proname = 'save_offers'"), "row 1 (the gate): save_no_primary, the five- and seven-argument save_offers, the overload count");
+  ["'functions'::text", "'availability total'::text", "'backup_only rows'::text", "'offer conflict'::text", "'primary held on a no-primary day'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  const NOTE_COUNT = "' with_note=' || count(*) filter (where nullif(btrim(coalesce(a.note, '')), '') is not null)";
+  ok(code.includes(NOTE_COUNT) && !/\bnote\b/.test(code.split(NOTE_COUNT).join("")), "the note is COUNTED, never printed - the count filter is the one place the pre-check reads a note (an anon-readable table's notes carry no reasons; the live Jackson County note is flagged, not copied)");
+  ok(code.includes("where o.day >= t.d and o.role_pref in ('primary', 'either')") && code.includes("where s.day >= t.d and s.primary_id is not null"), "the conflict sections look at today or later (Central)");
+}
+
+step("Prompt 28: verify-rls.sh section 16 - anon REST (16a save_no_primary, 16b the seven-key save_offers), the graded probe, leftovers; PROBE_SETUP / 404 pass as not applied unless SILVIS_NO_PRIMARY_APPLIED=1; graded against a faked CLI and curl");
+ok(/^echo "== 16\. no-primary days \(2026-10-01, Prompt 28\): save_no_primary \+ save_offers p_np_add \/ p_np_clear - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 16 (no-primary days)");
+const s16 = vr.slice(vr.indexOf('echo "== 16. '), vr.indexOf('echo "RESULT: '));
+ok(s16.length > 0 && vr.indexOf('echo "== 16. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 16 could not be sliced out (after section 15, right before the RESULT line)");
+const s16code = s16.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(s16code.includes('NPSTRICT16="${SILVIS_NO_PRIMARY_APPLIED:-}"'), "section 16 reads SILVIS_NO_PRIMARY_APPLIED");
+eq((s16code.match(/curl /g) || []).length, 2, "section 16 makes exactly two REST calls (16a, 16b);");
+ok(s16code.includes("-X POST \"$URL/rest/v1/rpc/save_no_primary\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_person\":\"s9test\",\"p_add\":[],\"p_clear\":[]}'"), "16a: anon POST rpc/save_no_primary (anon key as apikey and bearer; empty lists - nothing written)");
+ok(s16code.includes("-X POST \"$URL/rest/v1/rpc/save_offers\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_person\":\"s9test\",\"p_rows\":[],\"p_clear\":[],\"p_period\":null,\"p_mode\":null,\"p_np_add\":[],\"p_np_clear\":[]}'"), "16b: anon POST rpc/save_offers with the seven keys (the schema-cache gate before the client push)");
+ok(!/SILVIS_JWT|SILVIS_SURGEON_JWT/.test(s16code), "section 16 sends no user token (anon only)");
+ok((s16code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 2 && (s16code.match(/"HTTP 404"\) if \[ "\$NPSTRICT16" = "1" \]; then bad /g) || []).length === 2 && (s16code.match(/\n  \*\) bad "anon rpc save_/g) || []).length === 2, "16a / 16b: 401/403 PASS, 404 PASS unless strict (then FAIL), anything else - a 200 included - FAIL");
+ok(/PROBE16="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/no-primary-probe\.sql"/.test(s16code), "16c runs sql/probes/no-primary-probe.sql through the linked CLI");
+ok(/if \[ "\$NPSTRICT16" = "1" \]; then bad "no-primary probe: PROBE_SETUP - save_no_primary is absent with SILVIS_NO_PRIMARY_APPLIED=1/.test(s16code) && /else ok "no-primary probe: save_no_primary is absent \(before the migration: PROBE_SETUP\)"/.test(s16code), "16c: PROBE_SETUP (absent) is the not-applied picture (a PASS) unless SILVIS_NO_PRIMARY_APPLIED=1 (a FAIL)");
+ok(s16code.includes("expect_eq16()  { v=$(case_val16 \"$1\" | sed 's/\\\\//g');") && s16code.includes("case \"$v\" in \"ERR $2 $3: \"*\"$4\"*) ok") && s16code.includes("case \"$v\" in \"ERR $2 \"*\"$3\"*) ok"), "section 16's graders strip the CLI's backslashes and match ERR <code> [<token>:] ... <substring> literally");
+NP_CASES.forEach((k) => {
+  const [kind, a, b, c] = NP_PROBE_CASES[k];
+  const re = kind === "eq" ? new RegExp("\\n    expect_eq16\\s+" + reEsc(k) + "\\s+\"" + reEsc(a) + "\"\\s") : kind === "np" ? new RegExp("\\n    expect_np16\\s+" + reEsc(k) + "\\s+" + a + "\\s+" + b + "\\s+\"" + reEsc(c) + "\"\\s") : new RegExp("\\n    expect_err16\\s+" + reEsc(k) + "\\s+" + a + "\\s+[\"']" + reEsc(b) + "[\"']\\s");
+  ok(re.test(s16code), "section 16 must grade " + k + " as " + NP_PROBE_CASES[k].join(" | "));
+});
+eq((s16code.match(/\n    expect_(eq|np|err)16 /g) || []).length, NP_CASES.length, "section 16 grades exactly the 42 cases;");
+ok(s16code.includes("(select count(*) from auth.users where email like 'probe-noprimary-%@example.test')") && s16code.includes("(select count(*) from public.availability where start_date <= '2030-11-30' and end_date >= '2030-11-01')") && s16code.includes("(select count(*) from public.availability where '2020-04-06' between start_date and end_date)") && s16code.includes("(select count(*) from public.call_offers where day between '2030-11-01' and '2030-11-30')") && s16code.includes("(select count(*) from public.schedule_days where source = 'probe-noprimary')") && s16code.includes("(select count(*) from public.time_off where note = 'probe-noprimary')") && s16code.includes("(select count(*) from public.call_periods where label like 'probe np %')") && /LEFT ROWS BEHIND/.test(s16code), "16d counts leftovers over auth.users / availability / call_offers / schedule_days / time_off / call_periods and fails on non-zero");
+ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 16c / 16d skip (16a / 16b still run)");
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(/SILVIS_NO_PRIMARY_APPLIED=1 +grade section 16 strictly \(the probe's PROBE_SETUP and the anon 404s = FAIL\)/.test(head) && /no-primary days anon RPC checks and probe \(16\)/.test(head) && /anon checks \(1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b\)/.test(head), "verify-rls.sh's header names section 16 and SILVIS_NO_PRIMARY_APPLIED");
+  ok(/SILVIS_NO_PRIMARY_APPLIED \/ SILVIS_VACATION_GUARD_APPLIED - see the header/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_NO_PRIMARY_APPLIED");
+}
+{
+  const code16 = vr.slice(vr.indexOf('echo "== 16. '), vr.indexOf('\necho\necho "RESULT: '));
+  const run16 = (cliOut, opts) => {
+    const o = Object.assign({ strict: false, leftover: 0, a: "401", b: "401" }, opts || {});
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_NO_PRIMARY_APPLIED='" + (o.strict ? "1" : "") + "'\nCURL16A='" + o.a + "'; CURL16B='" + o.b + "'\nlinked() { true; }\n" +
+      "q() { printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + o.leftover + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"; }\n" +
+      "curl() { local of='' prev='' code='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in *rpc/save_no_primary*) code=\"$CURL16A\";; *rpc/save_offers*) code=\"$CURL16B\";; esac; prev=\"$a\"; done; [ -n \"$of\" ] && : > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code16 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 16: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = {};
+  NP_CASES.forEach((k) => { after[k] = NP_PROBE_CASES[k][0] === "eq" ? NP_PROBE_CASES[k][1] : (NP_AFTER[k] || "").replace(/<name>/g, NP_NAME).replace(/<today M\/D>/g, "10/1"); });
+  // the CLI's JSON escapes a double quote inside the message (S11 / S12): the graders strip the backslashes
+  const msgOf = (pic) => '{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k].replace(/"/g, '\\"')).join(";") + ';END"}';
+  const ra = run16(msgOf(after));
+  eq(ra.result, [NP_CASES.length + 3, 0], "section 16 against the AFTER picture (401 / 401, every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  const setup = '{"message": "ERROR: P0001: PROBE_SETUP: save_no_primary is absent - sql/migrations/2026-10-01-no-primary-days.sql is not applied"}';
+  const rb = run16(setup, { a: "404", b: "404" });
+  eq(rb.result, [4, 0], "section 16 before the apply (404 / 404, PROBE_SETUP): passes as not applied, the leftover check too (" + fails(rb) + ");");
+  eq(run16(setup, { a: "404", b: "404", strict: true }).result, [1, 3], "section 16 with SILVIS_NO_PRIMARY_APPLIED=1: the two 404s and PROBE_SETUP are FAILs;");
+  const rl = run16(msgOf(Object.assign({}, after, { H1: "ok np_added=1", F1: "ok np_added=1" })), { a: "200" });
+  eq(rl.result, [NP_CASES.length, 3], "section 16 must fail a held primary let through, a frozen day let through and an anon 200 - exactly those three (" + fails(rl) + ");");
+  const rq = run16(msgOf(after), { leftover: 3 });
+  eq(rq.result, [NP_CASES.length + 2, 1], "section 16 fails a non-zero leftover count;");
+  ok(/LEFT ROWS BEHIND/.test(rq.out), "section 16 names the leftovers");
+  eq(run16('{"message": "connection refused"}').result, [3, 1], "section 16 fails a run with no sentinel-terminated PROBE_RESULTS (16a / 16b and the leftover check still run);");
+  eq(run16('{"message": "ERROR: P0001: PROBE_SETUP: live rows already sit in 2030-11 (availability / call_offers / schedule_days / time_off / call_periods) or an availability row covers 2020-04-06 - the probe fixtures would collide"}').result, [3, 1], "the probe's collision guard is a FAIL, never 'not applied';");
+}
+
+step("Prompt 28: no apply script in the repo (Faraz 10/1: the one-command apply scripts carry machine paths and live outside the repo) - none under scripts/, no tracked SQL or SCHEMA-REVIEW line runs one from scripts/");
+{
+  ["apply-no-primary-days.sh", "apply-vacation-guard.sh"].forEach((f) => ok(!fs.existsSync(path.join(ROOT, "scripts", f)), "scripts/" + f + " must not be in the repo (Faraz 10/1: apply scripts live outside it; test/ci.test.js keeps verify-rls.sh the only shell script)"));
+  [NP_MIGRATION, NP_PROBE, NP_PRECHECK, path.join(ROOT, "sql", "schema.sql"), path.join(ROOT, "scripts", "verify-rls.sh"), path.join(ROOT, "docs", "SCHEMA-REVIEW.md")].forEach((p) =>
+    ok(!/bash scripts\/apply-|scripts\/apply-(no-primary-days|vacation-guard)\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
+}
+
+step("Prompt 28: docs - SCHEMA-REVIEW.md section (PREPARED, the decision, NP001-NP009, decisions, flags, blast radius, residuals, the pre-check verbatim, the probe table, apply order, one command, rollback, observed placeholder), table (a), the vacation guard's one command");
+ok(/^## 2026-10-01 - no-primary days: save_no_primary \+ save_offers p_np_add \/ p_np_clear \(Faraz 10\/1, Prompt 28; `sql\/migrations\/2026-10-01-no-primary-days\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-01 - no-primary days: ...' section");
+{
+  const at = review.indexOf("## 2026-10-01 - no-primary days:"), end = review.indexOf("\n## ", at + 1);
+  const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const flat = sec.replace(/\s+/g, " ");
+  ok(/\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*/.test(sec), "the section's status line reads `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+  ok(flat.includes("\"I do want them to be able to do that\"") && flat.includes("I can cover backup call these days"), "the section quotes Faraz and Burchett");
+  ok(/^\| `save_no_primary\(p_person text, p_add date\[\], p_clear date\[\]\)` \| - \|/m.test(sec) && /^\| `save_offers` \| five arguments/m.test(sec) && /\*\*unchanged\*\*/.test(sec) && flat.includes("`notify pgrst, 'reload schema';`"), "the object table: the new definer, save_offers dropped and re-created, everything else unchanged, the cache reload");
+  ok(flat.includes("**The decision: extend `save_offers` AND add the definer sibling, called inside it.**"), "the section states the decision");
+  NP_CODES.forEach(([c, t]) => ok(new RegExp("^\\| `" + c + "` \\|[^\\n]*`" + t + ": ", "m").test(sec), "the refusal table lists " + c + " with its " + t + " message"));
+  ok(flat.includes("**Decisions for Faraz**") && flat.includes("**Past days bind the scheduler too**") && flat.includes("**A vacation day is allowed**") && flat.includes("**Only a held PRIMARY is refused**") && flat.includes("**Either on a no-primary day is replaced by nothing**") && flat.includes("**A cleared seed-sourced row comes back on the next seed apply**") && flat.includes("**NP009 also binds older builds' Saves**"), "the section lists the decisions for Faraz");
+  ok(flat.includes("**Flags (live data, never changed here):**") && flat.includes("carry the public note \"Jackson County\"") && flat.includes("The function writes note NULL") && flat.includes("10/15"), "the section flags the live Jackson County note and the 10/15 seed row (nothing changed live)");
+  ok(flat.includes("**Blast radius.**") && flat.includes("**Residuals.**") && flat.includes("`claim_open_slot` does not consult availability") && flat.includes("unpaged"), "the section states the blast radius and the residuals");
+  ok(sec.includes("```sql\n" + npPre.slice(npPre.indexOf("with today as (")).replace(/\n+$/, "") + "\n```"), "the section carries the pre-check verbatim (= sql/probes/no-primary-precheck.sql)");
+  NP_CASES.forEach((k) => ok(new RegExp("^\\| " + reEsc(k) + " \\| [^\\n]* \\| `" + reEsc(NP_AFTER[k] || "?") + "` \\|$", "m").test(sec), "the section's probe table lists case " + k + " with its AFTER string"));
+  ok(flat.includes("4. Probe AFTER: every case as the table lists (42 cases).") && flat.includes("5. `SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh`") && flat.includes("6. The record step, ONE commit:") && flat.includes("`supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-no-primary-days.sql`"), "the apply order: pre-check, probe BEFORE, the file, probe AFTER (42), strict verify-rls, the record step");
+  ok(flat.includes("**One command (Faraz):** his apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo") && flat.includes("the migration's sha256 is the reviewed one") && flat.includes("--dry-run") && flat.includes("PASTE THIS BACK TO CLAUDE CODE"), "the section names the one command (its script outside the repo, Faraz 10/1), the sha256 stop, its dry run and the paste-back block");
+  ok(sec.includes("    drop function if exists public.save_offers(text, jsonb, date[], uuid, text, date[], date[]);\n    -- re-create the five-argument save_offers from sql/migrations/2026-09-24-coordinator-role.sql (its create, grants, comment)\n    drop function if exists public.save_no_primary(text, date[], date[]);\n    notify pgrst, 'reload schema';"), "the section gives the rollback");
+  ok(/^observed: _to be filled from Faraz's apply log_$/m.test(sec), "the section keeps the observed placeholder until the record step");
+}
+ok(/^\| `availability` \|[^\n]*through `save_offers` -> `save_no_primary` \(prepared 2026-10-01, NOT APPLIED/m.test(tblA), "SCHEMA-REVIEW table (a)'s availability row names the prepared no-primary write path");
+{
+  const at = review.indexOf("## 2026-09-30 - vacation guard:"), end = review.indexOf("\n## ", at + 1);
+  const vgSec = review.slice(at, end < 0 ? review.length : end);
+  const one = vgSec.indexOf("One command (10/1): Faraz's apply script `apply-vacation-guard.sh`, kept OUTSIDE the repo");
+  ok(one > 0 && one < vgSec.indexOf("observed (pre-apply, 2026-10-01)"), "the vacation guard section names its one command (the script kept outside the repo) before its observed lines");
+}
+console.log("- Prompt 28: save_no_primary + the seven-argument save_offers (report-first, NOT applied), mirrored (revision t), probe + pre-check + verify-rls section 16 graded against a faked CLI, apply scripts kept outside the repo, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");
