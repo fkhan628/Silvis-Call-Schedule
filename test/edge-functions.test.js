@@ -1895,7 +1895,8 @@ check("P26: no address in any offers response - the replayed dryRun entries (fir
   assert.ok(/"coordinator-c0a1b2c3"/.test(wire), "the coordinator tag");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const rec = s3.slice(s3.indexOf("### Deploy record - Prompt 26"), s3.indexOf("\n### ", s3.indexOf("### Deploy record - Prompt 26") + 10));
-  assert.ok(s3.indexOf("### Deploy record - Prompt 26") > 0 && /PENDING, nothing deployed/.test(rec), "the pending Prompt 26 record");
+  // pin moved deliberately 10/1: the record is DEPLOYED (2026-10-01 04:11 UTC, daily-reminder v7 / send-notification v9)
+  assert.ok(s3.indexOf("### Deploy record - Prompt 26") > 0 && !/PENDING, nothing deployed/.test(rec) && /deployed 2026-10-01 04:11 UTC by the orchestrator/.test(rec) && /v7 ACTIVE 2026-10-01 04:11:46 UTC/.test(rec) && /v9 ACTIVE 04:11:58 UTC/.test(rec), "the deployed Prompt 26 record");
   assert.ok(/`daily-reminder` \| v6 -> v7/.test(rec) && /`send-notification` \| v8 -> v9/.test(rec), "both functions, from the live versions");
   assert.ok(rec.indexOf("Before <freeze>, enter your vacations for <period> in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.") > 0, "the record quotes the body");
   const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 7."));
