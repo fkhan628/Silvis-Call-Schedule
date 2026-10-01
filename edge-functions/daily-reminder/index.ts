@@ -1,6 +1,11 @@
 // ===================================================================
 // Silvis Call Schedule - Daily Reminder Edge Function
 // ===================================================================
+// v8 - PREPARED 2026-10-01, NOT deployed (the 10/1 follow-ups, item 2; branch feat/weekend-pair-claim): the
+// @openSlots-mirror block words the generator's 'friday' weekend pattern (Prompt 23 B2) the way helpers.js does since
+// the 10/1 follow-ups - "weekend, Friday separate" in the Monday open-shifts e-mail - instead of reading it as unknown
+// (plain "weekend", the deployed v7). Nothing else changes. Deploy record and the exact commands: edge-functions/
+// README.md section 3, "Deploy record - 10/1 follow-up: daily-reminder v7 -> v8".
 // Retargeted from the Davenport (DSG) daily-reminder v19 on 2026-09-22.
 //
 // Runs HOURLY from pg_cron (`0 * * * *`) with the shared secret in the
@@ -482,6 +487,12 @@ function osmHolder(a, role) {
   if (role === "backup") return a.backup || null;
   return null;
 }
+// helpers.js OPEN_SLOT_PATTERN_WORDS / openSlotPatternWords (v8, 10/1): the words of a weekend unit's pattern - block / split /
+// daily as before and 'friday' (Prompt 23 B2: one surgeon on the Friday alone, the Saturday + Sunday a unit of their own);
+// an absent / unknown pattern reads plain "weekend".
+const OSM_PATTERN_WORDS = { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday separate" };
+function osmPatternKnown(k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(OSM_PATTERN_WORDS, k); }
+function osmPatternWords(pattern) { return osmPatternKnown(pattern) ? OSM_PATTERN_WORDS[pattern] : "weekend"; }
 function osmUnit(day, holidayByDay, weekendKinds) {
   const hol = holidayByDay && typeof holidayByDay === "object" ? holidayByDay[day] : null;
   if (hol && typeof hol === "object") return { kind: "holiday", name: hol.name || null };
@@ -490,7 +501,7 @@ function osmUnit(day, holidayByDay, weekendKinds) {
   const friday = dow === 5 ? day : osmAdd(day, dow === 6 ? -1 : -2);
   const kinds = weekendKinds && typeof weekendKinds === "object" ? weekendKinds : {};
   const k = kinds[friday];
-  return { kind: "weekend", pattern: k === "block" || k === "split" || k === "daily" ? k : null, friday: friday };
+  return { kind: "weekend", pattern: osmPatternKnown(k) ? k : null, friday: friday };
 }
 function openSlotsMirror(schedule, from, to, today, opts) {
   if (!osmIsDay(from) || !osmIsDay(to) || from > to) return [];
@@ -525,7 +536,7 @@ function openSlotsLineMirror(slot, nameOfUnit) {
   let unitText = "";
   if (typeof nameOfUnit === "function") unitText = u ? String(nameOfUnit(u) || "") : "";
   else if (u && u.kind === "holiday") unitText = "holiday: " + (u.name || "unit");
-  else if (u && u.kind === "weekend") unitText = "weekend" + (u.pattern ? " " + u.pattern : "");
+  else if (u && u.kind === "weekend") unitText = osmPatternWords(u.pattern);
   const reason = typeof s.reason === "string" && s.reason.trim() ? " - " + s.reason.trim() : "";
   return when + " - " + (s.role || "?") + (unitText ? " (" + unitText + ")" : "") + " - open" + reason;
 }

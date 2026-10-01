@@ -135,5 +135,36 @@
       { "day": "2026-11-16", "role": "primary", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null },
       { "day": "2026-11-16", "role": "backup", "unit": { "kind": "holiday", "name": "Test unit" }, "reason": null }
     ]
+  },
+  "fridayPattern": {
+    "note": "The generator's 'friday' weekend pattern (Prompt 23 B2: one surgeon on the Friday alone, the Saturday + Sunday a unit of their own) - the 10/1 follow-ups, item 2; daily-reminder v8 mirrors it. openSlots keeps the kind on the Friday, Saturday and Sunday of its weekend (unit.pattern 'friday'), openSlotsLine words it 'weekend, Friday separate'; an unknown kind (12/11 'weird') reads null - plain 'weekend'. December 2026: today (12/2) is a Wednesday; Fri 12/4 primary is held (the separate Friday) and its backup open, Sat 12/5 is open in both roles, Sun 12/6 primary is open; Mon-Thu are held. Roster ids only.",
+    "today": "2026-12-02",
+    "from": "2026-12-04",
+    "to": "2026-12-11",
+    "schedule": {
+      "2026-12-04": { "primary": "s5", "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-05": { "primary": null, "backup": null, "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-06": { "primary": null, "backup": "s2", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-07": { "primary": "s3", "backup": "s4", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-08": { "primary": "s4", "backup": "s6", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-09": { "primary": "s6", "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-10": { "primary": "s2", "backup": "s5", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null },
+      "2026-12-11": { "primary": null, "backup": "s3", "primaryLocked": false, "backupLocked": false, "source": "generate", "externalCover": null, "note": null }
+    },
+    "opts": { "weekendKinds": { "2026-12-04": "friday", "2026-12-11": "weird" } },
+    "expected": [
+      { "day": "2026-12-04", "role": "backup", "unit": { "kind": "weekend", "pattern": "friday", "friday": "2026-12-04" }, "reason": null },
+      { "day": "2026-12-05", "role": "primary", "unit": { "kind": "weekend", "pattern": "friday", "friday": "2026-12-04" }, "reason": null },
+      { "day": "2026-12-05", "role": "backup", "unit": { "kind": "weekend", "pattern": "friday", "friday": "2026-12-04" }, "reason": null },
+      { "day": "2026-12-06", "role": "primary", "unit": { "kind": "weekend", "pattern": "friday", "friday": "2026-12-04" }, "reason": null },
+      { "day": "2026-12-11", "role": "primary", "unit": { "kind": "weekend", "pattern": null, "friday": "2026-12-11" }, "reason": null }
+    ],
+    "expectedLines": [
+      "Fri 12/04 - backup (weekend, Friday separate) - open",
+      "Sat 12/05 - primary (weekend, Friday separate) - open",
+      "Sat 12/05 - backup (weekend, Friday separate) - open",
+      "Sun 12/06 - primary (weekend, Friday separate) - open",
+      "Fri 12/11 - primary (weekend) - open"
+    ]
   }
 }

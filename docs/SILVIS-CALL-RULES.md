@@ -980,7 +980,8 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     (follow-ups of the 10/1 queue), client half:* the board's Unit column, its Copy list and the publish / "Email the group
     now" e-mails word it "weekend, Friday separate" (`helpers.OPEN_SLOT_PATTERN_WORDS`; `lastGenerate.weekendKinds` now
     keeps `friday`). The Monday cron e-mail (daily-reminder, deployed v7) still reads it as plain "weekend" until its
-    prepared v8 is deployed (branch `feat/weekend-pair-claim`). The pattern is the weekend's **primary** kind, shown on its
+    v8 is deployed - prepared on branch `feat/weekend-pair-claim` (the same word table in the `@openSlots-mirror` block;
+    `edge-functions/README.md` section 3, deployed by Faraz before that branch merges). The pattern is the weekend's **primary** kind, shown on its
     backup slots too, like block / split / daily before it. (k) **Consequence
     for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
     periods generated more than eight weeks ahead (the Jan – Jun 2027 period is generated around 11/23: its January dates

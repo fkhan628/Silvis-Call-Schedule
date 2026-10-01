@@ -181,6 +181,41 @@ After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
+### Deploy record - 10/1 follow-up: daily-reminder v7 -> v8 (the 'friday' weekend pattern words) - v8 PREPARED, nothing deployed
+
+Prepared 2026-10-01 on branch `feat/weekend-pair-claim` (the 10/1 follow-ups, item 2). The client half is the main-bound `feat/followups-10-01`
+(helpers.js `OPEN_SLOT_PATTERN_WORDS`: the board, the Copy list and the publish / "Email the group now" e-mails word the
+generator's `friday` weekend pattern "weekend, Friday separate"). The deployed v7's `@openSlots-mirror` knows block / split /
+daily only and reads `friday` as unknown, so the Monday open-shifts e-mail says plain "weekend" for such a weekend - its
+text before 10/1, a safe gap. v8 changes the mirror block only (`OSM_PATTERN_WORDS` = helpers' table; `osmUnit` keeps
+`friday`, `openSlotsLineMirror` reads the words); `test/open-shifts.test.js` pins mirror == helpers with the `friday` kind
+(the explicit checks, the `fridayPattern` / `fridayWeekend` fixture cases and the 200 seeded schedules). Nothing else in the function changes: the cron secret gate, the reminder,
+the offers mode, the reads and the recipients are byte-for-byte v7.
+
+**Order: deploy v8 BEFORE `feat/weekend-pair-claim` merges** (main's `edge-functions/` must stay equal to what is deployed).
+Faraz runs, from Git Bash (the workdir is the directory linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`):
+
+```bash
+# 1. back up the live v7 (and confirm it is the repo's v7: byte-identical to main's file)
+supabase functions download daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp
+cp <cli-workdir>/supabase/functions/daily-reminder/index.ts <backup-dir>/daily-reminder-v7-index.ts
+git show origin/main:edge-functions/daily-reminder/index.ts | tr -d '\r' | cmp - <(tr -d '\r' < <backup-dir>/daily-reminder-v7-index.ts)
+# 2. put the branch's v8 in place and deploy it
+cp edge-functions/daily-reminder/index.ts <cli-workdir>/supabase/functions/daily-reminder/index.ts
+supabase functions deploy daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api
+# 3. observe: the new version ACTIVE, a re-download byte-identical to the branch's file, an unauthenticated POST -> 401
+supabase functions list --project-ref bzhsroegtagqhutbnsrp
+supabase functions download daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp
+tr -d '\r' < edge-functions/daily-reminder/index.ts | cmp - <(tr -d '\r' < <cli-workdir>/supabase/functions/daily-reminder/index.ts)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder
+```
+
+| when (UTC) | function | version | what changes | what to observe |
+|---|---|---|---|---|
+| _to be filled at the deploy_ | `daily-reminder` | v7 -> v8 (back up the live v7 first; re-download and `cmp` after) | mode `open-shifts` only: a weekend whose `lastGenerate.weekendKinds` kind is `friday` reads "weekend, Friday separate" in the Monday e-mail (v7: plain "weekend"); every other line, the subject, the recipients and the feed row unchanged | `supabase functions list` shows the new version ACTIVE; the re-download is byte-identical to the branch's file (CRLF-normalised `cmp`); an unauthenticated POST -> 401 (`{"error":"unauthorized"}`); the next Monday 12:00 UTC run's response as before (a weekend with the `friday` kind, if one is open, reads the new words) |
+
+Rollback: copy the v7 backup back and deploy it the same way (`--no-verify-jwt --use-api`).
+
 ### Deploy record - Prompt 26 (the heads-up before a freeze: vacations in, painting optional - Faraz 9/30) - deployed 2026-10-01 04:11 UTC by the orchestrator
 
 Deployed from main 325b1e1 (served client 2026.09.30c) with `supabase functions deploy <slug> --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api`, after backing up the live sources (`supabase functions download`; both were byte-identical to main 773dff4, i.e. daily-reminder v6 / send-notification v8). Observed: `daily-reminder` v7 ACTIVE 2026-10-01 04:11:46 UTC and `send-notification` v9 ACTIVE 04:11:58 UTC (`supabase functions list`); a re-download of each is byte-identical to main 325b1e1 (CRLF-normalised `cmp`); an unauthenticated POST answers 401 on both (`{"error":"unauthorized"}` / `{"error":"authentication required"}`). Not observed yet: a dryRun of mode `offers` (it needs the cron secret) - the first real run is the 13:00 UTC cron on the next reminder morning (Mon 11/9 for the 11/23 freeze); check its response then (`reminder: "first"`, every pool surgeon composed / sent, coordinators on the first).

@@ -18,5 +18,16 @@
       "through": "2026-11-06",
       "count": 1
     }
+  },
+  "fridayWeekend": {
+    "note": "The composed notice for open-slots.json fridayPattern.expected (the generator's 'friday' weekend pattern, 10/1 follow-ups item 2): the weekend's lines read 'weekend, Friday separate', the unknown kind plain 'weekend'. helpers.openShiftsEmail and the daily-reminder v8 mirror must both give exactly this.",
+    "through": "2026-12-11",
+    "expected": {
+      "subject": "5 open shifts through 12/11",
+      "message": "5 open call shifts through 12/11 (one 24-hour shift each, 07:00 to 07:00). Take one from the Open shifts board - the link is below.\n\nWeek of Mon 11/30:\n  Fri 12/04 - backup (weekend, Friday separate) - open\n  Sat 12/05 - primary (weekend, Friday separate) - open\n  Sat 12/05 - backup (weekend, Friday separate) - open\n  Sun 12/06 - primary (weekend, Friday separate) - open\n\nWeek of Mon 12/7:\n  Fri 12/11 - primary (weekend) - open",
+      "detail": "Take this shift: https://example.test/app/#openshifts",
+      "through": "2026-12-11",
+      "count": 5
+    }
   }
 }

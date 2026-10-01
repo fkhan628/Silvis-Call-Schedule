@@ -2112,8 +2112,9 @@ in 2030-11 / 2030-12 plus a 2020-01-04 lower bound (the setup refuses to run whe
 **Apply order** (one command does steps 2-6 and stops at the first failure:
 `apply-weekend-pair-claim.sh` in the private gate folder `run-2026-10-01` (outside the repo), run from the repo on `feat/weekend-pair-claim`).
 
-1. Deploy daily-reminder v8 first if the branch carries it (`edge-functions/README.md`, the 10/1 deploy record), so main's edge
-   source stays equal to what is deployed when the branch merges.
+1. Deploy daily-reminder v8 first - the branch carries it (`edge-functions/README.md` section 3, "Deploy record - 10/1
+   follow-up: daily-reminder v7 -> v8"), so main's edge source stays equal to what is deployed when the branch merges. It is
+   independent of steps 2-6 (they touch the database only).
 2. Pre-check: `select to_regprocedure('public.claim_open_weekend_pair(date,text)');` -> null.
 3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/weekend-pair-claim-probe.sql` -> `PROBE_SETUP: claim_open_weekend_pair is absent ...`.
 4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-weekend-pair-claim.sql`.

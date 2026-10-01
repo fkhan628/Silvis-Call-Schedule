@@ -325,8 +325,9 @@ function openSlotIsDay(s) { return suIsIso(s) && fmt(parse(s)) === s; }
 // one surgeon's pair or two daily days - the kinds map does not carry which, so the words say only that the Friday is
 // separate). The pattern is the weekend's PRIMARY kind (diagnostics.weekendUnits[].kind), shown on both roles' slots as
 // before. An absent / unknown pattern reads plain "weekend". The daily-reminder mirror (edge-functions/daily-reminder/
-// index.ts, deployed v7) knows block / split / daily only and reads 'friday' as unknown - plain "weekend" in the Monday
-// e-mail, exactly the text before - until its prepared v8 is deployed (10/1 follow-ups, item 2).
+// index.ts) carries the same table since v8 (OSM_PATTERN_WORDS - prepared on feat/weekend-pair-claim, deployed by Faraz
+// before that branch merges; README section 3); the deployed v7 knows block / split / daily only and reads 'friday' as
+// unknown - plain "weekend" in the Monday e-mail, exactly the text before (10/1 follow-ups, item 2).
 const OPEN_SLOT_PATTERN_WORDS = { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday separate" };
 function openSlotPatternKnown(k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(OPEN_SLOT_PATTERN_WORDS, k); }
 function openSlotPatternWords(pattern) { return openSlotPatternKnown(pattern) ? OPEN_SLOT_PATTERN_WORDS[pattern] : "weekend"; }

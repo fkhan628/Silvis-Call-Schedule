@@ -913,7 +913,9 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     const holidayByDay = {};
     ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"].forEach(d => { holidayByDay[d] = { name: "Thanksgiving", days: ["2026-11-26", "2026-11-27", "2026-11-28", "2026-11-29"] }; });
     ["2026-12-24", "2026-12-25"].forEach(d => { holidayByDay[d] = { name: "Christmas", days: ["2026-12-24", "2026-12-25"] }; });
-    const kinds = ["block", "split", "daily", "locked", null];
+    // daily-reminder v8 (10/1, prepared): 'friday' joins the kinds drawn - the mirror words it exactly as helpers (before v8 it
+    // was left out: the deployed v7 read it as unknown, the documented gap)
+    const kinds = ["block", "split", "daily", "friday", "locked", null];
     for (let t = 0; t < 200; t++) {
       const schedule = {};
       const weekendKinds = {}, reasons = {};
@@ -944,17 +946,43 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.deepStrictEqual(m.openShiftsEmail(slots.slice().reverse(), EM.appUrl), H.openShiftsEmail(slots.slice().reverse(), EM.appUrl));
     assert.deepStrictEqual(m.openShiftsEmail(null, EM.appUrl), H.openShiftsEmail(null, EM.appUrl));
   });
-  // Follow-ups 10/1 item 2: the client words the 'friday' kind now; the deployed daily-reminder v7 mirror does not - it
-  // reads the kind as unknown (pattern null), so the Monday e-mail says plain "weekend", exactly its text before. A safe
-  // gap, documented here (the random comparison above draws no 'friday'); the prepared v8 (branch feat/weekend-pair-claim)
-  // flips this pin to equality with helpers when it is deployed.
-  check("Follow-ups 10/1 (2), until daily-reminder v8: the repo's (= deployed v7) mirror reads the 'friday' kind as unknown - pattern null, plain 'weekend' in the Monday e-mail - while helpers words it", () => {
+  // Follow-ups 10/1 item 2 - the pin flipped by daily-reminder v8 (PREPARED on feat/weekend-pair-claim, deployed by Faraz
+  // BEFORE the branch merges - edge-functions/README.md section 3): the mirror words the 'friday' kind exactly as helpers does.
+  // Before v8 this pin documented the v7 gap (pattern null, plain 'weekend' in the Monday e-mail - its text before 10/1).
+  check("Follow-ups 10/1 (2), daily-reminder v8: the mirror keeps the 'friday' kind and words it 'weekend, Friday separate' - openSlots, openSlotsLine and openShiftsEmail equal helpers", () => {
     const m = loadMirror();
-    const opts = { weekendKinds: { "2026-11-06": "friday" } };
-    const b = m.openSlots({}, "2026-11-06", "2026-11-08", "2026-11-04", opts);
-    assert.ok(b.length === 6 && b.every(s => s.unit && s.unit.kind === "weekend" && s.unit.pattern === null), JSON.stringify(b));
-    assert.ok(H.openSlots({}, "2026-11-06", "2026-11-08", "2026-11-04", opts).every(s => s.unit.pattern === "friday"), "helpers keeps it");
-    assert.ok(m.openShiftsEmail(b, EM.appUrl).message.indexOf("  Fri 11/06 - primary (weekend) - open") > 0, "the v7 e-mail line is the pre-10/1 one");
+    const opts = { weekendKinds: { "2026-11-06": "friday", "2026-11-13": "block", "2026-11-20": "weird" } };
+    const b = m.openSlots({}, "2026-11-06", "2026-11-22", "2026-11-04", opts);
+    assert.deepStrictEqual(b, H.openSlots({}, "2026-11-06", "2026-11-22", "2026-11-04", opts), "mirror openSlots == helpers with a friday kind");
+    assert.ok(b.filter(s => s.day <= "2026-11-08").every(s => s.unit && s.unit.pattern === "friday") && b.filter(s => s.day >= "2026-11-20" && s.unit).every(s => s.unit.pattern === null), JSON.stringify(b.slice(0, 2)));
+    const em = m.openShiftsEmail(b, EM.appUrl);
+    assert.deepStrictEqual(em, H.openShiftsEmail(b, EM.appUrl), "mirror openShiftsEmail == helpers");
+    assert.ok(em.message.indexOf("  Fri 11/06 - primary (weekend, Friday separate) - open") > 0 && em.message.indexOf("  Sun 11/08 - backup (weekend, Friday separate) - open") > 0 && em.message.indexOf("  Sat 11/14 - primary (weekend block) - open") > 0 && em.message.indexOf("  Fri 11/20 - primary (weekend) - open") > 0, em.message);
+    ["block", "split", "daily", "friday", null, "weird", "toString"].forEach(p => {
+      const sl = { day: "2026-11-07", role: "backup", unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: "why" };
+      assert.strictEqual(m.openSlots({}, "2026-11-07", "2026-11-07", "2026-11-04", { weekendKinds: { "2026-11-06": p } })[0].unit.pattern, H.openSlots({}, "2026-11-07", "2026-11-07", "2026-11-04", { weekendKinds: { "2026-11-06": p } })[0].unit.pattern, String(p));
+      assert.strictEqual(m.openShiftsEmail([sl], EM.appUrl).message, H.openShiftsEmail([sl], EM.appUrl).message, "the line for pattern " + String(p));
+    });
+    const drHead = drSrc.slice(0, drSrc.indexOf("// Retargeted from the Davenport"));
+    assert.ok(/v8 - PREPARED 2026-10-01, NOT deployed/.test(drHead), "the file header names v8 as prepared (the record step after Faraz's deploy changes it to 'deployed <time>')");
+    const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+    const at = s3.indexOf("### Deploy record - 10/1 follow-up: daily-reminder v7 -> v8");
+    const rec = at >= 0 ? s3.slice(at, s3.indexOf("\n### ", at + 10)) : "";
+    assert.ok(at >= 0 && /v8 PREPARED, nothing deployed/.test(rec.split("\n")[0]), "README section 3 carries the v8 record, headed 'v8 PREPARED, nothing deployed'");
+    assert.ok(rec.includes("supabase functions deploy daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api") && rec.includes("supabase functions download daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp") && /BEFORE `feat\/weekend-pair-claim` merges/.test(rec), "the record carries the backup, the deploy command and the order");
+  });
+  check("Follow-ups 10/1 (2), daily-reminder v8: the fridayPattern fixture - helpers.openSlots and the mirror both give open-slots.json fridayPattern.expected, openSlotsLine its expectedLines, and both composers give open-shifts-email.json fridayWeekend", () => {
+    const m = loadMirror();
+    const fp = FX.fridayPattern, fw = EM.fridayWeekend;
+    assert.ok(fp && fw, "the fixtures carry fridayPattern / fridayWeekend");
+    assert.deepStrictEqual(H.openSlots(fp.schedule, fp.from, fp.to, fp.today, fp.opts), fp.expected, "helpers.openSlots");
+    assert.deepStrictEqual(m.openSlots(fp.schedule, fp.from, fp.to, fp.today, fp.opts), fp.expected, "the mirror's openSlots");
+    assert.ok(fp.expected.some(s => s.unit && s.unit.pattern === "friday") && fp.expected.some(s => s.unit && s.unit.kind === "weekend" && s.unit.pattern === null), "the fixture carries a friday weekend and an unknown kind");
+    assert.deepStrictEqual(fp.expected.map(s => H.openSlotsLine(s)), fp.expectedLines, "helpers.openSlotsLine");
+    const pick = (o) => ({ subject: o.subject, message: o.message, detail: o.detail, through: o.through, count: o.count });
+    assert.deepStrictEqual(pick(H.openShiftsEmail(fp.expected, { appUrl: EM.appUrl, through: fw.through })), fw.expected, "helpers.openShiftsEmail");
+    assert.deepStrictEqual(pick(m.openShiftsEmail(fp.expected, { appUrl: EM.appUrl, through: fw.through })), fw.expected, "the mirror's openShiftsEmail");
+    fp.expectedLines.forEach(l => assert.ok(fw.expected.message.indexOf("  " + l) > 0, "the e-mail carries " + l));
   });
 
   /* -- daily-reminder mode 'open-shifts' (source pins: the contract the orchestrator proves live with a dryRun) -- */
