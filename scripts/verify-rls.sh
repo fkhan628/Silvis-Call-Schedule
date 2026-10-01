@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
 #   SILVIS_VACATION_GUARD_APPLIED=1                           grade section 15 strictly (the probe's PROBE_SETUP = FAIL): only on the run right after sql/migrations/2026-09-30-vacation-guard.sql is applied; the record step makes strict the default and drops this variable
+#   SILVIS_NO_PRIMARY_APPLIED=1                               grade section 16 strictly (the probe's PROBE_SETUP and the anon 404s = FAIL): only on the run right after sql/migrations/2026-10-01-no-primary-days.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -16,7 +17,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_VACATION_GUARD_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_NO_PRIMARY_APPLIED / SILVIS_VACATION_GUARD_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1052,6 +1053,109 @@ if linked; then
   fi
 else
   echo "   SKIP 15 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 16. no-primary days (2026-10-01, Prompt 28): save_no_primary + save_offers p_np_add / p_np_clear - anon refused, rolled-back probe =="
+# sql/migrations/2026-10-01-no-primary-days.sql (report-first, NOT applied; revision t): save_no_primary (security definer) writes one
+# availability row per no-primary day (kind backup_only, role any, note null) for a surgeon himself, the office for a roster id or the
+# scheduler for anyone, and deletes the person's single-day backup_only rows; save_offers (security invoker, seven arguments) calls it inside
+# its own transaction. NP001-NP009 NO_PRIMARY_* refuse before any write. 16a / 16b go over REST as anon and write nothing (refused before
+# the body is used): 401/403 = the function exists and anon holds no EXECUTE; 404 = not applied yet (16b: PGRST202 - the schema cache does
+# not know p_np_add / p_np_clear, the gate before the Prompt 28 client push). 16c runs sql/probes/no-primary-probe.sql through the linked
+# CLI (rolls itself back; 42 cases graded by name - its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP:
+# save_no_primary is absent - a PASS, like the anon 404s, unless SILVIS_NO_PRIMARY_APPLIED=1 (the run right after the apply), then each is a
+# FAIL. 16d counts the probe's leftovers either way.
+NPSTRICT16="${SILVIS_NO_PRIMARY_APPLIED:-}"
+# 16a. anon may not execute save_no_primary
+line=$(curl -s -o $T/vr16a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_no_primary" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_add":[],"p_clear":[]}')
+echo "   16a anon rpc save_no_primary: $line  body: $(head -c 160 $T/vr16a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc save_no_primary refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") if [ "$NPSTRICT16" = "1" ]; then bad "anon rpc save_no_primary: HTTP 404 with SILVIS_NO_PRIMARY_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc save_no_primary: HTTP 404 - not applied yet (before the migration)"; fi;;
+  *) bad "anon rpc save_no_primary: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+esac
+# 16b. the seven-key save_offers call: PostgREST must know p_np_add / p_np_clear before the Prompt 28 client is pushed
+line=$(curl -s -o $T/vr16b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_rows":[],"p_clear":[],"p_period":null,"p_mode":null,"p_np_add":[],"p_np_clear":[]}')
+echo "   16b anon rpc save_offers (seven keys): $line  body: $(head -c 160 $T/vr16b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "PostgREST knows save_offers' p_np_add / p_np_clear (anon seven-key call refused, $line): the Prompt 28 client may send them";;
+  "HTTP 404") if [ "$NPSTRICT16" = "1" ]; then bad "anon rpc save_offers with seven keys: HTTP 404 with SILVIS_NO_PRIMARY_APPLIED=1 (PGRST202: the schema cache does not know p_np_add / p_np_clear) - do NOT push the Prompt 28 client"; else ok "anon rpc save_offers with seven keys: HTTP 404 - not applied yet (do not push the Prompt 28 client before the apply)"; fi;;
+  *) bad "anon rpc save_offers with seven keys: $line (expected 401/403, or 404 before the apply)";;
+esac
+if linked; then
+  PROBE16="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/no-primary-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE16" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: save_no_primary is absent'; then
+    if [ "$NPSTRICT16" = "1" ]; then bad "no-primary probe: PROBE_SETUP - save_no_primary is absent with SILVIS_NO_PRIMARY_APPLIED=1 (the function should exist after the apply)"; else ok "no-primary probe: save_no_primary is absent (before the migration: PROBE_SETUP)"; fi
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "no-primary probe reported no sentinel-terminated PROBE_RESULTS (setup error, a fixture collision or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results16=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results16" | tr ';' '\n' | sed 's/^/   /'
+    case_val16()   { echo "$results16" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq16()  { v=$(case_val16 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "no-primary probe $1: $3" || bad "no-primary probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err16() { v=$(case_val16 "$1" | sed 's/\\//g'); case "$v" in "ERR $2 "*"$3"*) ok "no-primary probe $1: $4";; *) bad "no-primary probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
+    expect_np16()  { v=$(case_val16 "$1" | sed 's/\\//g'); case "$v" in "ERR $2 $3: "*"$4"*) ok "no-primary probe $1: $5";; *) bad "no-primary probe $1: $5 (got '$v', expected ERR $2 $3: ... $4)";; esac; }
+    expect_eq16  P1  "np_fn=yes np_definer=yes np_path=yes offers7=yes offers5=no offers_invoker=yes overloads=1 np_anon=no np_auth=yes offers_anon=no offers_auth=yes" "save_no_primary is security definer with search_path public, pg_temp; save_offers is the one seven-argument invoker overload; both executable by authenticated, not by anon"
+    expect_eq16  S1  "ok np_added=2 np_cleared=0 rows=2 src=app by=s3 role=any note=null" "a surgeon marks two days through save_offers: one row per day, backup_only / any, note null, source app, created_by his id"
+    expect_eq16  S2  "ok np_added=0 np_kept=2 rows=2"                 "the same Save again duplicates nothing (kept)"
+    expect_eq16  S3  "ok deleted=1 np_added=1 offer=none np=1"        "No primary replaces a Primary offer in one Save (the offer cleared, the day marked)"
+    expect_eq16  S4  "ok np_added=1 offer=backup np=1"                "a Backup offer stays beside No primary (backup preferred that day)"
+    expect_eq16  S5  "ok upserted=1 np_cleared=1 offer=primary np=0"  "Primary offered and No primary lifted in one Save"
+    expect_np16  S6  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/2 and marks it No primary - keep one of the two (nothing was saved)" "an Either offer on a No primary day without lifting it is refused (save_offers' own check)"
+    expect_eq16  S6s "offer=none np=1"                                "... and nothing of that Save was written"
+    expect_np16  S7  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/13 and marks it No primary" "marking a day that keeps its Primary offer is refused (save_no_primary's check)"
+    expect_eq16  S8  "ok np_cleared=1 left=0"                         "a surgeon clears his own single day entered in Setup (any source)"
+    expect_np16  S9  NP007 NO_PRIMARY_RANGE "11/11 is part of a longer no-primary range the scheduler set" "a day of a longer Setup range is never cleared by the surgeon"
+    expect_eq16  S10 "ok np_cleared=0 unavailable=1"                  "clearing touches backup_only rows only (an unavailable row stays)"
+    expect_err16 S11 42501 'row-level security policy for table "availability"' "a surgeon still cannot write availability directly (another kind)"
+    expect_err16 S12 42501 'row-level security policy for table "availability"' "a surgeon still cannot write availability directly (backup_only)"
+    expect_np16  S13 NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/10 and marks it No primary" "a Primary offer on a day of a Setup range is refused"
+    expect_eq16  V1  "ok np_added=1"                                  "a vacation day may be marked No primary (no vacation refusal)"
+    expect_np16  H1  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5 - trade those days first, then mark them No primary" "a day he holds as primary on the saved schedule is refused (trade first)"
+    expect_eq16  H2  "ok np_added=1"                                  "a day he holds as backup may be marked (backup is fine)"
+    expect_np16  D1  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day cannot be marked"
+    expect_np16  D2  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day cannot be cleared"
+    expect_np16  F1  NP006 NO_PRIMARY_FROZEN "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/20)" "a day inside a period whose offers closed cannot be marked by a surgeon"
+    expect_np16  F2  NP006 NO_PRIMARY_FROZEN "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/21)" "... nor cleared"
+    expect_np16  B1  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5 - trade those days first" "one refused day refuses the whole Save"
+    expect_eq16  B1s "offer_1101=none np_1115=0"                      "... the offer row and the other day rolled back with it (all or nothing)"
+    expect_np16  B2  NP004 NO_PRIMARY_BAD_DAY "11/15 is both marked and cleared in one save - nothing was saved" "a day both marked and cleared is refused"
+    expect_np16  B3  NP004 NO_PRIMARY_BAD_DAY "a day in the list is empty - nothing was saved" "an empty day in the list is refused"
+    expect_err16 R1  OS002 "OFFERS_NOT_YOURS" "a surgeon cannot save another surgeon's days (save_offers' own check answers first)"
+    expect_np16  R2  NP002 NO_PRIMARY_NOT_YOURS "only the scheduler or the office can mark another surgeon's no-primary days" "nor through save_no_primary directly"
+    expect_np16  R3  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/13 and marks it No primary" "a direct save_no_primary call carries the offer-conflict check itself"
+    expect_eq16  O1  "ok upserted=1 np_added=0"                       "an older build's three-argument call resolves to the new save_offers and writes no no-primary row"
+    expect_eq16  C1  "ok np_added=1 src=office-relay by=self"         "the office relays a no-primary day for a roster surgeon (source office-relay, created_by its profile id)"
+    expect_err16 C2  OS004 "OFFERS_UNKNOWN_PERSON" "the office cannot relay through save_offers for an id that is not on the roster"
+    expect_np16  C3  NP003 NO_PRIMARY_UNKNOWN_PERSON "zz is not a roster id - the office relays for a roster surgeon only" "nor through save_no_primary directly"
+    expect_np16  C4  NP006 NO_PRIMARY_FROZEN "ask the scheduler (11/22)" "the office is frozen like a surgeon"
+    expect_eq16  A1  "ok np_added=1 src=email-relay by=scheduler"     "the scheduler marks a day inside a frozen period for a surgeon (exempt from the freeze; source email-relay)"
+    expect_eq16  A2  "ok np_cleared=1"                                "the scheduler clears a frozen single day"
+    expect_np16  A3  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5" "a held primary refuses the scheduler too (trade first)"
+    expect_np16  A4  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day refuses the scheduler too"
+    expect_np16  A5  NP007 NO_PRIMARY_RANGE "11/11 is part of a longer no-primary range" "a range is never split, not by the scheduler either (he edits it in Setup)"
+    expect_eq16  A6  "ok np_added=0 np_kept=1"                        "a day already covered by a range is not duplicated"
+    expect_err16 N1  42501 "permission denied for function save_no_primary" "anon cannot execute save_no_primary"
+    expect_np16  N2  NP001 NO_PRIMARY_NOT_LINKED "sign in with an account that is linked to a roster entry" "a session with no signed-in user is refused"
+  fi
+  LEFTOVER16_SQL="select ((select count(*) from auth.users where email like 'probe-noprimary-%@example.test') + (select count(*) from public.availability where start_date <= '2030-11-30' and end_date >= '2030-11-01') + (select count(*) from public.availability where '2020-04-06' between start_date and end_date) + (select count(*) from public.call_offers where day between '2030-11-01' and '2030-11-30') + (select count(*) from public.schedule_days where source = 'probe-noprimary') + (select count(*) from public.time_off where note = 'probe-noprimary') + (select count(*) from public.call_periods where label like 'probe np %'))::int as leftover"
+  r=$(q "$LEFTOVER16_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "no-primary probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "no-primary probe persisted nothing (leftover count 0: auth.users probe-noprimary-* / availability in 2030-11 or over 2020-04-06 / call_offers in 2030-11 / schedule_days source probe-noprimary / time_off probe-noprimary / call_periods probe np *)"
+  else
+    bad "no-primary probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.availability where (start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date;"
+    echo "      delete from public.call_offers where day between '2030-11-01' and '2030-11-30';"
+    echo "      delete from public.schedule_days where source = 'probe-noprimary';"
+    echo "      delete from public.time_off where note = 'probe-noprimary';"
+    echo "      delete from public.call_periods where label like 'probe np %';"
+    echo "      delete from auth.users where email like 'probe-noprimary-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo
