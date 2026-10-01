@@ -69,18 +69,32 @@
 // markers, pinned to test/fixtures/offer-timeline.json by
 // test/offers-timeline.test.js): on a reminder day (offers_close_at minus each
 // groupRules.offerPeriods.remindDaysBeforeClose, default 14 and 3) it e-mails
-// the pool members whose derived status is not_started ("your dates for
-// <label> freeze on <date> - paint them in the app or choose 'go by my
-// rules'"); from offers_close_at on it flips the row to 'closed' (compare-and-
-// swap on status = upcoming), writes the audit row period.close and e-mails the
-// scheduler / admin accounts the roll call (who submitted how many days, who
-// is rules-only, who never answered). Addresses come from user_profiles by
-// person_id with the service role; schedule_updates_email = false opts a
-// surgeon out of the reminder, while the close roll call to the scheduler /
-// admin accounts is unconditional (an operational notice, so a period never
-// closes unseen); statuses are keyed by person_id. It never generates or
-// publishes and never writes call_offers. dryRun composes, sends nothing,
-// writes nothing.
+// the heads-up before the freeze (Prompt 26, Faraz 9/30 - "vacations in,
+// painting optional"): "Silvis call - the <label> schedule is built from your
+// rules on <Mon 11/23>" / "Before <freeze>, enter your vacations for <label> in
+// the app. If there are days you'd like to work, or can't, paint them too.
+// Otherwise there is nothing to do - the schedule follows your rules." It goes
+// to EVERY pool surgeon whatever his offer status (submitted, rules_only,
+// not_started - vacations matter for everyone); the last call (the smallest
+// offset when there are 2+) says the same in one line with the days left; the
+// office coordinators (role coordinator, unlinked) get a version worded for
+// them on the FIRST (largest-offset) reminder only. The words, the audience
+// and the close summary are the plain-JS @offersMail block (unit-tested by
+// test/edge-functions.test.js). From offers_close_at on it flips the row to
+// 'closed' (compare-and-swap on status = upcoming), writes the audit row
+// period.close and e-mails the scheduler / admin accounts the roll call: who
+// PAINTED DAYS (offered days inside the period, with the count), who ADDED
+// VACATIONS (a time_off row overlapping the period, read with the service role
+// for the period's range, ranges clipped to it), and everyone else as
+// FOLLOWING THEIR RULES - never "missing" / "never answered". Addresses come
+// from user_profiles with the service role; schedule_updates_email = false
+// opts a surgeon (his row by person_id) or a coordinator (his row by
+// profile_id) out of the heads-up, while the close roll call to the scheduler
+// / admin accounts is unconditional (an operational notice, so a period never
+// closes unseen); statuses are keyed by person_id (a coordinator by the tag
+// "coordinator-<first 8 characters of his account id>" - never an address).
+// It never generates or publishes and never writes call_offers or time_off.
+// dryRun composes, sends nothing, writes nothing.
 //
 // Secrets (by NAME): CRON_SECRET, RESEND_API_KEY, NOTIFICATION_FROM_EMAIL
 // (required - no hardcoded fallback sender); SUPABASE_URL and
@@ -827,10 +841,201 @@ async function loadOffersBlob(): Promise<{ roster: any[]; rules: any }> {
   return { roster, rules: gr && typeof gr === "object" && !Array.isArray(gr) ? gr : null };
 }
 
-// Same frame as send-notification's offers_reminder / offers_closed
-// categories (title, colour, CTA) so the cron's mail and the Periods
-// "Remind" button's mail look alike in the inbox. Wording per the prompt.
-function offersFrame(title: string, color: string, name: string, bodyHtml: string, cta: string, footer: string): string {
+// ---------------------------------------------------------------------------
+// The heads-up before a freeze (Prompt 26, Faraz 9/30): "requested vacation
+// dates and painted dates in" before the next schedule - "the generator makes
+// most of the decisions and less work to paint". Plain JavaScript between the
+// markers (no type annotations, nothing from outside this block):
+// test/edge-functions.test.js extracts it, evaluates it with new Function and
+// runs it - the words per audience and reminder, who is mailed per offer
+// status, the vacation ranges and the close roll call. Wording only: the
+// offer statuses themselves (otmStatus / SQL offer_status()) are unchanged; a
+// not_started surgeon is simply "following his rules".
+// ---------------------------------------------------------------------------
+// @offersMail-start
+const OFM_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function ofmIso(v) {
+  const s = typeof v === "string" ? v.slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+function ofmAddDay(iso) {
+  const p = iso.split("-").map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + 1));
+  return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+}
+// "2027-01-04" -> "1/4"
+function ofmMD(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  return m ? Number(m[2]) + "/" + Number(m[3]) : String(iso || "?");
+}
+// "2026-11-23" -> "Mon 11/23"
+function ofmDayLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return String(iso || "?");
+  return OFM_DOW[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()] + " " + Number(m[2]) + "/" + Number(m[3]);
+}
+// A clipped range -> "1/4-1/10" (one day -> "1/4")
+function ofmRange(r) { return r.start === r.end ? ofmMD(r.start) : ofmMD(r.start) + "-" + ofmMD(r.end); }
+// Which reminder today's is. remindDays = the effective offsets (days before the close, from the timeline). Only the
+// offsets that can fire count, once each (a 0-day reminder falls on the close day, where the close wins - otmCronPlan).
+// "first" = the largest (the coordinators' copy rides it); "last" = the smallest when there are 2+ (the one-line last
+// call); anything between = "middle" (the full text again). A single offset is "first" - there is no last call.
+function offersReminderKind(daysToClose, remindDays) {
+  const offs = [];
+  (Array.isArray(remindDays) ? remindDays : []).forEach(function (n) {
+    if (typeof n === "number" && isFinite(n) && n > 0 && offs.indexOf(n) < 0) offs.push(n);
+  });
+  offs.sort(function (a, b) { return b - a; });
+  if (!offs.length || daysToClose === offs[0]) return "first";
+  if (offs.length >= 2 && daysToClose === offs[offs.length - 1]) return "last";
+  return "middle";
+}
+// The office coordinators: user_profiles rows with role coordinator and no roster link, each with his OWN prefs row
+// (notification_preferences keyed by profile_id since Prompt 20; no row -> on). key = "coordinator-" + the account id's
+// first 8 characters - what reaches the response and the log, never the address.
+function offersCoordinators(profiles, prefRows) {
+  const prefsByProfile = {};
+  (Array.isArray(prefRows) ? prefRows : []).forEach(function (r) {
+    if (r && typeof r === "object" && r.profile_id) prefsByProfile[String(r.profile_id)] = r;
+  });
+  const out = [];
+  (Array.isArray(profiles) ? profiles : []).forEach(function (p) {
+    if (!p || typeof p !== "object" || !p.id || p.role !== "coordinator") return;
+    if (p.person_id !== null && p.person_id !== undefined && String(p.person_id) !== "") return;
+    const email = typeof p.email === "string" && p.email.trim() ? p.email.trim() : null;
+    const name = typeof p.display_name === "string" && p.display_name.trim() ? p.display_name.trim() : null;
+    const pref = prefsByProfile[String(p.id)] || null;
+    out.push({ key: "coordinator-" + String(p.id).slice(0, 8), email: email, name: name, opted_out: !!(pref && pref.schedule_updates_email === false) });
+  });
+  return out;
+}
+// Who gets today's heads-up: EVERY pool surgeon, whatever his offer status, then - on the FIRST reminder only - the
+// coordinators. emailById: roster id -> address (or null) from the linked user_profiles rows; isOptedOut(pid): his own
+// schedule_updates_email is false. One entry per recipient { key, audience, pid, email, name, status }, status "due" |
+// "skipped_pref_off" | "skipped_no_email" (the switch first, then the address - the order every mode uses).
+function offersHeadsUpPlan(poolIds, emailById, isOptedOut, coordinators, kind) {
+  const book = emailById && typeof emailById === "object" ? emailById : {};
+  const out = [];
+  (Array.isArray(poolIds) ? poolIds : []).forEach(function (raw) {
+    const pid = String(raw);
+    if (out.some(function (e) { return e.key === pid; })) return;
+    const email = Object.prototype.hasOwnProperty.call(book, pid) && typeof book[pid] === "string" && book[pid] ? book[pid] : null;
+    const status = typeof isOptedOut === "function" && isOptedOut(pid) ? "skipped_pref_off" : email ? "due" : "skipped_no_email";
+    out.push({ key: pid, audience: "surgeon", pid: pid, email: email, name: null, status: status });
+  });
+  if (kind !== "first") return out;
+  (Array.isArray(coordinators) ? coordinators : []).forEach(function (c) {
+    if (!c || typeof c !== "object" || !c.key) return;
+    const address = typeof c.email === "string" && c.email ? c.email : null;
+    const status = c.opted_out ? "skipped_pref_off" : address ? "due" : "skipped_no_email";
+    out.push({ key: c.key, audience: "coordinator", pid: null, email: address, name: c.name || null, status: status });
+  });
+  return out;
+}
+// The words. audience "surgeon" | "coordinator", kind from offersReminderKind, p = { label, offers_close_at,
+// days_to_close }. Plain text { subject, text } (the caller escapes it into the frame), or null for a coordinator on
+// any reminder but the first (he never gets one).
+function offersHeadsUpText(audience, kind, p) {
+  const o = p && typeof p === "object" ? p : {};
+  const label = String(o.label || "next period");
+  const freeze = ofmDayLabel(o.offers_close_at);
+  if (audience === "coordinator") {
+    if (kind !== "first") return null;
+    return {
+      subject: "Silvis call - the " + label + " schedule is built from the surgeons' rules on " + freeze,
+      text: "Before " + freeze + ", the surgeons enter their vacations for " + label + " in the app; when one asks you, enter it for them under Time off. Painting days is optional - the schedule follows each surgeon's rules.",
+    };
+  }
+  if (kind === "last") {
+    const n = typeof o.days_to_close === "number" ? o.days_to_close : 0;
+    const left = n + " day" + (n === 1 ? "" : "s") + " left";
+    return {
+      subject: "Silvis call - " + left + ": the " + label + " schedule is built from your rules on " + freeze,
+      text: left + ": enter your vacations for " + label + " in the app before " + freeze + " (and paint any days you'd like to work, or can't) - otherwise the schedule follows your rules.",
+    };
+  }
+  return {
+    subject: "Silvis call - the " + label + " schedule is built from your rules on " + freeze,
+    text: "Before " + freeze + ", enter your vacations for " + label + " in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.",
+  };
+}
+// Vacations inside a period, for the close summary: time_off rows { person_id, start_date, end_date } of POOL surgeons
+// overlapping [start, end], clipped to the period and merged (overlapping or touching ranges become one), per roster
+// id in start order. A row outside the pool or the period, or without usable dates, is ignored.
+function offersVacationRanges(rows, start, end, poolIds) {
+  const s0 = ofmIso(start), e0 = ofmIso(end);
+  const out = {};
+  if (!s0 || !e0 || e0 < s0) return out;
+  const pool = (Array.isArray(poolIds) ? poolIds : []).map(function (x) { return String(x); });
+  const byId = {};
+  (Array.isArray(rows) ? rows : []).forEach(function (r) {
+    if (!r || typeof r !== "object") return;
+    const pid = r.person_id === null || r.person_id === undefined ? "" : String(r.person_id);
+    if (pool.indexOf(pid) < 0) return;
+    const a = ofmIso(r.start_date), b = ofmIso(r.end_date);
+    if (!a || !b || b < a || b < s0 || a > e0) return;
+    (byId[pid] = byId[pid] || []).push({ start: a < s0 ? s0 : a, end: b > e0 ? e0 : b });
+  });
+  pool.forEach(function (pid) {
+    const list = byId[pid];
+    if (!list || out[pid]) return;
+    list.sort(function (x, y) { return x.start < y.start ? -1 : x.start > y.start ? 1 : 0; });
+    const merged = [];
+    list.forEach(function (r) {
+      const last = merged.length ? merged[merged.length - 1] : null;
+      if (last && r.start <= ofmAddDay(last.end)) { if (r.end > last.end) last.end = r.end; }
+      else merged.push({ start: r.start, end: r.end });
+    });
+    out[pid] = merged;
+  });
+  return out;
+}
+// The roll call at the freeze: who PAINTED DAYS (otmRollcall's "submitted" - offered days inside the period, with the
+// count), who ADDED VACATIONS (offersVacationRanges), and everyone else as FOLLOWING THEIR RULES. A surgeon may be in
+// the first two lists; nobody is ever "missing", "never answered" or "not started". roll = otmRollcall rows.
+function offersCloseSummary(roll, vacations) {
+  const vac = vacations && typeof vacations === "object" ? vacations : {};
+  const painted = [], added = [], following = [];
+  (Array.isArray(roll) ? roll : []).forEach(function (r) {
+    if (!r || typeof r !== "object" || !r.id) return;
+    const id = String(r.id);
+    const p = r.status === "submitted";
+    const v = Object.prototype.hasOwnProperty.call(vac, id) && Array.isArray(vac[id]) && vac[id].length > 0;
+    if (p) painted.push({ id: id, offered: typeof r.offered === "number" ? r.offered : 0 });
+    if (v) added.push({ id: id, ranges: vac[id].map(ofmRange) });
+    if (!p && !v) following.push(id);
+  });
+  return { painted: painted, vacations: added, following: following };
+}
+// The close summary's words for the scheduler / admin accounts. p = { label, start_day, end_day, offers_close_at },
+// nameOf(id) -> the roster name. Plain text { subject, lead, sections: [{ heading, items }], tail }.
+function offersClosedText(p, summary, nameOf) {
+  const o = p && typeof p === "object" ? p : {};
+  const s = summary && typeof summary === "object" ? summary : {};
+  const painted = Array.isArray(s.painted) ? s.painted : [], vacations = Array.isArray(s.vacations) ? s.vacations : [], following = Array.isArray(s.following) ? s.following : [];
+  const nm = typeof nameOf === "function" ? nameOf : function (id) { return String(id); };
+  const label = String(o.label || "next period");
+  const freeze = ofmDayLabel(o.offers_close_at);
+  return {
+    subject: "Silvis call - " + label + " frozen " + freeze + ": " + painted.length + " painted days, " + vacations.length + " added vacations, " + following.length + " following their rules",
+    lead: label + " (" + ofmDayLabel(o.start_day) + " to " + ofmDayLabel(o.end_day) + ") froze on " + freeze,
+    sections: [
+      { heading: "Painted days", items: painted.map(function (r) { return nm(r.id) + " - " + r.offered + " day" + (r.offered === 1 ? "" : "s"); }) },
+      { heading: "Added vacations", items: vacations.map(function (r) { return nm(r.id) + " - " + r.ranges.join(", "); }) },
+      { heading: "Following their rules", items: following.map(function (id) { return nm(id); }) },
+    ],
+    tail: "Nothing was generated or published - open Setup, Generate, Periods when you are ready. A late vacation is entered under Time off; a late painted day can still be entered by the scheduler.",
+  };
+}
+// @offersMail-end
+
+// The two frames - the same title / colour / CTA as send-notification's offers_reminder / offers_closed categories
+// (test/edge-functions.test.js compares them), so the cron's mail and a mail the app sends look alike in the inbox.
+const OFFERS_REMINDER_FRAME = { title: "Schedule Heads-up", color: "#13294B", cta: "Open the app" };
+const OFFERS_CLOSED_FRAME = { title: "Period Frozen", color: "#C2410C", cta: "Open Periods" };
+
+// name null -> "Hi," (a coordinator account without a display name).
+function offersFrame(title: string, color: string, name: string | null, bodyHtml: string, cta: string, footer: string): string {
   return `
     <div style="font-family:'Outfit',Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
       <div style="background:${color};color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;">
@@ -839,7 +1044,7 @@ function offersFrame(title: string, color: string, name: string, bodyHtml: strin
       </div>
       <div style="background:#fff;border:1px solid #e0e4ea;border-top:none;padding:20px;border-radius:0 0 10px 10px;">
         <p style="font-size:14px;color:#2c3e50;line-height:1.6;margin:0;">
-          Hi <strong>${escHtml(name)}</strong>,<br><br>
+          ${name ? `Hi <strong>${escHtml(name)}</strong>,` : "Hi,"}<br><br>
           ${bodyHtml}
         </p>
         <a href="${APP_URL}" style="display:inline-block;background:${color};color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-top:16px;">
@@ -852,37 +1057,27 @@ function offersFrame(title: string, color: string, name: string, bodyHtml: strin
     </div>`;
 }
 
-function buildOffersReminder(name: string, p: { label: string; start_day: string; end_day: string; offers_close_at: string; days_to_close: number; remind_days: number[] }): { subject: string; html: string } {
-  const closeLabel = fmtDay(p.offers_close_at);
-  const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
-  const days = p.days_to_close === 1 ? "tomorrow" : `in ${p.days_to_close} days`;
+// The heads-up mail (Prompt 26): words = offersHeadsUpText(...) for this recipient's audience and today's reminder.
+function buildOffersReminder(name: string | null, words: { subject: string; text: string }, p: { audience: string; days_to_close: number; remind_days: number[] }): { subject: string; html: string } {
   // The footer names the effective offsets (groupRules.offerPeriods.remindDaysBeforeClose,
   // editable in Setup -> Rules) - never a literal, so editing the rule keeps the words right.
   const offsets = p.remind_days.length ? p.remind_days.join(" and ") : String(p.days_to_close);
-  const footer = `this reminder goes out ${offsets} day${offsets === "1" ? "" : "s"} before a period's freeze to anyone with nothing entered; turn schedule updates off under Settings in the app to stop it.`;
-  const body =
-    `Your dates for <strong>${escHtml(p.label)}</strong> (${escHtml(fmtDay(p.start_day))} to ${escHtml(fmtDay(p.end_day))}) ` +
-    `freeze on <strong>${escHtml(closeLabel)}</strong> (${days}) - paint them in the app or choose 'go by my rules'.<br><br>` +
-    `Nothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone ` +
-    `with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.`;
-  return { subject, html: offersFrame("Offers Reminder", "#13294B", name, body, "Paint my offers", footer) };
+  const footer = p.audience === "coordinator"
+    ? `this heads-up goes to the office coordinators with the first reminder, ${p.days_to_close} day${p.days_to_close === 1 ? "" : "s"} before a period's freeze; ask the scheduler to stop it.`
+    : `this reminder goes out ${offsets} day${offsets === "1" ? "" : "s"} before a period's freeze to every pool surgeon; turn schedule updates off under Settings in the app to stop it.`;
+  const f = OFFERS_REMINDER_FRAME;
+  return { subject: words.subject, html: offersFrame(f.title, f.color, name, escHtml(words.text), f.cta, footer) };
 }
 
-function buildOffersClosed(name: string, p: { label: string; start_day: string; end_day: string; offers_close_at: string }, roll: { id: string; status: string; offered: number }[], nameOf: (id: string) => string, periodStatus: string): { subject: string; html: string } {
-  const submitted = roll.filter((r) => r.status === "submitted");
-  const rulesOnly = roll.filter((r) => r.status === "rules_only");
-  const notStarted = roll.filter((r) => r.status === "not_started");
-  const subject = `Offers closed for ${p.label} - ${submitted.length} submitted, ${rulesOnly.length} by rules, ${notStarted.length} never answered`;
-  const li = (rows: { id: string; offered: number }[], suffix: (r: { offered: number }) => string) =>
-    rows.length ? rows.map((r) => `<li>${escHtml(nameOf(r.id))}${suffix(r)}</li>`).join("") : "<li>-</li>";
+// The close summary (Prompt 26): words = offersClosedText(...) - painted days, added vacations, following their rules.
+function buildOffersClosed(name: string, words: { subject: string; lead: string; sections: { heading: string; items: string[] }[]; tail: string }, periodStatus: string): { subject: string; html: string } {
+  const list = (items: string[]) => items.length ? items.map((t) => `<li>${escHtml(t)}</li>`).join("") : "<li>-</li>";
   const body =
-    `Offers for <strong>${escHtml(p.label)}</strong> (${escHtml(fmtDay(p.start_day))} to ${escHtml(fmtDay(p.end_day))}) closed on ` +
-    `<strong>${escHtml(fmtDay(p.offers_close_at))}</strong>; the period is now marked <strong>${escHtml(periodStatus)}</strong>.<br><br>` +
-    `<strong>Submitted</strong> (days offered inside the period):<ul style="margin:4px 0 10px;padding-left:20px;">${li(submitted, (r) => ` - ${r.offered} day${r.offered === 1 ? "" : "s"}`)}</ul>` +
-    `<strong>Go by my rules</strong>:<ul style="margin:4px 0 10px;padding-left:20px;">${li(rulesOnly, () => "")}</ul>` +
-    `<strong>Never answered</strong> (scheduled by their standing rules):<ul style="margin:4px 0 10px;padding-left:20px;">${li(notStarted, () => "")}</ul>` +
-    `Nothing was generated or published - open Setup, Generate, Periods when you are ready. A late offer can still be entered by the scheduler.`;
-  return { subject, html: offersFrame("Offers Closed", "#C2410C", name, body, "Open Periods", "the close summary goes to the scheduler and admin accounts on the morning a period's offers freeze.") };
+    `${escHtml(words.lead)}; the period is now marked <strong>${escHtml(periodStatus)}</strong>.<br><br>` +
+    words.sections.map((s) => `<strong>${escHtml(s.heading)}</strong>:<ul style="margin:4px 0 10px;padding-left:20px;">${list(s.items)}</ul>`).join("") +
+    escHtml(words.tail);
+  const f = OFFERS_CLOSED_FRAME;
+  return { subject: words.subject, html: offersFrame(f.title, f.color, name, body, f.cta, "the close summary goes to the scheduler and admin accounts on the morning a period freezes.") };
 }
 
 async function runOffers(now: { ymd: string; hour: number; weekday: string }, dryRun: boolean): Promise<Response> {
@@ -915,8 +1110,10 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
   }
 
   // Recipients, read once with the service role so RLS cannot silently hide a
-  // row: linked accounts (person_id -> email) for the reminder, scheduler /
+  // row: linked accounts (person_id -> email) for the heads-up, scheduler /
   // admin accounts for the close summary, and the schedule_updates_email flag.
+  // The coordinators (and their own prefs rows, by profile_id) are read below,
+  // on their own, so a failed read there never costs the surgeons their mail.
   const [profiles, schedProfiles, prefRows] = await Promise.all([
     rest("user_profiles?select=person_id,email&person_id=not.is.null"),
     rest("user_profiles?select=person_id,email,role&role=in.(scheduler,admin)"),
@@ -944,6 +1141,23 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
     schedulers.push({ key, pid, email });
   }
   const optedOut = (pid: string | null) => !!(pid && prefsById[pid] && prefsById[pid].schedule_updates_email === false);
+  // Prompt 26: the office coordinators get the FIRST heads-up of a period (their own prefs row, by profile_id). Read only
+  // when a reminder is due; a failed read is logged and answered on the reminder entry (coordinators_error) - the
+  // surgeons' heads-up stands.
+  let coordinators: any[] = [];
+  let coordError: string | null = null;
+  if (due.some((x) => x.plan.action === "remind")) {
+    try {
+      const [cProfiles, cPrefRows] = await Promise.all([
+        rest("user_profiles?select=id,person_id,email,display_name,role&role=eq.coordinator&person_id=is.null"),
+        rest("notification_preferences?select=*"),   // select=*, as the follower read: offersCoordinators keeps the rows keyed by profile_id
+      ]);
+      coordinators = offersCoordinators(cProfiles, cPrefRows);
+    } catch (e) {
+      coordError = redactAddresses(e instanceof Error ? e.message : String(e));
+      console.error(`[daily-reminder] offers: coordinator read failed: ${coordError}`);
+    }
+  }
 
   for (const { period, plan } of due) {
     const t = otmTimeline(period, blob.rules);
@@ -957,23 +1171,37 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
 
     if (plan.action === "remind") {
       reminded++;
-      const targets = roll.filter((r) => r.status === "not_started").map((r) => r.id);
-      console.log(`[daily-reminder] offers: ${period.label} reminder day (${plan.reason}) -> not_started: ${targets.join(",") || "(nobody)"}`);
-      for (const pid of targets) {
-        if (optedOut(pid)) { prefOff++; recipients.push({ person_id: pid, status: "skipped_pref_off" }); continue; }
-        const email = emailById[pid] || null;
-        if (!email) { noEmail++; recipients.push({ person_id: pid, status: "skipped_no_email" }); continue; }
-        const { subject, html } = buildOffersReminder(nameOf(pid), { label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at, days_to_close: plan.days_to_close, remind_days: remindDays });
-        if (dryRun) { recipients.push({ person_id: pid, status: "dry_run_composed" }); continue; }
-        const r = await sendEmail(email, subject, html, `mode=offers reminder period=${period.id} person=${pid}`);
-        if (r.ok) { sent++; recipients.push({ person_id: pid, status: "sent" }); }
-        else { failed++; recipients.push({ person_id: pid, status: `failed_${r.status}` }); }
+      // Prompt 26: EVERY pool surgeon, whatever his offer status (vacations matter for everyone); the coordinators on
+      // the first reminder only; the last call (the smallest of 2+ offsets) in one line. offersHeadsUpPlan decides who,
+      // offersHeadsUpText the words (the @offersMail block).
+      const kind = offersReminderKind(plan.days_to_close, remindDays);
+      entry.reminder = kind;
+      if (kind === "first" && coordError) entry.coordinators_error = coordError;
+      const headsUp = offersHeadsUpPlan(poolIds, emailById, (pid: string) => optedOut(pid), coordinators, kind);
+      console.log(`[daily-reminder] offers: ${period.label} reminder day (${plan.reason}, ${kind}) -> ${headsUp.map((e: any) => e.key).join(",") || "(nobody)"}`);
+      for (const e of headsUp) {
+        if (e.status === "skipped_pref_off") { prefOff++; recipients.push({ person_id: e.key, status: "skipped_pref_off" }); continue; }
+        if (e.status === "skipped_no_email") { noEmail++; recipients.push({ person_id: e.key, status: "skipped_no_email" }); continue; }
+        const words = offersHeadsUpText(e.audience, kind, { label: period.label, offers_close_at: t.offers_close_at, days_to_close: plan.days_to_close });
+        if (!words) continue;   // never: a coordinator is planned on the first reminder only
+        const { subject, html } = buildOffersReminder(e.audience === "coordinator" ? e.name : nameOf(e.pid), words, { audience: e.audience, days_to_close: plan.days_to_close, remind_days: remindDays });
+        if (dryRun) { recipients.push({ person_id: e.key, status: "dry_run_composed" }); continue; }
+        const r = await sendEmail(e.email, subject, html, `mode=offers reminder period=${period.id} to=${e.key}`);
+        if (r.ok) { sent++; recipients.push({ person_id: e.key, status: "sent" }); }
+        else { failed++; recipients.push({ person_id: e.key, status: `failed_${r.status}` }); }
       }
       continue;
     }
 
-    // plan.action === "close": flip the row first (compare-and-swap on status),
-    // then the audit row, then the summary. A dry run does none of the writes.
+    // plan.action === "close". Prompt 26: the roll call names who added vacations, so the pool's time_off rows that
+    // overlap the period are read first (service role, the period's range; read only) - a failed read throws here,
+    // BEFORE anything is written, and the period stays upcoming for the next run.
+    const vacRows = await rest(`time_off?select=person_id,start_date,end_date&start_date=lte.${t.end_day}&end_date=gte.${t.start_day}&order=start_date.asc`);
+    const summary = offersCloseSummary(roll, offersVacationRanges(Array.isArray(vacRows) ? vacRows : [], t.start_day, t.end_day, poolIds));
+    entry.summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };
+    const closedWords = offersClosedText({ label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, summary, nameOf);
+    // Then flip the row (compare-and-swap on status), then the audit row, then
+    // the summary. A dry run does none of the writes.
     let periodStatus = "unchanged_dry_run";
     entry.audit = "skipped_dry_run";
     if (!dryRun) {
@@ -995,7 +1223,7 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
           method: "POST", headers: { Prefer: "return=minimal" },
           body: JSON.stringify({
             actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close",
-            detail: { period_id: period.id, label: period.label, offers_close_at: plan.offers_close_at, today, rollcall: roll },
+            detail: { period_id: period.id, label: period.label, offers_close_at: plan.offers_close_at, today, rollcall: roll, summary: entry.summary },
           }),
         });
         entry.audit = "inserted";
@@ -1013,7 +1241,7 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
     // a missing address skips an account (reported as skipped_no_email).
     for (const s of schedulers) {
       if (!s.email) { noEmail++; recipients.push({ person_id: s.key, status: "skipped_no_email" }); continue; }
-      const { subject, html } = buildOffersClosed(s.pid ? nameOf(s.pid) : "scheduler", { label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, roll, nameOf, dryRun ? "closed (dry run - not written)" : periodStatus);
+      const { subject, html } = buildOffersClosed(s.pid ? nameOf(s.pid) : "scheduler", closedWords, dryRun ? "closed (dry run - not written)" : periodStatus);
       if (dryRun) { recipients.push({ person_id: s.key, status: "dry_run_composed" }); continue; }
       const r = await sendEmail(s.email, subject, html, `mode=offers closed period=${period.id} to=${s.key}`);
       if (r.ok) { sent++; recipients.push({ person_id: s.key, status: "sent" }); }

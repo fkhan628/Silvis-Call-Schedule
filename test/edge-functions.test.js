@@ -1557,6 +1557,340 @@ check("P20 R1: edge-functions/README.md section 3 - the Prompt 19 v7 record stay
   assert.ok(!/decision needed/i.test(readme), "no 'decision needed' left");
 });
 
+/* =====================================================================
+   Prompt 26 (Faraz 9/30) - the heads-up before a freeze: vacations in, painting optional. WORDING, AUDIENCE AND LABELS
+   ONLY - the offer statuses (otmStatus / SQL offer_status()) and the timeline maths are unchanged. daily-reminder mode
+   "offers" carries the pure pieces in ONE plain-JS block between '// @offersMail-start' and '// @offersMail-end'
+   (extracted, evaluated with new Function and run here, the Prompt 13 technique), next to the '@offerTimeline-mirror'
+   block it reads its roll call from:
+     - the words: surgeon (first / middle / last call) and coordinator texts, exactly as Faraz worded them;
+     - the audience: EVERY pool surgeon whatever his offer status (submitted, rules_only, not_started), the coordinators
+       on the FIRST (largest-offset) reminder only; a switch off -> skipped_pref_off; no address -> skipped_no_email;
+     - the close summary: painted days / added vacations / following their rules - nobody "never answered";
+     - never an address in a response row (keys are roster ids and "coordinator-<id8>").
+   p26DryRunRemind replays runOffers' reminder branch (dryRun) through both blocks; the source pins in the checks keep
+   the replay honest (each replayed line is the runner's own).
+   ===================================================================== */
+const OFM_START = "// @offersMail-start", OFM_END = "// @offersMail-end";
+function offersMailBlock() {
+  const i = drSrc.search(/^\/\/ @offersMail-start[ \t]*$/m), j = drSrc.search(/^\/\/ @offersMail-end[ \t]*$/m);
+  assert.ok(i >= 0, "daily-reminder carries the marker " + OFM_START + " on a line of its own");
+  assert.ok(j > i, "daily-reminder carries the marker " + OFM_END + " on a line of its own, after the start marker");
+  return drSrc.slice(i + OFM_START.length, j);
+}
+let OFM = null, OTM = null;
+const P26_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+const P26_ROSTER = Object.keys(P26_NAMES).map((id) => ({ id, name: P26_NAMES[id], active: true }));
+const P26_PERIOD = { id: "p26-period", label: "Jan 2027 - Jun 2027", start_day: "2027-01-04", end_day: "2027-06-30", offers_close_at: "2026-11-23", publish_by: "2026-12-07", status: "upcoming", rules_only_ids: ["s3"] };
+const P26_SEED_RULES = JSON.parse(read("docs/silvis-seed.json")).groupRules.offerPeriods;
+// s2 painted three days inside the period (submitted), s3 is rules-only, everyone else has entered nothing (not_started);
+// s1's one offered day is OUTSIDE the period (so he is not_started there)
+const P26_OFFERS = [
+  { person_id: "s2", day: "2027-01-08", role_pref: "primary" }, { person_id: "s2", day: "2027-02-12", role_pref: "any" }, { person_id: "s2", day: "2027-03-19", role_pref: "backup" },
+  { person_id: "s1", day: "2026-12-30", role_pref: "primary" },
+];
+// linked accounts (made-up addresses; this file never leaves the repo): s6 is linked without an address
+const P26_LINKED = [
+  { person_id: "s1", email: "harness.one@example.org" }, { person_id: "s2", email: "harness.two@example.org" }, { person_id: "s3", email: "harness.three@example.org" },
+  { person_id: "s4", email: "harness.four@example.org" }, { person_id: "s5", email: "harness.five@example.org" }, { person_id: "s6", email: null },
+];
+const P26_PREFS = [{ person_id: "s4", profile_id: null, schedule_updates_email: false }];   // s4 turned schedule updates off
+// the office: two coordinators with an address (one turned schedule updates off on his OWN row, by profile_id), one
+// without; a viewer and a surgeon-role row are never coordinators; a coordinator row naming a roster id is skipped
+const P26_COORDS = [
+  { id: "c0a1b2c3-coordinator-harness", person_id: null, role: "coordinator", email: "office.one@example.org", display_name: "Office (harness)" },
+  { id: "c7d8e9f0-coordinator-off", person_id: null, role: "coordinator", email: "office.two@example.org", display_name: null },
+  { id: "ca11ab1e-coordinator-noaddr", person_id: null, role: "coordinator", email: "  ", display_name: null },
+  { id: "d1e2f3a4-viewer", person_id: null, role: "viewer", email: "viewer.one@example.org", display_name: null },
+  { id: "e5f6a7b8-linked", person_id: "s1", role: "coordinator", email: "linked.one@example.org", display_name: null },
+];
+const P26_COORD_PREFS = [
+  { person_id: null, profile_id: "c7d8e9f0-coordinator-off", schedule_updates_email: false },
+  { person_id: "s1", profile_id: null, schedule_updates_email: false },   // a surgeon's row never stands in for a coordinator
+];
+// runOffers' reminder branch, replayed in dryRun (the lines are the runner's own - pinned in the source check below)
+function p26DryRunRemind(period, today, rules, roster, offers, linked, prefRows, cProfiles, cPrefRows) {
+  const poolIds = OTM.otmPoolIds(roster);
+  const plan = OTM.otmCronPlan(period, today, rules);
+  if (!plan || plan.action !== "remind") return { plan, entry: null, composed: [] };
+  const t = OTM.otmTimeline(period, rules);
+  const remindDays = t.remind_on.map((d) => OTM.otmDaysBetween(d, t.offers_close_at)).sort((a, b) => b - a);
+  const prefsById = {};
+  for (const p of prefRows) if (p && p.person_id) prefsById[String(p.person_id)] = p;
+  const emailById = {};
+  for (const row of linked) {
+    const pid = String(row.person_id);
+    const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
+    if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;
+  }
+  const optedOut = (pid) => !!(pid && prefsById[pid] && prefsById[pid].schedule_updates_email === false);
+  const coordinators = OFM.offersCoordinators(cProfiles, cPrefRows);
+  const roll = OTM.otmRollcall(period, offers, poolIds);
+  const recipients = [], composed = [];
+  const entry = { period: period.label, id: period.id, action: plan.action, reason: plan.reason, days_to_close: plan.days_to_close, offers_close_at: plan.offers_close_at, rollcall: roll, recipients };
+  const kind = OFM.offersReminderKind(plan.days_to_close, remindDays);
+  entry.reminder = kind;
+  const headsUp = OFM.offersHeadsUpPlan(poolIds, emailById, (pid) => optedOut(pid), coordinators, kind);
+  for (const e of headsUp) {
+    if (e.status === "skipped_pref_off") { recipients.push({ person_id: e.key, status: "skipped_pref_off" }); continue; }
+    if (e.status === "skipped_no_email") { recipients.push({ person_id: e.key, status: "skipped_no_email" }); continue; }
+    const words = OFM.offersHeadsUpText(e.audience, kind, { label: period.label, offers_close_at: t.offers_close_at, days_to_close: plan.days_to_close });
+    if (!words) continue;
+    composed.push({ key: e.key, audience: e.audience, subject: words.subject, text: words.text });
+    recipients.push({ person_id: e.key, status: "dry_run_composed" });   // dryRun: composed, never sent
+  }
+  return { plan, kind, roll, entry, composed, remindDays };
+}
+const P26_FORBIDDEN = /missing|never answered|not[ _]started|rules[ _]only|go by my rules|freeze on|offers? (reminder|closed)/i;
+const P26_BODY = "Before Mon 11/23, enter your vacations for Jan 2027 - Jun 2027 in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.";
+const P26_SUBJECT = "Silvis call - the Jan 2027 - Jun 2027 schedule is built from your rules on Mon 11/23";
+
+check("P26: daily-reminder carries ONE plain-JS '@offersMail' block (beside the unchanged '@offerTimeline-mirror' block) defining offersReminderKind, offersCoordinators, offersHeadsUpPlan, offersHeadsUpText, offersVacationRanges, offersCloseSummary, offersClosedText and ofmDayLabel; it evaluates on its own", () => {
+  const block = offersMailBlock();
+  plainJs(block, "daily-reminder @offersMail");
+  assert.strictEqual((drSrc.match(/^\/\/ @offersMail-start[ \t]*$/gm) || []).length, 1, "one block");
+  OFM = new Function(block + "\nreturn { offersReminderKind, offersCoordinators, offersHeadsUpPlan, offersHeadsUpText, offersVacationRanges, offersCloseSummary, offersClosedText, ofmDayLabel };")();
+  Object.keys(OFM).forEach((k) => assert.strictEqual(typeof OFM[k], "function", k + " is a function"));
+  OTM = new Function(blockOf(drSrc, "daily-reminder", "offerTimeline") + "\nreturn { otmPoolIds, otmCronPlan, otmTimeline, otmRollcall, otmDaysBetween };")();
+  assert.ok(drSrc.indexOf("// @offersMail-start") > drSrc.indexOf("// @offerTimeline-mirror-end"), "the words block sits after the mirror block (the mirror is untouched)");
+  assert.strictEqual(OFM.ofmDayLabel("2026-11-23"), "Mon 11/23");
+  assert.strictEqual(OFM.ofmDayLabel("2027-06-30"), "Wed 6/30");
+  assert.deepStrictEqual(P26_SEED_RULES.remindDaysBeforeClose, [14, 3], "the seed's reminders are [14, 3] (the live rule since 9/30)");
+});
+
+check("P26 words: the surgeon heads-up - subject 'Silvis call - the <period> schedule is built from your rules on <freeze>' and Faraz's three sentences (vacations, optional painting, nothing else to do); a middle reminder (a 3-offset list) reads the same; ASCII only; none of the retired words", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const p = { label: "Jan 2027 - Jun 2027", offers_close_at: "2026-11-23", days_to_close: 14 };
+  const first = OFM.offersHeadsUpText("surgeon", "first", p);
+  assert.deepStrictEqual(first, { subject: P26_SUBJECT, text: P26_BODY });
+  assert.deepStrictEqual(OFM.offersHeadsUpText("surgeon", "middle", p), first, "a middle reminder is the full text again");
+  [first.subject, first.text].forEach((s) => {
+    assert.ok(!/[^\x00-\x7F]/.test(s), "ASCII only: " + s);
+    assert.ok(!P26_FORBIDDEN.test(s), "no retired word: " + s);
+  });
+});
+
+check("P26 words: the LAST CALL says the same in ONE line with the days left - subject 'Silvis call - 3 days left: the <period> schedule is built from your rules on <freeze>', one sentence; '1 day left' in the singular", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const last = OFM.offersHeadsUpText("surgeon", "last", { label: "Jan 2027 - Jun 2027", offers_close_at: "2026-11-23", days_to_close: 3 });
+  assert.strictEqual(last.subject, "Silvis call - 3 days left: the Jan 2027 - Jun 2027 schedule is built from your rules on Mon 11/23");
+  assert.strictEqual(last.text, "3 days left: enter your vacations for Jan 2027 - Jun 2027 in the app before Mon 11/23 (and paint any days you'd like to work, or can't) - otherwise the schedule follows your rules.");
+  assert.ok(!/\n/.test(last.text) && (last.text.match(/[.!?](\s|$)/g) || []).length === 1 && /\.$/.test(last.text), "one line, one sentence");
+  assert.ok(/vacations/.test(last.text) && /paint/.test(last.text) && /follows your rules/.test(last.text), "the same three points");
+  const one = OFM.offersHeadsUpText("surgeon", "last", { label: "Jan 2027 - Jun 2027", offers_close_at: "2026-11-23", days_to_close: 1 });
+  assert.ok(one.subject.indexOf("Silvis call - 1 day left: ") === 0 && one.text.indexOf("1 day left: ") === 0, "singular: " + one.subject);
+  assert.ok(!P26_FORBIDDEN.test(last.subject + " " + last.text), "no retired word");
+});
+
+check("P26 words: the coordinator version (first reminder only) - the surgeons enter their vacations, the office enters one under Time off when asked, painting is optional, the schedule follows each surgeon's rules; null on any later reminder", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const p = { label: "Jan 2027 - Jun 2027", offers_close_at: "2026-11-23", days_to_close: 14 };
+  assert.deepStrictEqual(OFM.offersHeadsUpText("coordinator", "first", p), {
+    subject: "Silvis call - the Jan 2027 - Jun 2027 schedule is built from the surgeons' rules on Mon 11/23",
+    text: "Before Mon 11/23, the surgeons enter their vacations for Jan 2027 - Jun 2027 in the app; when one asks you, enter it for them under Time off. Painting days is optional - the schedule follows each surgeon's rules.",
+  });
+  assert.strictEqual(OFM.offersHeadsUpText("coordinator", "middle", p), null, "no coordinator copy on a middle reminder");
+  assert.strictEqual(OFM.offersHeadsUpText("coordinator", "last", p), null, "no coordinator copy on the last call");
+});
+
+check("P26 offersReminderKind: the largest offset is 'first', the smallest of 2+ is 'last', anything between 'middle'; a single offset has no last call; a 0 offset (the close day - the close wins) and duplicates do not count; tied to the real timeline: the seed's [14, 3] on Jan - Jun 2027 -> 11/9 first, 11/20 last", () => {
+  if (!OFM || !OTM) throw new Error("blocks did not load");
+  const K = OFM.offersReminderKind;
+  assert.deepStrictEqual([K(14, [14, 3]), K(3, [14, 3])], ["first", "last"]);
+  assert.deepStrictEqual([K(42, [42, 14, 3]), K(14, [42, 14, 3]), K(3, [42, 14, 3])], ["first", "middle", "last"]);
+  assert.strictEqual(K(14, [14]), "first", "a single offset: the one reminder is the first (the coordinators get it) - no last call");
+  assert.strictEqual(K(14, [14, 14]), "first", "duplicates are one offset - no last call");
+  assert.deepStrictEqual([K(14, [14, 3, 0]), K(3, [14, 3, 0])], ["first", "last"], "a 0-day offset never fires (close day), so 3 is the last call");
+  assert.deepStrictEqual([K(7, [7, 0])], ["first"], "[7, 0]: 7 is the only reminder that fires - no last call");
+  const t = OTM.otmTimeline(P26_PERIOD, P26_SEED_RULES);
+  const remindDays = t.remind_on.map((d) => OTM.otmDaysBetween(d, t.offers_close_at)).sort((a, b) => b - a);
+  assert.deepStrictEqual(remindDays, [14, 3]);
+  const on = (d) => { const pl = OTM.otmCronPlan(P26_PERIOD, d, P26_SEED_RULES); return pl.action === "remind" ? K(pl.days_to_close, remindDays) : pl.action; };
+  assert.deepStrictEqual([on("2026-11-09"), on("2026-11-20"), on("2026-11-23"), on("2026-10-12")], ["first", "last", "close", "none"]);
+});
+
+check("P26 audience (first reminder, 11/9): EVERY pool surgeon is mailed whatever his offer status - s2 submitted, s3 rules_only, s1 / s5 not_started all 'dry_run_composed' with the surgeon text; s4 (switch off) skipped_pref_off; s6 (no address) skipped_no_email; the coordinators ride along - one composed with the coordinator text, the one whose OWN row is off skipped_pref_off, the one without an address skipped_no_email; a viewer and a linked row are never coordinators", () => {
+  if (!OFM || !OTM) throw new Error("blocks did not load");
+  const r = p26DryRunRemind(P26_PERIOD, "2026-11-09", P26_SEED_RULES, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS);
+  assert.strictEqual(r.kind, "first");
+  const status = {}; r.roll.forEach((x) => { status[x.id] = x.status; });
+  assert.deepStrictEqual(status, { s1: "not_started", s2: "submitted", s3: "rules_only", s4: "not_started", s5: "not_started", s6: "not_started" }, "the offer statuses are what they were (otmStatus unchanged)");
+  assert.deepStrictEqual(r.entry.recipients, [
+    { person_id: "s1", status: "dry_run_composed" }, { person_id: "s2", status: "dry_run_composed" }, { person_id: "s3", status: "dry_run_composed" },
+    { person_id: "s4", status: "skipped_pref_off" }, { person_id: "s5", status: "dry_run_composed" }, { person_id: "s6", status: "skipped_no_email" },
+    { person_id: "coordinator-c0a1b2c3", status: "dry_run_composed" }, { person_id: "coordinator-c7d8e9f0", status: "skipped_pref_off" }, { person_id: "coordinator-ca11ab1e", status: "skipped_no_email" },
+  ]);
+  ["submitted", "rules_only", "not_started"].forEach((st) => {
+    const ids = r.roll.filter((x) => x.status === st).map((x) => x.id);
+    assert.ok(ids.some((id) => r.composed.some((c) => c.key === id)), "a " + st + " surgeon is mailed");
+  });
+  r.composed.filter((c) => c.audience === "surgeon").forEach((c) => assert.deepStrictEqual([c.subject, c.text], [P26_SUBJECT, P26_BODY], c.key + " gets the surgeon heads-up"));
+  const office = r.composed.filter((c) => c.audience === "coordinator");
+  assert.strictEqual(office.length, 1, "one coordinator copy composed");
+  assert.ok(/the surgeons enter their vacations/.test(office[0].text) && /under Time off/.test(office[0].text), "the coordinator text");
+  assert.strictEqual(r.entry.reminder, "first");
+});
+
+check("P26 audience (last call 11/20, and a middle reminder): the same pool surgeons whatever their status, the one-line text; NO coordinator - the office gets the first reminder only; with a single offset [14] the 11/9 reminder carries the coordinators and 11/20 sends nothing", () => {
+  if (!OFM || !OTM) throw new Error("blocks did not load");
+  const last = p26DryRunRemind(P26_PERIOD, "2026-11-20", P26_SEED_RULES, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS);
+  assert.strictEqual(last.kind, "last");
+  assert.deepStrictEqual(last.entry.recipients.map((x) => x.person_id + " " + x.status), ["s1 dry_run_composed", "s2 dry_run_composed", "s3 dry_run_composed", "s4 skipped_pref_off", "s5 dry_run_composed", "s6 skipped_no_email"], "surgeons only, every status");
+  last.composed.forEach((c) => assert.strictEqual(c.subject, "Silvis call - 3 days left: the Jan 2027 - Jun 2027 schedule is built from your rules on Mon 11/23", c.key));
+  const R3 = Object.assign({}, P26_SEED_RULES, { remindDaysBeforeClose: [42, 14, 3] });
+  const first3 = p26DryRunRemind(P26_PERIOD, "2026-10-12", R3, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS);
+  const mid = p26DryRunRemind(P26_PERIOD, "2026-11-09", R3, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS);
+  assert.deepStrictEqual([first3.kind, mid.kind], ["first", "middle"]);
+  assert.ok(first3.entry.recipients.some((x) => /^coordinator-/.test(x.person_id)) && !mid.entry.recipients.some((x) => /^coordinator-/.test(x.person_id)), "[42, 14, 3]: the coordinators on 10/12 (the largest) only");
+  mid.composed.forEach((c) => assert.deepStrictEqual([c.subject, c.text], [P26_SUBJECT, P26_BODY], "a middle reminder is the full surgeon text"));
+  const R1 = Object.assign({}, P26_SEED_RULES, { remindDaysBeforeClose: [14] });
+  const only = p26DryRunRemind(P26_PERIOD, "2026-11-09", R1, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS);
+  assert.ok(only.kind === "first" && only.entry.recipients.some((x) => x.person_id === "coordinator-c0a1b2c3" && x.status === "dry_run_composed"), "a single offset: the coordinators ride that one reminder");
+  only.composed.filter((c) => c.audience === "surgeon").forEach((c) => assert.strictEqual(c.subject, P26_SUBJECT, "a single offset has no last call - the full text"));
+  assert.strictEqual(p26DryRunRemind(P26_PERIOD, "2026-11-20", R1, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS).entry, null, "[14]: nothing on 11/20");
+});
+
+check("P26 offersCoordinators / offersHeadsUpPlan edge cases: a coordinator's prefs row is the one keyed by HIS profile_id (a missing row -> on); a surgeon's person_id row never decides for him; a duplicate pool id is mailed once; a pool id with no linked account is skipped_no_email; an empty office adds nobody", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const c = OFM.offersCoordinators(P26_COORDS, P26_COORD_PREFS);
+  assert.deepStrictEqual(c.map((x) => [x.key, x.opted_out, !!x.email, x.name]), [["coordinator-c0a1b2c3", false, true, "Office (harness)"], ["coordinator-c7d8e9f0", true, true, null], ["coordinator-ca11ab1e", false, false, null]]);
+  assert.deepStrictEqual(OFM.offersCoordinators(null, null), []);
+  const plan = OFM.offersHeadsUpPlan(["s1", "s1", "s7"], { s1: "harness.one@example.org" }, () => false, [], "first");
+  assert.deepStrictEqual(plan.map((e) => [e.key, e.audience, e.status]), [["s1", "surgeon", "due"], ["s7", "surgeon", "skipped_no_email"]]);
+  assert.deepStrictEqual(OFM.offersHeadsUpPlan(["s1"], { s1: "harness.one@example.org" }, (pid) => pid === "s1", c, "last").map((e) => e.status), ["skipped_pref_off"], "the surgeon's own switch; no coordinator on the last call");
+});
+
+check("P26 runOffers source pins: the reminder branch is the replay's - remindDays from the timeline, offersReminderKind, offersHeadsUpPlan over the WHOLE pool with optedOut (no status filter), the skip lines before the dryRun branch and the dryRun branch before the real send, rows keyed by e.key; the coordinators read once (role coordinator, unlinked; prefs select=*) only when a reminder is due, a failed read answered as coordinators_error (addresses redacted) without costing the surgeons their mail", () => {
+  const i = drSrc.indexOf("async function runOffers("), j = drSrc.indexOf("\n// ------", i);
+  const r = drSrc.slice(i, j);
+  [
+    "const remindDays: number[] = t.remind_on.map((d: string) => otmDaysBetween(d, t.offers_close_at)).sort((a: number, b: number) => b - a);",
+    "const optedOut = (pid: string | null) => !!(pid && prefsById[pid] && prefsById[pid].schedule_updates_email === false);",
+    "const kind = offersReminderKind(plan.days_to_close, remindDays);",
+    "entry.reminder = kind;",
+    "if (kind === \"first\" && coordError) entry.coordinators_error = coordError;",
+    "const headsUp = offersHeadsUpPlan(poolIds, emailById, (pid: string) => optedOut(pid), coordinators, kind);",
+    "coordinators = offersCoordinators(cProfiles, cPrefRows);",
+    'rest("user_profiles?select=id,person_id,email,display_name,role&role=eq.coordinator&person_id=is.null")',
+    'rest("notification_preferences?select=*")',
+    'if (due.some((x) => x.plan.action === "remind")) {',
+    "coordError = redactAddresses(e instanceof Error ? e.message : String(e));",
+  ].forEach((l) => assert.ok(r.includes(l), "runOffers still reads: " + l));
+  const loop = r.slice(r.indexOf("for (const e of headsUp) {"), r.indexOf("continue;\n    }", r.indexOf("for (const e of headsUp) {")));
+  const iSkipPref = loop.indexOf('if (e.status === "skipped_pref_off") { prefOff++; recipients.push({ person_id: e.key, status: "skipped_pref_off" }); continue; }');
+  const iSkipMail = loop.indexOf('if (e.status === "skipped_no_email") { noEmail++; recipients.push({ person_id: e.key, status: "skipped_no_email" }); continue; }');
+  const iWords = loop.indexOf("const words = offersHeadsUpText(e.audience, kind, { label: period.label, offers_close_at: t.offers_close_at, days_to_close: plan.days_to_close });");
+  const iDry = loop.indexOf('if (dryRun) { recipients.push({ person_id: e.key, status: "dry_run_composed" }); continue; }');
+  const iSend = loop.indexOf("const r = await sendEmail(e.email, subject, html, `mode=offers reminder period=${period.id} to=${e.key}`);");
+  assert.ok(iSkipPref > 0 && iSkipMail > iSkipPref && iWords > iSkipMail && iDry > iWords && iSend > iDry, "skip -> words -> dryRun -> send, in that order: " + [iSkipPref, iSkipMail, iWords, iDry, iSend].join(","));
+  assert.ok(!/status === "not_started"/.test(r), "no not_started filter anywhere in the runner");
+  // every response row the reminder pushes is keyed by e.key (a roster id or coordinator-<id8>) - never the address
+  (loop.match(/recipients\.push\(\{[^}]*\}\)/g) || []).forEach((p) => assert.ok(/person_id: e\.key/.test(p) && !/\bemail\b/.test(p), "keyed by e.key, no address: " + p));
+  assert.ok(r.indexOf("coordinators_error") > 0 && !/coordinators_error = [^;]*\.email/.test(r), "the coordinator error carries no address");
+});
+
+check("P26 close summary: offersVacationRanges clips the pool's time_off rows to the period and merges overlapping / touching ranges (outside rows, a non-pool id and junk ignored); offersCloseSummary lists painted days (submitted, with the count), added vacations (one surgeon may be in both) and everyone else as following their rules", () => {
+  if (!OFM || !OTM) throw new Error("blocks did not load");
+  const vacRows = [
+    { person_id: "s1", start_date: "2026-12-28", end_date: "2027-01-08" },   // straddles the start -> 1/4-1/8
+    { person_id: "s1", start_date: "2027-01-09", end_date: "2027-01-12" },   // touches it -> merged 1/4-1/12
+    { person_id: "s5", start_date: "2027-03-03", end_date: "2027-03-10" },
+    { person_id: "s5", start_date: "2027-03-01", end_date: "2027-03-05" },   // overlaps (out of order) -> 3/1-3/10
+    { person_id: "s5", start_date: "2027-06-29", end_date: "2027-07-03" },   // straddles the end -> 6/29-6/30
+    { person_id: "s6", start_date: "2027-02-14", end_date: "2027-02-14" },   // one day -> 2/14
+    { person_id: "s4", start_date: "2027-07-05", end_date: "2027-07-09" },   // after the period
+    { person_id: "s9", start_date: "2027-02-01", end_date: "2027-02-05" },   // not in the pool
+    { person_id: "s3", start_date: "junk", end_date: "2027-02-05" }, null,
+  ];
+  const pool = OTM.otmPoolIds(P26_ROSTER);
+  const vac = OFM.offersVacationRanges(vacRows, P26_PERIOD.start_day, P26_PERIOD.end_day, pool);
+  assert.deepStrictEqual(vac, {
+    s1: [{ start: "2027-01-04", end: "2027-01-12" }],
+    s5: [{ start: "2027-03-01", end: "2027-03-10" }, { start: "2027-06-29", end: "2027-06-30" }],
+    s6: [{ start: "2027-02-14", end: "2027-02-14" }],
+  });
+  const offers = P26_OFFERS.concat([{ person_id: "s1", day: "2027-04-02", role_pref: "any" }, { person_id: "s1", day: "2027-04-09", role_pref: "any" }]);
+  const roll = OTM.otmRollcall(P26_PERIOD, offers, pool);
+  const s = OFM.offersCloseSummary(roll, vac);
+  assert.deepStrictEqual(s, {
+    painted: [{ id: "s1", offered: 2 }, { id: "s2", offered: 3 }],
+    vacations: [{ id: "s1", ranges: ["1/4-1/12"] }, { id: "s5", ranges: ["3/1-3/10", "6/29-6/30"] }, { id: "s6", ranges: ["2/14"] }],
+    following: ["s3", "s4"],
+  }, "s1 painted AND added a vacation; s3 (rules-only) and s4 (nothing entered) follow their rules");
+  assert.deepStrictEqual(OFM.offersCloseSummary(OTM.otmRollcall(P26_PERIOD, [], pool), {}).following, pool, "nothing entered by anyone -> everyone follows their rules");
+  assert.deepStrictEqual(OFM.offersVacationRanges(vacRows, "2027-06-30", "2027-01-04", pool), {}, "a period without usable bounds -> nothing");
+});
+
+check("P26 close summary words: subject 'Silvis call - <period> frozen <freeze>: N painted days, M added vacations, K following their rules'; sections 'Painted days' (name - N days), 'Added vacations' (name - M/D-M/D ranges), 'Following their rules' (names); nobody is 'missing', 'never answered' or 'not started'", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const s = { painted: [{ id: "s1", offered: 2 }, { id: "s2", offered: 1 }], vacations: [{ id: "s1", ranges: ["1/4-1/12"] }, { id: "s5", ranges: ["3/1-3/10", "6/29-6/30"] }, { id: "s6", ranges: ["2/14"] }], following: ["s3", "s4"] };
+  const w = OFM.offersClosedText(P26_PERIOD, s, (id) => P26_NAMES[id] || id);
+  assert.strictEqual(w.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 2 painted days, 3 added vacations, 2 following their rules");
+  assert.strictEqual(w.lead, "Jan 2027 - Jun 2027 (Mon 1/4 to Wed 6/30) froze on Mon 11/23");
+  assert.deepStrictEqual(w.sections, [
+    { heading: "Painted days", items: ["Khan - 2 days", "Burchett - 1 day"] },
+    { heading: "Added vacations", items: ["Khan - 1/4-1/12", "Fierce - 3/1-3/10, 6/29-6/30", "Sarkar - 2/14"] },
+    { heading: "Following their rules", items: ["Acton", "Philip"] },
+  ]);
+  const all = [w.subject, w.lead, w.tail].concat(w.sections.map((x) => x.heading + " " + x.items.join(" "))).join(" | ");
+  assert.ok(!P26_FORBIDDEN.test(all), "no retired word in the roll call: " + all);
+  assert.ok(/Nothing was generated or published/.test(w.tail), "the close still says nothing was generated or published");
+  const empty = OFM.offersClosedText(P26_PERIOD, { painted: [], vacations: [], following: ["s1", "s2"] }, (id) => P26_NAMES[id]);
+  assert.strictEqual(empty.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 0 painted days, 0 added vacations, 2 following their rules");
+});
+
+check("P26 runOffers close source pins: time_off is read (service role, the period's range, select person_id,start_date,end_date) BEFORE the compare-and-swap, never written; the summary is offersCloseSummary(roll, offersVacationRanges(...)) rendered by buildOffersClosed from offersClosedText; entry.summary and the audit detail carry roster ids only; buildOffersClosed has no 'Never answered' / 'Submitted' / 'Go by my rules' section left", () => {
+  const i = drSrc.indexOf("async function runOffers("), j = drSrc.indexOf("\n// ------", i);
+  const r = drSrc.slice(i, j);
+  const iVac = r.indexOf("const vacRows = await rest(`time_off?select=person_id,start_date,end_date&start_date=lte.${t.end_day}&end_date=gte.${t.start_day}&order=start_date.asc`);");
+  assert.ok(iVac > 0 && iVac < r.indexOf('method: "PATCH"'), "the time_off read sits before the CAS");
+  assert.ok(iVac > r.indexOf('if (plan.action === "remind") {'), "and only on the close path (after the reminder branch's continue)");
+  assert.ok(r.includes("const summary = offersCloseSummary(roll, offersVacationRanges(Array.isArray(vacRows) ? vacRows : [], t.start_day, t.end_day, poolIds));"), "summary = painted / vacations / following");
+  assert.ok(r.includes("entry.summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };"), "entry.summary = roster ids only");
+  assert.ok(/detail: \{ period_id: period\.id, label: period\.label, offers_close_at: plan\.offers_close_at, today, rollcall: roll, summary: entry\.summary \}/.test(r), "the audit detail adds the ids-only summary");
+  assert.ok(r.includes("const closedWords = offersClosedText({ label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, summary, nameOf);") && r.includes("buildOffersClosed(s.pid ? nameOf(s.pid) : \"scheduler\", closedWords, "), "the close mail is offersClosedText's words");
+  const bc = drSrc.slice(drSrc.indexOf("function buildOffersClosed("), drSrc.indexOf("async function runOffers("));
+  assert.ok(/words\.sections\.map\(/.test(bc) && /escHtml\(s\.heading\)/.test(bc) && /escHtml\(t\)/.test(bc), "buildOffersClosed renders the sections, escaped");
+  assert.ok(!/Never answered|Submitted|Go by my rules|never answered/.test(bc), "no retired section");
+});
+
+check("P26 frames: daily-reminder's OFFERS_REMINDER_FRAME / OFFERS_CLOSED_FRAME = send-notification's offers_reminder / offers_closed categories (title, colour, CTA) - 'Schedule Heads-up' / 'Open the app' and 'Period Frozen' / 'Open Periods'; the reminder footer names the effective offsets from the data and says it goes to every pool surgeon; the coordinator footer says first reminder only", () => {
+  const frame = (name) => {
+    const m = new RegExp("const " + name + " = \\{ title: \"([^\"]+)\", color: \"([^\"]+)\", cta: \"([^\"]+)\" \\};").exec(drSrc);
+    assert.ok(m, "daily-reminder defines " + name);
+    return { title: m[1], color: m[2], cta: m[3] };
+  };
+  const cat = (key) => {
+    const m = new RegExp(key + ":\\s*\\{ pref: \"schedule_updates_email\", title: \"([^\"]+)\",\\s*color: \"([^\"]+)\", cta: \"([^\"]+)\" \\}").exec(snSrc);
+    assert.ok(m, "send-notification defines " + key);
+    return { title: m[1], color: m[2], cta: m[3] };
+  };
+  assert.deepStrictEqual(frame("OFFERS_REMINDER_FRAME"), cat("offers_reminder"));
+  assert.deepStrictEqual(frame("OFFERS_CLOSED_FRAME"), cat("offers_closed"));
+  assert.deepStrictEqual(cat("offers_reminder"), { title: "Schedule Heads-up", color: "#13294B", cta: "Open the app" });
+  assert.deepStrictEqual(cat("offers_closed"), { title: "Period Frozen", color: "#C2410C", cta: "Open Periods" });
+  const br = drSrc.slice(drSrc.indexOf("function buildOffersReminder("), drSrc.indexOf("function buildOffersClosed("));
+  assert.ok(/p\.remind_days\.join\(" and "\)/.test(br) && /before a period's freeze to every pool surgeon/.test(br), "the surgeon footer: the offsets from the data, every pool surgeon");
+  assert.ok(/office coordinators with the first reminder/.test(br), "the coordinator footer: first reminder only");
+  assert.ok(/offersFrame\(f\.title, f\.color, name, escHtml\(words\.text\), f\.cta, footer\)/.test(br), "the words are escaped into the frame");
+  assert.ok(/\$\{name \? `Hi <strong>\$\{escHtml\(name\)\}<\/strong>,` : "Hi,"\}/.test(drSrc), "a coordinator without a display name reads 'Hi,'");
+});
+
+check("P26: no address in any offers response - the replayed dryRun entries (first, last, coordinators) carry roster ids, coordinator-<id8> tags and statuses only (no '@', no full account id); edge-functions/README.md section 3 carries the pending Prompt 26 record, sections 5 / 6 say every pool surgeon (+ the coordinators on the first reminder)", () => {
+  if (!OFM || !OTM) throw new Error("blocks did not load");
+  const wire = JSON.stringify(["2026-11-09", "2026-11-20"].map((d) => p26DryRunRemind(P26_PERIOD, d, P26_SEED_RULES, P26_ROSTER, P26_OFFERS, P26_LINKED, P26_PREFS, P26_COORDS, P26_COORD_PREFS).entry));
+  assert.ok(!/@/.test(wire), "no address: " + wire.slice(0, 200));
+  P26_COORDS.forEach((c) => assert.ok(wire.indexOf(c.id) < 0, "no full account id: " + c.id));
+  assert.ok(/"coordinator-c0a1b2c3"/.test(wire), "the coordinator tag");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const rec = s3.slice(s3.indexOf("### Deploy record - Prompt 26"), s3.indexOf("\n### ", s3.indexOf("### Deploy record - Prompt 26") + 10));
+  assert.ok(s3.indexOf("### Deploy record - Prompt 26") > 0 && /PENDING, nothing deployed/.test(rec), "the pending Prompt 26 record");
+  assert.ok(/`daily-reminder` \| v6 -> v7/.test(rec) && /`send-notification` \| v8 -> v9/.test(rec), "both functions, from the live versions");
+  assert.ok(rec.indexOf("Before <freeze>, enter your vacations for <period> in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.") > 0, "the record quotes the body");
+  const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("## 7."));
+  assert.ok(!/to every not_started|the not_started pool members/.test(dr) && /every\s+pool surgeon/.test(dr) && /coordinators/.test(dr), "sections 5 / 6: every pool surgeon (+ coordinators), not the not_started members");
+});
+
 (async () => {
   for (const [name, fn] of ASYNC) {
     try { await fn(); passed++; console.log("ok   " + name); }

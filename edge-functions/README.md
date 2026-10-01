@@ -9,7 +9,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23) | yes - any non-empty send the gate lets through |
-| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open |
+| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -180,6 +180,17 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - Prompt 26 (the heads-up before a freeze: vacations in, painting optional - Faraz 9/30) - PENDING, nothing deployed
+
+Wording, audience and labels only: no rule, offer, period, schema, RLS or engine change; the `@offerTimeline-mirror`
+block (and SQL `offer_status()`) is unchanged, so the cron's dates, the CAS close and the audit row's place are exactly
+as today. Deploy BEFORE the first reminder of the Jan 2027 - Jun 2027 period (Mon 11/9, 14 days before the Mon 11/23 freeze).
+
+| when (UTC) | function | version | what changes | what to observe |
+|---|---|---|---|---|
+| pending | `daily-reminder` | v6 -> v7 (back up the live v6 first; re-download and `cmp` after) | mode `offers`, reminder day: the heads-up goes to EVERY pool surgeon whatever his offer status (submitted, rules_only, not_started) with a linked account, an address and `schedule_updates_email` on - subject `Silvis call - the <period> schedule is built from your rules on <Mon 11/23>`, body `Before <freeze>, enter your vacations for <period> in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.`; the LAST CALL (the smallest of 2+ offsets: 3 days with `[14, 3]`) says the same in one line with the days left (`Silvis call - 3 days left: the <period> schedule is built from your rules on <freeze>`); the office COORDINATORS (role coordinator, unlinked, with an address, their own `schedule_updates_email` - prefs row by `profile_id` - not false) get the first (largest-offset) reminder only, worded for them (`... when one asks you, enter it for them under Time off ...`), answered as `coordinator-<first 8 characters of the account id>`. The remind entry gains `reminder` (`first` / `middle` / `last`), and `coordinators_error` when the coordinator read failed (the surgeons' mail stands). Freeze day: `time_off` is read (service role, the period's range, BEFORE the CAS) and the roll call lists `Painted days` (name - N days), `Added vacations` (name - ranges clipped to the period, M/D-M/D) and `Following their rules` (everyone else) - subject `Silvis call - <period> frozen <freeze>: N painted days, M added vacations, K following their rules`; the close entry and the `period.close` audit detail gain `summary` { painted, added_vacations, following_rules } (roster ids only). Frames: `Schedule Heads-up` / CTA `Open the app`, `Period Frozen` / CTA `Open Periods` | an unauthenticated POST -> 401; one pg_net `{"mode":"offers","dryRun":true}` -> 200 (an ordinary morning: every period `"action":"none"`); on 11/9 a dryRun shows `"reminder":"first"` and one `dry_run_composed` per opted-in pool surgeon (any status) plus the coordinators; never an address in the body |
+| pending | `send-notification` | v8 -> v9 (back up the live v8 first; re-download and `cmp` after) | the `offers_reminder` / `offers_closed` category frames only: `Schedule Heads-up` / `#13294B` / `Open the app` and `Period Frozen` / `#C2410C` / `Open Periods` (the same as daily-reminder's `OFFERS_REMINDER_FRAME` / `OFFERS_CLOSED_FRAME`); the client still composes the words; the gate, the recipients and the response are unchanged | an unauthenticated POST -> 401; the scheduler's next Periods mail reads the new heading |
 
 ### Deploy record - calendar-sync all-day runs (Faraz 2026-09-25: "the calendar looks busy, and 07:00 -> 07:00 shifts draw across two days") - deployed 2026-09-25 13:20:14 UTC by the orchestrator
 
@@ -441,9 +452,12 @@ Notes
   by hand on a reminder day sends the reminder again. The close is a
   compare-and-swap (`status = upcoming` -> `closed`), so a second run on the
   close day finds nothing to close and sends no second summary.
-- Opt-out semantics of the offers mode: the reminder honours
-  `schedule_updates_email` (a surgeon who turned schedule updates off is
-  `skipped_pref_off`); the close roll call to the scheduler / admin accounts
+- Opt-out semantics of the offers mode: the reminder (the heads-up before a
+  freeze since Prompt 26 - every pool surgeon whatever his offer status, the
+  office coordinators on the first reminder only) honours
+  `schedule_updates_email` (a surgeon who turned schedule updates off - his
+  row by `person_id` - or a coordinator whose own row, by `profile_id`, says
+  false is `skipped_pref_off`); the close roll call to the scheduler / admin accounts
   is unconditional - an operational notice to whoever runs the period, so a
   period never closes with nobody told (only a missing address skips it).
 - Nothing secret is stored in `cron.job.command`: the command names the Vault
@@ -609,8 +623,13 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #   -> {"mode":"offers","dry_run":true,"today":"YYYY-MM-DD","periods":N,"reminded":0|1,"closed":0,"sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,
 #       "results":[{"period":"Nov 2026 - Jan 2027","id":"<uuid>","action":"none"|"remind"|"close","reason":"no-trigger"|"remind:14"|"remind:3"|"close:today"|"close:overdue",
 #                   "days_to_close":N,"offers_close_at":"YYYY-MM-DD", ...on a remind/close day also "rollcall":[{"id":"s?","status":"submitted"|"rules_only"|"not_started","offered":N}],
-#                   "recipients":[{"person_id":"s?","status":"dry_run_composed"|"skipped_pref_off"|"skipped_no_email"}], and on the close day "period_status":"unchanged_dry_run","audit":"skipped_dry_run"}]}
+#                   "recipients":[{"person_id":"s?"|"coordinator-<id8>","status":"dry_run_composed"|"skipped_pref_off"|"skipped_no_email"}], on a reminder day "reminder":"first"|"middle"|"last"
+#                   (and "coordinators_error" if their read failed), and on the close day "summary":{"painted":["s?"],"added_vacations":["s?"],"following_rules":["s?"]},
+#                   "period_status":"unchanged_dry_run","audit":"skipped_dry_run"}]}
 #   an ordinary morning: every period "action":"none" and "sent":0; "periods":0 when no row is upcoming.
+#   (Prompt 26: the rollcall statuses are the offer_status() keys, unchanged - not_started is what a person reads as
+#   "following his rules"; the reminder recipients are every pool surgeon whatever the status, plus the coordinators on
+#   the first reminder.)
 # an unknown mode -> 400, nothing read or sent
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"nope"}' | Select-Object -First 1
 ```
@@ -624,8 +643,9 @@ whenever `open` is non-zero, and it inserts the `notifications` row the board's
 Proof after deploying: one dryRun POST through pg_net from the SQL editor (or the
 curl above) and quote the 200 body.
 A LIVE
-`{"mode":"offers"}` call IS a real send on a reminder day (to every not_started
-pool member with `schedule_updates_email` on) and on the close day (it flips the
+`{"mode":"offers"}` call IS a real send on a reminder day (the heads-up to every
+pool surgeon with `schedule_updates_email` on, whatever his offer status, and on the
+first reminder to the office coordinators) and on the close day (it flips the
 period to `closed`, writes the `period.close` audit row and mails the scheduler /
 admin accounts); on any other day it reads and answers `sent: 0`. Proof after
 deploying: one dryRun POST through pg_net from the SQL editor (or the curl above)
@@ -651,8 +671,9 @@ and quote the 200 body in the deploy record (section 3).
   group now", after a preview). Type `shift_claimed` - to the scheduler(s) + the claimer
   when someone takes an open shift (targetIds, never a broadcast).
 - `daily-reminder` live `{"mode":"offers"}` on a reminder day (offers_close_at - 14 / - 3) or on / after
-  the close day of an upcoming period - the not_started pool members, or the scheduler / admin accounts
-  (the daily cron job is the intended caller; on every other day it sends nothing).
+  the close day of an upcoming period - every opted-in pool surgeon (and, on the first reminder, the office
+  coordinators), or the scheduler / admin accounts (the daily cron job is the intended caller; on every other day it
+  sends nothing).
 - `send-notification` types `offers_reminder` / `offers_closed` (Prompt 14 part 4) - targeted sends from
   the Periods section (the "Remind" button with a session); never a broadcast by design.
 - Prompt 20 F3 (followers; deployed 2026-09-27 00:46 UTC, after revision o): the live `daily-reminder` `{}` at a follower's own reminder hour mails

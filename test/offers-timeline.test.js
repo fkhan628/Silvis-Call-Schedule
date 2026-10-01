@@ -207,8 +207,12 @@ const offersRunner = () => {
 };
 
 check("send-notification: categories offers_reminder and offers_closed exist, both on schedule_updates_email, in the ONE CATEGORIES table; the header names them", () => {
-  assert.ok(/offers_reminder:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Offers Reminder"/.test(snSrc), "offers_reminder category");
-  assert.ok(/offers_closed:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Offers Closed"/.test(snSrc), "offers_closed category");
+  // pin moved deliberately 9/30 (Prompt 26): the frames were retitled from "choose your shifts" to "your schedule follows
+  // your rules" - offers_reminder "Offers Reminder" -> "Schedule Heads-up", offers_closed "Offers Closed" -> "Period Frozen";
+  // the category keys, the flag and the one table are pinned exactly as before, and the old titles must be gone
+  assert.ok(/offers_reminder:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Schedule Heads-up"/.test(snSrc), "offers_reminder category");
+  assert.ok(/offers_closed:\s*\{\s*pref:\s*"schedule_updates_email",\s*title:\s*"Period Frozen"/.test(snSrc), "offers_closed category");
+  assert.ok(!/"Offers Reminder"|"Offers Closed"|"Paint my offers"/.test(snSrc), "the old offers frame titles / CTA are gone");
   assert.strictEqual((snSrc.match(/^const CATEGORIES/gm) || []).length, 1);
   assert.ok(/\/\/.*offers_reminder.*offers_closed|\/\/.*offers_closed.*offers_reminder/.test(snSrc.split("\n").slice(0, 60).join(" ")), "the header comment lists the two categories");
   assert.ok(snSrc.indexOf('rest("user_profiles?select=person_id,email&person_id=not.is.null")') > 0, "recipients still come from user_profiles by person_id");
@@ -220,13 +224,21 @@ check("daily-reminder: mode \"offers\" is dispatched behind the x-cron-secret ga
   assert.ok(/mode must be/.test(drSrc), "an unknown mode is a 400 with the accepted values named");
   assert.ok(drSrc.indexOf('typeof body.dryRun !== "boolean"') > 0 && drSrc.indexOf('typeof body.dryRun !== "boolean"') < dispatch, "dryRun is validated before the dispatch");
 });
-check("daily-reminder runOffers: reads call_periods (status upcoming) + call_offers + the blob + user_profiles / notification_preferences ONLY - never schedule_days, availability, time_off, east_feed; never generates or publishes", () => {
+check("daily-reminder runOffers: reads call_periods (status upcoming) + call_offers + the blob + user_profiles / notification_preferences + (for the close roll call) time_off ONLY - never schedule_days, availability, east_feed; time_off is read, never written; never generates or publishes", () => {
   const r = offersRunner();
   assert.ok(r.indexOf("call_periods?select=") > 0 && r.indexOf("status=eq.upcoming") > 0, "reads the upcoming periods");
   assert.ok(r.indexOf("call_offers?select=") > 0, "reads the offers inside each period");
   assert.ok(r.indexOf("user_profiles?select=person_id,email") > 0, "addresses from user_profiles by person_id (service role)");
   assert.ok(r.indexOf("notification_preferences?select=person_id,schedule_updates_email") > 0, "the schedule_updates_email flag");
-  ["schedule_days", "availability?", "time_off", "east_feed", "shift_trade_requests"].forEach(t => assert.ok(r.indexOf(t) < 0, "runOffers never touches " + t));
+  // pin moved deliberately 9/30 (Prompt 26): the freeze roll call lists who ADDED VACATIONS, so runOffers now reads
+  // time_off - ONE GET of the pool's rows overlapping the period (select person_id,start_date,end_date, the period's own
+  // range), in the close branch, BEFORE the compare-and-swap; it is never written (the write pin below still allows
+  // call_periods / audit_log only) and the other tables stay untouched
+  ["schedule_days", "availability?", "east_feed", "shift_trade_requests"].forEach(t => assert.ok(r.indexOf(t) < 0, "runOffers never touches " + t));
+  const tOff = r.match(/time_off\?[^`"\n]*/g) || [];
+  assert.deepStrictEqual(tOff, ["time_off?select=person_id,start_date,end_date&start_date=lte.${t.end_day}&end_date=gte.${t.start_day}&order=start_date.asc"], "exactly one time_off read, the period's range: " + JSON.stringify(tOff));
+  assert.ok(!/rest\(\s*[`"]time_off[^\n]*\n?[^\n]*method:/.test(r), "time_off is never written by the cron");
+  assert.ok(r.indexOf("rest(`time_off?") > 0 && r.indexOf("rest(`time_off?") < r.indexOf('method: "PATCH"'), "the time_off read precedes the close's compare-and-swap (a failed read writes nothing)");
   assert.ok(!/call_schedule_data[^\n]*method:/.test(r) && !/schedule_days/.test(r), "the blob is read, never written; schedule_days is never touched (nothing generates or publishes)");
   const writes = r.match(/rest\(\s*[`"]([a-z_]+)[^\n]*\n?[^\n]*method:\s*"(POST|PATCH|DELETE)"/g) || [];
   writes.forEach(w => assert.ok(/^rest\(\s*[`"](call_periods|audit_log)/.test(w), "the only writes are the call_periods CAS and the audit row: " + w));
@@ -242,7 +254,7 @@ check("daily-reminder runOffers: the close is a compare-and-swap PATCH (id + sta
   assert.ok(/audit_log[\s\S]{0,300}action:\s*"period\.close"/.test(r), "audit_log row period.close");
   assert.ok(/actor_id:\s*"cron"/.test(r), "actor_id cron (no person impersonated)");
 });
-check("daily-reminder runOffers: the response carries mode / dry_run / today / periods / sent / results; per-recipient rows are keyed by person_id and never carry an address; reminder recipients = not_started pool members, close summary = scheduler/admin profiles", () => {
+check("daily-reminder runOffers: the response carries mode / dry_run / today / periods / sent / results; per-recipient rows are keyed by person_id and never carry an address; reminder recipients = EVERY pool member whatever his status (Prompt 26), close summary = scheduler/admin profiles", () => {
   const r = offersRunner();
   assert.ok(/mode:\s*"offers",\s*dry_run:\s*dryRun,\s*today\b/.test(r), "response shape starts mode / dry_run / today");
   assert.ok(/periods:\s*\w+\.length|periods:\s*periods\.length/.test(r) && r.indexOf("results") > 0 && /\bsent\b/.test(r), "periods count, sent, results");
@@ -254,10 +266,19 @@ check("daily-reminder runOffers: the response carries mode / dry_run / today / p
   // \bemail\b = an address key or variable; the status value skipped_no_email and the counter noEmail are not one.
   assert.ok(!/\b(results|recipients)\.push\([^)]*\bemail\b/.test(r), "no address variable reaches a response row");
   assert.ok(/json\(200,\s*\{[^}]*results\s*\}\)/.test(r) && !/json\(200,\s*\{[^}]*\bemail\b/.test(r), "the 200 body carries results, never an address field");
-  assert.ok(/status === "not_started"/.test(r), "reminder targets = not_started");
+  // pin moved deliberately 9/30 (Prompt 26): the heads-up goes to EVERY pool surgeon whatever his offer status (vacations
+  // matter for everyone) - the not_started filter is gone and offersHeadsUpPlan is handed the whole pool; the audience per
+  // status is run in test/edge-functions.test.js (the @offersMail block)
+  assert.ok(!/status === "not_started"/.test(r), "no not_started filter on the reminder targets any more");
+  assert.ok(/offersHeadsUpPlan\(poolIds, emailById, /.test(r), "reminder targets = offersHeadsUpPlan over the whole pool (poolIds)");
   assert.ok(/role=in\.\(scheduler,admin\)/.test(r) || /role=in\.\(admin,scheduler\)/.test(r), "close summary -> user_profiles with role scheduler / admin");
   assert.ok(r.indexOf("otmPoolIds(") > 0 && r.indexOf("otmRollcall(") > 0 && r.indexOf("otmCronPlan(") > 0, "the runner uses the mirrored maths, not a second copy");
-  assert.ok(drSrc.indexOf("go by my rules") > 0 && drSrc.indexOf("freeze on") > 0, "the reminder wording from the prompt (the composers sit beside the runner)");
+  // pin moved deliberately 9/30 (Prompt 26): the wording went from "freeze on <date> - paint them in the app or choose
+  // 'go by my rules'" to the heads-up "Before <freeze>, enter your vacations for <period> in the app ... the schedule
+  // follows your rules"; the old phrases must be gone from the function
+  assert.ok(drSrc.indexOf("enter your vacations for ") > 0 && drSrc.indexOf("the schedule follows your rules") > 0, "the heads-up wording from the prompt (the composers sit beside the runner)");
+  const drCode = drSrc.replace(/\/\/[^\n]*/g, "");   // the comments may name the retired words to say they are retired
+  assert.ok(drCode.indexOf("go by my rules") < 0 && drCode.indexOf("Paint my offers") < 0 && !/never answered|freeze on/i.test(drCode), "the old reminder / roll-call words are gone from the code");
 });
 check("no contact data in either function: no e-mail address literal, no phone-shaped literal", () => {
   [snSrc, drSrc].forEach((s, i) => {

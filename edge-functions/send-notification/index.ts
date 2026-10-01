@@ -31,10 +31,11 @@
 //     2026-09-22: the open-shifts notice broadcast on Accept & Publish / on
 //     demand from the board, and the "took the shift" note to the scheduler
 //     + claimer), offers_reminder, offers_closed (since Prompt 14 part 4,
-//     2026-09-23: the Periods "Remind" button's note to a surgeon with
-//     nothing entered for a period, and the close summary to the scheduler;
-//     both on schedule_updates_email, recipients by person_id like every
-//     other category), test. Davenport names schedule_changed and
+//     2026-09-23: the Periods "Remind" button's note to a surgeon, and the
+//     close summary to the scheduler; both on schedule_updates_email,
+//     recipients by person_id like every other category; Prompt 26, 9/30:
+//     framed as the heads-up before a freeze - "Schedule Heads-up", CTA "Open
+//     the app" - and the freeze roll call, "Period Frozen"), test. Davenport names schedule_changed and
 //     trade_submitted are accepted as aliases (logged) so deploy order vs the
 //     client build does not matter.
 //   - The CLIENT composes the words. Payload: { type, data: { subject?,
@@ -398,13 +399,19 @@ const CATEGORIES: Record<string, Category> = {
   // '#openshifts' deep link); this table only names the frame and the flag.
   open_shifts:        { pref: "schedule_updates_email", title: "Open Shifts",        color: "#C2410C", cta: "Open shifts" },
   shift_claimed:      { pref: "schedule_updates_email", title: "Shift Taken",        color: "#1a8040", cta: "View Schedule" },
-  // Prompt 14 part 4: offer periods. The client composes the words ("your
-  // dates for <label> freeze on <date> - paint them in the app or choose 'go
-  // by my rules'"; the close roll call); this table only names the frame and
+  // Prompt 14 part 4: offer periods; reworded by Prompt 26 (Faraz 9/30) from
+  // "choose your shifts" to "your schedule follows your rules". The client
+  // composes the words (the heads-up before a freeze: "Before <freeze>, enter
+  // your vacations for <period> in the app. If there are days you'd like to
+  // work, or can't, paint them too. Otherwise there is nothing to do - the
+  // schedule follows your rules."; the freeze roll call: painted days, added
+  // vacations, following their rules); this table only names the frame and
   // the flag. The daily cron (daily-reminder mode "offers") uses the same
-  // titles and colours so both routes look alike in the inbox.
-  offers_reminder:    { pref: "schedule_updates_email", title: "Offers Reminder",    color: "#13294B", cta: "Paint my offers" },
-  offers_closed:      { pref: "schedule_updates_email", title: "Offers Closed",      color: "#C2410C", cta: "Open Periods" },
+  // titles, colours and CTAs (OFFERS_REMINDER_FRAME / OFFERS_CLOSED_FRAME
+  // there; test/edge-functions.test.js compares them) so both routes look
+  // alike in the inbox.
+  offers_reminder:    { pref: "schedule_updates_email", title: "Schedule Heads-up",  color: "#13294B", cta: "Open the app" },
+  offers_closed:      { pref: "schedule_updates_email", title: "Period Frozen",      color: "#C2410C", cta: "Open Periods" },
   test:               { pref: null,                     title: "Test Email",         color: "#1a6fa8", cta: "Open App" },
 };
 
