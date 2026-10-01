@@ -74,53 +74,69 @@ check("offerStatus mirrors SQL offer_status(): submitted > rules_only > not_star
 check("offerTimeline: the seed's groupRules.offerPeriods fill a new period from its start day", () => {
   const t = H.offerTimeline({ start_day: "2026-11-02" }, seed.groupRules.offerPeriods);
   // pin moved deliberately 9/27 (Faraz: yes to the six-week e-mail): the seed's reminders are [42, 14, 3], so remind_on gains 8/10
-  eq(t, { start_day: "2026-11-02", end_day: "2027-01-31", length_months: 3, offers_close_at: "2026-09-21", publish_by: "2026-10-05", remind_on: ["2026-08-10", "2026-09-07", "2026-09-18"], presets: [3, 6] },
-    "3 months from 11/2 ends 2027-01-31 (a Sunday); close = start - 6 weeks; publish = start - 4 weeks; reminders 42, 14 and 3 days before the close");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed's lengthMonths is 6 (a new period's preset) and its
+  // reminders are [14, 3] again - 6 months from 11/2 end Fri 4/30/2027 -> Sunday 5/2, and 8/10 (the 42-day e-mail) is gone
+  eq(t, { start_day: "2026-11-02", end_day: "2027-05-02", length_months: 6, offers_close_at: "2026-09-21", publish_by: "2026-10-05", remind_on: ["2026-09-07", "2026-09-18"], presets: [3, 6] },
+    "6 months from 11/2: 2027-04-30 is a Friday -> Sunday 5/2; close = start - 6 weeks; publish = start - 4 weeks; reminders 14 and 3 days before the close");
 });
 check("offerTimeline: the 6-month preset, the Fri/Sat extension to Sunday, and per-period overrides win", () => {
   const six = H.offerTimeline({ start_day: "2026-11-02", length_months: 6 }, seed.groupRules.offerPeriods);
   eq([six.end_day, six.length_months], ["2027-05-02", 6], "6 months from 11/2: 2027-04-30 is a Friday -> extended to Sunday 5/2 (like the Generate presets)");
   const over = H.offerTimeline({ start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02" }, seed.groupRules.offerPeriods);
   eq([over.end_day, over.offers_close_at, over.publish_by], ["2027-01-03", "2026-10-02", "2026-10-05"], "the first period: end and close set by hand stay, publish_by is filled");
-  eq(H.offerTimeline({ start_day: "2027-02-01" }, seed.groupRules.offerPeriods).end_day, "2027-05-02", "3 months from 2/1/2027: 4/30 is a Friday -> Sunday 5/2");
-  eq(H.offerTimeline({ start_day: "2027-05-03" }, seed.groupRules.offerPeriods).end_day, "2027-08-01", "3 months from 5/3/2027: 7/31 is a Saturday -> Sunday 8/1");
-  eq(H.offerTimeline({ start_day: "2027-08-02" }, seed.groupRules.offerPeriods).end_day, "2027-10-31", "3 months from 8/2/2027: 10/31 is a Sunday -> stays");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed's lengthMonths is 6 now, so the three 3-month-preset
+  // cases name length_months 3 explicitly (they are about the 3-month preset's Fri/Sat extension), and the seed's own 6-month
+  // default gets its cases: the Jan - Jun row's end (a Wednesday), a Saturday and a Friday month end
+  eq(H.offerTimeline({ start_day: "2027-02-01", length_months: 3 }, seed.groupRules.offerPeriods).end_day, "2027-05-02", "3 months from 2/1/2027: 4/30 is a Friday -> Sunday 5/2");
+  eq(H.offerTimeline({ start_day: "2027-05-03", length_months: 3 }, seed.groupRules.offerPeriods).end_day, "2027-08-01", "3 months from 5/3/2027: 7/31 is a Saturday -> Sunday 8/1");
+  eq(H.offerTimeline({ start_day: "2027-08-02", length_months: 3 }, seed.groupRules.offerPeriods).end_day, "2027-10-31", "3 months from 8/2/2027: 10/31 is a Sunday -> stays");
+  eq(H.offerTimeline({ start_day: "2027-01-04" }, seed.groupRules.offerPeriods).end_day, "2027-06-30", "the seed's 6 months from 1/4/2027: 6/30 is a Wednesday -> stays (= the seed's Jan 2027 - Jun 2027 end)");
+  eq(H.offerTimeline({ start_day: "2027-02-01" }, seed.groupRules.offerPeriods).end_day, "2027-08-01", "the seed's 6 months from 2/1/2027: 7/31 is a Saturday -> Sunday 8/1");
+  eq(H.offerTimeline({ start_day: "2027-07-01" }, seed.groupRules.offerPeriods).end_day, "2028-01-02", "the seed's 6 months from 7/1/2027 (the day after Jan - Jun): 12/31/2027 is a Friday -> Sunday 1/2/2028");
   eq(H.offerTimeline({ start_day: "2027-01-04" }, seed.groupRules.offerPeriods).offers_close_at, "2026-11-23", "close date crosses the year boundary");
 });
-check("offerTimeline: absent rules fall back to the documented defaults (= the seed's values but the reminder list); a bad start returns null", () => {
+check("offerTimeline: absent rules fall back to the documented defaults (= the seed's values but the period length); a bad start returns null", () => {
   // pin moved deliberately 9/27: the seed's remindDaysBeforeClose is [42, 14, 3] (the six-week e-mail, set live as data)
   // while OP_PERIOD_DEFAULTS keeps [14, 3] - the literal the deployed daily-reminder mirror (OTM_DEFAULTS) carries, and
   // the cron reads the live blob's list anyway. Every other timeline key still equals the seed's.
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed's reminder list is [14, 3] again (= OP_PERIOD_DEFAULTS
+  // = the mirror's OTM_DEFAULTS) and its lengthMonths is 6 while the code default stays 3 - so the one timeline difference is
+  // now the period length (end_day / length_months); remind_on agrees again
   const byDefault = H.offerTimeline({ start_day: "2026-11-02" }, null), bySeed = H.offerTimeline({ start_day: "2026-11-02" }, seed.groupRules.offerPeriods);
-  eq(Object.assign({}, byDefault, { remind_on: null }), Object.assign({}, bySeed, { remind_on: null }), "defaults == seed on every key but remind_on (the notice keys are not timeline keys: they never reach offerTimeline's output)");
-  eq([byDefault.remind_on, bySeed.remind_on], [["2026-09-07", "2026-09-18"], ["2026-08-10", "2026-09-07", "2026-09-18"]], "defaults remind 14 and 3 days before the close; the seed also 42");
+  eq(Object.assign({}, byDefault, { end_day: null, length_months: null }), Object.assign({}, bySeed, { end_day: null, length_months: null }), "defaults == seed on every key but end_day / length_months (the notice keys are not timeline keys: they never reach offerTimeline's output)");
+  eq([byDefault.end_day, byDefault.length_months, bySeed.end_day, bySeed.length_months], ["2027-01-31", 3, "2027-05-02", 6], "defaults: 3 months from 11/2 end Sunday 1/31/2027; the seed: 6 months end Sunday 5/2/2027 (Fri 4/30 extended)");
+  eq([byDefault.remind_on, bySeed.remind_on], [["2026-09-07", "2026-09-18"], ["2026-09-07", "2026-09-18"]], "both remind 14 and 3 days before the close (the seed's 42 left with 9/30)");
   ["noticeDaysBeforeClose", "noticeUrgentDaysBeforeClose"].forEach((k) => assert.ok(!(k in bySeed) && !(k in H.OP_PERIOD_DEFAULTS), "offerTimeline's output and OP_PERIOD_DEFAULTS stay free of " + k + " (both are pinned against the edge mirror)"));
   eq(H.offerTimeline({ start_day: "11/02/2026" }, seed.groupRules.offerPeriods), null);
   eq(H.offerTimeline(null, seed.groupRules.offerPeriods), null);
-  eq(H.offerTimeline({ start_day: "2026-11-02", length_months: 0 }, seed.groupRules.offerPeriods).length_months, 3, "a non-positive length reads as the default");
+  eq(H.offerTimeline({ start_day: "2026-11-02", length_months: 0 }, seed.groupRules.offerPeriods).length_months, 6, "a non-positive length reads as the rules' lengthMonths (the seed's 6 since 9/30)");
+  eq(H.offerTimeline({ start_day: "2026-11-02", length_months: 0 }, null).length_months, 3, "...and without rules as OP_PERIOD_DEFAULTS' 3");
 });
-check("PD (9/23) / 9-24: the seed's offerPeriods[0] is published (read-only for a surgeon); offerNextPeriod lands on offerPeriods[1] = Jan 2027 (Faraz created it 9/24: 1/4 - 1/31, freeze 11/23, publish by 12/7) and, from its freeze, on offerPeriods[2] = Feb 2027 - Apr 2027 (freeze 12/21 / publish by 1/4 = the 3-month preset's arithmetic; the end is Sunday 5/2 since 9/24 = the preset's)", () => {
+check("PD (9/23) / 9-24 / 9-30: the seed's offerPeriods[0] is published (read-only for a surgeon); offerNextPeriod lands on offerPeriods[1] = Jan 2027 - Jun 2027 (Faraz created it 9/24 as Jan 2027, 1/4 - 1/31; widened 9/30 to 1/4 - 6/30, freeze 11/23, publish by 12/7 kept = the 6-month preset's arithmetic); Feb 2027 - Apr 2027 is folded into it and gone from the seed", () => {
   const P = seed.offerPeriods;
-  eq(P.length, 3);
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): three periods -> two - 'Jan 2027' (end 1/31) widened to
+  // 'Jan 2027 - Jun 2027' (end 6/30; close, publish-by, rulesOnly and source kept) and 'Feb 2027 - Apr 2027' removed (folded in);
+  // offerNextPeriod has no Feb - Apr to move on to after the 11/23 freeze, and the preset arithmetic is pinned on the Jan - Jun
+  // row (the seed's 6-month preset from 1/4) instead of the removed row (the 3-month preset from 2/1)
+  eq(P.length, 2, "the milestone period and Jan 2027 - Jun 2027 (Feb - Apr 2027 folded in 9/30)");
   eq([P[0].label, P[0].status, P[0].start, P[0].end, P[0].offersCloseAt], ["Nov 2026 - Jan 2027", "published", "2026-11-02", "2027-01-03", "2026-10-02"]);
-  eq([P[1].label, P[1].start, P[1].end, P[1].offersCloseAt, P[1].publishBy, P[1].status, P[1].rulesOnly, P[1].offerModes, P[1].source], ["Jan 2027", "2027-01-04", "2027-01-31", "2026-11-23", "2026-12-07", "upcoming", ["s5"], {}, "faraz-2026-09-24-period-jan"], "9-24 / 9-27: the Jan 2027 row as live (created by Faraz 9/24; rulesOnly ['s5'] = Fierce's 'Go by my rules' choice of 2026-09-26 00:16:35Z, mirrored 9/27 so the seed apply keeps it)");
-  eq([P[2].label, P[2].start, P[2].end, P[2].offersCloseAt, P[2].publishBy, P[2].status, P[2].rulesOnly, P[2].offerModes], ["Feb 2027 - Apr 2027", "2027-02-01", "2027-05-02", "2026-12-21", "2027-01-04", "upcoming", [], {}], "9-24: Feb - Apr 2027 ends Sunday 2027-05-02 (the live end since Faraz's 9/24 SQL update; label unchanged)");
+  eq([P[1].label, P[1].start, P[1].end, P[1].offersCloseAt, P[1].publishBy, P[1].status, P[1].rulesOnly, P[1].offerModes, P[1].source], ["Jan 2027 - Jun 2027", "2027-01-04", "2027-06-30", "2026-11-23", "2026-12-07", "upcoming", ["s5"], {}, "faraz-2026-09-24-period-jan"], "9-24 / 9-27 / 9-30: the Jan 2027 row (created by Faraz 9/24; rulesOnly ['s5'] = Fierce's 'Go by my rules' choice of 2026-09-26 00:16:35Z, mirrored 9/27) widened to Jan 2027 - Jun 2027 (end 6/30; close / publish-by / rulesOnly / source kept)");
+  eq(P.filter((p) => p.label === "Feb 2027 - Apr 2027" || p.start === "2027-02-01" || p.source === "faraz-2026-09-23-period-2").length, 0, "9-30: the seed no longer carries Feb - Apr 2027 (by label, start or source) - a later apply cannot bring it back");
   eq(H.offerPeriodOpen(P[0], "2026-09-23"), false, "published = frozen for a surgeon whatever the close date (the painter greys its days; OF003 in the database still reads offers_close_at only)");
-  eq([H.offerPeriodOpen(P[1], "2026-09-24"), H.offerPeriodOpen(P[2], "2026-09-24")], [true, true], "both later periods are open today");
-  eq(H.offerNextPeriod(P, "2026-09-24").label, "Jan 2027", "the painter, My schedule and the Periods box speak to the earliest open period - Jan 2027 since Faraz created it 9/24");
-  eq(H.offerNextPeriod(P, "2026-11-22").label, "Jan 2027", "the day before its freeze (11/23) Jan 2027 is still the one");
-  eq(H.offerNextPeriod(P, "2026-11-23").label, "Feb 2027 - Apr 2027", "from the Jan 2027 freeze they move on to Feb - Apr 2027");
-  eq(H.offerNextPeriod(P, "2026-12-20").label, "Feb 2027 - Apr 2027", "the day before its own freeze (12/21) Feb - Apr 2027 is still open");
-  eq(H.offerNextPeriod(P, "2026-12-21").label, "Nov 2026 - Jan 2027", "from the freeze (12/21) to 1/3 no period is open: the fallback is the earliest period still running - the published first one, read-only - until a third period exists or 1/3 passes (helpers.offerNextPeriod as documented; reported, not changed here)");
-  eq(H.offerNextPeriod(P, "2027-01-04").label, "Jan 2027", "from 1/4 the frozen Jan 2027 period is the earliest one running (read-only)");
-  eq(H.offerNextPeriod(P, "2027-02-01").label, "Feb 2027 - Apr 2027", "from 2/1 the frozen Feb - Apr 2027 period is the only one running");
+  eq(H.offerPeriodOpen(P[1], "2026-09-24"), true, "the later period is open today");
+  eq(H.offerNextPeriod(P, "2026-09-24").label, "Jan 2027 - Jun 2027", "the painter, My schedule and the Periods box speak to the earliest open period - Jan 2027 - Jun 2027");
+  eq(H.offerNextPeriod(P, "2026-11-22").label, "Jan 2027 - Jun 2027", "the day before its freeze (11/23) Jan - Jun 2027 is still the one");
+  eq(H.offerNextPeriod(P, "2026-11-23").label, "Nov 2026 - Jan 2027", "from the Jan - Jun freeze (11/23) to 1/3 no period is open: the fallback is the earliest period still running - the published first one, read-only (until 9/30 Feb - Apr 2027 was the open one here)");
+  eq(H.offerNextPeriod(P, "2026-12-21").label, "Nov 2026 - Jan 2027", "...still on 12/21 (Feb - Apr's old freeze is no date any more)");
+  eq(H.offerNextPeriod(P, "2027-01-04").label, "Jan 2027 - Jun 2027", "from 1/4 the frozen Jan - Jun 2027 period is the earliest one running (read-only)");
+  eq(H.offerNextPeriod(P, "2027-02-01").label, "Jan 2027 - Jun 2027", "2/1/2027 (Feb - Apr's start until 9/30): Jan - Jun still runs");
+  eq(H.offerNextPeriod(P, "2027-06-30").label, "Jan 2027 - Jun 2027", "...through its last day, 6/30/2027");
+  eq(H.offerNextPeriod(P, "2027-07-01"), null, "from 7/1/2027 no period on file runs (the next one is not created yet)");
   eq(H.offerNextPeriod([P[0]], "2026-09-23").label, "Nov 2026 - Jan 2027", "with the first period alone (today's live table) the painter falls back to it, read-only");
-  const t3 = H.offerTimeline({ start_day: "2027-02-01", length_months: 3 }, seed.groupRules.offerPeriods);
-  // reminder pins moved deliberately 9/27: the seed's list is [42, 14, 3] (the six-week e-mail) - 11/9 joins 12/7 and 12/18
-  eq([t3.offers_close_at, t3.publish_by, t3.remind_on], ["2026-12-21", "2027-01-04", ["2026-11-09", "2026-12-07", "2026-12-18"]], "the preset's close / publish-by / reminder days for a 2/1 start");
-  eq([t3.end_day, P[2].end], ["2027-05-02", "2027-05-02"], "the preset's end is Sunday 5/2 (4/30 is a Friday) and since 9/24 the seed's Feb - Apr end matches it (Faraz moved the live row's end 4/30 -> 5/2 so the last weekend unit stays whole; seed open question 17 decided)");
-  eq(H.offerTimeline(P[2], seed.groupRules.offerPeriods).remind_on, ["2026-11-09", "2026-12-07", "2026-12-18"], "Feb - Apr 2027's reminders fall on 11/9, 12/7 and 12/18");
-  eq(H.offerTimeline(P[1], seed.groupRules.offerPeriods).remind_on, ["2026-10-12", "2026-11-09", "2026-11-20"], "Jan 2027's on 10/12, 11/9 and 11/20 (close 11/23)");
+  const t6 = H.offerTimeline({ start_day: "2027-01-04" }, seed.groupRules.offerPeriods);
+  eq([t6.end_day, t6.length_months, t6.offers_close_at, t6.publish_by, t6.remind_on], ["2027-06-30", 6, "2026-11-23", "2026-12-07", ["2026-11-09", "2026-11-20"]], "the seed's 6-month preset from 1/4/2027: end Wed 6/30 (no extension), freeze 11/23, publish by 12/7, reminders 11/9 and 11/20");
+  eq([P[1].end, P[1].offersCloseAt, P[1].publishBy], [t6.end_day, t6.offers_close_at, t6.publish_by], "the seed's Jan 2027 - Jun 2027 row matches the preset's arithmetic");
+  eq(H.offerTimeline(P[1], seed.groupRules.offerPeriods).remind_on, ["2026-11-09", "2026-11-20"], "Jan 2027 - Jun 2027's reminders fall on 11/9 and 11/20 (close 11/23; the 42-day 10/12 e-mail left with 9/30)");
 });
 
 /* ---------------- B. parity with rules.buildContext ---------------- */
@@ -144,15 +160,24 @@ check("mode: offer_modes[id] or 'preferred'; the period row is echoed by offerSt
 
 /* ---------------- C. seed pins ---------------- */
 console.log("\n[C] seed");
-check("groupRules.offerPeriods = { lengthMonths 3, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [42, 14, 3], noticeDaysBeforeClose 42, noticeUrgentDaysBeforeClose 14 }", () => {
+check("groupRules.offerPeriods = { lengthMonths 6, presets [3, 6], closeWeeksBeforeStart 6, publishWeeksBeforeStart 4, remindDaysBeforeClose [14, 3], noticeDaysBeforeClose 14, noticeUrgentDaysBeforeClose 14 }", () => {
   // 9/27 (offer deadline notice): noticeDaysBeforeClose 42 joined the block - the in-app notice starts six weeks before the freeze.
   // 9/27 ship (Faraz: keep 42, yes to the six-week e-mail) - pin moved deliberately: remindDaysBeforeClose [14, 3] -> [42, 14, 3]
   // and noticeUrgentDaysBeforeClose 14 (the notice's urgent window, its own key since the reminder list now starts at 42)
-  eq(seed.groupRules.offerPeriods, { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [42, 14, 3], noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 });
-  const { noticeDaysBeforeClose, noticeUrgentDaysBeforeClose, remindDaysBeforeClose, ...cronKeys } = seed.groupRules.offerPeriods;
-  eq(Object.assign({}, cronKeys, { remindDaysBeforeClose: H.OP_PERIOD_DEFAULTS.remindDaysBeforeClose }), H.OP_PERIOD_DEFAULTS, "every other timeline key = OP_PERIOD_DEFAULTS (= the daily-reminder mirror's OTM_DEFAULTS)");
-  eq([remindDaysBeforeClose, H.OP_PERIOD_DEFAULTS.remindDaysBeforeClose], [[42, 14, 3], [14, 3]], "the reminder list is data: the seed's [42, 14, 3] (the cron reads the live blob's), the mirrored default stays [14, 3] (edge-functions untouched, no redeploy)");
-  eq({ noticeDaysBeforeClose, noticeUrgentDaysBeforeClose }, H.OP_NOTICE_DEFAULTS, "the notice defaults live in OP_NOTICE_DEFAULTS, equal to the seed");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed mirrors the live values Cowork set in Setup on 10/1 -
+  // lengthMonths 3 -> 6, remindDaysBeforeClose [42, 14, 3] -> [14, 3], noticeDaysBeforeClose 42 -> 14 (urgent 14 unchanged).
+  // The code defaults are NOT changed (OP_PERIOD_DEFAULTS = the deployed daily-reminder mirror's OTM_DEFAULTS, and
+  // OP_NOTICE_DEFAULTS); the keys where the seed and the code now differ are named exactly below
+  eq(seed.groupRules.offerPeriods, { lengthMonths: 6, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [14, 3], noticeDaysBeforeClose: 14, noticeUrgentDaysBeforeClose: 14 });
+  eq(H.OP_PERIOD_DEFAULTS, { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [14, 3] }, "the code's timeline defaults are unchanged (= the deployed mirror's OTM_DEFAULTS - edge-functions untouched, no redeploy)");
+  eq(H.OP_NOTICE_DEFAULTS, { noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 }, "the code's notice defaults are unchanged");
+  const diffKeys = (a, b) => Object.keys(Object.assign({}, a, b)).filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort();
+  const { noticeDaysBeforeClose, noticeUrgentDaysBeforeClose, ...cronKeys } = seed.groupRules.offerPeriods;
+  eq(diffKeys(cronKeys, H.OP_PERIOD_DEFAULTS), ["lengthMonths"], "seed vs OP_PERIOD_DEFAULTS: only lengthMonths differs (every other timeline key, the reminder list included, is equal)");
+  eq([cronKeys.lengthMonths, H.OP_PERIOD_DEFAULTS.lengthMonths], [6, 3], "lengthMonths is data: the seed's 6 (a new period's preset; the live blob's since 10/1), the code's 3");
+  eq([cronKeys.remindDaysBeforeClose, H.OP_PERIOD_DEFAULTS.remindDaysBeforeClose], [[14, 3], [14, 3]], "the reminder list: the seed's [14, 3] (the cron reads the live blob's) equals the mirrored default again");
+  eq(diffKeys({ noticeDaysBeforeClose, noticeUrgentDaysBeforeClose }, H.OP_NOTICE_DEFAULTS), ["noticeDaysBeforeClose"], "seed vs OP_NOTICE_DEFAULTS: only noticeDaysBeforeClose differs");
+  eq([noticeDaysBeforeClose, H.OP_NOTICE_DEFAULTS.noticeDaysBeforeClose, noticeUrgentDaysBeforeClose, H.OP_NOTICE_DEFAULTS.noticeUrgentDaysBeforeClose], [14, 42, 14, 14], "the notice window: the seed's 14 (it starts with the first e-mail), the code's 42; the urgent threshold 14 on both sides");
   assert.ok(typeof seed.groupRules.offerPeriodsNote === "string" && seed.groupRules.offerPeriodsNote.length > 40, "offerPeriodsNote");
 });
 check("weights.offerBonus = 6, weights.outsideOffers = 6 (strong), offerBonusOverShare = 0, the engine defaults agree, the weights note names them", () => {
@@ -184,37 +209,67 @@ check("the new notes carry rules, no reasons (the importer's own denylist) and n
 // Faraz 9/27: "add a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
 // before". Choices freeze 6 weeks before a period starts, the schedule is due 4 weeks before; the in-app notice starts
 // noticeDaysBeforeClose (42) days before the freeze. helpers.offerDeadlineNotices (the surgeon's notice) and
-// helpers.offerPeriodLeadWarnings (the scheduler's lines in Setup -> Periods) over the seed's three periods.
+// helpers.offerPeriodLeadWarnings (the scheduler's lines in Setup -> Periods) over the seed's periods.
+// pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed now carries TWO periods (the published first one and
+// Jan 2027 - Jun 2027, freeze 11/23) with noticeDaysBeforeClose 14 and remindDaysBeforeClose [14, 3]. The checks that read
+// the seed say so; the behaviour the seed no longer exercises (several open periods at once, a 42-day window that is not
+// urgent) runs on explicit inputs: GR927 = the seed's groupRules with the 9/27 values (noticeDaysBeforeClose 42,
+// remindDaysBeforeClose [42, 14, 3]) and PRE_FOLD = the periods as the seed carried them until 9/30 (Jan 2027 1/4 - 1/31,
+// rulesOnly s5; Feb 2027 - Apr 2027 2/1 - 5/2, freeze 12/21, publish by 1/4).
 console.log("\n[E] offer deadline notices: offerDeadlineNotices / offerPeriodLeadWarnings");
 const SP = seed.offerPeriods.map((p, i) => ({ id: "p" + i, label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status, rules_only_ids: (p.rulesOnly || []).slice() }));
 const GR = seed.groupRules;
+const GR927 = Object.assign({}, GR, { offerPeriods: Object.assign({}, GR.offerPeriods, { noticeDaysBeforeClose: 42, remindDaysBeforeClose: [42, 14, 3] }) });
+const PRE_FOLD = [SP[0], Object.assign({}, SP[1], { label: "Jan 2027", end_day: "2027-01-31" }), { id: "p2", label: "Feb 2027 - Apr 2027", start_day: "2027-02-01", end_day: "2027-05-02", offers_close_at: "2026-12-21", publish_by: "2027-01-04", status: "upcoming", rules_only_ids: [] }];
 const notices = (today, person, extra) => H.offerDeadlineNotices(Object.assign({ periods: SP, offers: [], personId: person, today, groupRules: GR }, extra || {}));
-check("E1: nothing before the window opens; Jan 2027 (freeze 11/23) enters it exactly 42 days out (10/12), not 43 (10/11)", () => {
-  eq(notices("2026-09-27", "s2"), [], "9/27: Jan 2027 is 57 days from its freeze, Feb - Apr 85 - no notice yet");
-  eq(notices("2026-10-11", "s2"), [], "43 days out: outside");
-  eq(notices("2026-10-12", "s2"), [{ periodId: "p1", label: "Jan 2027", closeAt: "2026-11-23", daysToClose: 42, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: false }], "42 days out: inside (<=)");
+check("E1: nothing before the window opens; Jan 2027 - Jun 2027 (freeze 11/23) enters it exactly 14 days out (11/9), not 15 (11/8) - the seed's window since 9/30; with the 9/27 window 42 days out (10/12), not 43", () => {
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed's noticeDaysBeforeClose is 14 (was 42), so the window
+  // opens 11/9 (was 10/12) - the same morning as the first e-mail; Jan 2027 is now Jan 2027 - Jun 2027. The 42-day boundary
+  // stays pinned on GR927.
+  eq(notices("2026-09-27", "s2"), [], "9/27: Jan - Jun 2027 is 57 days from its freeze - no notice yet");
+  eq(notices("2026-10-12", "s2"), [], "10/12 (42 days out, the 9/27 window's first day): no notice since 9/30");
+  eq(notices("2026-11-08", "s2"), [], "15 days out: outside");
+  eq(notices("2026-11-09", "s2"), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 14, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true }], "14 days out: inside (<=) - and already urgent (noticeUrgentDaysBeforeClose 14 = the window: the notice joins the Calendar on its first day)");
+  eq(notices("2026-10-12", "s2", { groupRules: GR927 }), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 42, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: false }], "with the 9/27 window (42) the period enters it 42 days out (10/12), not urgent");
+  eq(notices("2026-10-11", "s2", { groupRules: GR927 }), [], "...and not 43 days out (10/11)");
 });
 check("E2: several open periods at once - one notice each, earliest freeze first; the published first period never", () => {
-  const n = notices("2026-11-09", "s2");
-  eq(n.map(x => [x.periodId, x.daysToClose, x.urgent]), [["p1", 14, true], ["p2", 42, false]], "11/9: Jan 2027 (14 days, urgent) and Feb - Apr 2027 (42 days)");
-  eq(notices("2026-11-09", "s2", { periods: SP.slice().reverse() }).map(x => x.periodId), ["p1", "p2"], "sorted by freeze whatever the input order");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed has ONE upcoming period now, so the several-at-once
+  // behaviour runs on PRE_FOLD (Jan 2027 + Feb - Apr 2027, as the seed carried them until 9/30) with the 9/27 window (42);
+  // the seed itself gives one notice on 11/9
+  const n = notices("2026-11-09", "s2", { periods: PRE_FOLD, groupRules: GR927 });
+  eq(n.map(x => [x.periodId, x.daysToClose, x.urgent]), [["p1", 14, true], ["p2", 42, false]], "pre-fold, 11/9: Jan 2027 (14 days, urgent) and Feb - Apr 2027 (42 days)");
+  eq(notices("2026-11-09", "s2", { periods: PRE_FOLD.slice().reverse(), groupRules: GR927 }).map(x => x.periodId), ["p1", "p2"], "sorted by freeze whatever the input order");
   eq(n.some(x => x.periodId === "p0"), false, "the published Nov - Jan period is not upcoming");
+  eq(notices("2026-11-09", "s2").map(x => [x.periodId, x.label, x.daysToClose, x.urgent]), [["p1", "Jan 2027 - Jun 2027", 14, true]], "the seed since 9/30, 11/9: one notice - Jan 2027 - Jun 2027 (14 days, urgent); no Feb - Apr");
+  eq(notices("2026-10-12", "s2", { groupRules: GR927 }).some(x => x.periodId === "p0"), false, "the seed's published first period never, whatever the window");
 });
 check("E3: rules_only and submitted people get nothing for that period; an offer outside it does not count", () => {
-  eq(notices("2026-11-09", "s5").map(x => x.periodId), ["p2"], "s5 chose 'go by my rules' for Jan 2027 (rulesOnly) - only Feb - Apr remains");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): with Feb - Apr folded into Jan - Jun no second period is left
+  // over for s5 or a submitter; Fierce's 'go by my rules' (rulesOnly s5) now covers January - June, and an offer in May 2027
+  // (Feb - Apr's range until 9/30) counts for Jan - Jun. The pre-fold reading stays pinned on PRE_FOLD.
+  eq(notices("2026-11-09", "s5"), [], "s5 chose 'go by my rules' for Jan 2027 (rulesOnly, kept by the widened row) - no notice at all now");
   const sub = [{ person_id: "s2", day: "2027-01-10", role_pref: "either" }];
-  eq(notices("2026-11-09", "s2", { offers: sub }).map(x => x.periodId), ["p2"], "one offer inside Jan 2027 = submitted");
-  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2026-12-01", role_pref: "primary" }] }).map(x => x.periodId), ["p1", "p2"], "an offer outside both periods changes nothing");
-  eq(notices("2026-11-09", "s3", { offers: sub }).map(x => x.periodId), ["p1", "p2"], "another person's offer changes nothing");
+  eq(notices("2026-11-09", "s2", { offers: sub }), [], "one offer inside Jan - Jun 2027 = submitted");
+  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-05-15", role_pref: "backup" }] }), [], "an offer on 5/15/2027 (inside Feb - Apr's old range) lies inside the widened period = submitted");
+  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2026-12-01", role_pref: "primary" }] }).map(x => x.periodId), ["p1"], "an offer outside the period (12/1, inside the published first one) changes nothing");
+  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-07-01", role_pref: "primary" }] }).map(x => x.periodId), ["p1"], "...nor one the day after it ends (7/1/2027)");
+  eq(notices("2026-11-09", "s3", { offers: sub }).map(x => x.periodId), ["p1"], "another person's offer changes nothing");
+  eq(notices("2026-11-09", "s5", { periods: PRE_FOLD, groupRules: GR927 }).map(x => x.periodId), ["p2"], "pre-fold (until 9/30) s5's rules-only choice covered Jan 2027 only - Feb - Apr remained");
 });
 check("E4: boundaries - the freeze day itself and after: no notice (frozen); the day before: 1 day, urgent; urgent = <= noticeUrgentDaysBeforeClose (14)", () => {
-  eq(notices("2026-11-23", "s2").map(x => x.periodId), ["p2"], "11/23 = Jan 2027's freeze: closed to surgeons, no notice");
-  eq(notices("2026-11-22", "s2")[0], { periodId: "p1", label: "Jan 2027", closeAt: "2026-11-23", daysToClose: 1, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true });
-  eq(notices("2026-11-08", "s2")[0].urgent, false, "15 days out: not urgent (noticeUrgentDaysBeforeClose 14)");
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): no Feb - Apr period remains after the Jan - Jun freeze, and the
+  // seed's window is 14 = the urgent threshold, so 15 days out has no notice at all - the 'not urgent at 15 days' line and the
+  // 'urgent threshold is data' line run on GR927 (window 42)
+  eq(notices("2026-11-23", "s2"), [], "11/23 = Jan - Jun 2027's freeze: closed to surgeons, no notice (and no later period on file)");
+  eq(notices("2026-11-22", "s2")[0], { periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 1, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true });
+  eq(notices("2026-11-08", "s2"), [], "15 days out: no notice (outside the seed's 14-day window)");
+  eq(notices("2026-11-08", "s2", { groupRules: GR927 })[0].urgent, false, "15 days out with the 9/27 window: shown, not urgent (noticeUrgentDaysBeforeClose 14)");
   eq(notices("2026-11-09", "s2")[0].urgent, true, "14 days out: urgent");
-  const g = Object.assign({}, GR, { offerPeriods: Object.assign({}, GR.offerPeriods, { noticeUrgentDaysBeforeClose: 21 }) });
+  const g = Object.assign({}, GR927, { offerPeriods: Object.assign({}, GR927.offerPeriods, { noticeUrgentDaysBeforeClose: 21 }) });
   eq(notices("2026-11-02", "s2", { groupRules: g })[0].urgent, true, "the urgent threshold follows the data (21 days)");
-  eq(notices("2026-11-09", "s2", { periods: SP.map(p => p.id === "p1" ? Object.assign({}, p, { status: "closed" }) : p) }).map(x => x.periodId), ["p2"], "a period closed early (Close now) is out");
+  eq(notices("2026-11-01", "s2", { groupRules: g })[0].urgent, false, "...22 days out: not urgent");
+  eq(notices("2026-11-09", "s2", { periods: SP.map(p => p.id === "p1" ? Object.assign({}, p, { status: "closed" }) : p) }), [], "a period closed early (Close now) is out");
 });
 check("E5: noticeDaysBeforeClose is data - a missing key reads 42, another value moves the window, 0 turns the notice off; junk inputs answer []", () => {
   const without = (v) => { const op = Object.assign({}, GR.offerPeriods); if (v === undefined) delete op.noticeDaysBeforeClose; else op.noticeDaysBeforeClose = v; return Object.assign({}, GR, { offerPeriods: op }); };
@@ -228,11 +283,15 @@ check("E5: noticeDaysBeforeClose is data - a missing key reads 42, another value
   eq([H.offerDeadlineNotices(null), H.offerDeadlineNotices({ periods: SP, today: "2026-11-09", groupRules: GR }), notices("11/09/2026", "s2"), H.offerDeadlineNotices({ periods: null, personId: "s2", today: "2026-11-09" })], [[], [], [], []]);
   eq(H.offerDeadlineNotices({ periods: [{ id: "x", label: "No close", start_day: "2027-01-04", end_day: "2027-01-31" }], offers: [], personId: "s2", today: "2026-11-09", groupRules: GR }).map(x => [x.closeAt, x.daysToClose]), [["2026-11-23", 14]], "an absent close is start - closeWeeksBeforeStart (offerTimeline)");
 });
-check("E6: offerPeriodLeadWarnings - short lead on the first period's 31-day lead (upcoming only), publish-by due / passed with open slots, the next period missing from (lastEnd + 1) - 6 weeks - 42 days", () => {
+check("E6: offerPeriodLeadWarnings - short lead on the first period's 31-day lead (upcoming only), publish-by due / passed with open slots, the next period missing from (lastEnd + 1) - 6 weeks - noticeDaysBeforeClose (the seed's 14 since 9/30)", () => {
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the last period on file ends 6/30/2027 (was Feb - Apr's 5/2),
+  // so the next period starts 7/1/2027 (freeze 5/20) and - with the seed's noticeDaysBeforeClose 14 - its window opens
+  // 5/6/2027 (was 2/8, 42 days; the 42-day window stays pinned on GR927: 4/8); 'over' is from 7/1/2027; with only the first
+  // period on file the window opens 11/9 (was 10/12)
   const up = SP.map(p => Object.assign({}, p, { status: "upcoming" }));
   const w = H.offerPeriodLeadWarnings({ periods: up, today: "2026-09-27", groupRules: GR, openCounts: { p0: 3, p1: 56 } });
-  eq(w.periods, { p0: [{ kind: "short-lead", closeAt: "2026-10-02", daysBeforeStart: 31, weeksBeforeStart: 4, defaultWeeks: 6 }] }, "served upcoming (the smoke's harness), Nov - Jan's close 10/2 is 31 days before 11/2 - later than start - 42; Jan / Feb - Apr sit exactly on start - 42 (strict >)");
-  eq(w.next, null, "the next period (from 5/3/2027) needs no warning before 2/8/2027");
+  eq(w.periods, { p0: [{ kind: "short-lead", closeAt: "2026-10-02", daysBeforeStart: 31, weeksBeforeStart: 4, defaultWeeks: 6 }] }, "served upcoming (the smoke's harness), Nov - Jan's close 10/2 is 31 days before 11/2 - later than start - 42; Jan - Jun sits exactly on start - 42 (strict >)");
+  eq(w.next, null, "the next period (from 7/1/2027) needs no warning before 5/6/2027");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-09-27", groupRules: GR }).periods, {}, "as the seed reads (published), the first period's short lead is history - no line");
   const cl = SP.map(p => p.id === "p0" ? Object.assign({}, p, { status: "closed" }) : p);
   const due = H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-28", groupRules: GR, openCounts: { p0: 2 } }).periods.p0;
@@ -241,24 +300,34 @@ check("E6: offerPeriodLeadWarnings - short lead on the first period's 31-day lea
   eq(H.offerPeriodLeadWarnings({ periods: SP.map(p => p.id === "p0" ? Object.assign({}, p, { status: "generated" }) : p), today: "2026-10-06", groupRules: GR, openCounts: { p0: 2 } }).periods.p0, [{ kind: "publish-passed", publishBy: "2026-10-05", daysToPublish: -1, open: 2 }], "generated but not published: the passed line still shows");
   eq(H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-27", groupRules: GR, openCounts: { p0: 2 } }).periods, {}, "8 days out: quiet");
   eq(H.offerPeriodLeadWarnings({ periods: cl, today: "2026-09-28", groupRules: GR, openCounts: { p0: 0 } }).periods, {}, "no open slot: nothing to publish");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-12-08", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -1, open: 5 }], "Jan 2027's publish-by passed with slots open");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-01", groupRules: GR, openCounts: { p1: 5 } }).periods, {}, "a period that is over warns no more");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-07", groupRules: GR }).next, null, "2/7/2027: one day before the window");
-  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-08", groupRules: GR }).next, { from: "2027-05-03", closeBy: "2027-03-22", daysToClose: 42 }, "2/8/2027 = 3/22 - 42: create the period starting 5/3, choices close 3/22");
-  eq(H.offerPeriodLeadWarnings({ periods: [SP[0]], today: "2026-10-12", groupRules: GR }).next, { from: "2027-01-04", closeBy: "2026-11-23", daysToClose: 42 }, "with only the first period on file (the smoke's harness) the window opens 10/12");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-12-08", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -1, open: 5 }], "Jan - Jun 2027's publish-by passed with slots open");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-01", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -56, open: 5 }], "2/1/2027 (after the old Jan 2027's end 1/31): Jan - Jun still runs, so the passed line still shows");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-07-01", groupRules: GR, openCounts: { p1: 5 } }).periods, {}, "a period that is over (from 7/1/2027) warns no more");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-05-05", groupRules: GR }).next, null, "5/5/2027: one day before the window");
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-05-06", groupRules: GR }).next, { from: "2027-07-01", closeBy: "2027-05-20", daysToClose: 14 }, "5/6/2027 = 5/20 - 14: create the period starting 7/1, choices close 5/20");
+  eq([H.offerPeriodLeadWarnings({ periods: SP, today: "2027-04-07", groupRules: GR927 }).next, H.offerPeriodLeadWarnings({ periods: SP, today: "2027-04-08", groupRules: GR927 }).next], [null, { from: "2027-07-01", closeBy: "2027-05-20", daysToClose: 42 }], "the window is noticeDaysBeforeClose: with the 9/27 value (42) it opens 4/8/2027 = 5/20 - 42");
+  eq(H.offerPeriodLeadWarnings({ periods: [SP[0]], today: "2026-11-08", groupRules: GR }).next, null, "with only the first period on file (the smoke's harness): quiet on 11/8");
+  eq(H.offerPeriodLeadWarnings({ periods: [SP[0]], today: "2026-11-09", groupRules: GR }).next, { from: "2027-01-04", closeBy: "2026-11-23", daysToClose: 14 }, "...the window opens 11/9 (14 days) since 9/30");
+  eq(H.offerPeriodLeadWarnings({ periods: [SP[0]], today: "2026-10-12", groupRules: GR927 }).next, { from: "2027-01-04", closeBy: "2026-11-23", daysToClose: 42 }, "...with the 9/27 window it opened 10/12");
   eq([H.offerPeriodLeadWarnings(null), H.offerPeriodLeadWarnings({ periods: [], today: "2026-09-27" })], [{ periods: {}, next: null }, { periods: {}, next: null }], "junk / no periods -> quiet");
 });
 
-check("E7 (9/27 ship): urgent reads noticeUrgentDaysBeforeClose (default 14), never the reminder list - with the seed's [42, 14, 3] a notice is not urgent for all 42 days", () => {
-  const op = (patch, drop) => { const o = Object.assign({}, GR.offerPeriods, patch || {}); (drop || []).forEach((k) => delete o[k]); return Object.assign({}, GR, { offerPeriods: o }); };
-  eq(GR.offerPeriods.remindDaysBeforeClose, [42, 14, 3], "the seed carries the six-week e-mail");
-  eq(notices("2026-10-12", "s2").map((x) => [x.daysToClose, x.urgent]), [[42, false]], "42 days out (the first e-mail's day, the notice's first day): shown, not urgent - the old max(remindDaysBeforeClose) reading would say urgent");
-  eq(notices("2026-11-08", "s2").map((x) => [x.periodId, x.daysToClose, x.urgent]), [["p1", 15, false]], "15 days out: not urgent (Feb - Apr, 43 days out, has no notice yet)");
+check("E7 (9/27 ship): urgent reads noticeUrgentDaysBeforeClose (default 14), never the reminder list - with the 9/27 values ([42, 14, 3], window 42) a notice is not urgent for all 42 days", () => {
+  // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the seed's list is [14, 3] and its window 14, so its largest
+  // reminder offset equals the urgent threshold and the seed alone no longer tells the two readings apart - the check runs on
+  // GR927 (the 9/27 values: window 42, reminders [42, 14, 3]) over the seed's periods; Feb - Apr 2027 (p2) is gone, so the
+  // lines that carried two notices carry Jan - Jun only, and its 'at 42 days not urgent' half moves to its own 10/12 line
+  const op = (patch, drop) => { const o = Object.assign({}, GR927.offerPeriods, patch || {}); (drop || []).forEach((k) => delete o[k]); return Object.assign({}, GR927, { offerPeriods: o }); };
+  eq([GR.offerPeriods.remindDaysBeforeClose, GR.offerPeriods.noticeDaysBeforeClose, GR.offerPeriods.noticeUrgentDaysBeforeClose], [[14, 3], 14, 14], "the seed since 9/30: reminders [14, 3], window 14, urgent 14 - max(reminders) = urgent, so the seed cannot tell the readings apart");
+  eq(GR927.offerPeriods.remindDaysBeforeClose, [42, 14, 3], "GR927 carries the six-week e-mail (the 9/27 values)");
+  eq(notices("2026-10-12", "s2", { groupRules: GR927 }).map((x) => [x.daysToClose, x.urgent]), [[42, false]], "42 days out (the first e-mail's day, the notice's first day): shown, not urgent - the old max(remindDaysBeforeClose) reading would say urgent");
+  eq(notices("2026-11-08", "s2", { groupRules: GR927 }).map((x) => [x.periodId, x.daysToClose, x.urgent]), [["p1", 15, false]], "15 days out: not urgent");
   eq(notices("2026-11-08", "s2", { groupRules: op(null, ["noticeUrgentDaysBeforeClose"]) }).map((x) => x.urgent), [false], "key absent -> the default 14 (15 days out: not urgent)");
-  eq(notices("2026-11-09", "s2", { groupRules: op(null, ["noticeUrgentDaysBeforeClose"]) }).map((x) => [x.periodId, x.urgent]), [["p1", true], ["p2", false]], "key absent -> 14: Jan 2027 at 14 days is urgent, Feb - Apr at 42 is not");
-  eq(notices("2026-11-09", "s2", { groupRules: op({ remindDaysBeforeClose: [21, 3] }, ["noticeUrgentDaysBeforeClose"]) }).map((x) => x.urgent), [true, false], "the reminder list does not move urgent (21 in the list, still 14)");
+  eq(notices("2026-11-09", "s2", { groupRules: op(null, ["noticeUrgentDaysBeforeClose"]) }).map((x) => [x.periodId, x.urgent]), [["p1", true]], "key absent -> 14: Jan - Jun 2027 at 14 days is urgent");
+  eq(notices("2026-10-12", "s2", { groupRules: op(null, ["noticeUrgentDaysBeforeClose"]) }).map((x) => [x.periodId, x.urgent]), [["p1", false]], "key absent -> 14: at 42 days it is not");
+  eq(notices("2026-11-09", "s2", { groupRules: op({ remindDaysBeforeClose: [21, 3] }, ["noticeUrgentDaysBeforeClose"]) }).map((x) => x.urgent), [true], "the reminder list does not move urgent (21 in the list, still 14)");
   eq(notices("2026-11-05", "s2", { groupRules: op({ remindDaysBeforeClose: [21, 3] }, ["noticeUrgentDaysBeforeClose"]) }).map((x) => [x.periodId, x.daysToClose, x.urgent]), [["p1", 18, false]], "18 days out with 21 in the reminder list: NOT urgent (the old max(remindDaysBeforeClose) reading said urgent - this line tells the two rules apart)");
-  eq(notices("2026-11-09", "s2", { groupRules: op({ remindDaysBeforeClose: [] }) }).map((x) => x.urgent), [true, false], "an empty reminder list (no e-mails) leaves urgent on at 14 days (the old reading turned it off)");
+  eq(notices("2026-11-09", "s2", { groupRules: op({ remindDaysBeforeClose: [] }) }).map((x) => x.urgent), [true], "an empty reminder list (no e-mails) leaves urgent on at 14 days (the old reading turned it off)");
   eq(notices("2026-11-22", "s2", { groupRules: op({ noticeUrgentDaysBeforeClose: 0 }) })[0].urgent, false, "0: urgent never (1 day out)");
   eq(notices("2026-11-09", "s2", { groupRules: op({ noticeUrgentDaysBeforeClose: "two weeks" }) })[0].urgent, true, "a non-number reads the default 14");
   eq(notices("2026-11-09", "s2", { groupRules: op({ noticeUrgentDaysBeforeClose: -1 }) })[0].urgent, true, "a negative number reads the default 14");

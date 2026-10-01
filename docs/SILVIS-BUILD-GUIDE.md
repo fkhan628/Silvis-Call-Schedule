@@ -1030,7 +1030,7 @@ section is on `main` and live. Schema: `call_periods` (incl. `offer_modes`), `ca
 the painter RPCs `set_offer_mode` / `save_offers` (`sql/migrations/2026-09-23-offer-mode-rpc.sql`, applied 9/23 ~18:45 UTC —
 `docs/SCHEMA-REVIEW.md` carries each observed probe; `sql/schema.sql` mirrors every applied body). Data: the seed applied
 through the CLI twice on 9/23 — the first period (Nov 2026 – Jan 2027, status `published` since the 9/23 publish) with its 79
-seed-relayed offers and modes, and the Feb 2027 – Apr 2027 period (freeze 12/21, publish by 1/4; 9/24: Faraz moved its end from Fri 4/30 to Sun 5/2 by SQL — audit `period.update` — so the last weekend unit stays whole, and created **Jan 2027** — 1/4 – 1/31, freeze 11/23, publish by 12/7 — by SQL 9/24 (with an `audit_log` row) to fill the gap after 1/3; the seed's `offerPeriods[]` carries all three so a re-apply matches the live table). App: the painter
+seed-relayed offers and modes, and the Feb 2027 – Apr 2027 period (freeze 12/21, publish by 1/4; 9/24: Faraz moved its end from Fri 4/30 to Sun 5/2 by SQL — audit `period.update` — so the last weekend unit stays whole, and created **Jan 2027** — 1/4 – 1/31, freeze 11/23, publish by 12/7 — by SQL 9/24 (with an `audit_log` row) to fill the gap after 1/3; the seed's `offerPeriods[]` carries all three so a re-apply matches the live table - 9/30 (Faraz, six-month periods): Jan 2027 widens to **Jan 2027 – Jun 2027** (1/4 – 6/30, freeze 11/23, publish by 12/7) and Feb – Apr 2027 folds into it and is deleted; the seed carries the two periods since 9/30; the live change is docs/SCHEMA-REVIEW.md 2026-09-30, prepared and waiting to be applied - run it BEFORE any seed apply, or the apply widens the live Jan row while Feb – Apr stays). App: the painter
 (part 3a), the Periods section with Remind / Close now / Enter for someone / Generate this period (3b), the day editor's
 offer column and My schedule's offers (3c), the period-aware Setup import dry run (item IP below), and since Prompt 16 A7 the
 office's relay path ("Offers - enter for a surgeon", `source office-relay`). Functions and cron: `send-notification` v5 and
@@ -1044,11 +1044,11 @@ Everything below is live; the section reads as its specification.*
 Silvis is an **offers** problem where Davenport is a rules problem: the schedule has always been assembled from the
 days each surgeon emails in, relayed through whoever is collecting them and retyped by the ER-panel author. From Prompt 14 the
 app is where offers live. **Surgeons may enter offers for any future date, whenever they like** (`call_offers`, one row
-per person and day, primary / backup / either). A **period** (default 3 months, preset 6; `groupRules.offerPeriods`)
+per person and day, primary / backup / either). A **period** (code default 3 months, the data's 6 since 9/30, presets 3 / 6; `groupRules.offerPeriods`)
 is the generation window: the days inside the next period **freeze six weeks before that period starts**
 (`offers_close_at` = start − `closeWeeksBeforeStart` weeks, editable per period; 9/27: this line said "before the current
 period ends", true only when periods run back to back), the schedule is due four weeks before
-(`publish_by`), and reminders go out 42, 14 and 3 days before the freeze (`groupRules.offerPeriods.remindDaysBeforeClose` - the seed's `[42, 14, 3]` since 9/27; the built-in default is 14 and 3) to anyone with nothing entered for that period who
+(`publish_by`), and reminders go out 14 and 3 days before the freeze (`groupRules.offerPeriods.remindDaysBeforeClose` - `[14, 3]` since Faraz's 9/30 decision, set live 9/30 20:32 CDT; `[42, 14, 3]` from 9/27 to 9/30; the built-in default is 14 and 3) to anyone with nothing entered for that period who
 has not chosen **"go by my rules"**. Status per surgeon per period is derived, never typed: submitted / rules-only /
 not started. A daily cron mode (`daily-reminder` mode `offers`, job `silvis-offers-daily`, Vault secret like the
 others) sends the reminders and the close summary; it never generates or publishes. **Data (part 1, applied live
@@ -1263,7 +1263,7 @@ holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
 "you were placed on 11/5, a day you did not list — trade if needed"); an open slot inside a period carries
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
-6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [42, 14, 3]), end = the last day of the Nth month
+6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [14, 3] since 9/30 - [42, 14, 3] from 9/27; `lengthMonths` 6 since 9/30), end = the last day of the Nth month
 extended to a Sunday like the Generate presets). The ER-panel author's Word document is **retired at go-live** (Faraz 9/22
 evening): the app is the source of truth; the ER-panel author keeps a viewer account, the weekly office digest and the ER Call Panels
 export for a paper copy. Published assignments remain locks. Proof: `test/rules.test.js` and
@@ -1406,7 +1406,7 @@ defaults) and the two consequences recorded there; `offers_close_at` 2026-10-02 
 **Deadline notices (9/27; Faraz: "add a 6 week warning for choosing shifts so that the new schedule can be produced at
 least 4-6 weeks before").** The reading implemented (rules doc §1 Process row, §8 item 21): the freeze stays at start − 6
 weeks and publish-by at start − 4 weeks; what was missing was visibility. Data: `groupRules.offerPeriods.noticeDaysBeforeClose`
-(seed 42) and `noticeUrgentDaysBeforeClose` (seed 14; since the 9/27 ship) — defaults in `helpers.js` `OP_NOTICE_DEFAULTS`
+(seed 42 from 9/27, 14 since 9/30) and `noticeUrgentDaysBeforeClose` (seed 14; since the 9/27 ship) — defaults in `helpers.js` `OP_NOTICE_DEFAULTS`
 (`{ noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 }`), deliberately **not** in `OP_PERIOD_DEFAULTS`, which stays
 the literal twin of the `daily-reminder` mirror's `OTM_DEFAULTS` — `offerTimeline`'s output never carries either key and the
 cron never reads them). Two pure readers in `helpers.js`: `offerDeadlineNotices({ periods, offers, personId, today, groupRules })`
@@ -1439,7 +1439,7 @@ live value is set in the app:** Setup → Rules (per surgeon, and group rules) �
 apply carries the same values. The Periods "Remind" note names the list ("the morning run sends the same note 42, 14 and 3
 days before the freeze"). Rules doc §8 item 21 has the cron's dates for the two open periods and the caveats. Proof:
 `test/offers.test.js` E4 / E7 (urgent reads its own key, default 14) and [C] (the seed block), `test/offers-timeline.test.js`
-(the seed's periods remind 42 days out, helpers and the mirror alike), `test/importer.test.js` 9/27 step (the block reaches
+(9/27: the seed's periods reminded 42 days out; since 9/30 the seed reminds 14 and 3 days out and the 42-day reading is pinned on an explicit 9/27 rule set - helpers and the mirror alike), `test/importer.test.js` 9/27 step (the block reaches
 the blob).
 
 ## 18. East vacations — the person's Davenport time off, reviewed away / home (Faraz 9/22 evening; Prompt 15, built 2026-09-23)

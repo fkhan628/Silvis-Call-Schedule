@@ -1691,3 +1691,75 @@ public.call_pay_settings_touch();` (the triggers and policies go with the tables
 "unavailable").
 
 observed: applied 2026-09-28 01:15:26Z (`supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-27-call-pay.sql`, one implicit transaction, empty result, no error; the `main` row's `updated_at` 2026-09-28 01:15:26.066955Z) by the orchestrator in a local session on Faraz's go (9/27: the decisions above accepted as recorded, decision 4 included). Pre-check 01:15:10Z: `to_regclass('public.call_pay_logs')`, `to_regclass('public.call_pay_settings')` and `to_regprocedure('public.silvis_pay_enabled(text)')` all null. Probe BEFORE: `PROBE_SETUP: call_pay_logs is absent - sql/migrations/2026-09-27-call-pay.sql is not applied` (nothing else ran). After the apply: one settings row `main` with every rate null and `stipend_off_ids` `[]`, 0 call-ins; PostgREST saw both tables at once (anon GET `call_pay_logs` / `call_pay_settings` -> HTTP 401 `42501 permission denied`, not 404 `PGRST205`), so no `notify pgrst, 'reload schema'` was needed. Probe AFTER: all 52 cases exactly as the header lists - `P1=policies=call_pay_logs_delete,call_pay_logs_insert,call_pay_logs_read,call_pay_logs_update,call_pay_settings_read,call_pay_settings_write`, `P2=anon_logs=f anon_settings=f auth_truncate=f`, `P3=rows=1`, `P4=anon_exec=f auth_exec=t definer=t`, N1-N3 `42501`, S1-S17 / X1-X2 / T1 as listed (S4 `PY001 PAY_FUTURE`, S7 / S9 `PY003`, S5 / S8 the check constraints), the coordinator `C1=sees_all=t` `C2=rows=1` `C3=ERR PY004 PAY_READ_ONLY` `C4=updated=0` `C5=deleted=0` `C6=updated=0` `C7=ERR 42501 new row violates row-level security policy for table "call_pay_settings"`, V1-V2 nothing, A1-A4 as listed, `O1=rows=0` ... `O10=sees_s3=t`, `O11=viewer=t colleague=t`, `O12=admin=f coord=f self=f nojwt=f`. `SILVIS_CALL_PAY_APPLIED=1 bash scripts/verify-rls.sh` first read `RESULT: 270 passed, 1 failed` - the one FAIL was 14d's "CHANGED the stipend switches", a false alarm: the script compared the CLI's whole JSON before and after the probe, and CLI 2.84 stamps a random `boundary` into every result, so the two never matched (the live `stipend_off_ids` read `[]` before and after, `updated_at` unchanged). 14d now compares the extracted `off_ids` value only (and `test/schema.test.js`'s faked CLI carries a random boundary and escaped JSON); the strict re-run read `RESULT: 271 passed, 0 failed` (sections 1-14 green; section 14: the anon reads / POST refused 401, every probe case, leftovers 0, switches unchanged `[]`; the JWT-gated checks - 3, 6, 7c-7e, 8c / 8d, 9d, 14c - skipped, no JWT set). The record step: this status and table (a) / (b) rows; `sql/schema.sql` revision r `applied 2026-09-28 01:15:26Z` (and its block comments); the migration's marker line -> APPLIED; `SILVIS_CALL_PAY_APPLIED` dropped from `scripts/verify-rls.sh` (strict is the default: a 404, an anon 200 or PROBE_SETUP FAILs); guide 4.3's bullet; the test pins with them. After the record step, `bash scripts/verify-rls.sh` with no flags: `RESULT: 271 passed, 0 failed` (2026-09-28 01:56Z). No rate and no switch entered - Faraz enters them in Setup > Pay rates (step 7).
+
+## 2026-09-30 - data change: fold January into Jan 2027 - Jun 2027 (Faraz 9/30; TASK 2 of Cowork's 9/30 queue)
+
+**Status: PREPARED - NOT APPLIED.** Faraz 9/30: "go from January to June. We will do 6 months." The apply was attempted by
+the orchestrator on 10/1 (Faraz's standing go for the queue) and **refused by the session's permission classifier**; it was
+not retried by any other route. Faraz (or a session he permits) runs the file below - one batch, one implicit transaction.
+No schema, RLS, policy, schedule row, lock or offer changes; `call_periods` has no foreign key and no trigger pointing at it.
+
+Before (live, read 10/1; snapshot `silvis-gate/run-2026-10-01/call_periods-before.json`, all three rows):
+
+| id | label | days | offers close | publish by | status | rules_only_ids | offer_modes |
+|---|---|---|---|---|---|---|---|
+| 94f18b04-... | Nov 2026 - Jan 2027 | 2026-11-02 .. 2027-01-03 | 2026-10-02 | 2026-10-05 | published | s1, s6 | s2 exhaustive, s3 preferred, s4 exhaustive, s5 preferred |
+| 993950f2-... | Jan 2027 | 2027-01-04 .. 2027-01-31 | 2026-11-23 | 2026-12-07 | upcoming | s5 | {} |
+| fb0770b4-... | Feb 2027 - Apr 2027 | 2027-02-01 .. 2027-05-02 | 2026-12-21 | 2027-01-04 | upcoming | [] | {} |
+
+After (the file's dry run on the live database, rolled back - live unchanged afterwards): the Nov - Jan row unchanged;
+**Jan 2027 - Jun 2027** 2027-01-04 .. 2027-06-30, offers close 2026-11-23, publish by 2026-12-07, upcoming, rules_only_ids
+["s5"], offer_modes {}; the Feb - Apr row gone; 2 audit rows. Nothing to merge (the Feb - Apr row carried no rules-only list
+and no modes); offers are keyed by person and day - none sits in 2027-01-04 .. 2027-06-30 today, so none moves.
+Fierce's "go by my rules" choice for January (rules_only s5, set 9/26) now covers January - June.
+
+The file (`silvis-gate/run-2026-10-01/fold-jan-jun.sql`; apply with
+`supabase db query --linked --workdir <dir> -f <abs>/fold-jan-jun.sql`). Its pre-checks refuse a second run:
+
+```sql
+do $$
+declare
+  jan public.call_periods; feb public.call_periods; merged_ids jsonb; merged_modes jsonb; n int;
+begin
+  select * into jan from public.call_periods where label = 'Jan 2027' and start_day = date '2027-01-04' for update;
+  select * into feb from public.call_periods where label = 'Feb 2027 - Apr 2027' and start_day = date '2027-02-01' for update;
+  if jan.id is null then raise exception 'FOLD_PRECHECK: the Jan 2027 row is missing'; end if;
+  if feb.id is null then raise exception 'FOLD_PRECHECK: the Feb 2027 - Apr 2027 row is missing (already folded?)'; end if;
+  if jan.label <> 'Jan 2027' or jan.start_day <> date '2027-01-04' or jan.end_day <> date '2027-01-31'
+     or jan.offers_close_at <> date '2026-11-23' or jan.publish_by <> date '2026-12-07' or jan.status <> 'upcoming' then
+    raise exception 'FOLD_PRECHECK: the Jan row is not as read on 10/1: %', row_to_json(jan);
+  end if;
+  if feb.label <> 'Feb 2027 - Apr 2027' or feb.start_day <> date '2027-02-01' or feb.end_day <> date '2027-05-02' or feb.status <> 'upcoming' then
+    raise exception 'FOLD_PRECHECK: the Feb - Apr row is not as read on 10/1: %', row_to_json(feb);
+  end if;
+  select count(*) into n from public.call_periods where id not in (jan.id, feb.id) and status = 'upcoming'
+    and start_day <= date '2027-06-30' and end_day >= date '2027-01-04';
+  if n > 0 then raise exception 'FOLD_PRECHECK: % other upcoming period(s) overlap 2027-01-04 .. 2027-06-30', n; end if;
+  select coalesce(jsonb_agg(x order by x), '[]'::jsonb) into merged_ids
+    from (select distinct jsonb_array_elements_text(jan.rules_only_ids || feb.rules_only_ids) as x) s;
+  merged_modes := feb.offer_modes || jan.offer_modes;
+  update public.call_periods set end_day = date '2027-06-30', label = 'Jan 2027 - Jun 2027', rules_only_ids = merged_ids,
+    offer_modes = merged_modes, updated_at = now() where id = jan.id;
+  get diagnostics n = row_count; if n <> 1 then raise exception 'FOLD: the Jan update touched % row(s)', n; end if;
+  delete from public.call_periods where id = feb.id;
+  get diagnostics n = row_count; if n <> 1 then raise exception 'FOLD: the Feb - Apr delete touched % row(s)', n; end if;
+  insert into public.audit_log (actor_id, actor_name, action, detail) values
+    ('s1', 'Khan', 'period.update', jsonb_build_object('period_id', jan.id, 'label', 'Jan 2027 - Jun 2027', 'previous_label', jan.label,
+      'start_day', jan.start_day, 'end_day', date '2027-06-30', 'previous_end_day', jan.end_day, 'offers_close_at', jan.offers_close_at,
+      'publish_by', jan.publish_by, 'rules_only_ids', merged_ids, 'previous_rules_only_ids', jan.rules_only_ids, 'offer_modes', merged_modes,
+      'previous_offer_modes', jan.offer_modes, 'summary', 'Period Jan 2027 -> Jan 2027 - Jun 2027: end moved 2027-01-31 -> 2027-06-30 (one 6-month period, Faraz 9/30); offers close 2026-11-23 and publish by 2026-12-07 kept; Feb 2027 - Apr 2027 folded in (rules_only_ids / offer_modes merged: '
+        || case when feb.rules_only_ids = '[]'::jsonb and feb.offer_modes = '{}'::jsonb then 'none to merge' else (feb.rules_only_ids::text || ' / ' || feb.offer_modes::text) end || '); applied by SQL')),
+    ('s1', 'Khan', 'period.delete', jsonb_build_object('period_id', feb.id, 'label', feb.label, 'start_day', feb.start_day, 'end_day', feb.end_day,
+      'offers_close_at', feb.offers_close_at, 'publish_by', feb.publish_by, 'status', feb.status, 'rules_only_ids', feb.rules_only_ids,
+      'offer_modes', feb.offer_modes, 'created_by', feb.created_by, 'summary', 'Period Feb 2027 - Apr 2027 (2027-02-01 - 2027-05-02, offers close 2026-12-21, publish by 2027-01-04) deleted: folded into Jan 2027 - Jun 2027 (Faraz 9/30); offers are keyed by person and day, so none moved; applied by SQL'));
+end $$;
+```
+
+After the apply, check: `select label, start_day, end_day, offers_close_at, publish_by, status, rules_only_ids from
+public.call_periods order by start_day;` (two rows, as above) and the two `audit_log` rows (`period.update`,
+`period.delete`); then the app (Setup > Periods, the painter's period line and My schedule show one period to 6/30) and
+the offers cron's next mornings (11/9 reminder, 11/20 last call, 11/23 close). The seed already mirrors the result
+(2026-09-30 revision: the widened row, no Feb - Apr row, `groupRules.offerPeriods` lengthMonths 6, remind [14, 3], notice
+14), so a later seed apply cannot bring the Feb - Apr period back. **Order: Run fold-jan-jun.sql BEFORE any seed apply: an apply first would widen the live Jan row to 6/30 while the live Feb - Apr row stays (two overlapping upcoming periods - the importer upserts by start_day and never deletes), and the fold's pre-check would then refuse; the recovery is to delete the Feb - Apr row with its period.delete audit row by hand.**
+
+observed: _not applied - waiting for Faraz (the classifier refused the orchestrator's apply on 10/1)_
