@@ -3313,6 +3313,9 @@ function planHolidays(year, opts) {
                                          was skipped (its rows on file stay)
      holidayPlanConflictLines(conflicts, label)
                                          the confirm's replaced-slot lines, one per unit + role + holder change
+     holidayPlanNoticeChanges(days, after, persisted, held) / holidayPlanHeldNotices(held, persisted, local)
+                                         who the change notices go to - after an Accept that saves, and for the
+                                         days a failed / conflicted Accept left held (the card's Send button)
    A plan is planHolidays' assignments shape ([{ unit: { name } | name, primary, backup }]) or { <unit name>: { primary,
    backup } }; a unit it does not name is open.
    Breaks (hard - Accept names them in an explicit confirm; a swap that adds one asks first):
@@ -3411,7 +3414,10 @@ function hplEvaluate(P, A) {
     HPL_ROLES.forEach(function (role) {
       var id = a[role] || null;
       if (!id) { open.push({ unit: u.name, role: role }); vec[0]++; return; }
-      if (!P.inPool[id]) { push({ rule: "not-in-pool", unit: u.name, role: role, id: id, text: nameOf(id) + " (" + u.name + " " + role + ") is not an active roster surgeon" }); return; }
+      // an external cover ('ext:<name>' - read from the file only, e.g. a started unit's holders on file in
+      // holidayPlanWrittenCheck; a plan never names one) is labelled as the app's holderLabel does, never by its raw id
+      // (second review N2)
+      if (!P.inPool[id]) { push({ rule: "not-in-pool", unit: u.name, role: role, id: id, text: (String(id).indexOf("ext:") === 0 ? String(id).slice(4) + " (external - the " + u.name + " " + role + " on file)" : nameOf(id) + " (" + u.name + " " + role + ")") + " is not an active roster surgeon" }); return; }
       served[u.tier][id]++; if (role === "primary") prim[u.tier][id]++;
       days[u.tier][id] += u.days.length;
       var rs = P.block[ui][id][role];
@@ -3471,13 +3477,24 @@ function holidayPlanCheck(year, plan, opts) {
 // swaps before replacements, the pool in roster order) - deterministic; the planner's seeded RNG is not used here.
 // Never offered: a move that leaves one surgeon in both roles of a unit it touches (structural - the database's CHECK
 // schedule_days_distinct_roles refuses the row; for a swap both units are checked after the swap), and - with `today`
-// (Central ISO) - a swap with another unit that starts on or before today (holidayPlanAcceptRows leaves a started unit
-// as on file, so the swap would be written half; a replacement touches this unit only and stays offered).
-function hplOptions(P, A, ui, role, base, today) {
+// (Central ISO) - ANY move of a unit that itself starts on or before today (no swap, no replacement: holidayPlanAcceptRows
+// leaves a started unit as on file whatever the plan names - second review M2, 10/1) and a swap with another such unit
+// (the swap would be written half). fileHeld (optional, hplFileHeld) = per unit, the holders ON FILE in a role the plan
+// leaves open (Accept keeps them there): twoRoles reads each as that role's holder, so a move that puts one of them into
+// the unit's other role is not offered either - Accept would clear his role (holidayPlanAcceptRows' clash) and leave it
+// OPEN, which a "keeps every rule" label never said (second review M1, 10/1).
+function hplOptions(P, A, ui, role, base, today, fileHeld) {
   var cur = A[ui][role], u = P.units[ui], out = [], n = 0;
-  var baseKeys = base.breaks.map(function (b) { return b.key; });
   var started = function (uj) { return !!today && P.units[uj].days[0] <= today; };
-  var twoRoles = function (B, uj) { return !!(B[uj].primary && B[uj].primary === B[uj].backup); };
+  if (started(ui)) return out;
+  var baseKeys = base.breaks.map(function (b) { return b.key; });
+  var twoRoles = function (B, uj) {
+    var p = B[uj].primary, b = B[uj].backup, f = fileHeld && fileHeld[uj];
+    if (p && p === b) return true;
+    if (f && p && !b && f.backup.indexOf(p) >= 0) return true;    // the plan leaves the backup open: the file's backup stays
+    if (f && b && !p && f.primary.indexOf(b) >= 0) return true;   // ...and the primary
+    return false;
+  };
   var judge = function (B, o) {
     var ev = hplEvaluate(P, B), keys = ev.breaks.map(function (b) { return b.key; });
     o.assignments = hplAssignOut(P, B);
@@ -3510,10 +3527,26 @@ function hplOptions(P, A, ui, role, base, today) {
   out.forEach(function (o) { delete o.vec; delete o.order; });
   return out;
 }
+// hplFileHeld(P, A, schedule) -> per unit of P { primary: [ids], backup: [ids] } - the holders ON FILE (the raw primary /
+// backup of the unit's days, the fields holidayPlanAcceptRows' clash test reads; an external cover is never one) in each
+// role A leaves open - Accept keeps them there (a planned role overwrites what is on file, so it lists nobody).
+function hplFileHeld(P, A, schedule) {
+  var s = schedule && typeof schedule === "object" ? schedule : {};
+  return P.units.map(function (u, ui) {
+    var f = { primary: [], backup: [] };
+    HPL_ROLES.forEach(function (role) {
+      if (A[ui] && A[ui][role]) return;
+      u.days.forEach(function (d) { var a = s[d], h = a && typeof a[role] === "string" && a[role] ? a[role] : null; if (h && f[role].indexOf(h) < 0) f[role].push(h); });
+    });
+    return f;
+  });
+}
 // holidayPlanSwapOptions(year, plan, unitName, role, opts) -> { year, unit, role, current, base: { breaks, soft, cost },
 //   options: [{ kind: 'swap' | 'replace', unit, role, id, from, with, text, assignments, breaks, soft, open, cost, added,
 //   resolved, ok }] } - the Setup card's swap control and Re-check's suggestion read the same list. opts.today (Central
-//   ISO, optional): no swap with a unit that starts on or before it (hplOptions).
+//   ISO, optional): no move of a unit that starts on or before it and no swap with one (hplOptions). opts.schedule (the
+//   map Accept would write over, optional): a role the plan leaves open keeps its holder on file - no move puts him into
+//   the unit's other role (hplOptions' fileHeld).
 function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
   var Y = hplYear(year, "holidayPlanSwapOptions");
   if (role !== "primary" && role !== "backup") throw new Error("holidayPlanSwapOptions: role must be primary or backup, got " + JSON.stringify(role));
@@ -3523,7 +3556,7 @@ function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
   var ui = -1; P.units.forEach(function (u, i) { if (u.name === unitName) ui = i; });
   if (ui < 0) return { year: Y, unit: unitName, role: role, current: null, base: null, options: [], warnings: P.warnings.concat([unitName + " is not a holiday unit of " + Y]) };
   var base = hplEvaluate(P, A);
-  return { year: Y, unit: unitName, role: role, current: A[ui][role], base: { breaks: base.breaks, soft: base.soft, cost: hplCostObj(base.vec) }, options: hplOptions(P, A, ui, role, base, suIsIso(o.today) ? o.today : null), warnings: P.warnings.slice() };
+  return { year: Y, unit: unitName, role: role, current: A[ui][role], base: { breaks: base.breaks, soft: base.soft, cost: hplCostObj(base.vec) }, options: hplOptions(P, A, ui, role, base, suIsIso(o.today) ? o.today : null, hplFileHeld(P, A, o.schedule)), warnings: P.warnings.slice() };
 }
 // holidayPlanRecheck(year, opts) -> { year, source, accepted: [{ unit, days, primary, backup, mixed }], blocked: [{ unit,
 //   role, id, days, breaks, suggestion, valid, started }], warnings }. opts = planHolidays' opts + `schedule` (in-memory
@@ -3539,6 +3572,9 @@ function holidayPlanSwapOptions(year, plan, unitName, role, opts) {
 //   that clears them (valid: false, its added breaks listed); else null. With `today`: no swap with a unit that starts
 //   on or before it (hplOptions - Accept would write it half), and a blocked slot of a unit that has itself started is
 //   listed with started: true and no suggestion (Accept leaves a started unit as on file; the day editor changes it).
+//   A suggestion never moves the holder on file in a role the plan left open (an unlocked holder on a plan row, or the
+//   holders of a mixed role) into that unit's other role: Apply would clear his role and leave it OPEN (hplOptions'
+//   fileHeld - second review M1).
 var HPL_SLOT_RULES = ["refused", "not-in-pool", "same-person", "max-major"];
 function holidayPlanRecheck(year, opts) {
   var Y = hplYear(year, "holidayPlanRecheck");
@@ -3567,6 +3603,7 @@ function holidayPlanRecheck(year, opts) {
     A.push({ primary: rec.primary, backup: rec.backup });
   });
   var base = hplEvaluate(P, A), blocked = [];
+  var fileHeld = hplFileHeld(P, A, sched);   // the unlocked holder on file in a role the plan left open stays there (M1)
   P.units.forEach(function (u, ui) {
     HPL_ROLES.forEach(function (role) {
       var id = A[ui][role];
@@ -3575,7 +3612,7 @@ function holidayPlanRecheck(year, opts) {
       if (!mine.length) return;
       var keys = mine.map(function (b) { return b.key; });
       var started = !!today && u.days[0] <= today;
-      var list = started ? [] : hplOptions(P, A, ui, role, base, today);
+      var list = started ? [] : hplOptions(P, A, ui, role, base, today, fileHeld);
       var clears = function (op) { return !op.breaks.some(function (b) { return keys.indexOf(b.key) >= 0; }); };
       var pick = null, valid = false;
       for (var i = 0; i < list.length && !pick; i++) if (clears(list[i]) && !list[i].added.length) { pick = list[i]; valid = true; }
@@ -3698,6 +3735,69 @@ function holidayPlanUnitLines(units, nameOf) {
     var span = u.days.length > 1 ? fmtMD(u.days[0]) + "-" + fmtMD(u.days[u.days.length - 1]) : fmtMD(u.days[0]);
     return u.name + " " + span + ": " + [u.primary ? "P " + nm(u.primary) : null, u.backup ? "B " + nm(u.backup) : null].filter(Boolean).join(", ");
   });
+}
+// --- The change notices of an Accept (review fix G; second review S1 / M3, 10/1) ---
+// A HELD day (the app's holidayNoticePendingRef[year][day], left by an Accept or Re-check swap whose write failed or met
+// someone else's change) = { before, wrote, unit: { name, primary, backup }, swap }: `before` the row as last persisted
+// before that Accept (the earliest such Accept's while its write had not been overtaken), `wrote` the row it wrote, its
+// unit (the notice lines) and its mode. Holders compare as dayHolder (an external cover reads 'ext:<name>'); a lock or a
+// note change alone is no holder change and notifies nobody.
+function hplSameHolders(a, b) { return HPL_ROLES.every(function (role) { return dayHolder(a || null, role) === dayHolder(b || null, role); }); }
+function hplHolderChanges(day, before, after) {
+  var out = [];
+  HPL_ROLES.forEach(function (role) { var f = dayHolder(before || null, role), t = dayHolder(after || null, role); if (f !== t) out.push({ day: day, role: role, from: f, to: t }); });
+  return out;
+}
+function hplChangeIds(changes) { var ids = []; changes.forEach(function (c) { [c.from, c.to].forEach(function (id) { if (id && ids.indexOf(id) < 0) ids.push(id); }); }); return ids; }
+// holidayPlanNoticeChanges(days, after, persisted, held) -> { before: { day: row | null }, changes: [{ day, role, from,
+//   to }], affected: [ids] } - the notices of an Accept that saves, per written day: after = the map it writes,
+//   persisted = the rows LAST PERSISTED (the app's lastSyncRef, read before the sync), held = that year's held days.
+//   The "before" of a day is the persisted row, except for a held day whose persisted row is still the held `before`
+//   (the earlier write never landed) or the held `wrote` (it landed later, by the automatic retry): then the held
+//   `before` - the holders that earlier Accept displaced are told. Any other persisted row is someone else's change
+//   since (a trade, another device - the conflict reload adopted it): the diff is against it, so the holder the plan
+//   actually replaces is told, never the one who lost the day to that other change (second review M3). affected =
+//   every holder before or after a change (an 'ext:' cover included - the app keeps roster surgeons only).
+function holidayPlanNoticeChanges(days, after, persisted, held) {
+  var A = after && typeof after === "object" ? after : {}, Pm = persisted && typeof persisted === "object" ? persisted : {}, Hm = held && typeof held === "object" ? held : {};
+  var before = {}, changes = [];
+  (Array.isArray(days) ? days : []).forEach(function (d) {
+    var p = Pm[d] || null, h = Object.prototype.hasOwnProperty.call(Hm, d) && Hm[d] && typeof Hm[d] === "object" ? Hm[d] : null;
+    var b = h && (hplSameHolders(p, h.wrote) || hplSameHolders(p, h.before)) ? (h.before || null) : p;
+    before[d] = b;
+    changes = changes.concat(hplHolderChanges(d, b, A[d] || null));
+  });
+  return { before: before, changes: changes, affected: hplChangeIds(changes) };
+}
+// holidayPlanHeldNotices(held, persisted, local) -> { landed, waiting, dropped: [days], changes, affected, units: [{ name,
+//   days, primary, backup }], swap, left } - the app's "Send the held change notices" button over one year's held days:
+//   persisted = the rows LAST PERSISTED (lastSyncRef), local = the in-memory map (optional). Per held day:
+//     landed   the persisted row holds the holders the Accept wrote - its change is on file: the notice goes out for
+//              before -> wrote (changes / affected; units = the landed days per unit, for holidayPlanUnitLines; swap =
+//              every landed day came from a Re-check swap);
+//     waiting  not on file yet, but the local map still carries them (the automatic retry may still land them) - kept
+//              held (left); without `local`, a persisted row still equal to `before` waits;
+//     dropped  neither - nothing landed and the local map moved on (an undo, or the conflict reload adopted someone
+//              else's row): the plan's change does not stand, nothing is sent for the day.
+function holidayPlanHeldNotices(held, persisted, local) {
+  var Hm = held && typeof held === "object" ? held : {}, Pm = persisted && typeof persisted === "object" ? persisted : {}, L = local && typeof local === "object" ? local : null;
+  var landed = [], waiting = [], dropped = [], changes = [], units = [], byUnit = {}, left = {}, swapAll = true;
+  Object.keys(Hm).filter(suIsIso).sort().forEach(function (d) {
+    var h = Hm[d] && typeof Hm[d] === "object" ? Hm[d] : {}, p = Pm[d] || null;
+    if (hplSameHolders(p, h.wrote)) {
+      landed.push(d);
+      changes = changes.concat(hplHolderChanges(d, h.before, h.wrote));
+      if (!h.swap) swapAll = false;
+      var u = h.unit && typeof h.unit.name === "string" ? h.unit : { name: d, primary: null, backup: null };
+      var g = byUnit[u.name];
+      if (!g) { g = byUnit[u.name] = { name: u.name, days: [], primary: u.primary || null, backup: u.backup || null }; units.push(g); }
+      g.days.push(d);
+      return;
+    }
+    if (L ? hplSameHolders(L[d] || null, h.wrote) : hplSameHolders(p, h.before)) { waiting.push(d); left[d] = h; }
+    else dropped.push(d);
+  });
+  return { landed: landed, waiting: waiting, dropped: dropped, changes: changes, affected: hplChangeIds(changes), units: units, swap: landed.length > 0 && swapAll, left: left };
 }
 
 /* ---- East vacation reviews (Prompt 15 part 2, 9/23) ----
@@ -5868,7 +5968,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildErCallPanelsHTML, buildErCallPanelsText, buildErCallPanelsDocument, erPanelSpan,
     defaultHolidayUnits, huNthWeekday, HU_ORDER, HU_STANDARD_TIER,
     HOLIDAY_PLAN_DEFAULTS, holidayPlanRules, holidayPlanHistory, planHolidays,
-    holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanWrittenCheck, holidayPlanConflictLines, holidayPlanUnitLines,
+    holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanWrittenCheck, holidayPlanConflictLines, holidayPlanUnitLines, holidayPlanNoticeChanges, holidayPlanHeldNotices,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
