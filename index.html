@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-3ISyxyxDtO1TtqEvC2t8x0WcLj38gtcKwVm02Td6gus=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-0RLnnULy/s8qrMkkpcvD/e8LcPGVk6upPPYnBHmEh+s=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-LKHBQdHkp8r5rYrTxB05yIgAbkJGUTEJ5vmeKuXa4qE=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-EHxA4eRD0x9DUgtVKnbqxlnhbPec1jPYeJ8bic2TrgY=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -119,7 +119,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.01a";
+    var APP_VERSION = "2026.10.01b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -4566,12 +4566,25 @@ function CallSchedule() {
       } : null;
     }
     const P = rulesCtx.per ? rulesCtx.per[holderId] : null;
-    if (!P || P.weekendStyle !== "block") return null;
+    if (!P) return null;
     const dow = parse(day).getDay();
     if (dow !== 5 && dow !== 6 && dow !== 0) return null;
     const fri = fmt(addD(parse(day), dow === 5 ? 0 : dow === 6 ? -1 : -2));
     const days = [fri, fmt(addD(parse(fri), 1)), fmt(addD(parse(fri), 2))];
-    if (days.some(d => rulesCtx.holidayByDay[d])) return null;
+    if (days.some(d => rulesCtx.holidayByDay && rulesCtx.holidayByDay[d])) return null;
+    if (role === "primary" && P.noLoneWeekend && dow !== 5 && holds(days[1]) && holds(days[2])) {
+      if (P.weekendStyle === "block" && holds(days[0])) return {
+        kind: "weekend-block",
+        name: "weekend block",
+        days
+      };
+      return {
+        kind: "weekend-block",
+        name: "weekend pair",
+        days: days.slice(1)
+      };
+    }
+    if (P.weekendStyle !== "block") return null;
     return days.every(holds) ? {
       kind: "weekend-block",
       name: "weekend block",
@@ -15726,7 +15739,8 @@ function DayEditor(props) {
       [day]: _objectSpread(_objectSpread({}, draft), {}, {
         source: draft.source || "manual"
       })
-    })
+    }),
+    heldSchedule: ctxInputs.schedule
   })), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
