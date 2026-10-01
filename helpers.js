@@ -4576,10 +4576,15 @@ function offerRulesWords(rules, groupRules) {
    default on, eastFeed.eastBackupCountsAsBusy defaults on, an absent monthlyCap is the group default, an absent
    maxConsecutiveDays the group default. Data only: names, holiday names and the group rules come in through `info`
    ({ names: { id: name }, holidayNames: [..], groupRules }); there is no surgeon-specific branch. A key the helper does
-   not know (top level, or inside an object it reads) is listed as "other: <key>" - nothing is hidden; prose keys
-   (note, notes, rule, source, *Note) are documentation and are skipped. Prompt 23's keys (primaryContribution
-   "weekdays", standaloneFriday, noLoneWeekendDay, weekendCap, hardNeverWeekdaysNoticeDays) read as that engine reads
-   them. SU_RULE_FIELDS (below) is the editor's field registry. */
+   not know (top level, or inside an object it reads) is listed on the "Other" line as not read by the engine - nothing
+   is hidden; prose keys (note, notes, rule, source, *Note) are documentation and are skipped. Prompt 23's keys
+   (primaryContribution "weekdays", standaloneFriday, noLoneWeekendDay, weekendCap, hardNeverWeekdaysNoticeDays) read as
+   that engine reads them. Review 10/1: every day-limiting rule present is described on its own (the engine applies
+   them together); a soft term says "(soft)", and a pair of soft terms is read with the group's weights (over the
+   engine defaults) - a term whose weight is 0 is off, an allowed weekday's "others first" goes when a weekday
+   preference outweighs it; a value the engine reads as medium (not a weight) or ignores (a malformed cap) says so.
+   test/data-layer.test.js [P24] cross-checks the Primary / Backup lines against rules.js eligibility. SU_RULE_FIELDS
+   (below) is the editor's field registry. */
 const SU_SUM_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const SU_SUM_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function suSumHas(o, k) { return !!o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k); }
@@ -4639,7 +4644,21 @@ function suSumPattern(p) {
   else if (p.end) s += " until " + suSumDate(p.end, true);
   return s;
 }
-function suSumWeight(w) { return typeof w === "number" ? "weight " + w : (typeof w === "string" && w ? w : "medium"); }
+// rules.js defaultWeights(), restated (test/data-layer.test.js pins the two equal): the summary reads a weight the way the
+// engine does - the group's weights over these defaults - to say when a soft term is off (weight 0) and which of two
+// opposite terms wins
+const SU_SUM_WEIGHT_DEFAULTS = {
+  low: 1, medium: 3, strong: 10, preferred: -1, patternDaily: 5, patternMismatch: 3, backToBackWeekend: 3, backupAfterPrimary: 1,
+  noTargetWeekday: 1, eastUnknown: 1, eastForecastBelowThreshold: 2, smoothingTolerance: 2, longRunPerDay: 3, weekendContribution: 3,
+  eastClear: 2, offerBonus: 6, outsideOffers: 6, offerBonusOverShare: 0, hardNeverBeyondNotice: 3,
+};
+function suSumWeights(G) { return Object.assign({}, SU_SUM_WEIGHT_DEFAULTS, suSumObj(G) && suSumObj(G.weights) ? G.weights : {}); }
+// a value rules.js resolveWeight reads as given (a number, a weight name, a numeric string); anything else it reads as medium
+function suSumWeightOk(w, W) { return (typeof w === "number" && !isNaN(w)) || (typeof w === "string" && (Object.prototype.hasOwnProperty.call(W, w) || !isNaN(parseFloat(w)))); }
+function suSumWeight(w, W) {
+  if (W && !suSumWeightOk(w, W)) return "medium - the value set is not a weight";
+  return typeof w === "number" ? "weight " + w : (typeof w === "string" && w ? w : "medium");
+}
 function suSumNotice(n) { return n >= 14 && n % 7 === 0 ? (n / 7) + " weeks" : n + " day" + (n === 1 ? "" : "s"); }
 function suSumPlural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 // the keys suRulesSummary knows, per object path ("" = the top level); everything else is "other: <path>"
@@ -4695,6 +4714,7 @@ function suRulesSummary(rules, info) {
   const holNames = Array.isArray(I.holidayNames) ? I.holidayNames : [];
   const out = [];
   const line = (family, parts) => { const p = parts.filter(Boolean); if (!p.length) return; const t = p.join("; "); out.push({ family, text: t.charAt(0).toUpperCase() + t.slice(1) + (/\.$/.test(t) ? "" : ".") }); };
+  const Wt = suSumWeights(G);
   const backupOpen = !(G.backupPolicy && G.backupPolicy.openToEveryone === false);
   const weekendDays = G.weekendUnit && Array.isArray(G.weekendUnit.days) && G.weekendUnit.days.length ? G.weekendUnit.days : ["Fri", "Sat", "Sun"];
   const wkLabel = suSumDays(weekendDays);
@@ -4706,7 +4726,8 @@ function suRulesSummary(rules, info) {
   const hnRoles = Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles : (backupOpen ? ["primary"] : ["primary", "backup"]);
   const nd = R.hardNeverWeekdaysNoticeDays;
   const ndOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
-  const neverDays = hn.length ? suSumDays(hn) + (ndOk ? " within " + suSumNotice(nd) + " (later only as a last resort)" : "") : null;
+  // beyond the notice rules.js allows the day with the soft +hardNeverBeyondNotice (none when that weight is 0)
+  const neverDays = hn.length ? suSumDays(hn) + (ndOk ? " within " + suSumNotice(nd) + " (further out allowed" + (Wt.hardNeverBeyondNotice ? ", soft" : "") + ")" : "") : null;
   const wp = R.outsideDerivedWeeks && suSumObj(R.outsideDerivedWeeks.weekdayPattern) ? R.outsideDerivedWeeks.weekdayPattern : null;
   const wpWhere = efDerive ? "outside East weeks: " : "weekday pattern: ";
   const al = suSumObj(R.aledo) ? R.aledo : null;
@@ -4742,42 +4763,62 @@ function suRulesSummary(rules, info) {
   }
   if (Array.isArray(R.availableWeeks) && R.availableWeeks.length) {
     const ws = R.availableWeeks.slice().sort();
-    const from = R.availableWeeksFrom || String(ws[0]).slice(0, 7) + "-01";
-    av.push("primary only in " + suSumPlural(ws.length, "listed week") + ", " + suSumDate(ws[0], true) + " to the week of " + suSumDate(ws[ws.length - 1], true) + " (from " + suSumMonths([String(from).slice(0, 7)]) + "; none after)");
+    // rules.js: the weeks govern from availableWeeksFrom (that very day) or else the 1st of the first listed week's month
+    const from = R.availableWeeksFrom ? suSumDate(R.availableWeeksFrom, true) : suSumMonths([String(ws[0]).slice(0, 7)]);
+    av.push("primary only in " + suSumPlural(ws.length, "listed week") + ", " + suSumDate(ws[0], true) + " to the week of " + suSumDate(ws[ws.length - 1], true) + " (from " + from + "; none after)");
   }
   if (windows.length) av.push("only inside " + suSumPlural(windows.length, "date window") + ", both roles: " + windows.slice(0, 4).map(w => suSumDate(w && w.start) + "-" + suSumDate(w && w.end)).join(", ") + (windows.length > 4 ? " and " + (windows.length - 4) + " more" : ""));
   const gov = [governed.primary.length ? suSumMonths(governed.primary) + " (primary)" : null, governed.both.length ? suSumMonths(governed.both) + " (both roles)" : null, governed.backup.length ? suSumMonths(governed.backup) + " (backup)" : null].filter(Boolean);
   if (gov.length) av.push("only the listed days in " + gov.join(", "));
   line("Availability", av);
 
-  // Primary: which days, then what blocks or weighs on them
+  // Primary: which days, then what blocks or weighs on them. rules.js applies every day-limiting rule present together -
+  // the recurring list, the weekday allow-list, the weekday pattern, the windows, the listed weeks - so each is described
+  // on its own (review 10/1: an else-if chain hid an active allow-list / pattern behind a recurring list).
   const pr = [];
   const recA = Array.isArray(R.recurringAvailable) ? R.recurringAvailable : [];
+  const recOn = R.availabilityMode === "whitelist-recurring" || recA.length > 0;
   const wa = R.weekendsAvailable;
   const waPrim = wa === true || !!(suSumObj(wa) && wa.primary);
   const wd = suSumObj(R.weekdays) ? R.weekdays : null;
-  if (R.availabilityMode === "whitelist-recurring" || recA.length) pr.push("only " + (recA.length ? recA.map(suSumPattern).join(", ") : "listed recurring days (none listed)") + (waPrim ? " and " + wkLabel : ""));
-  else if (wd && Array.isArray(wd.allowed)) {
-    const allowed = wd.allowed.filter(d => weekendDays.indexOf(d) < 0);
-    pr.push((allowed.length ? suSumDays(allowed) + (wd.autoOffer !== false ? " (others first on equal terms)" : "") : "no weekday") + " and " + wkLabel);
-  } else if (wp) {
+  const nonWk = SU_SUM_WEEK.filter(d => weekendDays.indexOf(d) < 0);
+  const hnPrim = hnRoles.indexOf("primary") >= 0;
+  if (recOn) pr.push("only " + (recA.length ? recA.map(suSumPattern).join(", ") : "listed recurring days (none listed)") + (waPrim ? " and " + wkLabel : ""));
+  if (wd && Array.isArray(wd.allowed)) {
+    // a weekday on the never-on list is that rule's, not the allow-list's (rules.js skips it here): open when that rule
+    // does not cover primary
+    const open = nonWk.filter(d => wd.allowed.indexOf(d) >= 0 || (hn.indexOf(d) >= 0 && !hnPrim));
+    // an allowed weekday carries +noTargetWeekday while autoOffer is on; a "weekdays" preference takes -weekendContribution off it
+    const net = (wd.autoOffer !== false ? Wt.noTargetWeekday : 0) - (R.primaryContribution === "weekdays" ? Wt.weekendContribution : 0);
+    const first = net > 0 ? " (others first on equal terms)" : "";
+    if (!recOn) pr.push(open.length ? suSumDays(open) + first + " and " + wkLabel : wkLabel + " only (no weekday allowed)");
+    else pr.push(open.length ? "of " + suSumDays(nonWk) + " only " + suSumDays(open) + first : "no " + suSumDays(nonWk) + " (no weekday allowed)");
+  }
+  if (wp) {
     const yes = [], pref = [], block = [], no = [];
     SU_SUM_WEEK.forEach(d => { const pd = wp[d]; const v = pd ? pd.primary : undefined; if (v === true) { yes.push(d); if (pd.preferred) pref.push(d); } else if (v === "weekend-block-only") block.push(d); else no.push(d); });
     pr.push(wpWhere + [yes.length ? suSumDays(yes) + (pref.length ? " (" + (pref.length === yes.length ? "" : suSumDays(pref) + " ") + "preferred)" : "") : null, block.length ? suSumDays(block) + " only as one block" : null, no.length ? "not " + suSumDays(no) : null].filter(Boolean).join(", "));
-  } else if (windows.length) pr.push("only inside the date windows");
-  else if (Array.isArray(R.availableWeeks) && R.availableWeeks.length) pr.push("only in the listed weeks");
-  else pr.push("any day");
+  }
+  if (windows.length) pr.push("only inside the date windows");
+  if (Array.isArray(R.availableWeeks) && R.availableWeeks.length) pr.push("only in the listed weeks");
+  if (!pr.length) pr.push("any day");
   const never = [];
-  if (neverDays && hnRoles.indexOf("primary") >= 0) never.push(neverDays);
+  if (neverDays && hnPrim) never.push(neverDays);
   (Array.isArray(R.recurringUnavailable) ? R.recurringUnavailable : []).forEach(p => never.push(suSumPattern(p)));
   if (never.length) pr.push("never " + never.join(", "));
   if (efBlocks.indexOf("primary") >= 0) pr.push("not on East call days");
-  if (al && alDayBefore && alRoles.indexOf("primary") >= 0) pr.push("not the day before a clinic day (" + (alDays || "no clinic day listed") + ")");
-  if (al && al.avoidWholeWeek) pr.push("avoids clinic weeks (" + suSumWeight(al.avoidWholeWeek) + ")" + (alDayBefore || !alDays ? "" : " - clinic days " + alDays));
+  if (al && !alDays) pr.push("a clinic-day rule with no clinic day set (no effect)");
+  else if (al) {
+    const dbPrim = alDayBefore && alRoles.indexOf("primary") >= 0;
+    if (dbPrim) pr.push("not the day before a clinic day (" + alDays + ")");
+    if (al.avoidWholeWeek) pr.push("avoids clinic weeks (" + suSumWeight(al.avoidWholeWeek, Wt) + ")" + (dbPrim ? "" : " - clinic days " + alDays));
+  }
   const avoid = Array.isArray(R.recurringAvoid) ? R.recurringAvoid : [];
-  if (avoid.length) pr.push("avoids " + avoid.map(p => suSumPattern(p) + " (" + suSumWeight(p && p.weight !== undefined ? p.weight : "medium") + ")").join(", "));
-  if (R.primaryContribution === "weekends") pr.push("prefers full " + wkLabel + " blocks (weekend backup last)");
-  else if (R.primaryContribution === "weekdays") pr.push("prefers weekdays (Mon-Thu or a Friday on its own)");
+  if (avoid.length) pr.push("avoids " + avoid.map(p => suSumPattern(p) + " (" + suSumWeight(p && p.weight ? p.weight : "medium", Wt) + ")").join(", "));
+  // primaryContribution: weights.weekendContribution carries both readings; 0 switches the term off
+  const wcW = Wt.weekendContribution;
+  if (R.primaryContribution === "weekends") pr.push(wcW ? "prefers full " + wkLabel + " primary blocks, weekend backup discouraged (soft)" : "prefers weekends (off - its weight is 0)");
+  else if (R.primaryContribution === "weekdays") pr.push(wcW ? "prefers weekdays - " + suSumDays(nonWk) + " or a Friday on its own (soft)" : "prefers weekdays (off - its weight is 0)");
   else if (R.primaryContribution !== undefined && R.primaryContribution !== null && R.primaryContribution !== "") pr.push("prefers " + JSON.stringify(R.primaryContribution) + " (not a value the scheduler knows - ignored)");
   line("Primary", pr);
 
@@ -4796,7 +4837,7 @@ function suRulesSummary(rules, info) {
     if (windows.length) bk.push("only inside the date windows");
     if (governed.both.length || governed.backup.length) bk.push("only the listed days in " + suSumMonths(governed.both.concat(governed.backup)));
     if (efBlocks.indexOf("backup") >= 0) bk.push("not on East call days");
-    if (al && alDayBefore && alRoles.indexOf("backup") >= 0) bk.push("not the day before a clinic day");
+    if (al && alDays && alDayBefore && alRoles.indexOf("backup") >= 0) bk.push("not the day before a clinic day");
     if (!bk.length) bk.push("any day");
     const bc = suSumObj(R.backupCap) ? R.backupCap : null;
     if (bc) {
@@ -4808,8 +4849,17 @@ function suRulesSummary(rules, info) {
 
   // Weekends
   const wk = [];
-  const STYLE = { block: "one " + wkLabel + " block", split: "split (Fri+Sun / Sat)", daily: "single days", "saturday-only": "Saturday only (older setting)" };
-  if (R.weekendStyle) wk.push(STYLE[R.weekendStyle] || "style " + JSON.stringify(R.weekendStyle) + " (not a style the scheduler knows)");
+  // the style is soft (+weights.patternMismatch on a shape that does not fit); "daily" only makes a lone weekend day
+  // carry no style penalty (rules.js memberPen 0 - it does not make single days preferred). Under standaloneFriday the
+  // style governs the BACKUP weekends only (his primary shapes {Fri}, {Sat, Sun}, {Fri, Sat, Sun} carry no mismatch).
+  const sf = R.standaloneFriday === true;
+  const STYLE = { block: "prefers one " + wkLabel + " block", split: "prefers a split, Fri+Sun / Sat", daily: "a lone weekend day is fine", "saturday-only": "Saturday only (older setting)" };
+  const wsty = R.weekendStyle;
+  if (wsty) {
+    if (!STYLE[wsty]) wk.push("style " + JSON.stringify(wsty) + " (not a style the scheduler knows)");
+    else if (wsty === "block" || wsty === "split") wk.push(STYLE[wsty] + " (" + (sf ? "backup, " : "") + "soft)");
+    else wk.push(STYLE[wsty] + (sf && wsty === "daily" ? " (backup)" : ""));
+  }
   if (R.standaloneFriday === true) wk.push("a Friday may stand alone (primary)");
   if (R.noLoneWeekendDay === true) wk.push("never a lone Saturday or Sunday (primary)");
   const wc = R.weekendCap;
@@ -4819,11 +4869,14 @@ function suRulesSummary(rules, info) {
     const okCap = suSumObj(wc) && typeof wc.perMonth === "number" && wc.perMonth >= 0 && Math.floor(wc.perMonth) === wc.perMonth
       && Array.isArray(roles) && roles.length && roles.every(r => r === "primary" || r === "backup")
       && Array.isArray(days) && days.length && days.every(d => d === "Fri" || d === "Sat" || d === "Sun")
-      && (wc.countsEast === undefined || typeof wc.countsEast === "boolean");
+      && (wc.countsEast === undefined || typeof wc.countsEast === "boolean")
+      // rules.js drops the whole cap on a weight that is neither a finite number nor a weight name / numeric string
+      && (wc.weight === undefined || (typeof wc.weight === "number" && isFinite(wc.weight)) || (typeof wc.weight === "string" && (Object.prototype.hasOwnProperty.call(Wt, wc.weight) || !isNaN(parseFloat(wc.weight)))));
     if (!okCap) wk.push("a weekend cap that is not well formed (ignored)");
     else wk.push("at most " + suSumPlural(wc.perMonth, "weekend") + " a month" + (roles.length === 1 && roles[0] === "primary" ? "" : " (" + roles.join(" or ") + ")") + (wc.countsEast === true ? ", East weekends included" : "") + (days.length === 2 && days.indexOf("Sat") >= 0 && days.indexOf("Sun") >= 0 ? "" : ", counting " + suSumDays(days)) + " (soft" + (wc.weight === undefined || wc.weight === "strong" ? "" : ", " + suSumWeight(wc.weight)) + ")");
   }
-  if (R.weekendBlockPenalty !== undefined && R.weekendBlockPenalty !== null && R.weekendBlockPenalty !== "") wk.push("blocks and splits discouraged (" + suSumWeight(R.weekendBlockPenalty) + ")");
+  // rules.js applies any value but undefined / null - one it cannot read as a weight ("" included) as medium, with a warning
+  if (R.weekendBlockPenalty !== undefined && R.weekendBlockPenalty !== null) wk.push("blocks and splits discouraged (" + suSumWeight(R.weekendBlockPenalty, Wt) + ")");
   if (wa && !(R.availabilityMode === "whitelist-recurring" || recA.length)) wk.push("weekend availability set (used only with a recurring list)");
   if (R.splitPartner) wk.push("split partner " + (names[R.splitPartner] || R.splitPartner) + " (recorded only)");
   line("Weekends", wk);
@@ -4838,15 +4891,18 @@ function suRulesSummary(rules, info) {
   if (!suSumHas(R, "monthlyCap")) lim.push(dcap !== null ? capWords(dcap) + " (group default)" : "no monthly cap");
   else if (R.monthlyCap === null) lim.push("no monthly cap");
   else if (typeof R.monthlyCap === "number") lim.push(capWords(R.monthlyCap));
-  else if (suSumObj(R.monthlyCap)) {
+  else if (R.monthlyCap && typeof R.monthlyCap === "object") {
     const mc = R.monthlyCap;
     const own = typeof mc.primary === "number" ? mc.primary : typeof mc.total === "number" ? mc.total : null;
     const c = own !== null ? own : dcap;
     lim.push((c !== null ? capWords(c) + (own === null ? " (group default)" : "") : "no hard monthly cap") + (typeof mc.preferred === "number" ? ", " + mc.preferred + " preferred" : "") + (mc.countsEastDays === true || mc.countsEastDays === "distinct-days" ? ", East primary-week days count" : ""));
-  }
+  } else lim.push("a monthly cap that is not a number (invalid - no cap applied)"); // rules.js: a string / boolean cap leaves no cap at all
   const mt = R.monthlyTarget;
+  // generator.js genTargetOverride: a number = the primary target, an object = its numeric roles, anything else = none
+  const mtP = suSumObj(mt) && typeof mt.primary === "number" ? mt.primary : null, mtB = suSumObj(mt) && typeof mt.backup === "number" ? mt.backup : null;
+  if (mt !== undefined && mt !== null && typeof mt !== "number" && mtP === null && mtB === null) lim.push("a monthly target without a number (ignored)");
   if (typeof mt === "number") lim.push("target " + mt + " primary days a month");
-  else if (suSumObj(mt)) lim.push("target " + [typeof mt.primary === "number" ? mt.primary + " primary" : null, typeof mt.backup === "number" ? mt.backup + " backup" : null].filter(Boolean).join(" / ") + " days a month");
+  else if (mtP !== null || mtB !== null) lim.push("target " + [mtP !== null ? mtP + " primary" : null, mtB !== null ? mtB + " backup" : null].filter(Boolean).join(" / ") + " days a month");
   else if (R.poolMember === false) lim.push("no share target");
   else if (!windows.length) lim.push("equal share");
   const dpw = R.daysPerWindowWeek;
@@ -4863,7 +4919,9 @@ function suRulesSummary(rules, info) {
   const ea = [];
   if (ef && !efOn) ea.push("East feed off");
   if (efOn) {
-    ea.push(efBlocks.length ? "East call days block " + efBlocks.join(" and ") + (ef.eastBackupCountsAsBusy === false ? " (East backup weeks do not count)" : " (East backup weeks count)") : "East call days block no role");
+    // east-feed.js (the busy-day derivation): in a week the Davenport group is backup, the surgeon's own shifts count as busy
+    // (never the whole week) unless eastBackupCountsAsBusy is false
+    ea.push(efBlocks.length ? "East call days block " + efBlocks.join(" and ") + (ef.eastBackupCountsAsBusy === false ? " (shifts in East backup weeks do not count)" : " (shifts in East backup weeks count)") : "East call days block no role");
     if (ef.forecast && efBlocks.length) ea.push("the East forecast stands in while Davenport is unpublished");
     if (efDerive) {
       ea.push("Silvis weeks follow East" + (ef.deriveFrom ? " from " + suSumDate(ef.deriveFrom, true) : "") + ": East primary week = Silvis backup, East backup week = Silvis primary");
@@ -4881,28 +4939,32 @@ function suRulesSummary(rules, info) {
   const hr = suSumObj(R.holidayRules) ? R.holidayRules : {};
   const off = (Array.isArray(hr.holidaysOff) ? hr.holidaysOff : []).slice();
   if (hr.neverThanksgiving === true && off.indexOf("Thanksgiving") < 0) off.push("Thanksgiving");
-  if (off.length) ho.push("never covers " + off.join(", "));
+  // rules.js holiday-opt-out is hard for EVERY role on the unit's days; a standing East day blocks the roles the East feed blocks
+  if (off.length) ho.push("never covers " + off.join(", ") + " (primary or backup)");
   const mm = typeof hr.maxMajorHolidays === "number" ? hr.maxMajorHolidays : (suSumObj(R.preferences) && typeof R.preferences.maxMajorHolidays === "number" ? R.preferences.maxMajorHolidays : null);
   if (mm !== null) ho.push("at most " + suSumPlural(mm, "major holiday") + " in 12 months");
-  if (efBlocks.length) standing.filter(e => holNames.indexOf(e.name) >= 0).forEach(e => ho.push("no " + e.name + " " + efBlocks.join(" or ") + " (standing East call)"));
+  if (efBlocks.length) standing.filter(e => holNames.indexOf(e.name) >= 0).forEach(e => ho.push(off.indexOf(e.name) >= 0 ? "the standing East call also rules out " + e.name + " " + efBlocks.join(" and ") : "no " + e.name + " " + efBlocks.join(" or ") + " (standing East call)"));
   line("Holidays", ho);
 
-  // Seed lists: read by the import (availability rows, offers, time off), never by the scheduler itself
-  const sl = [];
-  const monthsOf = (v) => suSumObj(v) ? Object.keys(v) : [];
-  [["explicitAvailable", "available"], ["explicitBackupOnly", "backup only"], ["explicitUnavailable", "unavailable"], ["explicitBackupUnavailable", "no backup"], ["offeredDays", "offered days"]].forEach(([k, w]) => { const m = monthsOf(R[k]); if (m.length) sl.push(w + " " + suSumMonths(m)); });
-  if (Array.isArray(R.timeOff) && R.timeOff.length) sl.push(suSumPlural(R.timeOff.length, "vacation"));
-  if (suSumObj(R.offerSources)) {
-    const tagged = [];
-    let weeks = false;
-    Object.keys(R.offerSources).forEach(k => { if (k === "availableWeeks") weeks = true; else if (!suSumProse(k)) monthsOf(R.offerSources[k]).forEach(m => tagged.push(m)); });
-    const t = [tagged.length ? suSumMonths(tagged) : null, weeks ? "the listed weeks" : null].filter(Boolean);
-    if (t.length) sl.push("offers from " + t.join(" and "));
-  }
-  if (sl.length) line("Seed lists", ["the import turns these into dated rows: " + sl.join(", ")]);
+  // Seed lists: the seed IMPORT (importer.js) reads these from the seed file - the copies here are read by nothing. It
+  // writes availability rows (available / backup only / unavailable / no backup) and the vacations; with offer periods
+  // on (the CLI's setting) the tagged lists' days inside a period become offers - an available list's days INSTEAD of
+  // available rows; offered days are never availability rows (untagged, they are not imported at all).
+  const monthsOf = (v) => suSumObj(v) ? Object.keys(v).filter(k => !suSumProse(k)) : [];
+  const rowsOf = [["explicitAvailable", "available"], ["explicitBackupOnly", "backup only"], ["explicitUnavailable", "unavailable"], ["explicitBackupUnavailable", "no backup"]].map(([k, w]) => { const m = monthsOf(R[k]); return m.length ? w + " " + suSumMonths(m) : null; }).filter(Boolean);
+  const imp = [];
+  if (rowsOf.length) imp.push("availability rows (" + rowsOf.join(", ") + ")");
+  if (Array.isArray(R.timeOff) && R.timeOff.length) imp.push(suSumPlural(R.timeOff.length, "vacation"));
+  const src = suSumObj(R.offerSources) ? R.offerSources : {};
+  const tagAvail = monthsOf(src.explicitAvailable), tagOffered = monthsOf(src.offeredDays);
+  const offerParts = [tagAvail.length ? "the available days of " + suSumMonths(tagAvail) + " become offers instead" : null, tagOffered.length ? "the offered days of " + suSumMonths(tagOffered) + " become offers" : null, suSumHas(src, "availableWeeks") ? "the listed weeks become offers" : null].filter(Boolean);
+  const untagged = monthsOf(R.offeredDays).filter(m => tagOffered.indexOf(m) < 0);
+  const slText = [imp.length ? imp.join(", ") : null, offerParts.length ? "with offer periods on, " + offerParts.join(", ") : null, untagged.length ? "offered days of " + suSumMonths(untagged) + " (not imported - no offer tag)" : null].filter(Boolean);
+  if (slText.length) line("Seed lists", ["read by the seed import, not the scheduler: " + slText.join("; ")]);
 
+  // a key this helper does not know is one rules.js does not read either (SU_SUM_KNOWN lists every key it reads)
   const unknown = suRulesUnknownKeys(R);
-  if (unknown.length) out.push({ family: "Other", text: unknown.map(k => "other: " + k).join("; ") });
+  if (unknown.length) out.push({ family: "Other", text: unknown.join(", ") + " (not read by the engine)" });
   return out;
 }
 
@@ -4911,14 +4973,16 @@ function suRulesSummary(rules, info) {
 // same as no key counts as unused - the key stays in the data untouched), start = what "Add a rule" writes (the value the
 // old checkbox wrote; undefined = the field only appears, nothing is written until it is filled). Removing a rule
 // deletes its paths (an emptied parent object goes too), so it returns to the menu.
+// (review 10/1: the order the task lists them - availability, weekdays and patterns, weekends, limits, East / Davenport,
+// holidays, backup - for the menu and the panel alike)
 const SU_RULE_GROUPS = [
   { id: "availability", label: "Availability" },
   { id: "patterns", label: "Weekdays and patterns" },
   { id: "weekends", label: "Weekends" },
   { id: "limits", label: "Limits" },
-  { id: "backup", label: "Backup" },
   { id: "east", label: "East / Davenport" },
   { id: "holidays", label: "Holidays" },
+  { id: "backup", label: "Backup" },
 ];
 const suRfList = (v) => Array.isArray(v) && v.length > 0;
 const suRfObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -4936,11 +5000,12 @@ const SU_RULE_FIELDS = [
   { id: "outsideDerivedWeeks", group: "patterns", label: "Weekday pattern outside East weeks", paths: ["outsideDerivedWeeks"], used: r => suRfObj(r.outsideDerivedWeeks), start: { canBePrimary: true, weekdayPattern: {} } },
   { id: "aledo", group: "patterns", label: "Clinic days (the day before is blocked)", paths: ["aledo"], used: r => suRfObj(r.aledo), start: { weekdays: [], avoidWholeWeek: "strong", hardAvoidDayBefore: true } },
   { id: "weekendStyle", group: "weekends", label: "Weekend style", paths: ["weekendStyle"], used: r => suRfSet(r.weekendStyle) },
-  { id: "primaryContribution", group: "weekends", label: "Prefers", paths: ["primaryContribution"], used: r => suRfSet(r.primaryContribution) },
+  { id: "primaryContribution", group: "weekends", label: "Prefers weekends or weekdays", paths: ["primaryContribution"], used: r => suRfSet(r.primaryContribution) },
   { id: "standaloneFriday", group: "weekends", label: "A Friday may stand alone", paths: ["standaloneFriday"], used: r => r.standaloneFriday === true, start: true },
   { id: "noLoneWeekendDay", group: "weekends", label: "No lone Saturday or Sunday", paths: ["noLoneWeekendDay"], used: r => r.noLoneWeekendDay === true, start: true },
   { id: "weekendCap", group: "weekends", label: "Weekends per month", paths: ["weekendCap"], used: r => suRfObj(r.weekendCap), start: { perMonth: 2 } },
-  { id: "weekendBlockPenalty", group: "weekends", label: "Discourage multi-day weekends", paths: ["weekendBlockPenalty"], used: r => suRfSet(r.weekendBlockPenalty) },
+  // rules.js applies any value but undefined / null ("" as medium, with a warning) - so "" is in use too
+  { id: "weekendBlockPenalty", group: "weekends", label: "Discourage multi-day weekends", paths: ["weekendBlockPenalty"], used: r => r.weekendBlockPenalty !== undefined && r.weekendBlockPenalty !== null },
   { id: "weekendsAvailable", group: "weekends", label: "Weekends under the recurring list", paths: ["weekendsAvailable"], used: r => !!r.weekendsAvailable, start: { primary: true, backup: true } },
   { id: "splitPartner", group: "weekends", label: "Split partner", paths: ["splitPartner"], used: r => suRfSet(r.splitPartner) },
   { id: "maxConsecutiveDays", group: "limits", label: "Most primary days in a row", paths: ["maxConsecutiveDays"], used: r => typeof r.maxConsecutiveDays === "number" },
@@ -4950,11 +5015,11 @@ const SU_RULE_FIELDS = [
   { id: "monthlyCap", group: "limits", label: "Monthly cap", paths: ["monthlyCap"], used: r => suSumHas(r, "monthlyCap") },
   { id: "preferAlternateDays", group: "limits", label: "Prefers alternate days", paths: ["preferAlternateDays"], used: r => r.preferAlternateDays === true, start: true },
   { id: "handoffPartnerRequired", group: "limits", label: "Flag a missing handoff", paths: ["handoffPartnerRequired"], used: r => r.handoffPartnerRequired === true, start: true },
-  { id: "backupOptOut", group: "backup", label: "Does not take backup", paths: ["backupOptOut"], used: r => r.backupOptOut === true, start: true },
-  { id: "backupCap", group: "backup", label: "Backup caps", paths: ["backupCap"], used: r => suRfObj(r.backupCap) },
   { id: "eastFeed", group: "east", label: "East (Davenport) call", paths: ["eastFeed"], used: r => suRfObj(r.eastFeed), start: { enabled: true } },
   { id: "holidaysOff", group: "holidays", label: "Never covers", paths: ["holidayRules.holidaysOff", "holidayRules.neverThanksgiving"], used: r => suRfObj(r.holidayRules) && (suRfList(r.holidayRules.holidaysOff) || r.holidayRules.neverThanksgiving === true) },
   { id: "maxMajorHolidays", group: "holidays", label: "Most major holidays in 12 months", paths: ["holidayRules.maxMajorHolidays", "preferences.maxMajorHolidays"], used: r => (suRfObj(r.holidayRules) && typeof r.holidayRules.maxMajorHolidays === "number") || (suRfObj(r.preferences) && typeof r.preferences.maxMajorHolidays === "number") },
+  { id: "backupOptOut", group: "backup", label: "Does not take backup", paths: ["backupOptOut"], used: r => r.backupOptOut === true, start: true },
+  { id: "backupCap", group: "backup", label: "Backup caps", paths: ["backupCap"], used: r => suRfObj(r.backupCap) },
 ];
 // Known keys with no form field: shown in plain words under the fields, edited as JSON (Advanced).
 const SU_RULE_JSON_ONLY = [
@@ -4993,6 +5058,66 @@ function suRuleFieldRemove(field, rules) {
     for (let i = chain.length - 1; i > 0; i--) { if (Object.keys(chain[i]).length) break; delete chain[i - 1][parts[i - 1]]; }
   });
   return n;
+}
+// Review 10/1: what Remove would delete beyond the field's start value, in plain words - [] when the field holds nothing
+// more than what Add writes (or nothing at all), so Remove asks first only when data would go (an East rule holds the
+// stated weeks that derive locked East weeks; a recurring list, clinic days, listed weeks the field may not show whole).
+// Sub-keys read through SU_RULE_KEY_WORDS (a key not in it: its camel case spelled out); prose keys read "notes".
+const SU_RULE_KEY_WORDS = {
+  hardNeverWeekdaysRoles: "applies to", hardNeverWeekdaysNoticeDays: "hard only within (days)", availableWeeksFrom: "weeks govern from",
+  "holidayRules.neverThanksgiving": "Thanksgiving off", "preferences.maxMajorHolidays": "most major holidays (older place)",
+  allowed: "weekdays allowed", autoOffer: "others go first", enabled: "applies", eastBlocksPrimary: "East call days block primary",
+  eastBlocksBackup: "East call days block backup", eastBackupCountsAsBusy: "East backup weeks count", forecast: "uses the forecast",
+  deriveFrom: "derive Silvis weeks from", statedWeeks: "stated weeks", eastPrimary: "stated East primary weeks", eastBackup: "stated East backup weeks",
+  weekdayPattern: "weekday pattern", canBePrimary: "can be primary", weekdays: "clinic days", avoidWholeWeek: "avoid the clinic week",
+  hardAvoidDayBefore: "the day before is blocked", perMonth: "weekends per month", countsEast: "East weekends count", roles: "counts",
+  days: "counted days", weight: "weight", target: "target", countsBackup: "backup days count", min: "old min", max: "old max",
+  minIsSoft: "old min is soft", primary: "primary", backup: "backup", total: "total (older name)", preferred: "preferred at most",
+  countsEastDays: "East primary-week days count", perMonthDays: "backup days per month", weekendsPerMonth: "backup weekends per month",
+};
+function suRuleKeyWords(k) { return SU_RULE_KEY_WORDS[k] || String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase(); }
+function suRuleCanon(v) { return JSON.stringify(v, (k, x) => suRfObj(x) ? Object.keys(x).sort().reduce((o, kk) => { o[kk] = x[kk]; return o; }, {}) : x); }
+function suRuleFieldHeld(field, rules) {
+  if (!field || !suRfObj(rules)) return [];
+  const out = [];
+  let notes = false;
+  const val = (label, s) => label ? label + (s === "" ? "" : " " + s) : s;
+  const walk = (label, v, sv, depth) => {
+    if (v === undefined || suRuleCanon(v) === suRuleCanon(sv)) return;
+    if (Array.isArray(v)) {
+      if (!v.length) return;
+      if (v.every(suIsIso)) out.push(val(label, v.length <= 3 ? v.map(d => suSumDate(d, true)).join(", ") : v.length + " dates"));
+      else if (v.every(x => typeof x === "string")) out.push(val(label, suSumDays(v)));
+      else if (v.every(suRfObj)) out.push(val(label, v.length <= 2 ? v.map(suSumPattern).join(", ") : v.length + " entries"));
+      else out.push(val(label, v.length + " entries"));
+      return;
+    }
+    if (suRfObj(v)) {
+      const keys = Object.keys(v);
+      if (depth >= 1 && keys.length && keys.every(k => suRfObj(v[k]))) { out.push(val(label, "for " + suSumDays(keys))); return; } // a per-weekday table
+      keys.forEach(k => { if (suSumProse(k)) { if (v[k] !== "" && v[k] !== null && v[k] !== undefined) notes = true; return; } walk(suRuleKeyWords(k), v[k], suRfObj(sv) ? sv[k] : undefined, depth + 1); });
+      return;
+    }
+    if (v === null) out.push(val(label, "none"));
+    else if (typeof v === "boolean") out.push(label ? label + (v ? "" : ": off") : (v ? "on" : "off"));
+    else if (suIsIso(v)) out.push(val(label, suSumDate(v, true)));
+    else out.push(val(label, String(v)));
+  };
+  field.paths.forEach((p, i) => {
+    if (!suRulePathHas(rules, p)) return;
+    let v = rules;
+    p.split(".").forEach(k => { v = v[k]; });
+    walk(i === 0 ? "" : suRuleKeyWords(p), v, i === 0 ? field.start : undefined, 0);
+  });
+  if (notes) out.push("notes");
+  return out;
+}
+// The confirm text Remove shows, or null when nothing beyond the start value would be deleted (no question asked).
+function suRuleRemoveConfirm(field, rules, who) {
+  const held = suRuleFieldHeld(field, rules);
+  if (!held.length) return null;
+  const shown = held.length > 8 ? held.slice(0, 8).concat(["and " + (held.length - 8) + " more"]) : held;
+  return "Remove the rule \"" + field.label + "\"" + (who ? " for " + who : "") + "? This deletes: " + shown.join("; ") + ".";
 }
 function suRulesJsonOnly(rules) {
   const r = suRfObj(rules) ? rules : {};
@@ -5712,8 +5837,9 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
-    suRulesSummary, suRulesUnknownKeys, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN,
+    suRulesSummary, suRulesUnknownKeys, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,
+    suRuleFieldHeld, suRuleRemoveConfirm,
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
     offerFreezeRollcall, offerFreezeWords, offerFreezeDay, offerHeadsUpWords,
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,

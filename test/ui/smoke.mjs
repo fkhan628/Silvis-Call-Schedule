@@ -4934,9 +4934,11 @@ try {
   // Prompt 24 (moved deliberately 10/1): Setup > Rules shows only the rules a surgeon uses (helpers SU_RULE_FIELDS), so a step
   // that needs a field the picked surgeon does not use adds it from the "Add a rule" menu first. Adding a field without a start
   // value (Monthly target, Backup caps, ...) writes nothing - the field only appears; true = it was added.
+  // Review fixes 10/1 (moved deliberately): the menu select only chooses; the Add button (rules-add-button) adds.
   const ensureRuleField = async (pg, fieldId) => {
     if (await pg.$(`[data-testid=rules-field-${fieldId}]`)) return false;
     await pg.selectOption("[data-testid=rules-add]", fieldId);
+    await pg.click("[data-testid=rules-add-button]");
     await pg.waitForSelector(`[data-testid=rules-field-${fieldId}]`, { timeout: 3000 });
     return true;
   };
@@ -7554,21 +7556,78 @@ try {
         else if (JSON.stringify(st0.fields) !== JSON.stringify(wantFields)) fail(`${P24}: the fields should be the ones Acton uses (${wantFields.join(", ")}), got ${st0.fields.join(", ")}`);
         else if (st0.menu.some(id => wantFields.includes(id)) || st0.menu.length + wantFields.length !== HELPERS.SU_RULE_FIELDS.length) fail(`${P24}: the Add a rule menu should list exactly the unused fields, got ${st0.menu.join(", ")}`);
         else ok(`${P24}: Acton's summary (${st0.lines.length} lines: ${st0.lines.map(l => l.split(":")[0]).join(", ")}) and his ${st0.fields.length} fields equal the helpers over the shown rules; the menu lists the other ${st0.menu.length}`);
+        // review fixes 10/1 (a11y): a field's label is a <label> tied to its control; each Remove names its rule
+        const a11y = await page.evaluate(() => {
+          const el = document.querySelector("[data-testid=rules-max-consec-any]");
+          const lab = el && el.labels && el.labels.length ? el.labels[0].textContent : null;
+          const unlabelled = Array.from(document.querySelectorAll("[data-testid=rules-editor] .rules-field input[type=number], [data-testid=rules-editor] .rules-field select")).filter(c => !(c.labels && c.labels.length) && !c.getAttribute("aria-label") && !c.closest("table")).map(c => c.getAttribute("data-testid") || c.outerHTML.slice(0, 60));
+          const removes = Array.from(document.querySelectorAll("[data-testid^=rules-remove-]")).map(b => b.getAttribute("aria-label"));
+          return { lab, unlabelled, removes };
+        });
+        const wantRemoves = st0.fields.map(id => "Remove rule: " + HELPERS.suRuleField(id).label);
+        if (a11y.lab !== "Most days in a row, any role" || a11y.unlabelled.length) fail(`${P24}: every rule field's number input / select should carry a label (the any-role run's reads '${a11y.lab}'; unlabelled: ${a11y.unlabelled.join(", ")})`);
+        else if (JSON.stringify(a11y.removes) !== JSON.stringify(wantRemoves)) fail(`${P24}: each Remove should carry aria-label 'Remove rule: <field>' - got ${JSON.stringify(a11y.removes)}`);
+        else ok(`${P24}: every rule field's number input / select has its <label> (e.g. '${a11y.lab}'); each Remove reads 'Remove rule: <field>' (${a11y.removes.length})`);
+        // (c0) review fixes 10/1: the menu select only chooses - arrowing through it on the keyboard adds nothing (it used to
+        // add a rule per ArrowDown); the Add button is disabled until a rule is chosen
+        await page.focus("[data-testid=rules-add]");
+        for (let k = 0; k < 4; k++) { await page.keyboard.press("ArrowDown"); await page.waitForTimeout(80); }
+        const stK = await pageState();
+        const addDisabledIdle = await (async () => { await page.selectOption("[data-testid=rules-add]", ""); await page.waitForTimeout(80); return page.$eval("[data-testid=rules-add-button]", el => el.disabled); })();
+        if (JSON.stringify(stK.fields) !== JSON.stringify(st0.fields) || stK.status !== "Saved" || JSON.stringify(stK.lines) !== JSON.stringify(st0.lines)) fail(`${P24}: arrowing through the Add menu must add nothing - fields ${stK.fields.join(", ")}, status ${stK.status}`);
+        else if (!addDisabledIdle) fail(`${P24}: the Add button should be disabled while no rule is chosen`);
+        else ok(`${P24}: four ArrowDowns on the focused Add menu add no rule (fields, summary and Saved unchanged); Add is disabled until a rule is chosen`);
         // (c) add a rule from the menu and remove it again
         const addId = ["standaloneFriday", "noLoneWeekendDay", "handoffPartnerRequired"].find(id => st0.menu.includes(id) && !HELPERS.suRuleFieldHasKeys(HELPERS.suRuleField(id), orig));
         if (!addId) console.log(`     (${P24}: no key-free check rule in the menu - the add / remove leg is skipped this run)`);
         else {
           await page.selectOption("[data-testid=rules-add]", addId);
+          await page.click("[data-testid=rules-add-button]");
           await page.waitForSelector(`[data-testid=rules-field-${addId}]`, { timeout: 3000 });
           const stA = await pageState();
           const checked = await page.$eval(`[data-testid=rules-field-${addId}] input[type=checkbox]`, el => el.checked);
+          const startDialogs = [];
+          const onStartDlg = (d) => { startDialogs.push(d.message()); d.dismiss().catch(() => {}); };
+          page.on("dialog", onStartDlg);
           await page.click(`[data-testid=rules-remove-${addId}]`);
-          await page.waitForSelector(`[data-testid=rules-field-${addId}]`, { state: "detached", timeout: 3000 });
+          await page.waitForSelector(`[data-testid=rules-field-${addId}]`, { state: "detached", timeout: 3000 }).catch(() => {});
+          page.off("dialog", onStartDlg);
           const stR = await pageState();
           const addedLine = JSON.stringify(sumOf(HELPERS.suRuleFieldAdd(HELPERS.suRuleField(addId), orig)));
           if (!checked || stA.menu.includes(addId) || stA.status !== "Unsaved" || JSON.stringify(stA.lines) !== addedLine) fail(`${P24}: adding '${addId}' should show its field ticked, leave the menu, mark Unsaved and show in the summary - checked ${checked}, status ${stA.status}, lines ${JSON.stringify(stA.lines)}`);
+          else if (startDialogs.length) fail(`${P24}: removing '${addId}' at its start value must not ask - it asked ${JSON.stringify(startDialogs)}`);
           else if (!stR.menu.includes(addId) || JSON.stringify(stR.lines) !== JSON.stringify(st0.lines) || JSON.stringify(stR.fields) !== JSON.stringify(st0.fields)) fail(`${P24}: removing '${addId}' should return it to the menu and the summary / fields to where they were - menu ${stR.menu.includes(addId)}, lines ${JSON.stringify(stR.lines)}`);
-          else ok(`${P24}: '${addId}' added from the menu (field ticked, summary says so, Unsaved) and removed again (back in the menu, summary and fields as before)`);
+          else ok(`${P24}: '${addId}' added from the menu (field ticked, summary says so, Unsaved) and removed again with no question (its start value - back in the menu, summary and fields as before)`);
+        }
+        // (c2) review fixes 10/1: removing a rule that holds data asks first, naming what goes (helpers.suRuleRemoveConfirm);
+        // dismiss -> nothing removed, accept -> removed, Revert -> back. A field (d) does not edit, picked from the data.
+        const rmId = ["recurringAvoid", "monthlyCap", "maxConsecutiveDays"].find(id => wantFields.includes(id) && HELPERS.suRuleRemoveConfirm(HELPERS.suRuleField(id), orig, "x"));
+        const rmMsgWant = rmId ? HELPERS.suRuleRemoveConfirm(HELPERS.suRuleField(rmId), orig, p24Names.s3 || "s3") : null;
+        if (!rmId) console.log(`     (${P24}: Acton holds no data in a removable check field - the confirm leg is skipped this run)`);
+        else {
+          const stPre = await pageState(); // (c)'s add + remove leaves the draft equal to the rules but marked Unsaved
+          const dlg = [];
+          const onDismiss = (d) => { dlg.push(d.message()); d.dismiss().catch(() => {}); };
+          page.on("dialog", onDismiss);
+          await page.click(`[data-testid=rules-remove-${rmId}]`);
+          await page.waitForTimeout(250);
+          page.off("dialog", onDismiss);
+          const stD = await pageState();
+          const onAccept = (d) => { dlg.push(d.message()); d.accept().catch(() => {}); };
+          page.on("dialog", onAccept);
+          await page.click(`[data-testid=rules-remove-${rmId}]`);
+          await page.waitForSelector(`[data-testid=rules-field-${rmId}]`, { state: "detached", timeout: 3000 }).catch(() => {});
+          page.off("dialog", onAccept);
+          const stAc = await pageState();
+          if (await page.$("[data-testid=rules-revert]")) await page.click("[data-testid=rules-revert]");
+          await page.waitForSelector(`[data-testid=rules-field-${rmId}]`, { timeout: 3000 }).catch(() => {});
+          const stRv = await pageState();
+          const afterRm = JSON.stringify(sumOf(HELPERS.suRuleFieldRemove(HELPERS.suRuleField(rmId), orig)));
+          if (dlg.length !== 2 || dlg.some(m => m !== rmMsgWant)) fail(`${P24}: removing '${rmId}' (it holds data) should ask twice with '${rmMsgWant}', asked ${JSON.stringify(dlg)}`);
+          else if (JSON.stringify(stD.fields) !== JSON.stringify(st0.fields) || stD.status !== stPre.status || JSON.stringify(stD.lines) !== JSON.stringify(st0.lines)) fail(`${P24}: a dismissed Remove of '${rmId}' must remove nothing - fields ${stD.fields.join(", ")}, status ${stD.status} (was ${stPre.status})`);
+          else if (stAc.fields.includes(rmId) || stAc.status !== "Unsaved" || JSON.stringify(stAc.lines) !== afterRm) fail(`${P24}: an accepted Remove of '${rmId}' should remove it (Unsaved, summary without it) - fields ${stAc.fields.join(", ")}, status ${stAc.status}, lines ${JSON.stringify(stAc.lines)}`);
+          else if (JSON.stringify(stRv.fields) !== JSON.stringify(st0.fields) || stRv.status !== "Saved" || JSON.stringify(stRv.lines) !== JSON.stringify(st0.lines)) fail(`${P24}: Revert after removing '${rmId}' should bring it back - fields ${stRv.fields.join(", ")}, status ${stRv.status}`);
+          else ok(`${P24}: Remove '${rmId}' (it holds data) asks '${rmMsgWant.slice(0, 120)}${rmMsgWant.length > 120 ? "..." : ""}' - dismissed: nothing removed; accepted: removed (Unsaved, summary without it); Revert: back`);
         }
         // (d) one edit per group, then Save
         const modeNew = orig.availabilityMode === "whitelist-weeks" ? "blacklist-recurring" : "whitelist-weeks";
@@ -7591,11 +7650,21 @@ try {
         if (!(await page.isChecked("[data-testid=rules-east-forecast]"))) await page.check("[data-testid=rules-east-forecast]"); // East / Davenport
         await ensureRuleField(page, "holidaysOff");
         await page.locator("[data-testid=rules-field-holidaysOff] label", { hasText: "Christmas" }).locator("input").click(); // holidays
-        const exp = JSON.parse(JSON.stringify(orig));
+        // review fixes 10/1: a pattern bound (the from / until inputs) set on the first recurring day off, and the data-holding
+        // rule of (c2) removed with the confirm accepted - both must reach the PATCH
+        const bRow = Array.isArray(orig.recurringUnavailable) && orig.recurringUnavailable.length ? orig.recurringUnavailable[0] : null;
+        const bKey = bRow ? (!bRow.start ? "start" : !bRow.end ? "end" : "start") : null;
+        const bVal = bKey === "end" ? "2027-12-31" : "2026-10-01";
+        if (bRow) await page.fill(`[data-testid=rules-field-recurringUnavailable] [data-testid=pattern-${bKey}] >> nth=0`, bVal);
+        else console.log(`     (${P24}: Acton has no recurring day off - the pattern bound leg is skipped this run)`);
+        if (rmId) { const onAcc = (d) => d.accept().catch(() => {}); page.on("dialog", onAcc); await page.click(`[data-testid=rules-remove-${rmId}]`); await page.waitForSelector(`[data-testid=rules-field-${rmId}]`, { state: "detached", timeout: 3000 }).catch(() => {}); page.off("dialog", onAcc); }
+        let exp = JSON.parse(JSON.stringify(orig));
         exp.availabilityMode = modeNew; exp.hardNeverWeekdaysNoticeDays = 56; exp.weekendStyle = wsNew; exp.maxConsecutiveAnyRole = mcaNew;
         exp.backupCap = Object.assign({}, orig.backupCap || {}, { perMonthDays: 6 });
         exp.eastFeed = Object.assign({}, orig.eastFeed || {}, { enabled: true, forecast: true });
         exp.holidayRules = Object.assign({}, orig.holidayRules || {}, { holidaysOff: holNew });
+        if (bRow) exp.recurringUnavailable[0][bKey] = bVal;
+        if (rmId) exp = HELPERS.suRuleFieldRemove(HELPERS.suRuleField(rmId), exp);
         const expSaved = savedDerived(exp);
         let before = writes.length, hit = null;
         for (let attempt = 1; attempt <= 2 && !hit; attempt++) {
@@ -7605,7 +7674,7 @@ try {
         }
         const lastS3 = (blobPatches(before).pop() && s3Of(blobPatches(before).pop())) || null;
         if (!hit) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 = the shown rules + the seven edits${addId ? " (and no " + addId + ")" : ""}: want ${canon(expSaved).slice(0, 600)} - last write ${canon(lastS3).slice(0, 600)}`);
-        else ok(`${P24}: Save -> PATCH call_schedule_data with surgeonRules.s3 = the shown rules + one edit per group (availabilityMode ${modeNew}, hardNeverWeekdaysNoticeDays 56, weekendStyle ${wsNew}, maxConsecutiveAnyRole ${mcaNew}, backupCap.perMonthDays 6${bcAdded ? " (added from the menu)" : ""}, eastFeed { enabled, forecast }${efAdded ? " (added from the menu)" : ""}, holidaysOff ${JSON.stringify(holNew)}) and nothing else`);
+        else ok(`${P24}: Save -> PATCH call_schedule_data with surgeonRules.s3 = the shown rules + one edit per group (availabilityMode ${modeNew}, hardNeverWeekdaysNoticeDays 56, weekendStyle ${wsNew}, maxConsecutiveAnyRole ${mcaNew}, backupCap.perMonthDays 6${bcAdded ? " (added from the menu)" : ""}, eastFeed { enabled, forecast }${efAdded ? " (added from the menu)" : ""}, holidaysOff ${JSON.stringify(holNew)})${bRow ? ", the first recurring day off's " + (bKey === "start" ? "from" : "until") + " bound " + bVal : ""}${rmId ? ", '" + rmId + "' removed (confirm accepted)" : ""} and nothing else`);
         // (e) read back after a re-pick (the field set is re-read from the saved rules)
         await page.click("[data-testid=rules-pick-s1]");
         await page.waitForTimeout(200);
@@ -7616,11 +7685,31 @@ try {
           const xmas = Array.from(document.querySelectorAll("[data-testid=rules-field-holidaysOff] label")).find(l => /Christmas/.test(l.textContent));
           return { mode: v("rules-avail-mode"), notice: v("rules-hard-never-notice"), ws: v("rules-weekend-style"), mca: v("rules-max-consec-any"), bc: v("rules-backup-cap-days"), ef: v("rules-east-enabled"), fc: v("rules-east-forecast"), xmas: xmas ? xmas.querySelector("input").checked : null };
         });
+        if (bRow) rb.bound = await page.inputValue(`[data-testid=rules-field-recurringUnavailable] [data-testid=pattern-${bKey}] >> nth=0`).catch(() => null);
+        if (rmId) rb.removedGone = !(await page.$(`[data-testid=rules-field-${rmId}]`));
         const stB = await pageState();
         const rbWant = { mode: modeNew, notice: "56", ws: wsNew, mca: String(mcaNew), bc: "6", ef: true, fc: true, xmas: holNew.includes("Christmas") };
+        if (bRow) rbWant.bound = bVal;
+        if (rmId) rbWant.removedGone = true;
         if (canon(rb) !== canon(rbWant)) fail(`${P24}: read back after a re-pick - want ${canon(rbWant)}, got ${canon(rb)}`);
         else if (JSON.stringify(stB.lines) !== JSON.stringify(sumOf(expSaved))) fail(`${P24}: the summary after the save should read the saved rules - want ${JSON.stringify(sumOf(expSaved))}, got ${JSON.stringify(stB.lines)}`);
-        else ok(`${P24}: a re-pick reads every edited value back (${Object.keys(rbWant).length} fields) and the summary reads the saved rules (e.g. '${stB.lines.find(l => l.startsWith("Backup"))}')`);
+        else ok(`${P24}: a re-pick reads every edited value back (${Object.keys(rbWant).length} fields${bRow ? ", the pattern bound" : ""}${rmId ? ", the removed rule gone" : ""}) and the summary reads the saved rules (e.g. '${stB.lines.find(l => l.startsWith("Backup"))}')`);
+        // (e2) review fixes 10/1: clearing a pattern bound deletes its key (read through the JSON editor), then Revert
+        if (bRow) {
+          await page.fill(`[data-testid=rules-field-recurringUnavailable] [data-testid=pattern-${bKey}] >> nth=0`, "");
+          if ((await page.getAttribute("[data-testid=rules-advanced]", "data-open")) !== "1") await page.click("[data-testid=rules-advanced-toggle]");
+          if (!(await page.$("[data-testid=rules-raw]"))) await page.click("[data-testid=rules-raw-toggle]");
+          const cleared = JSON.parse(await page.inputValue("[data-testid=rules-raw]"));
+          await page.click("[data-testid=rules-raw-toggle]");
+          await page.click("[data-testid=rules-advanced-toggle]");
+          const row0 = (cleared.recurringUnavailable || [])[0] || {};
+          const wantRow0 = Object.assign({}, expSaved.recurringUnavailable[0]); delete wantRow0[bKey];
+          if (await page.$("[data-testid=rules-revert]")) await page.click("[data-testid=rules-revert]");
+          const backTo = await page.inputValue(`[data-testid=rules-field-recurringUnavailable] [data-testid=pattern-${bKey}] >> nth=0`).catch(() => null);
+          if (Object.prototype.hasOwnProperty.call(row0, bKey) || canon(row0) !== canon(wantRow0)) fail(`${P24}: clearing the ${bKey === "start" ? "from" : "until"} bound should delete the key and keep the rest of the pattern - got ${canon(row0)}, want ${canon(wantRow0)}`);
+          else if (backTo !== bVal) fail(`${P24}: Revert after clearing the bound should show the saved ${bVal} again, shows '${backTo}'`);
+          else ok(`${P24}: clearing the ${bKey === "start" ? "from" : "until"} bound deletes the key (the rest of the pattern kept: ${canon(row0)}); Revert shows the saved ${bVal} again`);
+        }
       } catch (e) { fail(`${P24}: ` + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-p24-rules.png"), fullPage: true }); } catch (e2) {} }
       // (f) the per-surgeon JSON editor puts the original back: Apply shows it in the form, Save writes it unchanged
       if (orig) {

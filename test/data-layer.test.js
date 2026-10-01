@@ -7589,55 +7589,55 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       eastStanding: [{ name: "Christmas", days: ["12-24", "12-25"], note: "standing Davenport rule" }],
       monthlyTarget: null, monthlyCap: null, hardNeverWeekdaysRoles: ["primary"],
     };
+    // Review fixes 10/1 (expectations moved deliberately, after the helper fixes): the branch now carries Prompt 23 and 25
+    // (merge 2afa13e), so the seed variants are gone - s1 is Khan with Prompt 23's keys AND holidayRules.holidaysOff
+    // ["Christmas"] (rules.js holiday-opt-out refuses both roles on the unit; the standing East call blocks Christmas primary
+    // besides), s3 is Acton with the 2027 bounds. B2: each day-limiting rule on its own; B3: beyond the notice a far Tue/Thu
+    // is allowed with a soft term (net 0 against his weekday bonus) and "others first" goes - under "weekdays" his
+    // weekday bonus (3) outweighs the allowed-weekday term (1); S1: the style words are soft, his style governs backup only
+    // under standaloneFriday, "daily" = a lone weekend day carries no style penalty; the seed lists are worded as the seed
+    // import writes them; the shifts (never the whole week) of an East backup week count.
     const P23_S1_LINES = [
-      "Primary: Mon/Wed (others first on equal terms) and Fri-Sun; never Tue/Thu within 8 weeks (later only as a last resort); not on East call days; prefers weekdays (Mon-Thu or a Friday on its own).",
+      "Primary: Mon/Wed and Fri-Sun; never Tue/Thu within 8 weeks (further out allowed, soft); not on East call days; prefers weekdays - Mon-Thu or a Friday on its own (soft).",
       "Backup: Any day.",
-      "Weekends: One Fri-Sun block; a Friday may stand alone (primary); never a lone Saturday or Sunday (primary); at most 2 weekends a month, East weekends included (soft).",
+      "Weekends: Prefers one Fri-Sun block (backup, soft); a Friday may stand alone (primary); never a lone Saturday or Sunday (primary); at most 2 weekends a month, East weekends included (soft).",
       "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); no monthly cap; equal share.",
-      "East / Davenport: East call days block primary (East backup weeks count); the East forecast stands in while Davenport is unpublished; on East call every year: Christmas (12/24, 12/25).",
+      "East / Davenport: East call days block primary (shifts in East backup weeks count); the East forecast stands in while Davenport is unpublished; on East call every year: Christmas (12/24, 12/25).",
       "Holidays: No Christmas primary (standing East call).",
     ];
-    // Per seed surgeon, verbatim. s1 and s3 carry a second reading for the Prompt 23 seed (Khan's new keys; Acton's 2027
-    // outreach patterns with start / end) so the suite holds on either seed; the variant is chosen by the DATA.
+    // Per seed surgeon, verbatim.
     const SEED_LINES = {
-      s1: [
-        "Primary: Mon/Wed (others first on equal terms) and Fri-Sun; never Tue/Thu; not on East call days; prefers full Fri-Sun blocks (weekend backup last).",
-        "Backup: Any day.",
-        "Weekends: One Fri-Sun block.",
-        "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); no monthly cap; equal share.",
-        "East / Davenport: East call days block primary (East backup weeks count); the East forecast stands in while Davenport is unpublished; on East call every year: Christmas (12/24, 12/25).",
-        "Holidays: No Christmas primary (standing East call).",
-      ],
+      s1: P23_S1_LINES.slice(0, 5).concat(["Holidays: Never covers Christmas (primary or backup); the standing East call also rules out Christmas primary."]),
       s2: [
         "Availability: Only the listed days in Oct 2026 (primary), Nov-Dec 2026 (both roles).",
         "Primary: Only the 2nd/4th Mon, the 1st Tue, the 2nd/4th Wed and Fri-Sun.",
         "Backup: Only the listed days in Nov-Dec 2026.",
-        "Weekends: Split (Fri+Sun / Sat).",
+        "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
         "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 8 primary days a month, 7 preferred; equal share.",
-        "Seed lists: The import turns these into dated rows: available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026, 5 vacations, offers from Nov-Dec 2026.",
+        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 5 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
       ],
       s3: [
         "Availability: Only the listed days in Oct 2026 (primary).",
-        "Primary: Any day; never Tue, the 2nd/4th Mon, the 2nd/4th Wed; avoids the Sun before the 2nd/4th Mon (medium).",
+        "Primary: Any day; never Tue, the 2nd/4th Mon until 12/31/2026, the 2nd Mon from 1/1/2027, the 2nd/4th Wed, the 3rd Wed from 1/1/2027; avoids the Sun before the 2nd/4th Mon until 12/31/2026 (medium), the Sun before the 2nd Mon from 1/1/2027 (medium).",
         "Backup: Any day.",
-        "Weekends: Split (Fri+Sun / Sat).",
+        "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
         "Limits: At most 3 primary days in a row, 4 in any role (soft); no monthly cap; equal share.",
-        "Holidays: Never covers Thanksgiving.",
-        "Seed lists: The import turns these into dated rows: available Oct 2026, offered days Nov 2026, 2 vacations, offers from Nov 2026.",
+        "Holidays: Never covers Thanksgiving (primary or backup).",
+        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026), 2 vacations; with offer periods on, the offered days of Nov 2026 become offers.",
       ],
       s4: [
         "Availability: Primary only in 19 listed weeks, 11/9/2026 to the week of 6/28/2027 (from Nov 2026; none after); only the listed days in Oct 2026 (primary).",
         "Primary: Only in the listed weeks; not the day before a clinic day (the 1st/3rd Wed, the Fri in the week of the 3rd Wed); avoids clinic weeks (strong).",
         "Backup: Any day; at most 7 days and 1 weekend a month.",
-        "Weekends: One Fri-Sun block.",
+        "Weekends: Prefers one Fri-Sun block (soft).",
         "Limits: At most 4 primary days in a row, 4 in any role (soft); cap 8 primary days a month (group default); equal share.",
         "Holidays: At most 1 major holiday in 12 months.",
-        "Seed lists: The import turns these into dated rows: available Oct 2026, no backup Oct 2026, 1 vacation, offers from the listed weeks.",
+        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026), 1 vacation; with offer periods on, the listed weeks become offers.",
       ],
       s5: [
         "Primary: Outside East weeks: Wed (preferred), Fri-Sun only as one block, not Mon/Tue/Thu.",
         "Backup: Any day.",
-        "Weekends: One Fri-Sun block.",
+        "Weekends: Prefers one Fri-Sun block (soft).",
         "Limits: At most 7 primary days in a row, 7 in any role (soft); cap 14 primary days a month, East primary-week days count; equal share.",
         "East / Davenport: East call days block no role; Silvis weeks follow East from 11/2/2026: East primary week = Silvis backup, East backup week = Silvis primary; stated weeks: East primary 11/9; East backup 10/12, 12/7.",
       ],
@@ -7645,22 +7645,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Availability: Only inside 4 date windows, both roles: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15.",
         "Primary: Only inside the date windows.",
         "Backup: Only inside the date windows.",
-        "Weekends: Single days; blocks and splits discouraged (strong).",
+        "Weekends: A lone weekend day is fine; blocks and splits discouraged (strong).",
         "Limits: At most 2 primary days in a row, 2 in any role (soft); cap 8 primary days a month (group default); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
       ],
     };
-    const P23_SEED_S3_PRIMARY = "Primary: Any day; never Tue, the 2nd/4th Mon until 12/31/2026, the 2nd Mon from 1/1/2027, the 2nd/4th Wed, the 3rd Wed from 1/1/2027; avoids the Sun before the 2nd/4th Mon until 12/31/2026 (medium), the Sun before the 2nd Mon from 1/1/2027 (medium).";
-    const expectFor = (id) => {
-      const r = seed.surgeonRules[id];
-      if (id === "s1" && r.standaloneFriday === true) return P23_S1_LINES;
-      if (id === "s3" && (r.recurringUnavailable || []).some(p => p && (p.start || p.end))) return SEED_LINES.s3.map(l => l.startsWith("Primary: ") ? P23_SEED_S3_PRIMARY : l);
-      return SEED_LINES[id];
-    };
-    check("P24 summary: one line per family for every seed surgeon, verbatim (the engine's reading of each key, defaults included; s1 / s3 read the Prompt 23 seed when it is in)", () => {
+    const expectFor = (id) => SEED_LINES[id];
+    check("P24 summary: one line per family for every seed surgeon, verbatim (the engine's reading of each key, defaults included; the merged seed - Prompt 23's keys and Khan's Christmas opt-out)", () => {
       assert.deepStrictEqual(Object.keys(seed.surgeonRules).sort(), ["s1", "s2", "s3", "s4", "s5", "s6"]);
       for (const id of Object.keys(seed.surgeonRules)) assert.deepStrictEqual(lines(seed.surgeonRules[id]), expectFor(id), id);
     });
-    check("P24 summary: Prompt 23's keys in plain words - weekdays preferred, the 56-day notice (8 weeks, later a last resort), a lone Friday, no lone Sat / Sun, at most 2 weekends a month with East", () => {
+    check("P24 summary: Prompt 23's keys in plain words - weekdays preferred (no 'others first' - his weekday bonus outweighs it), the 56-day notice (8 weeks, further out allowed with a soft term), a lone Friday, no lone Sat / Sun, his block style for backup only, at most 2 weekends a month with East", () => {
       assert.deepStrictEqual(lines(P23_S1), P23_S1_LINES);
       const fam = H.suRulesSummary(P23_S1, info).map(l => l.family);
       assert.deepStrictEqual(fam, ["Primary", "Backup", "Weekends", "Limits", "East / Davenport", "Holidays"], "families in display order, each once");
@@ -7674,12 +7668,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(block.length > 2000, "the helper block could not be sliced");
       for (const n of ["Khan", "Burchett", "Acton", "Philip", "Fierce", "Sarkar", "\"s1\"", "\"s3\""]) assert.ok(!block.includes(n), "helpers.js Prompt 24 block names " + n);
     });
-    check("P24 summary: an unknown key - top level or inside an object the helper reads - is listed as 'other: <key>'; prose keys (note, notes, rule, source, *Note) are skipped; every seed key is known", () => {
+    check("P24 summary: an unknown key - top level or inside an object the helper reads - is listed on the Other line as not read by the engine (every key rules.js reads is one the helper knows); prose keys (note, notes, rule, source, *Note) are skipped; every seed key is known", () => {
       const r = { maxConsecutiveDays: 3, weekendsInPool: true, foo: 1, fooNote: "x", notes: ["y"], eastFeed: { enabled: true, eastBlocksPrimary: true, liveVerifiedWeeks: [], rule: "prose" }, holidayRules: { holidaysOff: ["Christmas"], christmasOrNewYearOk: true }, preferences: { noFullWeek: true }, weekendCap: { perMonth: 1, bogus: 2 } };
       const out = H.suRulesSummary(r, info);
       const otherLine = out.find(l => l.family === "Other");
       assert.ok(otherLine, "no Other line: " + JSON.stringify(out));
-      assert.strictEqual(otherLine.text, "other: weekendsInPool; other: foo; other: eastFeed.liveVerifiedWeeks; other: holidayRules.christmasOrNewYearOk; other: preferences.noFullWeek; other: weekendCap.bogus");
+      assert.strictEqual(otherLine.text, "weekendsInPool, foo, eastFeed.liveVerifiedWeeks, holidayRules.christmasOrNewYearOk, preferences.noFullWeek, weekendCap.bogus (not read by the engine)", "review 10/1: no doubled 'Other: other:'");
+      // "not read by the engine" holds only while every surgeonRules key rules.js / generator.js read is a key the helper knows
+      const RSRC = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8"), GSRC = fs.readFileSync(path.join(ROOT, "generator.js"), "utf8");
+      const read = new Set();
+      (RSRC.match(/\brules\.[a-zA-Z]+/g) || []).forEach(k => read.add(k.slice(6)));
+      (GSRC.match(/\bP\.rules\.[a-zA-Z]+|\br\.(monthlyTarget|backupCap|poolMember)\b/g) || []).forEach(k => read.add(k.split(".").pop()));
+      ["js", "test"].forEach(k => read.delete(k)); // "rules.js" in comments, rules.test(...) in a regex test
+      assert.ok(read.size > 30, "too few engine keys found (" + read.size + ")");
+      assert.deepStrictEqual(Array.from(read).filter(k => !H.SU_SUM_KNOWN[""].includes(k)), [], "a surgeonRules key the engine reads is not one the summary knows");
       assert.strictEqual(out[out.length - 1].family, "Other", "Other comes last");
       assert.ok(!JSON.stringify(out).includes("fooNote") && !JSON.stringify(out).includes("prose"), "a prose key leaked");
       for (const id of Object.keys(seed.surgeonRules)) assert.deepStrictEqual(H.suRulesUnknownKeys(seed.surgeonRules[id]), [], id + ": a seed key the summary does not know");
@@ -7692,16 +7694,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: [] }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: Any day."], "an empty roles list is the default");
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"] }).slice(0, 2), ["Primary: Any day.", "Backup: Never Tue."]);
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"] }, { groupRules: { backupPolicy: { openToEveryone: false } } }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: The primary day rules apply to backup too (group setting); never Tue."]);
-      assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue", "Thu"], hardNeverWeekdaysNoticeDays: 10 })[0], "Primary: Any day; never Tue/Thu within 10 days (later only as a last resort).");
+      assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue", "Thu"], hardNeverWeekdaysNoticeDays: 10 })[0], "Primary: Any day; never Tue/Thu within 10 days (further out allowed, soft).");
+      assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysNoticeDays: 56 }, { groupRules: { weights: { hardNeverBeyondNotice: 0 } } })[0], "Primary: Any day; never Tue within 8 weeks (further out allowed).", "weights.hardNeverBeyondNotice 0: no soft term beyond the notice");
       for (const bad of [-1, 2.5, "56", null]) assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysNoticeDays: bad })[0], "Primary: Any day; never Tue.", "a malformed notice " + JSON.stringify(bad) + " leaves the rule hard everywhere");
       assert.deepStrictEqual(lines({ weekdays: { allowed: ["Mon", "Wed"] } })[0], "Primary: Mon/Wed (others first on equal terms) and Fri-Sun.", "autoOffer defaults on");
       assert.deepStrictEqual(lines({ weekdays: { allowed: ["Mon", "Wed"], autoOffer: false } })[0], "Primary: Mon/Wed and Fri-Sun.");
       assert.deepStrictEqual(lines({ aledo: { weekdays: [{ weekday: "Wed", nth: [1] }] } })[0], "Primary: Any day; not the day before a clinic day (the 1st Wed).", "hardAvoidDayBefore defaults on");
       assert.deepStrictEqual(lines({ aledo: { weekdays: [{ weekday: "Wed", nth: [1] }], hardAvoidDayBefore: false, avoidWholeWeek: "medium" } })[0], "Primary: Any day; avoids clinic weeks (medium) - clinic days the 1st Wed.");
-      assert.deepStrictEqual(lines({ eastFeed: { enabled: true, eastBlocksPrimary: true } }).find(l => l.startsWith("East")), "East / Davenport: East call days block primary (East backup weeks count).", "eastBackupCountsAsBusy defaults on");
-      assert.deepStrictEqual(lines({ eastFeed: { enabled: true, eastBlocksPrimary: true, eastBackupCountsAsBusy: false } }).find(l => l.startsWith("East")), "East / Davenport: East call days block primary (East backup weeks do not count).");
+      assert.deepStrictEqual(lines({ eastFeed: { enabled: true, eastBlocksPrimary: true } }).find(l => l.startsWith("East")), "East / Davenport: East call days block primary (shifts in East backup weeks count).", "eastBackupCountsAsBusy defaults on - the shifts of such a week, never the whole week (east-feed.js)");
+      assert.deepStrictEqual(lines({ eastFeed: { enabled: true, eastBlocksPrimary: true, eastBackupCountsAsBusy: false } }).find(l => l.startsWith("East")), "East / Davenport: East call days block primary (shifts in East backup weeks do not count).");
       assert.deepStrictEqual(lines({ eastFeed: { enabled: false, eastBlocksPrimary: true } }).find(l => l.startsWith("East")), "East / Davenport: East feed off.");
-      assert.deepStrictEqual(lines({ holidayRules: { neverThanksgiving: true } }).find(l => l.startsWith("Holidays")), "Holidays: Never covers Thanksgiving.", "neverThanksgiving alone reads as a Thanksgiving opt-out (rules.js)");
+      assert.deepStrictEqual(lines({ holidayRules: { neverThanksgiving: true } }).find(l => l.startsWith("Holidays")), "Holidays: Never covers Thanksgiving (primary or backup).", "neverThanksgiving alone reads as a Thanksgiving opt-out (rules.js), both roles");
       assert.deepStrictEqual(lines({ preferences: { maxMajorHolidays: 2 } }).find(l => l.startsWith("Holidays")), "Holidays: At most 2 major holidays in 12 months.", "the preferences fallback");
       assert.deepStrictEqual(lines({ maxConsecutiveDays: 5 }, { groupRules: { countBackupInConsecutive: true, defaultMonthlyCap: { total: 6 } } }).find(l => l.startsWith("Limits")), "Limits: At most 5 days on call in a row; cap 6 primary days a month (group default); equal share.", "a legacy group 'total' is the cap");
       assert.deepStrictEqual(lines({ monthlyCap: { preferred: 5 } }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default), 5 preferred; equal share.");
@@ -7722,12 +7725,185 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suSumMonths(["2026-12", "2026-10", "2027-01", "2026-11", "x"]), "Oct-Dec 2026, Jan 2027, x");
       assert.strictEqual(H.suSumMonths(["2026-10", "2026-12"]), "Oct, Dec 2026");
     });
+    check("P24 summary review 10/1: every day-limiting rule on its own (a recurring list with an allow-list, an allow-list with a weekday pattern); the soft pairs read with the weights (others first, the weekday / weekend preference, the notice); the style words soft, backup-only under a lone Friday, 'daily' a lone day fine", () => {
+      const fam = (rules, f, inf) => (H.suRulesSummary(rules, inf || info).find(l => l.family === f) || {}).text;
+      const S = seed.surgeonRules;
+      // B2: what an Add writes on a surgeon who has another day rule
+      assert.strictEqual(fam(H.suRuleFieldAdd(H.suRuleField("weekdays"), S.s2), "Primary"), "Only the 2nd/4th Mon, the 1st Tue, the 2nd/4th Wed and Fri-Sun; no Mon-Thu (no weekday allowed).");
+      assert.strictEqual(fam(Object.assign({}, S.s2, { weekdays: { allowed: ["Mon"] } }), "Primary"), "Only the 2nd/4th Mon, the 1st Tue, the 2nd/4th Wed and Fri-Sun; of Mon-Thu only Mon (others first on equal terms).");
+      const khanOdw = H.suRuleFieldAdd(H.suRuleField("outsideDerivedWeeks"), S.s1);
+      assert.strictEqual(fam(khanOdw, "Primary"), "Mon/Wed and Fri-Sun; weekday pattern: not Mon-Sun; never Tue/Thu within 8 weeks (further out allowed, soft); not on East call days; prefers weekdays - Mon-Thu or a Friday on its own (soft).");
+      assert.strictEqual(fam(khanOdw, "Backup"), "Weekday pattern: not Mon-Sun.");
+      assert.strictEqual(fam(Object.assign({}, S.s5, { weekdays: { allowed: ["Mon", "Wed"] } }), "Primary"), "Mon/Wed (others first on equal terms) and Fri-Sun; outside East weeks: Wed (preferred), Fri-Sun only as one block, not Mon/Tue/Thu.");
+      assert.strictEqual(fam(Object.assign({}, S.s6, { weekdays: { allowed: [] } }), "Primary"), "Fri-Sun only (no weekday allowed); only inside the date windows.");
+      assert.strictEqual(fam({ weekdays: { allowed: ["Mon"] }, hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"] }, "Primary"), "Mon/Tue (others first on equal terms) and Fri-Sun.", "a never-on day that does not cover primary is open (rules.js leaves it to that rule)");
+      // B3: the weights decide the pair
+      const W = (w) => ({ names, holidayNames: HOL, groupRules: Object.assign({}, seed.groupRules, { weights: Object.assign({}, seed.groupRules.weights, w) }) });
+      assert.strictEqual(fam(S.s1, "Primary", W({ weekendContribution: 0 })), "Mon/Wed (others first on equal terms) and Fri-Sun; never Tue/Thu within 8 weeks (further out allowed, soft); not on East call days; prefers weekdays (off - its weight is 0).");
+      assert.strictEqual(fam(S.s1, "Primary", W({ weekendContribution: 1 })).split(";")[0], "Mon/Wed and Fri-Sun", "a tie (1 - 1) puts nobody first");
+      assert.strictEqual(fam({ weekdays: { allowed: ["Mon"] } }, "Primary", W({ noTargetWeekday: 0 })), "Mon and Fri-Sun.", "noTargetWeekday 0: the allowed-weekday term is off");
+      assert.strictEqual(fam({ primaryContribution: "weekends" }, "Primary"), "Any day; prefers full Fri-Sun primary blocks, weekend backup discouraged (soft).");
+      assert.strictEqual(fam({ primaryContribution: "weekends" }, "Primary", W({ weekendContribution: 0 })), "Any day; prefers weekends (off - its weight is 0).");
+      assert.ok(!SRC.includes("as a last resort\"") && SRC.includes('hint="blank = always hard; further out the day is allowed with a soft penalty"'), "the notice field's hint says what the engine does");
+      // S1: the style words
+      assert.strictEqual(fam({ weekendStyle: "block" }, "Weekends"), "Prefers one Fri-Sun block (soft).");
+      assert.strictEqual(fam({ weekendStyle: "block", standaloneFriday: true }, "Weekends"), "Prefers one Fri-Sun block (backup, soft); a Friday may stand alone (primary).");
+      assert.strictEqual(fam({ weekendStyle: "split" }, "Weekends"), "Prefers a split, Fri+Sun / Sat (soft).");
+      assert.strictEqual(fam({ weekendStyle: "daily" }, "Weekends"), "A lone weekend day is fine.");
+      assert.strictEqual(fam({ weekendStyle: "daily", standaloneFriday: true }, "Weekends"), "A lone weekend day is fine (backup); a Friday may stand alone (primary).");
+      // the "daily" reading is the engine's: a daily-style surgeon alone pays block 3 < daily 5 < split 6 - no preference for single days
+      const R = require(path.join(ROOT, "rules.js"));
+      const dctx = R.buildContext({ roster: ["a", "b", "c"].map(id => ({ id, name: id, active: true })), surgeonRules: { a: { weekendStyle: "daily", maxConsecutiveDays: 3 }, b: { weekendStyle: "daily", maxConsecutiveDays: 3 }, c: { weekendStyle: "daily", maxConsecutiveDays: 3 } }, groupRules: { defaultMaxConsecutiveDays: 3 }, schedule: {}, today: "2026-11-23" });
+      const best = {}; R.weekendUnitPatterns(dctx, "2027-03-05", "primary").forEach(p => { if (!(p.kind in best)) best[p.kind] = p.penalty; });
+      assert.ok(best.block < best.daily && best.daily < best.split, "the daily style's pattern costs moved: " + JSON.stringify(best));
+    });
+    check("P24 summary review 10/1 (minors): a blank / non-weight block penalty reads medium (and is in use); a weekend cap with a bad weight is ignored; clinic days with none set; the weeks' own start date; a target / cap of the wrong type; the seed lists as the import writes them; a standing East holiday not opted out", () => {
+      const fam = (rules, f) => (H.suRulesSummary(rules, info).find(l => l.family === f) || {}).text;
+      assert.strictEqual(fam({ weekendBlockPenalty: "" }, "Weekends"), "Blocks and splits discouraged (medium - the value set is not a weight).");
+      assert.strictEqual(fam({ weekendBlockPenalty: "heavy" }, "Weekends"), "Blocks and splits discouraged (medium - the value set is not a weight).");
+      assert.strictEqual(fam({ weekendBlockPenalty: 4 }, "Weekends"), "Blocks and splits discouraged (weight 4).");
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ weekendBlockPenalty: "" }), ["weekendBlockPenalty"], "the engine applies it - the field shows");
+      assert.strictEqual(fam({ weekendCap: { perMonth: 1, weight: "heavy" } }, "Weekends"), "A weekend cap that is not well formed (ignored).", "rules.js drops the whole cap on a bad weight");
+      assert.strictEqual(fam({ weekendCap: { perMonth: 1, weight: "7" } }, "Weekends"), "At most 1 weekend a month (soft, 7).");
+      assert.strictEqual(fam(H.suRuleFieldAdd(H.suRuleField("aledo"), {}), "Primary"), "Any day; a clinic-day rule with no clinic day set (no effect).");
+      assert.strictEqual((H.suRulesSummary({ aledo: { weekdays: [] } }, { groupRules: { dayBeforeRules: { aledoDayBeforeRoles: ["primary", "backup"] } } }).find(l => l.family === "Backup") || {}).text, "Any day.", "no clinic day: nothing for backup either");
+      assert.strictEqual(fam({ availableWeeks: ["2026-11-23"], availableWeeksFrom: "2026-11-15" }, "Availability"), "Primary only in 1 listed week, 11/23/2026 to the week of 11/23/2026 (from 11/15/2026; none after).");
+      assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); a monthly target without a number (ignored); equal share.");
+      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); target 3 backup days a month.");
+      assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - no cap applied); equal share.");
+      assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - no cap applied)");
+      assert.strictEqual(fam({ offeredDays: { "2026-11": ["2026-11-02"] }, timeOff: [{ start: "2026-11-01" }] }, "Seed lists"), "Read by the seed import, not the scheduler: 1 vacation; offered days of Nov 2026 (not imported - no offer tag).");
+      assert.strictEqual(fam({ explicitAvailable: { "2026-10": ["2026-10-01"] }, explicitBackupUnavailable: { "2026-10": ["2026-10-02"] } }, "Seed lists"), "Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026).");
+      assert.strictEqual(fam({ eastFeed: { enabled: true, eastBlocksPrimary: true }, eastStanding: [{ name: "Christmas", days: ["12-24", "12-25"] }] }, "Holidays"), "No Christmas primary (standing East call).");
+      // the restated weight defaults are rules.js's
+      assert.deepStrictEqual(H.SU_SUM_WEIGHT_DEFAULTS, require(path.join(ROOT, "rules.js")).defaultWeights(), "helpers SU_SUM_WEIGHT_DEFAULTS drifted from rules.js defaultWeights()");
+    });
+    // S2 (review 10/1): the snapshots above pin the helper's own words; this pins them to the ENGINE. A small parser reads
+    // every clause of the Primary and Backup lines that names days (only ..., of Mon-Thu only ..., X and Fri-Sun, no ...,
+    // never ..., not the day before a clinic day (...), outside East weeks / weekday pattern: not X / X only as one block,
+    // only inside the date windows, only in the listed weeks; the notice of a never-on day) - the other clauses must be one
+    // of the known non-day ones - and the sampled days it closes must carry a day-pattern hard reason from rules.js
+    // eligibility, the days it leaves open none. Built from the rules alone (no dated rows, no East data, no offers: those lift
+    // or add rules the lines do not describe); days of a month a dated list governs and holiday-unit days are skipped.
+    check("P24 summary vs the engine: the Primary / Backup lines of the six seed surgeons and of the combinations an Add makes close exactly the sampled days rules.js closes (a day-pattern hard reason), and leave open the rest", () => {
+      const R = require(path.join(ROOT, "rules.js"));
+      const TODAY = "2026-11-23";
+      const FAMILY = ["hard-never-weekday:", "recurring-unavailable:", "weekday-not-allowed:", "weekend-block-only", "weekday-pattern:", "not-recurring-available", "day-before-aledo", "outside-available-weeks", "outside-window", "backup-opt-out"];
+      const WD7 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const dt = (s) => new Date(s + "T00:00:00Z"), iso = (d) => d.toISOString().slice(0, 10);
+      const add = (s, n) => { const d = dt(s); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+      const wdOf = (s) => WD7[dt(s).getUTCDay()];
+      const nthOf = (s) => Math.floor((dt(s).getUTCDate() - 1) / 7) + 1;
+      const diff = (a, b) => Math.round((dt(b) - dt(a)) / 86400000);
+      const mdy = (t) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t); if (!m) throw new Error("not a date: " + t); return m[3] + "-" + m[1].padStart(2, "0") + "-" + m[2].padStart(2, "0"); };
+      const isDays = (t) => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)([-/](Mon|Tue|Wed|Thu|Fri|Sat|Sun))*$/.test(t);
+      const dayList = (t) => { const out = new Set(); t.split("/").forEach(p => { const r = /^(\w{3})-(\w{3})$/.exec(p); if (r) { for (let i = DAYS.indexOf(r[1]); i <= DAYS.indexOf(r[2]); i++) out.add(DAYS[i]); } else out.add(p); }); return out; };
+      const ords = (t) => t.split("/").map(x => parseInt(x, 10));
+      const nthWeekday = (y, m, wd, n) => { let d = dt(y + "-" + String(m).padStart(2, "0") + "-01"); let c = 0; while (d.getUTCMonth() === m - 1) { if (WD7[d.getUTCDay()] === wd && ++c === n) return iso(d); d.setUTCDate(d.getUTCDate() + 1); } return null; };
+      const mondayOf = (s) => add(s, -((dt(s).getUTCDay() + 6) % 7));
+      // one helpers.suSumPattern phrase, its bounds included -> a day predicate (an independent restatement of matchesPattern)
+      const phrase = (t0) => {
+        let t = t0, lo = null, hi = null, m;
+        if ((m = / from (\S+) to (\S+)$/.exec(t))) { lo = mdy(m[1]); hi = mdy(m[2]); t = t.slice(0, m.index); }
+        else if ((m = / from (\S+)$/.exec(t))) { lo = mdy(m[1]); t = t.slice(0, m.index); }
+        else if ((m = / until (\S+)$/.exec(t))) { hi = mdy(m[1]); t = t.slice(0, m.index); }
+        let f;
+        if ((m = /^every (\w{3})$/.exec(t)) || (isDays(t) && (m = [t, t]))) { const s = dayList(m[1]); f = (d) => s.has(wdOf(d)); }
+        else if ((m = /^the ([\w/]+) (\w{3}) before the ([\w/]+) Mon$/.exec(t))) throw new Error("unexpected phrase " + t0);
+        else if ((m = /^the (\w{3}) before the ([\w/]+) Mon$/.exec(t))) { const w = m[1], ns = ords(m[2]); f = (d) => wdOf(d) === w && wdOf(add(d, 1)) === "Mon" && ns.includes(nthOf(add(d, 1))); }
+        else if ((m = /^the (\w{3}) in the week of the (\w+) (\w{3})$/.exec(t))) {
+          const w = m[1], n = parseInt(m[2], 10), anc = m[3];
+          f = (d) => { if (wdOf(d) !== w) return false; for (let k = 0; k < 2; k++) { let y = +d.slice(0, 4), mo = +d.slice(5, 7) + k; if (mo > 12) { mo = 1; y++; } const a = nthWeekday(y, mo, anc, n); if (a) { const mon = mondayOf(a); if (d >= mon && d <= add(mon, 6)) return true; } } return false; };
+        }
+        else if ((m = /^the ([\w/]+) (\w{3})$/.exec(t))) { const ns = ords(m[1]), w = m[2]; f = (d) => wdOf(d) === w && ns.includes(nthOf(d)); }
+        else throw new Error("the cross-check does not read the phrase '" + t0 + "'");
+        return (d) => (!lo || d >= lo) && (!hi || d <= hi) && f(d);
+      };
+      const splitTop = (t) => { const out = []; let depth = 0, cur = ""; for (let i = 0; i < t.length; i++) { const ch = t[i]; if (ch === "(") depth++; if (ch === ")") depth--; if (depth === 0 && t.startsWith(", ", i)) { out.push(cur); cur = ""; i++; continue; } cur += ch; } out.push(cur); return out; };
+      const INFO = [/^not on East call days$/, /^avoids /, /^prefers /, /^a clinic-day rule with no clinic day set/, /^at most /, /^only the listed days in /];
+      // a line -> { only: [pred], close: [pred], reopen: [pred] }: open(d) = (reopen || every only) && no close
+      const parse = (text, rules) => {
+        const P = { only: [], close: [], reopen: [] };
+        if (!text) return P;
+        text.replace(/\.$/, "").split("; ").forEach((c0, i) => {
+          const c = i === 0 && !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/.test(c0) ? c0.charAt(0).toLowerCase() + c0.slice(1) : c0; // the line capitalizes its first clause
+          let m;
+          if (c === "any day") return;
+          if (c === "never (does not take backup)") { P.close.push(() => true); return; }
+          if (c === "only in the listed weeks") { const wk = rules.availableWeeks.slice().sort(); const from = rules.availableWeeksFrom || wk[0].slice(0, 7) + "-01"; P.only.push((d) => d < from || wk.some(mon => d >= mon && d <= add(mon, 6))); return; }
+          if (c === "only inside the date windows") { P.only.push((d) => rules.availableWindows.some(w => d >= w.start && d <= w.end)); return; }
+          if (/^only the listed days in /.test(c)) return; // a governed month: its days are skipped below
+          if ((m = /^only (.+?)(?: and ((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[-/\w]*))?$/.exec(c))) {
+            const wk = m[2] ? dayList(m[2]) : new Set();
+            const items = m[1] === "listed recurring days (none listed)" ? [] : splitTop(m[1]).map(phrase);
+            P.only.push((d) => wk.has(wdOf(d)) || items.some(f => f(d))); return;
+          }
+          if ((m = /^of (\S+) only (\S+?)(?: \(others first on equal terms\))?$/.exec(c))) { const all = dayList(m[1]), ok = dayList(m[2]); P.only.push((d) => !all.has(wdOf(d)) || ok.has(wdOf(d))); return; }
+          if ((m = /^no (\S+) \(no weekday allowed\)$/.exec(c))) { const s = dayList(m[1]); P.close.push((d) => s.has(wdOf(d))); return; }
+          if ((m = /^(\S+) only \(no weekday allowed\)$/.exec(c))) { const s = dayList(m[1]); P.only.push((d) => s.has(wdOf(d))); return; }
+          if ((m = /^(\S+?)(?: \(others first on equal terms\))? and (\S+)$/.exec(c)) && isDays(m[1]) && isDays(m[2])) { const s = new Set([...dayList(m[1]), ...dayList(m[2])]); P.only.push((d) => s.has(wdOf(d))); return; }
+          if ((m = /^(?:outside East weeks|weekday pattern): (.+)$/i.exec(c))) {
+            splitTop(m[1]).forEach(it => { let mm; if ((mm = /^not (\S+)$/.exec(it))) { const s = dayList(mm[1]); P.close.push((d) => s.has(wdOf(d))); } else if ((mm = /^(\S+) only as one block$/.exec(it))) { const s = dayList(mm[1]); P.close.push((d) => s.has(wdOf(d))); } else if (!/^\S+( \((\S+ )?preferred\))?$/.test(it)) throw new Error("the cross-check does not read '" + it + "'"); });
+            return;
+          }
+          if ((m = /^never (.+)$/.exec(c))) {
+            splitTop(m[1]).forEach(it => {
+              let mm;
+              if ((mm = /^(\S+) within (\d+) (weeks?|days?) \(further out allowed(?:, soft)?\)$/.exec(it))) { const s = dayList(mm[1]), n = +mm[2] * (/^week/.test(mm[3]) ? 7 : 1); P.close.push((d) => s.has(wdOf(d)) && diff(TODAY, d) <= n); P.reopen.push((d) => s.has(wdOf(d)) && diff(TODAY, d) > n); }
+              else if (isDays(it)) { const s = dayList(it); P.close.push((d) => s.has(wdOf(d))); }
+              else P.close.push(phrase(it));
+            });
+            return;
+          }
+          if ((m = /^not the day before a clinic day \((.+)\)$/.exec(c))) { const items = splitTop(m[1]).map(phrase); P.close.push((d) => items.some(f => f(add(d, 1)))); return; }
+          if (INFO.some(re => re.test(c))) return;
+          throw new Error("the cross-check does not read the clause '" + c0 + "'");
+        });
+        return P;
+      };
+      const S = seed.surgeonRules;
+      const cases = Object.keys(S).map(id => ({ id, label: id, rules: S[id] })).concat([
+        { id: "s2", label: "s2 + Add weekdays", rules: H.suRuleFieldAdd(H.suRuleField("weekdays"), S.s2) },
+        { id: "s2", label: "s2 + weekdays Mon", rules: Object.assign({}, S.s2, { weekdays: { allowed: ["Mon"] } }) },
+        { id: "s1", label: "s1 + Add outsideDerivedWeeks", rules: H.suRuleFieldAdd(H.suRuleField("outsideDerivedWeeks"), S.s1) },
+        { id: "s1", label: "s1 without the notice", rules: Object.assign({}, S.s1, { hardNeverWeekdaysNoticeDays: undefined }) },
+        { id: "s5", label: "s5 + weekdays Mon/Wed", rules: Object.assign({}, S.s5, { weekdays: { allowed: ["Mon", "Wed"] } }) },
+        { id: "s3", label: "s3 + recurringAvailable", rules: Object.assign({}, S.s3, { recurringAvailable: [{ weekday: "Mon", nth: [1] }, { weekday: "Thu" }] }) },
+        { id: "s6", label: "s6 + Add weekdays", rules: H.suRuleFieldAdd(H.suRuleField("weekdays"), S.s6) },
+        { id: "s4", label: "s4 + recurringUnavailable Wed", rules: Object.assign({}, S.s4, { recurringUnavailable: [{ weekday: "Wed" }] }) },
+        { id: "s3", label: "s3 never-on for backup + allow-list", rules: { weekdays: { allowed: ["Mon"] }, hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"] } },
+      ]);
+      const sample = [];
+      for (let d = "2026-12-01"; d <= "2026-12-21"; d = add(d, 1)) sample.push(d);
+      for (let d = "2027-01-12"; d <= "2027-01-24"; d = add(d, 1)) sample.push(d); // across the 56-day notice edge (1/18 hard, 1/19 soft)
+      for (let d = "2027-02-22"; d <= "2027-03-21"; d = add(d, 1)) sample.push(d);
+      let checked = 0, closedSeen = 0;
+      for (const cs of cases) {
+        const ctx = R.buildContext({ roster: seed.roster, surgeonRules: Object.assign({}, S, { [cs.id]: cs.rules }), groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, today: TODAY });
+        const governed = new Set((cs.rules.explicitListMonths || []).map(e => typeof e === "string" ? e : e && e.month));
+        const sum = H.suRulesSummary(cs.rules, info);
+        for (const role of ["primary", "backup"]) {
+          const text = (sum.find(l => l.family === (role === "primary" ? "Primary" : "Backup")) || {}).text;
+          const P = parse(text, cs.rules);
+          for (const d of sample) {
+            if (governed.has(d.slice(0, 7)) || ctx.holidayByDay[d]) continue;
+            const said = (P.reopen.some(f => f(d)) || P.only.every(f => f(d))) && !P.close.some(f => f(d));
+            const r = R.eligibility(ctx, d, role, cs.id);
+            const hardFam = r.hard.filter(h => FAMILY.some(p => h.indexOf(p) === 0));
+            assert.strictEqual(said, hardFam.length === 0, cs.label + " " + role + " " + d + " " + wdOf(d) + ": the line '" + text + "' says " + (said ? "open" : "closed") + ", rules.js " + JSON.stringify(r.hard));
+            checked++; if (!said) closedSeen++;
+          }
+        }
+      }
+      assert.ok(checked > 1500 && closedSeen > 500, "too few days checked (" + checked + ", " + closedSeen + " closed)");
+    });
 
     // --- the field registry
     const FIELD_IDS = H.SU_RULE_FIELDS.map(f => f.id);
     check("P24 registry: unique ids, every field in one of the seven groups (in display order), every path a key the summary knows; every known key is a field's, a JSON-only one or documentation", () => {
       assert.strictEqual(new Set(FIELD_IDS).size, FIELD_IDS.length, "duplicate field ids");
-      assert.deepStrictEqual(H.SU_RULE_GROUPS.map(g => g.label), ["Availability", "Weekdays and patterns", "Weekends", "Limits", "Backup", "East / Davenport", "Holidays"]);
+      assert.deepStrictEqual(H.SU_RULE_GROUPS.map(g => g.label), ["Availability", "Weekdays and patterns", "Weekends", "Limits", "East / Davenport", "Holidays", "Backup"], "review 10/1: the task's order (backup last)");
+      assert.strictEqual(H.suRuleField("primaryContribution").label, "Prefers weekends or weekdays", "the Add menu names what the rule is");
       const gids = H.SU_RULE_GROUPS.map(g => g.id);
       let last = 0;
       for (const f of H.SU_RULE_FIELDS) {
@@ -7746,11 +7922,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         s1: ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed"],
         s2: ["availabilityMode", "recurringAvailable", "weekendStyle", "weekendsAvailable", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap"],
         s3: ["availabilityMode", "hardNeverWeekdays", "recurringUnavailable", "recurringAvoid", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap", "holidaysOff"],
-        s4: ["availabilityMode", "availableWeeks", "aledo", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "backupCap", "maxMajorHolidays"],
+        s4: ["availabilityMode", "availableWeeks", "aledo", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "maxMajorHolidays", "backupCap"],
         s5: ["availabilityMode", "outsideDerivedWeeks", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap", "eastFeed"],
         s6: ["availabilityMode", "availableWindows", "daysPerWindowWeek", "weekendStyle", "weekendBlockPenalty", "maxConsecutiveDays", "maxConsecutiveAnyRole", "preferAlternateDays", "handoffPartnerRequired"],
       };
-      if (seed.surgeonRules.s1.standaloneFriday === true) want.s1 = ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed"];
+      // the merged seed (review fixes 10/1): Khan with Prompt 23's keys and Prompt 25's Christmas opt-out; backup fields last
+      want.s1 = ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed", "holidaysOff"];
       for (const id of Object.keys(want)) assert.deepStrictEqual(H.suRuleFieldsUsed(seed.surgeonRules[id]), want[id], id);
       assert.deepStrictEqual(H.suRuleFieldsUsed({ backupOptOut: false, holidayUnitCountsAsOneDay: false, preferAlternateDays: false, monthlyTarget: null, primaryContribution: "", weekendStyle: "", standaloneFriday: false, hardNeverWeekdaysRoles: ["primary"], hardNeverWeekdays: [] }), [], "explicit defaults are unused");
       assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: null }), ["monthlyCap"], "monthlyCap null (no cap) differs from no key (the group default)");
@@ -7784,6 +7961,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.deepStrictEqual(seed.surgeonRules[id], JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8")).surgeonRules[id], id + ": add / remove mutated its input");
       }
     });
+    check("P24 registry review 10/1: Remove asks first exactly when the field holds more than its start value - helpers.suRuleRemoveConfirm names what goes (Fierce's East weeks, Philip's listed weeks, a recurring list, notes); nothing to lose = no question", () => {
+      const S = seed.surgeonRules, f = (id) => H.suRuleField(id);
+      assert.strictEqual(H.suRuleRemoveConfirm(f("standaloneFriday"), { standaloneFriday: true }, "X"), null, "the start value: no question");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("weekendCap"), { weekendCap: { perMonth: 2 } }, "X"), null);
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyTarget"), {}, "X"), null, "a field shown with no key");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("eastFeed"), { eastFeed: { enabled: true } }, "X"), null);
+      const fierce = H.suRuleRemoveConfirm(f("eastFeed"), S.s5, "Fierce");
+      assert.ok(fierce && fierce.startsWith('Remove the rule "East (Davenport) call" for Fierce? This deletes: '), fierce);
+      for (const part of ["stated East primary weeks 11/9/2026", "stated East backup weeks 10/12/2026, 12/7/2026", "derive Silvis weeks from 11/2/2026"]) assert.ok(fierce.includes(part), "the East rule's confirm should name '" + part + "': " + fierce);
+      assert.ok(!/[a-z][A-Z]/.test(fierce.replace(/"[^"]*"/, "")), "an internal key name in the confirm: " + fierce);
+      assert.strictEqual(H.suRuleRemoveConfirm(f("availableWeeks"), S.s4, "Philip"), 'Remove the rule "Listed weeks" for Philip? This deletes: 19 dates.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f("recurringAvoid"), S.s3, "Acton"), 'Remove the rule "Recurring days to avoid (soft)" for Acton? This deletes: the Sun before the 2nd/4th Mon until 12/31/2026, the Sun before the 2nd Mon from 1/1/2027.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f("hardNeverWeekdays"), S.s1, "Khan"), 'Remove the rule "Never on (weekdays)" for Khan? This deletes: Tue/Thu; applies to primary; hard only within (days) 56.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f("weekendCap"), S.s1, "Khan"), 'Remove the rule "Weekends per month" for Khan? This deletes: East weekends count; counts primary; weight strong.', "the start's perMonth 2 is not news; the rest is");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), S.s4, "Philip"), 'Remove the rule "Most major holidays in 12 months" for Philip? This deletes: 1; most major holidays (older place) 1.');
+      assert.ok(H.suRuleRemoveConfirm(f("aledo"), S.s4, "Philip").includes("clinic days the 1st/3rd Wed, the Fri in the week of the 3rd Wed"), "Philip's clinic days are named");
+      assert.ok(H.suRuleRemoveConfirm(f("outsideDerivedWeeks"), S.s5, "Fierce").includes("weekday pattern for Mon-Sun"), "a per-weekday table reads as one item");
+      const many = { availableWindows: Array.from({ length: 12 }, (_, i) => ({ start: "2027-0" + (1 + (i % 9)) + "-01", end: "2027-0" + (1 + (i % 9)) + "-05" })) };
+      assert.ok(/This deletes: 12 entries\.$/.test(H.suRuleRemoveConfirm(f("availableWindows"), many, "X")), "a long list is counted");
+      assert.deepStrictEqual(H.suRuleFieldHeld(f("weekendStyle"), { weekendStyle: "split" }), ["split"]);
+      assert.deepStrictEqual(H.suRuleFieldHeld(f("backupOptOut"), { backupOptOut: false }), ["off"], "an explicit default is still a key Remove deletes");
+    });
     check("P24 PatternListEditor kind switch (helpers.suPatternWithKind): keeps start / end, weight, note and any other key; the new kind's keys only; 'dates' drops the weekday", () => {
       const p = { weekday: "Mon", nth: [2, 4], start: "2027-01-01", end: "2027-06-30", weight: "strong", note: "outreach", extra: 1 };
       assert.deepStrictEqual(H.suPatternWithKind(p, "week"), { weekday: "Mon", start: "2027-01-01", end: "2027-06-30", weight: "strong", note: "outreach", extra: 1, nthWeekOfMonth: 1 });
@@ -7807,6 +8006,21 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RE.includes('data-testid="rules-summary"') && RE.includes('data-testid="rules-summary-line" data-family={l.family}'), "summary testids");
       assert.ok(RE.includes("const displayed = SU_RULE_FIELDS.filter(f => shown.has(f.id) || usedNow.has(f.id));") && RE.includes("const menu = SU_RULE_FIELDS.filter(f => !(shown.has(f.id) || usedNow.has(f.id)));"), "only used / added fields; the menu lists the rest");
       assert.ok(RE.includes('<select data-testid="rules-add"') && RE.includes("SU_RULE_GROUPS.map(g => { const fs = menu.filter(f => f.group === g.id); return fs.length ? <optgroup key={g.id} label={g.label}>"), "the Add a rule menu, grouped");
+      // review 10/1: the select only chooses (no rule added on a change event - an ArrowDown on it added one per step); the
+      // Add button adds the chosen one; a re-pick clears the choice
+      assert.ok(RE.includes('onChange={e => setAddPick(e.target.value)}') && !/data-testid="rules-add"[^>]*addRule\(/.test(RE), "the select must only choose");
+      assert.ok(RE.includes('<button data-testid="rules-add-button" type="button" disabled={!menu.some(f => f.id === addPick)} onClick={() => { const id = addPick; setAddPick(""); addRule(id); }}'), "the Add button adds the chosen rule");
+      assert.ok(RE.includes('setRawErr(""); setAddPick(""); };'), "a re-pick clears the choice");
+      // Remove asks first when data would go; the same removal after a yes
+      assert.ok(RE.includes("const msg = suRuleRemoveConfirm(f, draft, ((roster || []).find(x => x.id === sel) || {}).name || sel);") && RE.includes("if (msg && !confirm(msg)) return;"), "Remove asks first");
+      assert.ok(RE.includes('aria-label={"Remove rule: " + f.label}'), "each Remove names its rule for a screen reader");
+      // clearing the major-holiday limit deletes both places (the older preferences one too)
+      assert.ok(RE.includes('if (e.target.value === "") { setDirty(true); setDraft(d => suRuleFieldRemove(suRuleField("maxMajorHolidays"), d)); } else set("holidayRules.maxMajorHolidays", Number(e.target.value));'), "blank = no limit");
+      // RuField's label is a <label> tied to its one control
+      const rf = SRC.slice(SRC.indexOf("function RuField({"), SRC.indexOf("function RulesEditor({"));
+      assert.ok(rf.includes("<label htmlFor={id}") && rf.includes("React.cloneElement(one, { id })") && !rf.includes("<span style={{ fontSize: 10, color: T.muted, fontWeight: 600"), "RuField's label must be a <label> with htmlFor");
+      // the summary reads the group draft too - say so while either draft is unsaved
+      assert.ok(RE.includes('{dirty || groupDirty ? <span data-testid="rules-summary-unsaved"'), "the unsaved marker covers the group draft");
       assert.ok(RE.includes('data-testid={"rules-field-" + f.id}') && RE.includes('data-testid={"rules-remove-" + f.id}') && RE.includes("onClick={() => removeRule(f)}"), "a Remove per rule");
       assert.ok(RE.includes("if (f.start !== undefined) { setDirty(true); setDraft(d => suRuleFieldAdd(f, d)); }") && RE.includes("if (suRuleFieldHasKeys(f, draft)) { setDirty(true); setDraft(d => suRuleFieldRemove(f, d)); }"), "Add / Remove go through the draft and mark it unsaved");
       // every registry field has a renderer

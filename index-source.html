@@ -9959,19 +9959,19 @@ function PatternListEditor({ css, T, label, list, onChange, withWeight, today, h
         return (
           <div key={ids[i]} data-testid="pattern-row" style={{ border: "1px solid " + TT.border, borderRadius: 6, padding: "6px 8px", marginBottom: 6, background: TT.raised }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              {kind !== "dates" && <select value={p.weekday || "Mon"} onChange={e => update(i, { ...p, weekday: e.target.value })} style={{ ...inp, width: 70 }}>{SU_WEEKDAYS.map(w => <option key={w} value={w}>{w}</option>)}</select>}
-              <select value={kind} onChange={e => setKind(i, e.target.value)} style={{ ...inp, width: 190, maxWidth: "100%" }}>
+              {kind !== "dates" && <select aria-label="Weekday" value={p.weekday || "Mon"} onChange={e => update(i, { ...p, weekday: e.target.value })} style={{ ...inp, width: 70 }}>{SU_WEEKDAYS.map(w => <option key={w} value={w}>{w}</option>)}</select>}
+              <select aria-label="Repeats" value={kind} onChange={e => setKind(i, e.target.value)} style={{ ...inp, width: 190, maxWidth: "100%" }}>
                 <option value="every">every week</option>
                 <option value="nth">nth of the month (1-5)</option>
                 <option value="week">week of month (Mon-Sun week containing the nth Wed)</option>
                 <option value="before">the day before the nth Monday</option>
                 <option value="dates">explicit dates</option>
               </select>
-              {kind !== "every" && <input type="text" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [ids[i]]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, maxWidth: "100%", fontFamily: mono }} />}
+              {kind !== "every" && <input type="text" aria-label="Which ones" value={text} placeholder={kind === "dates" ? "2026-11-02, 2026-11-09" : kind === "week" ? "3" : "2,4"} onChange={e => { setTexts(t => ({ ...t, [ids[i]]: e.target.value })); setValue(i, e.target.value); }} style={{ ...inp, width: kind === "dates" ? 260 : 70, maxWidth: "100%", fontFamily: mono }} />}
               <label style={small}>from <input type="date" data-testid="pattern-start" value={p.start || ""} onChange={e => setBound(i, "start", e.target.value)} style={inp} /></label>
               <label style={small}>until <input type="date" data-testid="pattern-end" value={p.end || ""} onChange={e => setBound(i, "end", e.target.value)} style={inp} /></label>
-              {withWeight && <select value={p.weight || "medium"} onChange={e => update(i, { ...p, weight: e.target.value })} style={{ ...inp, width: 90 }}>{["low", "medium", "strong"].map(w => <option key={w} value={w}>{w}</option>)}</select>}
-              <input type="text" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px", minWidth: 0 }} />
+              {withWeight && <select aria-label="Weight" value={p.weight || "medium"} onChange={e => update(i, { ...p, weight: e.target.value })} style={{ ...inp, width: 90 }}>{["low", "medium", "strong"].map(w => <option key={w} value={w}>{w}</option>)}</select>}
+              <input type="text" aria-label="Operational note" value={p.note || ""} placeholder="operational note (public)" onChange={e => update(i, { ...p, note: e.target.value })} style={{ ...inp, flex: "1 1 160px", minWidth: 0 }} />
               <button onClick={() => { idsRef.current = ids.filter((_, j) => j !== i); onChange(items.filter((_, j) => j !== i)); }} style={css.danger}>Remove</button>
             </div>
             <div data-testid="pattern-preview" style={{ fontSize: 11, color: TT.muted, marginTop: 4, fontFamily: mono }}>
@@ -9994,6 +9994,10 @@ function PatternListEditor({ css, T, label, list, onChange, withWeight, today, h
 // and a key the draft starts using (Apply JSON) shows its field at once. One collapsed Advanced section holds the
 // per-surgeon JSON editor, the group rules, the weights (their own collapsed group) and the group JSON editor. UI only:
 // the same draft, the same set / toggleList writes and the same save() (contact check; neverThanksgiving from holidaysOff).
+// Review 10/1: the menu select only chooses and an Add button adds (rules-add-button); Remove asks first when the field
+// holds more than its start value (helpers.suRuleRemoveConfirm); clearing the major-holiday limit deletes both of its
+// places; each RuField label is a <label> tied to its control; the summary says "(with the unsaved changes)" while the
+// surgeon's draft or the group draft (which it reads) is unsaved.
 // Colours are THEME tokens only (test/ui/theme-regions.js region "rules-editor").
 const RULE_MODE_WORDS = {
   "": "(open - every day unless a rule blocks it)",
@@ -10018,11 +10022,18 @@ function ruleWeightLabel(k) {
   const s = String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+// Review 10/1 (a11y): the label is a <label> tied to its control - the one input / select / textarea child gets an id
+// (its own, or React.useId's) and the label's htmlFor names it; a field whose child is something else keeps the label
+// text unattached (none today).
 function RuField({ T, label, children, width, hint, testid }) {
+  const autoId = React.useId();
+  const kids = React.Children.toArray(children);
+  const one = kids.length === 1 && React.isValidElement(kids[0]) && ["input", "select", "textarea"].indexOf(kids[0].type) >= 0 ? kids[0] : null;
+  const id = one ? (one.props.id || "rufield" + autoId) : undefined;
   return (
     <div data-testid={testid || undefined} style={{ display: "inline-flex", flexDirection: "column", gap: 2, marginRight: 10, marginBottom: 6, width: width || "auto", maxWidth: "100%", verticalAlign: "top" }}>
-      <span style={{ fontSize: 10, color: T.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
-      {children}
+      <label htmlFor={id} style={{ fontSize: 10, color: T.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</label>
+      {one ? React.cloneElement(one, { id }) : children}
       {hint ? <span style={{ fontSize: 10.5, color: T.muted }}>{hint}</span> : null}
     </div>
   );
@@ -10034,6 +10045,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   const [draft, setDraft] = React.useState(() => suClone(surgeonRules[ids[0]] || {}));
   const [dirty, setDirty] = React.useState(false);
   const [shown, setShown] = React.useState(() => new Set(suRuleFieldsUsed(surgeonRules[ids[0]] || {})));
+  const [addPick, setAddPick] = React.useState("");
   const [rawOpen, setRawOpen] = React.useState(false);
   const [rawText, setRawText] = React.useState("");
   const [rawErr, setRawErr] = React.useState("");
@@ -10049,7 +10061,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   React.useEffect(() => { if (!dirty) { setDraft(suClone(surgeonRules[sel] || {})); setShown(s0 => new Set([...s0, ...suRuleFieldsUsed(surgeonRules[sel] || {})])); } }, [surgeonRules, sel]); // eslint-disable-line
   React.useEffect(() => { if (!groupDirty) setGroup(suClone(groupRules || {})); }, [groupRules]); // eslint-disable-line
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
-  const pick = (id) => { if (dirty && !confirm("Discard the unsaved changes to this surgeon's rules?")) return; setSel(id); setDraft(suClone(surgeonRules[id] || {})); setShown(new Set(suRuleFieldsUsed(surgeonRules[id] || {}))); setDirty(false); setRawOpen(false); setRawErr(""); };
+  const pick = (id) => { if (dirty && !confirm("Discard the unsaved changes to this surgeon's rules?")) return; setSel(id); setDraft(suClone(surgeonRules[id] || {})); setShown(new Set(suRuleFieldsUsed(surgeonRules[id] || {}))); setDirty(false); setRawOpen(false); setRawErr(""); setAddPick(""); };
   const revert = () => { setDraft(suClone(surgeonRules[sel] || {})); setShown(new Set(suRuleFieldsUsed(surgeonRules[sel] || {}))); setDirty(false); };
   const get = (path, dflt) => { let o = draft; for (const k of path.split(".")) { if (!o || typeof o !== "object") return dflt; o = o[k]; } return o === undefined ? dflt : o; };
   const set = (path, value) => {
@@ -10064,7 +10076,13 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   // dflt: the engine default the checkboxes display when the key is absent - the toggle starts from the same list, and emptying it drops the key (back to the default) rather than saving [].
   const toggleList = (path, item, on, dflt) => { const cur = get(path, dflt || []); const list = Array.isArray(cur) ? cur.filter(x => x !== item) : []; if (on) list.push(item); if (dflt && !list.length) { set(path, undefined); return; } set(path, list); };
   const addRule = (id) => { const f = suRuleField(id); if (!f) return; setShown(s0 => { const n = new Set(s0); n.add(id); return n; }); if (f.start !== undefined) { setDirty(true); setDraft(d => suRuleFieldAdd(f, d)); } };
-  const removeRule = (f) => { setShown(s0 => { const n = new Set(s0); n.delete(f.id); return n; }); if (suRuleFieldHasKeys(f, draft)) { setDirty(true); setDraft(d => suRuleFieldRemove(f, d)); } };
+  // Review 10/1: Remove asks first when the field holds more than what Add writes (helpers.suRuleRemoveConfirm names what
+  // goes - East weeks, listed weeks, a recurring list the field may not show whole); Revert still brings it back.
+  const removeRule = (f) => {
+    const msg = suRuleRemoveConfirm(f, draft, ((roster || []).find(x => x.id === sel) || {}).name || sel);
+    if (msg && !confirm(msg)) return;
+    setShown(s0 => { const n = new Set(s0); n.delete(f.id); return n; }); if (suRuleFieldHasKeys(f, draft)) { setDirty(true); setDraft(d => suRuleFieldRemove(f, d)); }
+  };
   const save = () => {
     const leaks = suContactPaths(draft);
     if (leaks.length) { showToast("Refused: the rules would carry contact-looking data at " + leaks.join(", ") + " (the blob is public).", "error"); return; }
@@ -10151,7 +10169,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         <div>
           <div style={lbl}>Weekdays allowed for primary <span style={{ textTransform: "none", fontWeight: 400 }}>- Fri-Sun stay open; the other weekdays are off</span></div>
           {["Mon", "Tue", "Wed", "Thu"].map(w => <SuCheck key={w} label={w} checked={(get("weekdays.allowed", []) || []).indexOf(w) >= 0} onChange={v => toggleList("weekdays.allowed", w, v)} />)}
-          <SuCheck label="others go first on equal terms" title="A small penalty on these weekdays, so another surgeon takes such a day on otherwise equal terms." checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
+          <SuCheck label="others go first on equal terms" title="A small penalty on these weekdays, so another surgeon takes such a day on otherwise equal terms - unless a weekday preference outweighs it." checked={get("weekdays.autoOffer", true) !== false} onChange={v => set("weekdays.autoOffer", v)} />
         </div>
       );
       case "hardNeverWeekdays": return (
@@ -10159,7 +10177,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
           <div style={lbl}>Never on</div>
           <div>{SU_WEEKDAYS.map(w => <SuCheck key={w} label={w} checked={(get("hardNeverWeekdays", []) || []).indexOf(w) >= 0} onChange={v => toggleList("hardNeverWeekdays", w, v)} />)}</div>
           <div><span style={quiet}>applies to</span>{roleChecks("hardNeverWeekdaysRoles", ["primary"])}<span style={quiet}>(default: primary only; one role stays ticked)</span></div>
-          <RuField T={T} label="Hard only within (days)" hint="blank = always hard; further out the day is allowed as a last resort"><input data-testid="rules-hard-never-notice" type="number" min="0" max="365" value={numVal("hardNeverWeekdaysNoticeDays")} onChange={numSet("hardNeverWeekdaysNoticeDays")} style={{ ...inp, width: 80 }} /></RuField>
+          <RuField T={T} label="Hard only within (days)" hint="blank = always hard; further out the day is allowed with a soft penalty"><input data-testid="rules-hard-never-notice" type="number" min="0" max="365" value={numVal("hardNeverWeekdaysNoticeDays")} onChange={numSet("hardNeverWeekdaysNoticeDays")} style={{ ...inp, width: 80 }} /></RuField>
         </div>
       );
       case "recurringAvailable": return <PatternListEditor css={css} T={T} label="Recurring days available" hint="primary only on these days" list={get("recurringAvailable", [])} onChange={l => set("recurringAvailable", l.length ? l : undefined)} today={today} />;
@@ -10199,7 +10217,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         </RuField>
       );
       case "primaryContribution": return (
-        <RuField T={T} label="Prefers" hint="soft: weekends = full Fri-Sun primary blocks first, weekend backup last; weekdays = Mon-Thu or a lone Friday first">
+        <RuField T={T} label="Prefers" hint="soft: weekends = full Fri-Sun primary blocks first, weekend backup discouraged; weekdays = Mon-Thu or a lone Friday first">
           <select data-testid="rules-primary-contribution" value={get("primaryContribution", "")} onChange={e => set("primaryContribution", e.target.value || undefined)} style={{ ...inp, width: 200, maxWidth: "100%" }}><option value="">(none)</option><option value="weekends">weekends</option><option value="weekdays">weekdays</option>{(() => { const v = get("primaryContribution", ""); return v && v !== "weekends" && v !== "weekdays" ? <option value={v}>{String(v)} (not known)</option> : null; })()}</select>
         </RuField>
       );
@@ -10207,14 +10225,15 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       case "noLoneWeekendDay": return <SuCheck testid="rules-no-lone-weekend" label="No lone Saturday or Sunday (primary, hard)" title="Holding one of the two needs the other." checked={draft.noLoneWeekendDay === true} onChange={v => set("noLoneWeekendDay", v ? true : undefined)} />;
       case "weekendCap": return (
         <div>
-          <RuField T={T} label="Weekends per month (soft)" hint="a weekend counts once, in the month of its Saturday"><input data-testid="rules-weekend-cap-month" type="number" min="0" max="5" value={numVal("weekendCap.perMonth")} onChange={numSet("weekendCap.perMonth")} style={{ ...inp, width: 70 }} /></RuField>
+          <RuField T={T} label="Weekends per month (soft)" hint="starts at 2 a month when added and applies at once; a weekend counts once, in the month of its Saturday"><input data-testid="rules-weekend-cap-month" type="number" min="0" max="5" value={numVal("weekendCap.perMonth")} onChange={numSet("weekendCap.perMonth")} style={{ ...inp, width: 70 }} /></RuField>
           <SuCheck testid="rules-weekend-cap-east" label="East weekends count" checked={get("weekendCap.countsEast", false) === true} onChange={v => set("weekendCap.countsEast", v ? true : undefined)} />
           <span style={quiet}>counts</span>{roleChecks("weekendCap.roles", ["primary"])}
         </div>
       );
       case "weekendBlockPenalty": return (
         <RuField T={T} label="Discourage multi-day weekends" hint="soft: a penalty on every block or split this surgeon is in">
-          <select data-testid="rules-weekend-block-penalty" value={get("weekendBlockPenalty", "") === null ? "" : String(get("weekendBlockPenalty", ""))} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select>
+          {/* review 10/1: a blank value is not "none" - the scheduler reads it as medium (it shows as such until changed) */}
+          <select data-testid="rules-weekend-block-penalty" value={(() => { const v = get("weekendBlockPenalty", null); return v === null ? "" : v === "" ? "__blank" : String(v); })()} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : e.target.value === "__blank" ? "" : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "medium" || v === "strong" ? null : v === "" ? <option value="__blank">blank - read as medium</option> : <option value={String(v)}>custom: {String(v)}</option>; })()}</select>
         </RuField>
       );
       case "weekendsAvailable": return (
@@ -10284,7 +10303,9 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         </div>
       );
       case "maxMajorHolidays": return (
-        <RuField T={T} label="Most major holidays in 12 months" hint="hard; blank = no limit"><input data-testid="rules-max-major" type="number" min="0" max="3" value={(() => { const a = get("holidayRules.maxMajorHolidays", null); if (typeof a === "number") return a; const b = get("preferences.maxMajorHolidays", null); return typeof b === "number" ? b : ""; })()} onChange={e => set("holidayRules.maxMajorHolidays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+        // review 10/1: clearing deletes both places the limit can live (the older preferences one too - the scheduler reads
+        // it when the holiday one is absent), so blank = no limit is true
+        <RuField T={T} label="Most major holidays in 12 months" hint="hard; blank = no limit"><input data-testid="rules-max-major" type="number" min="0" max="3" value={(() => { const a = get("holidayRules.maxMajorHolidays", null); if (typeof a === "number") return a; const b = get("preferences.maxMajorHolidays", null); return typeof b === "number" ? b : ""; })()} onChange={e => { if (e.target.value === "") { setDirty(true); setDraft(d => suRuleFieldRemove(suRuleField("maxMajorHolidays"), d)); } else set("holidayRules.maxMajorHolidays", Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></RuField>
       );
       default: return <span style={quiet}>{id}</span>;
     }
@@ -10298,7 +10319,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       </div>
       {!sel ? null : <>
         <div data-testid="rules-summary" style={{ border: "1px solid " + T.border, borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: T.raised }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.text, marginBottom: 6 }}>{s.name || sel} - in plain words{dirty ? <span style={{ fontWeight: 400, color: T.accentText }}> (with the unsaved changes)</span> : null}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.text, marginBottom: 6 }}>{s.name || sel} - in plain words{dirty || groupDirty ? <span data-testid="rules-summary-unsaved" style={{ fontWeight: 400, color: T.accentText }}> (with the unsaved changes)</span> : null}</div>
           {summary.map(l => (
             <div key={l.family} data-testid="rules-summary-line" data-family={l.family} className="rules-sum-line" style={{ fontSize: 12.5, lineHeight: 1.45, marginBottom: 4 }}>
               <span className="rules-sum-family" style={{ fontWeight: 700, color: T.muted }}>{l.family}</span>
@@ -10310,10 +10331,12 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         <div style={box}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
             <div style={{ flex: "1 1 auto", fontSize: 12.5, fontWeight: 700, color: T.text }}>Rules in use <span style={{ fontWeight: 400, color: T.muted }}>({displayed.length})</span></div>
-            <select data-testid="rules-add" aria-label="Add a rule" value="" onChange={e => { if (e.target.value) addRule(e.target.value); }} style={{ ...inp, width: 230, maxWidth: "100%" }}>
-              <option value="">Add a rule...</option>
+            {/* review 10/1: the select only chooses (a keyboard ArrowDown on it used to add a rule per step); Add adds */}
+            <select data-testid="rules-add" aria-label="Choose a rule to add" value={menu.some(f => f.id === addPick) ? addPick : ""} onChange={e => setAddPick(e.target.value)} style={{ ...inp, width: 230, maxWidth: "100%" }}>
+              <option value="">Choose a rule to add...</option>
               {SU_RULE_GROUPS.map(g => { const fs = menu.filter(f => f.group === g.id); return fs.length ? <optgroup key={g.id} label={g.label}>{fs.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</optgroup> : null; })}
             </select>
+            <button data-testid="rules-add-button" type="button" disabled={!menu.some(f => f.id === addPick)} onClick={() => { const id = addPick; setAddPick(""); addRule(id); }} style={{ ...css.mini(false), opacity: menu.some(f => f.id === addPick) ? 1 : 0.5 }}>Add</button>
           </div>
           {displayed.length === 0 && <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>No rules set for this surgeon - the group defaults apply. Add one from the menu.</div>}
           {SU_RULE_GROUPS.map(g => {
@@ -10325,7 +10348,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
                 {fs.map(f => (
                   <div key={f.id} data-testid={"rules-field-" + f.id} className="rules-field" style={{ padding: "6px 0 2px", borderTop: "1px solid " + T.border }}>
                     <div className="rules-field-body">{renderField(f.id)}</div>
-                    <button data-testid={"rules-remove-" + f.id} className="rules-field-remove" onClick={() => removeRule(f)} title="Remove this rule - the default applies again" style={css.mini(false)}>Remove rule</button>
+                    <button data-testid={"rules-remove-" + f.id} className="rules-field-remove" onClick={() => removeRule(f)} aria-label={"Remove rule: " + f.label} title="Remove this rule - the default applies again" style={css.mini(false)}>Remove rule</button>
                   </div>
                 ))}
               </div>
