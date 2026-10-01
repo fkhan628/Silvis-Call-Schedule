@@ -2599,6 +2599,61 @@ const hW0 = R.eligibility(makeCtx({ schedule: { "2027-03-02": { primary: KHAN } 
 okElig(hW0, "weights.hardNeverBeyondNotice 0: the held slot is still eligible"); lacksSoft(hW0, "hard-never", "...with no soft");
 blocked(R.eligibility(makeCtx({ schedule: { "2026-11-03": { primary: ACTON } } }), "2026-11-03", P, ACTON), "hard-never-weekday:Tue", "no notice key (Acton): a held Tuesday stays hard - the holder reading belongs to the notice only");
 function grN0Held() { return Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { hardNeverBeyondNotice: 0 }) }); }
+// Review 2 (10/1): "held" is read on the STANDING schedule (ctx.heldSchedule: a snapshot of input.heldSchedule, else of
+// input.schedule as given) - never on ctx.schedule, which may be a preview, a draft or the generator's working copy.
+{
+  const TUEH = "2027-03-02", T0 = "2027-02-01";
+  const kRow = () => ({ primary: KHAN, backup: null, primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null });
+  const hsDefault = makeCtx({ schedule: { [TUEH]: kRow() }, today: T0 });
+  eq(hsDefault.heldSchedule[TUEH], { primary: KHAN, backup: null }, "buildContext: no input.heldSchedule -> ctx.heldSchedule snapshots input.schedule's holders");
+  ok(hsDefault.heldSchedule !== hsDefault.schedule && hsDefault.heldSchedule[TUEH] !== hsDefault.schedule[TUEH], "...as a copy (never the schedule object or its rows)");
+  // a preview's own NEW row: on ctx.schedule (the final map) but not on the standing rows -> measured from today: hard
+  blocked(R.eligibility(makeCtx({ schedule: { [TUEH]: kRow() }, heldSchedule: {}, today: T0 }), TUEH, P, KHAN), "hard-never-weekday:Tue", "a preview row new against the standing rows (heldSchedule {}) 29 days out: hard");
+  const hsLive = makeCtx({ schedule: { [TUEH]: kRow() }, heldSchedule: { [TUEH]: kRow() }, today: T0 });
+  okElig(R.eligibility(hsLive, TUEH, P, KHAN), "...the same row unchanged from the standing rows: eligible");
+  hasSoft(R.eligibility(hsLive, TUEH, P, KHAN), "hard-never-beyond-notice:Tue", "...with the soft term (a held slot is a fact)");
+  // the day editor's reading: the draft switched the slot to Burchett, the SAVED holder is Khan -> putting him back is no new placement
+  const hsDraft = makeCtx({ schedule: { [TUEH]: Object.assign(kRow(), { primary: BURCHETT }) }, heldSchedule: { [TUEH]: kRow() }, today: T0 });
+  okElig(R.eligibility(hsDraft, TUEH, P, KHAN), "the saved holder judged on a draft that moved him off: eligible (the standing holder)");
+  hasSoft(R.eligibility(hsDraft, TUEH, P, KHAN), "hard-never-beyond-notice:Tue", "...with the soft term");
+  blocked(R.eligibility(makeCtx({ schedule: { [TUEH]: kRow() }, heldSchedule: { [TUEH]: Object.assign(kRow(), { primary: BURCHETT }) }, today: T0 }), TUEH, P, KHAN), "hard-never-weekday:Tue", "...and a draft pick of Khan over Burchett's saved slot: hard (the Override panel)");
+  // the snapshot is taken at build time: an in-place write to ctx.schedule (the generator's working copy, a caller's edit) never makes a row held
+  const hsMut = makeCtx({ schedule: {}, today: T0 });
+  hsMut.schedule[TUEH] = kRow();
+  blocked(R.eligibility(hsMut, TUEH, P, KHAN), "hard-never-weekday:Tue", "a row written into ctx.schedule after the build is not held: hard");
+  const srcSched = { [TUEH]: kRow() }, hsCopy = makeCtx({ schedule: srcSched, today: T0 });
+  srcSched[TUEH].primary = BURCHETT;
+  eq(hsCopy.heldSchedule[TUEH].primary, KHAN, "...and a later edit of the input rows does not move the snapshot");
+  const hsBad = makeCtx({ schedule: { [TUEH]: kRow() }, heldSchedule: [TUEH], today: T0 });
+  ok(hsBad.warnings.some(w => /heldSchedule is not a/.test(w)), "a malformed heldSchedule warns: " + JSON.stringify(hsBad.warnings));
+  blocked(R.eligibility(hsBad, TUEH, P, KHAN), "hard-never-weekday:Tue", "...and nothing is held (the conservative reading)");
+  eq(clone(R.heldSnapshot({ "2027-03-02": { primary: KHAN }, "2027-03-03": { primary: null, backup: null }, x: null })), { "2027-03-02": { primary: KHAN, backup: null } }, "rules.heldSnapshot keeps the holders of the rows that have one");
+  // generate(): the run's held reading is the schedule it STARTS from. Tue 1/5/2027, today 12/1/2026 (35 days out); the
+  // input row is an UNLOCKED Khan primary (published / generated); everyone else carries a primary-scoped unavailable row.
+  // Default mode clears the row first, so Khan there is a NEW placement (hard - the slot stays open, his reason the OR-day
+  // rule, and a placement bug there would read as a hard violation in genEvaluate); fill-open-only keeps the row as a
+  // standing fact (soft - no fixed violation). A spy on rules.eligibility records what the run's ctx.heldSchedule said.
+  const TUEG = "2027-01-05", TG = "2026-12-01";
+  eq(R.rdDaysBetween(TG, TUEG), 35, "fixture arithmetic (generator held reading)");
+  const rowsG = [BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => ({ person_id: id, kind: "unavailable", role: P, start_date: TUEG, end_date: TUEG }));
+  const inG = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastFeedCoverage: EAST_COVER, eastBusyDays: {}, today: TG, schedule: { [TUEG]: Object.assign(kRow(), { backup: BURCHETT }) } });
+  inG.availabilityRows = inG.availabilityRows.concat(rowsG);
+  const cG = R.buildContext(inG), heldBefore = cG.heldSchedule;
+  const seen = { generate: [], fill: [] }; let mode = null;
+  const realElig = R.eligibility;
+  R.eligibility = function (c, d, role, id) { if (mode && d === TUEG && role === P && id === KHAN) seen[mode].push(!!(c.heldSchedule && c.heldSchedule[d] && c.heldSchedule[d].primary === KHAN)); return realElig.apply(this, arguments); };
+  let outG, outF;
+  try {
+    mode = "generate"; outG = G.generate(cG, "2027-01-04", "2027-01-10", { seed: 1, bestOf: 1 });
+    mode = "fill"; outF = G.generate(cG, "2027-01-04", "2027-01-10", { seed: 1, bestOf: 1, fillOpenOnly: true });
+  } finally { R.eligibility = realElig; mode = null; }
+  ok(seen.generate.length > 0 && seen.generate.every(x => x === false), "generate (default mode): the cleared unlocked Khan Tue is never held inside the run: " + JSON.stringify(seen.generate));
+  eq(outG.schedule[TUEG].primary, null, "...so he is not put back on it inside the notice (the slot stays open)");
+  eq((outG.diagnostics.uncovered.find(u => u.day === TUEG && u.role === P) || { reasons: {} }).reasons[KHAN], ["hard-never-weekday:Tue"], "...his reason: the OR-day rule (a new placement)");
+  ok(seen.fill.length > 0 && seen.fill.every(x => x === true), "fill-open-only: the kept row is held inside the run: " + JSON.stringify(seen.fill));
+  eq([outF.schedule[TUEG].primary, outF.diagnostics.hardViolations, outF.diagnostics.fixedViolations.filter(v => v.day === TUEG && v.role === P)], [KHAN, [], []], "...kept, no hard violation, no fixed violation (the soft term)");
+  ok(cG.heldSchedule === heldBefore && cG.heldSchedule[TUEG].primary === KHAN, "generate() restores the caller's held snapshot after the run");
+}
 okElig(R.eligibility(atToday("2026-11-17"), "2027-01-12", B, KHAN), "backup was never restricted (hardNeverWeekdaysRoles primary)");
 lacksSoft(R.eligibility(atToday("2026-11-16"), "2027-01-12", B, KHAN), "hard-never-beyond-notice", "no soft on a backup either");
 // his own dated row lifts the rule entirely (W) - inside the notice AND beyond it (no soft either)
@@ -2770,6 +2825,17 @@ const feb2 = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-06"), wkPair(
 eq(capOf(R.eligibility(feb2, "2027-02-13", P, KHAN, { assume: PAIR("2027-02-13") })), [{ reason: "weekend-cap:2", weight: 10 }], "a candidate between two held weekends pays the 10 adding it costs (the generator's choice), although once held the latest weekend carries it");
 eq(capOf(R.eligibility(feb2, "2027-02-27", P, KHAN, { assume: PAIR("2027-02-27") })), [{ reason: "weekend-cap:2", weight: 10 }], "...a candidate after them too");
 eq(capSum(feb2, "2027-02"), 0, "control: 2 Silvis weekends - at the cap, no term");
+// Review 2 (10/1): a CANDIDATE day of a weekend that already counts through a day he holds (a lone Sunday 2/21 beside two
+// held weekends) adds no weekend - it pays 0, the marginal cost (it used to take the held reading and pay 10 while the
+// month's count did not move). Both lock variants of the review probe; the new-weekend candidate (2/27) still pays.
+[[false, false, "the Sunday and the other weekends unlocked"], [true, true, "the Sunday and the other weekends locked"]].forEach(([othersL, sunL, label]) => {
+  const lone = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-06", { primaryLocked: othersL }), wkPair("2027-02-13", { primaryLocked: othersL }), { "2027-02-21": { primary: KHAN, primaryLocked: sunL } }) });
+  eq(R.weekendCapCounts(lone, KHAN, "2027-02").weekends.map(w => w.saturday), ["2027-02-06", "2027-02-13", "2027-02-20"], "fixture (" + label + "): the lone Sunday already counts the 2/20 weekend");
+  const sat = R.eligibility(lone, "2027-02-20", P, KHAN);
+  okElig(sat, "candidate Sat 2/20 beside his lone Sunday (" + label + "): eligible");
+  eq(capOf(sat), [], "...and no weekend-cap term: the weekend already counts (" + label + ")");
+  eq(capOf(R.eligibility(lone, "2027-02-27", P, KHAN, { assume: PAIR("2027-02-27") })), [{ reason: "weekend-cap:2", weight: 10 }], "...while a NEW weekend (2/27) still pays the 10 adding it costs (" + label + ")");
+});
 // forecast days (Davenport unpublished): at or over the busy threshold count, below do not; never inside the published coverage
 // (EAST_COVER ends 1/31/2027) and never on a busy:false override day
 const fcCap = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-06": 0.6, "2027-02-14": 0.5, "2027-02-21": 0.4, "2027-01-09": 0.9 } } });

@@ -216,15 +216,27 @@
 //                 +weights.hardNeverBeyondNotice (3), so his allowed weekdays fill
 //                 first. A dated row / offer of his lifts the rule entirely, as
 //                 before (W); absent or not a whole number >= 0 = hard everywhere
-//                 (a malformed value warns once). A slot he already HOLDS (the
-//                 evaluated slot is his on ctx.schedule - a published or generated
-//                 day, a lock) reads the soft term inside the notice too (Prompt 23
-//                 review, 10/1): it was placed when the notice allowed it, so the
-//                 passing of time never turns it into a hard violation (fill-open-only
-//                 fixedViolations, the publish preflight, the day editor's holder). A
-//                 NEW placement - an open slot, someone else's slot (a claim, a trade,
-//                 an editor pick), every candidate the generator weighs - stays
+//                 (a malformed value warns once). A slot he already HOLDS on the
+//                 STANDING schedule (ctx.heldSchedule, below) reads the soft term
+//                 inside the notice too (Prompt 23 review, 10/1): it was placed when
+//                 the notice allowed it, so the passing of time never turns it into a
+//                 hard violation (fill-open-only fixedViolations, the publish
+//                 preflight, the day editor's saved holder). A NEW placement - an
+//                 open slot, someone else's slot (a claim, a trade, an editor pick),
+//                 a preview's own new rows, every slot the generator places - stays
 //                 measured from ctx.today.
+//   heldSchedule  (review 2, 10/1) the standing schedule the caller declares -
+//                 the rows that are FACTS (published / saved rows; a fill-open-only
+//                 run's kept rows). buildContext snapshots { date: { primary, backup } }
+//                 of input.heldSchedule, else of input.schedule AS GIVEN, into
+//                 ctx.heldSchedule - a copy, so the generator's in-place working
+//                 schedule and a caller's later edits never change it. The notice's
+//                 held test reads ONLY this snapshot (never ctx.schedule, never
+//                 assume-slots): the publish CLI passes the live rows (a preview's new
+//                 row is new), the day editor the saved rows (a newly picked holder is
+//                 new), and generate() narrows it for the run to the rows the run
+//                 starts from (its own placements are new). Not an object -> one
+//                 warning and nothing held.
 //   ctx.today     input.today ('YYYY-MM-DD'); absent -> the Central date when the
 //                 context is built (rdTodayCentral - the same expression as
 //                 helpers.todayCentral and generator genTodayStr). Every ctx the
@@ -268,7 +280,9 @@
 //                 finished schedule summed past "weight per weekend over"): a NEW
 //                 weekend (a candidate placement - the weekend is not on ctx.schedule
 //                 yet) pays weight when the month then counts more than perMonth (the
-//                 cost of adding it); a weekend he already holds pays weight when it
+//                 cost of adding it), a candidate day of a weekend that already counts
+//                 through another day he holds pays nothing (review 2, 10/1 - it adds
+//                 no weekend); a weekend he already holds pays weight when it
 //                 is past perMonth in the month's order - the East weekends first,
 //                 then his locked weekends, then the rest by date - so the terms of a
 //                 finished schedule add up to weight x (count - perMonth) whenever the
@@ -492,6 +506,20 @@ function rdNormalizeSchedule(schedule) {
   return schedule;
 }
 
+// rdHeldSnapshot(schedule) -> { 'YYYY-MM-DD': { primary, backup } } - a copy of the holders of every row that has one
+// (review 2, 10/1: ctx.heldSchedule, the standing schedule the notice's held test reads). Never mutates its input.
+function rdHeldSnapshot(schedule) {
+  var out = Object.create(null);
+  if (!schedule || typeof schedule !== "object") return out;
+  Object.keys(schedule).forEach(function (d) {
+    var e = schedule[d];
+    if (!e || typeof e !== "object") return;
+    var p = e.primary || null, b = e.backup || null;
+    if (p || b) out[d] = { primary: p, backup: b };
+  });
+  return out;
+}
+
 function rdAvailRec(map, date) {
   var r = map[date];
   if (!r) r = map[date] = { unavail: 0, avail: 0, backupOnly: false, noBackup: false, avoid: 0, prefer: 0 };
@@ -557,6 +585,10 @@ function buildContext(input) {
   var holidaysIn = input.holidays || {};
   var weekendDays = (groupRules.weekendUnit && groupRules.weekendUnit.days) || ["Fri", "Sat", "Sun"];
   var schedule = rdNormalizeSchedule(input.schedule || {});
+  // Review 2 (10/1): the standing schedule the notice's held test reads - input.heldSchedule when the caller declares
+  // one (the publish CLI: the live rows; the day editor: the saved rows), else input.schedule as given; always a copy.
+  var heldIn = input.heldSchedule, heldBad = heldIn !== undefined && heldIn !== null && (typeof heldIn !== "object" || Array.isArray(heldIn));
+  var heldSchedule = rdHeldSnapshot(heldIn === undefined || heldIn === null ? schedule : (heldBad ? null : heldIn));
   var dayBefore = groupRules.dayBeforeRules || {};
   var forecastThreshold = (groupRules.eastFeed && groupRules.eastFeed.forecast && groupRules.eastFeed.forecast.busyThreshold);
   if (typeof forecastThreshold !== "number") forecastThreshold = 0.5;
@@ -591,6 +623,7 @@ function buildContext(input) {
     holidays: holidaysIn,
     holidayFlags: groupRules.holidays || {},
     schedule: schedule,
+    heldSchedule: heldSchedule,         // review 2 (10/1): the standing rows (a snapshot) - the notice's held test reads only this
     per: {},
     holidayByDay: Object.create(null),
     holidayUnitsAll: [],
@@ -620,6 +653,7 @@ function buildContext(input) {
   if (ctx.holidayFlags && Object.prototype.hasOwnProperty.call(ctx.holidayFlags, "unitExemptFromMaxConsecutive")) {
     ctx.warnings.push("groupRules.holidays.unitExemptFromMaxConsecutive is ignored (Prompt 12 A, 9/22): a holiday unit counts as one day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true - remove the group key from the blob");
   }
+  if (heldBad) ctx.warnings.push("heldSchedule is not a { 'YYYY-MM-DD': row } object (review 2, 10/1): read as nothing held - every Tue/Thu inside a hardNeverWeekdays notice is judged as a new placement");
   if (todayIn !== undefined && todayIn !== null && !todayOk) ctx.warnings.push("today " + JSON.stringify(todayIn) + " is not a 'YYYY-MM-DD' date (Prompt 23): read as the Central date " + today + " - the hardNeverWeekdays notice is measured from it");
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
   // audit RG-1 (9/23): "anyone not opted out may cover a holiday" is fixed behaviour - the opt-out is
@@ -1372,8 +1406,9 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // (the schedule decides), exempt where a holiday unit cuts the weekend, lifted by
 // his own dated row / offer for the day (rowAvail). Prompt 23's soft codes:
 // weekday-primary (-weights.weekendContribution, primaryContribution "weekdays"),
-// hard-never-beyond-notice:<wd> (+weights.hardNeverBeyondNotice; also a held slot
-// inside the notice - review 10/1) and weekend-cap:<n> (weekendCap.weight per
+// hard-never-beyond-notice:<wd> (+weights.hardNeverBeyondNotice; also a slot held
+// on ctx.heldSchedule inside the notice - review 10/1, review 2) and
+// weekend-cap:<n> (weekendCap.weight per
 // weekend past n - review 10/1).
 // not-offered (Prompt 14 P2, 9/23): a SUBMITTED surgeon in EXHAUSTIVE mode on a
 // day/role he did not offer inside the period - decided in rdStatic
@@ -1548,8 +1583,8 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // out the day is allowed with the soft hard-never-beyond-notice (weights.hardNeverBeyondNotice) so his allowed
   // weekdays fill first. A dated row still lifts it entirely (W) - no soft either.
   // Prompt 23 review (10/1): a notice-bound hard reason is flagged (res.noticeHard = the weekday) so eligibility() can
-  // read a slot the surgeon already HOLDS with the soft term instead - this layer is schedule-free (memoized), the
-  // holder test is dynamic.
+  // read a slot the surgeon already HOLDS on the standing schedule (ctx.heldSchedule) with the soft term instead - this
+  // layer is schedule-free (memoized), the holder test is dynamic.
   var notRecurring = false;
   var patternDeferred = false;
   if (!waive) {
@@ -1664,13 +1699,17 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   hard = hard.concat(st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
   // Prompt 23 review (10/1): hardNeverWeekdaysNoticeDays measures a NEW placement from ctx.today. A slot he already
-  // holds on ctx.schedule (published, generated, locked) was placed when the notice allowed it - the held slot is a fact
-  // as far as the notice goes - so inside the notice it reads the soft hard-never-beyond-notice term, never the hard
-  // reason (else every legal far Tue/Thu turns hard 56 days before it: fill-open-only fixedViolations, the publish
-  // preflight, the day editor's holder). Only the slot's own holder qualifies: an open slot or someone else's (a claim,
-  // a trade, an editor pick - the editor judges candidates on the draft before the pick, the CLI on a cleared role) and
-  // every generator candidate (the default mode clears unlocked slots) stay hard; assume-slots never count here.
-  if (st.noticeHard && entry && entry[role] === surgeonId) {
+  // holds on the STANDING schedule was placed when the notice allowed it - the held slot is a fact as far as the notice
+  // goes - so inside the notice it reads the soft hard-never-beyond-notice term, never the hard reason (else every legal
+  // far Tue/Thu turns hard 56 days before it: fill-open-only fixedViolations, the publish preflight, the day editor's
+  // saved holder). Review 2 (10/1): "holds" is read on ctx.heldSchedule - the snapshot buildContext took of the
+  // standing rows (input.heldSchedule, else input.schedule as given) - NEVER on ctx.schedule, which may be a preview
+  // (the publish preflight's final map), a draft (the day editor) or the generator's working copy, where every new row
+  // would read as held. So an open slot, someone else's slot (a claim, a trade, a give, an editor pick), a preview's new
+  // row and every slot generate() places (it narrows the snapshot to the rows the run starts from) stay hard; only the
+  // standing holder of the evaluated slot and role qualifies; assume-slots never count here.
+  var heldE = ctx.heldSchedule ? ctx.heldSchedule[dateStr] : null;
+  if (st.noticeHard && heldE && heldE[role] === surgeonId) {
     var nhAt = hard.indexOf("hard-never-weekday:" + st.noticeHard);
     if (nhAt >= 0) {
       hard.splice(nhAt, 1);
@@ -1954,7 +1993,12 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     var lockedOn = function (d) { var e = sched[d]; if (!e) return false; for (var r = 0; r < wcap.roles.length; r++) if (e[wcap.roles[r]] === surgeonId && e[wcap.roles[r] + "Locked"]) return true; return false; };
     var thisDays = countedDaysOf(wkFri), carrier = null;
     for (var cd = 0; cd < thisDays.length && !carrier; cd++) if (holdsCounted(thisDays[cd])) carrier = thisDays[cd];
-    if (carrier === dateStr && !rdWeekendEastCounted(ctx, P, wkFri)) {
+    // Review 2 (10/1): a CANDIDATE (the evaluated slot is not his on ctx.schedule) whose weekend already counts through a
+    // day he holds there - a Saturday beside his locked lone Sunday - adds no weekend: its marginal cost is 0 (it used to
+    // take the held reading and pay weight while the month's count did not move).
+    var wkCandidate = !(sched[dateStr] && sched[dateStr][role] === surgeonId);
+    var wkAlready = wkCandidate && thisDays.some(schedHolds);
+    if (carrier === dateStr && !wkAlready && !rdWeekendEastCounted(ctx, P, wkFri)) {
       var wkMonth = wkSat.slice(0, 7), wkCount = 0, wkAhead = 0;
       var wkHeld = thisDays.some(schedHolds);                       // on the schedule already (a finished / held reading)
       var wkClass = thisDays.some(lockedOn) ? 1 : 2;                // 0 East, 1 locked Silvis, 2 other Silvis
@@ -2410,6 +2454,7 @@ if (typeof module !== "undefined") {
     rdParse: rdParse,
     rdAddDays: rdAddDays,
     rdWeekday: rdWeekday,
-    rdDaysBetween: rdDaysBetween
+    rdDaysBetween: rdDaysBetween,
+    heldSnapshot: rdHeldSnapshot
   };
 }

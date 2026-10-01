@@ -397,15 +397,27 @@ day held — schedule or assume-slots — or a holiday cut, or a dated row / off
 counted once in its Saturday's month (Silvis `roles` on `days`, or East-busy — `rdEastBusyOn`: feed + overrides, standing,
 forecast ≥ threshold outside the coverage, never a home day), on the weekend's first held counted day, only when the East
 data do not already count it; a weekend not yet on `ctx.schedule` (a candidate) pays when the month then counts more than
-n, a held one when it is past n in the month's order (East weekends, then his locked weekends, then by date), so a finished
+n (a candidate day of a weekend that already counts through another day he holds there pays nothing - review 2, 10/1),
+a held one when it is past n in the month's order (East weekends, then his locked weekends, then by date), so a finished
 schedule's terms add up to weight × (count − n) (review 10/1 - it read weight × (count − n) on every held weekend);
 `rules.weekendCapCounts(ctx, id, month)` lists the counted weekends. `hardNeverWeekdaysNoticeDays`:
 `hard-never-weekday` only for a date ≤ N days after `ctx.today`; beyond it the soft `hard-never-beyond-notice:<wd>` at
 `weights.hardNeverBeyondNotice` (code default 3 = medium: at the default `weekendContribution` 3 it equals the weekday bonus,
 so a far Tue/Thu nets 0 - allowed, never preferred; a higher `weekendContribution` makes it preferred again unless this weight
-rises too). A slot the surgeon already **holds** on `ctx.schedule` reads the soft term inside the notice as well (review 10/1:
-`rdStatic` flags the notice-bound reason, `eligibility()` swaps it for the soft term when the evaluated slot is his) - a new
-placement (open slot, someone else's slot, every generator candidate) stays hard. **`ctx.today`** = `input.today`, else the Central date read once by
+rises too). A slot the surgeon already **holds** on the **standing** schedule reads the soft term inside the notice as well
+(review 10/1: `rdStatic` flags the notice-bound reason, `eligibility()` swaps it for the soft term when the standing holder
+of the evaluated slot and role is him) - a new placement (open slot, someone else's slot, a preview's own new row, every slot
+the generator places) stays hard. Review 2 (10/1): the standing schedule is **`ctx.heldSchedule`**, a `{ day: { primary,
+backup } }` snapshot `buildContext` takes of `input.heldSchedule`, else of `input.schedule` as given (`rules.heldSnapshot`;
+a copy - later in-place writes to `ctx.schedule` never change it; a non-object warns and holds nothing); `eligibility()`
+never reads the holder on `ctx.schedule`. Callers: the app's main context (saved rows) and Generate use the default; the day
+editor's draft context passes `heldSchedule: ctxInputs.schedule` (the saved rows); `scripts/publish-preview.js` passes the
+live rows to `buildLiveContext`, and `preflight()` installs the live holders from the plan (`plan.live`, else
+`standingOf(plan)` = the final map with the planned changes put back) for its evaluation and restores the ctx's own after;
+`generate()` narrows it for the run (`genRunHeld`: outside the range the caller's snapshot, inside it only the rows the run
+starts from - the locks / fixed slots `genSeedLocks` keeps - that the caller's snapshot holds with the same surgeon) and
+restores it in its `finally`, so `genEvaluate` / `genDiagnostics` read the run's own placements as new.
+**`ctx.today`** = `input.today`, else the Central date read once by
 `buildContext` (`rdTodayCentral`) — `eligibility()` never reads a clock; tests pin a fixed today (`test/seed-adapter.js`
 `SEED_TEST_TODAY` 2026-11-23). Malformed values warn once and are ignored (the notice: the rule stays hard everywhere).
 
@@ -1782,7 +1794,9 @@ node scripts/publish-preview.js --apply --workdir <linked dir>   # runs the SQL 
 - **Preflight** (before any SQL): (a) `diagnostics.hardViolations` empty in both passes and the milestone's
   `uncovered` empty (backfill opens are listed); (b) `rules.eligibility` over every placed slot of both ranges on the
   FINAL schedule — a lock holder's `conflicts` are the known locked facts (the preview's `lockViolations`), any other
-  hard reason aborts; a ctx the builder could not complete (no East id resolved for an `eastBlocks` surgeon, a failed
+  hard reason aborts (review 2, 10/1: the rules' "already held" reading - a Khan Tue/Thu inside his notice - reads the
+  LIVE rows, `plan.live`, never the final map: a preview-new row inside the notice aborts, an unchanged live row passes);
+  a ctx the builder could not complete (no East id resolved for an `eastBlocks` surgeon, a failed
   Davenport roster read) **fails the preflight outright** — an incomplete ctx would evaluate Khan's East days `ok`
   and PASS silently; (c) every range day covered or listed open; (d) distinct roles. `--apply` refuses unless all pass.
 - **Verification on `--apply`**: the batch's final `SELECT` (snapshot id, snapshots before → after, audit id,
