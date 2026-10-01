@@ -2658,8 +2658,12 @@ Object.keys(PAY_AFTER_EQ).forEach((k) => ok(payProbeHdr.indexOf(PAY_AFTER_EQ[k])
 
 step("call pay: verify-rls.sh section 14 - anon count=exact reads, the anon POST, the surgeon read, the graded probe, leftovers, the stipend switches by value; strict since the record step (a 404, an anon 200 or PROBE_SETUP FAILs); graded against a faked CLI");
 ok(/^echo "== 14\. call pay \(2026-09-27\): anon sees neither table, anon cannot write, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 14 (call pay)");
-const s14 = vr.slice(vr.indexOf('echo "== 14. '), vr.indexOf('echo "RESULT: '));
-ok(s14.length > 0 && s14.length < vr.length, "verify-rls.sh section 14 could not be sliced out (it sits right before the RESULT line)");
+// pin moved deliberately 9/30 (Prompt 27): section 15 (the vacation guard) now follows section 14, so section 14 is bounded at
+// section 15's heading when it exists (the RESULT line otherwise) - the pins below keep judging section 14 alone (its one REST
+// write, its graded cases), and the faked 14d run below does not run section 15's code.
+const s14End = vr.indexOf('echo "== 15. ') > 0 ? vr.indexOf('echo "== 15. ') : vr.indexOf('echo "RESULT: ');
+const s14 = vr.slice(vr.indexOf('echo "== 14. '), s14End);
+ok(s14.length > 0 && s14.length < vr.length, "verify-rls.sh section 14 could not be sliced out (it sits right before section 15, or the RESULT line)");
 ok(/for t in call_pay_settings call_pay_logs; do/.test(s14) && /-H "Prefer: count=exact"/.test(s14), "section 14a must read both tables as anon with count=exact");
 ok(/^\s*200\) bad "anon read of \$t: HTTP 200/m.test(s14), "section 14a must FAIL any anon 200 (even Content-Range */0) - the anon revoke is proven over REST (strict since the record step)");
 ok(/^\s*404\) bad "anon read of \$t: HTTP 404/m.test(s14) && /"HTTP 404"\) bad "anon POST call_pay_logs: HTTP 404/.test(s14) && /bad "call pay probe: PROBE_SETUP - call_pay_logs is absent/.test(s14), "section 14 must FAIL a 404 and PROBE_SETUP since the record step (the tables exist since the 2026-09-28 apply)");
@@ -2674,7 +2678,8 @@ Object.keys(PAY_AFTER_EQ).forEach((k) => ok(new RegExp("expect_eq14\\s+" + k + "
 ok(/email like 'probe-pay-%@example\.test'/.test(s14) && /source = 'probe-pay'/.test(s14) && /note like 'probe-pay%'/.test(s14) && /LEFT ROWS BEHIND/.test(s14), "section 14 must count leftovers (auth.users / schedule_days / call_pay_logs) and fail on non-zero");
 ok(!/SILVIS_CALL_PAY_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must no longer name SILVIS_CALL_PAY_APPLIED (the record step dropped it; strict is the default)");
 {
-  const code14d = vr.slice(vr.indexOf("# 14d."), vr.indexOf('\necho\necho "RESULT: '));
+  // pin moved deliberately 9/30 (Prompt 27): bounded at section 15's heading (the vacation guard follows 14d), else the RESULT line
+  const code14d = vr.slice(vr.indexOf("# 14d."), vr.indexOf('\necho "== 15. ') > 0 ? vr.indexOf('\necho "== 15. ') : vr.indexOf('\necho\necho "RESULT: '));
   // the faked q(): the real CLI's shape (CLI 2.84, as the 9/28 apply run printed it) - indented multi-line JSON with a space
   // after each colon, a RANDOM "boundary" per call and the value JSON-escaped - carrying the leftover count or the stipend switch
   // list: OFFVAL (already escaped, e.g. [\"s3\"]) on every read, unless OFFMARK is set - then the read after the probe answers
@@ -2765,5 +2770,209 @@ ok(/`call_pay_settings`/.test(g42) && /`call_pay_logs`/.test(g42), "guide 4.2 mu
   ok(/52 cases in its header/.test(cpProof) && /applied: 2026-09-28 01:15:26 UTC/.test(cpProof) && !/_to be filled/.test(cpProof) && !/SILVIS_CALL_PAY_APPLIED/.test(cpProof) && /verify-rls 271 \/ 0/.test(cpProof), "guide 4.3's call pay Proof line must carry the 52 probe cases, 'applied: 2026-09-28 01:15:26 UTC' and verify-rls 271 / 0 (no flag since the record step)");
 }
 console.log("- call pay: two new authenticated-only tables (report-first, applied 2026-09-28 01:15:26Z), mirrored, probe + verify-rls section 14 (strict) graded against a faked CLI, docs pinned");
+
+// ---- Vacation guard (2026-09-30, Faraz 9/30 - Prompt 27: "need at least 2 surgeons around") ----
+// sql/migrations/2026-09-30-vacation-guard.sql (REPORT-FIRST, NOT APPLIED; revision s) adds ONE trigger function and ONE trigger
+// on time_off and touches nothing that exists: VG001 VACATION_TOO_FEW_AROUND when, on a day the row takes the person off, fewer than
+// groupRules.vacations.minSurgeonsAround (default 2) active roster surgeons would stay around (off = a time_off row or an East
+// vacation not reviewed 'home'); the scheduler and a no-user session pass, the coordinator is refused. schema.sql mirrors it;
+// sql/probes/vacation-guard-probe.sql proves it (rolled back) and verify-rls.sh section 15 grades it - PROBE_SETUP passes as the
+// not-applied picture unless SILVIS_VACATION_GUARD_APPLIED=1 (the run right after the apply; the record step makes strict the
+// default, drops the flag and moves these pins to the applied wording, like call pay's record step did).
+const VG_FILE = "2026-09-30-vacation-guard.sql";
+const VG_MIGRATION = path.join(ROOT, "sql", "migrations", VG_FILE);
+const VG_PROBE = path.join(ROOT, "sql", "probes", "vacation-guard-probe.sql");
+const VG_OVERLIMIT = path.join(ROOT, "sql", "probes", "vacation-guard-overlimit.sql");
+const VG_CASES = ["P1", "P2", "P3", "P4", "S1", "S2", "S3", "S4", "E1", "E2", "E3", "I1", "K1", "K2", "C1", "M1", "A1", "N1"];
+const VG_MSG = (days) => "ERR VG001 VACATION_TOO_FEW_AROUND: on " + days + " only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler";
+const VG_AFTER_EQ = {
+  P1: "active=6 min=2", P2: "east=yes", P3: "triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t",
+  S1: "ok", S2: VG_MSG("10/16, 10/17"), S3: VG_MSG("10/19"), S4: "updated=1",
+  E1: VG_MSG("10/1"), E2: "ok", E3: VG_MSG("10/7"), I1: "ok",
+  C1: VG_MSG("10/9, 10/10"), M1: VG_MSG("10/25"), A1: "ok", N1: "ok",
+};
+// what the probe records AFTER the apply for the cases graded by code + substring (K1 / K2 carry the live roster id of n1)
+const VG_AFTER_ERR = {
+  K1: "ERR P0001 ON_CALL_CONFLICT: s2 is on call 10/13 (primary), trade those shifts before entering this vacation",
+  K2: "ERR P0001 ON_CALL_CONFLICT: s2 is on call 10/29 (backup), trade those shifts before entering this vacation",
+};
+const VG_TRIGGER = "create trigger time_off_vacation_guard_trg\n  before insert or update on public.time_off\n  for each row execute function public.time_off_vacation_guard();";
+
+step("vacation guard: the migration - one NEW trigger function + one NEW trigger on time_off, report-first NOT APPLIED (blast radius, apply order, rollback), no supersedes, mirrored (not exempt)");
+const vgMig = read(VG_MIGRATION);
+ok(!/\r/.test(vgMig), "vacation guard migration has CRLF line endings");
+ok(migFiles.includes(VG_FILE) && !PREPARED_NOT_MIRRORED.includes(VG_FILE), "sql/migrations/" + VG_FILE + " is a mirrored migration (not exempt)");
+const vgHdr = vgMig.slice(0, vgMig.indexOf("create or replace function public.time_off_vacation_guard()"));
+ok(/^-- REPORT-FIRST, NOT APPLIED \(/m.test(vgHdr) && /Blast radius/.test(vgHdr) && /What the trigger sees/.test(vgHdr) && /Who it binds/.test(vgHdr) && /Need at least 2 surgeons around/.test(vgHdr), "the vacation guard migration header must say REPORT-FIRST, NOT APPLIED, quote Faraz, and state what the trigger sees, whom it binds and the blast radius");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-30-vacation-guard\.sql/.test(vgHdr) && /SILVIS_VACATION_GUARD_APPLIED=1 bash scripts\/verify-rls\.sh/.test(vgHdr) && /vacation-guard-probe\.sql/.test(vgHdr) && /vacation-guard-overlimit\.sql/.test(vgHdr) && /to_regprocedure\('public\.time_off_vacation_guard\(\)'\)/.test(vgHdr), "the header carries the pre-check, the over-limit query, the probe, the CLI apply line and the strict verify-rls run");
+ok(/^-- Rolling back = `drop trigger if exists time_off_vacation_guard_trg on public\.time_off; drop function if exists public\.time_off_vacation_guard\(\);`$/m.test(vgHdr), "the header gives the rollback (the trigger, then the function)");
+ok(/VG001 VACATION_TOO_FEW_AROUND: on 3\/18, 3\/19 only 1 of 6 surgeons would be around \(minimum 2\) - pick other dates or ask the scheduler/.test(vgHdr), "the header quotes the refusal");
+ok(!/^-- supersedes:/m.test(vgMig) && !/^-- PREPARED FOLLOW-UP/m.test(vgMig), "the vacation guard migration redefines no existing function (no supersedes line) and is not a NOT-MIRRORED follow-up");
+const vgStmts = payStatements(vgMig);
+eq(vgStmts.map((st) => st.split("\n")[0]), ["create or replace function public.time_off_vacation_guard() returns trigger", "drop trigger if exists time_off_vacation_guard_trg on public.time_off;", "create trigger time_off_vacation_guard_trg"], "the migration is exactly the function, the drop-if-exists and the trigger;");
+eq(vgStmts[2], VG_TRIGGER, "the trigger: BEFORE INSERT OR UPDATE, FOR EACH ROW, on time_off;");
+ok("time_off_no_call_conflict_trg" < "time_off_vacation_guard_trg", "the on-call trigger fires first (Postgres fires BEFORE ROW triggers in name order)");
+const vgFn = functionText(vgMig, "time_off_vacation_guard");
+ok(vgFn && vgFn.startsWith("create or replace function public.time_off_vacation_guard() returns trigger\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n"), "time_off_vacation_guard must be security definer with search_path public, pg_temp (the reads must not depend on the caller's RLS)");
+eq((vgFn.match(/raise exception/g) || []).length, 1, "one refusal, one code;");
+ok(/raise exception 'VACATION_TOO_FEW_AROUND: on % of % surgeons would be around \(minimum %\) - pick other dates or ask the scheduler',\n      over_txt, cardinality\(active\), min_around using errcode = 'VG001';/.test(vgFn), "the refusal: VG001 VACATION_TOO_FEW_AROUND with the days, the active count and the minimum");
+{
+  const lock = vgFn.indexOf("  perform pg_advisory_xact_lock(hashtext('time_off:vacation_guard'));");
+  const bypass = vgFn.indexOf("  if auth.uid() is null or public.silvis_is_sched() then\n    return new;\n  end if;");
+  const blob = vgFn.indexOf("  select c.data into blob from public.call_schedule_data c where c.id = 'main';");
+  ok(lock > 0 && bypass > lock && blob > bypass, "the advisory lock, then the scheduler / no-user exit, then the blob read (" + [lock, bypass, blob] + ")");
+  ok(vgFn.indexOf("if tg_op = 'UPDATE' then\n    if new.person_id = old.person_id then\n      if new.start_date >= old.start_date and new.end_date <= old.end_date then\n        return new;\n      end if;\n      o_start := old.start_date;\n      o_end := old.end_date;\n    end if;\n    ex_old := old.id;\n  end if;") > 0 && vgFn.indexOf("if tg_op = 'UPDATE'") < lock, "an UPDATE that takes the person off no new day returns first; a widening checks only the NEW-minus-OLD days of the same person");
+}
+ok(!/silvis_is_coord/.test(vgFn), "no office exemption: the coordinator is refused like a surgeon");
+ok(vgFn.includes("  min_around  int := 2;") && vgFn.includes("if jsonb_typeof(blob #> '{groupRules,vacations,minSurgeonsAround}') = 'number' then") && vgFn.includes("if m = trunc(m) and m >= 0 and m <= 99 then"), "the minimum: groupRules.vacations.minSurgeonsAround, a whole number 0-99, else 2 (helpers.vacationRules)");
+ok(vgFn.includes("and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external'") && vgFn.includes("if not (new.person_id = any(active)) then\n    return new;\n  end if;"), "counted over the ACTIVE roster (active not false, not external); a non-active person passes");
+ok(vgFn.includes("'eastFeed', 'enabled']) = 'true'::jsonb") && vgFn.includes("'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb") && vgFn.includes("'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb") && vgFn.includes("coalesce(e.r->>'code', '') <> ''"), "the East people: the app's eastVacationPerson (an enabled East feature that blocks a role, a roster code)");
+ok(vgFn.includes("where (f.data->'isForecast') is distinct from 'true'::jsonb") && vgFn.includes("upper(coalesce(v.r->>'code', '')) = east_codes[array_position(east_ids, a.id)]") && vgFn.includes("and to_char(d.day, 'YYYY-MM-DD') between v.r->>'start' and v.r->>'end')"), "the East ranges: the east_feed payload by roster code, forecast rows skipped, compared as YYYY-MM-DD text (never cast)");
+ok(vgFn.includes("and not exists (select 1 from public.east_vacation_reviews w\n                             where w.person_id = a.id and w.decision = 'home' and d.day between w.\"start\" and w.\"end\"))"), "a day a 'home' review covers is not off; away and unreviewed are");
+ok(vgFn.includes("where t.person_id = a.id and t.id <> new.id and t.id is distinct from ex_old"), "the row being written (and on an UPDATE its old version) is not counted");
+ok(vgFn.includes("     where not exists (select 1 from off_before o where o.day = d.day and o.id = new.person_id)"), "a day the person is already off by another row / an East vacation is not checked");
+{
+  // the message parity with helpers.js: the SQL builds the day list exactly as vacationGuardMessage does
+  const H = require(path.join(ROOT, "helpers.js"));
+  const fmt = (vgFn.match(/raise exception '(VACATION_TOO_FEW_AROUND: [^']*)'/) || [])[1] || "";
+  ok(fmt.startsWith(H.VG_CODE + ": on ") && fmt.endsWith(H.VG_TAIL), "the SQL text starts with helpers VG_CODE and ends with VG_TAIL");
+  ok(vgFn.includes("string_agg(case when n = 1 then to_char(s, 'FMMM/FMDD')\n                           when n = 2 then to_char(s, 'FMMM/FMDD') || ', ' || to_char(e, 'FMMM/FMDD')\n                           else to_char(s, 'FMMM/FMDD') || '-' || to_char(e, 'FMMM/FMDD') end, ', ' order by s) as txt") &&
+     vgFn.includes("select string_agg(txt || ' only ' || around, '; on ' order by first_day) into over_txt from by_count;") &&
+     vgFn.includes("day - (row_number() over (partition by around order by day))::int as grp"), "the SQL runs: 'M/D', 'M/D, M/D', 'M/D-M/D', grouped by the count in the order of the first day, '; on ' between groups");
+  const sql = (over, n, min) => fmt.replace("%", over).replace("%", String(n)).replace("%", String(min));
+  eq(sql("3/18, 3/19 only 1", 6, 2), H.vacationGuardMessage([{ day: "2027-03-18", around: 1 }, { day: "2027-03-19", around: 1 }], 6, 2), "the SQL text = helpers.vacationGuardMessage (one group);");
+  eq(sql("3/18, 3/20 only 1; on 3/19 only 0", 6, 2), H.vacationGuardMessage([{ day: "2027-03-18", around: 1 }, { day: "2027-03-19", around: 0 }, { day: "2027-03-20", around: 1 }], 6, 2), "the SQL text = helpers.vacationGuardMessage (two groups);");
+  eq(sql("3/16-3/18 only 1", 6, 3), H.vacationGuardMessage([{ day: "2027-03-16", around: 1 }, { day: "2027-03-17", around: 1 }, { day: "2027-03-18", around: 1 }], 6, 3), "the SQL text = helpers.vacationGuardMessage (a run of three);");
+}
+
+step("vacation guard: schema.sql mirrors every statement (the function byte for byte, the trigger after the on-call trigger), revision s 'report-first, NOT yet applied' after revision r");
+vgStmts.forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this vacation guard statement byte for byte:\n" + st.slice(0, 300)));
+ok(functionText(schema, "time_off_vacation_guard") === vgFn, "time_off_vacation_guard(): schema.sql differs from the migration");
+{
+  const onCall = schema.indexOf("  for each row execute function public.time_off_no_call_conflict();");
+  const block = schema.indexOf("-- ---------- vacation guard (2026-09-30, Faraz 9/30 - Prompt 27; sql/migrations/2026-09-30-vacation-guard.sql, revision s - report-first, NOT yet applied)");
+  const trg = schema.indexOf(VG_TRIGGER);
+  const avail = schema.indexOf("-- ---------- dated availability statements");
+  ok(onCall > 0 && block > onCall && trg > block && avail > trg, "schema.sql's vacation guard block sits right after the on-call trigger, before the availability table (" + [onCall, block, trg, avail] + ")");
+  eq((schema.match(/create trigger time_off_vacation_guard_trg/g) || []).length, 1, "one vacation guard trigger in schema.sql;");
+  const sAt = header.search(/^-- Revision 2026-09-30 s \(vacation guard, sql\/migrations\/2026-09-30-vacation-guard\.sql, report-first, NOT yet applied\): /m);
+  const rAt = header.search(/^-- Revision 2026-09-27 r /m);
+  ok(sAt > 0 && sAt > rAt, "schema.sql's header must record revision 2026-09-30 s (vacation guard; 'report-first, NOT yet applied' until the record step) after revision r");
+  const revS = header.slice(sAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0];
+  ok(/VG001 VACATION_TOO_FEW_AROUND/.test(revS) && /minSurgeonsAround/.test(revS) && /the scheduler and a no-user session pass, the coordinator is refused like a surgeon/.test(revS) && /No table, column, policy, grant or existing function changes/.test(revS), "revision s must name the code, the minimum, who passes and that nothing existing changes");
+}
+
+step("vacation guard: the probe is self-rolling-back, raises PROBE_SETUP before the apply, reads (never writes) the live roster, uses far-future 2030-10 fixtures and four throwaway users, states every AFTER string");
+const vgProbe = read(VG_PROBE);
+ok(!/\r/.test(vgProbe), "vacation guard probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(vgProbe), "vacation guard probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(vgProbe) && /grant insert, select on probe_results to authenticated;/.test(vgProbe), "vacation guard probe collects into probe_results granted to authenticated");
+const vgLastDo = vgProbe.lastIndexOf("do $$");
+ok(vgLastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(vgProbe.slice(vgLastDo)), "vacation guard probe's last DO block must raise 'PROBE_RESULTS %;END'");
+ok(/raise exception 'PROBE_SETUP: time_off_vacation_guard is absent - sql\/migrations\/2026-09-30-vacation-guard\.sql is not applied';/.test(vgProbe) && vgProbe.indexOf("PROBE_SETUP: time_off_vacation_guard is absent") < vgProbe.indexOf("insert into auth.users"), "the setup raises PROBE_SETUP before any fixture when the trigger is absent");
+VG_CASES.forEach((k) => ok(vgProbe.indexOf("values ('" + k + "', ") >= 0, "vacation guard probe lacks case " + k));
+ok(/'probe-vacguard-' \|\| u \|\| '@example\.test'/.test(vgProbe), "the throwaway users are probe-vacguard-<uuid>@example.test");
+ok(vgProbe.includes("update public.user_profiles set person_id = n[1], role = 'surgeon' where id = surgeon;") && vgProbe.includes("update public.user_profiles set person_id = n[2], role = 'surgeon' where id = surgeon2;") && vgProbe.includes("update public.user_profiles set role = 'coordinator' where id = coord;") && vgProbe.includes("update public.user_profiles set role = 'admin' where id = admin_u;"), "the acting users: surgeon n1, surgeon n2, an unlinked coordinator, an unlinked admin");
+const vgProbeCode = vgProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(vgProbeCode), "the probe never writes the blob (the roster is read, never modified - not even inside its transaction)");
+ok(vgProbeCode.includes("select c.data into blob from public.call_schedule_data c where c.id = 'main';"), "the probe reads the live roster from the blob");
+{
+  const days = Array.from(vgProbeCode.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]);
+  ok(days.length > 20 && days.every((d) => d.slice(0, 7) === "2030-10" || d === "2030-09-30"), "every fixture day in the probe is a far-future 2030-10 day (or the east_feed week 2030-09-30): " + days.filter((d) => !(d.slice(0, 7) === "2030-10" || d === "2030-09-30")).join(", "));
+  const inserts = Array.from(vgProbeCode.matchAll(/insert into public\.time_off \(person_id, start_date, end_date, note\) values ([^;]*);/g)).map((m) => m[1]);
+  ok(inserts.length >= 12, "the probe's time_off inserts could not be found (" + inserts.length + ")");
+  inserts.forEach((v) => v.split(/\),\s*\(/).forEach((t) => ok(/'probe-vacguard[^']*'\)?\s*$/.test(t.replace(/\s*returning id into rid\s*$/, "")), "every time_off row the probe writes carries a 'probe-vacguard' note (the leftover count keys on it): " + t.slice(0, 140))));
+  ok(vgProbeCode.includes("values ('2030-10-13', n[1], null, 'probe-vacguard'), ('2030-10-29', null, n[1], 'probe-vacguard');"), "the schedule_days fixtures carry source 'probe-vacguard' (10/13 primary n1, 10/29 backup n1)");
+  ok(vgProbeCode.includes("jsonb_build_object('probe', 'vacguard', 'vacations', jsonb_build_array(") && vgProbeCode.includes("values (e_id, '2030-10-01', '2030-10-02', 'away', 'probe-vacguard'), (e_id, '2030-10-04', '2030-10-05', 'home', 'probe-vacguard');"), "the East fixtures: one east_feed row (data.probe vacguard) with three ranges, an away and a home review (decided_by probe-vacguard), the third range unreviewed");
+  ok(/raise exception 'PROBE_SETUP: live rows already sit in 2030-10/.test(vgProbeCode) && /raise exception 'PROBE_SETUP: a cached East vacation range already touches 2030-10/.test(vgProbeCode), "the setup refuses to run over live rows in 2030-10");
+}
+const vgProbeHdr = vgProbe.slice(0, vgProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(vgProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(vgProbeHdr) && /does not modify the blob/.test(vgProbeHdr), "the probe header: report-first / not applied, nothing persisted, the blob never modified");
+ok(vgProbeHdr.includes("VG(days) below = '" + VG_MSG("<days>") + "'."), "the probe header defines VG(days) as the full refusal");
+Object.entries({ P1: "active=6 min=2", P2: "east=yes", P3: VG_AFTER_EQ.P3, P4: "inactive=roster | inactive=non-roster", S1: "ok", S2: "VG(10/16, 10/17)", S3: "VG(10/19)", S4: "updated=1", E1: "VG(10/1)", E3: "VG(10/7)", C1: "VG(10/9, 10/10)", M1: "VG(10/25)",
+  K1: "ERR P0001 ON_CALL_CONFLICT: <n1> is on call 10/13 (primary), trade those shifts before entering this vacation", K2: "ERR P0001 ON_CALL_CONFLICT: <n1> is on call 10/29 (backup), trade those shifts before entering this vacation" }).forEach(([k, v]) => {
+  const at = vgProbeHdr.indexOf("--   " + k + "  ");
+  const next = vgProbeHdr.slice(at + 5).search(/\n--   [A-Z][0-9]+  /);
+  const txt = at < 0 ? "" : vgProbeHdr.slice(at, next < 0 ? vgProbeHdr.length : at + 5 + next);
+  ok(at > 0 && txt.indexOf(v) > 0, "the probe header must state " + k + "'s AFTER `" + v + "`");
+});
+
+step("vacation guard: verify-rls.sh section 15 - the graded probe, leftovers, PROBE_SETUP passing as not applied unless SILVIS_VACATION_GUARD_APPLIED=1; no REST write; graded against a faked CLI");
+ok(/^echo "== 15\. vacation guard \(2026-09-30, Prompt 27\): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 15 (vacation guard)");
+const s15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('echo "RESULT: '));
+ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, right before the RESULT line)");
+const s15code = s15.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+eq((s15code.match(/-X (POST|PATCH|DELETE|PUT)|curl /g) || []).length, 0, "section 15 goes over no REST call (the probe runs through the linked CLI);");
+ok(s15code.includes('VGSTRICT15="${SILVIS_VACATION_GUARD_APPLIED:-}"') && /if \[ "\$VGSTRICT15" = "1" \]; then bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent with SILVIS_VACATION_GUARD_APPLIED=1/.test(s15code) && /else ok "vacation guard probe: the trigger is absent \(before the migration: PROBE_SETUP\)"/.test(s15code), "PROBE_SETUP is the not-applied picture (a PASS) unless SILVIS_VACATION_GUARD_APPLIED=1 (a FAIL)");
+ok(/PROBE15="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/vacation-guard-probe\.sql"/.test(s15code), "section 15 runs sql/probes/vacation-guard-probe.sql through the linked CLI");
+ok(s15code.includes('vg15()         { echo "ERR VG001 VACATION_TOO_FEW_AROUND: on $1 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"; }'), "section 15's refusal template");
+VG_CASES.filter((k) => k !== "P4").forEach((k) => ok(new RegExp("expect_(eq|err)15\\s+" + k + "\\s").test(s15code), "section 15 does not grade probe case " + k));
+ok(/p4_15=\$\(case_val15 P4\)/.test(s15code) && s15code.includes('"inactive=roster"|"inactive=non-roster") ok'), "section 15 grades P4 as either kind of inactive id");
+["P1", "P2", "P3", "S1", "S4", "E2", "I1", "A1", "N1"].forEach((k) => ok(new RegExp("expect_eq15\\s+" + k + "\\s+\"" + VG_AFTER_EQ[k].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\"").test(s15code), "section 15 must grade " + k + " = " + VG_AFTER_EQ[k]));
+[["S2", "10/16, 10/17"], ["S3", "10/19"], ["E1", "10/1"], ["E3", "10/7"], ["C1", "10/9, 10/10"], ["M1", "10/25"]].forEach(([k, d]) => ok(s15code.includes("expect_eq15  " + k + " \"$(vg15 '" + d + "')\""), "section 15 must grade " + k + " = VG(" + d + ")"));
+ok(/expect_err15 K1 P0001 "ON_CALL_CONFLICT"/.test(s15code) && /expect_err15 K2 P0001 "ON_CALL_CONFLICT"/.test(s15code), "section 15 grades K1 / K2 as the on-call refusal");
+ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.includes("note like 'probe-vacguard%'") && s15code.includes("source = 'probe-vacguard'") && s15code.includes("data->>'probe' = 'vacguard'") && s15code.includes("decided_by = 'probe-vacguard'") && /LEFT ROWS BEHIND/.test(s15code), "section 15 counts leftovers over auth.users / time_off / schedule_days / east_feed / east_vacation_reviews and fails on non-zero");
+ok(/SILVIS_VACATION_GUARD_APPLIED=1 +grade section 15 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_VACATION_GUARD_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))) && /vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name section 15 and SILVIS_VACATION_GUARD_APPLIED");
+{
+  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('\necho\necho "RESULT: '));
+  const run15 = (cliOut, strict, leftover) => {
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_VACATION_GUARD_APPLIED='" + (strict ? "1" : "") + "'\nlinked() { true; }\n" +
+      "q() { printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + (leftover || 0) + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code15 + "\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 15: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = Object.assign({}, VG_AFTER_EQ, VG_AFTER_ERR, { P4: "inactive=roster" });
+  eq(Object.keys(after).sort(), VG_CASES.slice().sort(), "the faked AFTER picture covers every probe case;");
+  const msgOf = (pic) => '{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";") + ';END"}';
+  const ra = run15(msgOf(after));
+  eq(ra.result, [VG_CASES.length + 1, 0], "section 15 against the AFTER picture: every case + the leftover check PASS (" + fails(ra) + ");");
+  const rn = run15(msgOf(Object.assign({}, after, { P4: "inactive=non-roster" })), true);
+  eq(rn.result, [VG_CASES.length + 1, 0], "section 15: P4 inactive=non-roster passes too, also strict (" + fails(rn) + ");");
+  const setup = '{"message": "ERROR: P0001: PROBE_SETUP: time_off_vacation_guard is absent - sql/migrations/2026-09-30-vacation-guard.sql is not applied"}';
+  eq(run15(setup, false).result, [2, 0], "section 15 before the apply: PROBE_SETUP passes as not applied (+ the leftover check);");
+  eq(run15(setup, true).result, [1, 1], "section 15 with SILVIS_VACATION_GUARD_APPLIED=1: PROBE_SETUP is a FAIL;");
+  const rb = run15(msgOf(Object.assign({}, after, { S2: "inserted (NO refusal)", C1: "inserted (NO refusal)", A1: VG_MSG("10/9, 10/10") })));
+  eq(rb.result, [VG_CASES.length - 2, 3], "section 15 must fail a 5th surgeon let through, the office let through and the scheduler refused;");
+  const rk = run15(msgOf(Object.assign({}, after, { K1: VG_MSG("10/13") })));
+  eq(rk.result, [VG_CASES.length, 1], "section 15 must fail K1 when the vacation guard answers before the on-call trigger;");
+  eq(run15('{"message": "connection refused"}').result, [1, 1], "section 15 fails a run with no sentinel-terminated PROBE_RESULTS (the leftover check still runs);");
+  const rl = run15(msgOf(after), false, 3);
+  eq(rl.result, [VG_CASES.length, 1], "section 15 fails a non-zero leftover count;");
+  ok(/LEFT ROWS BEHIND/.test(rl.out), "section 15 names the leftovers");
+}
+
+step("vacation guard: docs - SCHEMA-REVIEW.md section (PREPARED, what the trigger sees, decisions, blast radius, the over-limit query verbatim, the probe table, apply order, rollback, observed placeholder), table (a), guide 4.3; the over-limit query is read-only");
+ok(/^## 2026-09-30 - vacation guard: time_off_vacation_guard \(Faraz 9\/30, Prompt 27; `sql\/migrations\/2026-09-30-vacation-guard\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-09-30 - vacation guard: time_off_vacation_guard (Faraz 9/30, Prompt 27; `sql/migrations/2026-09-30-vacation-guard.sql`)' section");
+const reviewVg = (() => { const at = review.indexOf("## 2026-09-30 - vacation guard:"), end = review.indexOf("\n## ", at + 1); return at < 0 ? "" : review.slice(at, end < 0 ? review.length : end); })();
+ok(/\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*/.test(reviewVg), "the vacation guard section's status line must read `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+ok(/What the trigger sees/.test(reviewVg) && /How the client covers the rest/.test(reviewVg) && /Decisions for Faraz to approve with the apply/.test(reviewVg) && /Blast radius/.test(reviewVg) && /What could break/.test(reviewVg), "the section answers what the trigger sees and how the client covers the rest, lists the decisions, the blast radius and what could break");
+ok(reviewVg.includes("    VACATION_TOO_FEW_AROUND: on 3/18, 3/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"), "the section quotes the refusal");
+ok(/to_regprocedure\('public\.time_off_vacation_guard\(\)'\)/.test(reviewVg) && /supabase db query --linked --workdir <dir> -f <abs>\/sql\/probes\/vacation-guard-probe\.sql/.test(reviewVg) && /supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-30-vacation-guard\.sql/.test(reviewVg) && /SILVIS_VACATION_GUARD_APPLIED=1 bash scripts\/verify-rls\.sh/.test(reviewVg) && /The record step/.test(reviewVg), "the apply order: pre-check, probe BEFORE, apply, probe AFTER, strict verify-rls, the record step");
+ok(reviewVg.includes("**Rolling back** = `drop trigger if exists time_off_vacation_guard_trg on public.time_off; drop function if exists\npublic.time_off_vacation_guard();`"), "the section's rollback");
+ok(/^observed: _to be filled by the orchestrator/m.test(reviewVg), "the section ends with the 'observed:' placeholder until the record step");
+VG_CASES.forEach((k) => ok(new RegExp("^\\| (" + k + "|[A-Z][0-9] / " + k + "|" + k + " / [A-Z][0-9]|[A-Z][0-9] / [A-Z][0-9] / " + k + "|" + k + " / [A-Z][0-9] / [A-Z][0-9]|[A-Z][0-9] / " + k + " / [A-Z][0-9]) \\|", "m").test(reviewVg), "the section's probe table lists case " + k));
+{
+  const ol = read(VG_OVERLIMIT);
+  ok(!/\r/.test(ol), "the over-limit query has CRLF line endings");
+  const olHdr = ol.slice(0, ol.indexOf("with blob as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked\n-- or changed/.test(olHdr) && /Run it BEFORE the apply/.test(olHdr), "the over-limit query's header says READ-ONLY and when to run it");
+  const olCode = ol.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(olCode.startsWith("with blob as (") && olCode.endsWith("order by o.day;") && (olCode.match(/;/g) || []).length === 1, "the over-limit query is ONE statement (a select with CTEs)");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform)\b/i.test(olCode), "the over-limit query writes, locks and changes nothing");
+  ok(olCode.includes("coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external'") && olCode.includes("w.decision = 'home'") && olCode.includes("(f.data->'isForecast') is distinct from 'true'::jsonb") && olCode.includes("having (select n from active_n) - count(distinct o.id)::int < (select n from minimum)"), "the over-limit query reads like the trigger (active roster, East not home, forecast skipped) and lists the days under the minimum");
+  ok(reviewVg.includes("```sql\n" + ol.slice(ol.indexOf("with blob as (")).replace(/\n+$/, "") + "\n```"), "the SCHEMA-REVIEW section carries the over-limit query verbatim (= sql/probes/vacation-guard-overlimit.sql)");
+}
+ok(/^\| `time_off` \|[^\n]*\*\*prepared 2026-09-30 - report-first, NOT APPLIED\*\*[^\n]*time_off_vacation_guard_trg/m.test(tblA), "SCHEMA-REVIEW table (a)'s time_off row must name the prepared vacation guard trigger");
+{
+  const vgBullet = (g43.match(/^- \*\*Vacation guard \(2026-09-30, [^\n]*/m) || [""])[0];
+  const vgProof = (g43.match(/^Proof: `sql\/probes\/vacation-guard-probe\.sql`[^\n]*/m) || [""])[0];
+  ok(/^- \*\*Vacation guard \(2026-09-30, report-first, NOT applied; `sql\/migrations\/2026-09-30-vacation-guard\.sql`, revision s\)\.\*\*/.test(vgBullet) && /VACATION_TOO_FEW_AROUND/.test(vgBullet), "guide 4.3 must carry the 'Vacation guard (2026-09-30, report-first, NOT applied; ..., revision s)' bullet");
+  ok(/18 cases in its header/.test(vgProof) && /vacation-guard-overlimit\.sql/.test(vgProof) && /section 15/.test(vgProof) && /SILVIS_VACATION_GUARD_APPLIED=1/.test(vgProof) && /applied: _to be filled by the orchestrator_/.test(vgProof), "guide 4.3's vacation guard Proof line: the 18 probe cases, the over-limit query, verify-rls section 15 with its flag, the 'applied:' placeholder");
+}
+console.log("- vacation guard: one trigger function + one trigger on time_off (report-first, NOT applied), mirrored (revision s), SQL text = helpers.vacationGuardMessage, probe + verify-rls section 15 graded against a faked CLI, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");

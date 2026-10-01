@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
+#   SILVIS_VACATION_GUARD_APPLIED=1                           grade section 15 strictly (the probe's PROBE_SETUP = FAIL): only on the run right after sql/migrations/2026-09-30-vacation-guard.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -15,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_VACATION_GUARD_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -984,6 +985,71 @@ if linked; then
   fi
 else
   echo "   SKIP 14d (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 15. vacation guard (2026-09-30, Prompt 27): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="
+# sql/migrations/2026-09-30-vacation-guard.sql (report-first, NOT applied; revision s): time_off_vacation_guard, a BEFORE INSERT OR
+# UPDATE trigger on time_off that fires after the on-call trigger - VG001 VACATION_TOO_FEW_AROUND when, on a day the row takes the
+# person off, fewer than groupRules.vacations.minSurgeonsAround (default 2) active roster surgeons would stay around (off = a time_off
+# row or an East vacation not reviewed 'home'); the scheduler and a session with no signed-in user pass, the office coordinator is
+# refused like a surgeon. Nothing here goes over REST: sql/probes/vacation-guard-probe.sql exercises the trigger through the linked
+# CLI and rolls itself back. Its expected strings rest on the live picture P1 'active=6 min=2' / P2 'east=yes' (graded first, by
+# name). BEFORE the apply the probe raises PROBE_SETUP: time_off_vacation_guard is absent - the expected not-applied picture, a
+# PASS; with SILVIS_VACATION_GUARD_APPLIED=1 (the run right after the apply) it is a FAIL. The leftover count runs either way.
+VGSTRICT15="${SILVIS_VACATION_GUARD_APPLIED:-}"
+if linked; then
+  PROBE15="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/vacation-guard-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE15" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: time_off_vacation_guard is absent'; then
+    if [ "$VGSTRICT15" = "1" ]; then bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent with SILVIS_VACATION_GUARD_APPLIED=1 (the trigger should exist after the apply)"; else ok "vacation guard probe: the trigger is absent (before the migration: PROBE_SETUP)"; fi
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "vacation guard probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results15=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results15" | tr ';' '\n' | sed 's/^/   /'
+    case_val15()   { echo "$results15" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq15()  { v=$(case_val15 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "vacation guard probe $1: $3" || bad "vacation guard probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err15() { v=$(case_val15 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 " && echo "$v" | grep -qF -- "$3"; then ok "vacation guard probe $1: $4"; else bad "vacation guard probe $1: $4 (got '$v', expected ERR $2 ... $3)"; fi; }
+    vg15()         { echo "ERR VG001 VACATION_TOO_FEW_AROUND: on $1 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"; }
+    expect_eq15  P1 "active=6 min=2"                    "the live roster has six active surgeons and the default minimum 2 (the expected strings below rest on it)"
+    expect_eq15  P2 "east=yes"                          "the live roster has an East person (the E cases exercise his East vacations)"
+    expect_eq15  P3 "triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t" "time_off carries the on-call trigger then the vacation guard (name order = firing order); the guard is security definer"
+    p4_15=$(case_val15 P4)
+    case "$p4_15" in
+      "inactive=roster"|"inactive=non-roster") ok "vacation guard probe P4: the I case uses a $(echo "$p4_15" | sed 's/^inactive=//') id that is not an active surgeon";;
+      *) bad "vacation guard probe P4: expected inactive=roster or inactive=non-roster (got '$p4_15')";;
+    esac
+    expect_eq15  S1 "ok"                                "a surgeon may be the 4th off (2 of 6 stay around)"
+    expect_eq15  S2 "$(vg15 '10/16, 10/17')"            "the 5th off is refused, naming only the days over the limit (10/18 is only the 4th) with the count"
+    expect_eq15  S3 "$(vg15 '10/19')"                   "an update that widens into an over-limit day is refused (only its new days are checked)"
+    expect_eq15  S4 "updated=1"                         "an update that narrows a vacation is never checked"
+    expect_eq15  E1 "$(vg15 '10/1')"                    "an East vacation reviewed away counts as off"
+    expect_eq15  E2 "ok"                                "an East vacation reviewed home does not count"
+    expect_eq15  E3 "$(vg15 '10/7')"                    "an unreviewed East vacation counts as off (like away - the app's rule)"
+    expect_eq15  I1 "ok"                                "a vacation row of an inactive / outside / unknown id is not counted"
+    expect_err15 K1 P0001 "ON_CALL_CONFLICT"            "a range over the surgeon's own call day is refused by the on-call trigger FIRST (it would also be the 5th off)"
+    expect_err15 K2 P0001 "ON_CALL_CONFLICT"            "the on-call rule still fires on its own (an uncrowded range over a backup day)"
+    expect_eq15  C1 "$(vg15 '10/9, 10/10')"             "the office coordinator entering for a surgeon is refused the same way"
+    expect_eq15  M1 "$(vg15 '10/25')"                   "a multi-row insert (the painter's bulk shape) counts its earlier rows: the second row is the 5th"
+    expect_eq15  A1 "ok"                                "the scheduler may enter the 5th (the client asks him first)"
+    expect_eq15  N1 "ok"                                "a session with no signed-in user (SQL editor / linked CLI / service_role) passes"
+  fi
+  LEFTOVER15_SQL="select ((select count(*) from auth.users where email like 'probe-vacguard-%@example.test') + (select count(*) from public.time_off where note like 'probe-vacguard%') + (select count(*) from public.schedule_days where source = 'probe-vacguard') + (select count(*) from public.east_feed where data->>'probe' = 'vacguard') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-vacguard'))::int as leftover"
+  r=$(q "$LEFTOVER15_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "vacation guard probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "vacation guard probe persisted nothing (leftover count 0: auth.users probe-vacguard-* / time_off probe-vacguard notes / schedule_days source probe-vacguard / east_feed data.probe vacguard / east_vacation_reviews decided_by probe-vacguard)"
+  else
+    bad "vacation guard probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.time_off where note like 'probe-vacguard%';"
+    echo "      delete from public.schedule_days where source = 'probe-vacguard';"
+    echo "      delete from public.east_feed where data->>'probe' = 'vacguard';"
+    echo "      delete from public.east_vacation_reviews where decided_by = 'probe-vacguard';"
+    echo "      delete from auth.users where email like 'probe-vacguard-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 15 (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

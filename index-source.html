@@ -390,6 +390,7 @@ function CallSchedule() {
   const [seedState, setSeedState] = useState({ fileName: "", plan: null, diff: null, live: null, error: "", applying: false, result: null, loading: false, periodGap: 0 });
   const [vacConflict, setVacConflict] = useState(null);     // { personId, items: [{ day, role }] } from the last refused vacation
   const [vacLeadNote, setVacLeadNote] = useState(null);     // helpers.vacationLeadNote of the surgeon's last added vacation (inline advisory, never a confirm)
+  const [vacGuardRefusal, setVacGuardRefusal] = useState(null); // Prompt 27: { personId, start, end, message } - the last vacation the guard refused (the database's words)
 
   const [loaded, setLoaded] = useState(false);
   // Review 9/27, Do first 1 (an honest "schedule not loaded"): `loaded` turns true even when the first schedule_days
@@ -1509,11 +1510,11 @@ function CallSchedule() {
     // TRADE_IMMUTABLE / TRADE_NOT_ACCEPTED / TRADE_NOT_FOUND from the trade
     // guard and apply_trade) is shown VERBATIM (PostgREST wraps it as
     // { message, code, details, hint }).
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2); OFFER_* = the call_offers guards OF001-OF003, OFFERS_* / MODE_* = save_offers / set_offer_mode (Prompt 14 part 3a) - all shown verbatim
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2); OFFER_* = the call_offers guards OF001-OF003, OFFERS_* / MODE_* = save_offers / set_offer_mode (Prompt 14 part 3a); VACATION_* = the vacation guard's VG001 VACATION_TOO_FEW_AROUND (Prompt 27, the time_off trigger time_off_vacation_guard) - all shown verbatim
     if (OWN.test(s)) {
       let verbatim = "";
       try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e); verbatim = ""; }
-      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
+      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
       return verbatim;
     }
     if (/23514|check constraint|distinct/i.test(s)) return "The database refused the change (a check constraint failed - e.g. the same person in both roles on one day): " + s.slice(0, 160);
@@ -1560,6 +1561,12 @@ function CallSchedule() {
       return { ok: false, error: msg, conflicts };
     }
     setVacConflict(null);
+    // Prompt 27 (Faraz 9/30, "need at least 2 surgeons around"): the vacation guard runs after the on-call check (the database
+    // fires its on-call trigger first too). A surgeon / the office is refused here with the database's own words, shown under
+    // the form; the scheduler confirms and may proceed (vacGuardGate).
+    const gate = vacGuardGate(personId, start, end, null);
+    if (!gate.ok) { if (!gate.cancelled) setVacGuardRefusal({ personId, start, end, message: gate.message }); return { ok: false, error: gate.message, guard: gate.guard }; }
+    setVacGuardRefusal(null);
     try {
       const { data, error } = await db.insert("time_off", {
         person_id: personId, start_date: start, end_date: end, note: (note || "").trim() || null,
@@ -1567,8 +1574,12 @@ function CallSchedule() {
       });
       if (error || !data) {
         console.warn("time_off insert error", error);
-        showToast("Couldn't save the vacation: " + describeDbError(error), "error");
-        return { ok: false, error: describeDbError(error) };
+        const why = describeDbError(error);
+        // the database's VACATION_TOO_FEW_AROUND (the client's check was bypassed - another device's vacation landed first):
+        // shown under the form like the client's own refusal, verbatim
+        if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacGuardRefusal({ personId, start, end, message: why });
+        showToast("Couldn't save the vacation: " + why, "error");
+        return { ok: false, error: why };
       }
       adoptTimeOffRows([...timeOffRows, data]);
       logAudit("timeoff.add", `Added vacation for ${nameOf(personId)}: ${start}${start !== end ? " -> " + end : ""}`, { person_id: personId, start, end, note: (note || "").trim() || null });
@@ -1626,6 +1637,10 @@ function CallSchedule() {
     if (!isScheduler && old && String(old.start_date).slice(0, 10) <= todayStr) { showToast("That vacation has started or passed - it stays on record. Ask the scheduler if it needs to go.", "error"); return { ok: false }; }
     const conflicts = vacationConflicts(personId, newStart, newEnd);
     if (conflicts.length) { showToast(`${nameOf(personId)} is on call ${conflicts.join(", ")} - trade first.`, "error"); return { ok: false }; }
+    // Prompt 27: the vacation guard over the NEW days only (the edited row's own days were his already - the trigger reads NEW
+    // minus OLD the same way); a narrowing never trips it
+    const gate = vacGuardGate(personId, newStart, newEnd, rowId);
+    if (!gate.ok) return { ok: false };
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/time_off?id=eq.${encodeURIComponent(rowId)}`, {
         method: "PATCH", headers: { ...dbAuthHeaders(), Prefer: "return=representation" },
@@ -4564,6 +4579,20 @@ function CallSchedule() {
         const conflicts = vacationConflicts(en.personId, en.start, en.end);
         if (conflicts.length) return { ok: false, error: `${nameOf(en.personId)} is on call ${conflicts.join(", ")} - trade first` };
       }
+      // Prompt 27: the vacation guard over the whole draft, each entry counted with the entries before it (the database's
+      // time_off_vacation_guard counts the bulk insert's earlier rows the same way). A non-scheduler is refused with the first
+      // refusal's words; the scheduler confirms once for all of them (helpers VG_TAIL is the refusal's closing advice).
+      const draftRows = [], guardRefused = [];
+      entries.forEach((en, i) => {
+        const g = vacGuardFor(en.personId, en.start, en.end, null, draftRows);
+        if (!g.ok) guardRefused.push(g);
+        draftRows.push({ id: "paint-draft-" + i, person_id: en.personId, start_date: en.start, end_date: en.end });
+      });
+      if (guardRefused.length) {
+        if (!isScheduler) return { ok: false, error: guardRefused[0].message };
+        const ask = guardRefused.length === 1 ? guardRefused[0].confirmText : guardRefused.map(g => g.message.slice(0, g.message.length - VG_TAIL.length)).join("\n") + "\n\nAs the scheduler you may still enter them - enter them anyway?";
+        if (!confirm(ask)) return { ok: false, error: "Not saved - fewer surgeons than the minimum would be around." };
+      }
       const rows = entries.map(en => ({ person_id: en.personId, start_date: en.start, end_date: en.end, note: en.note || null, created_by: userProfile?.person_id || authUser?.id || null }));
       const res = await fetch(`${SUPABASE_URL}/rest/v1/time_off`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "return=representation" }, body: JSON.stringify(rows) });
       if (!res.ok) {
@@ -5103,6 +5132,32 @@ function CallSchedule() {
   }, [surgeons, surgeonRules, eastFeedRows, eastVacationReviewRows, todayStr, isPublicMode]);
   const eastVacById = useMemo(() => { const m = {}; eastVacPeople.forEach(p => { m[p.id] = p; }); return m; }, [eastVacPeople]);
   const eastVacUnreviewed = eastVacPeople.reduce((n, p) => n + p.unreviewedUpcoming, 0);
+  // Prompt 27 (Faraz 9/30: "a warning when people are taking vacations and a warning that stops vacations if more than 4 people
+  // are on vacation. Need at least 2 surgeons around"). The vacation guard - helpers.js vacationGuard over the loaded time_off
+  // rows and the East vacations that count as OFF (every unreviewed / away range of eastVacPeople by roster id - home is not off;
+  // unreviewed counts as away, the app's rule): who else is off on the typed days and how many stay around; ok false when
+  // fewer than groupRules.vacations.minSurgeonsAround (default 2) active surgeons would be around. The database's time_off
+  // trigger (time_off_vacation_guard, sql/migrations/2026-09-30-vacation-guard.sql) refuses the same with the same words.
+  // extraRows: rows not saved yet (the month painter's earlier entries). Empty East map in public mode (no Time off there).
+  const vacEastAway = useMemo(() => {
+    const m = {};
+    eastVacPeople.forEach(p => { const rs = (p.ranges || []).filter(r => r.state !== "home").map(r => ({ start: r.start, end: r.end, state: r.state })); if (rs.length) m[p.id] = rs; });
+    return m;
+  }, [eastVacPeople]);
+  const vacGuardFor = (personId, start, end, excludeId, extraRows) => vacationGuard({ personId, start, end, timeOffRows: extraRows && extraRows.length ? timeOffRows.concat(extraRows) : timeOffRows, eastAway: vacEastAway, roster: surgeons, groupRules, excludeId });
+  // the gate every single vacation write runs before its request (toAdd, toEdit; the painter checks its whole draft itself): a
+  // surgeon and the office coordinator are refused with the database's words (toast; toAdd also shows it under the form); the
+  // scheduler gets a confirm instead and may proceed - the trigger lets silvis_is_sched() through
+  const vacGuardGate = (personId, start, end, excludeId) => {
+    const guard = vacGuardFor(personId, start, end, excludeId);
+    if (guard.ok) return { ok: true, guard };
+    if (isScheduler) return confirm(guard.confirmText) ? { ok: true, guard, overridden: true } : { ok: false, guard, cancelled: true, message: "Not saved - fewer surgeons than the minimum would be around." };
+    showToast(guard.message, "error");
+    return { ok: false, guard, message: guard.message };
+  };
+  // the line under the vacation form while the dates are typed (before Save): "Also off: ... - after yours, N of M are around ..."
+  const vacGuardPreview = useMemo(() => (vacSurgeon && suIsIso(vacStart) && suIsIso(vacEnd) && vacEnd >= vacStart) ? vacGuardFor(vacSurgeon, vacStart, vacEnd, null) : null,
+    [vacSurgeon, vacStart, vacEnd, timeOffRows, vacEastAway, surgeons, groupRules]);
   // Calendar markers: date -> [{ id, state, feedBusy? }] over the visible grid. Per DAY
   // from the rules ctx when it is available (review fix E3, 9/23 - the same picture the
   // day editor shows): unreviewed / away from P.eastVacationDays, home from P.eastClear;
@@ -5769,6 +5824,21 @@ function CallSchedule() {
       <div><label style={label}>End</label><input type="date" value={vacEnd} onChange={e=>setVacEnd(e.target.value)} style={{...inp,width:145}}/></div>
       <div style={{flex:"1 1 160px"}}><label style={label}>Note (optional, operational)</label><input data-testid="vac-note" value={vacNote} onChange={e=>setVacNote(e.target.value)} placeholder="e.g. conference - notes are visible to the whole group" title="Operational notes only (visible to the whole group and the shareable page) - no personal reasons" style={{...inp,width:"100%"}}/></div>
       <button data-testid="vac-add" onClick={addVac} style={{...css.btn(true),padding:"7px 16px"}}>Add vacation</button>
+      {/* Prompt 27 (Faraz 9/30): while a vacation is typed - before Save - who else is off on those days and how many stay
+          around (helpers.vacationGuardLine; the East gloss is the scheduler's only, Item E3). Under the minimum it says so: a
+          surgeon / the office will be refused, the scheduler will be asked to confirm. */}
+      {vacGuardPreview && vacGuardPreview.days.length > 0 && vacGuardPreview.active > 0 && (
+        <div data-testid="vac-also-off" data-ok={vacGuardPreview.ok ? "1" : "0"} data-fewest={vacGuardPreview.fewest} data-active={vacGuardPreview.active} data-min={vacGuardPreview.minAround} role="status" style={{flex:"1 1 100%",fontSize:12,lineHeight:1.5,color:vacGuardPreview.ok ? T.text : T.warnText,borderLeft:"3px solid " + (vacGuardPreview.ok ? T.accent : T.warnText),padding:"4px 10px"}}>
+          <span data-testid="vac-also-off-text">{vacationGuardLine(vacGuardPreview, nameOf, { mine: !!mySurgeon && vacGuardPreview.personId === mySurgeon, personName: nameOf(vacGuardPreview.personId), showEast: eastDetailsVisible })}</span>
+          {!vacGuardPreview.ok && <span data-testid="vac-also-off-under">{isScheduler ? " - as the scheduler you can still enter it (you will be asked to confirm)." : " - it would be refused: at least " + vacGuardPreview.minAround + " surgeons must stay around."}</span>}
+        </div>
+      )}
+      {vacGuardRefusal && vacGuardRefusal.personId === vacSurgeon && vacGuardRefusal.start === vacStart && vacGuardRefusal.end === vacEnd && (
+        <div data-testid="vac-guard-refusal" role="alert" style={{...css.errBox,flex:"1 1 100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{flex:1}}><strong>Refused:</strong> <span data-testid="vac-guard-message">{vacGuardRefusal.message}</span></span>
+          <button onClick={()=>setVacGuardRefusal(null)} aria-label="Dismiss" style={{background:"none",border:"none",color:"#8a3030",cursor:"pointer",fontSize:14}}>x</button>
+        </div>
+      )}
       {vacConflict && vacConflict.items && vacConflict.items.length > 0 && (
         <div data-testid="vac-conflict" role="alert" style={{...css.errBox,flex:"1 1 100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
           <span><strong>Refused:</strong> {nameOf(vacConflict.personId)} is published on {vacConflict.items.length} day(s) in {fmtMD(vacConflict.start)} - {fmtMD(vacConflict.end)} - trade those shifts first:</span>
@@ -6281,7 +6351,7 @@ function CallSchedule() {
           <Collapsible css={css} ck="setup_vacations" defaultOpen={false} title="Vacations (everyone)"
             summary={cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations"))}
             right={<button onClick={(e)=>{e.stopPropagation(); setPaintSheet(true);}} style={{...css.btn(false),padding:"3px 10px",fontSize:11}}>Paint month</button>}>
-            <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is.</p>
+            <p style={sectionNote}>Self-entered, no approval. A range is refused when the person is already published as primary or backup on any of its days (or primary the day before) - trade first. The scheduler can enter or remove anyone's; the database trigger enforces the same rule and its message is shown as-is. Since 9/30 a range is also refused when fewer than {vacationRules(groupRules).minSurgeonsAround} surgeons would stay around on one of its days (groupRules.vacations.minSurgeonsAround) - as the scheduler you are asked to confirm and may enter it anyway.</p>
             {renderVacationForm(poolSurgeons)}
             <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
               <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past vacations
@@ -6991,6 +7061,8 @@ function CallSchedule() {
             )}
             {!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
+                {/* Prompt 27 (Faraz 9/30): the vacation guard in one sentence - the minimum is data (groupRules.vacations) */}
+                {!isViewer && <p style={sectionNote} data-testid="vac-guard-note">At least {vacationRules(groupRules).minSurgeonsAround} surgeons must stay around on every day: an entry that would leave fewer is refused{isScheduler ? " (as the scheduler you are asked to confirm and may enter it anyway)" : ""}. The form shows who else is off before you save.</p>}
                 {!isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past

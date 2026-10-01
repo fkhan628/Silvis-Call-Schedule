@@ -14,7 +14,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
-| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. |
+| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, **prepared 2026-09-30 - report-first, NOT APPLIED** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. |
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
@@ -1763,3 +1763,202 @@ the offers cron's next mornings (11/9 reminder, 11/20 last call, 11/23 close). T
 14), so a later seed apply cannot bring the Feb - Apr period back. **Order: Run fold-jan-jun.sql BEFORE any seed apply: an apply first would widen the live Jan row to 6/30 while the live Feb - Apr row stays (two overlapping upcoming periods - the importer upserts by start_day and never deletes), and the fold's pre-check would then refuse; the recovery is to delete the Feb - Apr row with its period.delete audit row by hand.**
 
 observed: applied by Faraz in the Supabase SQL editor, committed 2026-10-01 04:33:12Z (the file above, one batch; the orchestrator's own apply had been refused by the session's permission classifier earlier that night). Verified read-only right after by Cowork and again by the orchestrator (linked CLI): `call_periods` holds two rows - Nov 2026 - Jan 2027 unchanged (published, updated_at 2026-09-23 21:26:53Z) and **Jan 2027 - Jun 2027** (2027-01-04 .. 2027-06-30, offers close 2026-11-23, publish by 2026-12-07, upcoming, rules_only_ids ["s5"], offer_modes {}, updated_at 2026-10-01 04:33:12.509979Z); the Feb 2027 - Apr 2027 row is gone; `audit_log` holds `period.update` (label Jan 2027 - Jun 2027) and `period.delete` (label Feb 2027 - Apr 2027), both actor s1 / Khan at 04:33:12.509979Z. The app (build 2026.09.30d) shows the one period to 6/30 in Setup > Periods. The fold ran before any seed apply (the order this section requires), and the seed already mirrors it, so a later apply changes nothing for periods. Fierce's "go by my rules" choice for January now covers January - June.
+
+## 2026-09-30 - vacation guard: time_off_vacation_guard (Faraz 9/30, Prompt 27; `sql/migrations/2026-09-30-vacation-guard.sql`)
+
+**Status: PREPARED - report-first, NOT APPLIED.**
+
+Faraz 9/30: "a warning when people are taking vacations and a warning that stops vacations if more than 4 people are on
+vacation. Need at least 2 surgeons around." No approval step - vacations stay self-entered. Needed live before 11/9 (the
+heads-up e-mail of the Jan 2027 - Jun 2027 period goes out then and the surgeons enter their 2027 vacations after it).
+
+**The rule.** `groupRules.vacations.minSurgeonsAround` in the blob - a whole number 0-99; absent / junk -> **2**
+(`helpers.js` `VACATION_GUARD_DEFAULTS`, the `OP_NOTICE_DEFAULTS` / `GROUP_CALL_DEFAULTS` pattern: the live blob needs no
+edit; the seed carries `groupRules.vacations { minSurgeonsAround: 2 }` since its second 2026-09-30 revision). With six active
+surgeons at most four are off on any day. Counted per calendar day over the **active** roster surgeons (blob `roster`
+entries whose `active` is not `false` and whose `type` is not `external` - the app's `poolSurgeons`). A surgeon is **off** on
+a day inside one of his `time_off` rows, or inside one of his East (Davenport) vacation ranges that is not reviewed `home`
+(an unreviewed range counts as away, as everywhere in the app). A vacation is refused when, on a day it takes the person off
+(he is active and not off that day already; on an UPDATE only the NEW-minus-OLD days of the same person), fewer than the
+minimum would stay around.
+
+| object | before | after |
+|---|---|---|
+| `time_off_vacation_guard()` | - | new trigger function: `language plpgsql security definer set search_path = public, pg_temp` (the reads of `call_schedule_data` / `time_off` / `east_feed` / `east_vacation_reviews` must not depend on the caller's RLS: an RLS-filtered read answers no rows - silently - and would count nobody off). Volatile (the default), so the later rows of one multi-row INSERT see the earlier ones (the month painter's bulk insert is counted cumulatively). Takes one transaction advisory lock (`hashtext('time_off:vacation_guard')`) before it counts, so two concurrent entries cannot both pass. EXECUTE keeps the default grants (a `returns trigger` function cannot be called outside a trigger; PostgREST exposes none) |
+| `time_off_vacation_guard_trg` | - | new `BEFORE INSERT OR UPDATE ... FOR EACH ROW` trigger on `public.time_off`; fires after `time_off_no_call_conflict_trg` (Postgres fires a table's BEFORE ROW triggers in name order), so `ON_CALL_CONFLICT` still answers first |
+| `time_off_no_call_conflict()` and its trigger | the on-call rule | **unchanged** |
+| policies, grants, tables, columns, rows | - | **unchanged** (no PostgREST schema-cache reload needed) |
+
+**What the trigger sees (the task's question).** (1) **`time_off` rows** - every row, the row being written excluded by id
+(on an UPDATE the old row too). (2) **East vacations** - the trigger CAN see both kinds: the ranges the East feed refresh
+caches in the `east_feed` payload (`data.vacations [{ code, start, end }]` on every cached week; rows with
+`data.isForecast = true` skipped - `east-feed.js eastVacations`) for an active surgeon whose East feature reads busy days
+(`surgeonRules.<id>.eastFeed.enabled` and `eastBlocksPrimary` / `eastBlocksBackup` true, a roster code - the app's
+`eastVacationPerson`; only Khan today), matched by roster **code**, minus the days a `home` row of `east_vacation_reviews`
+covers. So an **away** review counts, a **home** review does not, and an **unreviewed** range counts like away - the app's
+own reading (`rules.js` derives `P.eastVacationDays` for unreviewed and away; the app shows "Unreviewed counts as away").
+**How the client covers the rest:** the client checks the same rule before every write (the Time off form, its Edit, the
+month painter) from the ranges `eastVacPeople` already holds (the merged Davenport ranges under the person-scoped review
+decisions, `helpers.derivedEastVacations`). The one difference, on the safe side: the client matches a `home` review to the
+merged range EXACTLY (a review of a range Davenport later changed reads unreviewed again - counted), the trigger reads any
+`home` row covering the day - a stale `home` row (until the next East refresh deletes it) can only make the database the
+more lenient of the two; the database never refuses what the client allowed.
+
+**Who it binds.** Every signed-in caller who is not the scheduler: a **surgeon** entering his own vacation and the office
+**coordinator** entering one for a surgeon (the office path is refused the same way). **`public.silvis_is_sched()`**
+(admin / scheduler) is let through - the client asks him first ("... As the scheduler you may still enter it - enter it
+anyway?"). A session with **no signed-in user** (`auth.uid()` null: the SQL editor, the linked CLI, `service_role`) is let
+through too - the scheduler's own tools (the seed import's `time_off` rows, a restore); the other probes' setups run that way.
+A row of a person who is not an active roster surgeon changes nobody's count and passes. An UPDATE that takes the person off
+no new day (same person, the range kept or narrowed, a note edit) is never checked - a surgeon can always shorten a vacation,
+also on a day already under the minimum. Deletes are never checked. A missing blob (no `main` row) reads as no roster:
+nothing is refused (the app cannot run without the blob).
+
+**The refusal.** One code, `VG001`, with the days and the count:
+
+    VACATION_TOO_FEW_AROUND: on 3/18, 3/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+
+The over-limit days are grouped by their count, the groups in the order of their first day ("on 3/18, 3/20 only 1; on 3/19
+only 0 of 6 ..."), each group's days as runs ("3/18", "3/18, 3/19", "3/18-3/20"). `helpers.js` `vacationGuardMessage`
+builds the same text from the same days, so the client's refusal before the write and the database's after a bypassed check
+read the same; the client shows the database's text verbatim (`describeDbError` lists `VACATION_[A-Z_]+` with the other own
+tokens).
+
+**Decisions for Faraz to approve with the apply:**
+
+1. **Unreviewed East counts as away** (the app's rule). Khan's Davenport vacations he has not reviewed reduce the count until
+   he marks them `home`; the form's "Also off" line shows the days (the scheduler sees them glossed "(East, unreviewed)",
+   everyone else sees the days only - East details stay the scheduler's, Item E3).
+2. **A no-user session passes** (SQL editor / linked CLI / `service_role`), beside the scheduler. Refusing it would make a
+   seed apply or a restore fail on a day the scheduler had already let go over the minimum.
+3. **Edits are checked on their new days only** and narrowing is never checked (so a day already under the minimum - entered
+   by the scheduler - never traps a surgeon's own shortening).
+4. **The person already off is not "taking himself off" again**: a second row over a day his other row or his East vacation
+   already covers is not refused.
+
+**Blast radius.** Every `time_off` INSERT / UPDATE by a non-scheduler from the apply on: the Time off form (surgeon,
+coordinator), its Edit, the month painter. The client that ships with this file checks the rule BEFORE the write - the form
+shows who else is off and how many stay around while the dates are typed, a surgeon / the coordinator is refused with the
+text above (no write), the scheduler gets a confirm - so the client can ship first; the trigger is the backstop for a stale
+build or a direct REST call. A day ALREADY under the minimum in live data stays as it is (nothing is deleted or re-checked);
+a new vacation of a non-scheduler over such a day is refused - the query below lists such days. The other probes'
+`time_off` fixtures (2030-03 / 04 / 05 / 08) put at most two surgeons off on a day and their setups run with no signed-in
+user: none of them changes; verify-rls section 4's `s9test` rows (not on the roster, no signed-in user) pass.
+
+**What could break.** (1) The probe and verify-rls section 15 are written against an AFTER picture nobody has observed (no
+local Postgres was available to this lane; the SQL was reviewed by reading): the first live run may show a typo or a
+different wording - section 15 grades exact strings, so it would say so by case. (2) The expected strings rest on the live
+roster (six active surgeons, minimum 2, an East person): P1 / P2 are graded first and name a changed picture. (3) A malformed
+date inside a cached `east_feed` range cannot make the trigger raise (a value not shaped `YYYY-MM-DD` is skipped, the rest is
+compared as text - never cast), while the read-only over-limit query casts it and would fail loudly.
+
+**The days ALREADY under the minimum (read-only; run BEFORE the apply).** `sql/probes/vacation-guard-overlimit.sql` - the
+same reading as the trigger, one row per day on which fewer than the minimum stay around (day, around, active, minimum, who
+is off - an East day tagged "(East)" - and whether the day is past):
+
+```sql
+with blob as (
+  select c.data from public.call_schedule_data c where c.id = 'main'
+),
+minimum as (
+  select coalesce((select case when jsonb_typeof(b.data #> '{groupRules,vacations,minSurgeonsAround}') = 'number'
+                               then case when (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric between 0 and 99
+                                          and (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric = trunc((b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric)
+                                         then (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric::int end end
+                     from blob b), 2) as n
+),
+roster as (
+  select e.r->>'id' as id, coalesce(e.r->>'name', e.r->>'id') as name, upper(coalesce(e.r->>'code', '')) as code,
+         coalesce(e.r->>'code', '') <> ''
+           and (b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'enabled']) = 'true'::jsonb
+           and ((b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb
+             or (b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb) as east
+    from blob b
+    cross join lateral jsonb_array_elements(case when jsonb_typeof(b.data->'roster') = 'array' then b.data->'roster' else '[]'::jsonb end) as e(r)
+   where jsonb_typeof(e.r) = 'object' and coalesce(e.r->>'id', '') <> ''
+     and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external'
+),
+active_n as (
+  select count(*)::int as n from roster
+),
+east_ranges as (
+  select a.id, v.r->>'start' as s, v.r->>'end' as e
+    from roster a
+    join public.east_feed f on a.east
+    cross join lateral jsonb_array_elements(case when jsonb_typeof(f.data->'vacations') = 'array' then f.data->'vacations' else '[]'::jsonb end) as v(r)
+   where (f.data->'isForecast') is distinct from 'true'::jsonb
+     and jsonb_typeof(v.r) = 'object'
+     and upper(coalesce(v.r->>'code', '')) = a.code
+     and coalesce(v.r->>'start', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+     and coalesce(v.r->>'end', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+     and v.r->>'start' <= v.r->>'end'
+),
+off_days as (
+  select g::date as day, t.person_id as id, false as east
+    from public.time_off t
+    join roster a on a.id = t.person_id
+    cross join lateral generate_series(t.start_date::timestamp, t.end_date::timestamp, interval '1 day') as g
+  union
+  select g::date, er.id, true
+    from east_ranges er
+    cross join lateral generate_series(er.s::date::timestamp, er.e::date::timestamp, interval '1 day') as g
+   where not exists (select 1 from public.east_vacation_reviews w
+                      where w.person_id = er.id and w.decision = 'home' and g::date between w."start" and w."end")
+)
+select o.day,
+       (select n from active_n) - count(distinct o.id)::int as around,
+       (select n from active_n) as active,
+       (select n from minimum) as minimum,
+       string_agg(distinct a.name || case when o.east then ' (East)' else '' end, ', ') as off,
+       o.day < (now() at time zone 'America/Chicago')::date as past
+  from off_days o
+  join roster a on a.id = o.id
+ group by o.day
+having (select n from active_n) - count(distinct o.id)::int < (select n from minimum)
+ order by o.day;
+```
+
+**The probe** (`sql/probes/vacation-guard-probe.sql`; one batch, a temp results table, the last statement raises
+`PROBE_RESULTS ...;END`, so everything rolls back; `PROBE_SETUP: time_off_vacation_guard is absent` before the migration).
+Throwaway auth users `probe-vacguard-<uuid>@example.test` (surgeon n1, surgeon n2, an unlinked coordinator, an unlinked
+admin); fixtures in 2030-10 (the setup refuses to run when `time_off`, `schedule_days`, `east_feed` or
+`east_vacation_reviews` already hold anything there); the roster READ from the live blob, never written (E = the East person,
+n1..n5 = the next five active surgeons). VG(days) = `ERR VG001 VACATION_TOO_FEW_AROUND: on <days> only 1 of 6 surgeons would
+be around (minimum 2) - pick other dates or ask the scheduler`.
+
+| case | what | AFTER |
+|---|---|---|
+| P1 / P2 | the live picture the strings rest on | `active=6 min=2` / `east=yes` |
+| P3 | `time_off`'s triggers in firing order, the guard's security | `triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t` |
+| P4 | the id the I case uses | `inactive=roster` or `inactive=non-roster` |
+| S1 | surgeon n1 is the 4th off (10/15-10/17) | `ok` |
+| S2 | surgeon n2 would be the 5th on 10/16, 10/17 (10/18 only the 4th) | VG(`10/16, 10/17`) |
+| S3 | n1 widens his S1 row to 10/19 (10/18 the 4th, 10/19 the 5th) | VG(`10/19`) |
+| S4 | n1 narrows his S1 row to 10/15-10/16 | `updated=1` |
+| E1 / E2 / E3 | n1 on a day of E's East range reviewed away / home / unreviewed | VG(`10/1`) / `ok` / VG(`10/7`) |
+| I1 | n1 the 4th active off beside an inactive / outside id's row | `ok` |
+| K1 | n1 over his own primary day 10/13 that would also be the 5th | `ERR P0001 ON_CALL_CONFLICT: ...` (first) |
+| K2 | n1 over his backup day 10/29, nobody else off | `ERR P0001 ON_CALL_CONFLICT: ...` (also) |
+| C1 | the coordinator enters n1 as the 5th (10/9-10/10) | VG(`10/9, 10/10`) |
+| M1 | the coordinator enters n1 and n2 on 10/25 in ONE insert | VG(`10/25`) |
+| A1 | the admin (scheduler) enters n1 as the 5th | `ok` |
+| N1 | no signed-in user enters n1 as the 5th | `ok` |
+
+**Apply order.**
+
+1. The client may ship first (its own check refuses / confirms before any write; it shows the database's text if refused).
+2. Pre-check: `select to_regprocedure('public.time_off_vacation_guard()');` -> null; and the over-limit query above (read
+   only - report the days to Faraz; nothing is changed).
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/vacation-guard-probe.sql` -> `PROBE_SETUP: time_off_vacation_guard is absent ...`.
+4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-30-vacation-guard.sql`.
+5. Probe AFTER: every case as the table lists (18 cases: P1-P4, S1-S4, E1-E3, I1, K1-K2, C1, M1, A1, N1).
+6. `SILVIS_VACATION_GUARD_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-15 green (the flag makes the probe's PROBE_SETUP a
+   FAIL; section 15 counts the leftovers either way).
+7. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; `sql/schema.sql` revision s ->
+   "applied <timestamp>" (and its block comment, and the test pins with them); the migration's header -> APPLIED;
+   `SILVIS_VACATION_GUARD_APPLIED` dropped from verify-rls (strict becomes the default); guide 4.3's bullet updated.
+
+**Rolling back** = `drop trigger if exists time_off_vacation_guard_trg on public.time_off; drop function if exists
+public.time_off_vacation_guard();` (nothing else refers to either; the client's own check stays).
+
+observed: _to be filled by the orchestrator (pre-check, the over-limit query's rows, probe BEFORE / AFTER, verify-rls counts)_

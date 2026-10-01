@@ -1806,8 +1806,14 @@ step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule
   // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the 9/29 entry is no longer the last - the 9/30 entry follows it
   // (the step below pins that one as the last and seedLastRevision 2026-09-30). Kept intent: the 9/29 entry sits right before
   // it, so nothing was appended between the two and the 9/29 entry was not moved.
-  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0])], [seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "9/29: the 9/29 entry sits right before the 9/30 (last) entry");
+  // pin moved deliberately 9/30 (Prompt 27, vacation guard): a SECOND 9/30 entry (groupRules.vacations) follows the fold entry, so
+  // the fold entry is no longer the last either. Kept intent, read against the two 9/30 entries by content: the 9/29 entry sits
+  // right before the fold entry, which sits right before the vacation-guard entry (the last) - nothing was appended between them
+  // and none of the three was moved.
+  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/fold-jan-jun/.test(t));
+  const revVg930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
+  eq([revAfter929.length, revVg930.length], [1, 1], "9/29: one 9/30 fold entry and one 9/30 vacation-guard entry");
+  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0]), seed._meta.revisions.indexOf(revVg930[0])], [seed._meta.revisions.length - 3, seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "9/29: the 9/29 entry sits right before the 9/30 fold entry, which sits right before the 9/30 vacation-guard (last) entry");
   ok(/groupRules\.groupCall/.test(rev929[0]) && /holidayUnitDaysAllDay/.test(rev929[0]) && /GROUP_CALL_DEFAULTS/.test(rev929[0]) && /seedCoreHash moves/.test(rev929[0]), "9/29: the entry names the block, the holiday reading, the code defaults and the core-hash move");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev929[0]), "9/29: the entry carries no amount and no contact-like value");
   const seedNo = clone(seed); delete seedNo.groupRules.groupCall; seedNo._meta.revisions = seedNo._meta.revisions.filter((t) => !/^2026-09-29 /.test(t));
@@ -1841,22 +1847,56 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   eq([dPre.tables.call_periods.insert, dPre.tables.call_periods.update, dPre.tables.call_periods.unchanged, dPre.totalChanges, dPre.totalDeletes], [0, 1, 1, 1, 0], "9/30: against the pre-fold live table - ONE update (Jan 2027 widened), the first period unchanged, nothing deleted");
   eq(dPre.tables.call_periods.rows, ["update Jan 2027 - Jun 2027 2027-01-04..2027-06-30 (close 2026-11-23, publish by 2026-12-07, status upcoming)"], "9/30: the update line names the widened row; no line for the live Feb - Apr row");
   ok(dPre.lines.some((l) => /a live period the seed lacks is never deleted/.test(l)), "9/30: the dry run says a live period the seed lacks is never deleted (the live fold's delete is fold-jan-jun.sql, report-first)");
-  // the revision entry: one, dated 2026-09-30, the last; seedLastRevision reads it
-  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq(rev930.length, 1, "9/30: one _meta.revisions entry dated 2026-09-30");
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-30", rev930[0]], "9/30: it is the last entry, and seedLastRevision reads its date");
+  // the revision entry: one, dated 2026-09-30; seedLastRevision reads 2026-09-30
+  // pin moved deliberately 9/30 (Prompt 27, vacation guard): a second entry dated 2026-09-30 (groupRules.vacations, the step below)
+  // follows this one, so "one entry dated 2026-09-30" is read as one FOLD entry (by its branch), and "the last" moves to "right
+  // before the last" (the vacation-guard entry is the last). Kept intent: exactly one fold entry, nothing appended between it and
+  // the next 9/30 entry, and seedLastRevision still reads 2026-09-30.
+  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/fold-jan-jun/.test(t));
+  eq(rev930.length, 1, "9/30: one _meta.revisions fold entry dated 2026-09-30");
+  eq(seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t)).length, 2, "9/30: two entries dated 2026-09-30 - the fold and the vacation guard (Prompt 27)");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 2]], ["2026-09-30", rev930[0]], "9/30: it is the entry right before the last (the vacation-guard entry), and seedLastRevision reads 2026-09-30");
   eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev930[0]) && IMP.impFindContactValues(rev930[0]).length === 0, "9/30: the entry carries no amount and no contact-like value");
   ok(/Jan 2027 - Jun 2027/.test(rev930[0]) && /Feb 2027 - Apr 2027/.test(rev930[0]) && /lengthMonths 3 -> 6/.test(rev930[0]) && /remindDaysBeforeClose \[42, 14, 3\] -> \[14, 3\]/.test(rev930[0]) && /noticeDaysBeforeClose 42 -> 14/.test(rev930[0]) && /seedCoreHash moves/.test(rev930[0]), "9/30: the entry names the fold, the three moved keys and the core-hash move");
   // groupRules is a core key: the block moves the seed's core hash (against the 9/27 block, without the 9/30 entry)
   const seedPre930 = clone(seed);
   seedPre930.groupRules.offerPeriods = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [42, 14, 3], noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 };
-  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-09-30 /.test(t));
+  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-09-30 /.test(t));   // both 9/30 entries (the fold, the vacation guard)
+  delete seedPre930.groupRules.vacations;   // Prompt 27: the pre-9/30 seed has no vacations block either (the step below pins that block on its own)
   const planPre930 = IMP.importPlan(seedPre930, { now: NOW });
   ok(plan.blob.settings.seedCoreHash !== planPre930.blob.settings.seedCoreHash, "9/30: the block moves the seed's core hash (groupRules is a core key)");
   eq(planPre930.blob.settings.seedLastRevision, "2026-09-29", "9/30: without the entry the last revision is 9/29's");
   eq(IMP.planDiff(plan, { blob: clone(planPre930.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
     { roster: "unchanged", surgeonRules: "unchanged", groupRules: "update", holidays: "unchanged", settings: "update" }, "9/30: against the pre-9/30 blob only groupRules (the block) and settings update");
+}
+
+step("9/30 (Prompt 27): groupRules.vacations reaches the blob as data - the rule only (minSurgeonsAround 2), equal to the code defaults; the second 2026-09-30 entry is the last");
+{
+  // Faraz 9/30 ("need at least 2 surgeons around"): the vacation guard's minimum. The block is the code default (helpers.js
+  // VACATION_GUARD_DEFAULTS), so the live blob needs no edit; a seed apply carries the same value. The database trigger
+  // time_off_vacation_guard (sql/migrations/2026-09-30-vacation-guard.sql) reads the same key. groupRules is a core key: the
+  // seed's core hash moves.
+  const H = require(path.join(__dirname, "..", "helpers.js"));
+  eq(plan.blob.groupRules.vacations, { minSurgeonsAround: 2 }, "Prompt 27: blob groupRules.vacations");
+  eq(plan.blob.groupRules.vacations, H.VACATION_GUARD_DEFAULTS, "Prompt 27: the seed block equals the code defaults (the live blob, which lacks it, reads the same)");
+  eq(H.vacationRules(plan.blob.groupRules), { minSurgeonsAround: 2 }, "Prompt 27: helpers.vacationRules reads the blob's block");
+  eq(IMP.importPlan(seed, { now: NOW, offerPeriods: true }).blob.groupRules.vacations, { minSurgeonsAround: 2 }, "Prompt 27: ...in the period-aware plan (the CLI's) too");
+  const vgText = JSON.stringify(seed.groupRules.vacations);
+  ok(!/@|\d{3}[-.]\d{3}[-.]\d{4}/.test(vgText) && !seed.roster.some((r) => r.name && vgText.indexOf(r.name) >= 0), "Prompt 27: the block carries no contact-like value and no roster name (the blob is anon-readable)");
+  eq(Object.keys(seed.groupRules.vacations), ["minSurgeonsAround"], "Prompt 27: the rule's one key only - no note, no reason");
+  const revVg = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
+  eq(revVg.length, 1, "Prompt 27: one _meta.revisions entry for the vacation guard, dated 2026-09-30");
+  eq([seed._meta.revisions.indexOf(revVg[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 1, "2026-09-30", seed._meta.revisions.length], "Prompt 27: it is the last entry; seedLastRevision reads 2026-09-30 and seedRevisionCount counts it");
+  ok(/groupRules\.vacations/.test(revVg[0]) && /minSurgeonsAround: 2/.test(revVg[0]) && /VACATION_GUARD_DEFAULTS/.test(revVg[0]) && /time_off_vacation_guard/.test(revVg[0]) && /seedCoreHash moves/.test(revVg[0]), "Prompt 27: the entry names the block, the code default, the trigger and the core-hash move");
+  ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(revVg[0]) && IMP.impFindContactValues(revVg[0]).length === 0, "Prompt 27: the entry carries no amount and no contact-like value");
+  const seedNoVg = clone(seed); delete seedNoVg.groupRules.vacations; seedNoVg._meta.revisions = seedNoVg._meta.revisions.filter((t) => t !== revVg[0]);
+  const planNoVg = IMP.importPlan(seedNoVg, { now: NOW });
+  ok(plan.blob.settings.seedCoreHash !== planNoVg.blob.settings.seedCoreHash, "Prompt 27: the block moves the seed's core hash (groupRules is a core key)");
+  eq([planNoVg.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount - planNoVg.blob.settings.seedRevisionCount], ["2026-09-30", 1], "Prompt 27: without the entry the last revision is still 2026-09-30 (the fold) and the count is one less");
+  eq(H.vacationRules(planNoVg.blob.groupRules), { minSurgeonsAround: 2 }, "Prompt 27: a blob without the block reads the same minimum (the code default)");
+  eq(IMP.planDiff(plan, { blob: clone(planNoVg.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
+    { roster: "unchanged", surgeonRules: "unchanged", groupRules: "update", holidays: "unchanged", settings: "update" }, "Prompt 27: against the blob without the block only groupRules (the block) and settings update");
 }
 
 console.log("ok " + n + " assertions");
