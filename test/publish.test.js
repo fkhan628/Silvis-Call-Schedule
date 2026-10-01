@@ -315,10 +315,13 @@ step("F: preflight on a synthetic ctx (seed rules, no network)");
   const ctxClean = mk(base);
   const openOf = (F, days) => { const o = []; days.forEach(d => { const e = F[d]; if (!e || (!e.primary && !e.externalCover)) o.push({ day: d, role: "primary" }); if (!e || !e.backup) o.push({ day: d, role: "backup" }); }); return o; };
   const week = ["2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11"];
+  // 10/1 follow-ups (item 4): every hand-built plan below states what is LIVE (plan.live, as planPublish always does) - a
+  // plan meaning "nothing changes" passes its final's holders. A plan with neither live nor changes now holds nothing.
+  const liveOf = (F) => { const o = {}; Object.keys(F || {}).forEach(d => { const e = F[d]; o[d] = { primary: (e && e.primary) || null, backup: (e && e.backup) || null }; }); return o; };
   // (c) with the opens NOT listed the seed week fails on coverage alone (the October backups are open on the seed)
-  const pfUnlisted = PUB.preflight(ctxClean, { ok: true, days: week, final: base, openSlots: [], aborts: [] });
+  const pfUnlisted = PUB.preflight(ctxClean, { ok: true, days: week, final: base, live: liveOf(base), openSlots: [], aborts: [] });
   ok(!pfUnlisted.ok && pfUnlisted.hardRemaining.length === 0 && pfUnlisted.missingDays.length > 0, "seed week with opens unlisted fails (c) only: missing " + JSON.stringify(pfUnlisted.missingDays));
-  const fakePlan = { ok: true, days: week, final: base, openSlots: openOf(base, week), aborts: [] };
+  const fakePlan = { ok: true, days: week, final: base, live: liveOf(base), openSlots: openOf(base, week), aborts: [] };
   const pfClean = PUB.preflight(ctxClean, fakePlan);
   ok(pfClean.ok, "seed week passes with its opens listed: hard remaining " + JSON.stringify(pfClean.hardRemaining) + " missing " + JSON.stringify(pfClean.missingDays));
   ok(Array.isArray(pfClean.lockedFacts), "locked facts are listed, not fatal");
@@ -329,12 +332,12 @@ step("F: preflight on a synthetic ctx (seed rules, no network)");
   const planted = clone(base);
   planted["2026-10-06"] = { primary: "s3", backup: "s2", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null };
   const ctxBad = mk(planted);
-  const pfBad = PUB.preflight(ctxBad, { ok: true, days: ["2026-10-06"], final: planted, openSlots: [], aborts: [] });
+  const pfBad = PUB.preflight(ctxBad, { ok: true, days: ["2026-10-06"], final: planted, live: liveOf(planted), openSlots: [], aborts: [] });
   ok(!pfBad.ok, "the planted violation fails the preflight");
   ok(pfBad.hardRemaining.some(h => h.day === "2026-10-06" && h.role === "primary" && h.id === "s3" && h.reasons.some(r => /hard-never-weekday/.test(r))), "...naming Acton / Tuesday: " + JSON.stringify(pfBad.hardRemaining));
   // the same holder LOCKED is a locked fact (the app's import-holder reading), not a failure
   const lockedP = clone(planted); lockedP["2026-10-06"].primaryLocked = true; lockedP["2026-10-06"].source = "import";
-  const pfLocked = PUB.preflight(mk(lockedP), { ok: true, days: ["2026-10-06"], final: lockedP, openSlots: [], aborts: [] });
+  const pfLocked = PUB.preflight(mk(lockedP), { ok: true, days: ["2026-10-06"], final: lockedP, live: liveOf(lockedP), openSlots: [], aborts: [] });
   ok(pfLocked.ok && pfLocked.lockedFacts.some(f => f.day === "2026-10-06" && f.id === "s3"), "a locked holder's conflicts are reported as locked facts: " + JSON.stringify(pfLocked.lockedFacts));
   // Prompt 23 review (10/1): a Khan Tuesday published beyond his 56-day notice (Tue 3/2/2027 - 99 days after the 11/23
   // generation day) still passes the preflight when the CLI runs later, inside the notice (2/1/2027: 29 days out) - the held
@@ -343,13 +346,25 @@ step("F: preflight on a synthetic ctx (seed rules, no network)");
     const TUE = "2027-03-02";
     const heldK = { [TUE]: { primary: "s1", backup: "s2", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null } };
     const mkAt = (schedule, today) => R.buildContext(SA.seedToContextInput(seed, { eastDerived: [], eastFeedCoverage: EAST_COVER, eastBusyDays: {}, schedule, today }));
-    const pfHeld = PUB.preflight(mkAt(heldK, "2027-02-01"), { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [] });
+    const liveK = { [TUE]: { primary: "s1", backup: "s2" } };
+    const pfHeld = PUB.preflight(mkAt(heldK, "2027-02-01"), { ok: true, days: [TUE], final: heldK, live: liveK, openSlots: [], aborts: [] });
     ok(pfHeld.ok && pfHeld.hardRemaining.length === 0 && pfHeld.evaluated === 2, "a held Khan Tue inside the notice passes the preflight (no hard reason): " + JSON.stringify(pfHeld));
-    ok(PUB.preflight(mkAt(heldK, "2026-11-23"), { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [] }).ok, "...as it did on the generation day (beyond the notice)");
+    ok(PUB.preflight(mkAt(heldK, "2026-11-23"), { ok: true, days: [TUE], final: heldK, live: liveK, openSlots: [], aborts: [] }).ok, "...as it did on the generation day (beyond the notice)");
+    // 10/1 follow-ups (item 4) - the hole closed: the SAME plan with neither live nor changes says nothing about what is
+    // live, so it holds nothing - the Khan Tue inside the notice is judged as a new placement and FAILS (it used to read
+    // every final row as held and pass); an empty changes array means final = live and still passes.
+    const pfNeither = PUB.preflight(mkAt(heldK, "2027-02-01"), { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [] });
+    ok(!pfNeither.ok && pfNeither.hardRemaining.some(h => h.day === TUE && h.role === "primary" && h.id === "s1" && h.reasons.some(r => /^hard-never-weekday:Tue/.test(r))), "a plan with neither live nor changes holds nothing: the Khan Tue inside the notice fails: " + JSON.stringify(pfNeither.hardRemaining));
+    ok(PUB.preflight(mkAt(heldK, "2027-02-01"), { ok: true, days: [TUE], final: heldK, changes: [], openSlots: [], aborts: [] }).ok, "...an empty changes array (final = live) still holds it and passes");
+    eq(PUB.standingOf({ final: heldK }), {}, "standingOf: neither live nor changes -> nothing held");
+    eq([PUB.standingOf(null), PUB.standingOf(undefined), PUB.standingOf({}), PUB.standingOf({ final: heldK, changes: "x" })], [{}, {}, {}, {}], "standingOf: no plan / no changes array -> nothing held");
+    eq(clone(PUB.standingOf({ final: heldK, changes: [] })), liveK, "standingOf: an empty changes array -> final's holders");
+    ok(PUB.standingOf({ live: liveK, final: {}, changes: [{ day: TUE, role: "primary", from: null, to: "s1" }] }) === liveK, "standingOf: plan.live wins, returned as is");
     const rNew = R.eligibility(mkAt({}, "2027-02-01"), TUE, "primary", "s1");
     ok(!rNew.ok && rNew.hard.some(h => /^hard-never-weekday:Tue/.test(h)), "control: the same Tuesday as a NEW placement on 2/1 is hard: " + JSON.stringify(rNew.hard));
     // Review 2 (10/1) - pin moved deliberately: "held" is read on the LIVE rows, never on plan.final. The case above passes
-    // because that hand-built plan carries no change (standingOf: final minus the planned changes = the live rows); a
+    // because that hand-built plan states the live rows (live: Khan on the Tue - 10/1 follow-ups; before them it passed on
+    // carrying no change, which the follow-ups now read as "nothing held" unless a changes array is given); a
     // preview-NEW Khan Tue inside the notice (live: primary OPEN; the plan's change OPEN -> s1) FAILS, although the ctx
     // is built from plan.final where the row is his - a preview generated weeks before the publish cannot slip one through.
     const planNew = { ok: true, days: [TUE], final: heldK, openSlots: [], aborts: [], changes: [{ day: TUE, role: "primary", from: null, to: "s1" }] };
@@ -370,11 +385,16 @@ step("F: preflight on a synthetic ctx (seed rules, no network)");
     eq([plSame.ok, plSame.changes.length, plSame.skipped], [true, 0, [TUE]], "planPublish: Khan already live on the Tue - nothing to write");
     ok(PUB.preflight(mkAt(plSame.final, "2027-02-01"), plSame).ok, "planPublish -> preflight: the unchanged live Khan Tue inside the notice passes");
     eq(clone(PUB.standingOf(planNew)), { [TUE]: { primary: null, backup: "s2" } }, "standingOf: a hand-built plan's final with the planned change put back");
+    // 10/1 follow-ups (item 4): planPublish always states the live rows - an object even with no live row at all (main()
+    // passes plan.live, so its preflight never falls back to the hand-built readings)
+    const plNone = PUB.planPublish(prevK, []);
+    ok(plNone.live && typeof plNone.live === "object" && !Array.isArray(plNone.live) && Object.keys(plNone.live).length === 0, "planPublish with zero live rows: plan.live is {} - " + JSON.stringify(plNone.live));
+    ok(!PUB.preflight(mkAt(plNone.final, "2027-02-01"), plNone).ok, "...so the preview's new Khan Tue inside the notice (no live row) fails the preflight");
   }
   // coverage check: a range day with no row and not listed open fails
-  const pfMissing = PUB.preflight(ctxClean, { ok: true, days: ["2026-10-06", "2030-01-01"], final: base, openSlots: [], aborts: [] });
+  const pfMissing = PUB.preflight(ctxClean, { ok: true, days: ["2026-10-06", "2030-01-01"], final: base, live: liveOf(base), openSlots: [], aborts: [] });
   ok(!pfMissing.ok && pfMissing.missingDays.includes("2030-01-01"), "an unlisted uncovered day fails the preflight");
-  const pfListed = PUB.preflight(ctxClean, { ok: true, days: ["2026-10-06", "2030-01-01"], final: base, openSlots: [{ day: "2030-01-01", role: "primary" }, { day: "2030-01-01", role: "backup" }], aborts: [] });
+  const pfListed = PUB.preflight(ctxClean, { ok: true, days: ["2026-10-06", "2030-01-01"], final: base, live: liveOf(base), openSlots: [{ day: "2030-01-01", role: "primary" }, { day: "2030-01-01", role: "backup" }], aborts: [] });
   ok(pfListed.ok, "...and passes once both roles are listed open");
   // a ctx note (an eastBlocks surgeon whose East busy days could not be resolved) is FATAL, never a silent PASS
   const pfNoted = PUB.preflight(ctxClean, fakePlan, ["no East id for FAK - his East busy days are NOT in the ctx"]);

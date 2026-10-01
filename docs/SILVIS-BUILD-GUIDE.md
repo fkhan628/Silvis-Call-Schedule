@@ -413,7 +413,9 @@ a copy - later in-place writes to `ctx.schedule` never change it; a non-object w
 never reads the holder on `ctx.schedule`. Callers: the app's main context (saved rows) and Generate use the default; the day
 editor's draft context passes `heldSchedule: ctxInputs.schedule` (the saved rows); `scripts/publish-preview.js` passes the
 live rows to `buildLiveContext`, and `preflight()` installs the live holders from the plan (`plan.live`, else
-`standingOf(plan)` = the final map with the planned changes put back) for its evaluation and restores the ctx's own after;
+`standingOf(plan)` = the final map with the planned changes put back when the plan carries a `changes` array, and
+nothing held when it carries neither - 10/1 follow-ups; `main()` always passes `plan.live`) for its evaluation and
+restores the ctx's own after;
 `generate()` narrows it for the run (`genRunHeld`: outside the range the caller's snapshot, inside it only the rows the run
 starts from - the locks / fixed slots `genSeedLocks` keeps - that the caller's snapshot holds with the same surgeon) and
 restores it in its `finally`, so `genEvaluate` / `genDiagnostics` read the run's own placements as new.
