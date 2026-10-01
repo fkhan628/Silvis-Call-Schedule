@@ -33,7 +33,9 @@
 // must be byte-identical to the standard seed-1 run - and, since the P2 review
 // fix stage, seven more: Acton offering every November day on seeds 1-3 with
 // the share taper and its untapered control (6 runs at bestOf 2) and a one-week
-// Christmas run at bestOf 1 for the holiday-unit unplaced reason).
+// Christmas run at bestOf 1 for the holiday-unit unplaced reason); since Prompt 23
+// (9/30) the notice fixture's two one-week runs, and since its review (10/1) the
+// two three-day weekend-pair runs (noLoneWeekendDay on / off) - 27 in the summary.
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -841,8 +843,10 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   //   B3 - the weekend cap as a SOFT term: per month his weekends (a weekend by its Saturday, counted once) = Silvis PRIMARY on
   //        its Sat or Sun in the merged view, or East-busy on one (KHAN_BUSY; the forecast at or over the threshold outside the
   //        published coverage, never on a fixture HOME day - the engine does not consult the forecast there). The soft list
-  //        carries 'weekend-cap:2' at 10 x (count - 2) on exactly the GENERATED carrier day (his Saturday, else his Sunday) of
-  //        each weekend the East data do not already count, in a month over 2 - and nowhere else. A month over the cap is
+  //        carries 'weekend-cap:2' at 10 on exactly the GENERATED carrier day (his Saturday, else his Sunday) of each weekend
+  //        the East data do not already count that is past the cap in its month's order - East weekends first, then his
+  //        weekends with a held day that is not generator-placed (a lock), then the rest by date - and nowhere else (Prompt 23
+  //        review 10/1: 10 per weekend over; it read 10 x (count - 2) on every carrier of the month). A month over the cap is
   //        recorded for the summary, never failed (soft).
   //   B2 - the shapes are counted for the summary (standalone Fridays, Sat-Sun pairs, full blocks); the hard pair rule is item 5b.
   {
@@ -853,14 +857,18 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     const eastWk = (sat) => eastCapDay(sat) || eastCapDay(addDays(sat, 1));
     const silvisWk = (sat) => holder(view, sat, P) === KHAN || holder(view, addDays(sat, 1), P) === KHAN;
     const monthCount = (m) => monthDays(m).filter((d) => weekday(d) === "Sat" && (eastWk(d) || silvisWk(d))).length;
+    // the month's order (review 10/1): 0 East-counted, 1 Silvis with a held day the generator did not place (a lock), 2 the rest
+    const fixedWk = (sat) => [sat, addDays(sat, 1)].some((x) => holder(view, x, P) === KHAN && !isPlaced(out, x, P));
+    const clsOf = (sat) => (eastWk(sat) ? 0 : silvisWk(sat) ? (fixedWk(sat) ? 1 : 2) : -1);
     const expected = [];
     days.forEach((d) => {
       if ((weekday(d) !== "Sat" && weekday(d) !== "Sun") || holder(view, d, P) !== KHAN) return;
       const sat = weekday(d) === "Sat" ? d : addDays(d, -1);
       const carrier = holder(view, sat, P) === KHAN ? sat : addDays(sat, 1);
       if (carrier !== d || !isPlaced(out, d, P) || eastWk(sat)) return;
-      const c = monthCount(monthOf(sat));
-      if (c > capW.perMonth) expected.push(d + " weekend-cap:" + capW.perMonth + " " + 10 * (c - capW.perMonth));
+      const me = clsOf(sat);
+      const pos = monthDays(monthOf(sat)).filter((s2) => weekday(s2) === "Sat" && s2 !== sat && clsOf(s2) >= 0 && (clsOf(s2) < me || (clsOf(s2) === me && s2 < sat))).length + 1;
+      if (pos > capW.perMonth) expected.push(d + " weekend-cap:" + capW.perMonth + " 10");
     });
     const got = D.softPenalties.filter((s) => s.id === KHAN && /^weekend-cap:/.test(s.reason)).map((s) => s.day + " " + s.reason + " " + s.weight).sort();
     eq(got, expected.sort(), "Prompt 23 B3: the weekend-cap soft terms are exactly the restated ones (carrier days of weekends the East data do not count, in months over 2)");
@@ -2046,6 +2054,40 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(u56 && u56.reasons[KHAN], ["hard-never-weekday:Tue"], "B4: ...and Khan's only reason is the OR-day rule inside the notice");
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
+// Prompt 23 review (10/1) - B2 in the weekend fill: a Sat + Sun only the noLoneWeekendDay surgeon can take stay together.
+// Weekend 3/5-3/7/2027: the other five take Fri 3/5 off (a vacation) and have a backup_only row on Sat 3/6; Khan is East-busy
+// on Fri 3/5. No full pattern exists (nobody may take the Friday), and Khan - the only one for the Saturday - fails it solo
+// with lone-weekend-day. The reduced unit keeps the Saturday WITH its Sunday: Khan takes Sat + Sun and only the Friday stays
+// open (before the fix both the Friday and the Saturday stayed open - the Saturday was dropped from the reduced unit and the
+// Sunday went to someone else). Control: without noLoneWeekendDay the same inputs give the same Sat + Sun to Khan.
+{
+  const FRI = "2027-03-05", SAT = "2027-03-06", SUN = "2027-03-07";
+  eq([weekday(FRI), isHoliday(FRI) || isHoliday(SAT) || isHoliday(SUN), KHAN_NO_PRIMARY.has(SAT), KHAN_NO_PRIMARY.has(SUN), SARKAR_WINDOW.has(FRI)], ["Fri", false, false, false, false], "fixture: 3/5/2027 is an ordinary weekend, Khan free on Sat / Sun, outside Sarkar's windows");
+  const others = [BURCHETT, ACTON, PHILIP, FIERCE, SARKAR];
+  const runPair = (noLone) => {
+    const srX = SA.seedToSurgeonRules(seed);
+    if (!noLone) delete srX[KHAN].noLoneWeekendDay;
+    const inputX = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY.concat([FRI]) }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST }, surgeonRules: srX });
+    inputX.timeOffRows = (inputX.timeOffRows || []).concat(others.map((id) => ({ person_id: id, start_date: FRI, end_date: FRI, kind: "vacation" })));
+    inputX.availabilityRows = inputX.availabilityRows.concat(others.map((id) => ({ person_id: id, kind: "backup_only", role: null, start_date: SAT, end_date: SAT })));
+    const ctxX = R.buildContext(inputX);
+    if (ctxX.warnings.length) fail("buildContext warnings (pair fixture " + noLone + "): " + JSON.stringify(ctxX.warnings));
+    eq(ctxX.per[KHAN].noLoneWeekend, noLone, "the fixture ctx reads noLoneWeekendDay " + noLone);
+    CUR.range = "Prompt 23 review pair fixture noLoneWeekendDay " + noLone; CUR.seed = 1; CUR.day = SAT;
+    return GEN.generate(ctxX, FRI, SUN, { seed: 1, bestOf: 1 });
+  };
+  [true, false].forEach((noLone) => {
+    const o = runPair(noLone);
+    eq([o.schedule[FRI].primary, o.schedule[SAT].primary, o.schedule[SUN].primary], [null, KHAN, KHAN], "B2 pair (noLoneWeekendDay " + noLone + "): Sat + Sun primary go to Khan, the Friday stays open");
+    eq(o.diagnostics.uncovered.filter((u) => u.role === P).map((u) => u.day), [FRI], "B2 pair (noLoneWeekendDay " + noLone + "): only the Friday primary is uncovered");
+    const uF = o.diagnostics.uncovered.find((u) => u.day === FRI && u.role === P);
+    eq(uF && uF.reasons[KHAN], ["east-busy"], "B2 pair (noLoneWeekendDay " + noLone + "): Khan's reason for the Friday is East");
+    eq(o.diagnostics.hardViolations, [], "B2 pair (noLoneWeekendDay " + noLone + "): no hard violation");
+    const wu = o.diagnostics.weekendUnits.find((w) => w.friday === FRI);
+    ok(!!(wu && wu.roles.primary && wu.roles.primary.partial), "B2 pair (noLoneWeekendDay " + noLone + "): the weekend is a reduced (partial) fill: " + JSON.stringify(wu && wu.roles.primary));
+  });
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
 // Across every run of the file: the pair rule was actually exercised (some generated Sat / Sun primary of Khan was checked
 // against its partner), and the beyond-notice Tue/Thu placements, the shapes and the months over the soft cap are printed.
 {
@@ -2059,7 +2101,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 23 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

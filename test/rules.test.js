@@ -1076,7 +1076,9 @@ eq(R.holidayUnitCandidates(eastTg, units[0], P), [KHAN], "the locked holder is s
 eq(R.holidayUnitCandidates(eastTg, units[0], B), [PHILIP, FIERCE], "backup candidates (Burchett's November list is not waived on the unit - small items 9/22)");
 blocked(R.eligibility(eastTg, "2026-11-13", P, KHAN), "east-busy", "an unlocked East-busy day is still blocked");
 ok(R.weekendUnitPatterns(eastTg, "2026-11-27").length === 1 && R.weekendUnitPatterns(eastTg, "2026-11-27")[0].members.fri === KHAN, "Thanksgiving weekend keeps its locked block");
-const lh2 = R.eligibility(makeCtx({ schedule: { "2026-11-03": { primary: KHAN, primaryLocked: true } } }), "2026-11-03", P, KHAN);
+// Prompt 23 review (10/1): pin moved deliberately to Khan's pre-9/30 rules (no hardNeverWeekdaysNoticeDays - the OR-day rule
+// hard on every date); with his 56-day notice a slot he HOLDS reads the soft term instead (pinned in the Prompt 23 B4 block)
+const lh2 = R.eligibility(makeCtx({ schedule: { "2026-11-03": { primary: KHAN, primaryLocked: true } }, surgeonRules: srPre23 }), "2026-11-03", P, KHAN);
 okElig(lh2); eq(lh2.lockHolder, true); eq(lh2.conflicts, ["hard-never-weekday:Tue"], "manual lock on an OR day: kept, conflict reported");
 const lh3 = R.eligibility(ctx, "2026-10-20", P, SARKAR);
 eq(lh3.lockHolder, true); eq(lh3.conflicts, [], "a clean locked row has no conflicts");
@@ -1882,7 +1884,9 @@ blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-23")]), "2026-
 blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-23")]), "2026-11-23", B, SARKAR), "outside-window", "W: ...for backup either");
 blocked(R.eligibility(withRows([row(SARKAR, "available", "2026-11-26", "backup")]), "2026-11-26", B, SARKAR), "outside-window", "W: a row on a holiday-unit day outside a window - still enforced on holidays");
 // a manual lock is not a dated availability row: the holder keeps the lock and the OR-day rule is reported as a conflict
-const wLock = R.eligibility(makeCtx({ schedule: { [W_TUE]: { primary: KHAN, primaryLocked: true } } }), W_TUE, P, KHAN);
+// (Prompt 23 review 10/1: on Khan's pre-9/30 rules - no notice key - so the OR-day rule is hard on every date; with his
+// notice a held slot reads the soft term, pinned in the Prompt 23 B4 block)
+const wLock = R.eligibility(makeCtx({ schedule: { [W_TUE]: { primary: KHAN, primaryLocked: true } }, surgeonRules: srPre23 }), W_TUE, P, KHAN);
 ok(wLock.ok === true && wLock.lockHolder === true, "W: a manual lock on an OR day keeps the holder");
 eq(wLock.conflicts, ["hard-never-weekday:Tue"], "W: ...with hard-never-weekday:Tue reported in conflicts (a lock lifts nothing)");
 // holiday-unit days: the family is waived there anyway (unchanged) - the row adds nothing and the East rule still holds
@@ -2561,6 +2565,25 @@ blocked(R.eligibility(atToday("2026-11-19"), "2027-01-14", P, KHAN), "hard-never
 hasSoft(R.eligibility(atToday("2026-11-18"), "2027-01-14", P, KHAN), "hard-never-beyond-notice:Thu", "Thu 57 days out: soft");
 blocked(R.eligibility(atToday("2027-02-01"), "2027-01-12", P, KHAN), "hard-never-weekday:Tue", "a date already past (negative days out) is inside the notice: hard");
 blocked(R.eligibility(atToday("2027-01-12"), "2027-01-12", P, KHAN), "hard-never-weekday:Tue", "the day itself (0 days out): hard");
+// Prompt 23 review (10/1): a slot he already HOLDS is a fact as far as the notice goes - Tue 3/2/2027, placed beyond the
+// notice (99 days after the 11/23 generation day), checked again on 2/1/2027 (29 days out): ok with the soft term, never
+// the hard reason (fill-open-only fixedViolations, the publish preflight and the day editor's holder read it this way)
+eq(R.rdDaysBetween("2027-02-01", "2027-03-02"), 29, "fixture arithmetic (holder)");
+const heldTue = (sched, today) => makeCtx({ schedule: sched, today: today });
+const hTue = R.eligibility(heldTue({ "2027-03-02": { primary: KHAN } }, "2027-02-01"), "2027-03-02", P, KHAN);
+okElig(hTue, "his own Tue 3/2 checked 29 days out: still eligible (the held slot is a fact)");
+eq(hTue.soft.filter(s => s.reason.indexOf("hard-never") === 0), [{ reason: "hard-never-beyond-notice:Tue", weight: 3 }], "...with the soft hard-never-beyond-notice:Tue at 3, as when it was placed");
+lacks(hTue.hard, "hard-never-weekday", "...and no hard reason");
+blocked(R.eligibility(atToday("2027-02-01"), "2027-03-02", P, KHAN), "hard-never-weekday:Tue", "the same date as a NEW placement (open slot) 29 days out: hard");
+blocked(R.eligibility(heldTue({ "2027-03-02": { primary: BURCHETT } }, "2027-02-01"), "2027-03-02", P, KHAN), "hard-never-weekday:Tue", "...and on someone else's slot (a trade / an editor pick): hard");
+blocked(R.eligibility(heldTue({ "2027-03-02": { primary: BURCHETT } }, "2027-02-01"), "2027-03-02", P, KHAN, { claim: true }), "hard-never-weekday:Tue", "...the claim flag changes nothing (a claim is a new placement)");
+blocked(R.eligibility(heldTue({ "2027-03-02": { primary: null, backup: KHAN } }, "2027-02-01"), "2027-03-02", P, KHAN), "hard-never-weekday:Tue", "...holding the BACKUP of the day is not holding the primary");
+const hLock = R.eligibility(heldTue({ "2027-03-02": { primary: KHAN, primaryLocked: true } }, "2027-02-01"), "2027-03-02", P, KHAN);
+ok(hLock.ok && hLock.lockHolder && hLock.conflicts.length === 0 && hLock.soft.some(s => s.reason === "hard-never-beyond-notice:Tue"), "a LOCKED held Tue inside the notice: no conflict, the soft term: " + JSON.stringify(hLock));
+const hW0 = R.eligibility(makeCtx({ schedule: { "2027-03-02": { primary: KHAN } }, groupRules: grN0Held(), today: "2027-02-01" }), "2027-03-02", P, KHAN);
+okElig(hW0, "weights.hardNeverBeyondNotice 0: the held slot is still eligible"); lacksSoft(hW0, "hard-never", "...with no soft");
+blocked(R.eligibility(makeCtx({ schedule: { "2026-11-03": { primary: ACTON } } }), "2026-11-03", P, ACTON), "hard-never-weekday:Tue", "no notice key (Acton): a held Tuesday stays hard - the holder reading belongs to the notice only");
+function grN0Held() { return Object.assign(clone(seed.groupRules), { weights: Object.assign({}, seed.groupRules.weights, { hardNeverBeyondNotice: 0 }) }); }
 okElig(R.eligibility(atToday("2026-11-17"), "2027-01-12", B, KHAN), "backup was never restricted (hardNeverWeekdaysRoles primary)");
 lacksSoft(R.eligibility(atToday("2026-11-16"), "2027-01-12", B, KHAN), "hard-never-beyond-notice", "no soft on a backup either");
 // his own dated row lifts the rule entirely (W) - inside the notice AND beyond it (no soft either)
@@ -2632,6 +2655,18 @@ eq(fp(KHAN, PHILIP, PHILIP), undefined, "Philip cannot take 1/23-24 (outside his
 eq(fp(KHAN, BURCHETT, BURCHETT).penalty, soloS("2027-01-22", KHAN) - WCW + pairS(BURCHETT) + 3, "Khan Fri + Burchett Sat+Sun: Khan's soft - " + WCW + " + Burchett's two days + 3 (a split-style block of two)");
 eq(fp(KHAN, FIERCE, FIERCE), undefined, "Fierce never takes a Sat+Sun pair (weekend-block-only needs the full block)");
 eq(fp(BURCHETT, KHAN, KHAN).penalty, soloS("2027-01-22", BURCHETT) + 3 + pairS(KHAN), "Burchett Fri + Khan Sat+Sun: Burchett's Friday mismatch 3 (split style) + Khan's pair, no mismatch for the key holder");
+// Prompt 23 review (10/1): a BLOCK-style holder's Sat+Sun pair pays the mismatch too (it used to be free in the unit choice
+// while per-day eligibility charged pattern-mismatch:block and genStyleMismatch flagged him - every 'friday' weekend of the
+// 10/1 preview was Khan Fri + Philip Sat/Sun with a mismatch the choice never paid). Weekend 1/29/2027 (Philip's listed week).
+const fpP = R.weekendUnitPatterns(clean, "2027-01-29").find(p => p.kind === "friday" && p.members.fri === KHAN && p.members.sat === PHILIP && p.members.sun === PHILIP);
+const pairOf = (id, sat) => ssum(R.eligibility(clean, sat, P, id, { assume: [{ date: R.rdAddDays(sat, 1), role: P }], skipPatternSoft: true })) + ssum(R.eligibility(clean, R.rdAddDays(sat, 1), P, id, { assume: [{ date: sat, role: P }], skipPatternSoft: true }));
+eq(clean.per[PHILIP].weekendStyle, "block", "fixture: Philip is block style");
+eq(fpP.penalty, soloS("2027-01-29", KHAN) - WCW + pairOf(PHILIP, "2027-01-30") + 3, "Khan Fri + Philip Sat+Sun: Khan's soft - " + WCW + " + Philip's two days + 3 (a block-style holder's block of two is a mismatch)");
+const asgP = makeCtx({ schedule: { "2027-01-29": { primary: KHAN }, "2027-01-30": { primary: PHILIP }, "2027-01-31": { primary: PHILIP } } });
+["2027-01-30", "2027-01-31"].forEach(d => eq(R.eligibility(asgP, d, P, PHILIP).soft.filter(s => s.reason.indexOf("pattern-mismatch") === 0), [{ reason: "pattern-mismatch:block", weight: 3 }], "...per-day eligibility charges Philip's " + d + " the same mismatch"));
+eq(G.genStyleMismatch({ ctx: asgP }, { present: ["2027-01-29", "2027-01-30", "2027-01-31"] }, P, { fri: KHAN, sat: PHILIP, sun: PHILIP }), [PHILIP], "...and genStyleMismatch flags Philip (not Khan, whose lone Friday is his shape) for the same assignment");
+const asgP3 = makeCtx({ schedule: { "2027-01-29": { primary: PHILIP }, "2027-01-30": { primary: PHILIP }, "2027-01-31": { primary: PHILIP } } });
+eq(G.genStyleMismatch({ ctx: asgP3 }, { present: ["2027-01-29", "2027-01-30", "2027-01-31"] }, P, { fri: PHILIP, sat: PHILIP, sun: PHILIP }), [], "control: Philip's full Fri-Sun block is no mismatch");
 eq(fp(SARKAR, KHAN, KHAN), undefined, "1/22 is outside Sarkar's windows");
 // per-day shape softs agree with the unit view
 lacksSoft(R.eligibility(clean, "2027-01-22", P, KHAN), "pattern-mismatch", "a Friday alone: no mismatch for the key holder");
@@ -2670,7 +2705,9 @@ eq(capOf(R.eligibility(dsg2, "2027-01-23", P, KHAN, { assume: PAIR("2027-01-23")
 eq(capOf(R.eligibility(dsg2, "2027-01-24", P, KHAN, { assume: [{ date: "2027-01-23", role: P }] })), [], "...once per weekend - on the Saturday, not again on the Sunday");
 okElig(R.eligibility(dsg2, "2027-01-23", P, KHAN, { assume: PAIR("2027-01-23") }), "the cap is soft: still eligible");
 const dsg2two = makeCtx({ schedule: { "2027-01-02": { primary: KHAN }, "2027-01-03": { primary: KHAN } }, eastBusyDays: { [KHAN]: ["2027-01-09", "2027-01-17"] } });
-eq(capOf(R.eligibility(dsg2two, "2027-01-23", P, KHAN, { assume: PAIR("2027-01-23") })), [{ reason: "weekend-cap:2", weight: 20 }], "a fourth weekend (one Silvis weekend already held): 10 x 2 over");
+// Prompt 23 review (10/1): pin moved deliberately from 20 (10 x 2 over) - a candidate pays what adding it costs, one more
+// weekend over = 10; the old escalating reading summed past "10 per weekend over" on a finished schedule
+eq(capOf(R.eligibility(dsg2two, "2027-01-23", P, KHAN, { assume: PAIR("2027-01-23") })), [{ reason: "weekend-cap:2", weight: 10 }], "a fourth weekend (one Silvis weekend already held): one more weekend over - 10");
 eq(capOf(R.eligibility(makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2027-01-09"] } }), "2027-01-23", P, KHAN, { assume: PAIR("2027-01-23") })), [], "DSG 1 + this = 2: at the cap, no term");
 // the placement adds nothing when the East data already count the weekend (generic reading, shown without the pair rule)
 const srCapNL = clone(SA.seedToSurgeonRules(seed)); delete srCapNL[KHAN].noLoneWeekendDay;
@@ -2689,8 +2726,35 @@ eq(capOf(R.eligibility(friE, "2027-01-30", P, KHAN, { assume: PAIR("2027-01-30")
 const splitM = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2027-07-11", "2027-07-18", "2027-08-01"] } });
 eq(R.weekendCapCounts(splitM, KHAN, "2027-07").weekends.map(w => w.saturday), ["2027-07-10", "2027-07-17", "2027-07-31"], "East Sunday 8/1 counts the weekend of Saturday 7/31 - in July");
 eq(R.weekendCapCounts(splitM, KHAN, "2027-08").weekends, [], "...and not in August");
-eq(capOf(R.eligibility(splitM, "2027-07-24", P, KHAN, { assume: PAIR("2027-07-24") })), [{ reason: "weekend-cap:2", weight: 20 }], "July: 3 East weekends + this = 4 -> 10 x 2");
+eq(capOf(R.eligibility(splitM, "2027-07-24", P, KHAN, { assume: PAIR("2027-07-24") })), [{ reason: "weekend-cap:2", weight: 10 }], "July: 3 East weekends + this = 4 -> the placement adds one weekend over: 10 (review 10/1: was 10 x 2)");
 eq(capOf(R.eligibility(splitM, "2027-08-07", P, KHAN, { assume: PAIR("2027-08-07") })), [], "August: the first weekend - no term");
+// Prompt 23 review (10/1): a placement ON the split weekend itself (rules.js reads its month from the Saturday)
+const jul2 = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2027-07-10", "2027-07-17"] } });
+eq(capOf(R.eligibility(jul2, "2027-07-31", P, KHAN, { assume: PAIR("2027-07-31") })), [{ reason: "weekend-cap:2", weight: 10 }], "split weekend Sat 7/31 - Sun 8/1 is July's third weekend");
+const aug3 = makeCtx({ schedule: {}, eastBusyDays: { [KHAN]: ["2027-08-07", "2027-08-14", "2027-08-21"] } });
+eq(capOf(R.eligibility(aug3, "2027-07-31", P, KHAN, { assume: PAIR("2027-07-31") })), [], "...and never August's: three August DSG weekends add no term");
+// ...and when the carrier is the SUNDAY 8/1 itself (shown without the pair rule, srCapNL): still July's weekend, never August's
+eq(capOf(R.eligibility(makeCtx({ schedule: {}, surgeonRules: srCapNL, eastBusyDays: { [KHAN]: ["2027-07-10", "2027-07-17"] } }), "2027-08-01", P, KHAN)), [{ reason: "weekend-cap:2", weight: 10 }], "a Silvis Sunday 8/1 alone counts in July (its Saturday's month)");
+eq(capOf(R.eligibility(makeCtx({ schedule: {}, surgeonRules: srCapNL, eastBusyDays: { [KHAN]: ["2027-08-07", "2027-08-14", "2027-08-21"] } }), "2027-08-01", P, KHAN)), [], "...so three August DSG weekends add no term to it");
+// Prompt 23 review (10/1): 10 per weekend over, read over a FINISHED schedule - the terms of every day he holds add up to
+// 10 x (count - 2): the weekends past the cap are the latest ones, East weekends first and his locked weekends next
+// (February 2027: Saturdays 2/6, 2/13, 2/20, 2/27). A candidate pays what adding it costs, wherever it falls in the month.
+const capSum = (c, m) => { let s = 0; Object.keys(c.schedule).filter(d => d.slice(0, 7) === m && c.schedule[d].primary === KHAN).forEach(d => { capOf(R.eligibility(c, d, P, KHAN)).forEach(x => { s += x.weight; }); }); return s; };
+const wkPair = (sat, extra) => { const o = {}; o[sat] = Object.assign({ primary: KHAN }, extra || {}); o[R.rdAddDays(sat, 1)] = Object.assign({ primary: KHAN }, extra || {}); return o; };
+const febE2 = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-20"), wkPair("2027-02-27")), eastBusyDays: { [KHAN]: ["2027-02-06", "2027-02-14"] } });
+eq(R.weekendCapCounts(febE2, KHAN, "2027-02").weekends.length, 4, "fixture: 2 DSG + 2 Silvis weekends in February");
+eq(capSum(febE2, "2027-02"), 20, "finished: 2 DSG + 2 Silvis weekends = 2 over -> the terms add up to 20 (was 40: 20 on each Silvis weekend)");
+eq([capOf(R.eligibility(febE2, "2027-02-20", P, KHAN)), capOf(R.eligibility(febE2, "2027-02-21", P, KHAN))], [[{ reason: "weekend-cap:2", weight: 10 }], []], "...10 on each weekend's Saturday, nothing on its Sunday");
+const feb3 = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-06"), wkPair("2027-02-13"), wkPair("2027-02-20")) });
+eq(capSum(feb3, "2027-02"), 10, "finished: 3 Silvis weekends, no DSG = 1 over -> 10 in all (was 30)");
+eq([capOf(R.eligibility(feb3, "2027-02-06", P, KHAN)).length, capOf(R.eligibility(feb3, "2027-02-13", P, KHAN)).length, capOf(R.eligibility(feb3, "2027-02-20", P, KHAN)).length], [0, 0, 1], "...carried by the latest weekend (2/20)");
+const feb3L = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-06"), wkPair("2027-02-13"), wkPair("2027-02-20", { primaryLocked: true })) });
+eq([capOf(R.eligibility(feb3L, "2027-02-06", P, KHAN)).length, capOf(R.eligibility(feb3L, "2027-02-13", P, KHAN)).length, capOf(R.eligibility(feb3L, "2027-02-20", P, KHAN)).length], [0, 1, 0], "a LOCKED weekend counts ahead of the others (the generator never scores a lock): the latest unlocked one (2/13) carries the 10");
+eq(capSum(feb3L, "2027-02"), 10, "...still 10 in all");
+const feb2 = makeCtx({ schedule: Object.assign({}, wkPair("2027-02-06"), wkPair("2027-02-20")) });
+eq(capOf(R.eligibility(feb2, "2027-02-13", P, KHAN, { assume: PAIR("2027-02-13") })), [{ reason: "weekend-cap:2", weight: 10 }], "a candidate between two held weekends pays the 10 adding it costs (the generator's choice), although once held the latest weekend carries it");
+eq(capOf(R.eligibility(feb2, "2027-02-27", P, KHAN, { assume: PAIR("2027-02-27") })), [{ reason: "weekend-cap:2", weight: 10 }], "...a candidate after them too");
+eq(capSum(feb2, "2027-02"), 0, "control: 2 Silvis weekends - at the cap, no term");
 // forecast days (Davenport unpublished): at or over the busy threshold count, below do not; never inside the published coverage
 // (EAST_COVER ends 1/31/2027) and never on a busy:false override day
 const fcCap = makeCtx({ schedule: {}, eastForecast: { [KHAN]: { "2027-02-06": 0.6, "2027-02-14": 0.5, "2027-02-21": 0.4, "2027-01-09": 0.9 } } });

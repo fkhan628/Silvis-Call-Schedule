@@ -216,7 +216,15 @@
 //                 +weights.hardNeverBeyondNotice (3), so his allowed weekdays fill
 //                 first. A dated row / offer of his lifts the rule entirely, as
 //                 before (W); absent or not a whole number >= 0 = hard everywhere
-//                 (a malformed value warns once).
+//                 (a malformed value warns once). A slot he already HOLDS (the
+//                 evaluated slot is his on ctx.schedule - a published or generated
+//                 day, a lock) reads the soft term inside the notice too (Prompt 23
+//                 review, 10/1): it was placed when the notice allowed it, so the
+//                 passing of time never turns it into a hard violation (fill-open-only
+//                 fixedViolations, the publish preflight, the day editor's holder). A
+//                 NEW placement - an open slot, someone else's slot (a claim, a trade,
+//                 an editor pick), every candidate the generator weighs - stays
+//                 measured from ctx.today.
 //   ctx.today     input.today ('YYYY-MM-DD'); absent -> the Central date when the
 //                 context is built (rdTodayCentral - the same expression as
 //                 helpers.todayCentral and generator genTodayStr). Every ctx the
@@ -252,12 +260,20 @@
 //                 countsEast, is East-busy on one of those days (rdEastBusyOn: the
 //                 feed's busy days with the overrides, eastStanding days, and the
 //                 forecast at or over the busy threshold outside the published
-//                 coverage - the set rdStatic blocks primary on). A placement that
-//                 adds a weekend the East data does not already count, in a month
-//                 that then counts more than perMonth, carries 'weekend-cap:<n>' at
-//                 weight x (count - perMonth), once per weekend (on its first held
-//                 counted day). Never lifted by an offer (a cap). Malformed -> one
-//                 warning, ignored.
+//                 coverage - the set rdStatic blocks primary on). The term is
+//                 'weekend-cap:<n>' at `weight` for each weekend past perMonth, on the
+//                 weekend's first held counted day, never on a weekend the East data
+//                 already count (Prompt 23 review, 10/1 - it used to read weight x
+//                 (count - perMonth) on every held weekend of the month, which a
+//                 finished schedule summed past "weight per weekend over"): a NEW
+//                 weekend (a candidate placement - the weekend is not on ctx.schedule
+//                 yet) pays weight when the month then counts more than perMonth (the
+//                 cost of adding it); a weekend he already holds pays weight when it
+//                 is past perMonth in the month's order - the East weekends first,
+//                 then his locked weekends, then the rest by date - so the terms of a
+//                 finished schedule add up to weight x (count - perMonth) whenever the
+//                 East data alone stay within the cap. Never lifted by an offer (a
+//                 cap). Malformed -> one warning, ignored.
 //
 // Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
 // outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
@@ -415,7 +431,7 @@ function defaultWeights() {
     offerBonus: 6,     // Prompt 14 P2 (9/23): soft 'offered' bonus on a submitted surgeon's offered day (strong; 0 = off)
     outsideOffers: 6,  // Prompt 14 P2 (9/23): soft 'outside-offers' penalty on a submitted surgeon's non-offered day - preferred mode, and an exhaustive surgeon's claim result (strong; 0 = off)
     offerBonusOverShare: 0, // Prompt 14 P2 review (9/23): what the 'offered' bonus reads in the GENERATOR once the placement no longer brings him towards his share for the role and month (0 = the bonus stops at the share; = offerBonus restores the untapered reading). rules.js itself always emits -offerBonus.
-    hardNeverBeyondNotice: 3 // Prompt 23 B4 (9/30): soft 'hard-never-beyond-notice:<wd>' on a hardNeverWeekdays day further out than surgeonRules.<id>.hardNeverWeekdaysNoticeDays; 3 (= medium = the weekday-primary bonus) leaves such a day net 0 - allowed, never preferred over a colleague - so his allowed weekdays fill first (the 10/1 Jan - Jun preview: at 2 he took 17 Tue/Thu against 11 Mon/Wed, at 3 9 against 18); 0 = off
+    hardNeverBeyondNotice: 3 // Prompt 23 B4 (9/30): soft 'hard-never-beyond-notice:<wd>' on a hardNeverWeekdays day further out than surgeonRules.<id>.hardNeverWeekdaysNoticeDays; 3 (= medium) equals the weekday-primary bonus at the DEFAULT weekendContribution 3, so such a day nets 0 for a "weekdays" surgeon - allowed, never preferred over a colleague - and his allowed weekdays fill first. It cancels the bonus only while weekendContribution is 3: raising weekendContribution in Setup makes a far Tue/Thu net negative (preferred over a colleague) again unless this weight is raised with it (the 10/1 Jan - Jun preview, rules today 11/23: at 3 Khan read Mon/Wed 18, Tue/Thu 9; at 5 and 10, 16 and 8 - rules doc section 8 item 23 (h)); 0 = off
   };
 }
 
@@ -1356,8 +1372,9 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // (the schedule decides), exempt where a holiday unit cuts the weekend, lifted by
 // his own dated row / offer for the day (rowAvail). Prompt 23's soft codes:
 // weekday-primary (-weights.weekendContribution, primaryContribution "weekdays"),
-// hard-never-beyond-notice:<wd> (+weights.hardNeverBeyondNotice) and
-// weekend-cap:<n> (weekendCap.weight x the weekends over n).
+// hard-never-beyond-notice:<wd> (+weights.hardNeverBeyondNotice; also a held slot
+// inside the notice - review 10/1) and weekend-cap:<n> (weekendCap.weight per
+// weekend past n - review 10/1).
 // not-offered (Prompt 14 P2, 9/23): a SUBMITTED surgeon in EXHAUSTIVE mode on a
 // day/role he did not offer inside the period - decided in rdStatic
 // (res.notOffered), pushed by eligibility() unless opts.claim; it is the first
@@ -1530,12 +1547,15 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // date at most N days after ctx.today (the day the placement is made; a past date is inside the notice); further
   // out the day is allowed with the soft hard-never-beyond-notice (weights.hardNeverBeyondNotice) so his allowed
   // weekdays fill first. A dated row still lifts it entirely (W) - no soft either.
+  // Prompt 23 review (10/1): a notice-bound hard reason is flagged (res.noticeHard = the weekday) so eligibility() can
+  // read a slot the surgeon already HOLDS with the soft term instead - this layer is schedule-free (memoized), the
+  // holder test is dynamic.
   var notRecurring = false;
   var patternDeferred = false;
   if (!waive) {
     if (P.hardNever.has(info.wd) && P.hardNeverRoles.has(role) && !rowAvail) {
       if (P.noticeDays !== null && info.n - ctx.todayN > P.noticeDays) { if (W.hardNeverBeyondNotice) soft.push({ reason: "hard-never-beyond-notice:" + info.wd, weight: W.hardNeverBeyondNotice }); }
-      else hard.push("hard-never-weekday:" + info.wd);
+      else { hard.push("hard-never-weekday:" + info.wd); if (P.noticeDays !== null) res.noticeHard = info.wd; }
     }
     if (P.derived[date]) patternDeferred = true;
     else rdPatternRules(ctx, P, info, role, asBlock, rowAvail, hard, soft);
@@ -1643,6 +1663,20 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
   hard = hard.concat(st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
+  // Prompt 23 review (10/1): hardNeverWeekdaysNoticeDays measures a NEW placement from ctx.today. A slot he already
+  // holds on ctx.schedule (published, generated, locked) was placed when the notice allowed it - the held slot is a fact
+  // as far as the notice goes - so inside the notice it reads the soft hard-never-beyond-notice term, never the hard
+  // reason (else every legal far Tue/Thu turns hard 56 days before it: fill-open-only fixedViolations, the publish
+  // preflight, the day editor's holder). Only the slot's own holder qualifies: an open slot or someone else's (a claim,
+  // a trade, an editor pick - the editor judges candidates on the draft before the pick, the CLI on a cleared role) and
+  // every generator candidate (the default mode clears unlocked slots) stay hard; assume-slots never count here.
+  if (st.noticeHard && entry && entry[role] === surgeonId) {
+    var nhAt = hard.indexOf("hard-never-weekday:" + st.noticeHard);
+    if (nhAt >= 0) {
+      hard.splice(nhAt, 1);
+      if (ctx.weights.hardNeverBeyondNotice) soft.push({ reason: "hard-never-beyond-notice:" + st.noticeHard, weight: ctx.weights.hardNeverBeyondNotice });
+    }
+  }
   var P = ctx.per[surgeonId];
   if (!P) return { ok: false, hard: hard, soft: soft };
 
@@ -1902,23 +1936,39 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // once, in its SATURDAY's month; its counted days are weekendCap.days (default Sat + Sun: a standalone Friday is a
   // weekday). It counts when he holds a role in weekendCap.roles on a counted day, or - countsEast - is East-busy on
   // one (rdEastBusyOn). The term rides on the FIRST counted day of the weekend he holds (so a Sat+Sun pair pays once),
-  // only when the East data do not already count the weekend (the placement then adds nothing) and only when the
-  // month then counts more than perMonth: weight x (count - perMonth).
+  // only when the East data do not already count the weekend (the placement then adds nothing).
+  // Prompt 23 review (10/1): `weight` per weekend past perMonth - never weight x (count - perMonth) on every weekend of
+  // the month (a finished schedule summed that past "weight per weekend over"). A NEW weekend (not on ctx.schedule yet:
+  // the generator's candidates, the unit patterns, a claim) is the one being added, so it pays when the month then
+  // counts more than perMonth - exactly what adding it costs. A weekend he already HOLDS pays when it is past perMonth in
+  // the month's order: East-counted weekends first (fixed facts), then his locked weekends (facts the generator never
+  // scores), then the rest by date - so the terms over a finished schedule add up to weight x (count - perMonth)
+  // whenever the East data alone stay within the cap (weight per Silvis weekend when they do not).
   var wcap = P.weekendCap;
   if (wcap && info.friday && wcap.roles.indexOf(role) >= 0 && wcap.days.indexOf(info.wd) >= 0) {
     var wkFri = info.friday, wkSat = rdAddDays(wkFri, 1);
     var holdsCounted = function (d) { for (var r = 0; r < wcap.roles.length; r++) if (holdsRole(d, wcap.roles[r])) return true; return false; };
     var countedDaysOf = function (friStr) { return [friStr, rdAddDays(friStr, 1), rdAddDays(friStr, 2)].filter(function (d) { return wcap.days.indexOf(rdInfo(d).wd) >= 0; }); };
+    // held on ctx.schedule itself (not the evaluated slot, not assume-slots); lockedOn: such a held day carries his lock
+    var schedHolds = function (d) { var e = sched[d]; if (!e) return false; for (var r = 0; r < wcap.roles.length; r++) if (e[wcap.roles[r]] === surgeonId) return true; return false; };
+    var lockedOn = function (d) { var e = sched[d]; if (!e) return false; for (var r = 0; r < wcap.roles.length; r++) if (e[wcap.roles[r]] === surgeonId && e[wcap.roles[r] + "Locked"]) return true; return false; };
     var thisDays = countedDaysOf(wkFri), carrier = null;
     for (var cd = 0; cd < thisDays.length && !carrier; cd++) if (holdsCounted(thisDays[cd])) carrier = thisDays[cd];
     if (carrier === dateStr && !rdWeekendEastCounted(ctx, P, wkFri)) {
-      var wkMonth = wkSat.slice(0, 7), wkCount = 0;
+      var wkMonth = wkSat.slice(0, 7), wkCount = 0, wkAhead = 0;
+      var wkHeld = thisDays.some(schedHolds);                       // on the schedule already (a finished / held reading)
+      var wkClass = thisDays.some(lockedOn) ? 1 : 2;                // 0 East, 1 locked Silvis, 2 other Silvis
       rdMonthDays(wkMonth).forEach(function (d) {
         if (rdInfo(d).wd !== "Sat") return;
         var f = rdAddDays(d, -1);
-        if (f === wkFri || rdWeekendEastCounted(ctx, P, f) || countedDaysOf(f).some(holdsCounted)) wkCount++;
+        if (f === wkFri) { wkCount++; return; }
+        var cls = rdWeekendEastCounted(ctx, P, f) ? 0 : (countedDaysOf(f).some(holdsCounted) ? (countedDaysOf(f).some(lockedOn) ? 1 : 2) : -1);
+        if (cls < 0) return;
+        wkCount++;
+        if (cls < wkClass || (cls === wkClass && f < wkFri)) wkAhead++;
       });
-      if (wkCount > wcap.perMonth && wcap.weight) soft.push({ reason: "weekend-cap:" + wcap.perMonth, weight: wcap.weight * (wkCount - wcap.perMonth) });
+      var wkPast = wkHeld ? wkAhead + 1 > wcap.perMonth : wkCount > wcap.perMonth;
+      if (wkPast && wcap.weight) soft.push({ reason: "weekend-cap:" + wcap.perMonth, weight: wcap.weight });
     }
   }
 
@@ -1965,9 +2015,12 @@ function rdSoftSum(r) { var s = 0; for (var k = 0; k < r.soft.length; k++) s += 
 //      or the block-of-two holder carries the key. X's Friday costs nothing for a
 //      key holder (the Sarkar-Friday reading: a standalone day is his normal
 //      pattern) and his weekendStyle's daily member penalty otherwise; the
-//      reduced unit is scored exactly like a holiday-cut Sat-Sun unit (a block of
-//      two is no mismatch for a block-style or key holder, else
-//      weights.patternMismatch; + weekendBlockPenalty). The daily enumeration
+//      Sat-Sun block of two is no mismatch for a key holder only - anyone else
+//      pays weights.patternMismatch once, a block-style holder included (review
+//      10/1: the weekend is whole, so his style wants the Friday too - the
+//      per-day check and genStyleMismatch read it so; a holiday-CUT Sat-Sun is
+//      the case where a block-style holder's two days are his whole block);
+//      + weekendBlockPenalty. The daily enumeration
 //      skips the shapes the 'friday' kind covers. A key holder's primary shapes
 //      {Fri}, {Sat, Sun}, {Fri, Sat, Sun} carry no style mismatch; any other
 //      membership of his (a split side, a daily Sat / Sun) costs one.
@@ -2074,7 +2127,9 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       if (!r1.ok) return;
       var r2 = eligibility(ctx, sun, role, y, { assume: [{ date: sat, role: role }], skipPatternSoft: true });
       if (!r2.ok) return;
-      subs.push({ sat: y, sun: y, pen: rdSoftSum(r1) + rdSoftSum(r2) + (sfOf(y) || sy === "block" ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty, surgeons: [y], fallback: false, pairKey: sfOf(y) });
+      // Prompt 23 review (10/1): only the key holder's pair is free - a block-style holder pays the mismatch too (the
+      // weekend is whole, so his style wants the Friday as well: per-day eligibility and genStyleMismatch say the same)
+      subs.push({ sat: y, sun: y, pen: rdSoftSum(r1) + rdSoftSum(r2) + (sfOf(y) ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty, surgeons: [y], fallback: false, pairKey: sfOf(y) });
     });
     ids.forEach(function (y) { // two daily days
       if (!solo[y][sat].ok) return;
