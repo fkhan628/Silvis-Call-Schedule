@@ -39,6 +39,7 @@ on:
       - "test/totals.test.js"
       - "test/pay.test.js"
       - "test/holidays.test.js"
+      - "test/holiday-plan.test.js"
       - "test/publish.test.js"
       - "test/day-edit.test.js"
       - "test/open-shifts.test.js"
@@ -182,6 +183,12 @@ jobs:
 
       - name: Holiday unit builder tests
         run: node test/holidays.test.js
+
+      # The yearly holiday plan (Prompt 25, Faraz 9/30): helpers.js planHolidays - the tier split, alternation, the
+      # primary rate, no repeat and every per-person limit, rule by rule, the 2027 plan on the seed inputs and ten
+      # simulated years; the seed's groupRules.holidayPlan = the code defaults. Pure - no network.
+      - name: Holiday plan tests
+        run: node test/holiday-plan.test.js
 
       # Command-line publish plan (scripts/publish-preview.js, Prompt 12 PUB):
       # locked roles untouched, app-edited slots refused, CAS + RAISE guards in
