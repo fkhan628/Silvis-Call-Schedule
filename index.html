@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-e73+f7cRT9QEZUXSZcLQWcXGwuzs3ZOGARUX4AwGiRc=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-g3oiI2hMDt4WTD5NY/khCsRWVMwGhGlZ3uwLDECb10k=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-gkb/+S1fSlZDy0TeUn1fDXdSWAlDdlNwhwMobK6PK3c=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-lfbftUdm50egiJypHinmC8Barmljo9REvXaymrhxsMM=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -107,7 +107,7 @@
       input[type="checkbox"] { width: 20px; height: 20px; }
       .trade-pick { width: 100% !important; }
       .trade-pick-wrap { flex: 1 1 100%; }
-      /* the offer deadline notice (9/27): on a phone the sentence takes the full width and "Choose shifts" sits under it */
+      /* the offer deadline notice (9/27; Prompt 26 9/30): on a phone the sentence takes the full width and "Enter vacations" / "Paint days (optional)" sit under it */
       .offer-notice-row .offer-notice-text { flex-basis: 100% !important; }
     }
   </style>
@@ -119,7 +119,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.09.30b";
+    var APP_VERSION = "2026.09.30c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -5814,8 +5814,8 @@ function CallSchedule() {
     if (!isScheduler || !p || !p.id) return {
       ok: false
     };
-    const roll = offerRollcall(p, offerRows, offerPoolIds(surgeons));
-    const words = roll.map(r => `${nameOf(r.id)}: ${r.status === "submitted" ? r.offered + " day" + (r.offered === 1 ? "" : "s") : r.status === "rules_only" ? "rules" : "nothing"}`).join(", ");
+    const roll = offerFreezeRollcall(p, offerRows, timeOffRows, offerPoolIds(surgeons));
+    const words = roll.map(r => `${nameOf(r.id)}: ${offerFreezeWords(r)}`).join("; ");
     if (!confirm(`Close offers for ${p.label} now?\n\nSurgeons can no longer paint days or change their mode for it (you still can, as the scheduler). Standing now - ${words}.\n\nThe status becomes 'closed'. Nothing is generated, published or e-mailed by this.`)) {
       showToast("Nothing was changed - the period stays open.", "info");
       return {
@@ -5884,7 +5884,7 @@ function CallSchedule() {
     }
   };
   const remindOffers = async (p, personId) => {
-    if (!isScheduler || !p || !p.id || !personId) return {
+    if (!isScheduler || !p || !p.id || !personId || !offerPoolIds(surgeons).includes(String(personId))) return {
       ok: false
     };
     const key = p.id + ":" + personId;
@@ -5902,19 +5902,21 @@ function CallSchedule() {
         prefOff: true
       };
     }
-    const start = String(p.start_day || "").slice(0, 10),
-      end = String(p.end_day || "").slice(0, 10),
-      close = String(p.offers_close_at || "").slice(0, 10);
-    const n = suIsIso(close) ? suDaysBetween(todayStr, close) : null;
-    const when = n === null ? "" : n === 0 ? " (today)" : n === 1 ? " (tomorrow)" : n > 1 ? ` (in ${n} days)` : "";
-    const closeLabel = prdDayWords(close);
-    const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;
-    const message = `Your dates for ${p.label} (${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'.\n\nNothing is entered for you yet. After the freeze the schedule for the period is built from what was offered; anyone with nothing entered is scheduled by their standing rules, and what is still open goes to the open-shifts board.\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page (the morning run sends the same note ${(() => {
+    const close = String(p.offers_close_at || "").slice(0, 10);
+    const {
+      subject,
+      body
+    } = offerHeadsUpWords({
+      label: p.label,
+      closeAt: close
+    });
+    const ds = (() => {
       const lst = groupRules && groupRules.offerPeriods && groupRules.offerPeriods.remindDaysBeforeClose;
-      const ds = (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter(n => typeof n === "number" && isFinite(n) && n >= 0).sort((x, y) => y - x);
-      return ds.length > 1 ? ds.slice(0, -1).join(", ") + " and " + ds[ds.length - 1] : ds.join("");
-    })()} days before the freeze).`;
-    const detail = "Paint my offers: " + window.location.origin + window.location.pathname + "#offers";
+      return (Array.isArray(lst) ? lst : OP_PERIOD_DEFAULTS.remindDaysBeforeClose).filter((n, i, a) => typeof n === "number" && isFinite(n) && n > 0 && a.indexOf(n) === i).sort((x, y) => y - x);
+    })();
+    const cadence = ds.length ? ` (the morning run sends it ${ds[0]} day${ds[0] === 1 ? "" : "s"} before the freeze${ds.length > 1 ? `, with a one-line last call ${ds[ds.length - 1]} day${ds[ds.length - 1] === 1 ? "" : "s"} before` : ""})` : "";
+    const message = `${body}\n\nSent now by ${nameOf(mySurgeon) || "the scheduler"} from the Periods page${cadence}.`;
+    const detail = "Enter vacations under Time off; paint days (optional): " + window.location.origin + window.location.pathname + "#offers";
     setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
       [key]: {
         ok: false,
@@ -6656,15 +6658,17 @@ function CallSchedule() {
   const boardRanges = board.ranges;
   const boardEndText = boardEnd ? fmtMD(boardEnd) : "-";
   const boardKeys = useMemo(() => new Set(boardSlots.map(s => openSlotKey(s.day, s.role))), [boardSlots]);
+  const offerPool = useMemo(() => offerPoolIds(surgeons), [surgeons]);
   const offerNotices = useMemo(() => {
     return mySurgeon && !isPublicMode ? offerDeadlineNotices({
       periods: periodRows,
       offers: offerRows,
       personId: mySurgeon,
+      poolIds: offerPool,
       today: todayStr,
       groupRules
     }) : [];
-  }, [mySurgeon, isPublicMode, periodRows, offerRows, todayStr, groupRules]);
+  }, [mySurgeon, isPublicMode, periodRows, offerRows, offerPool, todayStr, groupRules]);
   const prdOpenCounts = useMemo(() => {
     const out = {};
     if (!isScheduler) return out;
@@ -7342,11 +7346,6 @@ function CallSchedule() {
   const dowShort = d => DAY_HDR[parse(d).getDay()];
   const offerNoticeBox = (list, where) => {
     if (!list || !list.length) return null;
-    const opR = groupRules && groupRules.offerPeriods || {};
-    const wk = (v, d) => typeof v === "number" && v > 0 ? v : d;
-    const closeW = wk(opR.closeWeeksBeforeStart, OP_PERIOD_DEFAULTS.closeWeeksBeforeStart),
-      pubW = wk(opR.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart);
-    const weeks = pubW === closeW ? String(closeW) : Math.min(pubW, closeW) + "-" + Math.max(pubW, closeW);
     return React.createElement("div", {
       "data-testid": "offer-deadline-notice",
       "data-where": where,
@@ -7367,6 +7366,7 @@ function CallSchedule() {
       "data-period-id": n.periodId || "",
       "data-days": n.daysToClose,
       "data-urgent": n.urgent ? "1" : "0",
+      "data-status": n.status || "",
       style: {
         display: "flex",
         gap: 8,
@@ -7380,19 +7380,37 @@ function CallSchedule() {
         flex: "1 1 240px",
         minWidth: 0
       }
-    }, "Choose your shifts for ", React.createElement("strong", null, n.label || fmtMD(n.startDay)), " before ", dowShort(n.closeAt), " ", fmtMD(n.closeAt), " (they freeze ", n.daysToClose === 1 ? "tomorrow" : "in " + n.daysToClose + " days", ") - the schedule is built ", weeks, " weeks before ", fmtMD(n.startDay), "."), React.createElement("button", {
+    }, "Before ", React.createElement("strong", null, dowShort(n.closeAt), " ", fmtMD(n.closeAt)), ", enter your vacations for ", React.createElement("strong", null, n.label || fmtMD(n.startDay)), ". If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules."), React.createElement("span", {
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("button", {
+      type: "button",
+      "data-testid": "offer-deadline-vacations",
+      onClick: () => {
+        setVacSurgeon(mySurgeon);
+        setView("timeoff");
+      },
+      title: "Go to Time off and enter your vacations for " + (n.label || fmtMD(n.startDay)) + " (choices freeze " + (n.daysToClose === 1 ? "tomorrow" : "in " + n.daysToClose + " days") + ")",
+      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, "Enter vacations"), React.createElement("button", {
       type: "button",
       "data-testid": "offer-deadline-choose",
       onClick: () => setOfferSheet({
         personId: mySurgeon,
         periodId: n.periodId || null
       }),
-      title: "Open the offer painter on " + (n.label || fmtMD(n.startDay)) + ": paint the days you will cover, or choose 'Go by my rules'",
-      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+      title: "Optional: open the offer painter on " + (n.label || fmtMD(n.startDay)) + " and paint the days you'd like to work, or can't",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "5px 12px",
         fontSize: 11
       })
-    }, "Choose shifts"))));
+    }, "Paint days (optional)")))));
   };
   const isWeekendDay = d => {
     const w = parse(d).getDay();
@@ -8783,26 +8801,7 @@ function CallSchedule() {
       position: "relative"
     }),
     title: "Paint the dates you'll cover (primary / backup / either), any time ahead"
-  }, "Paint offers", offerNotices.length > 0 && React.createElement("span", {
-    "data-testid": "offer-deadline-badge",
-    title: offerNotices.length + " period(s) waiting for your choices - the first freezes " + fmtMD(offerNotices[0].closeAt),
-    style: {
-      position: "absolute",
-      top: -4,
-      right: -4,
-      background: T.accent,
-      color: T.onAccent,
-      borderRadius: 10,
-      fontSize: 9,
-      fontWeight: 700,
-      minWidth: 16,
-      height: 16,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "0 4px"
-    }
-  }, offerNotices.length)))), React.createElement("div", {
+  }, "Paint offers"))), React.createElement("div", {
     style: {
       maxWidth: 1020,
       margin: "0 auto",
@@ -9110,6 +9109,7 @@ function CallSchedule() {
     css: css,
     periods: periodRows,
     offers: offerRows,
+    timeOff: timeOffRows,
     roster: surgeons,
     groupRules: groupRules,
     today: todayStr,
@@ -11474,7 +11474,7 @@ function CallSchedule() {
       }, "My offers (", mine.length, " upcoming day", mine.length === 1 ? "" : "s", ")"), nextPer && React.createElement("span", {
         style: muted,
         "data-testid": "mine-offer-status"
-      }, nextPer.label, ": ", st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : "nothing entered yet", nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : "")), mine.length === 0 ? React.createElement("p", {
+      }, nextPer.label, ": ", st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : pid === mySurgeon ? "following your rules" : "following their rules", nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : "")), mine.length === 0 ? React.createElement("p", {
         style: _objectSpread(_objectSpread({}, muted), {}, {
           fontStyle: "italic",
           margin: 0
@@ -14586,7 +14586,7 @@ function OfferPainterSheet({
       color: text,
       lineHeight: 1.35
     }
-  }, periodLabel, " - ", periodOpen ? periodClose ? "freezes " + fmtMD(periodClose) : "open" : "closed" + (periodClose ? " " + fmtMD(periodClose) : ""), " - ", periodStatus === "submitted" ? "days offered" : periodStatus === "rules_only" ? "by your rules" : "nothing yet", periodOpen ? " - " + (shownMode === "exhaustive" ? "only these days" : "preferred days") : "", modeDirty && React.createElement("span", {
+  }, periodLabel, " - ", periodOpen ? periodClose ? "freezes " + fmtMD(periodClose) : "open" : "closed" + (periodClose ? " " + fmtMD(periodClose) : ""), " - ", periodStatus === "submitted" ? "days offered" : periodStatus === "rules_only" ? "by your rules" : asScheduler ? "following their rules" : "following your rules", periodOpen ? " - " + (shownMode === "exhaustive" ? "only these days" : "preferred days") : "", modeDirty && React.createElement("span", {
     style: {
       color: "#a05010",
       marginLeft: 6
@@ -14713,7 +14713,7 @@ function OfferPainterSheet({
       color: muted,
       lineHeight: 1.45
     }
-  }, "Offers for ", periodLabel, " closed", periodClose ? " " + fmtMD(periodClose) : "", " - ask the scheduler for a late change. ", periodStatus === "submitted" ? "You offered days for it" : periodStatus === "rules_only" ? "You go by your rules for it" : "You entered nothing for it", period.offer_modes && period.offer_modes[pid] ? ", mode " + (savedMode === "exhaustive" ? "only these days" : "preferred days") : "", "."), periodOpen && periodExpanded && React.createElement(React.Fragment, null, React.createElement("div", {
+  }, "Offers for ", periodLabel, " closed", periodClose ? " " + fmtMD(periodClose) : "", " - ask the scheduler for a late change. ", periodStatus === "submitted" ? "You offered days for it" : periodStatus === "rules_only" ? "You go by your rules for it" : asScheduler ? "Following their rules for it" : "Following your rules for it", period.offer_modes && period.offer_modes[pid] ? ", mode " + (savedMode === "exhaustive" ? "only these days" : "preferred days") : "", "."), periodOpen && periodExpanded && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -15345,7 +15345,7 @@ function offerCandidateWords(st, role) {
   return {
     kind: "rules",
     tag: "rules",
-    words: "rules (nothing entered)",
+    words: "following their rules",
     mode: null
   };
 }
@@ -21266,23 +21266,18 @@ function suHeldUnlockedSlotChanges(current, next) {
   });
 }
 const PRD_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const PRD_DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 function prdLabelFor(start, end) {
   if (!suIsIso(start) || !suIsIso(end)) return "";
   const a = PRD_MON[+start.slice(5, 7) - 1] + " " + start.slice(0, 4),
     b = PRD_MON[+end.slice(5, 7) - 1] + " " + end.slice(0, 4);
   return a === b ? a : a + " - " + b;
 }
-function prdDayWords(iso) {
-  if (!suIsIso(iso)) return String(iso || "");
-  const dt = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)));
-  return PRD_DOW[dt.getUTCDay()] + ", " + PRD_MON[dt.getUTCMonth()] + " " + dt.getUTCDate();
-}
 const PRD_MUTED = "#5B6B82";
 function PeriodsSection({
   css,
   periods,
   offers,
+  timeOff,
   roster,
   groupRules,
   today,
@@ -21401,8 +21396,8 @@ function PeriodsSection({
     if (r.status === "rules_only") return "-";
     return m === "exhaustive" ? "only these days" : m === "preferred" ? "preferred days" : "preferred days (default)";
   };
-  const statusWord = r => r.status === "submitted" ? `submitted ${r.offered} day${r.offered === 1 ? "" : "s"}` : r.status === "rules_only" ? "rules only" : "not started";
-  const statusColor = s => s === "submitted" ? "#1a6030" : s === "rules_only" ? PRD_MUTED : "#a83232";
+  const statusWord = r => offerFreezeWords(r);
+  const statusColor = r => r.kind === "rules" ? PRD_MUTED : "#1a6030";
   const roleBreakdown = (p, id) => {
     const c = {
       primary: 0,
@@ -21470,7 +21465,7 @@ function PeriodsSection({
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. Status below is derived from the offers on file - submitted (days inside the period), rules only (chose \"go by my rules\"), not started."), lead.next && React.createElement("div", {
+  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. The roll call below is derived from what is on file - who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules. Remind e-mails one surgeon the heads-up (enter vacations; painting days is optional)."), lead.next && React.createElement("div", {
     "data-testid": "prd-lead-warn",
     "data-kind": "next-missing",
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
@@ -21602,14 +21597,14 @@ function PeriodsSection({
       marginBottom: 8
     }
   }, "Create the next period from a preset above; the seed's first period arrives with the offers import."), shown.map(p => {
-    const roll = offerRollcall(p, offers || [], ids);
+    const roll = offerFreezeRollcall(p, offers || [], timeOff || [], ids);
     const status = p.status || "upcoming";
     const open = offerPeriodOpen(p, today);
     const close = day(p.offers_close_at),
       pub = day(p.publish_by);
-    const nSub = roll.filter(r => r.status === "submitted").length,
-      nRules = roll.filter(r => r.status === "rules_only").length,
-      nNot = roll.length - nSub - nRules;
+    const nPainted = roll.filter(r => r.offered > 0).length,
+      nVac = roll.filter(r => r.vacations.length > 0).length,
+      nRules = roll.filter(r => r.kind === "rules").length;
     return React.createElement("div", {
       key: p.id || day(p.start_day),
       "data-testid": "prd-period",
@@ -21684,12 +21679,9 @@ function PeriodsSection({
         color: PRD_MUTED,
         marginBottom: 6
       }
-    }, "Offers close ", React.createElement("strong", null, close || "-"), inWords(daysTo(close)), " - publish by ", React.createElement("strong", null, pub || "-"), inWords(daysTo(pub)), " - ", nSub, " submitted, ", nRules, " rules only, ", React.createElement("span", {
-      style: {
-        color: nNot ? "#a83232" : "#1a6030",
-        fontWeight: 600
-      }
-    }, nNot, " not started"), "."), (lead.periods[p.id || day(p.start_day)] || []).map(w => React.createElement("div", {
+    }, "Offers close ", React.createElement("strong", null, close || "-"), inWords(daysTo(close)), " - publish by ", React.createElement("strong", null, pub || "-"), inWords(daysTo(pub)), " - ", React.createElement("span", {
+      "data-testid": "prd-summary"
+    }, nPainted, " ", nPainted === 1 ? "surgeon" : "surgeons", " painted days, ", nVac, " added vacations, ", nRules, " following their rules"), "."), (lead.periods[p.id || day(p.start_day)] || []).map(w => React.createElement("div", {
       key: w.kind,
       "data-testid": "prd-lead-warn",
       "data-kind": w.kind,
@@ -21713,7 +21705,9 @@ function PeriodsSection({
         "data-testid": "prd-row",
         "data-person": r.id,
         "data-status": r.status,
-        "data-offered": r.offered
+        "data-offered": r.offered,
+        "data-kind": r.kind,
+        "data-vacations": r.vacations.map(v => v.start + ".." + v.end).join(",")
       }, React.createElement("td", {
         style: {
           whiteSpace: "nowrap",
@@ -21721,11 +21715,11 @@ function PeriodsSection({
         }
       }, nameOf(r.id)), React.createElement("td", {
         style: {
-          whiteSpace: "nowrap",
-          color: statusColor(r.status),
-          fontWeight: 600
+          color: statusColor(r),
+          fontWeight: 600,
+          minWidth: 150
         },
-        title: r.status === "submitted" ? roleBreakdown(p, r.id) : ""
+        title: r.status === "submitted" ? roleBreakdown(p, r.id) : r.status === "rules_only" ? "chose 'go by my rules'" : ""
       }, statusWord(r)), React.createElement("td", {
         style: {
           whiteSpace: "nowrap",
@@ -21742,12 +21736,12 @@ function PeriodsSection({
           alignItems: "center",
           flexWrap: "nowrap"
         }
-      }, r.status === "not_started" && status === "upcoming" && open && React.createElement("button", {
+      }, status === "upcoming" && open && React.createElement("button", {
         type: "button",
         "data-testid": "prd-remind",
         onClick: () => onRemind(p, r.id),
         disabled: busy || mailOff || rs && rs.note === "sending",
-        title: mailOff ? nameOf(r.id) + " has schedule-update e-mails turned off - no reminder can be sent" : "E-mail " + nameOf(r.id) + " that the dates for " + (p.label || "this period") + " freeze on " + prdDayWords(close) + " (the same note the morning run sends)",
+        title: mailOff ? nameOf(r.id) + " has schedule-update e-mails turned off - no reminder can be sent" : "E-mail " + nameOf(r.id) + " the heads-up for " + (p.label || "this period") + ": enter vacations before " + offerFreezeDay(close) + ", painting days is optional (the morning run's first reminder)",
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           padding: "5px 9px",
           opacity: mailOff ? 0.5 : 1
