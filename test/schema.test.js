@@ -2921,8 +2921,11 @@ Object.entries({ P1: "active=6 min=2", P2: "east=yes", P3: VG_AFTER_EQ.P3, P4: "
 
 step("vacation guard: verify-rls.sh section 15 - the graded probe, leftovers, PROBE_SETUP passing as not applied unless SILVIS_VACATION_GUARD_APPLIED=1; no REST write; graded against a faked CLI");
 ok(/^echo "== 15\. vacation guard \(2026-09-30, Prompt 27\): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 15 (vacation guard)");
-const s15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('echo "RESULT: '));
-ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, right before the RESULT line)");
+// bounded at the next section (2026-10-01: the weekend pair claim's section 17 follows it - its anon POST and probe are its own),
+// else at the RESULT line
+const s15Next = vr.indexOf('\necho "== ', vr.indexOf('echo "== 15. ') + 1);
+const s15 = vr.slice(vr.indexOf('echo "== 15. '), s15Next > 0 ? s15Next + 1 : vr.indexOf('echo "RESULT: '));
+ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, before the next section or the RESULT line)");
 const s15code = s15.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 eq((s15code.match(/-X (POST|PATCH|DELETE|PUT)|curl /g) || []).length, 0, "section 15 goes over no REST call (the probe runs through the linked CLI);");
 ok(s15code.includes('VGSTRICT15="${SILVIS_VACATION_GUARD_APPLIED:-}"') && /if \[ "\$VGSTRICT15" = "1" \]; then bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent with SILVIS_VACATION_GUARD_APPLIED=1/.test(s15code) && /else ok "vacation guard probe: the trigger is absent \(before the migration: PROBE_SETUP\)"/.test(s15code), "PROBE_SETUP is the not-applied picture (a PASS) unless SILVIS_VACATION_GUARD_APPLIED=1 (a FAIL)");
@@ -2934,9 +2937,11 @@ ok(/p4_15=\$\(case_val15 P4\)/.test(s15code) && s15code.includes('"inactive=rost
 [["S2", "10/16, 10/17"], ["S3", "10/19"], ["E1", "10/1"], ["E3", "10/7"], ["C1", "10/9, 10/10"], ["M1", "10/25"], ["U1", "10/10"]].forEach(([k, d]) => ok(s15code.includes("expect_eq15  " + k + " \"$(vg15 '" + d + "')\""), "section 15 must grade " + k + " = VG(" + d + ")"));
 ok(/expect_err15 K1 P0001 "ON_CALL_CONFLICT"/.test(s15code) && /expect_err15 K2 P0001 "ON_CALL_CONFLICT"/.test(s15code), "section 15 grades K1 / K2 as the on-call refusal");
 ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.includes("note like 'probe-vacguard%'") && s15code.includes("source = 'probe-vacguard'") && s15code.includes("data->>'probe' = 'vacguard'") && s15code.includes("decided_by = 'probe-vacguard'") && /LEFT ROWS BEHIND/.test(s15code), "section 15 counts leftovers over auth.users / time_off / schedule_days / east_feed / east_vacation_reviews and fails on non-zero");
-ok(/SILVIS_VACATION_GUARD_APPLIED=1 +grade section 15 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_VACATION_GUARD_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))) && /vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name section 15 and SILVIS_VACATION_GUARD_APPLIED");
+// pin moved deliberately 10/1 (the weekend pair claim): --help lists SILVIS_WEEKEND_PAIR_CLAIM_APPLIED after it, so the flag may be
+// followed by later flags before "- see"; kept intent: --help names SILVIS_VACATION_GUARD_APPLIED among its env vars.
+ok(/SILVIS_VACATION_GUARD_APPLIED=1 +grade section 15 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_VACATION_GUARD_APPLIED( \/ SILVIS_[A-Z_]+)* - see/.test(vr.slice(0, vr.indexOf("set -u"))) && /vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name section 15 and SILVIS_VACATION_GUARD_APPLIED");
 {
-  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('\necho\necho "RESULT: '));
+  const code15 = vr.slice(vr.indexOf('echo "== 15. '), s15Next > 0 ? s15Next : vr.indexOf('\necho\necho "RESULT: '));
   const run15 = (cliOut, strict, leftover) => {
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
       "SILVIS_VACATION_GUARD_APPLIED='" + (strict ? "1" : "") + "'\nlinked() { true; }\n" +
@@ -3040,5 +3045,204 @@ ok(/^\| `time_off` \|[^\n]*\*\*prepared 2026-09-30 - report-first, NOT APPLIED\*
   ok(/refused when fewer than `groupRules\.vacations\.minSurgeonsAround` \(default 2\)\nactive surgeons would stay around on one of its days/.test(claudeMd) && /the scheduler may override after a\nconfirm/.test(claudeMd) && /report-first until applied/.test(claudeMd), "CLAUDE.md's time-off summary names the vacation guard (the key, default 2, the scheduler's confirm, report-first until applied)");
 }
 console.log("- vacation guard: one trigger function + one trigger on time_off (report-first, NOT applied), mirrored (revision s), SQL text = helpers.vacationGuardMessage, probe + verify-rls section 15 graded against a faked CLI, docs pinned");
+
+// ---- 2026-10-01: the weekend pair claim (the 10/1 follow-up 3) ----
+// sql/migrations/2026-10-01-weekend-pair-claim.sql (REPORT-FIRST, NOT APPLIED; revision u) adds ONE function,
+// claim_open_weekend_pair(p_saturday date, p_role text): a linked surgeon takes an open Saturday AND the Sunday after it in ONE
+// transaction (a noLoneWeekendDay surgeon refused each day alone - two claim_open_slot calls could leave him on a lone day).
+// claim_open_slot's refusals per day (CL009 once over both days), the new CL010 CLAIM_NOT_SATURDAY, every refusal before the
+// first write; claim_open_slot itself is not re-created. schema.sql mirrors it; sql/probes/weekend-pair-claim-probe.sql proves it
+// (rolled back; executed offline in PGlite 10/1) and verify-rls.sh section 17 grades it - PROBE_SETUP and the anon 404 pass as
+// the not-applied picture unless SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 (the run right after the apply).
+const WP_FILE = "2026-10-01-weekend-pair-claim.sql";
+const WP_MIGRATION = path.join(ROOT, "sql", "migrations", WP_FILE);
+const WP_PROBE = path.join(ROOT, "sql", "probes", "weekend-pair-claim-probe.sql");
+const WP_CASES = ["A", "B", "B2", "C", "D", "E", "F", "G", "H", "H2", "I", "J", "K", "K2", "L", "M", "N", "O", "P", "Q"];
+// the AFTER picture (observed offline in PGlite 0.5.8 on 2026-10-01; the live run fills the record step)
+const WP_AFTER = {
+  A: "ERR 42501 permission denied for function claim_open_weekend_pair",
+  B: "ok versions=2,2 primary=s3,s3 source=claim,claim audit=2 notif=2 offers=2",
+  B2: "Acton took 11/2 primary (pair 2030-11-03, offer true) | Acton took 11/3 primary (pair 2030-11-02, offer true)",
+  C: "ERR CL010 CLAIM_NOT_SATURDAY: 2030-11-08 is not a Saturday - the two-day claim takes a Saturday and the Sunday after it",
+  D: "ERR CL005 CLAIM_HELD: 2030-11-10 primary is already held by s2 after: sat_primary=null sat_version=1 audit=0 offers=0",
+  E: "ERR CL007 CLAIM_LOCKED: 2030-11-16 primary is locked  ask the scheduler to assign it",
+  F: "ERR CL006 CLAIM_EXTERNAL: 2030-11-24 primary is covered by probe-locum (outside the roster)",
+  G: "ERR CL008 CLAIM_OTHER_ROLE: you already hold backup on 2030-12-01",
+  H: "ERR CL009 CLAIM_VACATION: your vacation 12/9-12/9 conflicts with 2030-12-07 and 2030-12-08 primary (a primary shift also blocks the day before a vacation)",
+  H2: "ok versions=2,2 backup=s3,s3",
+  I: "ERR CL003 CLAIM_PAST: 2020-01-04 is before today (2026-10-01) in Central time  past days are not open",
+  J: "ERR CL004 CLAIM_OUTSIDE_RANGE: 2030-12-29 is outside the published schedule (2020-01-04 to 2030-12-28)",
+  K: "ok versions=2,2 primary=s3,s3 sat_source=claim",
+  K2: "ERR CL005 CLAIM_HELD: 2030-12-22 primary is already held by s2 after: sat_row=absent",
+  L: "ok versions=2,2 offer_sat=false offer_sun=true offers=1",
+  M: "ok versions=2,2 backup=s3,s3",
+  N: "ERR CL002 CLAIM_BAD_ROLE: role must be primary or backup (got observer)",
+  O: "ERR CL001 CLAIM_NOT_LINKED: sign in with an account that is linked to a roster entry to take a shift",
+  P: "share_locks=1",
+  Q: "anon=false authenticated=true",
+};
+
+step("weekend pair claim: the migration - one NEW function (claim_open_slot untouched), report-first NOT APPLIED (blast radius, apply order, rollback, deadlock note), mirrored (not exempt)");
+const wpMig = read(WP_MIGRATION);
+ok(!/\r/.test(wpMig), "weekend pair claim migration has CRLF line endings");
+ok(migFiles.includes(WP_FILE) && !PREPARED_NOT_MIRRORED.includes(WP_FILE), "sql/migrations/" + WP_FILE + " is a mirrored migration (not exempt)");
+const wpHdr = wpMig.slice(0, wpMig.indexOf("create or replace function public.claim_open_weekend_pair("));
+ok(/^-- REPORT-FIRST, NOT APPLIED \(/m.test(wpHdr) && /Blast radius/.test(wpHdr) && /Deadlock note/.test(wpHdr) && /40P01/.test(wpHdr) && /noLoneWeekendDay/.test(wpHdr), "the header must say REPORT-FIRST, NOT APPLIED, name noLoneWeekendDay, the blast radius and the deadlock note (40P01)");
+ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-10-01-weekend-pair-claim\.sql/.test(wpHdr) && /SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 bash scripts\/verify-rls\.sh/.test(wpHdr) && /weekend-pair-claim-probe\.sql/.test(wpHdr) && /to_regprocedure\('public\.claim_open_weekend_pair\(date,text\)'\)/.test(wpHdr) && /apply-weekend-pair-claim\.sh/.test(wpHdr), "the header carries the pre-check, the probe, the CLI apply line, the strict verify-rls run and the apply script");
+ok(/^-- Rolling back = `drop function if exists public\.claim_open_weekend_pair\(date, text\);`/m.test(wpHdr), "the header gives the rollback");
+{
+  const code = wpMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const wpFn0 = functionText(wpMig, "claim_open_weekend_pair");
+  const rest = wpMig.replace(wpFn0 || "@@no function@@", "(the function)").split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  eq(rest, "(the function)\n\nrevoke all on function public.claim_open_weekend_pair(date, text) from public, anon;\ngrant execute on function public.claim_open_weekend_pair(date, text) to authenticated;\n\nnotify pgrst, 'reload schema';", "the migration is exactly the function, the revoke, the grant and the schema-cache reload;");
+  ok(!/claim_open_slot/.test(code), "the migration's code never names claim_open_slot (it is not re-created, dropped or called)");
+  ok(!/\b(alter|drop|create)\s+(table|policy|trigger|index)\b/i.test(code), "no table, policy, trigger or index changes");
+}
+const wpFn = functionText(wpMig, "claim_open_weekend_pair");
+ok(wpFn && wpFn.startsWith("create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb\nlanguage plpgsql security definer set search_path = public as $$\n"), "claim_open_weekend_pair must be security definer with search_path public (members cannot write schedule_days under RLS)");
+ok(functionText(schema, "claim_open_weekend_pair") === wpFn, "claim_open_weekend_pair(): schema.sql differs from the migration");
+ok(functionText(schema, "claim_open_slot") === functionText(read(AUDIT_MIGRATION), "claim_open_slot"), "claim_open_slot in schema.sql is still the item 5b body (untouched by the weekend pair claim)");
+
+step("weekend pair claim: the function - ten refusals in order, the locks in day order, every raise before the first write, claim_open_slot's texts and shapes");
+{
+  const at = (s) => wpFn.indexOf(s);
+  const TOKENS = [["CL001", "CLAIM_NOT_LINKED"], ["CL002", "CLAIM_BAD_ROLE"], ["CL010", "CLAIM_NOT_SATURDAY"], ["CL003", "CLAIM_PAST"], ["CL004", "CLAIM_OUTSIDE_RANGE"], ["CL005", "CLAIM_HELD"], ["CL006", "CLAIM_EXTERNAL"], ["CL007", "CLAIM_LOCKED"], ["CL008", "CLAIM_OTHER_ROLE"], ["CL009", "CLAIM_VACATION"]];
+  const pos = TOKENS.map(([code, tok]) => {
+    const re = new RegExp("raise exception '" + tok + ": [^\\n]*using errcode = '" + code + "';");
+    const m = wpFn.match(re);
+    ok(m, "claim_open_weekend_pair lacks `raise exception '" + tok + ": ...' using errcode = '" + code + "'`");
+    eq((wpFn.match(new RegExp("errcode = '" + code + "'", "g")) || []).length, 1, code + " raised once;");
+    return m ? m.index : -1;
+  });
+  ok(pos.every((p, i) => i === 0 || p > pos[i - 1]), "the refusals run in order CL001, CL002, CL010, CL003, CL004, CL005-CL008, CL009: " + pos.join(","));
+  ok(/if p_saturday is null or extract\(isodow from p_saturday\) <> 6 then/.test(wpFn) && wpFn.includes("sun := p_saturday + 1;"), "CL010: null or not ISO day 6; the Sunday is p_saturday + 1");
+  const lockT = at("lock table public.time_off in share mode;");
+  const firstForUpdate = at("for update;");
+  ok(lockT > pos[4] && lockT < firstForUpdate, "time_off is locked (SHARE) after the row-less refusals and before the first day-row lock");
+  eq((wpFn.match(/foreach dd in array array\[p_saturday, sun\] loop/g) || []).length, 3, "three walks over [Saturday, Sunday] in day order (the range, the row locks + slot checks, the writes);");
+  const walk2 = wpFn.indexOf("foreach dd in array array[p_saturday, sun] loop", lockT);
+  ok(walk2 > lockT && firstForUpdate > walk2 && pos[5] > firstForUpdate && wpFn.indexOf("end loop;", pos[8]) < pos[9] && pos[9] > pos[8], "the rows are locked FOR UPDATE inside the day-order walk (Saturday, then Sunday) with the four slot checks, then CL009 once");
+  const lastRaise = wpFn.lastIndexOf("raise exception");
+  const firstUpdate = at("update public.schedule_days");
+  ok(firstUpdate > lastRaise && lastRaise > 0, "atomic by construction: the first `update public.schedule_days` comes after the last `raise exception`");
+  ok(at("insert into public.call_offers") > lastRaise && at("insert into public.audit_log") > lastRaise && at("insert into public.notifications") > lastRaise, "the offer, audit and feed writes come after every refusal too");
+  ok(wpFn.includes("start_date <= (case when p_role = 'primary' then sun + 1 else sun end)\n     and end_date   >= p_saturday;"), "CL009 covers both days plus the Monday for a primary pair");
+  // claim_open_slot's texts, byte for byte (p_day -> dd): CL001, CL002, CL003 (on the Saturday), CL004, CL005-CL008
+  const one = functionText(schema, "claim_open_slot");
+  const fmt = (fn, tok) => { const m = fn.match(new RegExp("raise exception '" + tok + ": ([^']*)'")); return m ? m[1] : null; };
+  ["CLAIM_NOT_LINKED", "CLAIM_BAD_ROLE", "CLAIM_PAST", "CLAIM_OUTSIDE_RANGE", "CLAIM_HELD", "CLAIM_EXTERNAL", "CLAIM_LOCKED", "CLAIM_OTHER_ROLE"].forEach((tok) => {
+    ok(fmt(one, tok) !== null && fmt(one, tok) === fmt(wpFn, tok), tok + ": the message text must equal claim_open_slot's (" + fmt(one, tok) + " / " + fmt(wpFn, tok) + ")");
+  });
+  // the same day-row creation, slot write and offer upsert as claim_open_slot (p_day -> dd)
+  const norm = (t) => t.replace(/p_day/g, "dd").replace(/\s+/g, " ");
+  const grab = (fn, a, b) => { const i = fn.indexOf(a); return i < 0 ? null : fn.slice(i, fn.indexOf(b, i) + b.length); };
+  ok(norm(grab(wpFn, "insert into public.schedule_days (day, source, version, updated_by, updated_at)", "on conflict (day) do nothing;")) === norm(grab(one, "insert into public.schedule_days (day, source, version, updated_by, updated_at)", "on conflict (day) do nothing;")), "a missing row is created exactly like claim_open_slot's (source 'claim', version 1)");
+  ok(norm(grab(wpFn, "insert into public.call_offers", "updated_at = now();")) === norm(grab(one, "insert into public.call_offers", "updated_at = now();")), "the offer upsert is claim_open_slot's (a claim is an offer made on the spot)");
+  ok(wpFn.includes("if not exists (select 1 from public.call_periods p where dd between p.start_day and p.end_day and p.rules_only_ids ? me) then\n      perform set_config('silvis.claim_in_progress', 'on', true);") && wpFn.includes("perform set_config('silvis.claim_in_progress', '', true);"), "rules_only is read per day (a period boundary can split a weekend); the freeze bypass is claim_open_slot's");
+  ok(wpFn.includes("set primary_id = me, version = version + 1, source = 'claim', updated_by = me, updated_at = now()") && wpFn.includes("set backup_id = me, version = version + 1, source = 'claim', updated_by = me, updated_at = now()"), "the slot write: version + 1, source 'claim' (every other client's compare-and-swap fails loudly)");
+  ok(wpFn.includes("jsonb_build_object('summary', summary, 'day', dd, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer, 'pair', case when dd = p_saturday then sun else p_saturday end)") && /values \(me, my_name, 'schedule\.claim', /.test(wpFn), "one 'schedule.claim' audit row per day in claim_open_slot's detail shape plus 'pair'");
+  ok(wpFn.includes("summary := my_name || ' took ' || to_char(dd, 'FMMM/FMDD') || ' ' || p_role;") && wpFn.includes("my_name || ' took the open ' || p_role || ' shift on ' || to_char(dd, 'Dy FMMM/FMDD') || ' (07:00 to 07:00).',") && wpFn.includes("jsonb_build_object('day', dd, 'role', p_role, 'surgeon_id', me, 'person_id', me, 'pair', case when dd = p_saturday then sun else p_saturday end)"), "one 'shift_claimed' feed row per day with claim_open_slot's title / message / data plus 'pair'");
+  ok(wpFn.includes("return jsonb_build_object('ok', true, 'days', jsonb_build_array(p_saturday, sun), 'role', p_role, 'person_id', me,\n                            'versions', jsonb_build_array(ver_sat, ver_sun), 'offers', jsonb_build_array(offer_sat, offer_sun));"), "the return shape { ok, days, role, person_id, versions, offers }");
+}
+
+step("weekend pair claim: schema.sql - the mirror after claim_open_slot, the grants, revision u (report-first, NOT yet applied)");
+{
+  const fnAt = schema.indexOf("create or replace function public.claim_open_weekend_pair(");
+  ok(fnAt > schema.indexOf("grant execute on function public.claim_open_slot(date, text) to authenticated;") && fnAt < schema.indexOf("-- ---------- offers + periods (2026-09-22"), "the mirror sits right after claim_open_slot's grants");
+  eq((schema.match(/^revoke all on function public\.claim_open_weekend_pair\(date, text\) from public, anon;$/gm) || []).length, 1, "schema.sql revokes EXECUTE from public / anon once;");
+  eq((schema.match(/^grant execute on function public\.claim_open_weekend_pair\(date, text\) to authenticated;$/gm) || []).length, 1, "schema.sql grants EXECUTE to authenticated once;");
+  ok(/^-- Revision 2026-10-01 u \(weekend pair claim, sql\/migrations\/2026-10-01-weekend-pair-claim\.sql, report-first, NOT yet applied\): /m.test(header), "schema.sql must carry `-- Revision 2026-10-01 u (weekend pair claim, sql/migrations/2026-10-01-weekend-pair-claim.sql, report-first, NOT yet applied): ...`");
+  ok(header.search(/^-- Revision 2026-10-01 u /m) > header.search(/^-- Revision 2026-09-30 s /m), "revision u follows revision s");
+}
+
+step("weekend pair claim: the probe - self-rolling-back, PROBE_SETUP before the apply, far-future 2030-11 / 2030-12 fixtures + 2020-01-04, two throwaway users, every case and its AFTER string in the header");
+const wpProbe = read(WP_PROBE);
+ok(!/\r/.test(wpProbe), "weekend pair probe has CRLF line endings");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(wpProbe), "the probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(/create temp table probe_results/.test(wpProbe) && /grant insert, select on probe_results to authenticated;/.test(wpProbe), "the probe collects into probe_results granted to authenticated");
+ok(/raise exception 'PROBE_RESULTS %;END'/.test(wpProbe.slice(wpProbe.lastIndexOf("do $$"))), "the probe's last DO block must raise 'PROBE_RESULTS %;END'");
+ok(/raise exception 'PROBE_SETUP: claim_open_weekend_pair is absent - sql\/migrations\/2026-10-01-weekend-pair-claim\.sql is not applied';/.test(wpProbe) && wpProbe.indexOf("PROBE_SETUP: claim_open_weekend_pair is absent") < wpProbe.indexOf("insert into auth.users"), "the setup raises PROBE_SETUP before any fixture when the function is absent");
+WP_CASES.forEach((k) => ok(wpProbe.indexOf("values ('" + k + "', ") >= 0, "the probe lacks case " + k));
+ok(/'probe-pair-' \|\| u::text \|\| '@example\.test'/.test(wpProbe), "the throwaway users are probe-pair-<uuid>@example.test");
+ok(wpProbe.includes("update public.user_profiles set person_id = 's3', role = 'surgeon' where id = surgeon;") && wpProbe.includes("update public.user_profiles set person_id = null, role = 'viewer'  where id = viewer;"), "the acting users: s3 as a surgeon, an unlinked viewer");
+{
+  const code = wpProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]);
+  ok(days.length > 30 && days.every((d) => /^2030-1[12]-/.test(d) || d === "2020-01-04"), "every fixture day is in 2030-11 / 2030-12 (or the 2020-01-04 lower bound): " + days.filter((d) => !(/^2030-1[12]-/.test(d) || d === "2020-01-04")).join(", "));
+  ok(/raise exception 'PROBE_SETUP: live rows already sit in 2030-11 \/ 2030-12 or on 2020-01-04/.test(code) && /raise exception 'PROBE_SETUP: max\(day\) is not 2030-12-28/.test(code), "the setup refuses to run over live rows and checks the range's upper bound (case J)");
+  ok((code.match(/'probe-pair', 1\)/g) || []).length === 16 && code.includes("values ('s3', '2030-12-09', '2030-12-09', 'probe-pair', 'probe-pair');") && code.includes("values ('probe-pair', '2030-11-18', '2030-11-23', '2030-11-04', '2030-11-11', 'upcoming', '[\"s3\"]'::jsonb, 'probe-pair');"), "every fixture carries the 'probe-pair' key the leftover count reads (16 schedule_days rows, the time_off row, the call_periods row)");
+  ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(code), "the probe never writes the blob");
+}
+{
+  const hdr = wpProbe.slice(0, wpProbe.indexOf("create temp table probe_results"));
+  ok(/REPORT-FIRST, NOT APPLIED\)/.test(hdr) && /WITHOUT PERSISTING ANYTHING/.test(hdr) && /\(20 cases: A, B, B2, C, D, E, F, G, H, H2, I, J, K, K2, L, M, N, O, P, Q\.\)/.test(hdr), "the probe header: report-first / not applied, nothing persisted, the 20 cases");
+  const flat = hdr.replace(/\n--\s+/g, " ");
+  Object.entries(WP_AFTER).forEach(([k, v]) => {
+    const want = k + "=" + v.replace(/before today \(2026-10-01\)/, "before today (...)").replace(/ \(a primary shift also blocks the day before a vacation\)$/, " (...)");
+    ok(flat.includes(want), "the probe header must state " + k + "'s AFTER `" + want + "`");
+  });
+}
+
+step("weekend pair claim: verify-rls.sh section 17 - the anon REST refusal, the graded probe, leftovers, PROBE_SETUP / 404 passing as not applied unless SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1; graded against a faked CLI");
+ok(/^echo "== 17\. weekend pair claim \(2026-10-01, the 10\/1 follow-up 3\): claim_open_weekend_pair - Sat \+ Sun in one transaction, anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 17 (weekend pair claim)");
+const s17Start = vr.indexOf('echo "== 17. ');
+const s17Next = vr.indexOf('\necho "== ', s17Start + 1);
+const code17 = vr.slice(s17Start, s17Next > 0 ? s17Next : vr.indexOf('\necho\necho "RESULT: '));
+ok(s17Start > vr.indexOf('echo "== 15. ') && code17.length > 0 && code17.length < vr.length, "section 17 follows section 15 and can be sliced out");
+{
+  const c = code17.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  eq((c.match(/-X (POST|PATCH|DELETE|PUT)/g) || []).length, 1, "section 17 makes ONE REST call - the anon POST, which cannot persist anything;");
+  ok(c.includes('-X POST "$URL/rest/v1/rpc/claim_open_weekend_pair" -H "apikey: $ANON" -H "Authorization: Bearer $ANON"'), "17a posts as anon");
+  ok(c.includes('"HTTP 401"|"HTTP 403") ok "anon rpc claim_open_weekend_pair refused ($line)";;') && /"HTTP 404"\) if \[ "\$PAIRSTRICT17" = "1" \]; then bad /.test(c), "17a: 401/403 pass; 404 passes only before the apply (strict: FAIL); anything else FAILs");
+  ok(c.includes('PAIRSTRICT17="${SILVIS_WEEKEND_PAIR_CLAIM_APPLIED:-}"') && /if \[ "\$PAIRSTRICT17" = "1" \]; then bad "weekend pair probe: PROBE_SETUP/.test(c) && /else ok "weekend pair probe: the function is absent \(before the migration: PROBE_SETUP\)"/.test(c), "PROBE_SETUP is the not-applied picture (a PASS) unless SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 (a FAIL)");
+  ok(/PROBE17="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/weekend-pair-claim-probe\.sql"/.test(c), "section 17 runs sql/probes/weekend-pair-claim-probe.sql through the linked CLI");
+  WP_CASES.forEach((k) => ok(new RegExp("expect_(eq|err)17\\s+" + k + "\\s").test(c), "section 17 does not grade probe case " + k));
+  ok(c.includes("email like 'probe-pair-%@example.test'") && c.includes("note = 'probe-pair'") && c.includes("label = 'probe-pair'") && c.includes("from public.call_offers where day between '2030-11-01' and '2030-12-31'") && /LEFT ROWS BEHIND/.test(c), "section 17 counts leftovers over schedule_days / time_off / auth.users / audit_log / notifications / call_offers / call_periods and fails on non-zero");
+}
+ok(/SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 +grade section 17 strictly/.test(vr.slice(0, vr.indexOf("case \"${1:-}\""))) && /SILVIS_WEEKEND_PAIR_CLAIM_APPLIED - see/.test(vr.slice(0, vr.indexOf("set -u"))) && /weekend pair claim anon check and probe \(17\)/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header and --help must name section 17 and SILVIS_WEEKEND_PAIR_CLAIM_APPLIED");
+{
+  const run17 = (cliOut, strict, http, leftover) => {
+    const script = "set -u\nURL=http://verify.invalid; ANON=anon; T=$(mktemp -d); WORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_WEEKEND_PAIR_CLAIM_APPLIED='" + (strict ? "1" : "") + "'\nlinked() { true; }\n" +
+      "curl() { local o=''; while [ $# -gt 0 ]; do [ \"$1\" = '-o' ] && o=\"$2\"; shift; done; echo '{}' > \"$o\"; printf 'HTTP " + (http || "401") + "'; }\n" +
+      "q() { printf '{\\n  \"rows\": [\\n    {\\n      \"leftover\": " + (leftover || 0) + "\\n    }\\n  ]\\n}\\n'; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code17 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 17: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  eq(Object.keys(WP_AFTER).sort(), WP_CASES.slice().sort(), "the AFTER picture covers every probe case;");
+  const msgOf = (pic) => '{"message": "ERROR: P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";") + ';END"}';
+  const ra = run17(msgOf(WP_AFTER), true);
+  eq(ra.result, [WP_CASES.length + 2, 0], "section 17 against the AFTER picture, strict: 17a + every case + the leftover check PASS (" + fails(ra) + ");");
+  const setup = '{"message": "ERROR: P0001: PROBE_SETUP: claim_open_weekend_pair is absent - sql/migrations/2026-10-01-weekend-pair-claim.sql is not applied"}';
+  eq(run17(setup, false, "404").result, [3, 0], "section 17 before the apply: the anon 404 and PROBE_SETUP pass as not applied (+ the leftover check);");
+  eq(run17(setup, true, "404").result, [1, 2], "section 17 with SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1: the anon 404 and PROBE_SETUP are FAILs;");
+  eq(run17(msgOf(WP_AFTER), false, "400").result, [WP_CASES.length + 1, 1], "section 17 fails an anon call that reached the body (HTTP 400 - the revoke is missing);");
+  const half = run17(msgOf(Object.assign({}, WP_AFTER, { D: "ERR CL005 CLAIM_HELD: 2030-11-10 primary is already held by s2 after: sat_primary=s3 sat_version=2 audit=1 offers=1", K2: "ERR CL005 CLAIM_HELD: 2030-12-22 primary is already held by s2 after: sat_row=PRESENT" })), true);
+  eq(half.result, [WP_CASES.length, 2], "section 17 must fail a half-written pair (the Saturday kept after a Sunday refusal; a created row left behind);");
+  const lone = run17(msgOf(Object.assign({}, WP_AFTER, { B: "ok versions=2,null primary=s3,null source=claim,probe-pair audit=1 notif=1 offers=1" })), true);
+  eq(lone.result, [WP_CASES.length + 1, 1], "section 17 must fail a pair that took one day only;");
+  eq(run17('{"message": "connection refused"}', true).result, [2, 1], "section 17 fails a run with no sentinel-terminated PROBE_RESULTS (17a and the leftover check still run);");
+  const rl = run17(msgOf(WP_AFTER), true, "401", 4);
+  eq(rl.result, [WP_CASES.length + 1, 1], "section 17 fails a non-zero leftover count;");
+  ok(/LEFT ROWS BEHIND/.test(rl.out), "section 17 names the leftovers");
+}
+
+step("weekend pair claim: docs - SCHEMA-REVIEW.md section (PREPARED, the contract, locks + deadlock note, blast radius, what could break, the probe table, apply order, rollback, observed placeholder)");
+{
+  ok(/^## 2026-10-01 - weekend pair claim: claim_open_weekend_pair \(PREPARED, NOT applied; `sql\/migrations\/2026-10-01-weekend-pair-claim\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-01 - weekend pair claim: claim_open_weekend_pair (PREPARED, NOT applied; ...)' section");
+  const at = review.indexOf("## 2026-10-01 - weekend pair claim:"), end = review.indexOf("\n## ", at + 1);
+  const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  ok(/\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*/.test(sec), "the section's status line must read `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+  ok(/\*\*The contract\.\*\*/.test(sec) && /\*\*Locks\.\*\*/.test(sec) && /\*\*Deadlock note:\*\*/.test(sec) && /\*\*Blast radius\.\*\*/.test(sec) && /\*\*What could break\.\*\*/.test(sec) && /PGlite/.test(sec), "the section states the contract, the locks and the deadlock note, the blast radius and what could break (with the offline PGlite run)");
+  ok(sec.includes("**Rolling back** = `drop function if exists public.claim_open_weekend_pair(date, text);`"), "the section's rollback");
+  ok(/to_regprocedure\('public\.claim_open_weekend_pair\(date,text\)'\)/.test(sec) && sec.includes("supabase db query --linked --workdir <dir> -f <abs>/sql/probes/weekend-pair-claim-probe.sql") && sec.includes("supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-weekend-pair-claim.sql") && sec.includes("SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 bash scripts/verify-rls.sh") && sec.includes("apply-weekend-pair-claim.sh") && /The record step/.test(sec), "the apply order: pre-check, probe BEFORE, apply, probe AFTER, strict verify-rls, the record step (and the apply script)");
+  ok(sec.includes("5. Probe AFTER: every case as the table lists (20 cases: A, B, B2, C-H, H2, I-K, K2, L-Q)."), "apply-order step 5 counts the 20 cases");
+  WP_CASES.forEach((k) => ok(new RegExp("^\\| (" + k + "|[A-Z][0-9]? / " + k + "|" + k + " / [A-Z][0-9]?) \\|", "m").test(sec), "the section's probe table lists case " + k));
+  ok(/^observed: _to be filled after the apply/m.test(sec), "the observed placeholder stays until the record step");
+}
+console.log("- weekend pair claim: one new function claim_open_weekend_pair (report-first, NOT applied; claim_open_slot untouched), mirrored (revision u), every refusal before the first write, probe + verify-rls section 17 graded against a faked CLI, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");

@@ -1998,3 +1998,134 @@ sql/migrations/2026-09-30-vacation-guard.sql is not applied` (nothing else ran).
 session's permission classifier and not retried by any other route: Faraz applies the migration himself (SQL editor or the
 linked CLI), as he did the period fold on 10/1 04:33Z. Post-apply: _to be filled after the apply (the probe AFTER - 20 cases -
 and the `SILVIS_VACATION_GUARD_APPLIED=1 bash scripts/verify-rls.sh` counts)_
+
+## 2026-10-01 - weekend pair claim: claim_open_weekend_pair (PREPARED, NOT applied; `sql/migrations/2026-10-01-weekend-pair-claim.sql`)
+
+**Status: PREPARED - report-first, NOT APPLIED.** Branch `feat/weekend-pair-claim` (prepared, not pushed to main): the
+migration, `sql/schema.sql` revision u, the probe, `scripts/verify-rls.sh` section 17 and the client's "Take Sat + Sun" on
+the Open shifts board. The client waits for the apply (before it, the button's call answers 404 and says so).
+
+The 10/1 queue report's follow-up 3: "the Open shifts board taking Khan's Sat + Sun as one claim". A surgeon whose rules carry
+`noLoneWeekendDay` (Prompt 23 B2 - Khan's key, `docs/SILVIS-CALL-RULES.md` section 3, Khan item 2) is refused a lone Saturday
+or Sunday as PRIMARY (`rules.js` hard `lone-weekend-day:<Sat|Sun>`). The board asks `rules.js` per slot, so with both days of a
+weekend open he is refused each day alone, and `claim_open_slot` takes one slot. Two `claim_open_slot` calls in a row are not
+a pair: the second can be refused (someone took the Sunday in between, a vacation, a lock) and leave him on a lone day the
+rules forbid. A client-only two-call claim was ruled out for that reason; the pair needs one transaction - a database
+function.
+
+| object | before | after |
+|---|---|---|
+| `claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb` | - | new: `language plpgsql security definer set search_path = public`; EXECUTE revoked from `public` / `anon`, granted to `authenticated` (the `claim_open_slot` grants) |
+| `claim_open_slot(date, text)` | the one-day claim | **unchanged** - not re-created (it has been re-created by four migrations with sha-checked bases; a new function leaves it alone and rolls back with one drop) |
+| tables, columns, policies, triggers, other functions, rows | - | **unchanged**; the file ends with `notify pgrst, 'reload schema'` so PostgREST exposes the new RPC |
+
+**The contract.** The same tokens, SQLSTATEs and message text as `claim_open_slot`, each message naming the failing day, and
+one new refusal:
+
+| code | token | when |
+|---|---|---|
+| CL001 | `CLAIM_NOT_LINKED` | no roster link (anon has no EXECUTE: 42501) |
+| CL002 | `CLAIM_BAD_ROLE` | role not `primary` / `backup` (the role is generic; the board offers the pair where `rules.js` asks for it) |
+| CL010 | `CLAIM_NOT_SATURDAY` | `p_saturday` null or not a Saturday (ISO day 6) - new; the Sunday is `p_saturday + 1` |
+| CL003 | `CLAIM_PAST` | the Saturday is before today in Central time (on a Sunday the pair is past; the board never offers it then) |
+| CL004 | `CLAIM_OUTSIDE_RANGE` | the Saturday, then the Sunday, outside `min(day)..max(day)` of `schedule_days` |
+| CL005 / CL006 / CL007 / CL008 | `CLAIM_HELD` / `CLAIM_EXTERNAL` / `CLAIM_LOCKED` / `CLAIM_OTHER_ROLE` | per day, the Saturday first, then the Sunday |
+| CL009 | `CLAIM_VACATION` | once over both days, plus the Monday for a primary pair (the Sunday shift ends 07:00 Monday) |
+
+Every check of both days runs before the first write (`test/schema.test.js` pins the first `update public.schedule_days` after
+the last `raise exception`), so a refusal rolls back both days and any row created on the way (a day inside the range with no
+row is inserted with source `claim` first, exactly like `claim_open_slot`). Then, the Saturday and then the Sunday: the slot
+(the caller, `version + 1`, source `claim`, `updated_by`, `updated_at`); the caller's `call_offers` row unless he is in
+`rules_only_ids` of the period containing **that** day (read per day - a period boundary can split a weekend; written with
+`silvis.claim_in_progress` on, like `claim_open_slot`); one `audit_log` row `schedule.claim` per day in `claim_open_slot`'s
+detail shape (`summary` "<Name> took <M/D> <role>", `day`, `role`, `person`, `version`, `offer`) plus `pair` = the other
+day; one `notifications` row `shift_claimed` per day (`claim_open_slot`'s title / message / data plus `pair`). Every per-day
+reader (the Activity log's `detail.summary`, `audit_read_own`, the feed's `data.day`) reads them as two claims. Returns
+`{ ok, days: [sat, sun], role, person_id, versions: [v_sat, v_sun], offers: [offer_sat, offer_sun] }`.
+
+**Locks.** `lock table public.time_off in share mode` after the row-less refusals and before the first day-row lock and the
+vacation check (`claim_open_slot`'s reasoning, Prompt 16 B6), then the day rows `for update` in day order. Lock order:
+`time_off` (share) -> the Saturday row -> the Sunday row. **Deadlock note:** `apply_trade()` locks a trade's day and then its
+return day in whatever order the trade names them, so a concurrent Sunday-for-Saturday trade of the same weekend can deadlock
+with this function; PostgreSQL aborts ONE transaction with `40P01` - rolled back whole, never half-written; the client shows
+the error and refetches. Documented, not engineered around.
+
+**What it guards.** Data integrity only, like `claim_open_slot`. The JS rules (`lone-weekend-day` itself, caps, patterns,
+runs) are enforced by the client before "Take Sat + Sun" is offered: `rules.eligibility` for each day with the partner day
+assumed (`assume`), the Friday held as a block member - the accepted boundary for a six-surgeon group; everything is logged.
+
+**The client on the same branch.** The board's eligibility memo asks the pair only for a surgeon whose one-day answer is
+refused by `lone-weekend-day` alone and whose partner day is listed on the board, open and unlocked in the same role. Then
+the Saturday and Sunday rows show "Take Sat + Sun" (`data-testid="ob-take-pair"`) beside the disabled one-day Take (its
+reason in words: "a Saturday on its own - weekend days come as a pair (Sat + Sun)"); the confirm sheet names both days; the
+confirm re-reads the pair gate and makes ONE `POST rest/v1/rpc/claim_open_weekend_pair { p_saturday, p_role }` - no
+two-call fallback. A 404 / `PGRST202` (the function not applied yet, or PostgREST not reloaded) reads "the two-day claim is
+not switched on yet - ask the scheduler". A refusal writes one client audit row (`claim refused: Sat M/D + Sun M/D role`);
+a success one `shift_claimed` e-mail naming both days (the function writes the audit and feed rows). The button shows only
+when Khan's `noLoneWeekendDay` is set live (Setup > Rules; today the live blob has none of the Prompt 23 keys - see
+`khan-s1-for-setup.json` in the gate folder).
+
+**Blast radius.** Nothing changes for anyone until a client calls the new RPC: the board's "Take Sat + Sun", shown only to a
+`noLoneWeekendDay` surgeon (Khan once his key is set). `claim_open_slot`, `apply_trade`, the day editor's writes, the
+publish, every policy are untouched; no other probe calls the function. Its writes are `claim_open_slot`'s, twice, in one
+transaction.
+
+**What could break.** (1) The live AFTER picture has not been observed. The probe was executed OFFLINE in PGlite 0.5.8
+(PostgreSQL 18.3 in WASM - the live major may differ) over main's `sql/schema.sql` with minimal Supabase stubs (roles,
+`auth.users`, `auth.uid()` from `request.jwt.claims`, the default grants): probe BEFORE -> `PROBE_SETUP`, the migration, probe
+AFTER -> the 20 cases below exactly, a second run identical, leftover 0, the re-run idempotent, the rollback line ->
+`PROBE_SETUP` again; this branch's `schema.sql` (with the mirror) gives the same 20; the existing claim probe gives section 7's
+expected picture in the same harness. Section 17's grading ran on that PGlite output through a faked CLI (20 cases + the
+leftover check PASS; `test/schema.test.js` does the same with the expected picture). A live difference (a roster name, a grant
+default) shows by case in section 17. (2) Prompt 28 (`feat/no-primary-days`) edits `schema.sql`, this file, `verify-rls.sh` and `schema.test.js` too: textual
+conflicts at the merge; the letter u and section 17 assume Prompt 28 takes t and 16 - whichever lands second re-letters and
+renumbers. If Prompt 28 changes `claim_open_slot`'s offer upsert, this function's upsert should follow it.
+
+**The probe** (`sql/probes/weekend-pair-claim-probe.sql`; one batch, a temp results table, the last statement raises
+`PROBE_RESULTS ...;END`, so everything rolls back; `PROBE_SETUP: claim_open_weekend_pair is absent` before the migration).
+Throwaway auth users `probe-pair-<uuid>@example.test` (s3 as a surgeon, an unlinked viewer); fixtures on far-future weekends
+in 2030-11 / 2030-12 plus a 2020-01-04 lower bound (the setup refuses to run when `schedule_days`, `time_off`, `call_offers` or
+`call_periods` already hold anything there); a `call_periods` row `probe-pair` 11/18-11/23 with `rules_only_ids ["s3"]`.
+
+| case | what | AFTER |
+|---|---|---|
+| A | anon claims W1 primary | `ERR 42501 permission denied for function claim_open_weekend_pair` |
+| B | s3 claims W1 (11/2-11/3) primary, both open | `ok versions=2,2 primary=s3,s3 source=claim,claim audit=2 notif=2 offers=2` |
+| B2 | B's two audit rows | `Acton took 11/2 primary (pair 2030-11-03, offer true) \| Acton took 11/3 primary (pair 2030-11-02, offer true)` |
+| C | a Friday (11/8) given | `ERR CL010 CLAIM_NOT_SATURDAY: 2030-11-08 is not a Saturday ...` |
+| D | W2: the Sunday held by s2 | `ERR CL005 CLAIM_HELD: 2030-11-10 primary ...` and the Saturday untouched (`sat_primary=null sat_version=1 audit=0 offers=0`) |
+| E | W3: the Saturday's primary locked | `ERR CL007 CLAIM_LOCKED: 2030-11-16 primary is locked ...` |
+| F | W4: the Sunday externally covered | `ERR CL006 CLAIM_EXTERNAL: 2030-11-24 primary ...` |
+| G | W5: s3 holds the Sunday's backup | `ERR CL008 CLAIM_OTHER_ROLE: you already hold backup on 2030-12-01` |
+| H / H2 | W6, s3's vacation starts Monday 12/9: primary / backup | `ERR CL009 CLAIM_VACATION: ... conflicts with 2030-12-07 and 2030-12-08 primary ...` / `ok versions=2,2 backup=s3,s3` |
+| I | a past Saturday (2020-01-04) inside the range | `ERR CL003 CLAIM_PAST: 2020-01-04 is before today ...` |
+| J | W9: the Sunday after `max(day)` | `ERR CL004 CLAIM_OUTSIDE_RANGE: 2030-12-29 is outside the published schedule ...` |
+| K | W7: no Saturday row | `ok versions=2,2 primary=s3,s3 sat_source=claim` |
+| K2 | W8: no Saturday row, the Sunday held | `ERR CL005 CLAIM_HELD: 2030-12-22 ...` and `sat_row=absent` (the created row rolled back) |
+| L | W4 backup across the period boundary (rules_only s3 to Sat 11/23) | `ok versions=2,2 offer_sat=false offer_sun=true offers=1` |
+| M | W3 backup (the Saturday's primary lock does not block it) | `ok versions=2,2 backup=s3,s3` |
+| N | an unknown role | `ERR CL002 CLAIM_BAD_ROLE: ... (got observer)` |
+| O | a signed-in user with no roster link | `ERR CL001 CLAIM_NOT_LINKED: ...` |
+| P | after B, the `time_off` SHARE lock in `pg_locks` | `share_locks=1` |
+| Q | EXECUTE | `anon=false authenticated=true` |
+
+**Apply order** (one command does steps 2-6 and stops at the first failure:
+`apply-weekend-pair-claim.sh` in the private gate folder `run-2026-10-01` (outside the repo), run from the repo on `feat/weekend-pair-claim`).
+
+1. Deploy daily-reminder v8 first if the branch carries it (`edge-functions/README.md`, the 10/1 deploy record), so main's edge
+   source stays equal to what is deployed when the branch merges.
+2. Pre-check: `select to_regprocedure('public.claim_open_weekend_pair(date,text)');` -> null.
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/weekend-pair-claim-probe.sql` -> `PROBE_SETUP: claim_open_weekend_pair is absent ...`.
+4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-weekend-pair-claim.sql`.
+5. Probe AFTER: every case as the table lists (20 cases: A, B, B2, C-H, H2, I-K, K2, L-Q).
+6. `SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 bash scripts/verify-rls.sh` - green (the flag makes the probe's PROBE_SETUP and the anon
+   404 a FAIL; section 17 counts the leftovers either way).
+7. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; `sql/schema.sql` revision u ->
+   "applied <timestamp>"; the migration's and the probe's headers -> APPLIED; `SILVIS_WEEKEND_PAIR_CLAIM_APPLIED` dropped from
+   verify-rls (strict becomes the default); the test pins with them. Then merge the branch - the client ships.
+
+**Rolling back** = `drop function if exists public.claim_open_weekend_pair(date, text);` (nothing else refers to it; the
+client's button then answers 404 and says the two-day claim is not switched on).
+
+observed: _to be filled after the apply (probe BEFORE, the apply time, the probe AFTER - 20 cases - and the
+`SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 bash scripts/verify-rls.sh` counts)_

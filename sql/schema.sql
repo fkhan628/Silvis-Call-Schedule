@@ -93,6 +93,13 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
+-- Revision 2026-10-01 u (weekend pair claim, sql/migrations/2026-10-01-weekend-pair-claim.sql, report-first, NOT yet applied): the 10/1
+-- follow-up 3 - one NEW function claim_open_weekend_pair(p_saturday date, p_role text) (security definer, search_path public;
+-- EXECUTE revoked from public / anon, granted to authenticated): a linked surgeon takes an open Saturday and the Sunday after it
+-- in one transaction - claim_open_slot's nine refusals per day (CL009 once over both days) plus CL010 CLAIM_NOT_SATURDAY, every
+-- refusal before the first write; per day the slot, the offer row, a 'schedule.claim' audit row and a 'shift_claimed' feed row
+-- carrying 'pair'. No table, column, policy, trigger or existing function changes (claim_open_slot is not re-created). The
+-- letter u assumes Prompt 28 (feat/no-primary-days) takes t; whichever lands second re-letters at the merge.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -919,6 +926,164 @@ end $$;
 
 revoke all on function public.claim_open_slot(date, text) from public, anon;
 grant execute on function public.claim_open_slot(date, text) to authenticated;
+
+-- ============================================================================
+-- claim_open_weekend_pair(p_saturday, p_role) - a linked surgeon takes an OPEN Saturday AND the Sunday after it in ONE
+-- transaction (2026-10-01, the 10/1 follow-up 3; sql/migrations/2026-10-01-weekend-pair-claim.sql, revision u - report-first,
+-- NOT yet applied). For a noLoneWeekendDay surgeon (rules.js lone-weekend-day: his weekend days come as a pair) refused each
+-- day alone on the Open shifts board: two claim_open_slot calls could leave him on a lone day, this cannot. claim_open_slot's
+-- checks for each day (Saturday first), the new CL010 CLAIM_NOT_SATURDAY, CL009 once over both days (plus the Monday for a
+-- primary pair); every refusal before the first write, so a refusal rolls back both days. Lock order: time_off (share) ->
+-- the Saturday row -> the Sunday row (a concurrent Sunday-for-Saturday trade can deadlock: 40P01 aborts one transaction
+-- whole). Per day: the slot (version + 1, source 'claim'), the offer row (rules_only checked per day), one 'schedule.claim'
+-- audit row and one 'shift_claimed' feed row in claim_open_slot's shapes plus 'pair' = the other day. See the migration's header.
+-- ============================================================================
+create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  me          text := public.silvis_person_id();
+  today_c     date := (now() at time zone 'America/Chicago')::date;
+  sun         date;
+  dd          date;
+  d           public.schedule_days%rowtype;
+  lo          date;
+  hi          date;
+  other       text;
+  held        text;
+  is_locked   boolean;
+  my_name     text;
+  vac         text;
+  new_ver     integer;
+  ver_sat     integer;
+  ver_sun     integer;
+  wrote_offer boolean;
+  offer_sat   boolean := false;
+  offer_sun   boolean := false;
+  summary     text;
+begin
+  if auth.uid() is null or me is null then
+    raise exception 'CLAIM_NOT_LINKED: sign in with an account that is linked to a roster entry to take a shift' using errcode = 'CL001';
+  end if;
+  if p_role is null or p_role not in ('primary', 'backup') then
+    raise exception 'CLAIM_BAD_ROLE: role must be primary or backup (got %)', coalesce(p_role, 'null') using errcode = 'CL002';
+  end if;
+  if p_saturday is null or extract(isodow from p_saturday) <> 6 then
+    raise exception 'CLAIM_NOT_SATURDAY: % is not a Saturday - the two-day claim takes a Saturday and the Sunday after it', coalesce(p_saturday::text, 'null') using errcode = 'CL010';
+  end if;
+  sun := p_saturday + 1;
+  if p_saturday < today_c then
+    raise exception 'CLAIM_PAST: % is before today (%) in Central time; past days are not open', p_saturday, today_c using errcode = 'CL003';
+  end if;
+
+  -- The published range = every day between the first and the last schedule_days row; the Saturday, then the Sunday.
+  select min(day), max(day) into lo, hi from public.schedule_days;
+  foreach dd in array array[p_saturday, sun] loop
+    if lo is null or dd < lo or dd > hi then
+      raise exception 'CLAIM_OUTSIDE_RANGE: % is outside the published schedule (% to %)', dd, coalesce(lo::text, '-'), coalesce(hi::text, '-') using errcode = 'CL004';
+    end if;
+  end loop;
+
+  -- SHARE on time_off before the day rows are locked and before the vacation check (CL009) - claim_open_slot's reasoning.
+  -- Lock order: time_off table (share) -> the Saturday row (update) -> the Sunday row (update).
+  lock table public.time_off in share mode;
+
+  other := case when p_role = 'primary' then 'backup' else 'primary' end;
+  -- Each day in day order: lock its row (a day inside the range with no row gets one, source 'claim' - rolled back with any
+  -- refusal below), then its four slot checks. Nothing is written to a slot before every check of BOTH days has passed.
+  foreach dd in array array[p_saturday, sun] loop
+    select * into d from public.schedule_days where day = dd for update;
+    if not found then
+      insert into public.schedule_days (day, source, version, updated_by, updated_at)
+        values (dd, 'claim', 1, me, now())
+        on conflict (day) do nothing;
+      select * into d from public.schedule_days where day = dd for update;
+    end if;
+    held      := case when p_role = 'primary' then d.primary_id else d.backup_id end;
+    is_locked := case when p_role = 'primary' then d.primary_locked else d.backup_locked end;
+    if held is not null then
+      raise exception 'CLAIM_HELD: % % is already held by %', dd, p_role, held using errcode = 'CL005';
+    end if;
+    if p_role = 'primary' and coalesce(d.external_cover, '') <> '' then
+      raise exception 'CLAIM_EXTERNAL: % primary is covered by % (outside the roster)', dd, d.external_cover using errcode = 'CL006';
+    end if;
+    if is_locked then
+      raise exception 'CLAIM_LOCKED: % % is locked; ask the scheduler to assign it', dd, p_role using errcode = 'CL007';
+    end if;
+    if (case when p_role = 'primary' then d.backup_id else d.primary_id end) = me then
+      raise exception 'CLAIM_OTHER_ROLE: you already hold % on %', other, dd using errcode = 'CL008';
+    end if;
+  end loop;
+
+  -- Vacation conflict over both days, plus the Monday for a PRIMARY pair (the Sunday shift ends 07:00 Monday - the same
+  -- trailing edge claim_open_slot and the time_off trigger read).
+  select string_agg(to_char(start_date, 'FMMM/FMDD') || '-' || to_char(end_date, 'FMMM/FMDD'), ', ' order by start_date)
+    into vac
+    from public.time_off
+   where person_id = me
+     and start_date <= (case when p_role = 'primary' then sun + 1 else sun end)
+     and end_date   >= p_saturday;
+  if vac is not null then
+    raise exception 'CLAIM_VACATION: your vacation % conflicts with % and % % (a primary shift also blocks the day before a vacation)', vac, p_saturday, sun, p_role using errcode = 'CL009';
+  end if;
+
+  -- Display name from the roster blob (last name); falls back to the id.
+  select r->>'name' into my_name
+    from public.call_schedule_data c, jsonb_array_elements(coalesce(c.data->'roster', '[]'::jsonb)) r
+   where c.id = 'main' and r->>'id' = me
+   limit 1;
+  my_name := coalesce(nullif(my_name, ''), me);
+
+  -- The writes - only now, after every refusal above. The Saturday, then the Sunday: the slot (version + 1 makes every other
+  -- client's compare-and-swap on the day fail loudly and reload), the offer row (none for a rules_only claimer of the period
+  -- containing THAT day), the audit row and the feed row, each carrying 'pair' = the other day.
+  foreach dd in array array[p_saturday, sun] loop
+    if p_role = 'primary' then
+      update public.schedule_days
+         set primary_id = me, version = version + 1, source = 'claim', updated_by = me, updated_at = now()
+       where day = dd
+       returning version into new_ver;
+    else
+      update public.schedule_days
+         set backup_id = me, version = version + 1, source = 'claim', updated_by = me, updated_at = now()
+       where day = dd
+       returning version into new_ver;
+    end if;
+
+    wrote_offer := false;
+    if not exists (select 1 from public.call_periods p where dd between p.start_day and p.end_day and p.rules_only_ids ? me) then
+      perform set_config('silvis.claim_in_progress', 'on', true);
+      insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)
+      values (me, dd, p_role, null, me, 'app')
+      on conflict (person_id, day) do update
+         set role_pref  = case when public.call_offers.role_pref = excluded.role_pref then public.call_offers.role_pref else 'either' end,
+             updated_at = now();
+      perform set_config('silvis.claim_in_progress', '', true);
+      wrote_offer := true;
+    end if;
+
+    summary := my_name || ' took ' || to_char(dd, 'FMMM/FMDD') || ' ' || p_role;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (me, my_name, 'schedule.claim', jsonb_build_object('summary', summary, 'day', dd, 'role', p_role, 'person', me, 'version', new_ver, 'offer', wrote_offer, 'pair', case when dd = p_saturday then sun else p_saturday end));
+
+    insert into public.notifications (type, title, message, data)
+    values ('shift_claimed',
+            summary,
+            my_name || ' took the open ' || p_role || ' shift on ' || to_char(dd, 'Dy FMMM/FMDD') || ' (07:00 to 07:00).',
+            jsonb_build_object('day', dd, 'role', p_role, 'surgeon_id', me, 'person_id', me, 'pair', case when dd = p_saturday then sun else p_saturday end));
+
+    if dd = p_saturday then
+      ver_sat := new_ver; offer_sat := wrote_offer;
+    else
+      ver_sun := new_ver; offer_sun := wrote_offer;
+    end if;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'days', jsonb_build_array(p_saturday, sun), 'role', p_role, 'person_id', me,
+                            'versions', jsonb_build_array(ver_sat, ver_sun), 'offers', jsonb_build_array(offer_sat, offer_sun));
+end $$;
+
+revoke all on function public.claim_open_weekend_pair(date, text) from public, anon;
+grant execute on function public.claim_open_weekend_pair(date, text) to authenticated;
 
 -- ---------- offers + periods (2026-09-22, Prompt 14 part 1; sql/migrations/2026-09-22-offers-periods.sql, applied 15:15)
 -- Silvis is an offers problem: surgeons paint the dates they will cover for any time ahead; a period is the

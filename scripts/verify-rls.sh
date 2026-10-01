@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + weekend pair claim anon check and probe (17) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
 #   SILVIS_VACATION_GUARD_APPLIED=1                           grade section 15 strictly (the probe's PROBE_SETUP = FAIL): only on the run right after sql/migrations/2026-09-30-vacation-guard.sql is applied; the record step makes strict the default and drops this variable
+#   SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1                       grade section 17 strictly (the probe's PROBE_SETUP and the anon 404 = FAIL): only on the run right after sql/migrations/2026-10-01-weekend-pair-claim.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
@@ -16,7 +17,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_VACATION_GUARD_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_VACATION_GUARD_APPLIED / SILVIS_WEEKEND_PAIR_CLAIM_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1052,6 +1053,81 @@ if linked; then
   fi
 else
   echo "   SKIP 15 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 17. weekend pair claim (2026-10-01, the 10/1 follow-up 3): claim_open_weekend_pair - Sat + Sun in one transaction, anon refused, rolled-back probe =="
+# sql/migrations/2026-10-01-weekend-pair-claim.sql (report-first, NOT applied; revision u; the number 17 assumes Prompt 28 takes 16 -
+# renumber at the merge): one NEW security-definer function claim_open_weekend_pair(p_saturday date, p_role text) - a linked
+# surgeon takes an open Saturday and the Sunday after it in ONE transaction (claim_open_slot's refusals per day, CL009 over both
+# days, the new CL010 CLAIM_NOT_SATURDAY; every refusal before the first write). claim_open_slot is not touched.
+# 17a. anon may not call it at all - no JWT needed. 404 = the function is not created yet (before the migration; a FAIL with
+#      SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1); 401/403 = execute revoked from anon (after). A 400 here would mean anon reached
+#      the body (CLAIM_NOT_LINKED): the revoke is missing. Nothing is written either way (CL001 fires before any write).
+# 17b. sql/probes/weekend-pair-claim-probe.sql through the linked CLI: fixtures in 2030-11 / 2030-12 plus a 2020-01-04 lower
+#      bound, throwaway users probe-pair-<uuid>@example.test (s3 surgeon, an unlinked viewer), the 'PROBE_RESULTS ...;END'
+#      sentinel. BEFORE the apply the probe raises PROBE_SETUP: claim_open_weekend_pair is absent - the expected not-applied
+#      picture, a PASS; with SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 (the run right after the apply) it is a FAIL. The leftover
+#      count runs either way.
+PAIRSTRICT17="${SILVIS_WEEKEND_PAIR_CLAIM_APPLIED:-}"
+line=$(curl -s -o $T/vr17a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/claim_open_weekend_pair" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_saturday":"2030-11-02","p_role":"primary"}')
+echo "   17a anon rpc: $line  body: $(head -c 160 $T/vr17a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc claim_open_weekend_pair refused ($line)";;
+  "HTTP 404") if [ "$PAIRSTRICT17" = "1" ]; then bad "anon rpc claim_open_weekend_pair: HTTP 404 with SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 (the function should exist after the apply - is PostgREST's schema cache reloaded?)"; else ok "anon rpc claim_open_weekend_pair: HTTP 404 (before the migration: the function does not exist)"; fi;;
+  *) bad "anon rpc claim_open_weekend_pair: $line (expected 401/403, or 404 before the apply)";;
+esac
+if linked; then
+  PROBE17="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/weekend-pair-claim-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE17" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: claim_open_weekend_pair is absent'; then
+    if [ "$PAIRSTRICT17" = "1" ]; then bad "weekend pair probe: PROBE_SETUP - claim_open_weekend_pair is absent with SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 (the function should exist after the apply)"; else ok "weekend pair probe: the function is absent (before the migration: PROBE_SETUP)"; fi
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "weekend pair probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results17=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results17" | tr ';' '\n' | sed 's/^/   /'
+    case_val17()   { echo "$results17" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq17()  { v=$(case_val17 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "weekend pair probe $1: $3" || bad "weekend pair probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err17() { v=$(case_val17 "$1" | sed 's/\\//g'); if echo "$v" | grep -q "^ERR $2 $3" && echo "$v" | grep -qF -- "$4"; then ok "weekend pair probe $1: $5 ($2 $3)"; else bad "weekend pair probe $1: $5 (got '$v', expected 'ERR $2 $3 ...' containing '$4')"; fi; }
+    expect_err17 A  42501 "permission denied for function claim_open_weekend_pair" "" "anon (role anon, no jwt sub) cannot execute the function"
+    expect_eq17  B  "ok versions=2,2 primary=s3,s3 source=claim,claim audit=2 notif=2 offers=2" "the clean primary pair: both days taken (version 2, source claim), two audit rows, two feed rows, two offer rows"
+    expect_eq17  B2 "Acton took 11/2 primary (pair 2030-11-03, offer true) | Acton took 11/3 primary (pair 2030-11-02, offer true)" "each day's audit row carries claim_open_slot's summary plus 'pair' = the other day"
+    expect_err17 C  CL010 CLAIM_NOT_SATURDAY "2030-11-08 is not a Saturday" "a Friday given is refused (CLAIM_NOT_SATURDAY)"
+    expect_err17 D  CL005 CLAIM_HELD "2030-11-10 primary is already held by s2 after: sat_primary=null sat_version=1 audit=0 offers=0" "a held Sunday refuses the pair naming the Sunday - the Saturday is left as it was (no write, no audit, no offer)"
+    expect_err17 E  CL007 CLAIM_LOCKED "2030-11-16 primary is locked" "a locked Saturday is refused"
+    expect_err17 F  CL006 CLAIM_EXTERNAL "2030-11-24 primary is covered by probe-locum" "an externally covered Sunday refuses a primary pair, naming the Sunday"
+    expect_err17 G  CL008 CLAIM_OTHER_ROLE "you already hold backup on 2030-12-01" "the caller holding the other role on the Sunday is refused"
+    expect_err17 H  CL009 CLAIM_VACATION "conflicts with 2030-12-07 and 2030-12-08 primary" "a primary pair the day before the caller's vacation is refused (the Monday edge)"
+    expect_eq17  H2 "ok versions=2,2 backup=s3,s3" "the backup pair of that weekend is allowed (no Monday edge for a backup)"
+    expect_err17 I  CL003 CLAIM_PAST "2020-01-04 is before today" "a past Saturday (inside the range) is refused - PAST is checked before RANGE"
+    expect_err17 J  CL004 CLAIM_OUTSIDE_RANGE "2030-12-29 is outside the published schedule" "a Sunday after max(day) is refused, naming the Sunday"
+    expect_eq17  K  "ok versions=2,2 primary=s3,s3 sat_source=claim" "a Saturday with NO row inside the range gets one (source claim) and the pair is taken"
+    expect_err17 K2 CL005 CLAIM_HELD "2030-12-22 primary is already held by s2 after: sat_row=absent" "a refusal after the Saturday row was created rolls that row back too (atomic)"
+    expect_eq17  L  "ok versions=2,2 offer_sat=false offer_sun=true offers=1" "rules_only is read per day: a period ending on the Saturday (rules_only s3) - no offer row for it, one for the Sunday"
+    expect_eq17  M  "ok versions=2,2 backup=s3,s3" "the backup pair of a weekend whose Saturday PRIMARY is locked is allowed"
+    expect_err17 N  CL002 CLAIM_BAD_ROLE "(got observer)" "an unknown role is refused"
+    expect_err17 O  CL001 CLAIM_NOT_LINKED "linked to a roster entry" "a signed-in user with no roster link is refused"
+    expect_eq17  P  "share_locks=1" "the function holds SHARE on time_off (pg_locks, this backend) after B - a vacation written concurrently waits"
+    expect_eq17  Q  "anon=false authenticated=true" "EXECUTE is revoked from anon and granted to authenticated"
+  fi
+  LEFTOVER17_SQL="select ((select count(*) from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04') + (select count(*) from public.time_off where note = 'probe-pair') + (select count(*) from auth.users where email like 'probe-pair-%@example.test') + (select count(*) from public.audit_log where action = 'schedule.claim' and detail ->> 'day' between '2030-11-01' and '2030-12-31') + (select count(*) from public.notifications where type = 'shift_claimed' and data ->> 'day' between '2030-11-01' and '2030-12-31') + (select count(*) from public.call_offers where day between '2030-11-01' and '2030-12-31') + (select count(*) from public.call_periods where label = 'probe-pair'))::int as leftover"
+  r=$(q "$LEFTOVER17_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "weekend pair probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "weekend pair probe persisted nothing (leftover count 0: schedule_days 2030-11 / 2030-12 + 2020-01-04 / time_off probe-pair / auth.users probe-pair-* / audit_log + notifications + call_offers in 2030-11 / 2030-12 / call_periods probe-pair)"
+  else
+    bad "weekend pair probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.notifications where type = 'shift_claimed' and data ->> 'day' between '2030-11-01' and '2030-12-31';"
+    echo "      delete from public.audit_log where action = 'schedule.claim' and detail ->> 'day' between '2030-11-01' and '2030-12-31';"
+    echo "      delete from public.call_offers where day between '2030-11-01' and '2030-12-31';"
+    echo "      delete from public.call_periods where label = 'probe-pair';"
+    echo "      delete from public.time_off where note = 'probe-pair';"
+    echo "      delete from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04';"
+    echo "      delete from auth.users where email like 'probe-pair-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 17b (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo
