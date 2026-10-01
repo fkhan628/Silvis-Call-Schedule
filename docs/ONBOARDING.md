@@ -96,17 +96,26 @@ days a surgeon was placed on outside his list.*
 offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
 row per day for the month; ‹ › move ahead as far as you like. While a period is open, a **Go to <period> (freezes M/D,
 in N days)** button under the month jumps straight to its first month. Tap a brush at the top — **Primary**, **Backup**, **Either**
-(happy with either role) or **Clear** — then tap the days; tap a day again with the same brush to take it back. For a
-run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which tap you
-are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20". Greyed rows
+(happy with either role), **No primary** or **Clear** — then tap the days; tap a day again with the same brush to take it
+back. For a run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which
+tap you are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20".
+**No primary** marks a day you cannot be on primary but can still take backup — an outreach or out-of-town day, for
+example: the schedule never puts you on primary that day and may still use you as backup. It replaces a Primary or Either
+offer on that day; a Backup offer stays (backup preferred that day). Painting Primary or Either on a No primary day lifts
+it (the app asks once); **Clear** takes back both. A day you are already published as primary cannot be marked — trade
+it first. A vacation blocks backup too, so when you can still take backup, use No primary instead of a vacation. In
+**Only these days** mode a No primary day is not an offer: paint **Backup** on it as well if you want backup there.
+Single No primary days are yours to change whoever entered them; a longer run Faraz entered reads "No primary (set by the
+scheduler)" and only he can change it. Greyed rows
 cannot be offered and say why: past, your vacation (and the day before it for primary), an East call day or a derived
-East week, outside your window, a day you had Faraz mark as unavailable / no backup / backup only (ask him to change
-that row first), or frozen because that period already closed (ask Faraz). A day your usual pattern excludes — a Tue/Thu
+East week, outside your window, a day you had Faraz mark as unavailable or no backup (ask him to change that row
+first), or frozen because that period already closed (ask Faraz). A day your usual pattern excludes — a Tue/Thu
 OR day, a Clinton or outreach day — is NOT greyed: the app asks once ("... is normally not one of your primary call days
 - offer it anyway?") and your offer counts for that date. If a vacation you entered later covers a day you had
 offered, that row greys but **Clear** can still take the offer back. Each row also shows who is already published that
 day (OPEN in red if nobody) and how many colleagues offered it. Nothing is written while you tap: the footer counts
-your unsaved changes; **Save** writes them all at once — your days and, if you changed it, your mode, in one request;
+your unsaved changes; **Save** writes them all at once — your days, your No primary days and, if you changed it, your
+mode, in one request;
 if it fails nothing at all was saved, the list of what is still pending stays on screen, and you just Save again —
 **Discard** drops them. Above Save, one line names the next period, its freeze date, where you stand and your mode;
 **Change** opens the choice: **Only these days** or **These are my preferred days - use my rules to fill gaps** (the

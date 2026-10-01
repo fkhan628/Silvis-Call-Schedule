@@ -1181,6 +1181,62 @@ const expOfferNotices = (person, periods, opts) => {
     .map(p => ({ id: p.id, label: p.label, close: p.offers_close_at, start: p.start_day, days: noticeIsoDiff(todayCentral, p.offers_close_at), urgent: noticeIsoDiff(todayCentral, p.offers_close_at) <= urgentDays, status: statusOf(p) }));
 };
 let failSaveOffers = false;
+// Prompt 28 (10/1): the No primary days. save_offers' p_np_add / p_np_clear are answered like save_no_primary would (its
+// NP004-NP009 refusals before any store moves, then the writes); the rows it "wrote" live in npStore and are overlaid on the
+// availability GETs of ONE page (npStore.page - the step's surgeon page): the served rows (fixture or the live anon read) minus
+// the single-day backup_only rows cleared (clearedKeys "<person>|<day>") plus the rows added. npStore.served caches that page's
+// last served list (NP007 reads its ranges). subs maps a page's JWT sub to its roster id (the 'app' stamp). The step resets it.
+const npStore = { page: null, added: [], clearedKeys: new Set(), served: [], subs: {} };
+const npWrites = []; // every save_offers call that carried No primary days and passed: { who, sub, add, clear, result }
+const NP_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+const npIsSingle = (r) => String(r.start_date).slice(0, 10) === String(r.end_date || r.start_date).slice(0, 10);
+const npOverlay = (rows) => (Array.isArray(rows) ? rows : []).filter(r => !(r && r.kind === "backup_only" && npIsSingle(r) && npStore.clearedKeys.has(r.person_id + "|" + String(r.start_date).slice(0, 10)))).concat(npStore.added.map(r => ({ ...r })));
+// npRpc(b, who, sub, offersAfter) -> { code, message } on a refusal (nothing moved), else a commit() that moves the store and
+// answers { np_added, np_cleared, np_kept }. offersAfter = the person's call_offers rows as they stand after this Save's rows.
+const npRpc = (b, who, sub, offersAfter) => {
+  const adds = [...new Set((Array.isArray(b.p_np_add) ? b.p_np_add : []).map(String))].sort();
+  const clears = [...new Set((Array.isArray(b.p_np_clear) ? b.p_np_clear : []).map(String))].sort();
+  const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+  const list = (a) => a.map(md).join(", ");
+  const vis = () => npOverlay(npStore.served).filter(r => r && r.person_id === who && r.kind === "backup_only").map(r => ({ s: String(r.start_date).slice(0, 10), e: String(r.end_date || r.start_date).slice(0, 10) }));
+  const none = { commit: () => ({ np_added: 0, np_cleared: 0, np_kept: 0 }) };
+  if (!adds.length && !clears.length) return none;
+  const both = adds.filter(d => clears.includes(d));
+  if (both.length) return { code: "NP004", message: `NO_PRIMARY_BAD_DAY: ${list(both)} is both marked and cleared in one save - nothing was saved` };
+  const all = adds.concat(clears).sort();
+  const past = all.filter(d => d < todayCentral);
+  if (past.length) return { code: "NP005", message: `NO_PRIMARY_PAST: ${list(past)} is before today (${md(todayCentral)}) in Central time - a past day stays as it was` };
+  if (sub !== FAKE_UID) { // the freeze spares the scheduler only (NP006, as OF003)
+    const fr = periodStore.filter(p => p.status !== "upcoming" || (p.offers_close_at && String(p.offers_close_at).slice(0, 10) <= todayCentral)).sort((x, y) => x.start_day < y.start_day ? -1 : 1).find(p => all.some(d => d >= p.start_day && d <= p.end_day));
+    if (fr) return { code: "NP006", message: `NO_PRIMARY_FROZEN: offers for ${fr.label} closed on ${String(fr.offers_close_at).slice(0, 10)} - ask the scheduler (${list(all.filter(d => d >= fr.start_day && d <= fr.end_day))})` };
+  }
+  const inRange = clears.filter(d => vis().some(r => r.s < r.e && d >= r.s && d <= r.e));
+  if (inRange.length) return { code: "NP007", message: `NO_PRIMARY_RANGE: ${list(inRange)} is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements` };
+  const name = NP_NAMES[who] || who;
+  const held = adds.filter(d => liveEarlyByDay[d] && liveEarlyByDay[d].primary_id === who);
+  if (held.length) return { code: "NP008", message: `NO_PRIMARY_ON_CALL: ${name} holds primary on ${list(held)} - trade those days first, then mark them No primary` };
+  const conflict = adds.filter(d => offersAfter.some(o => o.day === d && (o.role_pref === "primary" || o.role_pref === "either")));
+  if (conflict.length) return { code: "NP009", message: `NO_PRIMARY_OFFER_CONFLICT: ${name} offers primary on ${list(conflict)} and marks it No primary - keep one of the two (nothing was saved)` };
+  return { commit: () => {
+    const subPerson = sub === FAKE_UID ? "s1" : (npStore.subs[sub] || null);
+    const by = sub === COORD_UID ? COORD_UID : subPerson && subPerson === who ? who : "scheduler";
+    const src = sub === COORD_UID ? "office-relay" : subPerson && subPerson === who ? "app" : "email-relay";
+    let cleared = 0, added = 0;
+    clears.forEach(d => {
+      const i = npStore.added.findIndex(r => r.person_id === who && r.start_date === d && r.end_date === d);
+      if (i >= 0) { npStore.added.splice(i, 1); cleared++; }
+      else if (npOverlay(npStore.served).some(r => r && r.person_id === who && r.kind === "backup_only" && npIsSingle(r) && String(r.start_date).slice(0, 10) === d)) { npStore.clearedKeys.add(who + "|" + d); cleared++; }
+    });
+    adds.forEach(d => {
+      if (vis().some(r => d >= r.s && d <= r.e)) return; // covered by a row already (kept)
+      const k = who + "|" + d;
+      if (npStore.clearedKeys.has(k)) { npStore.clearedKeys.delete(k); added++; return; } // a served single row comes back
+      npStore.added.push({ id: crypto.randomUUID(), person_id: who, kind: "backup_only", role: "any", start_date: d, end_date: d, note: null, source: src, created_by: by, created_at: new Date().toISOString() });
+      added++;
+    });
+    return { np_added: added, np_cleared: cleared, np_kept: adds.length - added };
+  } };
+};
 // applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
 // save_offers calls it for p_mode inside its "transaction" (the store is mutated only after every check passed, so a
 // refused mode leaves the rows untouched - the SQL's rollback, in miniature).
@@ -1207,9 +1263,25 @@ const offerRpc = (b, json, sub) => {
   const rows = Array.isArray(b.p_rows) ? b.p_rows : [];
   const bad = rows.filter(r => !/^\d{4}-\d{2}-\d{2}$/.test(String(r && r.day)) || !["primary", "backup", "either"].includes(r && r.role_pref));
   if (bad.length) return err("OS003", `OFFERS_BAD_ROW: ${bad.map(r => (r.day || "null") + " " + (r.role_pref || "null")).join(", ")} (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved`);
+  // Prompt 28: the No primary days (save_no_primary inside the same "transaction") - checked against the offers as they stand
+  // AFTER this Save's rows, before ANY store moves (applyOfferMode below writes the period when it passes); then save_offers'
+  // own NP009: a day this Save offers as primary / either must carry no backup_only row afterwards.
+  const clearSet0 = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
+  const offersAfter = offerStore.filter(o => o.person_id === who && !clearSet0.has(o.day) && !rows.some(r => r.day === o.day)).concat(rows.map(r => ({ day: r.day, role_pref: r.role_pref })));
+  const npCheck = npRpc(b, who, sub, offersAfter);
+  if (npCheck.code) return err(npCheck.code, npCheck.message);
+  const hasNp = (Array.isArray(b.p_np_add) && b.p_np_add.length) || (Array.isArray(b.p_np_clear) && b.p_np_clear.length);
+  if (rows.some(r => r.role_pref !== "backup")) {
+    const addSet = new Set(Array.isArray(b.p_np_add) ? b.p_np_add : []), clrSet = new Set(Array.isArray(b.p_np_clear) ? b.p_np_clear : []);
+    const covered = (d) => addSet.has(d) || npOverlay(npStore.page ? npStore.served : []).some(a => a && a.person_id === who && a.kind === "backup_only" && d >= String(a.start_date).slice(0, 10) && d <= String(a.end_date || a.start_date).slice(0, 10) && !(npIsSingle(a) && clrSet.has(d)));
+    const badDays = rows.filter(r => r.role_pref !== "backup" && covered(r.day)).map(r => r.day).sort();
+    if (badDays.length) return err("NP009", `NO_PRIMARY_OFFER_CONFLICT: ${NP_NAMES[who] || who} offers primary on ${badDays.map(d => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`).join(", ")} and marks it No primary - keep one of the two (nothing was saved)`);
+  }
   // the mode's checks run before the store moves (a refused mode = nothing written, like the SQL rollback)
   const modeCheck = b.p_mode !== null && b.p_mode !== undefined ? applyOfferMode(who, b.p_period, b.p_mode) : { ok: true };
   if (modeCheck.code) return err(modeCheck.code, modeCheck.message);
+  const npDone = npCheck.commit();
+  if (hasNp) npWrites.push({ who, sub, add: (b.p_np_add || []).slice(), clear: (b.p_np_clear || []).slice(), result: npDone });
   const clear = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
   let deleted = 0;
   for (let i = offerStore.length - 1; i >= 0; i--) if (offerStore[i].person_id === who && clear.has(offerStore[i].day)) { offerStore.splice(i, 1); deleted++; }
@@ -1219,7 +1291,7 @@ const offerRpc = (b, json, sub) => {
     if (cur) Object.assign(cur, { role_pref: r.role_pref, note: r.note || cur.note || null, entered_by: by, source: src, updated_at: new Date().toISOString() }); // coalesce(excluded.note, call_offers.note)
     else offerStore.push({ id: crypto.randomUUID(), person_id: who, day: r.day, role_pref: r.role_pref, note: r.note || null, entered_by: by, source: src, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
   });
-  return json(200, { ok: true, person_id: who, upserted: rows.length, deleted, entered_by: by, source: src, mode: b.p_mode === undefined ? null : b.p_mode });
+  return json(200, { ok: true, person_id: who, upserted: rows.length, deleted, entered_by: by, source: src, mode: b.p_mode === undefined ? null : b.p_mode, np_added: npDone.np_added, np_cleared: npDone.np_cleared, np_kept: npDone.np_kept });
 };
 const offerModeRpc = (b, json) => {
   const who = String(b.p_person || "s1");
@@ -1519,6 +1591,17 @@ const routeSupabase = async (route, scope) => {
   // ... and (Prompt 25) the holiday plan's accepted days while the step holds them (planDayStore).
   if ((Object.keys(claimedDays).length || harnessOpen.day || Object.keys(planDayStore).length) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     return json(200, await scheduleDayRows(route, req, url));
+  }
+  // Prompt 28: the No primary step's page reads its availability through the npStore overlay (the served rows minus the
+  // single days its Saves cleared, plus the rows they added); every other page is untouched.
+  if (npStore.page && method === "GET" && url.pathname === "/rest/v1/availability") {
+    let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
+    if (pg === npStore.page) {
+      let rows = fixtureAnswer(url);
+      if (!rows) { const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } }); rows = await res.json().catch(() => []); }
+      npStore.served = Array.isArray(rows) ? rows.map(r => ({ ...r })) : [];
+      return json(200, npOverlay(npStore.served));
+    }
   }
   // Prompt 25 (the holiday plan Re-check): the harness's mocked vacation rows, appended to every time_off GET while set
   if (extraTimeOff.length && method === "GET" && url.pathname === "/rest/v1/time_off") {
@@ -5631,7 +5714,9 @@ try {
     const mdOfDay = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
     const tap = async (day) => { await page.click(`[data-testid=ofp-day][data-day="${day}"]`); await page.waitForTimeout(120); };
     const stateOf = async (day) => page.$eval(`[data-testid=ofp-day][data-day="${day}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer") }));
-    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), disabled: e.disabled, h: e.getBoundingClientRect().height })));
+    // Prompt 28: np = data-noprimary ("own" / "range" / "") - a live No primary day of the painted person is never picked below,
+    // so his own marks never change this step's picture (a Primary / Either tap there would lift it after a question)
+    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), np: e.getAttribute("data-noprimary") || "", disabled: e.disabled, h: e.getBoundingClientRect().height })));
     try {
       await page.setViewportSize({ width: 390, height: 844 });
       await page.click('button[data-tab="myschedule"]');
@@ -5713,10 +5798,11 @@ try {
         await page.click("[data-testid=ofp-next]"); await page.waitForTimeout(200);
         monthLabel = await page.$eval("[data-testid=ofp-month]", el => el.textContent.trim());
         allRows = await readRows();
-        freeDays = allRows.filter(r => r.state === "free" && !r.why);
+        freeDays = allRows.filter(r => r.state === "free" && !r.why && !r.np);
         if (freeDays.length >= 6) break;
       }
       if (freeDays.length < 6) throw new Error(`no month within four ahead has six paintable rows for s1 (last ${monthLabel}: ${freeDays.length})`);
+      { const npOwn = allRows.filter(r => r.state === "free" && !r.why && r.np).length; console.log(`     (Offer painter: ${npOwn} free row(s) of ${monthLabel} carry s1's own No primary mark and were left out of the picks)`); }
       ok(`Offer painter: ${monthLabel} has ${freeDays.length} paintable rows for s1 (${allRows.filter(r => r.state === "blocked").length} greyed, ${allRows.filter(r => r.state === "free" && r.why).length} one-role)`);
       const oneRole = allRows.find(r => r.state === "free" && r.why);
       if (oneRole) ok(`Offer painter: a one-role row says why (${oneRole.day}: '${oneRole.why}')`);
@@ -5732,7 +5818,14 @@ try {
       else ok(`Offer painter: Primary armed = gradient, white text, ${armedProbe.h}px; Either idle = flat`);
       await page.screenshot({ path: path.join(OUT, "offers-armed-390.png"), fullPage: false });
       ok("screenshot test/ui/out/offers-armed-390.png");
-      const [d1, d2, d3, d4, d5] = freeDays.map(r => r.day);
+      const [d1, d2, d3] = freeDays.map(r => r.day);
+      // Prompt 28: the Either range d4..d5 is two consecutive picks with NO own No primary row of s1 between them (the brush would
+      // lift it after a question and change his picture); when every later pair crosses one, the range is the one day d4.
+      let i4 = 3;
+      while (i4 + 1 < freeDays.length && allRows.some(r => r.day > freeDays[i4].day && r.day < freeDays[i4 + 1].day && r.np === "own")) i4++;
+      const d4 = freeDays[i4].day;
+      const d5 = i4 + 1 < freeDays.length ? freeDays[i4 + 1].day : d4;
+      if (i4 !== 3 || d5 === d4) console.log(`     (Offer painter: the Either range moved to ${d4}..${d5} so it crosses no own No primary day of s1)`);
       // tap, tap again (clears), tap again (paints)
       await tap(d1); const s1a = await stateOf(d1); await tap(d1); const s1b = await stateOf(d1); await tap(d1); const s1c = await stateOf(d1);
       if (!(s1a.state === "draft" && s1a.offer === "primary" && s1b.state === "free" && s1b.offer === "" && s1c.state === "draft" && s1c.offer === "primary")) fail(`Offer painter: tap / tap again / tap on ${d1} read ${JSON.stringify([s1a, s1b, s1c])}, expected draft primary -> free -> draft primary`);
@@ -5747,7 +5840,9 @@ try {
       if (!new RegExp("Start .*" + mdOfDay(d4).replace("/", "\\/") + " - tap the end day").test(hintMid) || !(await page.$("[data-testid=ofp-cancel-start]"))) fail("Offer painter: the range hint does not name the start and offer 'x cancel start': " + hintMid);
       else ok(`Offer painter: range hint '${hintMid.slice(0, 70)}' with 'x cancel start'`);
       await tap(d5);
-      const expectRange = allRows.filter(r => r.day >= d4 && r.day <= d5 && r.state === "free" && !r.why).map(r => r.day);
+      // Prompt 28: the range expectation also requires data-noprimary="" (no own No primary row lies inside it - picked above; a
+      // scheduler's range day carries a why, "backup only - No primary (set by the scheduler)", and is skipped by the brush)
+      const expectRange = allRows.filter(r => r.day >= d4 && r.day <= d5 && r.state === "free" && !r.why && !r.np).map(r => r.day);
       const expected = { [d1]: "primary", [d2]: "primary", [d3]: "backup" }; expectRange.forEach(d => { expected[d] = "either"; });
       const drafts = await page.$$eval("[data-testid=ofp-day][data-state=draft]", els => els.map(e => [e.getAttribute("data-day"), e.getAttribute("data-offer")]));
       const draftMap = Object.fromEntries(drafts);
@@ -5943,6 +6038,168 @@ try {
       await page.setViewportSize({ width: 1180, height: 900 });
     }
   } catch (e) { fail("Offer painter: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-offers.png"), fullPage: false }); } catch (e2) {} }
+
+  // ---- Prompt 28 (10/1): No primary days - a surgeon marks his own (Faraz: "I do want them to be able to do that") ----
+  // A second page routed as s2 Burchett (role surgeon, a fake JWT), 390 x 844: Paint offers -> arm No primary (the legend shows)
+  // -> the first month starting after every served period (nothing frozen there) -> his live single-day backup_only rows in
+  // that month read 'own' (Jackson County, when the month holds one; else a logged skip) -> two free rows marked (draft 'add',
+  // pill 'No primary', '2 unsaved') -> Save = exactly ONE rpc/save_offers { p_person s2, p_rows [], p_clear [], p_np_add
+  // [D1, D2], p_np_clear [] }, no set_offer_mode, no direct availability write, ONE audit 'Burchett: no primary on M/D, M/D
+  // (<label>)' -> reload: both read 'own' (the npStore overlay serves what the mock wrote) -> Either pasted onto D1, D2 asks
+  // ONCE to lift both (dismissed: nothing drafted, '2 No primary day(s) left out') -> Clear D1 -> Save = ONE save_offers
+  // { p_np_add [], p_np_clear [D1] } + audit 'Burchett: no primary lifted on M/D (...)' -> reload: D1 '', D2 'own'. The smoke
+  // asserts the request bodies and the audit; the database probe (sql/probes/no-primary-probe.sql) proves the server's side.
+  {
+    const NP_UID = "00000000-0000-4000-8000-00000000e2e2";
+    const NP_PROFILE = { id: NP_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
+    const NP_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: NP_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const npp = await context.newPage();
+    watchPage(npp, "no-primary");
+    await npp.setViewportSize({ width: 390, height: 844 });
+    await npp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, NP_JWT);
+    await npp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await npp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(NP_PROFILE));
+    const npDialogs = [];
+    let npDismissLift = false;
+    npp.on("dialog", (d) => { const m = d.message(); npDialogs.push(m); if (npDismissLift && /marked No primary/.test(m)) d.dismiss(); else d.accept(); });
+    npStore.page = npp; npStore.added = []; npStore.clearedKeys = new Set(); npStore.served = []; npStore.subs = { [NP_UID]: "s2" };
+    const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    const rowOf = (d) => npp.$eval(`[data-testid=ofp-day][data-day="${d}"]`, el => ({ state: el.getAttribute("data-state"), np: el.getAttribute("data-noprimary"), draft: el.getAttribute("data-np-draft"), npWhy: el.getAttribute("data-np-why"), pill: ((el.querySelector("[data-testid=ofp-np-pill]") || {}).textContent || "").trim() }));
+    const servedEnds = periodStore.map(p => String(p.end_day || "").slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    const lastEnd = servedEnds.length ? servedEnds[servedEnds.length - 1] : todayCentral;
+    const target = (() => { const y = +lastEnd.slice(0, 4), m = +lastEnd.slice(5, 7); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; })();
+    const openAt = async (ym) => {
+      await npp.click("[data-testid=nav-paint-offers]");
+      await npp.waitForSelector("[data-testid=ofp-sheet][data-person=s2]", { timeout: 8000 });
+      await npp.waitForTimeout(300);
+      for (let k = 0; k < 36; k++) { const m = await npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month")); if (m >= ym) break; await npp.click("[data-testid=ofp-next]"); await npp.waitForTimeout(100); }
+      return npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
+    };
+    const reloadNp = async () => { await npp.reload({ waitUntil: "domcontentloaded" }); await npp.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 }); await npp.waitForSelector("text=Synced", { timeout: 30000 }); await npp.waitForTimeout(800); };
+    const labelSuffix = async () => { const id = await npp.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-period-id")).catch(() => null); const p = id ? periodStore.find(x => x.id === id) : null; return p ? " (" + p.label + ")" : ""; };
+    try {
+      await loadWithRetry(npp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (No primary)");
+      await npp.waitForSelector("text=Synced", { timeout: 30000 });
+      await npp.waitForTimeout(800);
+      if ((await npp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the No primary page shows a Setup tab - it is being treated as the scheduler");
+      // 1. the painter, the No primary brush armed, the legend; 2. the first month after every served period
+      const month = await openAt(target);
+      if (month !== target) throw new Error(`could not reach ${target} in the painter (at ${month})`);
+      await npp.click("[data-testid=ofp-brush-noprimary]");
+      await npp.waitForTimeout(150);
+      const armedNp = await npp.$eval("[data-testid=ofp-brush-noprimary]", el => ({ armed: el.getAttribute("data-armed"), text: el.textContent.trim(), bg: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color }));
+      const legend = await npp.$eval("[data-testid=ofp-legend]", el => { const r = el.getBoundingClientRect(); return { text: el.innerText.replace(/\s+/g, " ").trim(), h: r.height, visible: r.height > 0 && r.width > 0 }; }).catch(() => null);
+      const hintNp = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+      if (armedNp.armed !== "1" || armedNp.text !== "No primary" || !/linear-gradient/.test(armedNp.bg) || armedNp.color !== "rgb(255, 255, 255)") fail("No primary (s2): the fifth brush should arm as 'No primary' (gradient, white text): " + JSON.stringify(armedNp));
+      else if (!legend || !legend.visible || legend.text !== "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change." || legend.h > 40) fail("No primary (s2): the legend should show (at most two lines at 390) while the brush is armed: " + JSON.stringify(legend));
+      else if (hintNp !== "Tap a day to mark yourself No primary (backup is still fine); tap again to take it back.") fail("No primary (s2): the tap hint reads '" + hintNp + "'");
+      else ok(`No primary (s2): Paint offers -> ${target}; ofp-brush-noprimary armed (gradient, white text), legend shown (${Math.round(legend.h)} px), hint '${hintNp.slice(0, 60)}...'`);
+      const listGeomNp = await npp.evaluate(() => { const l = document.querySelector("[data-testid=ofp-list]"); return { list: l ? l.clientHeight : 0, vh: window.innerHeight, sw: document.querySelector("[data-testid=ofp-sheet]").scrollWidth }; });
+      if (listGeomNp.list < 0.4 * listGeomNp.vh || listGeomNp.sw > 391) fail(`No primary (s2, 390x844): with the legend up the day list is ${listGeomNp.list}px of ${listGeomNp.vh} (sheet ${listGeomNp.sw} wide) - it must keep >= 40% and never scroll sideways`);
+      else ok(`No primary (s2, 390x844): with the legend up the day list keeps ${listGeomNp.list}px of ${listGeomNp.vh} (${Math.round(100 * listGeomNp.list / listGeomNp.vh)}%), no sideways scroll`);
+      // 3. his live single-day backup_only rows in that month (Cowork's Jackson County entries, any source) read 'own'; a range 'range'
+      const mine = npStore.served.filter(r => r && r.person_id === "s2" && r.kind === "backup_only");
+      const rangesS2 = mine.filter(r => !npIsSingle(r)).map(r => [String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)]);
+      const ownIn = mine.filter(r => npIsSingle(r) && String(r.start_date).slice(0, 7) === target).map(r => String(r.start_date).slice(0, 10)).filter(d => !rangesS2.some(([s, e]) => d >= s && d <= e)).sort();
+      if (!ownIn.length) console.log(`     (No primary (s2): the served availability holds no single-day backup_only row of s2 in ${target} - the 'own' read-back of live rows is not exercised this run; ${mine.length} backup_only row(s) of s2 served in all)`);
+      else {
+        const reads = []; for (const d of ownIn) reads.push([d, (await rowOf(d)).np]);
+        const wrong = reads.filter(([, v]) => v !== "own");
+        if (wrong.length) fail(`No primary (s2): his single-day backup_only rows in ${target} should read data-noprimary="own" (editable by him, whatever their source): ${JSON.stringify(wrong)}`);
+        else ok(`No primary (s2): his ${ownIn.length} single-day backup_only row(s) in ${target} (${ownIn.map(md).join(", ")}; sources ${[...new Set(mine.filter(r => ownIn.includes(String(r.start_date).slice(0, 10))).map(r => r.source || "-"))].join("/")}) read 'No primary' - his to clear`);
+      }
+      // 4. two free rows marked
+      const picks = await npp.$$eval("[data-testid=ofp-day][data-state=free]", els => els.filter(e => !e.getAttribute("data-noprimary") && !e.getAttribute("data-np-why") && !e.disabled).map(e => e.getAttribute("data-day")));
+      if (picks.length < 2) throw new Error(`fewer than two free rows to mark in ${target} (${picks.length})`);
+      const [D1, D2] = picks;
+      await npp.click(`[data-testid=ofp-day][data-day="${D1}"]`); await npp.waitForTimeout(120);
+      await npp.click(`[data-testid=ofp-day][data-day="${D2}"]`); await npp.waitForTimeout(150);
+      const r1 = await rowOf(D1), r2 = await rowOf(D2);
+      const status1 = await npp.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      const counts1 = await npp.$eval("[data-testid=ofp-counts]", el => ({ n: +el.getAttribute("data-month-noprimary"), text: el.innerText.replace(/\s+/g, " ") }));
+      const good4 = (r) => r.np === "own" && r.draft === "add" && r.state === "draft" && r.pill === "No primary";
+      if (!good4(r1) || !good4(r2) || status1 !== "2 unsaved") fail(`No primary (s2): ${D1} / ${D2} should read own + draft add + state draft + pill 'No primary', status '2 unsaved': ${JSON.stringify({ r1, r2, status1 })}`);
+      else if (counts1.n < 2 || !/ no primary/.test(counts1.text)) fail("No primary (s2): the header count should carry the marked days: " + JSON.stringify(counts1));
+      else ok(`No primary (s2): ${D1} and ${D2} marked - data-noprimary own, data-np-draft add, pill 'No primary', '2 unsaved'; header '${counts1.text.slice(0, 80)}'`);
+      // 5. Save = ONE save_offers carrying the days; 6. ONE audit naming them
+      const suffix = await labelSuffix();
+      const b5 = writes.length;
+      await npp.click("[data-testid=ofp-save]");
+      await waitFor(() => writesSince(b5, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await npp.waitForTimeout(500);
+      const saves5 = writesSince(b5, "/rest/v1/rpc/save_offers"), modes5 = writesSince(b5, "/rest/v1/rpc/set_offer_mode");
+      const avail5 = writesSince(b5).filter(w => /\/rest\/v1\/availability/.test(w.path) || /rpc\/save_no_primary/.test(w.path));
+      const sb5 = saves5[0] ? bodyOf(saves5[0]) : null;
+      const audit5 = auditSince(b5, "offers.save");
+      const nAudit5 = writesSince(b5, "/rest/v1/audit_log").filter(w => (bodyOf(w) || {}).action === "offers.save").length;
+      const want5 = `Burchett: no primary on ${md(D1)}, ${md(D2)}${suffix}`;
+      if (saves5.length !== 1 || !sb5 || sb5.p_person !== "s2" || JSON.stringify(sb5.p_rows) !== "[]" || JSON.stringify(sb5.p_clear) !== "[]" || JSON.stringify(sb5.p_np_add) !== JSON.stringify([D1, D2]) || JSON.stringify(sb5.p_np_clear) !== "[]") fail("No primary (s2): Save should be exactly ONE rpc/save_offers { p_person s2, p_rows [], p_clear [], p_np_add [D1, D2], p_np_clear [] }: " + JSON.stringify(saves5.map(w => w.body)).slice(0, 400));
+      else if (modes5.length || avail5.length) fail("No primary (s2): no set_offer_mode and no direct availability / save_no_primary call may go out: " + JSON.stringify(modes5.concat(avail5).map(w => w.method + " " + w.path)));
+      else if (nAudit5 !== 1 || !audit5 || audit5.detail.summary !== want5 || audit5.actor_id !== "s2") fail(`No primary (s2): expected ONE audit offers.save '${want5}' as s2: ` + JSON.stringify(audit5));
+      else ok(`No primary (s2): Save = ONE rpc/save_offers (p_rows [], p_np_add [${D1}, ${D2}]) + ONE audit offers.save "${audit5.detail.summary}"; no set_offer_mode, no direct availability write`);
+      const stored5 = npStore.added.filter(r => r.person_id === "s2" && [D1, D2].includes(r.start_date));
+      console.log(`     (No primary (s2): the mock's rows - ${stored5.map(r => r.start_date + " " + r.source + "/" + r.created_by + " note " + r.note).join("; ")})`);
+      if (!writesSince(b5).every(w => noAddress(w.body))) fail("No primary (s2): a write body carries an email address");
+      const saved5 = await npp.$eval("[data-testid=ofp-saved]", el => el.textContent.trim()).catch(() => null);
+      if (saved5 !== "Saved 2 changes") fail("No primary (s2): the saved note should read 'Saved 2 changes', got " + JSON.stringify(saved5)); else ok("No primary (s2): the saved note reads 'Saved 2 changes'");
+      // 7. reload: both read 'own', no draft
+      await reloadNp();
+      await openAt(target);
+      const r1b = await rowOf(D1), r2b = await rowOf(D2);
+      if (r1b.np !== "own" || r2b.np !== "own" || r1b.draft || r2b.draft || r1b.state === "draft" || r2b.state === "draft") fail("No primary (s2): after the reload both days should read own with no draft: " + JSON.stringify({ r1b, r2b }));
+      else ok(`No primary (s2): after a reload ${D1} and ${D2} read 'No primary' (data-noprimary own, no draft)`);
+      // the lift question: Either pasted onto both days asks ONCE for the batch; dismissed = nothing drafted, the hint says so
+      await npp.click("[data-testid=ofp-brush-either]");
+      await npp.click("[data-testid=ofp-paste-toggle]");
+      await npp.fill("[data-testid=ofp-paste-text]", `${D1}, ${D2}`);
+      npDismissLift = true; const dl0 = npDialogs.length;
+      await npp.click("[data-testid=ofp-paste-add]"); await npp.waitForTimeout(250);
+      npDismissLift = false;
+      const lifts = npDialogs.slice(dl0).filter(m => /marked No primary/.test(m));
+      const statusL = await npp.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      const hintL = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+      if (lifts.length !== 1 || !lifts[0].includes(md(D1)) || !lifts[0].includes(md(D2)) || !/2 of these days are marked No primary \(.*\) - offer primary or backup there and lift the block\?/.test(lifts[0])) fail("No primary (s2): Either on two marked days should ask ONCE naming both: " + JSON.stringify(npDialogs.slice(dl0)));
+      else if (statusL !== "No unsaved changes" || !/2 No primary day\(s\) left out/.test(hintL)) fail(`No primary (s2): the declined lift should leave nothing drafted and say '2 No primary day(s) left out' (status '${statusL}', hint '${hintL}')`);
+      else ok(`No primary (s2): Either on both marked days asked once ('${lifts[0].slice(0, 90)}...'); declined -> nothing drafted, hint '${hintL.slice(0, 60)}'`);
+      await npp.click("[data-testid=ofp-paste-toggle]");
+      // 8. Clear D1 -> ONE save_offers lifting it + its audit
+      await npp.click("[data-testid=ofp-brush-clear]");
+      await npp.click(`[data-testid=ofp-day][data-day="${D1}"]`); await npp.waitForTimeout(150);
+      const r1c = await rowOf(D1);
+      if (r1c.draft !== "clear" || r1c.np !== "" || r1c.pill !== "will lift No primary") fail(`No primary (s2): Clear on ${D1} should draft a lift ('will lift No primary', data-np-draft clear): ` + JSON.stringify(r1c));
+      else ok(`No primary (s2): Clear on ${D1} drafts the lift ('will lift No primary')`);
+      const suffix8 = await labelSuffix();
+      const b8 = writes.length;
+      await npp.click("[data-testid=ofp-save]");
+      await waitFor(() => writesSince(b8, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await npp.waitForTimeout(500);
+      const saves8 = writesSince(b8, "/rest/v1/rpc/save_offers");
+      const sb8 = saves8[0] ? bodyOf(saves8[0]) : null;
+      const audit8 = auditSince(b8, "offers.save");
+      const nAudit8 = writesSince(b8, "/rest/v1/audit_log").filter(w => (bodyOf(w) || {}).action === "offers.save").length;
+      const want8 = `Burchett: no primary lifted on ${md(D1)}${suffix8}`;
+      if (saves8.length !== 1 || !sb8 || JSON.stringify(sb8.p_np_add) !== "[]" || JSON.stringify(sb8.p_np_clear) !== JSON.stringify([D1]) || JSON.stringify(sb8.p_rows) !== "[]" || JSON.stringify(sb8.p_clear) !== "[]" || sb8.p_person !== "s2") fail("No primary (s2): the Clear Save should be ONE rpc/save_offers { p_np_add [], p_np_clear [D1], p_rows [], p_clear [] }: " + JSON.stringify(saves8.map(w => w.body)).slice(0, 400));
+      else if (nAudit8 !== 1 || !audit8 || audit8.detail.summary !== want8) fail(`No primary (s2): expected the audit '${want8}': ` + JSON.stringify(audit8));
+      else ok(`No primary (s2): Clear + Save = ONE rpc/save_offers (p_np_clear [${D1}]) + ONE audit "${audit8.detail.summary}"`);
+      // 9. reload: D1 cleared, D2 still marked
+      await reloadNp();
+      await openAt(target);
+      await npp.click("[data-testid=ofp-brush-noprimary]");
+      const r1d = await rowOf(D1), r2d = await rowOf(D2);
+      if (r1d.np !== "" || r2d.np !== "own") fail("No primary (s2): after the second reload D1 should be clear and D2 still marked: " + JSON.stringify({ r1d, r2d }));
+      else ok(`No primary (s2): after a reload ${D1} is clear and ${D2} still reads 'No primary'`);
+      await npp.locator(`[data-testid=ofp-day][data-day="${D2}"]`).scrollIntoViewIfNeeded();
+      await npp.screenshot({ path: path.join(OUT, "no-primary-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/no-primary-390.png");
+      await npp.click("[data-testid=ofp-close]");
+    } catch (e) {
+      fail("No primary (s2): " + errLine(e));
+      try { await npp.screenshot({ path: path.join(OUT, "failure-no-primary.png"), fullPage: false }); } catch (e2) {}
+    } finally {
+      npStore.page = null; npStore.added = []; npStore.clearedKeys = new Set(); npStore.served = []; npStore.subs = {};
+      await npp.close().catch(() => {});
+    }
+  }
 
   // ---- Prompt 14 part 3c (U3c): the day editor's offer labels + My schedule's offer pills ----
   // Fixture: U3C.day carries s3's offer (his held role) and s4's 'either' inside the seed period (the store above).
@@ -10982,7 +11239,8 @@ try {
       else ok("coordinator: the tap hint reads 'Tap a day to offer Acton as ...'");
       let freeDay = null;
       for (let k = 0; k < 6 && !freeDay; k++) {
-        freeDay = await pc.$$eval("[data-testid=ofp-day][data-state=free]", els => { const e = els.find(x => !x.getAttribute("data-why")); return e ? e.getAttribute("data-day") : null; });
+        // Prompt 28: never a day carrying Acton's own No primary mark (data-noprimary="own" - the Either brush would lift it after a question)
+        freeDay = await pc.$$eval("[data-testid=ofp-day][data-state=free]", els => { const e = els.find(x => !x.getAttribute("data-why") && !x.getAttribute("data-noprimary")); return e ? e.getAttribute("data-day") : null; });
         if (!freeDay) { await pc.click("[data-testid=ofp-next]"); await pc.waitForTimeout(200); }
       }
       if (!freeDay) fail("coordinator: no paintable day for s3 within six months");
