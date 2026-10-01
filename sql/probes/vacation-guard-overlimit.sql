@@ -11,9 +11,12 @@
 -- off on a day inside one of his time_off rows, or inside one of his East (Davenport) vacation ranges cached in the east_feed
 -- payload (an East-feature surgeon: eastFeed.enabled and a blocked role, a roster code; matched by code, forecast rows
 -- skipped) on a day no 'home' east_vacation_reviews row covers (unreviewed counts as away). One row per day on which fewer
--- than the minimum stay around: the day, how many are around, the active count, the minimum, who is off (roster name; an East
--- day tagged ' (East)') and whether the day is past (Central). No row = no day under the minimum. Past days are listed too
--- (they are history; the trigger checks only the days a new or widened vacation takes someone off).
+-- than the minimum stay around: the day, how many are around, the active count, the minimum, who is off (roster names in roster
+-- order, each ONCE - his sources are aggregated per day and person first; tagged ' (East)' only when every source of his that
+-- day is an East range, review 10/1) and whether the day is past (Central). No row = no day under the minimum. Past days are
+-- listed too (they are history; the trigger checks only the days a new or widened vacation takes someone off). Also the check
+-- for the trigger's known gap: an East review turned 'away' or a new Davenport range from the feed refresh is never refused, so
+-- a day can fall under the minimum without any time_off write - run this after such a change when in doubt.
 -- ============================================================================
 
 with blob as (
@@ -27,13 +30,13 @@ minimum as (
                      from blob b), 2) as n
 ),
 roster as (
-  select e.r->>'id' as id, coalesce(e.r->>'name', e.r->>'id') as name, upper(coalesce(e.r->>'code', '')) as code,
+  select e.r->>'id' as id, e.ord, coalesce(e.r->>'name', e.r->>'id') as name, upper(coalesce(e.r->>'code', '')) as code,
          coalesce(e.r->>'code', '') <> ''
            and (b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'enabled']) = 'true'::jsonb
            and ((b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb
              or (b.data #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb) as east
     from blob b
-    cross join lateral jsonb_array_elements(case when jsonb_typeof(b.data->'roster') = 'array' then b.data->'roster' else '[]'::jsonb end) as e(r)
+    cross join lateral jsonb_array_elements(case when jsonb_typeof(b.data->'roster') = 'array' then b.data->'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
    where jsonb_typeof(e.r) = 'object' and coalesce(e.r->>'id', '') <> ''
      and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external'
 ),
@@ -63,15 +66,20 @@ off_days as (
     cross join lateral generate_series(er.s::date::timestamp, er.e::date::timestamp, interval '1 day') as g
    where not exists (select 1 from public.east_vacation_reviews w
                       where w.person_id = er.id and w.decision = 'home' and g::date between w."start" and w."end")
+),
+off_people as (
+  select o.day, o.id, bool_and(o.east) as east_only
+    from off_days o
+   group by o.day, o.id
 )
-select o.day,
-       (select n from active_n) - count(distinct o.id)::int as around,
+select p.day,
+       (select n from active_n) - count(distinct p.id)::int as around,
        (select n from active_n) as active,
        (select n from minimum) as minimum,
-       string_agg(distinct a.name || case when o.east then ' (East)' else '' end, ', ') as off,
-       o.day < (now() at time zone 'America/Chicago')::date as past
-  from off_days o
-  join roster a on a.id = o.id
- group by o.day
-having (select n from active_n) - count(distinct o.id)::int < (select n from minimum)
- order by o.day;
+       string_agg(a.name || case when p.east_only then ' (East)' else '' end, ', ' order by a.ord) as off,
+       p.day < (now() at time zone 'America/Chicago')::date as past
+  from off_people p
+  join roster a on a.id = p.id
+ group by p.day
+having (select n from active_n) - count(distinct p.id)::int < (select n from minimum)
+ order by p.day;

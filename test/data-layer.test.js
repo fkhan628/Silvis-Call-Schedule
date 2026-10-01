@@ -7228,8 +7228,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const eastSelf = g({ personId: "s1", start: "2027-03-19", end: "2027-03-19", timeOffRows: rows.concat([row("f", "s2", "2027-03-19")]), eastAway: { s1: [{ start: "2027-03-19", end: "2027-03-19", state: "away" }] } });
       assert.deepStrictEqual([eastSelf.ok, eastSelf.days[0].checked], [true, false], "Khan formalizing an East away day as a Silvis vacation is not refused (he is off already)");
     });
-    check("VG: a missing / inverted / overlong range or no roster checks nothing (ok, no days); alsoOff merges a person's rows, keeps East apart, lists only the ranges that touch the days", () => {
+    // pin moved deliberately 10/1 (review item 6): an overlong range (end - start >= VG_MAX_DAYS) is no longer "ok, no days" - it
+    // is refused as a typing slip (ok false, tooLong, the client's own words, no confirmText), for everyone; kept intent: no day
+    // of it is counted, and a missing / inverted range or an empty roster still checks nothing.
+    check("VG: a missing / inverted range or no roster checks nothing (ok, no days); a range of over ten years (end - start >= VG_MAX_DAYS) is refused as a typing slip (tooLong, no days, no confirm); alsoOff merges a person's rows, keeps East apart, lists only the ranges that touch the days", () => {
       assert.deepStrictEqual([g({ personId: "s2", start: "", end: "2027-03-17" }).days.length, g({ personId: "s2", start: "2027-03-18", end: "2027-03-17" }).days.length, g({ personId: "s2", start: "2027-03-18", end: "2038-03-18" }).days.length], [0, 0, 0]);
+      assert.deepStrictEqual([g({ personId: "s2", start: "", end: "2027-03-17" }).ok, g({ personId: "s2", start: "2027-03-18", end: "2027-03-17" }).ok], [true, true]);
+      assert.strictEqual(H.VG_MAX_DAYS, 3660);
+      const long = g({ personId: "s2", start: "2027-03-18", end: "2038-03-18" });
+      assert.deepStrictEqual([long.ok, long.tooLong, long.message, long.confirmText, long.overDays.length], [false, true, "That range is 4019 days long (over ten years) - check the dates; a vacation that long is not saved.", "", 0]);
+      const edge = g({ personId: "s2", start: "2027-01-01", end: H.suAddDays("2027-01-01", 3659) });
+      assert.deepStrictEqual([edge.tooLong, edge.days.length], [false, 3660], "end - start = 3659 days is still counted day by day");
+      const edge2 = g({ personId: "s2", start: "2027-01-01", end: H.suAddDays("2027-01-01", 3660) });
+      assert.deepStrictEqual([edge2.ok, edge2.tooLong, edge2.days.length], [false, true, 0], "end - start = 3660 days is refused");
+      assert.strictEqual(g({ personId: "s2", start: "2027-01-01", end: "9999-12-31" }).tooLong, true, "a year-9999 slip is refused at once (no day loop)");
       assert.deepStrictEqual([g({ personId: "s2", start: "2027-03-18", end: "2027-03-18", roster: [] }).ok, g({ personId: "s2", start: "2027-03-18", end: "2027-03-18", roster: [] }).active], [true, 0]);
       const r = g({ personId: "s2", start: "2027-03-17", end: "2027-03-18", timeOffRows: [row("a", "s3", "2027-03-10", "2027-03-16"), row("b", "s3", "2027-03-17", "2027-03-19"), row("c", "s3", "2027-04-01", "2027-04-02"), row("d", "s4", "2027-03-18")],
         eastAway: { s3: [{ start: "2027-03-18", end: "2027-03-25", state: "away" }] } });
@@ -7251,58 +7263,165 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.vacationGuardLine(refused, nameOf, { mine: false, personName: "Burchett", showEast: true }), "Also off: Khan 3/17 (East, unreviewed), Acton 3/15-3/21, Fierce 3/15-3/21, Sarkar 3/15-3/21 - after Burchett's, 1 of 6 is around 3/17 - under the minimum of 2");
       assert.strictEqual(H.vacationGuardLine(g({ personId: "s2", start: "", end: "" }), nameOf, {}), "", "no days, no line");
       assert.strictEqual(H.vacationGuardLine(null, nameOf, {}), "");
+      assert.strictEqual(H.vacationGuardLine(g({ personId: "s2", start: "2027-03-18", end: "2038-03-18" }), nameOf, {}), "That range is 4019 days long (over ten years) - check the dates; a vacation that long is not saved.", "a tooLong guard reads its refusal");
+    });
+    check("VG review 10/1 item 3: for everyone but the scheduler a person's time_off and counted East ranges read as ONE merged list (no second, unlabeled entry hinting at an East source); the scheduler keeps them apart, glossed; East ranges of different states are not merged into one gloss", () => {
+      // s3: time_off 3/15-3/18 and 3/22-3/23, an East away range 3/17-3/21 (overlapping the first, adjacent to the second)
+      const rows = [row("a", "s3", "2027-03-15", "2027-03-18"), row("b", "s3", "2027-03-22", "2027-03-23")];
+      const r = g({ personId: "s2", start: "2027-03-16", end: "2027-03-22", timeOffRows: rows, eastAway: { s3: [{ start: "2027-03-17", end: "2027-03-21", state: "away" }] } });
+      assert.strictEqual(H.vacationGuardLine(r, nameOf, { mine: true }), "Also off: Acton 3/15-3/23 - after yours, 4 of 6 are around 3/16-3/22", "one merged range, no East word");
+      assert.strictEqual(H.vacationGuardLine(r, nameOf, { mine: true, showEast: true }), "Also off: Acton 3/15-3/18, 3/17-3/21 (East), 3/22-3/23 - after yours, 4 of 6 are around 3/16-3/22", "the scheduler sees each range, the East one glossed");
+      // two disjoint ranges stay two in the merged list
+      const two = g({ personId: "s2", start: "2027-03-16", end: "2027-03-25", timeOffRows: [row("a", "s3", "2027-03-15", "2027-03-16")], eastAway: { s3: [{ start: "2027-03-20", end: "2027-03-25", state: "unreviewed" }] } });
+      assert.strictEqual(H.vacationGuardLine(two, nameOf, { mine: true }), "Also off: Acton 3/15-3/16, 3/20-3/25 - after yours, 4 of 6 are around 3/16, 3/20-3/25", "disjoint ranges stay apart, merged per person");
+      // an away and an unreviewed East range side by side keep their own glosses for the scheduler
+      const states = g({ personId: "s2", start: "2027-03-17", end: "2027-03-20", eastAway: { s1: [{ start: "2027-03-17", end: "2027-03-18", state: "away" }, { start: "2027-03-19", end: "2027-03-20", state: "unreviewed" }] } });
+      assert.deepStrictEqual(states.alsoOff, [{ id: "s1", ranges: [{ start: "2027-03-17", end: "2027-03-18", east: true, state: "away" }, { start: "2027-03-19", end: "2027-03-20", east: true, state: "unreviewed" }] }], "adjacent East ranges of two states stay apart");
+      assert.strictEqual(H.vacationGuardLine(states, nameOf, { mine: true, showEast: true }), "Also off: Khan 3/17-3/18 (East), 3/19-3/20 (East, unreviewed) - after yours, 4 of 6 are around 3/17-3/20");
+      assert.strictEqual(H.vacationGuardLine(states, nameOf, { mine: true }), "Also off: Khan 3/17-3/20 - after yours, 4 of 6 are around 3/17-3/20", "...and read as one range for everyone else");
+    });
+    check("VG review 10/1 item 1: eastReviewsLoaded false (the review rows not loaded) - another surgeon's East range does not count toward a refusal (shown to the scheduler as '(East - reviews not loaded)', left out for everyone else); the person's own East range still exempts his days; default true", () => {
+      const four = [row("a", "s3", "2027-03-15", "2027-03-21"), row("b", "s5", "2027-03-15", "2027-03-21"), row("c", "s6", "2027-03-15", "2027-03-21")];
+      const ea = { s1: [{ start: "2027-03-17", end: "2027-03-17", state: "unreviewed" }] };
+      const counted = g({ personId: "s2", start: "2027-03-17", end: "2027-03-17", timeOffRows: four, eastAway: ea });
+      assert.deepStrictEqual([counted.ok, counted.eastPending, counted.days[0].around], [false, false, 1], "loaded (the default): the unreviewed range counts - refused");
+      assert.strictEqual(g({ personId: "s2", start: "2027-03-17", end: "2027-03-17", timeOffRows: four, eastAway: ea, eastReviewsLoaded: true }).ok, false, "eastReviewsLoaded true = the default");
+      const pend = g({ personId: "s2", start: "2027-03-17", end: "2027-03-17", timeOffRows: four, eastAway: ea, eastReviewsLoaded: false });
+      assert.deepStrictEqual([pend.ok, pend.eastPending, pend.days[0].around, pend.days[0].off, pend.message], [true, true, 2, ["s2", "s3", "s5", "s6"], ""], "not loaded: the East range is not counted - no refusal on a guess");
+      assert.deepStrictEqual(pend.alsoOff[0], { id: "s1", ranges: [{ start: "2027-03-17", end: "2027-03-17", east: true, state: "unreviewed", pending: true }] }, "it stays in alsoOff, pending");
+      assert.strictEqual(H.vacationGuardLine(pend, nameOf, { mine: false, personName: "Burchett", showEast: true }), "Also off: Khan 3/17 (East - reviews not loaded), Acton 3/15-3/21, Fierce 3/15-3/21, Sarkar 3/15-3/21 - after Burchett's, 2 of 6 are around 3/17", "the scheduler sees it, marked");
+      assert.strictEqual(H.vacationGuardLine(pend, nameOf, { mine: true }), "Also off: Acton 3/15-3/21, Fierce 3/15-3/21, Sarkar 3/15-3/21 - after yours, 2 of 6 are around 3/17", "everyone else: left out (uncounted, and no East hint)");
+      // the person's own pending East range: his day stays exempt (Decision 4 - the lenient side)
+      const own = g({ personId: "s1", start: "2027-03-17", end: "2027-03-17", timeOffRows: four.concat([row("d", "s2", "2027-03-17")]), eastAway: ea, eastReviewsLoaded: false });
+      assert.deepStrictEqual([own.ok, own.days[0].checked], [true, false], "Khan over his own East range is not checked while the reviews are not loaded");
+      // a person with only a pending East range touching the days drops out of everyone else's line
+      const only = g({ personId: "s2", start: "2027-03-17", end: "2027-03-17", eastAway: ea, eastReviewsLoaded: false });
+      assert.strictEqual(H.vacationGuardLine(only, nameOf, { mine: true }), "Nobody else is off then - after yours, 5 of 6 are around 3/17");
+    });
+    check("VG review 10/1 item 5: vacationGuardOverride / vacationGuardOverrideText - the short days and the count a scheduler's override leaves in the audit row and the toast; null / '' when nothing is overridden", () => {
+      const rows4 = [row("a", "s3", "2027-03-15", "2027-03-21"), row("b", "s4", "2027-03-15", "2027-03-21"), row("c", "s5", "2027-03-15", "2027-03-21"), row("d", "s6", "2027-03-18", "2027-03-19")];
+      const no5 = g({ personId: "s2", start: "2027-03-17", end: "2027-03-20", timeOffRows: rows4 });
+      assert.deepStrictEqual(H.vacationGuardOverride(no5), { days: "3/18, 3/19", around: 1, active: 6, minimum: 2 });
+      assert.strictEqual(H.vacationGuardOverrideText(H.vacationGuardOverride(no5)), "under the minimum on 3/18, 3/19 (1 of 6 around, minimum 2)");
+      const mixed = g({ personId: "s2", start: "2027-03-17", end: "2027-03-19", timeOffRows: rows4.concat([row("e", "s1", "2027-03-19")]) });
+      assert.deepStrictEqual(H.vacationGuardOverride(mixed), { days: "3/18, 3/19", around: 0, active: 6, minimum: 2 }, "around = the fewest on the over-limit days");
+      assert.strictEqual(H.vacationGuardOverride(g({ personId: "s2", start: "2027-03-17", end: "2027-03-17" })), null, "an ok guard overrides nothing");
+      assert.strictEqual(H.vacationGuardOverride(g({ personId: "s2", start: "2027-03-18", end: "2038-03-18" })), null, "a tooLong guard is never overridden");
+      assert.deepStrictEqual([H.vacationGuardOverride(null), H.vacationGuardOverrideText(null)], [null, ""]);
+      const audit = { person_id: "s2", start: "2027-03-17", end: "2027-03-20", vacation_guard_override: H.vacationGuardOverride(no5) };
+      assert.ok(!/\$\s*\d|@/.test(JSON.stringify(audit)), "the override detail carries days and counts only (no amount, no contact)");
     });
     check("VG pins: describeDbError shows VACATION_* verbatim (both regexes); vacEastAway = eastVacPeople's ranges not reviewed home; vacGuardFor = helpers.vacationGuard over timeOffRows (+ the painter's draft) / vacEastAway / surgeons / groupRules / excludeId", () => {
       assert.ok(src.includes("const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+/;"), "the OWN token list");
       assert.ok(src.includes("const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+)[^\"}\\\\]*/.exec(s);"), "the extracting regex");
       assert.ok(src.includes('eastVacPeople.forEach(p => { const rs = (p.ranges || []).filter(r => r.state !== "home").map(r => ({ start: r.start, end: r.end, state: r.state })); if (rs.length) m[p.id] = rs; });'), "vacEastAway: unreviewed / away ranges, home left out");
-      assert.ok(src.includes("const vacGuardFor = (personId, start, end, excludeId, extraRows) => vacationGuard({ personId, start, end, timeOffRows: extraRows && extraRows.length ? timeOffRows.concat(extraRows) : timeOffRows, eastAway: vacEastAway, roster: surgeons, groupRules, excludeId });"), "vacGuardFor");
+      // pin moved deliberately 10/1 (review item 1): vacGuardFor also passes eastReviewsLoaded (the East review rows loaded -
+      // eastVacReviewState 'ok'), and the preview memo depends on that state too; kept intent: one call into the pure helper over
+      // the loaded rows, the East map, the roster, the rules and the edited row.
+      assert.ok(src.includes("const vacGuardFor = (personId, start, end, excludeId, extraRows) => vacationGuard({ personId, start, end, timeOffRows: extraRows && extraRows.length ? timeOffRows.concat(extraRows) : timeOffRows, eastAway: vacEastAway, roster: surgeons, groupRules, excludeId, eastReviewsLoaded: eastVacReviewState === \"ok\" });"), "vacGuardFor (eastReviewsLoaded = the review rows are loaded)");
       assert.ok(src.indexOf("const vacEastAway = useMemo(") > src.indexOf("const eastVacPeople = useMemo("), "vacEastAway is declared after eastVacPeople (a const read before its line is a TDZ crash)");
-      assert.ok(src.includes("const vacGuardPreview = useMemo(() => (vacSurgeon && suIsIso(vacStart) && suIsIso(vacEnd) && vacEnd >= vacStart) ? vacGuardFor(vacSurgeon, vacStart, vacEnd, null) : null,\n    [vacSurgeon, vacStart, vacEnd, timeOffRows, vacEastAway, surgeons, groupRules]);"), "the preview memo and its deps");
+      assert.ok(src.includes("const vacGuardPreview = useMemo(() => (vacSurgeon && suIsIso(vacStart) && suIsIso(vacEnd) && vacEnd >= vacStart) ? vacGuardFor(vacSurgeon, vacStart, vacEnd, null) : null,\n    [vacSurgeon, vacStart, vacEnd, timeOffRows, vacEastAway, surgeons, groupRules, eastVacReviewState]);"), "the preview memo and its deps");
       assert.ok(src.indexOf("const vacGuardPreview = useMemo(") < src.indexOf("const renderVacationForm = (personChoices) => ("), "the preview is declared before the form renders it");
+      // review 10/1 item 2: the Edit row's preview - the edited row excluded
+      assert.ok(src.includes("const vacEditGuardPreview = useMemo(() => (editVac && editVac.sid && suIsIso(editVac.start) && suIsIso(editVac.end) && editVac.end >= editVac.start) ? vacGuardFor(editVac.sid, editVac.start, editVac.end, editVac.rowId) : null,\n    [editVac, timeOffRows, vacEastAway, surgeons, groupRules, eastVacReviewState]);"), "the Edit row's preview memo (excludeId = the edited row) and its deps");
+      assert.ok(src.indexOf("const [editVac, setEditVac] = useState(") < src.indexOf("const vacEditGuardPreview = useMemo("), "editVac is declared before the memo reads it");
+      // review 10/1 item 4: the database's refusal turns live once the rows under it change
+      assert.ok(src.includes("  useEffect(() => {\n    setVacGuardRefusal(r => (r && r.db ? { ...r, db: false } : r));\n    setVacEditGuardRefusal(r => (r && r.db ? { ...r, db: false } : r));\n  }, [timeOffRows, vacEastAway, surgeons, groupRules, eastVacReviewState]);"), "a db refusal is judged live once timeOffRows / the East map / the roster / the rules / the review state change");
     });
-    check("VG behaviour: vacGuardGate (lifted verbatim) - ok passes; a surgeon and the office coordinator are refused with the database's words (toast, no confirm); the scheduler gets guard.confirmText and proceeds on yes, stops on no", () => {
+    check("VG behaviour (review 10/1 item 4): vacRefusalShown (lifted verbatim) - the client's refusal shows only while the CURRENT guard over the same person / dates still refuses, in its current words; the database's refusal stands as said until it turns live; another person / dates show nothing", () => {
+      const at = src.indexOf("  const vacRefusalShown = (r, personId, start, end, live) => ");
+      const line = src.slice(at, src.indexOf("\n", at));
+      assert.ok(at > 0 && line.length < 400, "vacRefusalShown could not be sliced out");
+      const shown = new Function(line + "\nreturn vacRefusalShown;")();
+      const client = { personId: "s2", start: "2027-03-17", end: "2027-03-18", message: "OLD", db: false };
+      assert.strictEqual(shown(null, "s2", "2027-03-17", "2027-03-18", { ok: false, message: "NOW" }), "", "no refusal, no box");
+      assert.strictEqual(shown(client, "s2", "2027-03-17", "2027-03-18", { ok: false, message: "NOW" }), "NOW", "still refused: the current words");
+      assert.strictEqual(shown(client, "s2", "2027-03-17", "2027-03-18", { ok: true, message: "" }), "", "a reload made the range acceptable: the box clears");
+      assert.strictEqual(shown(client, "s2", "2027-03-17", "2027-03-18", null), "", "no preview (dates cleared): nothing");
+      assert.strictEqual(shown(client, "s3", "2027-03-17", "2027-03-18", { ok: false, message: "NOW" }), "", "another person");
+      assert.strictEqual(shown(client, "s2", "2027-03-17", "2027-03-19", { ok: false, message: "NOW" }), "", "other dates");
+      assert.strictEqual(shown(Object.assign({}, client, { db: true, message: "DB" }), "s2", "2027-03-17", "2027-03-18", { ok: true, message: "" }), "DB", "the database's refusal stands while the rows under it are unchanged");
+    });
+    // pin moved deliberately 10/1 (review items 5 and 6): the gate returns the scheduler's override (helpers.vacationGuardOverride,
+    // injected here like the other free names) and refuses a tooLong range for everyone with no confirm; the length bound grew
+    // with the two lines. Kept intent: ok passes, a surgeon / the office is refused with a toast and no dialog, the scheduler confirms.
+    check("VG behaviour: vacGuardGate (lifted verbatim) - ok passes; a surgeon and the office coordinator are refused with the database's words (toast, no confirm); the scheduler gets guard.confirmText and proceeds on yes (with the override for the audit row), stops on no; a range of over ten years is refused for everyone, no confirm", () => {
       const at = src.indexOf("  const vacGuardGate = (personId, start, end, excludeId) => {");
       const body = src.slice(at, src.indexOf("\n  };\n", at) + 5);
-      assert.ok(at > 0 && body.length > 200 && body.length < 1200, "vacGuardGate could not be sliced out");
+      assert.ok(at > 0 && body.length > 200 && body.length < 1500, "vacGuardGate could not be sliced out");
       assert.ok(!/isCoordinator/.test(body), "no office exemption: the coordinator is refused like a surgeon");
       const run = (isScheduler, guard, answer) => {
         const log = { toasts: [], confirms: [] };
-        const fn = new Function("vacGuardFor", "isScheduler", "confirm", "showToast", body + "\nreturn vacGuardGate;")(() => guard, isScheduler, (t) => { log.confirms.push(t); return answer; }, (m, k) => log.toasts.push([m, k]));
+        const fn = new Function("vacGuardFor", "isScheduler", "confirm", "showToast", "vacationGuardOverride", body + "\nreturn vacGuardGate;")(() => guard, isScheduler, (t) => { log.confirms.push(t); return answer; }, (m, k) => log.toasts.push([m, k]), H.vacationGuardOverride);
         return { r: fn("s2", "2027-03-17", "2027-03-17", null), log };
       };
-      const okG = { ok: true }, noG = { ok: false, message: VGM("3/17"), confirmText: "Q - enter it anyway?" };
+      const okG = { ok: true }, noG = { ok: false, message: VGM("3/17"), confirmText: "Q - enter it anyway?", overDays: [{ day: "2027-03-17", around: 1 }], active: 6, minAround: 2 };
       assert.deepStrictEqual(run(false, okG).r, { ok: true, guard: okG });
       const s = run(false, noG);
       assert.deepStrictEqual([s.r.ok, s.r.message, s.log.toasts, s.log.confirms], [false, VGM("3/17"), [[VGM("3/17"), "error"]], []], "a surgeon / the office: refused, toast, no dialog");
       const yes = run(true, noG, true);
-      assert.deepStrictEqual([yes.r.ok, yes.r.overridden, yes.log.confirms, yes.log.toasts], [true, true, ["Q - enter it anyway?"], []], "the scheduler: confirm, yes -> proceed");
+      assert.deepStrictEqual([yes.r.ok, yes.r.overridden, yes.r.override, yes.log.confirms, yes.log.toasts], [true, true, { days: "3/17", around: 1, active: 6, minimum: 2 }, ["Q - enter it anyway?"], []], "the scheduler: confirm, yes -> proceed, the override returned for the audit row");
       const no = run(true, noG, false);
       assert.deepStrictEqual([no.r.ok, no.r.cancelled, no.log.toasts], [false, true, []], "the scheduler: no -> nothing saved, no toast");
+      const longG = { ok: false, tooLong: true, message: "That range is 4019 days long (over ten years) - check the dates; a vacation that long is not saved.", confirmText: "" };
+      [false, true].forEach((sched) => {
+        const t = run(sched, longG, true);
+        assert.deepStrictEqual([t.r.ok, t.r.message, t.log.confirms, t.log.toasts], [false, longG.message, [], [[longG.message, "error"]]], (sched ? "the scheduler" : "a surgeon") + ": a range of over ten years is refused, no dialog");
+      });
     });
     check("VG pins: toAdd runs the gate AFTER the on-call check and BEFORE the insert (a refusal under the form); the database's VACATION_TOO_FEW_AROUND is shown under the form too; toEdit gates the NEW days (excludeId = the row); the painter counts its draft cumulatively, refuses a non-scheduler, confirms for the scheduler", () => {
       const fn = src.slice(src.indexOf("  const toAdd = async (personId, start, end, note) => {"), src.indexOf("  const deleteTimeOffRow = async (rowId) => {"));
       const gate = fn.indexOf("const gate = vacGuardGate(personId, start, end, null);");
       assert.ok(gate > fn.indexOf("vacationConflictItems(") && gate < fn.indexOf('db.insert("time_off"'), "the gate sits between the on-call check and the insert");
-      assert.ok(fn.includes("if (!gate.ok) { if (!gate.cancelled) setVacGuardRefusal({ personId, start, end, message: gate.message }); return { ok: false, error: gate.message, guard: gate.guard }; }"), "a refusal is kept for the form, nothing is written");
-      assert.ok(fn.includes("if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacGuardRefusal({ personId, start, end, message: why });"), "the database's refusal (client check bypassed) is shown under the form, verbatim");
+      // pins moved deliberately 10/1 (review items 2, 4, 5, 6): the refusal records carry db (the database's own refusal - shown
+      // live after a reload, item 4); toEdit keeps its refusal for the Edit row (item 2) instead of a toast alone; the scheduler's
+      // override reaches the audit rows (item 5); a range of over ten years is refused first (item 6). Kept intent: the gate sits
+      // after the on-call check and before the write, a refusal writes nothing.
+      assert.ok(fn.includes("if (!gate.ok) { if (!gate.cancelled) setVacGuardRefusal({ personId, start, end, message: gate.message, db: false }); return { ok: false, error: gate.message, guard: gate.guard }; }"), "a refusal is kept for the form, nothing is written");
+      assert.ok(fn.includes("if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacGuardRefusal({ personId, start, end, message: why, db: true });"), "the database's refusal (client check bypassed) is shown under the form, verbatim (db: true)");
+      // item 6: the length check comes first - before the on-call scan and the gate - and refuses for everyone
+      const tl = fn.indexOf("const tooLong = vacationGuard({ start, end });");
+      assert.ok(tl > fn.indexOf("if (end < start)") && tl < fn.indexOf("vacationConflictItems(") && fn.includes("if (tooLong.tooLong) { setVacGuardRefusal({ personId, start, end, message: tooLong.message, db: false }); showToast(tooLong.message, \"error\"); return { ok: false, error: tooLong.message }; }"), "toAdd: a range of over ten years is refused before the on-call scan");
+      // item 5: the override into the audit row (detail + summary) and back to addVac's toast
+      assert.ok(fn.includes("const override = gate.overridden ? gate.override : null;") && fn.includes('+ (override ? " - scheduler override, " + vacationGuardOverrideText(override) : "")') && fn.includes("...(override ? { vacation_guard_override: override } : {}) });") && fn.includes("return { ok: true, row: data, override };"), "toAdd: the scheduler's override reaches the timeoff.add audit row (summary + detail.vacation_guard_override) and the caller");
+      assert.ok(fn.lastIndexOf("vacation_guard_override") > fn.indexOf('logAudit("timeoff.add"'), "the override rides in the timeoff.add row");
       const te = src.slice(src.indexOf("  const toEdit = async (personId, rowId, newStart, newEnd) => {"), src.indexOf("  // SCHEDULE STORAGE: schedule_days is the sole source."));
-      assert.ok(te.includes("const gate = vacGuardGate(personId, newStart, newEnd, rowId);\n    if (!gate.ok) return { ok: false };") && te.indexOf("vacGuardGate(") < te.indexOf('method: "PATCH"') && te.indexOf("vacGuardGate(") > te.indexOf("vacationConflicts("), "toEdit: after the on-call check, before the PATCH, the edited row excluded");
+      assert.ok(te.includes("const gate = vacGuardGate(personId, newStart, newEnd, rowId);\n    if (!gate.ok) { if (!gate.cancelled) setVacEditGuardRefusal({ rowId, personId, start: newStart, end: newEnd, message: gate.message, db: false }); return { ok: false }; }") && te.indexOf("vacGuardGate(") < te.indexOf('method: "PATCH"') && te.indexOf("vacGuardGate(") > te.indexOf("vacationConflicts("), "toEdit: after the on-call check, before the PATCH, the edited row excluded; a refusal is kept for the Edit row");
+      assert.ok(te.includes("if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacEditGuardRefusal({ rowId, personId, start: newStart, end: newEnd, message: why, db: true });"), "toEdit: the database's refusal is kept for the Edit row too, verbatim");
+      assert.ok(te.indexOf("const tooLong = vacationGuard({ start: newStart, end: newEnd });") > 0 && te.indexOf("const tooLong = vacationGuard(") < te.indexOf("vacationConflicts("), "toEdit: a range of over ten years is refused before the on-call scan");
+      assert.ok(te.includes("...(override ? { vacation_guard_override: override } : {}) });") && te.includes("return { ok: true, override };") && te.lastIndexOf("vacation_guard_override") > te.indexOf('logAudit("timeoff.edit"'), "toEdit: the override reaches the timeoff.edit audit row and the caller");
       const cp = src.slice(src.indexOf("  const commitTimeOffPaint = async (entries) => {"), src.indexOf("  // --- Offer painter (Prompt 14 part 3a)"));
       assert.ok(cp.includes("const g = vacGuardFor(en.personId, en.start, en.end, null, draftRows);") && cp.includes('draftRows.push({ id: "paint-draft-" + i, person_id: en.personId, start_date: en.start, end_date: en.end });'), "each entry is counted with the entries before it");
       assert.ok(cp.includes("if (!isScheduler) return { ok: false, error: guardRefused[0].message };") && cp.includes("if (!confirm(ask)) return { ok: false, error:"), "a non-scheduler is refused, the scheduler confirms");
       assert.ok(cp.indexOf("guardRefused") < cp.indexOf('method: "POST"'), "before the bulk POST");
+      assert.ok(cp.includes("paintOverride = guardRefused.map(g => ({ person_id: g.personId, start: g.start, end: g.end, ...vacationGuardOverride(g) }));") && cp.includes("...(paintOverride ? { vacation_guard_override: paintOverride } : {}) });") && cp.lastIndexOf("vacation_guard_override") > cp.indexOf('logAudit("timeoff.paint"'), "the painter: the override per entry into the timeoff.paint audit row");
+      assert.ok(cp.includes('if (paintOverride) showToast("Saved " + overrideWords + " - your override is in the audit log.", "success");'), "...and the toast");
       const av = src.slice(src.indexOf("const addVac = async () => {"), src.indexOf("const rmVac = "));
       assert.ok(!av.includes("confirm(") && av.includes("const r = await toAdd(vacSurgeon, vacStart, vacEnd, vacNote);"), "addVac stays dialog-free; the scheduler's confirm lives in the gate");
+      assert.ok(av.includes('showToast(r.override ? "Vacation saved " + vacationGuardOverrideText(r.override) + " - your override is in the audit log." : "Vacation saved.", "success");'), "addVac's toast says the override");
+      const se = src.slice(src.indexOf("const saveEditVac = async () => {"), src.indexOf("// --- Month painter (bulk vacation entry)"));
+      assert.ok(se.includes('if (r.ok) { setEditVac(null); if (r.override) showToast("Vacation changed " + vacationGuardOverrideText(r.override) + " - your override is in the audit log.", "success"); }'), "saveEditVac's toast says the override");
     });
-    check("VG pins: the form shows vac-also-off while the dates are typed (helpers.vacationGuardLine, the East gloss for the scheduler only) and vac-guard-refusal with the database's words for the CURRENT person and dates; the Time off card and Setup say the minimum (vacationRules); ASCII", () => {
+    check("VG pins: the form shows vac-also-off while the dates are typed (helpers.vacationGuardLine, the East gloss for the scheduler only) and vac-guard-refusal for the CURRENT person and dates (live, vacRefusalShown); an Edit row shows the same (vac-edit-*); the Time off card and Setup say the minimum (vacationRules); ASCII", () => {
+      // pins moved deliberately 10/1 (review items 2-4): the line and the refusal box moved into renderVacGuard(prefix, ...), shared
+      // by the Add form ("vac" - the same test ids as before: vac-also-off / -text / -under, vac-guard-refusal / -message) and an
+      // Edit row ("vac-edit"); the box shows vacRefusalShown (live), not the stored message. Kept intent: the line renders once the
+      // dates are typed, with its data attributes, the pure helper's words and the per-role under-the-minimum words; under the Add
+      // button, before the on-call refusal.
+      const rg = src.slice(src.indexOf("const renderVacGuard = (prefix, preview, refusalMsg, onDismiss) => ("), src.indexOf("const renderVacationList = (personIds, allowEdit) => {"));
+      assert.ok(rg.length > 200, "renderVacGuard could not be sliced out");
+      assert.ok(rg.includes("{preview && (preview.tooLong || (preview.days.length > 0 && preview.active > 0)) && ("), "the line renders once dates are typed (and for a range of over ten years)");
+      assert.ok(rg.includes('<div data-testid={prefix + "-also-off"} data-ok={preview.ok ? "1" : "0"} data-fewest={preview.fewest} data-active={preview.active} data-min={preview.minAround} data-east-pending={preview.eastPending ? "1" : "0"} role="status"'), "<prefix>-also-off and its data attributes");
+      assert.ok(rg.includes('<span data-testid={prefix + "-also-off-text"}>{vacationGuardLine(preview, nameOf, { mine: !!mySurgeon && preview.personId === mySurgeon, personName: nameOf(preview.personId), showEast: eastDetailsVisible })}</span>'), "the pure line; the East gloss follows eastDetailsVisible (the scheduler's only, Item E3)");
+      assert.ok(rg.includes('{!preview.ok && !preview.tooLong && <span data-testid={prefix + "-also-off-under"}>{isScheduler ? " - as the scheduler you can still enter it (you will be asked to confirm)." : " - it would be refused: at least " + preview.minAround + " surgeons must stay around."}</span>}'), "the under-the-minimum words per role");
+      assert.ok(rg.includes("{refusalMsg && (") && rg.includes('<div data-testid={prefix + "-guard-refusal"} role="alert"') && rg.includes('<span data-testid={prefix + "-guard-message"}>{refusalMsg}</span>'), "the refusal box: <prefix>-guard-refusal / -message");
       const vf = src.slice(src.indexOf("const renderVacationForm = (personChoices) => ("), src.indexOf("const authBox = "));
-      assert.ok(vf.includes("{vacGuardPreview && vacGuardPreview.days.length > 0 && vacGuardPreview.active > 0 && ("), "the line renders once dates are typed");
-      assert.ok(vf.includes('<div data-testid="vac-also-off" data-ok={vacGuardPreview.ok ? "1" : "0"} data-fewest={vacGuardPreview.fewest} data-active={vacGuardPreview.active} data-min={vacGuardPreview.minAround} role="status"'), "vac-also-off and its data attributes");
-      assert.ok(vf.includes('<span data-testid="vac-also-off-text">{vacationGuardLine(vacGuardPreview, nameOf, { mine: !!mySurgeon && vacGuardPreview.personId === mySurgeon, personName: nameOf(vacGuardPreview.personId), showEast: eastDetailsVisible })}</span>'), "the pure line; the East gloss follows eastDetailsVisible (the scheduler's only, Item E3)");
-      assert.ok(vf.includes('{isScheduler ? " - as the scheduler you can still enter it (you will be asked to confirm)." : " - it would be refused: at least " + vacGuardPreview.minAround + " surgeons must stay around."}'), "the under-the-minimum words per role");
-      assert.ok(vf.includes("{vacGuardRefusal && vacGuardRefusal.personId === vacSurgeon && vacGuardRefusal.start === vacStart && vacGuardRefusal.end === vacEnd && (") && vf.includes('<span data-testid="vac-guard-message">{vacGuardRefusal.message}</span>'), "the refusal for the current person and dates only");
-      assert.ok(vf.indexOf('data-testid="vac-also-off"') > vf.indexOf('data-testid="vac-add"') && vf.indexOf('data-testid="vac-also-off"') < vf.indexOf('data-testid="vac-conflict"'), "under the Add button, before the on-call refusal");
+      assert.ok(vf.includes('{renderVacGuard("vac", vacGuardPreview, vacRefusalShown(vacGuardRefusal, vacSurgeon, vacStart, vacEnd, vacGuardPreview), () => setVacGuardRefusal(null))}'), "the Add form: prefix vac, the refusal for the current person and dates, judged live");
+      assert.ok(vf.indexOf('renderVacGuard("vac",') > vf.indexOf('data-testid="vac-add"') && vf.indexOf('renderVacGuard("vac",') < vf.indexOf('data-testid="vac-conflict"'), "under the Add button, before the on-call refusal");
+      const rl = src.slice(src.indexOf("const renderVacationList = (personIds, allowEdit) => {"), src.indexOf("const renderVacationForm = (personChoices) => ("));
+      assert.ok(rl.includes('{renderVacGuard("vac-edit", vacEditGuardPreview, vacRefusalShown(vacEditGuardRefusal && vacEditGuardRefusal.rowId === editVac.rowId ? vacEditGuardRefusal : null, editVac.sid, editVac.start, editVac.end, vacEditGuardPreview), () => setVacEditGuardRefusal(null))}'), "an Edit row (review 10/1 item 2): prefix vac-edit, the same line and box for the row being edited");
+      assert.ok(rl.indexOf('renderVacGuard("vac-edit",') > rl.indexOf("<button onClick={saveEditVac}") && rl.indexOf('renderVacGuard("vac-edit",') < rl.indexOf("vacRangeLabel(r.vs, r.ve, todayStr)"), "...inside the Edit branch, after Save / Cancel");
+      assert.strictEqual(count("renderVacGuard("), 2, "one renderer (const renderVacGuard = ...), two call sites");
       assert.strictEqual(count('data-testid="vac-guard-note"'), 1, "one card sentence");
       assert.ok(src.includes('{!isViewer && <p style={sectionNote} data-testid="vac-guard-note">At least {vacationRules(groupRules).minSurgeonsAround} surgeons must stay around on every day: an entry that would leave fewer is refused'), "the Time off card's sentence reads the minimum from the data");
       assert.ok(src.includes("Since 9/30 a range is also refused when fewer than {vacationRules(groupRules).minSurgeonsAround} surgeons would stay around on one of its days"), "Setup > Vacations says it too");

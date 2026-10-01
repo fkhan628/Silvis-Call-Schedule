@@ -46,15 +46,23 @@
 -- on the caller's RLS: an RLS-filtered read answers no rows - silently - and would count nobody off). EXECUTE keeps the
 -- default grants: a trigger function cannot be called outside a trigger (PostgREST exposes no `returns trigger` function).
 --
--- Blast radius: every time_off INSERT / UPDATE by a non-scheduler from the apply on - the Time off form (surgeon, coordinator),
--- its Edit, the month painter. The client that ships with this file checks the same rule BEFORE the write (the form shows who
--- else is off and how many stay around; a surgeon / the coordinator is refused with this text, the scheduler confirms), and
--- shows the database's VACATION_TOO_FEW_AROUND verbatim (describeDbError) when its own check was bypassed (a stale build, a
--- direct REST call). A day ALREADY under the minimum in live data stays as it is (nothing is deleted or re-checked); a new
--- vacation over such a day is refused for a non-scheduler - sql/probes/vacation-guard-overlimit.sql lists such days (read-only;
--- run it before the apply). The other probes' time_off fixtures (2030-03 / 04 / 05 / 08) put at most two surgeons off on a day
--- and their setups run as postgres (no signed-in user): none of them changes. No PostgREST schema-cache reload is needed (no
--- new table, column or RPC).
+-- Blast radius: every time_off INSERT / UPDATE by a non-scheduler from the apply on - the Time off form and its Edit (a surgeon,
+-- the office coordinator) and a direct REST call. The month painter (Setup > Vacations > Paint month) opens for the scheduler
+-- only, so its bulk insert passes the trigger (the client asks him first). The client that ships with this file checks the same
+-- rule BEFORE the write (the form shows who else is off and how many stay around; a surgeon / the coordinator is refused with
+-- this text, the scheduler confirms), and shows the database's VACATION_TOO_FEW_AROUND verbatim (describeDbError) when its own
+-- check was bypassed (a stale build, a direct REST call). A day ALREADY under the minimum in live data stays as it is (nothing
+-- is deleted or re-checked); a new vacation over such a day is refused for a non-scheduler - sql/probes/vacation-guard-overlimit.sql
+-- lists such days (read-only; run it before the apply). The other probes' time_off fixtures (2030-03 / 04 / 05 / 08) put at most
+-- two surgeons off on a day and their setups run as postgres (no signed-in user): none of them changes. No PostgREST
+-- schema-cache reload is needed (no new table, column or RPC).
+--
+-- Known gap (review 10/1). The rule is enforced only when a time_off row is written. Two other paths can push a day under the
+-- minimum with nothing refused: an East review changed to 'away' (east_vacation_reviews gets no refusing trigger - a Davenport
+-- absence is a fact the surgeon reports, not a request the group may refuse), and a new or longer Davenport range arriving
+-- through the East feed refresh (east_feed is a cache of the other project's facts). Neither is checked here;
+-- sql/probes/vacation-guard-overlimit.sql lists such days (read-only - run it when in doubt, e.g. after a refresh), and a later
+-- vacation of a non-scheduler over such a day is refused.
 --
 -- Apply live with the Supabase CLI (absolute path; the workdir is a directory linked with `supabase link --project-ref
 -- bzhsroegtagqhutbnsrp`), or paste the file into the SQL editor as ONE session:

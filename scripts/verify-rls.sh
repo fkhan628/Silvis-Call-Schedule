@@ -1033,6 +1033,8 @@ if linked; then
     expect_eq15  M1 "$(vg15 '10/25')"                   "a multi-row insert (the painter's bulk shape) counts its earlier rows: the second row is the 5th"
     expect_eq15  A1 "ok"                                "the scheduler may enter the 5th (the client asks him first)"
     expect_eq15  N1 "ok"                                "a session with no signed-in user (SQL editor / linked CLI / service_role) passes"
+    expect_eq15  D1 "ok"                                "a surgeon already off that day (his other row) may enter another row over it - not refused even at the limit (Decision 4)"
+    expect_eq15  U1 "$(vg15 '10/10')"                   "the coordinator moving a row to another surgeon onto a day at the limit is refused (a person change checks every day of the row)"
   fi
   LEFTOVER15_SQL="select ((select count(*) from auth.users where email like 'probe-vacguard-%@example.test') + (select count(*) from public.time_off where note like 'probe-vacguard%') + (select count(*) from public.schedule_days where source = 'probe-vacguard') + (select count(*) from public.east_feed where data->>'probe' = 'vacguard') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-vacguard'))::int as leftover"
   r=$(q "$LEFTOVER15_SQL")

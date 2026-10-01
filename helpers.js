@@ -3265,11 +3265,16 @@ function vacationLeadNote(start, today, rules) {
  * silvis_is_sched() through). One difference, on the safe side: the client matches a 'home' review to the merged Davenport
  * range exactly (helpers.derivedEastVacations), the trigger reads any 'home' review covering the day - a stale 'home' row
  * of a changed range can only make the database the more lenient of the two, never refuse what the client allowed.
+ * Review fixes 10/1: (1) eastReviewsLoaded false (the app: the East review rows are not loaded - eastVacReviewState is not
+ * 'ok') - another surgeon's East range does not count toward a refusal (it may be reviewed 'home'; it stays in alsoOff,
+ * pending: true, and the scheduler's line says "(East - reviews not loaded)"), the person's own East range still exempts his
+ * days (the lenient side); the database's trigger stays authoritative. (6) A range of over ten years (VG_MAX_DAYS) is
+ * refused as a typing slip (tooLong) for everyone - the trigger checks every day of any range, so the client may not skip one.
  * Pure: nothing here reads the clock, the DOM or the network. */
 const VACATION_GUARD_DEFAULTS = { minSurgeonsAround: 2 };
 const VG_CODE = "VACATION_TOO_FEW_AROUND";
 const VG_TAIL = " - pick other dates or ask the scheduler";
-const VG_MAX_DAYS = 3660;   // a range longer than ten years is a typing slip, not a vacation: nothing is computed for it
+const VG_MAX_DAYS = 3660;   // a range of over ten years (end - start >= 3660 days) is a typing slip, not a vacation: refused as such (tooLong), never counted day by day
 // vacationRules(groupRules) -> { minSurgeonsAround }: a whole number 0-99, anything else (a "2" string, 2.5, -1, absent) -> 2.
 function vacationRules(groupRules) {
   const G = groupRules && typeof groupRules === "object" ? groupRules.vacations : null;
@@ -3301,37 +3306,52 @@ function vacationGuardMessage(overDays, activeCount, minAround) {
   list.forEach((x) => { let g = groups.find((gg) => gg.around === x.around); if (!g) { g = { around: x.around, days: [] }; groups.push(g); } g.days.push(x.day); });
   return VG_CODE + ": on " + groups.map((g) => vgDaysLabel(g.days) + " only " + g.around).join("; on ") + " of " + activeCount + " surgeons would be around (minimum " + minAround + ")" + VG_TAIL;
 }
-// vgMerge(ranges) -> the ranges sorted, overlapping and adjacent ones merged (the first range's other keys kept).
-function vgMerge(ranges) {
+// vgMerge(ranges, same?) -> the ranges sorted, overlapping and adjacent ones merged (the first range's other keys kept);
+// with same(a, b) only ranges it accepts are merged (the East ranges of one state - an away range never takes an unreviewed
+// neighbour's gloss, or the other way round).
+function vgMerge(ranges, same) {
   const out = [];
   ranges.slice().sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0).forEach((r) => {
-    const last = out[out.length - 1];
+    const last = out.length ? out.filter((x) => typeof same !== "function" || same(x, r)).pop() : null;
     if (last && r.start <= suAddDays(last.end, 1)) { if (r.end > last.end) last.end = r.end; } else out.push(Object.assign({}, r));
   });
-  return out;
+  return out.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
 }
-// vacationGuard({ personId, start, end, timeOffRows, eastAway, roster, groupRules, excludeId }) ->
-//   { ok, minAround, active, personId, personActive, start, end,
+// vgTooLongMessage(days) -> the refusal of a range of over ten years (review 10/1 item 6; the client's own words - the
+// database has no such refusal, its trigger checks every day): "That range is 3661 days long (over ten years) - check the
+// dates; a vacation that long is not saved."
+function vgTooLongMessage(days) { return "That range is " + days + " days long (over ten years) - check the dates; a vacation that long is not saved."; }
+// vacationGuard({ personId, start, end, timeOffRows, eastAway, roster, groupRules, excludeId, eastReviewsLoaded }) ->
+//   { ok, minAround, active, personId, personActive, start, end, eastPending, tooLong,
 //     days: [{ day, off: [ids, roster order - the person included when active], around, checked, over }],
 //     overDays: [the days with over], fewest, fewestDays: [the days with the fewest around],
-//     alsoOff: [{ id, ranges: [{ start, end, east, state? }] }] - every OTHER active surgeon off on any of the days, with his
-//              whole ranges that touch them (time_off rows merged, East ranges apart, roster order),
+//     alsoOff: [{ id, ranges: [{ start, end, east, state?, pending? }] }] - every OTHER active surgeon off on any of the days,
+//              with his whole ranges that touch them (time_off rows merged, East ranges apart and merged per state, roster
+//              order; pending: an East range shown but NOT counted - eastReviewsLoaded false),
 //     message, confirmText }
 //   timeOffRows: time_off rows ({ id, person_id, start_date, end_date }); excludeId: the row being edited (left out of the
-//   count; when it is the same person's, its own days are not checked - the trigger's NEW-minus-OLD days). ok is true with
-//   no days for a missing / inverted range or one over ten years. message = vacationGuardMessage(overDays) ("" when ok);
-//   confirmText = the scheduler's question ("... - enter it anyway?").
+//   count; when it is the same person's, its own days are not checked - the trigger's NEW-minus-OLD days). eastReviewsLoaded
+//   (default true): false = the East review rows are not loaded, so an East range may be reviewed 'home' unseen - another
+//   surgeon's East range is then not counted (never a refusal on a guess), the person's own still exempts his days. ok is
+//   true with no days for a missing / inverted range; a range of over ten years (end - start >= VG_MAX_DAYS) is ok false,
+//   tooLong true, no days, message = vgTooLongMessage, no confirmText (refused for everyone, the scheduler too). Otherwise
+//   message = vacationGuardMessage(overDays) ("" when ok); confirmText = the scheduler's question ("... - enter it anyway?").
 function vacationGuard(o) {
   const opts = o && typeof o === "object" ? o : {};
   const min = vacationRules(opts.groupRules).minSurgeonsAround;
   const active = (Array.isArray(opts.roster) ? opts.roster : []).filter((r) => r && typeof r === "object" && r.id && r.active !== false && r.type !== "external").map((r) => String(r.id));
   const pid = opts.personId !== undefined && opts.personId !== null && opts.personId !== "" ? String(opts.personId) : null;
   const act = new Set(active);
-  const out = { ok: true, minAround: min, active: active.length, personId: pid, personActive: !!(pid && act.has(pid)), start: null, end: null,
+  const pending = opts.eastReviewsLoaded === false;
+  const out = { ok: true, minAround: min, active: active.length, personId: pid, personActive: !!(pid && act.has(pid)), start: null, end: null, eastPending: pending, tooLong: false,
     days: [], overDays: [], fewest: null, fewestDays: [], alsoOff: [], message: "", confirmText: "" };
   const start = vgIso(opts.start), end = vgIso(opts.end);
-  if (!start || !end || end < start || suDaysBetween(start, end) >= VG_MAX_DAYS) return out;
+  if (!start || !end || end < start) return out;
   out.start = start; out.end = end;
+  if (suDaysBetween(start, end) >= VG_MAX_DAYS) {
+    out.ok = false; out.tooLong = true; out.message = vgTooLongMessage(suDaysBetween(start, end) + 1);
+    return out;
+  }
   const rows = Array.isArray(opts.timeOffRows) ? opts.timeOffRows : [];
   const exId = opts.excludeId !== undefined && opts.excludeId !== null && opts.excludeId !== "" ? opts.excludeId : null;
   const exRow = exId !== null ? rows.find((r) => r && r.id === exId) : null;
@@ -3353,13 +3373,18 @@ function vacationGuard(o) {
       if (!r || typeof r !== "object" || r.state === "home") return;
       const s = vgIso(r.start), e = vgIso(r.end);
       if (!s || !e || e < s) return;
-      (src[id] = src[id] || []).push({ start: s, end: e, east: true, state: r.state === "away" ? "away" : "unreviewed" });
+      const x = { start: s, end: e, east: true, state: r.state === "away" ? "away" : "unreviewed" };
+      if (pending) x.pending = true;
+      (src[id] = src[id] || []).push(x);
     });
   });
-  const offOn = (id, d) => (src[id] || []).some((r) => d >= r.start && d <= r.end);
+  // offOn: another surgeon counts as off by a time_off row or a counted East range; selfOn: the person himself is off already
+  // by any of his ranges, a pending East range included (it only ever exempts his day - never a refusal on a guess)
+  const offOn = (id, d) => (src[id] || []).some((r) => !r.pending && d >= r.start && d <= r.end);
+  const selfOn = (id, d) => (src[id] || []).some((r) => d >= r.start && d <= r.end);
   for (let d = start; d <= end; d = suAddDays(d, 1)) {
     const others = active.filter((id) => id !== pid && offOn(id, d));
-    const selfOff = out.personActive && offOn(pid, d);
+    const selfOff = out.personActive && selfOn(pid, d);
     const checked = out.personActive && !selfOff && !(exS && d >= exS && d <= exE);
     const off = out.personActive ? active.filter((id) => id === pid || others.indexOf(id) >= 0) : others;
     const around = active.length - off.length;
@@ -3372,7 +3397,7 @@ function vacationGuard(o) {
   active.forEach((id) => {
     if (id === pid || !src[id]) return;
     // merged first (a vacation entered as two adjacent rows reads as one), then the ranges that touch the days
-    const ranges = vgMerge(src[id].filter((r) => !r.east)).concat(vgMerge(src[id].filter((r) => r.east)))
+    const ranges = vgMerge(src[id].filter((r) => !r.east)).concat(vgMerge(src[id].filter((r) => r.east), (a, b) => a.state === b.state))
       .filter((r) => r.start <= end && r.end >= start)
       .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
     if (ranges.length) out.alsoOff.push({ id, ranges });
@@ -3383,19 +3408,42 @@ function vacationGuard(o) {
   }
   return out;
 }
-// vacationGuardLine(g, nameOf, { mine, personName, showEast }) -> the Time off form's line while a vacation is typed:
-//   "Also off: Acton 3/15-3/21, Burchett 3/18-3/20 - after yours, 3 of 6 are around 3/18-3/20"
+// vacationGuardLine(g, nameOf, { mine, personName, showEast }) -> the Time off form's line while a vacation is typed (the
+// others in roster order):
+//   "Also off: Burchett 3/18-3/20, Acton 3/15-3/21 - after yours, 3 of 6 are around 3/18-3/20"
 //   "Nobody else is off then - after Acton's, 5 of 6 are around 3/18-3/20" (entered for someone else: "after <Name>'s")
 // " - under the minimum of 2" is appended when the vacation would be refused. showEast (the scheduler only - East details
-// are his, Item E3) glosses an East range "(East)" / "(East, unreviewed)"; everyone else sees the days alone. "" with no days.
+// are his, Item E3) lists each range as it is and glosses an East one "(East)" / "(East, unreviewed)" / "(East - reviews not
+// loaded)" (pending: shown, not counted). Everyone else sees one merged list of days per person - the time_off and counted
+// East ranges merged, no East word, a pending East range left out (review 10/1 items 1 and 3). A tooLong guard reads its
+// message. "" with no days.
 function vacationGuardLine(g, nameOf, opts) {
+  if (g && g.tooLong) return g.message || "";
   if (!g || !g.start || !Array.isArray(g.days) || !g.days.length || !g.active) return "";
   const o = opts || {};
   const name = typeof nameOf === "function" ? nameOf : (id) => id;
-  const others = (g.alsoOff || []).map((a) => name(a.id) + " " + a.ranges.map((r) => vgRangeLabel(r.start, r.end) + (o.showEast && r.east ? " (East" + (r.state === "unreviewed" ? ", unreviewed" : "") + ")" : "")).join(", "));
+  const gloss = (r) => !r.east ? "" : r.pending ? " (East - reviews not loaded)" : " (East" + (r.state === "unreviewed" ? ", unreviewed" : "") + ")";
+  const others = [];
+  (g.alsoOff || []).forEach((a) => {
+    const ranges = o.showEast ? (a.ranges || []) : vgMerge((a.ranges || []).filter((r) => !r.pending).map((r) => ({ start: r.start, end: r.end })));
+    if (ranges.length) others.push(name(a.id) + " " + ranges.map((r) => vgRangeLabel(r.start, r.end) + (o.showEast ? gloss(r) : "")).join(", "));
+  });
   const lead = others.length ? "Also off: " + others.join(", ") : "Nobody else is off then";
   const whose = o.mine ? "after yours" : "after " + (o.personName || name(g.personId)) + "'s";
   return lead + " - " + whose + ", " + g.fewest + " of " + g.active + " " + (g.fewest === 1 ? "is" : "are") + " around " + vgDaysLabel(g.fewestDays) + (g.ok ? "" : " - under the minimum of " + g.minAround);
+}
+// vacationGuardOverride(g) -> what a scheduler's override leaves behind (review 10/1 item 5: the audit row's
+// detail.vacation_guard_override and the toast) - the short days and the count:
+//   { days: "3/18, 3/19", around: 1, active: 6, minimum: 2 }   (around = the fewest around on those days)
+// null when nothing was overridden (an ok guard, a tooLong one - never overridable - or no over-limit day).
+function vacationGuardOverride(g) {
+  if (!g || g.ok || g.tooLong || !Array.isArray(g.overDays) || !g.overDays.length) return null;
+  return { days: vgDaysLabel(g.overDays.map((x) => x.day)), around: g.overDays.reduce((m, x) => Math.min(m, x.around), g.active), active: g.active, minimum: g.minAround };
+}
+// vacationGuardOverrideText(ov) -> "under the minimum on 3/18, 3/19 (1 of 6 around, minimum 2)"; "" for null.
+function vacationGuardOverrideText(ov) {
+  if (!ov || typeof ov !== "object") return "";
+  return "under the minimum on " + ov.days + " (" + ov.around + " of " + ov.active + " around, minimum " + ov.minimum + ")";
 }
 // tradesWaitingOn(rows, personId, today, tagOf) -> the PENDING trade / give proposals addressed to personId (the ones only
 // they can answer: Accept / Decline), ONE row per proposal, in the order given. [] without a person. With `tagOf` (the
@@ -4229,6 +4277,7 @@ if (typeof module !== "undefined" && module.exports) {
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
     offerFreezeRollcall, offerFreezeWords, offerFreezeDay, offerHeadsUpWords,
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
-    VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuard, vacationGuardLine,
+    VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, VG_MAX_DAYS, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuard, vacationGuardLine,
+    vacationGuardOverride, vacationGuardOverrideText,
   };
 }

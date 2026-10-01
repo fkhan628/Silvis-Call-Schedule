@@ -89,7 +89,10 @@
 -- VG001 VACATION_TOO_FEW_AROUND when, on a day the row takes the person off, fewer than groupRules.vacations.minSurgeonsAround
 -- (default 2) active roster surgeons would stay around - off = a time_off row or an East vacation not reviewed 'home' (the
 -- east_feed payload + east_vacation_reviews); the scheduler and a no-user session pass, the coordinator is refused like a surgeon.
--- No table, column, policy, grant or existing function changes.
+-- No table, column, policy, grant or existing function changes. Known gap (review 10/1): the rule is enforced only when a time_off
+-- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
+-- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
+-- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -241,7 +244,9 @@ create trigger time_off_no_call_conflict_trg
 -- with no signed-in user pass; the coordinator is refused like a surgeon. An UPDATE checks only the NEW-minus-OLD days of
 -- the same person (a narrowing or a note edit is never checked). Security definer (the reads must not depend on RLS),
 -- search_path pinned; one transaction advisory lock per vacation write. Fires after time_off_no_call_conflict_trg (name order),
--- so ON_CALL_CONFLICT still answers first. Reviewed in docs/SCHEMA-REVIEW.md "2026-09-30 - vacation guard".
+-- so ON_CALL_CONFLICT still answers first. Known gap: only a time_off write is checked - an East review turned 'away' or a new
+-- Davenport range from the feed refresh can leave a day under the minimum (sql/probes/vacation-guard-overlimit.sql lists such
+-- days). Reviewed in docs/SCHEMA-REVIEW.md "2026-09-30 - vacation guard".
 create or replace function public.time_off_vacation_guard() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare

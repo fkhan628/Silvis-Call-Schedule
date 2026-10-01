@@ -72,6 +72,11 @@
 --                                              ok                 (the scheduler may; the client asks him first)
 --   N1  postgres with no signed-in user enters n1 10/11 - the 5th
 --                                              ok                 (the SQL editor / linked CLI / service_role pass)
+--   D1  surgeon n2 enters 10/10 - a day at the limit (n2, n3, n4, n5 off) on which he is already off by his fixture row
+--                                              ok                 (Decision 4: a person already off is not taking himself off again)
+--   U1  the coordinator moves the D1 row to n1 (update person_id) - 10/10 stays at the limit without it (n2 is still off by his
+--       fixture row) and n1 would be the 5th
+--                                              VG(10/10)          (an update that changes the person checks every day of the row)
 --   E1-E3 read 'SKIP no East person on the roster' when the roster has none (P2 east=none - verify-rls fails P2 by name).
 -- ============================================================================
 
@@ -202,7 +207,7 @@ do $$ declare tv text; d boolean; begin   -- (no variable named v or k: probe_ct
   exception when others then insert into probe_results values ('P4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
 end $$;
 
--- S1-S4, E1-E3, I1, K1-K2: as the LINKED SURGEON n1 (S2 as the second surgeon n2)
+-- S1-S4, E1-E3, I1, K1-K2: as the LINKED SURGEON n1 (S2 and D1 as the second surgeon n2)
 do $$ declare u text; u2 text; n1 text; n2 text; ex text; rid uuid; n int; begin
   select v into u from probe_ctx where k = 'surgeon';
   select v into u2 from probe_ctx where k = 'surgeon2';
@@ -259,11 +264,17 @@ do $$ declare u text; u2 text; n1 text; n2 text; ex text; rid uuid; n int; begin
     insert into public.time_off (person_id, start_date, end_date, note) values (n1, '2030-10-28', '2030-10-30', 'probe-vacguard K2');
     insert into probe_results values ('K2', 'inserted (NO refusal)');
   exception when others then insert into probe_results values ('K2', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  -- D1 (as n2): 10/10 is at the limit (n2, n3, n4, n5 off) and n2 is one of them - a second row of his over it is not refused
+  perform set_config('request.jwt.claims', json_build_object('sub', u2, 'role', 'authenticated')::text, true);
+  begin
+    insert into public.time_off (person_id, start_date, end_date, note) values (n2, '2030-10-10', '2030-10-10', 'probe-vacguard D1');
+    insert into probe_results values ('D1', 'ok');
+  exception when others then insert into probe_results values ('D1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
--- C1, M1: as the COORDINATOR (never linked) - the office enters a surgeon's vacation and is refused like the surgeon
-do $$ declare u text; n1 text; n2 text; begin
+-- C1, M1, U1: as the COORDINATOR (never linked) - the office enters (or moves) a surgeon's vacation and is refused like the surgeon
+do $$ declare u text; n1 text; n2 text; n int; begin
   select v into u from probe_ctx where k = 'coord';
   select v into n1 from probe_ctx where k = 'n1';
   select v into n2 from probe_ctx where k = 'n2';
@@ -277,6 +288,12 @@ do $$ declare u text; n1 text; n2 text; begin
     insert into public.time_off (person_id, start_date, end_date, note) values (n1, '2030-10-25', '2030-10-25', 'probe-vacguard M1'), (n2, '2030-10-25', '2030-10-25', 'probe-vacguard M1');
     insert into probe_results values ('M1', 'inserted (NO refusal)');
   exception when others then insert into probe_results values ('M1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  -- U1: the D1 row (n2 on 10/10) moved to n1 - n2 stays off by his fixture row, so n1 would be the 5th on 10/10
+  begin
+    update public.time_off set person_id = n1 where note = 'probe-vacguard D1';
+    get diagnostics n = row_count;
+    insert into probe_results values ('U1', 'updated=' || n || ' (NO refusal)');
+  exception when others then insert into probe_results values ('U1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
