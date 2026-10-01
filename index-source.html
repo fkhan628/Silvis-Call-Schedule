@@ -8578,7 +8578,7 @@ const REASON_WORDS = {
   // long words for soft codes a claim can carry (review of the 10/1 follow-ups) - reasonLabel reads these on the claim
   // sheet and the board chip; softTag keeps its own short tags (its cases come first). Item E4: these reach non-schedulers
   // unmasked (none is an EAST_*_REASON_KEYS code), so no word names East
-  "avoid-row": "a day stated as one to avoid", "recurring-avoid": "a weekday set to avoid",
+  "avoid-row": "a day stated as one to avoid", "recurring-avoid": "a recurring day set to avoid",
   "auto-offer-weekday": "an auto-offered weekday", "pattern-mismatch": "not the preferred weekend style",
   "under-target": "under the monthly target",
 };
@@ -8628,6 +8628,9 @@ function reasonLabel(code, nameOf) {
     // standing schedule, however it was placed) without claiming how the slot was set
     case "lone-weekend-day": return arg === "Sat" ? "a Saturday alone as primary, without its Sunday" : arg === "Sun" ? "a Sunday alone as primary, without its Saturday" : "a weekend day alone as primary, without its pair";
     case "weekend-cap": return "past the soft weekend cap of " + arg + " a month";
+    // pattern-mismatch's argument is the surgeon's OWN preferred style (rules.js), or standalone-friday for a weekend shaped
+    // around a Friday on its own - say "prefers" so "(split)" is not read as the slot's style (re-check 10/1)
+    case "pattern-mismatch": return arg === "standalone-friday" ? "not the preferred weekend style (the Friday stands on its own)" : arg ? "not the preferred weekend style (prefers " + arg + ")" : "not the preferred weekend style";
     case "hard-never-beyond-notice": return arg + " is a never-on day, allowed with a soft penalty far ahead or when already held";
     // a soft code with no words here reads its softTag (the claim sheet and the board chip label soft notes through this
     // function); an unknown code still prints raw (softTag's own fallback)

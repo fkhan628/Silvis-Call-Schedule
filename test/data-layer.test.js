@@ -2646,8 +2646,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(L.softTag({ reason: "weekday-primary", weight: -3 }), "weekday primary (contribution bonus)");
     assert.strictEqual(L.softTag({ reason: "pattern-daily", weight: 2 }), "daily weekend pattern");
     // review 10/1: plain words on the claim sheet / board chip for the soft codes a claim can carry; softTag keeps its tags
-    [["avoid-row", "a day stated as one to avoid", "avoid"], ["recurring-avoid:Tue", "a weekday set to avoid (Tue)", "avoid: Tue"],
-      ["auto-offer-weekday", "an auto-offered weekday", "auto-offer"], ["pattern-mismatch:split", "not the preferred weekend style (split)", "style: split"],
+    // pins moved deliberately (re-check 10/1): recurring-avoid is any recurring day (Acton's is the Sunday before the 2nd / 4th
+    // Monday - "weekday" means Mon-Thu in this app); pattern-mismatch names the surgeon's own preferred style as "prefers ..."
+    [["avoid-row", "a day stated as one to avoid", "avoid"], ["recurring-avoid:Sun", "a recurring day set to avoid (Sun)", "avoid: Sun"],
+      ["auto-offer-weekday", "an auto-offered weekday", "auto-offer"], ["pattern-mismatch:split", "not the preferred weekend style (prefers split)", "style: split"],
+      ["pattern-mismatch:standalone-friday", "not the preferred weekend style (the Friday stands on its own)", "style: standalone-friday"],
       ["under-target", "under the monthly target", "under target"]].forEach(([c, w, t]) => {
       assert.strictEqual(L.reasonLabel(c, nameOf), w, c);
       assert.strictEqual(L.softTag({ reason: c, weight: 1 }), t, c + " (tag)");
@@ -2681,7 +2684,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const eastHard = keysOf("EAST_HARD_REASON_KEYS"), eastSoft = keysOf("EAST_SOFT_REASON_KEYS");
     assert.ok(eastHard.indexOf("east-busy") >= 0 && eastSoft.indexOf("east-clear") >= 0, "the East key lists lifted: " + JSON.stringify([eastHard, eastSoft]));
     const keyOf = (c) => c.split(":")[0];
-    const eastWords = /East|Davenport/i;
+    const eastWords = /\bEast\b|Davenport/i; // whole word: "least" / "Easter" are not East (re-check 10/1)
     const leakHard = R.HARD_REASONS.map(withArg).filter(c => eastHard.indexOf(keyOf(c)) < 0 && eastWords.test(L.reasonLabel(c, nameOf)));
     assert.deepStrictEqual(leakHard, [], "unmasked hard codes whose words name East: " + leakHard.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
     const leakSoft = softCodes.filter(c => eastSoft.indexOf(keyOf(c)) < 0 && (eastWords.test(L.reasonLabel(c, nameOf)) || eastWords.test(L.softTag({ reason: c, weight: 1 }))));

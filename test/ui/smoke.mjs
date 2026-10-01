@@ -9255,7 +9255,7 @@ try {
     const pubP = pubProbe ? await cellAttr(pubProbe.day, "data-primary").catch(() => null) : null;
     const pubB = pubProbe ? await cellAttr(pubProbe.day, "data-backup").catch(() => null) : null;
     const pubPrev = pubProbe ? await cellAttr(pubProbe.day, "data-preview").catch(() => null) : null;
-    console.log(`     (Accept & Publish: the probe read ${Math.round((Date.now() - acceptAt) / 1000)} s after the Accept click; the last schedule_days poll answered ${lastDaysGetAt ? Math.round((Date.now() - lastDaysGetAt) / 1000) + " s" : "never"} ago)`);
+    console.log(`     (Accept & Publish: the probe read ${Math.round((Date.now() - acceptAt) / 1000)} s after the Accept click; the last schedule_days read (any GET - the poll, the snapshot read or a per-day read) answered ${lastDaysGetAt ? Math.round((Date.now() - lastDaysGetAt) / 1000) + " s" : "never"} ago)`);
     if (!pubProbe) fail(`Accept & Publish: none of the ${previewGrid.length} preview cells carried a holder to re-check after the accept`);
     else if ((pubP || "") !== (pubProbe.p || "") || (pubB || "") !== (pubProbe.b || "") || pubPrev === "1") fail(`Accept & Publish: ${pubProbe.day} should now be a saved assignment with the preview's holders P ${pubProbe.p || "-"} / B ${pubProbe.b || "-"} (cell P '${pubP}' B '${pubB}', preview '${pubPrev}'${pubChanged ? "; the accept changed this day against the map" : ""})`);
     else ok(`Accept & Publish: ${pubProbe.day} is a saved assignment (P ${pubP || "-"} / B ${pubB || "-"} = the preview's${pubChanged ? ", a day the accept changed: " + expectedSlots.filter(s => s.startsWith(mdOf(pubProbe.day) + " ")).join(", ") : " - no preview cell differed from the map"}), no longer a preview`);
