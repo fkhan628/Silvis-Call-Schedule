@@ -401,7 +401,7 @@ function openSlotWeekendKinds(weekendUnits) {
    openSlotsMessageCurrent). */
 const OPEN_SLOT_REASON_TABLE = [
   ["vacations", ["time-off", "day-before-vacation"]],
-  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered"]],
+  ["weekday patterns and stated availability", ["hard-never-weekday", "weekday-not-allowed", "recurring-unavailable", "not-recurring-available", "whitelist-month", "outside-available-weeks", "outside-window", "weekday-pattern", "weekend-block-only", "day-before-aledo", "unavailable-row", "no-backup-row", "backup-only-row", "not-offered", "lone-weekend-day"]],
   ["not available", ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"]], // Item E3 (9/25): East busy / forecast-busy / derived weeks, named for nobody
   ["caps reached", ["monthly-cap", "backup-cap", "backup-weekend-cap", "max-consecutive", "max-major-holidays"]],
   ["already on call that day", ["holds-other-role"]],
@@ -2994,6 +2994,7 @@ const OFFER_CONFIRM_WORDS = {
   "not-recurring-available": "not one of your recurring available days",
   "weekday-pattern": "your weekday pattern",
   "weekend-block-only": "a standalone weekend day (you take Fri-Sun as a block)",
+  "lone-weekend-day": "a Saturday or Sunday on its own (your weekend days come as a pair)", // Prompt 23 B2: a shape rule of his own - a saved offer lifts it like the pattern family (W)
   "day-before-aledo": "the day before an Aledo day",
   "whitelist-month": "outside the days you listed for that month",
   "outside-available-weeks": "outside your listed weeks",
@@ -3345,8 +3346,18 @@ function offerRulesWords(rules, groupRules) {
   };
   const listOf = (v) => (Array.isArray(v) ? v : []).map(nthWords).filter(Boolean).join(", ");
   const md = (d) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? Number(m[1]) + "/" + Number(m[2]) : String(d || ""); };
+  // Prompt 23 B1 (9/30): the contribution key, said plainly (weekends: Prompt 12 L; weekdays: Prompt 23)
+  if (R.primaryContribution === "weekdays") out.push("Preferred: weekday primary (Mon-Thu, or a Friday on its own).");
+  else if (R.primaryContribution === "weekends") out.push("Preferred: weekend primary (a full Fri-Sun block).");
   if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? " (offered automatically when East is clear)" : "") + ".");
-  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + ".");
+  // Prompt 23 B4: with hardNeverWeekdaysNoticeDays the rule is hard only that many days ahead (a soft penalty beyond it)
+  const nd = R.hardNeverWeekdaysNoticeDays;
+  const noticeOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
+  if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days; further ahead only as a last resort" : "") + ".");
+  // Prompt 23 B2 / B3
+  if (R.standaloneFriday === true || R.noLoneWeekendDay === true) out.push([R.standaloneFriday === true ? "A Friday may stand alone" : null, R.noLoneWeekendDay === true ? "Saturday and Sunday come as a pair (never one alone as primary)" : null].filter(Boolean).join("; ") + ".");
+  const wcap = R.weekendCap;
+  if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? ", East weekends included" : "") + " (preferred, not a hard limit).");
   if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
   if (Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.length) out.push("Unavailable on " + listOf(R.recurringUnavailable) + ".");
   if (Array.isArray(R.recurringAvoid) && R.recurringAvoid.length) out.push("Prefer not: " + listOf(R.recurringAvoid) + ".");

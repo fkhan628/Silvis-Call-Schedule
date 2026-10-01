@@ -317,9 +317,16 @@ step("D: eligibility gating (synthetic ctx from the seed)");
   eq(d20["2026-10-20"].backup, null, "the day's own edited role is still cleared in its draft");
   const NOV = ["2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"].map(d => row(d, null, false, null, false, "generated", 1, "x", null));
   const schedN = DE.scheduleFromRows(NOV, SA.seedToSchedule(seed));
-  const mkN = (schedule) => R.buildContext(SA.seedToContextInput(seed, { eastDerived: [], eastFeedCoverage: { from: "2026-09-28", to: "2026-12-31" }, eastBusyDays: {}, schedule }));
+  // Prompt 23 B2 (9/30): with Khan's noLoneWeekendDay the Saturday picked before its Sunday is a lone Saturday (hard, the
+  // sequential gate sees it - pinned just below). This block pins the max-consecutive sequence, so it reads his rules without
+  // that key (pin moved deliberately: the sequence and the override bookkeeping are unchanged).
+  const srN = SA.seedToSurgeonRules(seed); srN.s1 = Object.assign({}, srN.s1); delete srN.s1.noLoneWeekendDay;
+  const mkN = (schedule) => R.buildContext(SA.seedToContextInput(seed, { eastDerived: [], eastFeedCoverage: { from: "2026-09-28", to: "2026-12-31" }, eastBusyDays: {}, schedule, surgeonRules: srN }));
   const planN = DE.planEdits(NOV, NOV.map(r => DE.parseSet(r.day + ":primary=s1")), { lock: true, by: BY, roster });
   const evN = DE.evaluateEdits(planN, schedN, mkN);
+  const mkN23 = (schedule) => R.buildContext(SA.seedToContextInput(seed, { eastDerived: [], eastFeedCoverage: { from: "2026-09-28", to: "2026-12-31" }, eastBusyDays: {}, schedule }));
+  const evN23 = DE.evaluateEdits(DE.planEdits(NOV, NOV.map(r => DE.parseSet(r.day + ":primary=s1")), { lock: true, by: BY, roster }), schedN, mkN23);
+  eq(evN23.slice(0, 3).map(e => e.day + " " + (e.ok ? "ok" : "HARD " + e.hard.join(","))), ["2026-11-06 ok", "2026-11-07 HARD lone-weekend-day:Sat", "2026-11-08 ok"], "Prompt 23 B2: with the seed's noLoneWeekendDay the Saturday picked before its Sunday is a lone Saturday (the Sunday then completes the pair) - an editor save of the first day of his pair needs the override");
   eq(evN.slice(0, 3).map(e => e.day + " " + (e.ok ? "ok" : "HARD " + e.hard.join(","))), ["2026-11-06 ok", "2026-11-07 ok", "2026-11-08 ok"], "Khan Fri-Sun 11/6-11/8 primary: the first three picks pass");
   ok(!evN[3].ok && evN[3].hard.some(h => /max-consecutive/.test(h)), "Khan's fourth day in a row (Mon 11/9) is HARD max-consecutive - visible only because the batch is gated sequentially: " + JSON.stringify({ ok: evN[3].ok, hard: evN[3].hard }));
   eq(DE.gate(planN, evN, { override: false, roster }).exitCode, DE.EXIT.REFUSED, "...so the four-day batch is refused without --override");

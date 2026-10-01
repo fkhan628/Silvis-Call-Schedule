@@ -1,5 +1,6 @@
 // Silvis Call Schedule - rules engine (pure functions; no DOM, no fetch, no
-// Date.now()/Math.random inside eligibility).
+// Date.now()/Math.random inside eligibility). The one clock read is buildContext's
+// ctx.today fallback (Prompt 23 B4: the Central date when the input carries no today).
 //
 // Loadable two ways:
 //   * browser: classic <script> after helpers.js/config.js. Classic scripts share
@@ -197,6 +198,66 @@
 //                 and someone else backs him up. Holiday units are not weekend
 //                 units: no term on a holiday-unit day, no block bonus on a weekend
 //                 a unit pre-empts (reduced). Any other value warns once.
+//   surgeonRules[id].primaryContribution 'weekdays'  (Prompt 23 B1, Faraz 9/30;
+//                 Khan) - the mirror of 'weekends': a PRIMARY on a weekday (a day
+//                 outside groupRules.weekendUnit.days - Mon-Thu - or a STANDALONE
+//                 Friday: a Friday whose Saturday and Sunday he does not hold as
+//                 primary) -> soft 'weekday-primary' at -weights.weekendContribution;
+//                 no weekend-block bonus and no backup term (his backups are
+//                 balanced by the share alone). weekendUnitPatterns carries it as a
+//                 unit-level term (-weekendContribution once on a pattern whose
+//                 Friday he holds without its Saturday and Sunday). Never on a
+//                 holiday-unit day.
+//   surgeonRules[id].hardNeverWeekdaysNoticeDays  N (Prompt 23 B4, 9/30; Khan 56)
+//                 - hardNeverWeekdays stays HARD only for a date at most N days
+//                 after ctx.today (the day the placement is made - see below; a
+//                 past date is inside the notice); a date further out is allowed
+//                 for those roles with the soft 'hard-never-beyond-notice:<wd>' at
+//                 +weights.hardNeverBeyondNotice (2), so his allowed weekdays fill
+//                 first. A dated row / offer of his lifts the rule entirely, as
+//                 before (W); absent or not a whole number >= 0 = hard everywhere
+//                 (a malformed value warns once).
+//   ctx.today     input.today ('YYYY-MM-DD'); absent -> the Central date when the
+//                 context is built (rdTodayCentral - the same expression as
+//                 helpers.todayCentral and generator genTodayStr). Every ctx the
+//                 app builds - Generate's run, the day editor's draft, the board's
+//                 claim gate, the trade and give checks - therefore measures the
+//                 notice from the day it is made; eligibility() itself never reads
+//                 a clock. Tests pass a fixed today (test/seed-adapter.js).
+//   surgeonRules[id].standaloneFriday  true (Prompt 23 B2, 9/30; Khan) - as
+//                 PRIMARY a Friday on its own is a normal pattern for him (no style
+//                 mismatch, no daily-pattern penalty), and the Saturday + Sunday
+//                 then form their own unit for someone else; his own weekend
+//                 shapes are {Fri}, {Sat, Sun} and {Fri, Sat, Sun}.
+//                 weekendUnitPatterns adds the 'friday' pattern kind (one surgeon
+//                 on the Friday + the Saturday-Sunday as a reduced unit: a block of
+//                 two or two daily days) for a full weekend whenever the Friday
+//                 holder or the Sat+Sun block holder carries the key. Backup
+//                 weekends are unchanged.
+//   surgeonRules[id].noLoneWeekendDay  true (Prompt 23 B2) - HARD for PRIMARY:
+//                 never a lone Saturday or Sunday; holding one of the two needs the
+//                 other (schedule, assume-slots or the evaluated slot) -
+//                 'lone-weekend-day:<Sat|Sun>'. A weekend a holiday unit cuts (the
+//                 partner day is a holiday-unit day) and a holiday-unit day itself
+//                 are exempt; a dated row / offer of his for the day lifts it (a
+//                 shape rule of his own, the weekday-pattern family - W); a lock is
+//                 a fact (conflicts).
+//   surgeonRules[id].weekendCap  { perMonth, countsEast, roles, days, weight }
+//                 (Prompt 23 B3, 9/30; Khan { perMonth: 2, countsEast: true,
+//                 roles: ["primary"], weight: "strong" }) - SOFT: at most perMonth
+//                 weekends a month. A weekend (Fri-Sun) counts ONCE, in the month
+//                 of its Saturday, when he holds a role in `roles` (default
+//                 ["primary"]) on one of its `days` (default ["Sat", "Sun"] - a
+//                 standalone Friday is a weekday and does not count) or, with
+//                 countsEast, is East-busy on one of those days (rdEastBusyOn: the
+//                 feed's busy days with the overrides, eastStanding days, and the
+//                 forecast at or over the busy threshold outside the published
+//                 coverage - the set rdStatic blocks primary on). A placement that
+//                 adds a weekend the East data does not already count, in a month
+//                 that then counts more than perMonth, carries 'weekend-cap:<n>' at
+//                 weight x (count - perMonth), once per weekend (on its first held
+//                 counted day). Never lifted by an offer (a cap). Malformed -> one
+//                 warning, ignored.
 //
 // Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
 // outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
@@ -353,8 +414,20 @@ function defaultWeights() {
     eastClear: 2, // Prompt 15 part 2 (9/23): PRIMARY bonus on a 'home' East vacation day (no East call, no OR block); 0 switches it off
     offerBonus: 6,     // Prompt 14 P2 (9/23): soft 'offered' bonus on a submitted surgeon's offered day (strong; 0 = off)
     outsideOffers: 6,  // Prompt 14 P2 (9/23): soft 'outside-offers' penalty on a submitted surgeon's non-offered day - preferred mode, and an exhaustive surgeon's claim result (strong; 0 = off)
-    offerBonusOverShare: 0 // Prompt 14 P2 review (9/23): what the 'offered' bonus reads in the GENERATOR once the placement no longer brings him towards his share for the role and month (0 = the bonus stops at the share; = offerBonus restores the untapered reading). rules.js itself always emits -offerBonus.
+    offerBonusOverShare: 0, // Prompt 14 P2 review (9/23): what the 'offered' bonus reads in the GENERATOR once the placement no longer brings him towards his share for the role and month (0 = the bonus stops at the share; = offerBonus restores the untapered reading). rules.js itself always emits -offerBonus.
+    hardNeverBeyondNotice: 2 // Prompt 23 B4 (9/30): soft 'hard-never-beyond-notice:<wd>' on a hardNeverWeekdays day further out than surgeonRules.<id>.hardNeverWeekdaysNoticeDays (more than the +1 auto-offer of his allowed weekdays, so those fill first); 0 = off
   };
+}
+
+// Prompt 23 B4: the Central date - the same expression as helpers.js todayCentral and
+// generator.js genTodayStr. Read ONCE by buildContext when the input carries no today;
+// eligibility() never reads a clock.
+function rdTodayCentral() {
+  try {
+    var s = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s)) return s;
+  } catch (e) { /* fall through to the device date */ }
+  return rdFmt(new Date());
 }
 
 // resolveWeight(ctx, 'medium' | 4 | '2.5') -> number. Unknown strings fall back to medium.
@@ -482,6 +555,12 @@ function buildContext(input) {
   var defaultCap = null, defaultCapLegacy = false;
   if (dmc && typeof dmc.primary === "number") defaultCap = dmc.primary;
   else if (dmc && typeof dmc.total === "number") { defaultCap = dmc.total; defaultCapLegacy = true; }
+  // Prompt 23 B4: the day the placement is made (the hardNeverWeekdays notice is measured from it) -
+  // input.today, else the Central date now (the one clock read; see the header). A malformed value
+  // warns below and falls back the same way.
+  var todayIn = input.today;
+  var todayOk = rdIsDateStr(todayIn) && rdFromDayNum(rdInfo(todayIn).n) === todayIn;
+  var today = todayOk ? todayIn : rdTodayCentral();
 
   var ctx = {
     roster: roster,
@@ -511,6 +590,8 @@ function buildContext(input) {
     backupOpen: backupOpen,
     rangeStart: input.rangeStart || null,
     rangeEnd: input.rangeEnd || null,
+    today: today,                       // Prompt 23 B4: 'YYYY-MM-DD' the notice is measured from
+    todayN: rdInfo(today).n,
     periods: [],                        // Prompt 14 P2: normalized call_periods rows, sorted by start (rdBuildOffers)
     periodOfDay: Object.create(null),   // Prompt 14 P2: 'YYYY-MM-DD' -> index into ctx.periods (first period wins an overlap)
     warnings: [],
@@ -523,6 +604,7 @@ function buildContext(input) {
   if (ctx.holidayFlags && Object.prototype.hasOwnProperty.call(ctx.holidayFlags, "unitExemptFromMaxConsecutive")) {
     ctx.warnings.push("groupRules.holidays.unitExemptFromMaxConsecutive is ignored (Prompt 12 A, 9/22): a holiday unit counts as one day for the consecutive limits only for a surgeon whose surgeonRules.<id>.holidayUnitCountsAsOneDay is true - remove the group key from the blob");
   }
+  if (todayIn !== undefined && todayIn !== null && !todayOk) ctx.warnings.push("today " + JSON.stringify(todayIn) + " is not a 'YYYY-MM-DD' date (Prompt 23): read as the Central date " + today + " - the hardNeverWeekdays notice is measured from it");
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
   // audit RG-1 (9/23): "anyone not opted out may cover a holiday" is fixed behaviour - the opt-out is
   // surgeonRules.<id>.holidayRules.holidaysOff (hard holiday-opt-out:<name>), the waiver family is
@@ -646,8 +728,17 @@ function buildContext(input) {
       handoffPartnerRequired: rules.handoffPartnerRequired === true,
       // Prompt 12 L (9/22): "weekends" = weekend primary is his main contribution
       // (weights.weekendContribution as a full-block primary bonus / weekend backup
-      // penalty); null = no contribution term.
-      contribution: rules.primaryContribution === "weekends" ? "weekends" : null,
+      // penalty); Prompt 23 B1 (9/30): "weekdays" = the mirror, a weekday-primary
+      // bonus (Mon-Thu or a standalone Friday); null = no contribution term.
+      contribution: rules.primaryContribution === "weekends" || rules.primaryContribution === "weekdays" ? rules.primaryContribution : null,
+      // Prompt 23 B4: hardNeverWeekdays is hard only up to this many days after ctx.today (null = everywhere)
+      noticeDays: null,
+      // Prompt 23 B2: a Friday on its own is a normal primary pattern; never a lone Saturday / Sunday as primary
+      standaloneFriday: rules.standaloneFriday === true,
+      noLoneWeekend: rules.noLoneWeekendDay === true,
+      // Prompt 23 B3: the soft weekends-per-month cap (normalized below; null = none) and its East memo (Saturday -> bool)
+      weekendCap: null,
+      wkEastMemo: Object.create(null),
       // Prompt 14 P2 (9/23): his offers ('YYYY-MM-DD' -> role mask) and, per period key, the derived status
       // ('submitted' | 'rules_only' | 'not_started') and mode ('exhaustive' | 'preferred') - rdBuildOffers.
       offers: Object.create(null),
@@ -674,7 +765,37 @@ function buildContext(input) {
       }
     })();
     if (rules.primaryContribution !== undefined && rules.primaryContribution !== null && rules.primaryContribution !== "" && P.contribution === null) {
-      ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L: only \"weekends\"): ignored - no contribution term for this surgeon");
+      ctx.warnings.push("surgeonRules." + id + ".primaryContribution = " + JSON.stringify(rules.primaryContribution) + " is not a value the engine knows (Prompt 12 L / Prompt 23: \"weekends\" or \"weekdays\"): ignored - no contribution term for this surgeon");
+    }
+    // Prompt 23 B4: the notice horizon of hardNeverWeekdays - a whole number of days >= 0; anything else
+    // warns once and is ignored (the rule stays hard everywhere - never a silent relaxation).
+    var nd = rules.hardNeverWeekdaysNoticeDays;
+    if (nd !== undefined && nd !== null) {
+      if (typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd) P.noticeDays = nd;
+      else ctx.warnings.push("surgeonRules." + id + ".hardNeverWeekdaysNoticeDays = " + JSON.stringify(nd) + " is not a whole number of days >= 0 (Prompt 23): ignored - hardNeverWeekdays stays hard on every date");
+    }
+    // Prompt 23 B2: the two shape keys are booleans; any other value is ignored with one warning.
+    ["standaloneFriday", "noLoneWeekendDay"].forEach(function (k) {
+      var v = rules[k];
+      if (v !== undefined && v !== null && v !== true && v !== false) ctx.warnings.push("surgeonRules." + id + "." + k + " = " + JSON.stringify(v) + " is not true / false (Prompt 23): ignored");
+    });
+    // Prompt 23 B3: weekendCap { perMonth, countsEast, roles, days, weight } -> P.weekendCap (null when absent or malformed).
+    var wcIn = rules.weekendCap;
+    if (wcIn !== undefined && wcIn !== null) {
+      var wcBad = [];
+      if (typeof wcIn !== "object" || Array.isArray(wcIn)) wcBad.push("not an object");
+      else {
+        if (!(typeof wcIn.perMonth === "number" && isFinite(wcIn.perMonth) && wcIn.perMonth >= 0 && Math.floor(wcIn.perMonth) === wcIn.perMonth)) wcBad.push("perMonth must be a whole number >= 0");
+        var wcRoles = wcIn.roles === undefined ? ["primary"] : wcIn.roles;
+        if (!Array.isArray(wcRoles) || !wcRoles.length || wcRoles.some(function (r) { return r !== "primary" && r !== "backup"; })) wcBad.push("roles must be a non-empty list of primary / backup");
+        var wcDays = wcIn.days === undefined ? ["Sat", "Sun"] : wcIn.days;
+        if (!Array.isArray(wcDays) || !wcDays.length || wcDays.some(function (d) { return d !== "Fri" && d !== "Sat" && d !== "Sun"; })) wcBad.push("days must be a non-empty list of Fri / Sat / Sun");
+        if (wcIn.countsEast !== undefined && wcIn.countsEast !== true && wcIn.countsEast !== false) wcBad.push("countsEast must be true / false");
+        var wcW = wcIn.weight === undefined ? "strong" : wcIn.weight;
+        if (!(typeof wcW === "number" && isFinite(wcW)) && !(typeof wcW === "string" && (Object.prototype.hasOwnProperty.call(ctx.weights, wcW) || !isNaN(parseFloat(wcW))))) wcBad.push("weight must be a weight name or a number");
+      }
+      if (wcBad.length) ctx.warnings.push("surgeonRules." + id + ".weekendCap ignored (Prompt 23): " + wcBad.join("; ") + " - use { perMonth: 2, countsEast: true, roles: [\"primary\"], weight: \"strong\" }");
+      else P.weekendCap = { perMonth: wcIn.perMonth, countsEast: wcIn.countsEast === true, roles: wcRoles.slice(), days: wcDays.slice(), weight: resolveWeight(ctx, wcW) };
     }
     // Prompt 12 V (9/22 evening): standing East days. The same gate as busy days (the
     // surgeon's East feature must be on AND block at least one role - blocksPrimary /
@@ -1098,6 +1219,54 @@ function rdEastCovered(ctx, P, info) {
   return !!(P.eastForecast && P.eastForecast[info.s] != null);
 }
 
+// Prompt 23 B3: is the surgeon East-busy on day d - the set rdStatic blocks a role on: a published busy day (the
+// overrides applied - buildContext), a standing East day, or - outside the published coverage, not on a 'home'
+// East-vacation day and not cleared by a busy:false override - a forecast probability at or over the threshold.
+// (A day the feed derived from an East BACKUP week is in the busy set exactly when eastFeed.eastBackupCountsAsBusy
+// is on - Khan's seed value - and the forecast is always derived that way.) Independent of which roles East blocks.
+function rdEastBusyOn(ctx, P, d) {
+  if (!P.eastEnabled) return false;
+  if (P.eastBusy.has(d) || rdStandingName(P, d)) return true;
+  if (P.eastClear.has(d)) return false;
+  var info = rdInfo(d);
+  if (rdInPublishedCoverage(ctx, info) || (P.eastOverrides && P.eastOverrides[d] === false)) return false;
+  var prob = P.eastForecast ? P.eastForecast[d] : undefined;
+  return typeof prob === "number" && prob >= ctx.forecastThreshold;
+}
+// Prompt 23 B3: does the East data alone count the weekend of Friday friStr for this surgeon's weekendCap (countsEast
+// on and East-busy on one of weekendCap.days)? Static per ctx - memoized per Friday.
+function rdWeekendEastCounted(ctx, P, friStr) {
+  var wc = P.weekendCap;
+  if (!wc || !wc.countsEast) return false;
+  var m = P.wkEastMemo[friStr];
+  if (m !== undefined) return m;
+  var out = false;
+  for (var k = 0; k < 3 && !out; k++) { var d = rdAddDays(friStr, k); if (wc.days.indexOf(rdInfo(d).wd) >= 0 && rdEastBusyOn(ctx, P, d)) out = true; }
+  P.wkEastMemo[friStr] = out;
+  return out;
+}
+
+// weekendCapCounts(ctx, surgeonId, 'YYYY-MM', schedule?) -> null when the surgeon has no weekendCap, else
+// { perMonth, weekends: [{ saturday, silvis: bool, east: bool }] } - every weekend of the month (by its Saturday) the
+// cap counts, from the schedule (default ctx.schedule) and the East data. Read-only; the preview and the tests read it.
+function weekendCapCounts(ctx, surgeonId, month, schedule) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  if (!P || !P.weekendCap) return null;
+  var wc = P.weekendCap, sched = schedule || ctx.schedule || {}, out = [];
+  rdMonthDays(month).forEach(function (d) {
+    if (rdInfo(d).wd !== "Sat") return;
+    var f = rdAddDays(d, -1), silvis = false;
+    for (var k = 0; k < 3; k++) {
+      var x = rdAddDays(f, k), e = sched[x];
+      if (wc.days.indexOf(rdInfo(x).wd) < 0 || !e) continue;
+      for (var r = 0; r < wc.roles.length; r++) if (e[wc.roles[r]] === surgeonId) silvis = true;
+    }
+    var east = rdWeekendEastCounted(ctx, P, f);
+    if (silvis || east) out.push({ saturday: d, silvis: silvis, east: east });
+  });
+  return { perMonth: wc.perMonth, weekends: out };
+}
+
 // Was the derived lock for (date, role) overridden by an import/manual lock?
 // Two ways (import/manual locks beat derived locks, with a warning):
 //   (a) another surgeon is locked into his derived slot, or
@@ -1179,7 +1348,16 @@ function rdMonthIndex(s) { var i = rdInfo(s); return i.y * 12 + i.m; }
 // not-recurring-available, outside-available-weeks, outside-window,
 // external-cover, external-surgeon, slot-locked:, derived-lock:,
 // derived-lock-held:, holds-other-role, monthly-cap:, max-consecutive:,
-// backup-cap:, backup-weekend-cap:, max-major-holidays:, not-offered.
+// backup-cap:, backup-weekend-cap:, max-major-holidays:, not-offered,
+// lone-weekend-day:.
+// lone-weekend-day:<Sat|Sun> (Prompt 23 B2, 9/30): a noLoneWeekendDay surgeon as
+// PRIMARY on a Saturday or Sunday whose partner day he does not hold (schedule,
+// assume-slots or the evaluated slot) - his weekend days come as a pair. Dynamic
+// (the schedule decides), exempt where a holiday unit cuts the weekend, lifted by
+// his own dated row / offer for the day (rowAvail). Prompt 23's soft codes:
+// weekday-primary (-weights.weekendContribution, primaryContribution "weekdays"),
+// hard-never-beyond-notice:<wd> (+weights.hardNeverBeyondNotice) and
+// weekend-cap:<n> (weekendCap.weight x the weekends over n).
 // not-offered (Prompt 14 P2, 9/23): a SUBMITTED surgeon in EXHAUSTIVE mode on a
 // day/role he did not offer inside the period - decided in rdStatic
 // (res.notOffered), pushed by eligibility() unless opts.claim; it is the first
@@ -1229,7 +1407,7 @@ var HARD_REASONS = [
   "not-recurring-available", "outside-available-weeks", "outside-window",
   "external-cover", "external-surgeon", "slot-locked:", "derived-lock:", "derived-lock-held:",
   "holds-other-role", "monthly-cap:", "max-consecutive:", "backup-cap:",
-  "backup-weekend-cap:", "max-major-holidays:", "not-offered"
+  "backup-weekend-cap:", "max-major-holidays:", "not-offered", "lone-weekend-day:"
 ];
 function rdStatic(ctx, date, role, id, asBlock) {
   var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
@@ -1348,10 +1526,17 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // (East) week the derived lock governs instead, so the rest of the family is
   // deferred: eligibility() re-applies it when an import/manual lock overrides
   // that derived lock (res.patternDeferred + res.rowAvail carry what it needs).
+  // Prompt 23 B4 (Faraz 9/30): with surgeonRules.<id>.hardNeverWeekdaysNoticeDays N the rule is hard only for a
+  // date at most N days after ctx.today (the day the placement is made; a past date is inside the notice); further
+  // out the day is allowed with the soft hard-never-beyond-notice (weights.hardNeverBeyondNotice) so his allowed
+  // weekdays fill first. A dated row still lifts it entirely (W) - no soft either.
   var notRecurring = false;
   var patternDeferred = false;
   if (!waive) {
-    if (P.hardNever.has(info.wd) && P.hardNeverRoles.has(role) && !rowAvail) hard.push("hard-never-weekday:" + info.wd);
+    if (P.hardNever.has(info.wd) && P.hardNeverRoles.has(role) && !rowAvail) {
+      if (P.noticeDays !== null && info.n - ctx.todayN > P.noticeDays) { if (W.hardNeverBeyondNotice) soft.push({ reason: "hard-never-beyond-notice:" + info.wd, weight: W.hardNeverBeyondNotice }); }
+      else hard.push("hard-never-weekday:" + info.wd);
+    }
     if (P.derived[date]) patternDeferred = true;
     else rdPatternRules(ctx, P, info, role, asBlock, rowAvail, hard, soft);
   }
@@ -1638,6 +1823,16 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     if (majors > P.maxMajor) hard.push("max-major-holidays:" + P.maxMajor);
   }
 
+  // Prompt 23 B2 (Faraz 9/30): noLoneWeekendDay - as PRIMARY his Saturday and Sunday come as a pair (Sat+Sun or
+  // Fri+Sat+Sun). A Saturday or Sunday whose partner day he does not hold (schedule, assume-slots) is
+  // 'lone-weekend-day'. Exempt: a holiday-unit day, a weekend whose partner day a holiday unit takes (the weekend is
+  // cut - the unit is no weekend unit), and a day his own dated row / offer covers (rowAvail: a shape rule of his own,
+  // the weekday-pattern family, W).
+  if (role === "primary" && P.noLoneWeekend && !hol && !st.rowAvail && (info.wd === "Sat" || info.wd === "Sun")) {
+    var partnerDay = info.wd === "Sat" ? nextDay : prevDay;
+    if (!ctx.holidayByDay[partnerDay] && !holdsRole(partnerDay, "primary")) hard.push("lone-weekend-day:" + info.wd);
+  }
+
   if (hard.length) return blockedResult();
 
   // --- schedule-shape soft penalties ---
@@ -1654,16 +1849,24 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     for (var s = -7; s <= 7 && !b2b; s += 14) for (var t = 0; t < 3; t++) if (holdsAny(rdAddDays(info.friday, s + t))) { b2b = true; break; }
     if (b2b && W.backToBackWeekend) soft.push({ reason: "back-to-back-weekend", weight: W.backToBackWeekend });
 
-    if (!opts.skipPatternSoft && !opts.asBlockMember && P.weekendStyle && W.patternMismatch) {
+    // Prompt 23 B2: a standaloneFriday surgeon's PRIMARY shapes are {Fri}, {Sat, Sun} and {Fri, Sat, Sun} - those
+    // are no mismatch whatever his weekendStyle (which keeps governing his backup weekends).
+    var sfShape = role === "primary" && P.standaloneFriday;
+    if (!opts.skipPatternSoft && !opts.asBlockMember && (P.weekendStyle || sfShape) && W.patternMismatch) {
       var fri = info.friday, sat = rdAddDays(fri, 1), sun = rdAddDays(fri, 2);
       var mismatch = false;
-      if (P.weekendStyle === "block") {
+      if (sfShape) {
+        // a weekend a holiday unit cuts is no whole weekend: whatever he holds of the rest is his shape (no mismatch)
+        var hF = holdsRole(fri, role), hS = holdsRole(sat, role), hU = holdsRole(sun, role);
+        var cutWk = !!(ctx.holidayByDay[fri] || ctx.holidayByDay[sat] || ctx.holidayByDay[sun]);
+        mismatch = !cutWk && !((hF && !hS && !hU) || (!hF && hS && hU) || (hF && hS && hU));
+      } else if (P.weekendStyle === "block") {
         var others = [fri, sat, sun].filter(function (x) { return x !== dateStr; });
         mismatch = !(holdsRole(others[0], role) && holdsRole(others[1], role));
       } else if (P.weekendStyle === "split") {
         mismatch = info.wd === "Sat" ? (holdsRole(fri, role) || holdsRole(sun, role)) : holdsRole(sat, role);
       }
-      if (mismatch) soft.push({ reason: "pattern-mismatch:" + P.weekendStyle, weight: W.patternMismatch });
+      if (mismatch) soft.push({ reason: "pattern-mismatch:" + (sfShape ? "standalone-friday" : P.weekendStyle), weight: W.patternMismatch });
     }
 
     // Prompt 12 L (9/22): primaryContribution "weekends". Per-day view, used by the
@@ -1685,6 +1888,40 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     }
   }
 
+  // Prompt 23 B1 (Faraz 9/30): primaryContribution "weekdays" - the mirror of "weekends". A PRIMARY on a weekday
+  // (outside groupRules.weekendUnit.days: Mon-Thu) or on a STANDALONE Friday (he holds neither its Saturday nor its
+  // Sunday as primary - schedule or assume-slots) earns 'weekday-primary' at -weights.weekendContribution. No
+  // weekend-block bonus, no backup term. Never on a holiday-unit day; skipped under skipPatternSoft
+  // (weekendUnitPatterns carries the unit-level term for a Friday held alone instead).
+  if (!opts.skipPatternSoft && P.contribution === "weekdays" && W.weekendContribution && role === "primary" && !hol) {
+    var aloneFri = info.wd === "Fri" && rdIsWeekendDay(ctx, info) && !holdsRole(nextDay, "primary") && !holdsRole(rdAddDays(dateStr, 2), "primary");
+    if (!rdIsWeekendDay(ctx, info) || aloneFri) soft.push({ reason: "weekday-primary", weight: -W.weekendContribution });
+  }
+
+  // Prompt 23 B3 (Faraz 9/30): weekendCap - at most perMonth weekends a month (soft). The weekend of this day counts
+  // once, in its SATURDAY's month; its counted days are weekendCap.days (default Sat + Sun: a standalone Friday is a
+  // weekday). It counts when he holds a role in weekendCap.roles on a counted day, or - countsEast - is East-busy on
+  // one (rdEastBusyOn). The term rides on the FIRST counted day of the weekend he holds (so a Sat+Sun pair pays once),
+  // only when the East data do not already count the weekend (the placement then adds nothing) and only when the
+  // month then counts more than perMonth: weight x (count - perMonth).
+  var wcap = P.weekendCap;
+  if (wcap && info.friday && wcap.roles.indexOf(role) >= 0 && wcap.days.indexOf(info.wd) >= 0) {
+    var wkFri = info.friday, wkSat = rdAddDays(wkFri, 1);
+    var holdsCounted = function (d) { for (var r = 0; r < wcap.roles.length; r++) if (holdsRole(d, wcap.roles[r])) return true; return false; };
+    var countedDaysOf = function (friStr) { return [friStr, rdAddDays(friStr, 1), rdAddDays(friStr, 2)].filter(function (d) { return wcap.days.indexOf(rdInfo(d).wd) >= 0; }); };
+    var thisDays = countedDaysOf(wkFri), carrier = null;
+    for (var cd = 0; cd < thisDays.length && !carrier; cd++) if (holdsCounted(thisDays[cd])) carrier = thisDays[cd];
+    if (carrier === dateStr && !rdWeekendEastCounted(ctx, P, wkFri)) {
+      var wkMonth = wkSat.slice(0, 7), wkCount = 0;
+      rdMonthDays(wkMonth).forEach(function (d) {
+        if (rdInfo(d).wd !== "Sat") return;
+        var f = rdAddDays(d, -1);
+        if (f === wkFri || rdWeekendEastCounted(ctx, P, f) || countedDaysOf(f).some(holdsCounted)) wkCount++;
+      });
+      if (wkCount > wcap.perMonth && wcap.weight) soft.push({ reason: "weekend-cap:" + wcap.perMonth, weight: wcap.weight * (wkCount - wcap.perMonth) });
+    }
+  }
+
   // Numeric monthly target = PRIMARY days only (see the cap block above).
   if (hasTarget) {
     if (monthPrimary > rules.monthlyTarget) soft.push({ reason: "over-target:" + (monthPrimary - rules.monthlyTarget), weight: W.low * (monthPrimary - rules.monthlyTarget) });
@@ -1700,7 +1937,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
 function rdSoftSum(r) { var s = 0; for (var k = 0; k < r.soft.length; k++) s += r.soft[k].weight; return s; }
 
 // weekendUnitPatterns(ctx, fridayStr, role = 'primary', daysPresent = null)
-//   -> [{ kind:'block'|'split'|'daily', members:{fri,sat,sun}, penalty, fallback, surgeons }]
+//   -> [{ kind:'block'|'split'|'daily'|'friday' (Prompt 23 B2), members:{fri,sat,sun}, penalty, fallback, surgeons }]
 // sorted by penalty. daysPresent (array of date strings) restricts the unit to
 // the days a holiday unit did not pre-empt; a reduced unit offers block(remaining)
 // and daily only. Block members are evaluated with asBlockMember only for a full
@@ -1718,6 +1955,26 @@ function rdSoftSum(r) { var s = 0; for (var k = 0; k < r.soft.length; k++) s += 
 // per-day weekend-primary / weekend-backup softs are off in here: the unit-level
 // term is the only one a pattern carries (no double count). Reduced blocks,
 // splits and daily days earn no primary bonus (the block must be whole).
+// Prompt 23 (Faraz 9/30), primary enumerations only:
+//   B1 "weekdays": -weights.weekendContribution ONCE on a pattern whose Friday the
+//      surgeon holds without its Saturday and Sunday (a standalone Friday is a
+//      weekday primary; eligibility()'s per-day weekday-primary is off in here).
+//   B2 standaloneFriday: for a FULL unit the 'friday' kind - X alone on the Friday,
+//      the Saturday + Sunday as their own reduced unit (a block of two by one
+//      surgeon Y, or two daily days with weights.patternDaily) - is offered when X
+//      or the block-of-two holder carries the key. X's Friday costs nothing for a
+//      key holder (the Sarkar-Friday reading: a standalone day is his normal
+//      pattern) and his weekendStyle's daily member penalty otherwise; the
+//      reduced unit is scored exactly like a holiday-cut Sat-Sun unit (a block of
+//      two is no mismatch for a block-style or key holder, else
+//      weights.patternMismatch; + weekendBlockPenalty). The daily enumeration
+//      skips the shapes the 'friday' kind covers. A key holder's primary shapes
+//      {Fri}, {Sat, Sun}, {Fri, Sat, Sun} carry no style mismatch; any other
+//      membership of his (a split side, a daily Sat / Sun) costs one.
+//   B2 noLoneWeekendDay: a lone Saturday / Sunday is the hard lone-weekend-day in
+//      eligibility(); a surgeon blocked solo ONLY by it stays a daily candidate,
+//      so a daily shape where he holds the pair is still enumerated (and judged
+//      with the pair assumed).
 function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   role = role || "primary";
   if (rdWeekday(fridayStr) !== "Fri") throw new Error("weekendUnitPatterns: " + fridayStr + " is not a Friday");
@@ -1738,6 +1995,18 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   // subtracts it for a full block (blockBonus).
   function contrib(id) { return ctx.per[id].contribution === "weekends" && W.weekendContribution ? W.weekendContribution : 0; }
   function backupPen(id) { return role === "backup" ? contrib(id) : 0; }
+  // Prompt 23 B1: the unit-level weekday term - the pattern's Friday holder is a "weekdays" surgeon who holds neither
+  // the Saturday nor the Sunday (in the pattern, or - a day the unit does not carry - on the schedule).
+  function heldBy(map, d, id) { return map[d] === id || (present.indexOf(d) < 0 && !!ctx.schedule[d] && ctx.schedule[d][role] === id); }
+  function wkdayBonus(map) {
+    var f = map[fri];
+    if (role !== "primary" || !f || !W.weekendContribution || ctx.per[f].contribution !== "weekdays") return 0;
+    return heldBy(map, sat, f) || heldBy(map, sun, f) ? 0 : W.weekendContribution;
+  }
+  // Prompt 23 B2: standaloneFriday is a PRIMARY shape key; noLoneWeekendDay alone may block a surgeon solo on Sat / Sun.
+  function sfOf(id) { return role === "primary" && ctx.per[id].standaloneFriday; }
+  function loneOnly(r) { return !r.ok && r.hard.length > 0 && r.hard.every(function (h) { return h.indexOf("lone-weekend-day:") === 0; }); }
+  var sfLive = full && role === "primary" && ids.some(function (id) { return ctx.per[id].standaloneFriday; });
 
   // Solo eligibility per surgeon per day (daily / split-Sat members).
   var solo = {};
@@ -1757,10 +2026,11 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       pen += rdSoftSum(r);
       map[present[k]] = id;
     }
-    if (present.length > 1 ? style !== "block" : style === "block") pen += W.patternMismatch;
+    if (!sfOf(id) && (present.length > 1 ? style !== "block" : style === "block")) pen += W.patternMismatch; // B2: every block of the present days is a legal shape for a key holder
     if (present.length > 1) pen += ctx.per[id].blockPenalty; // N: a multi-day block for a weekendBlockPenalty surgeon (0 for everyone else)
     if (role === "primary" && full) pen -= contrib(id);        // L: his full primary block is the contribution (bonus once per block)
     pen += backupPen(id);                                       // L: him as the weekend backup block (penalty once)
+    pen -= wkdayBonus(map);                                     // B1: a reduced unit's lone Friday is a weekday primary
     out.push({ kind: "block", members: members(map), penalty: pen, fallback: false, surgeons: [id] });
   });
 
@@ -1773,30 +2043,67 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       if (!rf.ok) return;
       var rs = eligibility(ctx, sun, role, x, { assume: [{ date: fri, role: role }], skipPatternSoft: true });
       if (!rs.ok) return;
-      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty + backupPen(x); // N: split membership carries the surgeon's weekendBlockPenalty; L: a backup split membership carries his contribution penalty
+      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" && !sfOf(x) ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty + backupPen(x); // N: split membership carries the surgeon's weekendBlockPenalty; L: a backup split membership carries his contribution penalty; B2: Fri+Sun is no shape of a key holder
       ids.forEach(function (y) {
         if (y === x || !solo[y][sat].ok) return;
         var sy = styleOf(y);
-        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty + backupPen(y);
+        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") && !sfOf(y) ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty + backupPen(y);
         var map = {}; map[fri] = x; map[sun] = x; map[sat] = y;
         out.push({ kind: "split", members: members(map), penalty: pen, fallback: false, surgeons: [x, y] });
       });
     });
   }
 
-  // Daily: independent days (fallback). Shapes already covered by block/split are skipped.
-  var cands = present.map(function (d) { return ids.filter(function (id) { return solo[id][d].ok; }); });
+  // Daily member penalty (also the 'friday' kind's): a standalone day is the normal pattern for "daily" / no style;
+  // B2: for a standaloneFriday key holder the Friday is (his lone Sat / Sun is not).
   function memberPen(id, d) {
+    if (sfOf(id)) return d === fri ? 0 : W.patternMismatch;
     var s = styleOf(id);
     if (s === "block") return W.patternMismatch;
     if (s === "split" || s === "saturday-only") return d === sat ? 0 : W.patternMismatch;
     return 0; // "daily" (N) and no style: a standalone day is the normal pattern
   }
+
+  // Prompt 23 B2: the 'friday' kind (full primary units with a standaloneFriday surgeon on the roster).
+  if (sfLive) {
+    var subs = []; // the Saturday-Sunday as its own reduced unit: { sat, sun, pen, surgeons, fallback, pairKey }
+    ids.forEach(function (y) { // a block of two
+      var sy = styleOf(y);
+      if (sy === "saturday-only") return;
+      var r1 = eligibility(ctx, sat, role, y, { assume: [{ date: sun, role: role }], skipPatternSoft: true });
+      if (!r1.ok) return;
+      var r2 = eligibility(ctx, sun, role, y, { assume: [{ date: sat, role: role }], skipPatternSoft: true });
+      if (!r2.ok) return;
+      subs.push({ sat: y, sun: y, pen: rdSoftSum(r1) + rdSoftSum(r2) + (sfOf(y) || sy === "block" ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty, surgeons: [y], fallback: false, pairKey: sfOf(y) });
+    });
+    ids.forEach(function (y) { // two daily days
+      if (!solo[y][sat].ok) return;
+      ids.forEach(function (z) {
+        if (z === y || !solo[z][sun].ok || styleOf(z) === "saturday-only") return;
+        subs.push({ sat: y, sun: z, pen: W.patternDaily + rdSoftSum(solo[y][sat]) + memberPen(y, sat) + rdSoftSum(solo[z][sun]) + memberPen(z, sun), surgeons: [y, z], fallback: true, pairKey: false });
+      });
+    });
+    ids.forEach(function (x) { // the Friday alone
+      var rx = solo[x][fri];
+      if (!rx.ok || styleOf(x) === "saturday-only") return;
+      var xsf = sfOf(x), penX = rdSoftSum(rx) + memberPen(x, fri);
+      subs.forEach(function (sp) {
+        if (sp.surgeons.indexOf(x) >= 0 || !(xsf || sp.pairKey)) return;
+        var map = {}; map[fri] = x; map[sat] = sp.sat; map[sun] = sp.sun;
+        out.push({ kind: "friday", members: members(map), penalty: penX + sp.pen - wkdayBonus(map), fallback: sp.fallback, surgeons: [x].concat(sp.surgeons) });
+      });
+    });
+  }
+
+  // Daily: independent days (fallback). Shapes already covered by block/split (and B2's 'friday' kind) are skipped.
+  // B2: a surgeon blocked solo only by lone-weekend-day stays a candidate (a repeat re-judges him with the pair assumed).
+  var cands = present.map(function (d) { return ids.filter(function (id) { return solo[id][d].ok || loneOnly(solo[id][d]); }); });
   (function rec(idx, map, chosen) {
     if (idx === present.length) {
       var distinct = chosen.filter(function (v, i, a) { return a.indexOf(v) === i; });
       if (present.length > 1 && distinct.length === 1) return;                    // == block
       if (full && distinct.length === 2 && chosen[0] === chosen[2]) return;        // == split
+      if (sfLive && chosen[0] !== chosen[1] && chosen[0] !== chosen[2] && (sfOf(chosen[0]) || (chosen[1] === chosen[2] && sfOf(chosen[1])))) return; // == friday (B2)
       var pen = W.patternDaily;
       for (var k = 0; k < present.length; k++) {
         var d = present[k], id = chosen[k];
@@ -1808,6 +2115,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
         pen += rdSoftSum(r) + memberPen(id, d);
       }
       for (var c2 = 0; c2 < distinct.length; c2++) pen += backupPen(distinct[c2]); // L: once per surgeon, however many days he holds
+      pen -= wkdayBonus(map);                                                        // B1
       out.push({ kind: "daily", members: members(map), penalty: pen, fallback: true, surgeons: distinct });
       return;
     }
@@ -2039,6 +2347,8 @@ if (typeof module !== "undefined") {
     runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,
     standingEastDays: standingEastDays,
+    weekendCapCounts: weekendCapCounts,
+    eastBusyOn: function (ctx, id, d) { var P = ctx && ctx.per ? ctx.per[id] : null; return !!P && rdEastBusyOn(ctx, P, d); },
     offerState: offerState,
     offeredOn: offeredOn,
     rdFmt: rdFmt,

@@ -335,8 +335,10 @@ function project(ctx) {
   // `note` string the importer drops from the blob and rules.js never reads - compared minus note-like keys.
   return { per, sched, units: ctx.holidayUnitsAll, active: ctx.activeIds, weights: stripNoteKeys(ctx.weights), defaultCap: ctx.defaultCap };
 }
+// Prompt 23 B4 (9/30): the app passes no today (rules.js reads the Central date); the comparison pins the adapter's fixed
+// today on both sides so the hardNeverWeekdays notice never makes the two ctx differ with the calendar
 const appCtx = R.buildContext({ roster: plan.blob.roster, surgeonRules: plan.blob.surgeonRules, groupRules: plan.blob.groupRules, holidays: plan.blob.holidays,
-  timeOffRows: plan.timeOffRows, availabilityRows: plan.availabilityRows, schedule: rowsToSchedule(plan.scheduleDayRows) });
+  timeOffRows: plan.timeOffRows, availabilityRows: plan.availabilityRows, schedule: rowsToSchedule(plan.scheduleDayRows), today: SA.SEED_TEST_TODAY });
 const testCtx = R.buildContext(SA.seedToContextInput(seed));
 eq(IMP.impCanon(project(appCtx)), IMP.impCanon(project(testCtx)), "same per-surgeon precompute, schedule and holiday units");
 // the cap pin is not vacuous: the projected fields carry the seed's real values (never undefined on both sides)
@@ -542,7 +544,7 @@ function applyWithDeletes(model, p) {
   return c;
 }
 function asLive(model) { return { blob: model.blob, availability: model.availability, time_off: model.time_off, schedule_days: model.schedule_days }; }
-function ctxOf(model) { return R.buildContext({ roster: model.blob.roster, surgeonRules: model.blob.surgeonRules, groupRules: model.blob.groupRules, holidays: model.blob.holidays, timeOffRows: model.time_off, availabilityRows: model.availability, schedule: rowsToSchedule(model.schedule_days) }); }
+function ctxOf(model) { return R.buildContext({ roster: model.blob.roster, surgeonRules: model.blob.surgeonRules, groupRules: model.blob.groupRules, holidays: model.blob.holidays, timeOffRows: model.time_off, availabilityRows: model.availability, schedule: rowsToSchedule(model.schedule_days), today: SA.SEED_TEST_TODAY }); } // Prompt 23: the adapter's fixed today
 function converges(label, e) {
   const m = { blob: {}, schedule_days: [], availability: [], time_off: [] };
   applyWithDeletes(m, plan);                       // first import = tonight's live state
@@ -1481,7 +1483,7 @@ eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 2, "9/30: two periods pl
 //     rules-only and not-started surgeons are byte-identical to the legacy ctx on every period day and role
 {
   const ctxP5 = R.buildContext({ roster: p5.blob.roster, surgeonRules: p5.blob.surgeonRules, groupRules: p5.blob.groupRules, holidays: p5.blob.holidays,
-    timeOffRows: p5.timeOffRows, availabilityRows: p5.availabilityRows, schedule: rowsToSchedule(p5.scheduleDayRows), periods: p5.periodRows, offers: p5.offerRows });
+    timeOffRows: p5.timeOffRows, availabilityRows: p5.availabilityRows, schedule: rowsToSchedule(p5.scheduleDayRows), periods: p5.periodRows, offers: p5.offerRows, today: SA.SEED_TEST_TODAY }); // Prompt 23: the adapter's fixed today (compared with testCtx below)
   eq(ctxP5.warnings, [], "P5: the planned rows build a warning-free ctx");
   eq(["s1", "s2", "s3", "s4", "s5", "s6"].map((id) => { const st = R.offerState(ctxP5, "2026-12-01", id); return st.status + "/" + st.mode; }),
     ["rules_only/preferred", "submitted/exhaustive", "submitted/preferred", "submitted/exhaustive", "not_started/preferred", "rules_only/preferred"], "P5: rules.js derives the same statuses and modes as the dry-run table");
@@ -1812,8 +1814,10 @@ step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule
   // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): the 9/29 entry is no longer the last - the 9/30 entry follows it
   // (the step below pins that one as the last and seedLastRevision 2026-09-30). Kept intent: the 9/29 entry sits right before
   // it, so nothing was appended between the two and the 9/29 entry was not moved.
-  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0])], [seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "9/29: the 9/29 entry sits right before the 9/30 (last) entry");
+  // pin moved deliberately 9/30 (Prompt 23, Khan + Acton): a second 2026-09-30 entry (feat/khan-weekdays) follows TASK 2's, so
+  // "the 9/30 entry" is TASK 2's by its branch name; the 9/29 entry still sits right before it.
+  const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/fold-jan-jun/.test(t));
+  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0])], [seed._meta.revisions.indexOf(revAfter929[0]) - 1, seed._meta.revisions.indexOf(revAfter929[0])], "9/29: the 9/29 entry sits right before the 9/30 (TASK 2) entry");
   ok(/groupRules\.groupCall/.test(rev929[0]) && /holidayUnitDaysAllDay/.test(rev929[0]) && /GROUP_CALL_DEFAULTS/.test(rev929[0]) && /seedCoreHash moves/.test(rev929[0]), "9/29: the entry names the block, the holiday reading, the code defaults and the core-hash move");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev929[0]), "9/29: the entry carries no amount and no contact-like value");
   const seedNo = clone(seed); delete seedNo.groupRules.groupCall; seedNo._meta.revisions = seedNo._meta.revisions.filter((t) => !/^2026-09-29 /.test(t));
@@ -1848,9 +1852,11 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   eq(dPre.tables.call_periods.rows, ["update Jan 2027 - Jun 2027 2027-01-04..2027-06-30 (close 2026-11-23, publish by 2026-12-07, status upcoming)"], "9/30: the update line names the widened row; no line for the live Feb - Apr row");
   ok(dPre.lines.some((l) => /a live period the seed lacks is never deleted/.test(l)), "9/30: the dry run says a live period the seed lacks is never deleted (the live fold's delete is fold-jan-jun.sql, report-first)");
   // the revision entry: one, dated 2026-09-30, the last; seedLastRevision reads it
-  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t));
-  eq(rev930.length, 1, "9/30: one _meta.revisions entry dated 2026-09-30");
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 1]], ["2026-09-30", rev930[0]], "9/30: it is the last entry, and seedLastRevision reads its date");
+  // pin moved deliberately 9/30 (Prompt 23): the Prompt 23 entry (also dated 2026-09-30) follows this one - TASK 2's entry is
+  // found by its branch name, sits right before the last entry, and seedLastRevision still reads 2026-09-30
+  const rev930 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/fold-jan-jun/.test(t));
+  eq(rev930.length, 1, "9/30: one _meta.revisions entry for TASK 2 (branch feat/fold-jan-jun)");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 2]], ["2026-09-30", rev930[0]], "9/30: it sits right before the last entry (Prompt 23's, the same date), and seedLastRevision reads 2026-09-30");
   eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev930[0]) && IMP.impFindContactValues(rev930[0]).length === 0, "9/30: the entry carries no amount and no contact-like value");
   ok(/Jan 2027 - Jun 2027/.test(rev930[0]) && /Feb 2027 - Apr 2027/.test(rev930[0]) && /lengthMonths 3 -> 6/.test(rev930[0]) && /remindDaysBeforeClose \[42, 14, 3\] -> \[14, 3\]/.test(rev930[0]) && /noticeDaysBeforeClose 42 -> 14/.test(rev930[0]) && /seedCoreHash moves/.test(rev930[0]), "9/30: the entry names the fold, the three moved keys and the core-hash move");
@@ -1863,6 +1869,37 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   eq(planPre930.blob.settings.seedLastRevision, "2026-09-29", "9/30: without the entry the last revision is 9/29's");
   eq(IMP.planDiff(plan, { blob: clone(planPre930.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
     { roster: "unchanged", surgeonRules: "unchanged", groupRules: "update", holidays: "unchanged", settings: "update" }, "9/30: against the pre-9/30 blob only groupRules (the block) and settings update");
+}
+
+step("9/30 (Prompt 23): Khan's new call preferences + Acton's 2027 outreach days reach the blob as rules only (surgeonRules s1 / s3)");
+{
+  // Faraz 9/30: generic keys on Khan (primaryContribution weekdays, standaloneFriday, noLoneWeekendDay, weekendCap,
+  // hardNeverWeekdaysNoticeDays) and Acton's dated outreach patterns. The importer carries the rules and drops every note.
+  const K = plan.blob.surgeonRules[KHAN], A = plan.blob.surgeonRules[ACTON];
+  eq([K.primaryContribution, K.standaloneFriday, K.noLoneWeekendDay, K.hardNeverWeekdaysNoticeDays, K.weekendCap], ["weekdays", true, true, 56, { perMonth: 2, countsEast: true, roles: ["primary"], weight: "strong" }], "Prompt 23: Khan's five keys in the blob");
+  ok(!["primaryContributionNote", "weekendShapeNote", "weekendCapNote", "hardNeverWeekdaysNoticeDaysNote"].some((k) => k in K) && !("note" in K.weekdays), "Prompt 23: his four new Note keys and the weekdays note are dropped (rules only in the anon-readable blob)");
+  eq(A.recurringAvoid, [{ weekday: "Sun", beforeNthMonday: [2, 4], end: "2026-12-31", weight: "medium" }, { weekday: "Sun", beforeNthMonday: [2], start: "2027-01-01", weight: "medium" }], "Prompt 23: Acton's Sunday avoid follows his Maquoketa Mondays (rules only)");
+  ok(!("recurringUnavailableNote" in A), "Prompt 23: Acton's recurringUnavailableNote is dropped");
+  // the revision entry: one, the last, dated 2026-09-30 (seedLastRevision unchanged), counted
+  const rev23 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/khan-weekdays/.test(t));
+  eq(rev23.length, 1, "Prompt 23: one _meta.revisions entry (branch feat/khan-weekdays)");
+  eq(seed._meta.revisions[seed._meta.revisions.length - 1], rev23[0], "Prompt 23: it is the last entry");
+  eq([plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "Prompt 23: seedLastRevision stays 2026-09-30, the count includes the entry");
+  ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev23[0]) && IMP.impFindContactValues(rev23[0]).length === 0 && !DENY.test(rev23[0]), "Prompt 23: the entry carries no amount, no contact-like value and no denylist word");
+  ok(/primaryContribution weekends -> weekdays/.test(rev23[0]) && /standaloneFriday/.test(rev23[0]) && /noLoneWeekendDay/.test(rev23[0]) && /weekendCap/.test(rev23[0]) && /hardNeverWeekdaysNoticeDays 56/.test(rev23[0]) && /recurringUnavailable dated/.test(rev23[0]) && /seedCoreHash moves/.test(rev23[0]), "Prompt 23: the entry names the five Khan keys, Acton's dated patterns and the core-hash move");
+  // surgeonRules is a core key: against the pre-Prompt-23 rules only surgeonRules and settings update
+  const seedPre23 = clone(seed);
+  const k0 = seedPre23.surgeonRules[KHAN];
+  k0.primaryContribution = "weekends"; ["standaloneFriday", "noLoneWeekendDay", "weekendCap", "hardNeverWeekdaysNoticeDays", "primaryContributionNote", "weekendShapeNote", "weekendCapNote", "hardNeverWeekdaysNoticeDaysNote"].forEach((k) => { delete k0[k]; });
+  seedPre23.surgeonRules[ACTON].recurringUnavailable = [{ weekday: "Mon", nth: [2, 4] }, { weekday: "Wed", nth: [2, 4] }];
+  seedPre23.surgeonRules[ACTON].recurringAvoid = [{ weekday: "Sun", beforeNthMonday: [2, 4], weight: "medium" }];
+  seedPre23._meta.revisions = seedPre23._meta.revisions.filter((t) => t !== rev23[0]);
+  const planPre23 = IMP.importPlan(seedPre23, { now: NOW });
+  ok(plan.blob.settings.seedCoreHash !== planPre23.blob.settings.seedCoreHash, "Prompt 23: the keys move the seed's core hash (surgeonRules is a core key)");
+  eq(IMP.planDiff(plan, { blob: clone(planPre23.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
+    { roster: "unchanged", surgeonRules: "update", groupRules: "unchanged", holidays: "unchanged", settings: "update" }, "Prompt 23: against the pre-Prompt-23 blob only surgeonRules and settings update - no row of any table");
+  const dRows = IMP.planDiff(plan, { blob: clone(planPre23.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) });
+  eq([dRows.tables.schedule_days.insert + dRows.tables.schedule_days.update, dRows.tables.availability.insert, dRows.tables.time_off.insert, dRows.totalDeletes], [0, 0, 0, 0], "Prompt 23: no schedule_days / availability / time_off row moves (future generation only)");
 }
 
 console.log("ok " + n + " assertions");
