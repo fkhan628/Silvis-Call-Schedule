@@ -10232,8 +10232,10 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       );
       case "weekendBlockPenalty": return (
         <RuField T={T} label="Discourage multi-day weekends" hint="soft: a penalty on every block or split this surgeon is in">
-          {/* review 10/1: a blank value is not "none" - the scheduler reads it as medium (it shows as such until changed) */}
-          <select data-testid="rules-weekend-block-penalty" value={(() => { const v = get("weekendBlockPenalty", null); return v === null ? "" : v === "" ? "__blank" : String(v); })()} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : e.target.value === "__blank" ? "" : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", ""); return v === null || v === undefined || v === "medium" || v === "strong" ? null : v === "" ? <option value="__blank">blank - read as medium</option> : <option value={String(v)}>custom: {String(v)}</option>; })()}</select>
+          {/* review 10/1: a blank value is not "none" - the scheduler reads it as medium (it shows as such until changed).
+              Review 2 (10/1): the extra option reads the key with the same null default as value= - with "" an absent key
+              offered "blank - read as medium", and picking it wrote "" */}
+          <select data-testid="rules-weekend-block-penalty" value={(() => { const v = get("weekendBlockPenalty", null); return v === null ? "" : v === "" ? "__blank" : String(v); })()} onChange={e => set("weekendBlockPenalty", e.target.value === "" ? undefined : e.target.value === "__blank" ? "" : (/^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value))} style={{ ...inp, width: 130 }}><option value="">none</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("weekendBlockPenalty", null); return v === null || v === undefined || v === "medium" || v === "strong" ? null : v === "" ? <option value="__blank">blank - read as medium</option> : <option value={String(v)}>custom: {String(v)}</option>; })()}</select>
         </RuField>
       );
       case "weekendsAvailable": return (

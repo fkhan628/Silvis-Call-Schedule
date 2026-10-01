@@ -372,7 +372,7 @@
           "Wed"
         ],
         "autoOffer": true,
-        "note": "Faraz 9/21: auto-offer Mon/Wed whenever East is clear ('I'll have to figure it out on those days'). 9/30 (Prompt 23): weekdays are now his preferred primary days (primaryContribution weekdays); Mon/Wed fill first, a Tue/Thu more than 56 days out is the last resort (hardNeverWeekdaysNoticeDays)."
+        "note": "Faraz 9/21: auto-offer Mon/Wed whenever East is clear ('I'll have to figure it out on those days'). 9/30 (Prompt 23): weekdays are now his preferred primary days (primaryContribution weekdays); Mon/Wed fill first; a Tue/Thu more than 56 days out is allowed with a soft penalty - it nets 0 against the weekday bonus, so it competes with a colleague on equal terms, behind his own Mon/Wed (hardNeverWeekdaysNoticeDays; review 2 10/1: was 'the last resort')."
       },
       "hardNeverWeekdays": [
         "Tue",
