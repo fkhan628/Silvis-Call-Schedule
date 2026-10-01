@@ -418,12 +418,17 @@ function holdsFullBlock(F, day, role, id) {
 }
 
 // standingOf(plan) -> the LIVE holders { day: { primary, backup } } (review 2, 10/1): plan.live (planPublish's live rows)
-// when the plan carries it, else plan.final with every planned change put back to its `from` holder (a hand-built plan).
+// when the plan carries it, else plan.final with every planned change put back to its `from` holder (a hand-built plan
+// with a changes array - an empty one means final = live). A plan with NEITHER live NOR a changes array says nothing
+// about what is live, so it holds NOTHING (10/1 follow-ups, item 4 - it used to read every final row as held, so a
+// never-published Khan Tue/Thu inside the notice passed): every slot is then judged as a new placement and can only
+// fail, never pass silently. main() always passes plan.live (planPublish sets it, {} with no live rows).
 function standingOf(plan) {
   if (plan && plan.live && typeof plan.live === "object") return plan.live;
-  const F = (plan && plan.final) || {}, out = {};
+  if (!plan || !Array.isArray(plan.changes)) return {};
+  const F = plan.final || {}, out = {};
   Object.keys(F).forEach((d) => { const e = F[d]; out[d] = { primary: (e && e.primary) || null, backup: (e && e.backup) || null }; });
-  ((plan && plan.changes) || []).forEach((c) => {
+  plan.changes.forEach((c) => {
     if (!c || !c.day || ROLES.indexOf(c.role) < 0) return;
     if (!out[c.day]) out[c.day] = { primary: null, backup: null };
     out[c.day][c.role] = c.from || null;

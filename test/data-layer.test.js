@@ -2619,6 +2619,77 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(L.rOnQuiet.toasts, [], "a quiet (poll) read never toasts");
     assert.ok(L.rPublic.r === true && L.rPublic.reads.length === 0 && L.rPublic.toasts.length === 0, "public mode still never reads the reviews");
   });
+  // Follow-ups 10/1 item 1 (the 10/1 queue report): Prompt 23's codes get plain words - lone-weekend-day (hard),
+  // weekend-cap and hard-never-beyond-notice (soft), weekday-primary (soft, same gap) - reasonLabel falls back to softTag
+  // for a soft code it has no words for (the claim sheet and the board chip label soft notes through reasonLabel), and a
+  // vocabulary pin: every rules.HARD_REASONS code reads words through reasonLabel, every soft reason literal rules.js /
+  // generator.js push reads words through softTag and reasonLabel - a future code cannot show raw silently.
+  check("Follow-ups 10/1 (1): reason glosses for lone-weekend-day / weekend-cap / hard-never-beyond-notice / weekday-primary; reasonLabel falls back to softTag; no rules.js / generator.js code reads raw", () => {
+    const labelsSrc = e4Lift("const REASON_WORDS = {", "\n};\n") + "\n" + e4Lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + e4Lift("function softTag(soft) {", "\n}\n");
+    const L = new Function(labelsSrc + "\nreturn { reasonLabel, softTag };")();
+    // review 10/1: one clause each - the painter's words for the lone weekend day (primary only), the notice term's two
+    // readings (beyond the notice, or already held - rules.js does not record how a held slot was placed), no " - " or
+    // brackets of their own (the editor prefixes "Name - ", the trade text appends " (M/D)", the claim sheet " (weight N)")
+    assert.strictEqual(L.reasonLabel("lone-weekend-day:Sat", nameOf), "a Saturday alone as primary, without its Sunday");
+    assert.strictEqual(L.reasonLabel("lone-weekend-day:Sun", nameOf), "a Sunday alone as primary, without its Saturday");
+    assert.strictEqual(L.reasonLabel("lone-weekend-day:Fri", nameOf), "a weekend day alone as primary, without its pair");
+    assert.strictEqual(L.reasonLabel("weekend-cap:2", nameOf), "past the soft weekend cap of 2 a month");
+    assert.strictEqual(L.softTag({ reason: "weekend-cap:2", weight: 10 }), "over weekend cap 2");
+    assert.strictEqual(L.reasonLabel("hard-never-beyond-notice:Tue", nameOf), "Tue is a never-on day, allowed with a soft penalty far ahead or when already held");
+    assert.strictEqual(L.softTag({ reason: "hard-never-beyond-notice:Tue", weight: 3 }), "never-on Tue: far ahead or held");
+    ["lone-weekend-day:Sat", "lone-weekend-day:Sun", "weekend-cap:2", "hard-never-beyond-notice:Tue"].forEach(c => {
+      const w = L.reasonLabel(c, nameOf), t = L.softTag({ reason: c, weight: 1 });
+      assert.ok(!/ - |[()]/.test(w), c + ": the label carries its own dash / brackets: " + w);
+      assert.ok(!/[()]/.test(t), c + ": the tag carries brackets (the dropdown wraps the tags in them): " + t);
+    });
+    assert.strictEqual(L.reasonLabel("weekday-primary", nameOf), "weekday primary (contribution bonus)");
+    assert.strictEqual(L.softTag({ reason: "weekday-primary", weight: -3 }), "weekday primary (contribution bonus)");
+    assert.strictEqual(L.softTag({ reason: "pattern-daily", weight: 2 }), "daily weekend pattern");
+    // review 10/1: plain words on the claim sheet / board chip for the soft codes a claim can carry; softTag keeps its tags
+    // pins moved deliberately (re-check 10/1): recurring-avoid is any recurring day (Acton's is the Sunday before the 2nd / 4th
+    // Monday - "weekday" means Mon-Thu in this app); pattern-mismatch names the surgeon's own preferred style as "prefers ..."
+    [["avoid-row", "a day stated as one to avoid", "avoid"], ["recurring-avoid:Sun", "a recurring day set to avoid (Sun)", "avoid: Sun"],
+      ["auto-offer-weekday", "an auto-offered weekday", "auto-offer"], ["pattern-mismatch:split", "not the preferred weekend style (prefers split)", "style: split"],
+      ["pattern-mismatch:standalone-friday", "not the preferred weekend style (the Friday stands on its own)", "style: standalone-friday"],
+      ["under-target", "under the monthly target", "under target"]].forEach(([c, w, t]) => {
+      assert.strictEqual(L.reasonLabel(c, nameOf), w, c);
+      assert.strictEqual(L.softTag({ reason: c, weight: 1 }), t, c + " (tag)");
+    });
+    // the fallback: a softTag-only code reads its tag through reasonLabel; an unknown code and "not available" pass through
+    assert.strictEqual(L.reasonLabel("back-to-back-weekend", nameOf), "back-to-back weekend");
+    assert.strictEqual(L.reasonLabel("over-target:2", nameOf), "over target +2");
+    assert.strictEqual(L.reasonLabel("no-such-code:x", nameOf), "no-such-code:x");
+    assert.strictEqual(L.reasonLabel("not available", nameOf), "not available");
+    // words that were there stay as they were (REASON_WORDS and the explicit cases win over the fallback)
+    assert.strictEqual(L.reasonLabel("monthly-cap:4", nameOf), "monthly cap of 4 reached");
+    assert.strictEqual(L.reasonLabel("east-busy", nameOf), "on East (Davenport) call");
+    assert.strictEqual(L.reasonLabel("outside-offers", nameOf), "outside the offered days (penalty)");
+    assert.strictEqual(L.reasonLabel("slot-locked:s2", nameOf), "slot locked to Burchett");
+    // the vocabulary: hard through reasonLabel, soft through softTag and reasonLabel - never the raw code
+    const R = require(path.join(ROOT, "rules.js"));
+    const withArg = (c) => c.endsWith(":") ? c + "Sat" : c;
+    const rawHard = R.HARD_REASONS.map(withArg).filter(c => L.reasonLabel(c, nameOf) === c);
+    assert.deepStrictEqual(rawHard, [], "rules.HARD_REASONS codes reasonLabel prints raw: " + rawHard.join(", "));
+    const softSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8") + "\n" + fs.readFileSync(path.join(ROOT, "generator.js"), "utf8");
+    const softCodes = Array.from(new Set(Array.from(softSrc.matchAll(/reason: "([a-z-]+)(:?)/g)).map(x => x[1] + (x[2] ? ":2" : "")))).sort();
+    ["weekend-cap:2", "hard-never-beyond-notice:2", "weekday-primary", "pattern-daily", "recurring-avoid:2", "east-forecast:2"].forEach(c => assert.ok(softCodes.indexOf(c) >= 0, "the soft literal scan missed " + c + ": " + softCodes.join(", ")));
+    const PLAIN = ["preferred"]; // a code that is its own plain word (softTag "preferred" since Prompt 12)
+    const rawSoftTag = softCodes.filter(c => PLAIN.indexOf(c) < 0 && L.softTag({ reason: c, weight: 1 }) === c);
+    assert.deepStrictEqual(rawSoftTag, [], "soft codes softTag prints raw: " + rawSoftTag.join(", "));
+    const rawSoftLabel = softCodes.filter(c => PLAIN.indexOf(c) < 0 && L.reasonLabel(c, nameOf) === c);
+    assert.deepStrictEqual(rawSoftLabel, [], "soft codes reasonLabel prints raw: " + rawSoftLabel.join(", "));
+    // Item E4 (review 10/1 smoke): a code eastMaskedReasons does NOT mask reaches non-schedulers as is, so its words never
+    // name East (the first draft's "an auto-offered weekday (East clear)" leaked on the board chip and the claim sheet)
+    const keysOf = (name) => JSON.parse(e4Lift("const " + name + " = ", ";\n").slice(("const " + name + " = ").length, -2));
+    const eastHard = keysOf("EAST_HARD_REASON_KEYS"), eastSoft = keysOf("EAST_SOFT_REASON_KEYS");
+    assert.ok(eastHard.indexOf("east-busy") >= 0 && eastSoft.indexOf("east-clear") >= 0, "the East key lists lifted: " + JSON.stringify([eastHard, eastSoft]));
+    const keyOf = (c) => c.split(":")[0];
+    const eastWords = /\bEast\b|Davenport/i; // whole word: "least" / "Easter" are not East (re-check 10/1)
+    const leakHard = R.HARD_REASONS.map(withArg).filter(c => eastHard.indexOf(keyOf(c)) < 0 && eastWords.test(L.reasonLabel(c, nameOf)));
+    assert.deepStrictEqual(leakHard, [], "unmasked hard codes whose words name East: " + leakHard.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
+    const leakSoft = softCodes.filter(c => eastSoft.indexOf(keyOf(c)) < 0 && (eastWords.test(L.reasonLabel(c, nameOf)) || eastWords.test(L.softTag({ reason: c, weight: 1 }))));
+    assert.deepStrictEqual(leakSoft, [], "unmasked soft codes whose words name East: " + leakSoft.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
+  });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
   console.log("\n[M] outside surgeons pins");
@@ -7955,6 +8026,80 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suSumDays(["Sun", "Fri", "Sat", "Mon"]), "Mon/Fri-Sun");
       assert.strictEqual(H.suSumMonths(["2026-12", "2026-10", "2027-01", "2026-11", "x"]), "Oct-Dec 2026, Jan 2027, x");
       assert.strictEqual(H.suSumMonths(["2026-10", "2026-12"]), "Oct, Dec 2026");
+    });
+    // Follow-ups 10/1 item 5 (the 10/1 queue report): offerRulesWords (the painter's "Go by my rules" words) is as truthful
+    // as suRulesSummary's notice clause - "allowed further ahead" only where no other day rule of a covered role closes the
+    // day (suHnOtherDayRules, which both read now) - and names the roles rules.js applies (the key's, else the default).
+    check("Follow-ups 10/1 (5): offerRulesWords' notice sentence qualified beside another day rule (suHnOtherDayRules, shared with suRulesSummary); the seed text unchanged; the default roles named; agrees with the summary", () => {
+      const G0 = seed.groupRules;
+      const never = (rules, g) => H.offerRulesWords(rules, g || G0).filter(s => /^Never (primary|backup|primary\/backup) on (Mon|Tue|Wed|Thu|Fri|Sat|Sun)/.test(s));
+      const Wg = (w, g) => Object.assign({}, g || G0, { weights: Object.assign({}, (g || G0).weights, w) });
+      const closed = Object.assign({}, G0, { backupPolicy: Object.assign({}, G0.backupPolicy, { openToEveryone: false }) });
+      const s1 = seed.surgeonRules.s1;
+      // the seed's sentences, unchanged (s1 has no other day rule; s3 has a governed month but no notice)
+      assert.deepStrictEqual(never(s1), ["Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."]);
+      assert.deepStrictEqual(never(seed.surgeonRules.s3), ["Never primary on Tue."]);
+      assert.deepStrictEqual(never(s1, Wg({ hardNeverBeyondNotice: 0 })), ["Never primary on Tue, Thu within 56 days; allowed further ahead."]);
+      // s1 plus each other day rule of primary: qualified
+      const Q = "Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty, where your other day rules allow it.";
+      [["recurringAvailable", { recurringAvailable: [{ weekday: "Mon" }] }], ["the whitelist-recurring mode", { availabilityMode: "whitelist-recurring" }],
+        ["availableWindows", { availableWindows: [{ start: "2027-01-04", end: "2027-03-28" }] }], ["availableWeeks", { availableWeeks: ["2027-01-04"] }],
+        ["explicitListMonths", { explicitListMonths: ["2027-01"] }], ["a weekdayPattern", { outsideDerivedWeeks: { weekdayPattern: { Mon: { primary: true } } } }]
+      ].forEach(([k, add]) => assert.deepStrictEqual(never(Object.assign({}, s1, add)), [Q], k));
+      assert.deepStrictEqual(never(Object.assign({}, s1, { recurringAvailable: [{ weekday: "Mon" }] }), Wg({ hardNeverBeyondNotice: 0 })), ["Never primary on Tue, Thu within 56 days; further ahead, your other day rules decide."], "weight 0");
+      assert.deepStrictEqual(never(Object.assign({}, s1, { explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] })), ["Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."], "a month governed for backup only does not close his primary day");
+      // backup-only coverage: the recurring list closes backup only while backup is NOT open to everyone
+      const bk = { hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"], hardNeverWeekdaysNoticeDays: 10, recurringAvailable: [{ weekday: "Mon" }] };
+      assert.deepStrictEqual(never(bk), ["Never backup on Tue within 10 days; allowed further ahead, with a soft penalty."], "backup open: the recurring list does not close backup");
+      assert.deepStrictEqual(never(bk, closed), ["Never backup on Tue within 10 days; allowed further ahead, with a soft penalty, where your other day rules allow it."]);
+      // the roles key absent: rules.js's default (primary while backup is open, both otherwise) - it used to name none
+      assert.deepStrictEqual(never({ hardNeverWeekdays: ["Tue"] }), ["Never primary on Tue."]);
+      assert.deepStrictEqual(never({ hardNeverWeekdays: ["Tue"] }, closed), ["Never primary/backup on Tue."]);
+      // the shared predicate
+      assert.deepStrictEqual(H.suHnOtherDayRules({}, G0), { primary: false, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWeeks: ["2027-01-04"] }, G0), { primary: true, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWeeks: ["2027-01-04"] }, closed), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ availableWindows: [{ start: "2027-01-04", end: "2027-01-10" }] }, G0), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] }, G0), { primary: false, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules(null, null), { primary: false, backup: false });
+      // review 10/1: the terms the agreement matrix below cannot reach (both readers share this predicate) pinned directly -
+      // a weekday pattern for backup, a month governed for both (plain while backup is closed, an object with no roles)
+      assert.deepStrictEqual(H.suHnOtherDayRules({ outsideDerivedWeeks: { weekdayPattern: { Mon: { backup: true } } } }, G0), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ explicitListMonths: [{ month: "2027-01" }] }, G0), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ explicitListMonths: ["2027-01"] }, closed), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ explicitListMonths: ["2027-01"] }, G0), { primary: true, backup: false });
+      // review 10/1: a recurringUnavailable entry that can fall on a never-on weekday closes it (rules.js recurring-unavailable,
+      // primary; backup only while backup is closed); one on another weekday does not
+      const ruTue = { hardNeverWeekdays: ["Tue"], recurringUnavailable: [{ weekday: "Tue" }] };
+      assert.deepStrictEqual(H.suHnOtherDayRules(ruTue, G0), { primary: true, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules(ruTue, closed), { primary: true, backup: true });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ hardNeverWeekdays: ["Tue"], recurringUnavailable: [{ weekday: "Wed" }] }, G0), { primary: false, backup: false });
+      assert.deepStrictEqual(H.suHnOtherDayRules({ hardNeverWeekdays: ["Tue"], recurringUnavailable: [{ nth: [1] }] }, G0), { primary: true, backup: false }, "an entry with no weekday can fall on a Tue");
+      assert.deepStrictEqual(never(Object.assign({}, s1, { recurringUnavailable: [{ weekday: "Tue" }] })), [Q], "a recurring day off on a never-on weekday: the far day is that rule's");
+      assert.deepStrictEqual(never(Object.assign({}, s1, { recurringUnavailable: [{ weekday: "Fri" }] })), ["Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."], "a recurring day off on another weekday leaves it allowed");
+      {
+        // ... and the engine agrees: seed s1 + a recurring Tue off - a far Tue (beyond the 56 days) is hard recurring-unavailable
+        const R = require(path.join(ROOT, "rules.js"));
+        const ctxRu = R.buildContext({ roster: seed.roster, surgeonRules: Object.assign({}, seed.surgeonRules, { s1: Object.assign({}, s1, { recurringUnavailable: [{ weekday: "Tue" }] }) }), groupRules: G0, holidays: seed.holidays, schedule: {}, today: "2026-10-01" });
+        assert.deepStrictEqual(R.eligibility(ctxRu, "2027-02-02", "primary", "s1").hard, ["recurring-unavailable:Tue"]);
+      }
+      assert.deepStrictEqual(H.suSumGoverned({ explicitListMonths: ["2027-01", { month: "2027-02" }, { month: "2027-03", roles: ["backup"] }, 7] }, true), { primary: ["2027-01"], both: ["2027-02"], backup: ["2027-03"] });
+      // agreement: offerRulesWords qualifies exactly when suRulesSummary's line of a covered role does
+      const others = [{}, { recurringAvailable: [{ weekday: "Mon" }] }, { availabilityMode: "whitelist-recurring" }, { availableWindows: [{ start: "2027-01-04", end: "2027-01-10" }] },
+        { availableWeeks: ["2027-01-04"] }, { explicitListMonths: ["2027-01"] }, { explicitListMonths: [{ month: "2027-01", roles: ["backup"] }] }, { outsideDerivedWeeks: { weekdayPattern: { Mon: { primary: true, backup: true } } } },
+        { recurringUnavailable: [{ weekday: "Tue" }] }];
+      const rolesSets = [undefined, ["primary"], ["backup"], ["primary", "backup"]];
+      let n = 0;
+      [G0, closed, Wg({ hardNeverBeyondNotice: 0 }), Wg({ hardNeverBeyondNotice: 0 }, closed)].forEach((g, gi) => rolesSets.forEach(roles => others.forEach(o => {
+        const rules = Object.assign({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysNoticeDays: 10 }, roles ? { hardNeverWeekdaysRoles: roles } : {}, o);
+        const ow = never(rules, g); assert.strictEqual(ow.length, 1, JSON.stringify(rules));
+        const oq = /where your other day rules allow it|your other day rules decide/.test(ow[0]);
+        const sum = H.suRulesSummary(rules, { names, holidayNames: HOL, groupRules: g }).filter(l => l.family === "Primary" || l.family === "Backup").map(l => l.text).join(" | ");
+        const sq = /where the other day rules allow it|left to the other day rules/.test(sum);
+        assert.strictEqual(oq, sq, "group #" + gi + " " + JSON.stringify(rules) + ": offerRulesWords '" + ow[0] + "' vs summary '" + sum + "'");
+        n++;
+      })));
+      assert.strictEqual(n, 4 * 4 * 9, "the whole matrix ran");
     });
     check("P24 summary review 10/1: every day-limiting rule on its own (a recurring list with an allow-list, an allow-list with a weekday pattern); the soft pairs read with the weights (others first, the weekday / weekend preference, the notice); the style words soft, backup-only under a lone Friday, 'daily' a lone day fine", () => {
       const fam = (rules, f, inf) => (H.suRulesSummary(rules, inf || info).find(l => l.family === f) || {}).text;

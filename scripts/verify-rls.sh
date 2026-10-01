@@ -6,10 +6,10 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_VACATION_GUARD_APPLIED=1                           grade section 15 strictly (the probe's PROBE_SETUP = FAIL): only on the run right after sql/migrations/2026-09-30-vacation-guard.sql is applied; the record step makes strict the default and drops this variable
 #   SILVIS_NO_PRIMARY_APPLIED=1                               grade section 16 strictly (the probe's PROBE_SETUP and the anon 404s = FAIL): only on the run right after sql/migrations/2026-10-01-no-primary-days.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
+# The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
 # Section 5 (Prompt 12 D) runs sql/probes/trade-guards-probe.sql, which rolls itself back: it ends by
 # RAISING an exception whose message carries the per-case results, and this script grades them.
 # Section 7 (Prompt 13 part 2) does the same with sql/probes/claim-open-slot-probe.sql (claim_open_slot).
@@ -17,11 +17,17 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_NO_PRIMARY_APPLIED / SILVIS_VACATION_GUARD_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_NO_PRIMARY_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
 set -u
+# Supabase CLI agent mode (the vacation guard's record step, 10/1): `supabase db query -o json` prints the
+# {"warning","boundary","rows"} envelope only in agent mode, which the CLI (2.84) auto-detects from env vars such as CLAUDECODE /
+# AI_AGENT. q() prints that envelope and verdict() tells a success by its "rows" key (the trigger checks, every probe setup and
+# cleanup); outside an agent shell the CLI prints a bare array, so every q() success would read as an error (Faraz's first 10/1
+# apply run stopped on that shape). Set it here so any shell behaves like the tested one; an AI_AGENT already set is kept.
+export AI_AGENT="${AI_AGENT:-1}"
 cd "$(dirname "$0")/.." || exit 1
 URL=$(grep -oE 'SUPABASE_URL\s*=\s*"[^"]+"' config.js | head -1 | sed 's/.*"\(.*\)"/\1/')
 ANON=$(grep -oE 'SUPABASE_ANON_KEY\s*=\s*"[^"]+"' config.js | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -989,20 +995,20 @@ else
 fi
 
 echo "== 15. vacation guard (2026-09-30, Prompt 27): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="
-# sql/migrations/2026-09-30-vacation-guard.sql (report-first, NOT applied; revision s): time_off_vacation_guard, a BEFORE INSERT OR
-# UPDATE trigger on time_off that fires after the on-call trigger - VG001 VACATION_TOO_FEW_AROUND when, on a day the row takes the
-# person off, fewer than groupRules.vacations.minSurgeonsAround (default 2) active roster surgeons would stay around (off = a time_off
-# row or an East vacation not reviewed 'home'); the scheduler and a session with no signed-in user pass, the office coordinator is
-# refused like a surgeon. Nothing here goes over REST: sql/probes/vacation-guard-probe.sql exercises the trigger through the linked
-# CLI and rolls itself back. Its expected strings rest on the live picture P1 'active=6 min=2' / P2 'east=yes' (graded first, by
-# name). BEFORE the apply the probe raises PROBE_SETUP: time_off_vacation_guard is absent - the expected not-applied picture, a
-# PASS; with SILVIS_VACATION_GUARD_APPLIED=1 (the run right after the apply) it is a FAIL. The leftover count runs either way.
-VGSTRICT15="${SILVIS_VACATION_GUARD_APPLIED:-}"
+# sql/migrations/2026-09-30-vacation-guard.sql (report-first; applied 2026-10-01 16:53:33Z, revision s): time_off_vacation_guard, a
+# BEFORE INSERT OR UPDATE trigger on time_off that fires after the on-call trigger - VG001 VACATION_TOO_FEW_AROUND when, on a day the
+# row takes the person off, fewer than groupRules.vacations.minSurgeonsAround (default 2) active roster surgeons would stay around
+# (off = a time_off row or an East vacation not reviewed 'home'); the scheduler and a session with no signed-in user pass, the office
+# coordinator is refused like a surgeon. Nothing here goes over REST: sql/probes/vacation-guard-probe.sql exercises the trigger
+# through the linked CLI and rolls itself back. Its expected strings rest on the live picture P1 'active=6 min=2' / P2 'east=yes'
+# (graded first, by name). The trigger exists since the apply, so the probe's PROBE_SETUP (time_off_vacation_guard is absent) is a
+# FAIL - strict since the record step, which dropped the flag for the run right after the apply (before the apply PROBE_SETUP
+# passed as the not-applied picture). The leftover count runs either way.
 if linked; then
   PROBE15="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/vacation-guard-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE15" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: time_off_vacation_guard is absent'; then
-    if [ "$VGSTRICT15" = "1" ]; then bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent with SILVIS_VACATION_GUARD_APPLIED=1 (the trigger should exist after the apply)"; else ok "vacation guard probe: the trigger is absent (before the migration: PROBE_SETUP)"; fi
+    bad "vacation guard probe: PROBE_SETUP - time_off_vacation_guard is absent (the trigger exists since the 2026-10-01 apply)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
     bad "vacation guard probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
   else

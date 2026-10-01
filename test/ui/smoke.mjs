@@ -9395,6 +9395,12 @@ try {
     failSnapshotInsert = false;
 
     // ---- Accept & Publish for real: snapshot BEFORE the first schedule_days write, then the publish dialog ----
+    // Review of the 10/1 follow-ups: the accepted rows are intercepted writes, so the app's next background schedule_days
+    // poll re-adopts the live rows and drops a saved day the live table does not hold (refreshDays) - the probe re-read
+    // below then sees the pre-accept holders (9/23, 9/25 and 10/1 runs; the 5-s settle cannot recover it). Start the writes,
+    // the Publish (Send) step and the probe at the top of a fresh 60-s poll interval, as the day-editor checks do.
+    await freshPollWindow("Accept & Publish");
+    const acceptAt = Date.now();
     const beforeOk = writes.length;
     await page.click("[data-testid=gen-accept]");
     await page.waitForSelector("[data-testid=publish-dialog]", { timeout: 60000 });
@@ -9538,6 +9544,7 @@ try {
     const pubP = pubProbe ? await cellAttr(pubProbe.day, "data-primary").catch(() => null) : null;
     const pubB = pubProbe ? await cellAttr(pubProbe.day, "data-backup").catch(() => null) : null;
     const pubPrev = pubProbe ? await cellAttr(pubProbe.day, "data-preview").catch(() => null) : null;
+    console.log(`     (Accept & Publish: the probe read ${Math.round((Date.now() - acceptAt) / 1000)} s after the Accept click; the last schedule_days read (any GET - the poll, the snapshot read or a per-day read) answered ${lastDaysGetAt ? Math.round((Date.now() - lastDaysGetAt) / 1000) + " s" : "never"} ago)`);
     if (!pubProbe) fail(`Accept & Publish: none of the ${previewGrid.length} preview cells carried a holder to re-check after the accept`);
     else if ((pubP || "") !== (pubProbe.p || "") || (pubB || "") !== (pubProbe.b || "") || pubPrev === "1") fail(`Accept & Publish: ${pubProbe.day} should now be a saved assignment with the preview's holders P ${pubProbe.p || "-"} / B ${pubProbe.b || "-"} (cell P '${pubP}' B '${pubB}', preview '${pubPrev}'${pubChanged ? "; the accept changed this day against the map" : ""})`);
     else ok(`Accept & Publish: ${pubProbe.day} is a saved assignment (P ${pubP || "-"} / B ${pubB || "-"} = the preview's${pubChanged ? ", a day the accept changed: " + expectedSlots.filter(s => s.startsWith(mdOf(pubProbe.day) + " ")).join(", ") : " - no preview cell differed from the map"}), no longer a preview`);
