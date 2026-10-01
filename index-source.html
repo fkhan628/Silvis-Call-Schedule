@@ -9990,7 +9990,7 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   const renderField = (id) => {
     switch (id) {
       case "availabilityMode": return (
-        <RuField T={T} label="Availability mode" hint="only 'only listed recurring days' changes the scheduling; the others are labels">
+        <RuField T={T} label="Availability mode" hint="a label, except 'only listed recurring days' (that one limits primary)">
           <select data-testid="rules-avail-mode" value={get("availabilityMode", "")} onChange={e => set("availabilityMode", e.target.value || undefined)} style={{ ...inp, width: 260, maxWidth: "100%" }}>
             {SU_MODES.map(m => <option key={m} value={m}>{RULE_MODE_WORDS[m] || m}</option>)}
             {(() => { const v = get("availabilityMode", ""); return v && SU_MODES.indexOf(v) < 0 ? <option value={v}>{v}</option> : null; })()}
