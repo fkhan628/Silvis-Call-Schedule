@@ -7975,13 +7975,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suRuleRemoveConfirm(f("recurringAvoid"), S.s3, "Acton"), 'Remove the rule "Recurring days to avoid (soft)" for Acton? This deletes: the Sun before the 2nd/4th Mon until 12/31/2026, the Sun before the 2nd Mon from 1/1/2027.');
       assert.strictEqual(H.suRuleRemoveConfirm(f("hardNeverWeekdays"), S.s1, "Khan"), 'Remove the rule "Never on (weekdays)" for Khan? This deletes: Tue/Thu; applies to primary; hard only within (days) 56.');
       assert.strictEqual(H.suRuleRemoveConfirm(f("weekendCap"), S.s1, "Khan"), 'Remove the rule "Weekends per month" for Khan? This deletes: East weekends count; counts primary; weight strong.', "the start's perMonth 2 is not news; the rest is");
-      assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), S.s4, "Philip"), 'Remove the rule "Most major holidays in 12 months" for Philip? This deletes: 1; most major holidays (older place) 1.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), S.s4, "Philip"), 'Remove the rule "Most major holidays in 12 months" for Philip? This deletes: the setting "1"; most major holidays (older place) 1.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s3, "Acton"), 'Remove the rule "Monthly cap" for Acton? This deletes: the setting "none".', "a lone null never reads as 'deletes: none'");
       assert.ok(H.suRuleRemoveConfirm(f("aledo"), S.s4, "Philip").includes("clinic days the 1st/3rd Wed, the Fri in the week of the 3rd Wed"), "Philip's clinic days are named");
       assert.ok(H.suRuleRemoveConfirm(f("outsideDerivedWeeks"), S.s5, "Fierce").includes("weekday pattern for Mon-Sun"), "a per-weekday table reads as one item");
       const many = { availableWindows: Array.from({ length: 12 }, (_, i) => ({ start: "2027-0" + (1 + (i % 9)) + "-01", end: "2027-0" + (1 + (i % 9)) + "-05" })) };
       assert.ok(/This deletes: 12 entries\.$/.test(H.suRuleRemoveConfirm(f("availableWindows"), many, "X")), "a long list is counted");
-      assert.deepStrictEqual(H.suRuleFieldHeld(f("weekendStyle"), { weekendStyle: "split" }), ["split"]);
-      assert.deepStrictEqual(H.suRuleFieldHeld(f("backupOptOut"), { backupOptOut: false }), ["off"], "an explicit default is still a key Remove deletes");
+      assert.deepStrictEqual(H.suRuleFieldHeld(f("weekendStyle"), { weekendStyle: "split" }), ['the setting "split"']);
+      assert.deepStrictEqual(H.suRuleFieldHeld(f("backupOptOut"), { backupOptOut: false }), ['the setting "off"'], "an explicit default is still a key Remove deletes");
     });
     check("P24 PatternListEditor kind switch (helpers.suPatternWithKind): keeps start / end, weight, note and any other key; the new kind's keys only; 'dates' drops the weekday", () => {
       const p = { weekday: "Mon", nth: [2, 4], start: "2027-01-01", end: "2027-06-30", weight: "strong", note: "outreach", extra: 1 };

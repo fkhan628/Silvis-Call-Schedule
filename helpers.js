@@ -5098,10 +5098,12 @@ function suRuleFieldHeld(field, rules) {
       keys.forEach(k => { if (suSumProse(k)) { if (v[k] !== "" && v[k] !== null && v[k] !== undefined) notes = true; return; } walk(suRuleKeyWords(k), v[k], suRfObj(sv) ? sv[k] : undefined, depth + 1); });
       return;
     }
-    if (v === null) out.push(val(label, "none"));
-    else if (typeof v === "boolean") out.push(label ? label + (v ? "" : ": off") : (v ? "on" : "off"));
-    else if (suIsIso(v)) out.push(val(label, suSumDate(v, true)));
-    else out.push(val(label, String(v)));
+    // a lone value of the field itself (no label) reads "the setting ..." - "This deletes: none" would read as nothing
+    const lone = (s) => label ? val(label, s) : "the setting \"" + s + "\"";
+    if (v === null) out.push(lone("none"));
+    else if (typeof v === "boolean") out.push(label ? label + (v ? "" : ": off") : lone(v ? "on" : "off"));
+    else if (suIsIso(v)) out.push(lone(suSumDate(v, true)));
+    else out.push(lone(String(v)));
   };
   field.paths.forEach((p, i) => {
     if (!suRulePathHas(rules, p)) return;
