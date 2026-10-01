@@ -85,7 +85,7 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 
 | id | name | code | pool |
 |---|---|---|---|
-| s1 | Khan | FAK | weekend primary when East allows (`primaryContribution: "weekends"`, 9/22); Mon/Wed auto-offered when East is clear (= eligible with a soft +1, `auto-offer-weekday` / `weights.noTargetWeekday` — audit RG-3, 9/23); never Tue/Thu as primary (backup any day since 9/22); East blocks primary only |
+| s1 | Khan | FAK | ⟶ 9/30 (Prompt 23): **weekdays preferred** (`primaryContribution: "weekdays"`; was weekend primary, 9/22), a **standalone Friday** allowed and **never a lone Sat/Sun** as primary (`standaloneFriday`, `noLoneWeekendDay`), **at most 2 weekends a month across DSG and Silvis** (soft `weekendCap`), Tue/Thu primary hard only **within 56 days** (`hardNeverWeekdaysNoticeDays`); Mon/Wed auto-offered when East is clear (= eligible with a soft +1, `auto-offer-weekday` / `weights.noTargetWeekday` — audit RG-3, 9/23); backup any day since 9/22; East blocks primary only |
 | s2 | Burchett | MAB | yes |
 | s3 | Acton | BDA | yes |
 | s4 | Philip | AFP | yes |
@@ -382,6 +382,22 @@ Aledo week (strong), `prefer` rows (negative), weekend-style mismatch (block-sty
 preferences (`neverThanksgiving` is hard; `maxMajorHolidays` hard once reached; alternating-days preference soft),
 back-to-back weekends, backup on the day right after a primary day (mild), distance from monthly target.
 
+**Prompt 23 (Faraz 9/30) — four generic keys (Khan's new call preferences; rules doc §3 Khan, §8 item 23).**
+`primaryContribution: "weekdays"` (the mirror of `"weekends"`): a primary on a weekday (outside `weekendUnit.days`) or a
+standalone Friday → soft `weekday-primary` at −`weights.weekendContribution`; no block bonus, no backup term; never on a
+holiday-unit day; `weekendUnitPatterns` carries it as a unit-level term (skipPatternSoft). `standaloneFriday` +
+`noLoneWeekendDay`: the `friday` weekend pattern (§6) and the **hard** `lone-weekend-day:<Sat|Sun>` for primary (the partner
+day held — schedule or assume-slots — or a holiday cut, or a dated row / offer of his lifting it; a dynamic reason, in
+`HARD_REASONS`, the board's "weekday patterns and stated availability" category and the painter's confirm words).
+`weekendCap { perMonth, countsEast, roles, days, weight }`: soft `weekend-cap:<n>` at weight × (weekends over n), a weekend
+counted once in its Saturday's month (Silvis `roles` on `days`, or East-busy — `rdEastBusyOn`: feed + overrides, standing,
+forecast ≥ threshold outside the coverage, never a home day), on the weekend's first held counted day, only when the East
+data do not already count it; `rules.weekendCapCounts(ctx, id, month)` lists the counted weekends. `hardNeverWeekdaysNoticeDays`:
+`hard-never-weekday` only for a date ≤ N days after `ctx.today`; beyond it the soft `hard-never-beyond-notice:<wd>` at
+`weights.hardNeverBeyondNotice` (code default 2). **`ctx.today`** = `input.today`, else the Central date read once by
+`buildContext` (`rdTodayCentral`) — `eligibility()` never reads a clock; tests pin a fixed today (`test/seed-adapter.js`
+`SEED_TEST_TODAY` 2026-11-23). Malformed values warn once and are ignored (the notice: the rule stays hard everywhere).
+
 Every rule must be expressible in `call_schedule_data.data.surgeonRules` and editable in Setup — no surgeon-specific
 `if (name === "Philip")` in code. Fierce's derivation and Khan's East dependency are generic features
 (`eastFeed.enabled` + `eastBlocksPrimary` / `eastBlocksBackup` + a `derivedFrom` spec), so a future surgeon who splits
@@ -445,6 +461,25 @@ separately, and `diagnostics.impliedTargets` shows every level plus, per member,
 hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups).
 Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
 the pool's open-slot count.
+
+**Prompt 23 (Faraz 9/30) — the `friday` weekend pattern.** For a full primary weekend unit, whenever an active surgeon
+carries `surgeonRules.<id>.standaloneFriday`, `rules.weekendUnitPatterns` adds the kind **`friday`**: one surgeon alone on the
+Friday + the Saturday–Sunday as their own reduced unit — a block of two by one surgeon, or two daily days (with
+`weights.patternDaily`) — offered when the Friday holder or the block-of-two holder carries the key. The key holder's Friday
+costs nothing (the Sarkar-Friday reading of a standalone day), anyone else's Friday their weekendStyle's daily member
+penalty; the Sat–Sun is scored exactly like a holiday-cut Sat–Sun unit (a block of two is no mismatch for a block-style or
+key holder, else `weights.patternMismatch`; + `weekendBlockPenalty`). The daily enumeration skips the shapes the kind
+covers. **Effect on the other surgeons' weekend units:** only weekends where the key holder (Khan) holds the Friday alone
+or the Sat+Sun pair change — then the rest of the weekend goes to someone else as a two-day block (Philip, block style, no
+mismatch; Acton / Burchett, split style, +3, or a daily Sat / Sun pair with `patternDaily`; Fierce never — his Fri–Sun is
+block-only) or as a lone Friday beside Khan's pair (Sarkar's window Fridays pair naturally at 0; a block- or split-style
+Friday costs its +3). With no key on the roster the enumeration — and the whole generate — is byte-identical to the pre-23
+engine (checked on Nov–Dec and Jan–Mar, three seeds each, 10/1). The generator writes the kind like any pattern
+(`diagnostics.weekendUnits[].kind`), counts its daily sub-pattern in `pattern-daily`, reads the key holder's legal primary
+shapes ({Fri}, {Sat, Sun}, {Fri, Sat, Sun}) as no style mismatch (`genStyleMismatch`), and `buildUnits` judges a surgeon
+blocked ONLY by `lone-weekend-day` with the partner day assumed (the allowed-slot count). The other three keys (weekday
+bonus, weekend cap, Tue/Thu notice) reach the generator as ordinary soft terms through `eligibility()`; the notice is
+measured from `ctx.today`, which the app's Generate builds fresh per run (the Central date).
 
 **Diagnostics** returned with every run: per-surgeon tallies (primary, backup, weekend days, holidays, consecutive max,
 month totals vs cap/target), a list of open slots with reasons, the soft penalties incurred (so Faraz can see *why*

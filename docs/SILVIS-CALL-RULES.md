@@ -88,10 +88,52 @@ decides the Trauma Director role.
 
 ## 3. Per-surgeon rules
 
-### Khan (s1) — weekend primary when available, East-dependent
-- ⟶ **9/22: main contribution = PRIMARY on weekends when available** (Fri+Sat+Sun as a block). He is not a backup filler: his backup count is balanced like everyone else's, and the generator should prefer him as weekend *primary* over weekend *backup* whenever East allows.
-- ⟶ **Seed keys (Prompt 12 L, 9/22):** `surgeonRules.s1.primaryContribution: "weekends"` (generic — any surgeon; seed/blob data today, no Setup field yet) with `groupRules.weights.weekendContribution` = 3 (medium; 0 = off): his full Fri+Sat+Sun primary block earns the soft `weekend-primary` (−3 per day in the score, only as a member of a whole block; once per block inside the weekend-unit choice) and any weekend backup day of his costs the soft `weekend-backup` (+3 per day; once per pattern membership in the unit choice) — both soft, never a block; the weight is editable in Setup → Rules → weights (0 = off). Holiday units are not weekend units: neither term applies on a holiday-unit day and a weekend a unit pre-empts earns no block bonus. East cross-reference sources (`east-feed.js deriveKhanBusyDays`): `dayCall` Mon–Sat, `nights.mon..thu`, `nights.wknd` (Fri + Sun), `holidayCoverage` (24 h; someone else's holiday clears his day), `dayCallOverrides`, `isBackup` weeks (busy for primary while `eastFeed.eastBackupCountsAsBusy` is true — an East backup week busies only the shifts he actually holds in it (his dayCall/override/night/weekend/holiday days), never all seven days; pinned by `test/east-feed.test.js` "never busy wholesale"); each blocks primary (`east-busy`) and leaves backup open.
-- **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)* ⟶ **9/23 (audit RG-3): "auto-offered" = eligible with a soft +1** (`auto-offer-weekday`, `groupRules.weights.noTargetWeekday`), so on otherwise equal terms another surgeon takes the day and weekends stay his main contribution — set the weight to 0 in Setup → Rules → weights for equal footing (the Setup label reads "offer those days (soft +1, weights.noTargetWeekday)").
+### Khan (s1) — weekdays preferred since 9/30 (was: weekend primary when available), East-dependent
+- ⟶ **9/30 (Faraz, Prompt 23): new call preferences — they supersede the 9/22 "weekends are his main contribution" reading
+  below.** Four changes, each a **generic** `surgeonRules` key (any surgeon; no name branch), all soft unless said:
+  1. **Weekdays preferred** — `primaryContribution: "weekdays"` (was `"weekends"`), the mirror: a **primary on a weekday**
+     (Mon–Thu, or a **standalone Friday** — a Friday whose Saturday and Sunday he does not hold as primary) earns the soft
+     `weekday-primary` at `groupRules.weights.weekendContribution` (3). No weekend-block bonus, no backup term (the 9/22
+     weekend-backup penalty has no mirror — his backups are balanced by the share alone, on any day). Never on a holiday-unit
+     day. Mon/Wed keep the +1 auto-offer, so a Mon/Wed primary nets −2.
+  2. **Standalone Fridays** — `standaloneFriday: true`: as primary he may hold a Friday on its own; the Saturday–Sunday then
+     forms its own unit for someone else. **His own weekends stay Sat–Sun or Fri–Sun, never a lone Saturday or Sunday** —
+     `noLoneWeekendDay: true`, **hard** for primary (`lone-weekend-day:<Sat|Sun>`): holding one of the two needs the other.
+     Exempt: a weekend a holiday unit cuts (the partner day is a holiday-unit day — e.g. Sun 12/26/2027 after the Christmas
+     Saturday) and a holiday-unit day itself; a dated row or offer of his for the day lifts it (his own date beats his own
+     shape rule — item W); a lock is a fact (kept, rule in `conflicts`). An **East-busy partner day does not complete the
+     pair**: a Silvis Sunday alone after a DSG Saturday is still a lone Sunday (the rule is about his Silvis shapes - §8 item
+     23 (d)). His `weekendStyle "block"` keeps governing his **backup** weekends (unchanged).
+  3. **At most 2 weekends a month across DSG and Silvis** — `weekendCap: { perMonth: 2, countsEast: true, roles: ["primary"],
+     weight: "strong" }`, **soft**: a weekend counts **once, in its Saturday's month** (Sat 7/31 – Sun 8/1/2027 is a July
+     weekend), when he is **Silvis primary** on its Saturday or Sunday **or East-busy** on either day — the feed's busy days
+     (overrides applied; **his shifts in the weeks the Davenport group is backup count while `eastFeed.eastBackupCountsAsBusy`
+     is true, his seed value — the forecast always derives them that way**), the standing days (Christmas), and the forecast
+     at or over the busy threshold (0.5) outside the published coverage while Davenport is unpublished (never on a busy:false
+     override day or a 'home' East-vacation day). **Silvis backup does not count. A standalone Friday is a weekday and does
+     not count** (Cowork's reading of "M-F", 9/30 — §8 item 23 (a)). A placement that adds a weekend the East data do not
+     already count, in a month that then counts more than 2, carries `weekend-cap:2` at 10 × (weekends over 2), once per
+     weekend (on its first held day). Never lifted by an offer (a cap).
+  4. **Tue/Thu with more than 8 weeks' notice** — `hardNeverWeekdaysNoticeDays: 56`: the Tue/Thu primary rule stays **hard
+     only for a date within 56 days of the day the placement is made** (Central today — Generate's run, a claim, a trade, a
+     give, the day editor; **56 days out = hard, 57 = soft**; a past date is inside). Further out the day is allowed as primary
+     with the soft `hard-never-beyond-notice:<wd>` at `groupRules.weights.hardNeverBeyondNotice` (2, a code default — Setup's
+     weights list shows it), so Mon/Wed (+1) fill first. His dated rows / offers still lift the rule entirely. His Mon/Wed
+     allow-list and auto-offer stay.
+  **Unchanged:** DSG call blocks Silvis primary (`east-busy` / `east-forecast-busy`), Christmas Eve/Day on DSG (eastStanding),
+  max consecutive 3 (holiday unit = one day), offers first (his offered dates still beat his patterns), backup open every day.
+  **Engine:** `rules.js eligibility()` stays the single chokepoint; the today comes from the context (`ctx.today` =
+  `input.today`, else the Central date when the context is built — eligibility itself reads no clock); the generator gets the
+  terms through eligibility / `weekendUnitPatterns`, which adds the **`friday` pattern kind** (one surgeon alone on the
+  Friday + the Saturday–Sunday as a reduced unit: a block of two, or two daily days) whenever the Friday holder or the
+  block-of-two holder carries `standaloneFriday` (build guide §6). **Live:** the seed carries the five keys (with Note keys the
+  importer drops); Cowork sets them in Setup → Rules → Khan → *Edit as JSON* after the ship (no seed apply). The Setup form's
+  "Primary contribution" select lists only `weekends` and shows "(none)" for `weekdays`, but saving the form keeps the value
+  (the draft is the whole rules object) — the other four keys exist only in the JSON editor. **Preview:** the Jan – Jun 2027
+  before/after on the 10/1 live inputs is in the Prompt 23 report (private folder).
+- ⟶ **9/22: main contribution = PRIMARY on weekends when available** (Fri+Sat+Sun as a block). ⟶ **Superseded 9/30 (above): weekdays preferred.** He is not a backup filler: his backup count is balanced like everyone else's, and the generator should prefer him as weekend *primary* over weekend *backup* whenever East allows.
+- ⟶ **Seed keys (Prompt 12 L, 9/22) — ⟶ 9/30: his value is `"weekdays"` now (Prompt 23, above); the `"weekends"` mechanics below stay generic for any surgeon:** `surgeonRules.s1.primaryContribution: "weekends"` (generic — any surgeon; seed/blob data today, no Setup field yet) with `groupRules.weights.weekendContribution` = 3 (medium; 0 = off): his full Fri+Sat+Sun primary block earns the soft `weekend-primary` (−3 per day in the score, only as a member of a whole block; once per block inside the weekend-unit choice) and any weekend backup day of his costs the soft `weekend-backup` (+3 per day; once per pattern membership in the unit choice) — both soft, never a block; the weight is editable in Setup → Rules → weights (0 = off). Holiday units are not weekend units: neither term applies on a holiday-unit day and a weekend a unit pre-empts earns no block bonus. East cross-reference sources (`east-feed.js deriveKhanBusyDays`): `dayCall` Mon–Sat, `nights.mon..thu`, `nights.wknd` (Fri + Sun), `holidayCoverage` (24 h; someone else's holiday clears his day), `dayCallOverrides`, `isBackup` weeks (busy for primary while `eastFeed.eastBackupCountsAsBusy` is true — an East backup week busies only the shifts he actually holds in it (his dayCall/override/night/weekend/holiday days), never all seven days; pinned by `test/east-feed.test.js` "never busy wholesale"); each blocks primary (`east-busy`) and leaves backup open.
+- **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)* ⟶ **9/23 (audit RG-3): "auto-offered" = eligible with a soft +1** (`auto-offer-weekday`, `groupRules.weights.noTargetWeekday`), so on otherwise equal terms another surgeon takes the day and weekends stay his main contribution — set the weight to 0 in Setup → Rules → weights for equal footing (the Setup label reads "offer those days (soft +1, weights.noTargetWeekday)"). ⟶ **9/30 (Prompt 23): the Tue/Thu rule is hard only within 56 days (item 4 above), and weekdays are his preferred primary days (the −3 weekday-primary bonus outweighs the +1, so a Mon/Wed nets −2 and a Tue/Thu beyond the notice −1).**
 - ⟶ **9/22 late (Prompt 12 AA): the OR-day reason stays here and nowhere else** — the blob carries the rule only (`surgeonRules.s1.hardNeverWeekdays: ["Tue", "Thu"]`, `hardNeverWeekdaysRoles: ["primary"]`); the former `hardNeverWeekdaysReason` key ("OR day" token in the live blob) is gone from the seed, its wording folded into `hardNeverWeekdaysNote` (a Note key the importer drops), and the importer no longer writes a category token for any surgeon's note. One standard for anything anon-readable: no reasons, only the rule.
 - East feed: **primary** only on days he is **not on call at East (Davenport)**; **backup is allowed even on East call days**. ⟶ **9/22: cross-reference ALL of his Davenport call** — service weeks (Mon–Sat), weeknights, weekends, backup weeks, holiday coverage — from the Davenport app's `schedule_weeks` rows for the surgeon coded FAK, plus the forecast until Davenport publishes.
 - ⟶ **9/22 evening: his OR days are not every Tuesday and Thursday.** On a Tuesday or Thursday with no East OR block
@@ -709,3 +751,25 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     surgeons reading the rates are kept as built; Friday, holiday-unit days and the call-in requirement are switches Faraz sets
     with the rates. New: (i) the office coordinator reads pay read-only (Totals → Pay + CSV); (j) a per-surgeon "Paid by the
     call stipend" switch, default on (Faraz sets who is off).
+23. **Khan's 9/30 preferences (Prompt 23) — the readings taken; each is data in `surgeonRules.s1` / `groupRules.weights`,
+    none a code branch (§3 Khan).** (a) **A standalone Friday is a weekday** — it earns the weekday bonus and does **not**
+    count toward the 2-weekend cap (Cowork's reading of "M-F", 9/30); if a Friday should count, `weekendCap.days` takes
+    `["Fri", "Sat", "Sun"]` (data, default `["Sat", "Sun"]`). (b) **DSG backup days count** toward the cap: in the weeks the
+    Davenport group is backup, his own shifts are East-busy days while `eastFeed.eastBackupCountsAsBusy` is true (his seed
+    value), and the forecast always derives them that way; a backup week with no shift of his adds nothing. (c) **Silvis
+    backup does not count** (`weekendCap.roles ["primary"]`). (d) **An East-busy day does not complete his Silvis pair**: a
+    Silvis Sunday alone after a DSG Saturday is a lone Sunday (`lone-weekend-day`) — the rule reads his Silvis shapes; if a
+    DSG day should complete the pair, that is a one-line engine change (the partner held OR East-busy) — say so.
+    (e) **The notice's "today" is the day the context is built** (Central date): Generate builds a fresh one per run, the day
+    editor per draft; the app's main context is rebuilt whenever its data change, so a claim or trade made just after
+    midnight on an untouched session can read yesterday's date — at most a one-day shift at the 56-day edge. (f) **No backup
+    term in weekdays mode** (the 9/22 weekend-backup penalty has no mirror). (g) **The cap is soft at 10 per weekend over**
+    (strong) — Faraz may raise `weekendCap.weight`; it never blocks. (h) **A Tue/Thu beyond the notice costs +2**
+    (`weights.hardNeverBeyondNotice`), more than the +1 Mon/Wed auto-offer, so his Mon/Wed fill first. (i) **The day
+    editor:** the first of his Sat/Sun pair saved alone reads `lone-weekend-day` until the partner is saved (an override with
+    the visible warning, like any hard rule), and the editor shows the new codes raw (the UI's reason glosses are an
+    index-source follow-up, not built here). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
+    as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). (k) **Consequence
+    for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
+    periods generated more than eight weeks ahead (the Jan – Jun 2027 period is generated around 11/23: its January dates
+    through 1/18 stay hard for him, later ones soft).
