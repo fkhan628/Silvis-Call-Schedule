@@ -7171,10 +7171,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   (() => {
     const HP = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
     const hpCount = (s, needle) => s.split(needle).length - 1;
-    const acc = HP.slice(HP.indexOf("  const acceptHolidayPlan = async (year, plan, meta) => {"), HP.indexOf("  // --- Seed import (docs/silvis-seed.json through importer.js) ---"));
+    // slice moved deliberately 10/1 (second review S1): sendHeldHolidayNotices now follows acceptHolidayPlan, so `acc` ends
+    // at its comment and `sendHeld` is its own slice; kept intent - every acc pin still reads acceptHolidayPlan alone
+    const sendHeldAt = HP.indexOf("  // Second review S1 (10/1): the card's \"Send the held change notices (N)\"");
+    const acc = HP.slice(HP.indexOf("  const acceptHolidayPlan = async (year, plan, meta) => {"), sendHeldAt);
+    const sendHeld = HP.slice(sendHeldAt, HP.indexOf("  // --- Seed import (docs/silvis-seed.json through importer.js) ---"));
     const panel = HP.slice(HP.indexOf("function HolidayPlanPanel("), HP.indexOf("// --- East feed status, forecast, overrides, derived weeks and busy days ---"));
     check("P25 pins: the card is the scheduler's only - the Setup view is scheduler-only, HolidaysCard renders HolidayPlanPanel for isScheduler (passed isScheduler && !isPublicMode), and acceptHolidayPlan refuses anyone else and an unread schedule before it reads the map", () => {
-      assert.ok(acc.length > 200 && panel.length > 200, "acceptHolidayPlan / HolidayPlanPanel found");
+      assert.ok(acc.length > 200 && panel.length > 200 && sendHeldAt > 0, "acceptHolidayPlan / HolidayPlanPanel / sendHeldHolidayNotices found");
       assert.ok(HP.includes('{view==="setup" && !isPublicMode && isScheduler && <>'), "Setup is the scheduler's view");
       assert.ok(HP.includes("onSave={saveHolidays} isScheduler={isScheduler && !isPublicMode} planState={ctxInputs} today={todayStr} onAcceptPlan={acceptHolidayPlan}"), "the call site: scheduler flag, live state, the one write path");
       assert.ok(HP.includes("{isScheduler && <HolidayPlanPanel css={css} dk={dk} holidays={holidays} planState={planState}"), "HolidaysCard renders the panel for the scheduler only");
@@ -7220,20 +7224,68 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ["office-notifications", "schedule_published", "publishRef.current()", "pendingOpenShiftsNoticeRef"].forEach(n => assert.strictEqual(hpCount(acc, n), 0, "no " + n));
       assert.ok(acc.includes('const affected = [...new Set(noticeChanged.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];'), "affected = roster holders before / after a changed slot (review fix G: against the rows last persisted)");
     });
-    check("[P25] review fix G pins: the notices diff the rows LAST PERSISTED (lastSyncRef, read before the sync - never written here) or the 'before' a failed / conflicted Accept left pending, against the plan rows; a failed / conflicted Accept keeps its before-rows (earliest wins) for the next Accept of the year that saves; a saved Accept clears its days", () => {
+    // pin moved deliberately 10/1 (second review S1 / M3): the "before" is helpers.holidayPlanNoticeChanges (the held
+    // `before` only while the persisted row is still it or the held `wrote`), a held day is { before, wrote, unit, swap },
+    // and the failure toast points at the card's Send button instead of "press Accept again". Kept intent: the notices
+    // diff the rows LAST PERSISTED (read before the sync, never written here); a failed / conflicted Accept holds them;
+    // a saved Accept clears its days.
+    check("[P25] review fix G + second review S1 / M3 pins: the notices diff the rows LAST PERSISTED (lastSyncRef, read before the sync - never written here) through helpers.holidayPlanNoticeChanges (the held 'before' only while the persisted row is still it or the held 'wrote'); a failed / conflicted Accept holds each changed day as { before, wrote, unit, swap }; a saved Accept clears its days; the ref is mirrored for the card after every change", () => {
       assert.ok(HP.includes("  const holidayNoticePendingRef = useRef({});"), "the pending-notice ref, declared once at the component's top level");
-      const before = acc.indexOf("rows.days.forEach(d => { noticeBefore[d] = Object.prototype.hasOwnProperty.call(pend, d) ? pend[d] : (persisted[d] || null); noticeAfter[d] = next[d]; });");
+      assert.ok(HP.includes("  const [holidayNoticeHeld, setHolidayNoticeHeld] = useState({});"), "its render mirror (the card's Send button), declared once at the component's top level");
       const persistedRead = acc.indexOf("const persisted = lastSyncRef.current || {};");
-      const nc = acc.indexOf('const noticeChanged = diffScheduleDays(noticeBefore, noticeAfter).filter(c => c.role === "primary" || c.role === "backup");');
+      const before = acc.indexOf("const notice = holidayPlanNoticeChanges(rows.days, next, persisted, pend);");
+      const nc = acc.indexOf("const noticeChanged = notice.changes;");
       const sync = acc.indexOf("const r = await syncScheduleDays(next);");
       assert.ok(persistedRead > 0 && before > persistedRead && nc > before && sync > nc, JSON.stringify({ persistedRead, before, nc, sync }));
       assert.strictEqual(hpCount(acc, "lastSyncRef.current ="), 0, "acceptHolidayPlan never writes lastSyncRef (the sync's own state)");
+      assert.strictEqual(hpCount(acc, "noticeBefore"), 0, "the old per-day 'before' (pend wins whatever is on file - review 2 M3) is gone");
       const okAt = acc.indexOf("if (r && r.ok) {");
       const clear = acc.indexOf("if (Object.keys(left).length) pendingNotices[year] = left; else delete pendingNotices[year];");
-      const keep = acc.indexOf("rows.days.forEach(d => { if (!Object.prototype.hasOwnProperty.call(keep, d)) keep[d] = noticeBefore[d]; });");
+      const mirror1 = acc.indexOf("mirrorHeldNotices();", clear);
       const blockedRet = acc.indexOf('if (r && r.blocked) { showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error"); return false; }');
-      assert.ok(okAt > sync && clear > okAt && blockedRet > clear && keep > blockedRet, JSON.stringify({ okAt, clear, blockedRet, keep }));
-      assert.ok(acc.includes("The change notices wait: press Accept ${year} again once the header shows Saved to send them."), "the failed write says the notices wait");
+      const keep = acc.indexOf("rows.days.forEach(d => { if (heldDays.has(d)) keep[d] = { before: notice.before[d], wrote: next[d], unit: unitOfDay[d] || null, swap }; else delete keep[d]; });");
+      const heldSet = acc.indexOf("const heldDays = new Set(noticeChanged.map(c => c.day));");
+      const store = acc.indexOf("if (Object.keys(keep).length) pendingNotices[year] = keep; else delete pendingNotices[year];");
+      const mirror2 = acc.indexOf("mirrorHeldNotices();", store);
+      assert.ok(okAt > sync && clear > okAt && mirror1 > clear && blockedRet > mirror1 && heldSet > blockedRet && keep > heldSet && store > keep && mirror2 > store, JSON.stringify({ okAt, clear, mirror1, blockedRet, heldSet, keep, store, mirror2 }));
+      assert.ok(!acc.includes("press Accept ${year} again"), "the old toast (pointing at an Accept a failed swap no longer offers) is gone");
+    });
+    check("[P25] second review S1 pins: the failure toast is worded per mode, names the surgeons whose notices are held, shows on a conflict too, and points at the card's 'Send the held change notices' button; N4 - the success toast names who was told and never says 'already on file' while held notices went out", () => {
+      const blockedRet = acc.indexOf('if (r && r.blocked) {');
+      const tail = acc.slice(blockedRet);
+      assert.ok(tail.includes("const heldIds = noticeRosterIds(notice.affected);"), "the held surgeons are the roster holders of the held changes");
+      assert.ok(tail.includes('const heldText = heldIds.length ? ` The change notices to ${heldIds.map(nameOf).join(", ")} are held: once the header shows Saved, press "Send the held change notices" on the holiday plan card (Setup > Holidays) - it sends only the days now on file as planned.` : " No slot changed hands - no change notice is held.";'), "the held text names them and the button");
+      const cf = tail.indexOf('if (r && r.conflict) showToast(`Someone else changed a schedule day while the ${swap ? "holiday swap" : year + " holiday plan"} was saving - the schedule was reloaded; the days that did not collide save on their own.${heldText} Then ${swap ? "Re-check " + year : "Plan " + year + " -> Accept"} again for the days the other change took.`, "error");');
+      const sw = tail.indexOf('else if (swap) showToast(`The holiday swap did not save yet - it retries automatically (the Re-check list already reads the swapped holders, so there is nothing to Apply again).${heldText}`, "error");');
+      const fl = tail.indexOf('else showToast(`Some ${year} holiday days did not save yet - they retry automatically (no need to Accept again).${heldText}`, "error");');
+      assert.ok(cf > 0 && sw > cf && fl > sw, JSON.stringify({ cf, sw, fl }));
+      assert.ok(!/if \(!\(r && r\.conflict\)\) showToast/.test(acc), "a conflict is no longer silent");
+      assert.ok(acc.includes('const savedNote = changed.length ? "" : affected.length ? " (this device already showed them after the earlier Accept that did not save)" : " (the holders were already on file)";'), "N4: 'already on file' only when nobody was told");
+      assert.ok(acc.includes('showToast(`Locked ${rows.days.length} holiday day(s) of ${year}${savedNote}.${affected.length ? " Change notices sent to " + affected.map(nameOf).join(", ") + "." : ""} The office notice is Settings > Office notifications > Publish and notify office.`, "success");'), "N4: the success toast names who was told");
+    });
+    check("[P25] second review S1 pins: 'Send the held change notices (N)' - the card shows it per year with held days (the App's mirror), and sendHeldHolidayNotices (scheduler only) sends through helpers.holidayPlanHeldNotices against the rows LAST PERSISTED + the local map: ONE manual_edit note + ONE manual_edit e-mail for the landed days, the waiting days kept, the rest dropped; no write of any row", () => {
+      assert.ok(sendHeld.length > 200, "sendHeldHolidayNotices found");
+      assert.ok(HP.includes("onAcceptPlan={acceptHolidayPlan} heldNotices={holidayNoticeHeld} onSendHeldNotices={sendHeldHolidayNotices}"), "the call site hands the mirror and the send handler to HolidaysCard");
+      assert.ok(HP.includes("onAccept={onAcceptPlan} showToast={showToast} heldNotices={heldNotices} onSendHeld={onSendHeldNotices}/>}"), "HolidaysCard passes them to the panel");
+      assert.strictEqual(hpCount(HP, "onSendHeldNotices={sendHeldHolidayNotices}"), 1, "sendHeldHolidayNotices is reached from the card only");
+      const gate = sendHeld.indexOf('if (!isScheduler || isPublicMode) { showToast("Only the scheduler can send the holiday plan notices.", "error"); return; }');
+      const res = sendHeld.indexOf("const res = holidayPlanHeldNotices(held, lastSyncRef.current || {}, scheduleRef.current || schedule);");
+      const left = sendHeld.indexOf("if (Object.keys(res.left).length) pendingNotices[year] = res.left; else delete pendingNotices[year];");
+      const mirror = sendHeld.indexOf("mirrorHeldNotices();", left);
+      const note = sendHeld.indexOf('addNotification("manual_edit", res.swap ? "Holiday swap " + year : "Holiday plan " + year, msg, { year, affected, surgeon_id: affected[0] });');
+      const mail = sendHeld.indexOf('sendEmailNotif("manual_edit", { message: msg, subject: `Holiday plan ${year}${res.swap ? " - swap" : ""}` }, affected);');
+      assert.ok(gate > 0 && res > gate && left > res && mirror > left && note > mirror && mail > note, JSON.stringify({ gate, res, left, mirror, note, mail }));
+      assert.ok(sendHeld.includes("const affected = noticeRosterIds(res.affected);") && sendHeld.includes("holidayPlanUnitLines(res.units, nameOf)"), "roster holders only; the message lists the landed units");
+      assert.strictEqual(hpCount(sendHeld, "addNotification("), 1); assert.strictEqual(hpCount(sendHeld, "sendEmailNotif("), 1);
+      ["syncScheduleDays(", "setSchedule(", "lastSyncRef.current =", "scheduleRef.current =", "fetch(", "db.", "logAudit(", "snapshots.", "office-notifications"].forEach(n => assert.strictEqual(hpCount(sendHeld, n), 0, "no " + n + " in sendHeldHolidayNotices"));
+      assert.ok(sendHeld.includes("still held; press again once the header shows Saved.") && sendHeld.includes("dropped, nothing sent for them."), "the toast says what waits and what was dropped");
+      assert.ok(panel.includes('const heldYears = Object.keys(heldNotices || {}).filter(y => heldNotices[y] && heldNotices[y].days > 0).sort();'), "the panel shows a year while it has held days");
+      assert.ok(panel.includes('<button data-testid="holplan-send-held" data-year={y} onClick={() => { if (onSendHeld) onSendHeld(Number(y)); }} disabled={busy}') && panel.includes(">Send the held change notices ({heldNotices[y].days})</button>"), "the button: 'Send the held change notices (N)'");
+      assert.ok(panel.indexOf('data-testid="holplan-held"') > panel.indexOf('data-testid="holplan-recheck"') && panel.indexOf('data-testid="holplan-held"') < panel.indexOf('data-testid="holplan-preview"'), "in the Plan / Re-check area, above the preview and the Re-check list");
+      assert.strictEqual(hpCount(HP, "mirrorHeldNotices();"), 4, "the mirror follows every change of the ref (a saved Accept, a held one, the Send - and the Send's no-op)");
+    });
+    check("[P25] second review M2 pins: a started unit's swap control lists no move (helpers hplOptions) and says so", () => {
+      assert.ok(panel.includes("const unitStarted = !!today && a.unit.days[0] <= today;") && panel.includes("disabled={busy || !opts.length}") && panel.includes('<option value="">{unitStarted ? "started" : "swap..."}</option>'), "the select is disabled with no option and reads 'started'");
     });
     check("[P25] review fix A / B / C / E / F pins: one surgeon in both roles stops BEFORE the confirm (structural, nothing written); a swap with a started unit is refused (it would be written half); a full Accept that skips a started unit names the breaks of the year as written; kept notes and every replaced slot (grouped) are in the confirm", () => {
       const rowsAt = acc.indexOf("const acc = holidayPlanAcceptRows(year, plan, cur, opts);");

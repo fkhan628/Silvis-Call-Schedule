@@ -3492,7 +3492,27 @@ function CallSchedule() {
   // role + holder (helpers holidayPlanConflictLines), never cut off by day. G - the change notices diff the rows last
   // PERSISTED (lastSyncRef - read only) against the plan rows, and a failed / conflicted Accept keeps its "before" rows
   // in holidayNoticePendingRef so the next Accept of that year that saves still sends them.
-  const holidayNoticePendingRef = useRef({}); // { year: { day: assignment before the first Accept that did not save } }
+  // Second review (10/1): S1 - a held day is { before, wrote, unit, swap } and the card shows "Send the held change
+  // notices (N)" while a year has held days (holidayNoticeHeld mirrors the ref for the render): it sends, against the
+  // rows LAST PERSISTED, only the days now on file as the Accept wrote them (helpers holidayPlanHeldNotices), keeps the
+  // ones still waiting for the automatic retry and drops the ones someone else has changed since. The failure toast is
+  // worded per mode (a failed swap leaves nothing to Apply again - the Re-check list reads the moved map), names the
+  // surgeons whose notices are held, and shows on a conflict too, pointing at that button. M3 - the held `before` counts
+  // only while the persisted row is still that `before` or the `wrote` (helpers holidayPlanNoticeChanges); otherwise the
+  // notice diffs the persisted row, so the holder actually replaced is told. N4 - the success toast names who was told.
+  const holidayNoticePendingRef = useRef({}); // { year: { day: { before, wrote, unit: { name, primary, backup }, swap } } }
+  const [holidayNoticeHeld, setHolidayNoticeHeld] = useState({}); // { year: { days, ids } } - the card's mirror of the ref
+  const noticeRosterIds = (ids) => [...new Set(ids)].filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external");
+  const mirrorHeldNotices = () => {
+    const out = {};
+    Object.keys(holidayNoticePendingRef.current).forEach(y => {
+      const held = holidayNoticePendingRef.current[y] || {};
+      const days = Object.keys(held);
+      if (!days.length) return;
+      out[y] = { days: days.length, ids: noticeRosterIds(days.flatMap(d => diffScheduleDays({ [d]: held[d].before }, { [d]: held[d].wrote }).filter(c => c.role === "primary" || c.role === "backup").flatMap(c => [c.from, c.to]))) };
+    });
+    setHolidayNoticeHeld(out);
+  };
   const acceptHolidayPlan = async (year, plan, meta) => {
     const m = meta || {};
     const swap = m.mode === "swap";
@@ -3536,14 +3556,14 @@ function CallSchedule() {
     }
     const next = { ...base, ...rows.rows };
     const changed = diffScheduleDays(base, next).filter(c => c.role === "primary" || c.role === "backup");
-    // The notices' "before": per plan day, the row a failed / conflicted Accept of this year left pending, else the row
-    // LAST PERSISTED (lastSyncRef, read before the sync moves it) - never the local map, which a failed Accept already moved.
+    // The notices' "before": per plan day, the row LAST PERSISTED (lastSyncRef, read before the sync moves it) - never the
+    // local map, which a failed Accept already moved - or the held `before` of a failed / conflicted Accept of this year
+    // while the persisted row is still that `before` or its `wrote` (helpers holidayPlanNoticeChanges, second review M3).
     const pendingNotices = holidayNoticePendingRef.current;
     const pend = pendingNotices[year] || {};
     const persisted = lastSyncRef.current || {};
-    const noticeBefore = {}, noticeAfter = {};
-    rows.days.forEach(d => { noticeBefore[d] = Object.prototype.hasOwnProperty.call(pend, d) ? pend[d] : (persisted[d] || null); noticeAfter[d] = next[d]; });
-    const noticeChanged = diffScheduleDays(noticeBefore, noticeAfter).filter(c => c.role === "primary" || c.role === "backup");
+    const notice = holidayPlanNoticeChanges(rows.days, next, persisted, pend);
+    const noticeChanged = notice.changes;
     pushUndo(base, next);
     setSchedule(next);
     scheduleRef.current = next;
@@ -3560,22 +3580,59 @@ function CallSchedule() {
       const left = {};
       Object.keys(pend).forEach(d => { if (rows.days.indexOf(d) < 0) left[d] = pend[d]; });
       if (Object.keys(left).length) pendingNotices[year] = left; else delete pendingNotices[year];
+      mirrorHeldNotices();
       const affected = [...new Set(noticeChanged.flatMap(c => [c.from, c.to]).filter(id => id && !String(id).startsWith("ext:") && sMap[id] && sMap[id].type !== "external"))];
       if (affected.length) {
         const msg = manualEditMsg([`Holiday plan ${year}${swap ? " (swap)" : ""} - locked:`].concat(holidayPlanUnitLines(rows.units, nameOf)), userProfile?.display_name || nameOf(mySurgeon));
         addNotification("manual_edit", swap ? "Holiday swap " + year : "Holiday plan " + year, msg, { year, affected, surgeon_id: affected[0] });
         sendEmailNotif("manual_edit", { message: msg, subject: `Holiday plan ${year}${swap ? " - swap" : ""}` }, affected);
       }
-      showToast(`Locked ${rows.days.length} holiday day(s) of ${year}${changed.length ? "" : " (the holders were already on file)"}. The office notice is Settings > Office notifications > Publish and notify office.`, "success");
+      // N4: changed is the LOCAL diff - 0 after an earlier Accept that did not save already moved this device's map, while
+      // the notices (against the rows last persisted) still went out
+      const savedNote = changed.length ? "" : affected.length ? " (this device already showed them after the earlier Accept that did not save)" : " (the holders were already on file)";
+      showToast(`Locked ${rows.days.length} holiday day(s) of ${year}${savedNote}.${affected.length ? " Change notices sent to " + affected.map(nameOf).join(", ") + "." : ""} The office notice is Settings > Office notifications > Publish and notify office.`, "success");
       return true;
     }
     if (r && r.blocked) { showToast("The write was refused by the wipe guard - nothing was saved. Reload and try again.", "error"); return false; }
-    // failed or conflict: keep each day's "before" (the earliest wins) - the next Accept of this year that saves sends the notices
+    // failed or conflict: hold each changed day's { before, wrote } (before = the earliest Accept's while it still stands -
+    // holidayPlanNoticeChanges) for the card's "Send the held change notices" button and the next Accept of this year
     const keep = { ...pend };
-    rows.days.forEach(d => { if (!Object.prototype.hasOwnProperty.call(keep, d)) keep[d] = noticeBefore[d]; });
-    pendingNotices[year] = keep;
-    if (!(r && r.conflict)) showToast(`Some holiday days did not save yet - they retry automatically. The change notices wait: press Accept ${year} again once the header shows Saved to send them.`, "error");
+    const unitOfDay = {};
+    rows.units.forEach(u => u.days.forEach(d => { unitOfDay[d] = { name: u.name, primary: u.primary, backup: u.backup }; }));
+    const heldDays = new Set(noticeChanged.map(c => c.day));
+    rows.days.forEach(d => { if (heldDays.has(d)) keep[d] = { before: notice.before[d], wrote: next[d], unit: unitOfDay[d] || null, swap }; else delete keep[d]; });
+    if (Object.keys(keep).length) pendingNotices[year] = keep; else delete pendingNotices[year];
+    mirrorHeldNotices();
+    const heldIds = noticeRosterIds(notice.affected);
+    const heldText = heldIds.length ? ` The change notices to ${heldIds.map(nameOf).join(", ")} are held: once the header shows Saved, press "Send the held change notices" on the holiday plan card (Setup > Holidays) - it sends only the days now on file as planned.` : " No slot changed hands - no change notice is held.";
+    if (r && r.conflict) showToast(`Someone else changed a schedule day while the ${swap ? "holiday swap" : year + " holiday plan"} was saving - the schedule was reloaded; the days that did not collide save on their own.${heldText} Then ${swap ? "Re-check " + year : "Plan " + year + " -> Accept"} again for the days the other change took.`, "error");
+    else if (swap) showToast(`The holiday swap did not save yet - it retries automatically (the Re-check list already reads the swapped holders, so there is nothing to Apply again).${heldText}`, "error");
+    else showToast(`Some ${year} holiday days did not save yet - they retry automatically (no need to Accept again).${heldText}`, "error");
     return false;
+  };
+  // Second review S1 (10/1): the card's "Send the held change notices (N)" - one year's held days against the rows LAST
+  // PERSISTED (lastSyncRef, read only) and the local map (helpers holidayPlanHeldNotices): the days on file as the Accept
+  // wrote them get ONE manual_edit note + ONE manual_edit e-mail (the Accept's own notice, for those units) and are
+  // cleared; the days the automatic retry has not landed yet stay held; the days someone else has changed since (or an
+  // undo took back) are dropped - nothing is sent for them. Scheduler only, like the Accept.
+  const sendHeldHolidayNotices = (year) => {
+    if (!isScheduler || isPublicMode) { showToast("Only the scheduler can send the holiday plan notices.", "error"); return; }
+    const pendingNotices = holidayNoticePendingRef.current;
+    const held = pendingNotices[year] || {};
+    if (!Object.keys(held).length) { mirrorHeldNotices(); showToast(`No change notices of ${year} are held.`, "info"); return; }
+    const res = holidayPlanHeldNotices(held, lastSyncRef.current || {}, scheduleRef.current || schedule);
+    if (Object.keys(res.left).length) pendingNotices[year] = res.left; else delete pendingNotices[year];
+    mirrorHeldNotices();
+    const affected = noticeRosterIds(res.affected);
+    if (affected.length) {
+      const msg = manualEditMsg([`Holiday plan ${year}${res.swap ? " (swap)" : ""} - locked:`].concat(holidayPlanUnitLines(res.units, nameOf)), userProfile?.display_name || nameOf(mySurgeon));
+      addNotification("manual_edit", res.swap ? "Holiday swap " + year : "Holiday plan " + year, msg, { year, affected, surgeon_id: affected[0] });
+      sendEmailNotif("manual_edit", { message: msg, subject: `Holiday plan ${year}${res.swap ? " - swap" : ""}` }, affected);
+    }
+    const parts = [affected.length ? `Change notices sent to ${affected.map(nameOf).join(", ")} (${res.landed.length} day(s) of ${year} on file as planned).` : res.landed.length ? `${res.landed.length} day(s) of ${year} are on file as planned - no slot changed hands, nothing to send.` : `Nothing of ${year} sent.`];
+    if (res.waiting.length) parts.push(`${res.waiting.length} day(s) are not saved yet - still held; press again once the header shows Saved.`);
+    if (res.dropped.length) parts.push(`${res.dropped.length} day(s) no longer hold the plan's change (changed by someone else, or undone) - dropped, nothing sent for them.`);
+    showToast(parts.join(" "), affected.length ? "success" : "info");
   };
   // --- Seed import (docs/silvis-seed.json through importer.js) ---
   const fetchLiveForImport = async () => {
@@ -6561,7 +6618,7 @@ function CallSchedule() {
 
           <Collapsible css={css} ck="setup_holidays" defaultOpen={false} title="Holidays (units per year)"
             summary={cardSummary(holidays === undefined ? "Not imported yet" : (Object.keys((holidays && holidays.units) || {}).length ? "Years " + Object.keys(holidays.units).sort().join(", ") : "No years yet"))}>
-            <HolidaysCard css={css} dk={dk} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} isScheduler={isScheduler && !isPublicMode} planState={ctxInputs} today={todayStr} onAcceptPlan={acceptHolidayPlan}
+            <HolidaysCard css={css} dk={dk} holidays={holidays} groupRules={groupRules} schedule={schedule} roster={surgeons} nameOf={nameOf} onSave={saveHolidays} isScheduler={isScheduler && !isPublicMode} planState={ctxInputs} today={todayStr} onAcceptPlan={acceptHolidayPlan} heldNotices={holidayNoticeHeld} onSendHeldNotices={sendHeldHolidayNotices}
               onEditDay={goToDay} showToast={showToast} rulesImported={rulesImported} daysUnread={loaded && !daysReadOk}/>
           </Collapsible>
 
@@ -10313,7 +10370,7 @@ function AvailabilityCard({ css, rows, roster, nameOf, onAdd, onDelete, busy, to
 // - a minor holiday on a Monday absorbs the weekend before it (Sat-Mon) when
 // groupRules.holidays.mondayMinorAbsorbsWeekend is true. Every unit and day
 // stays editable; the stored days are what the engine reads.
-function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported, daysUnread, isScheduler, planState, today, onAcceptPlan }) {
+function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf, onSave, onEditDay, showToast, rulesImported, daysUnread, isScheduler, planState, today, onAcceptPlan, heldNotices, onSendHeldNotices }) {
   const inp = { ...css.inp, padding: "3px 6px", fontSize: 12 };
   // Review 9/28: daysUnread = a finished load holds no read of schedule_days - the coverage / held counts read the
   // empty map (every unit OPEN, 0/0 held), so they say "not loaded" and the Edit buttons (goToDay) are disabled.
@@ -10396,7 +10453,7 @@ function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf,
         <span style={{ fontSize: 11, color: "#5B6B82" }}>{dirty ? "Unsaved changes" : "Saved in the shared setup (autosave)."}</span>
       </div>
       <p data-testid="holidays-prefill-hint" style={{ fontSize: 11, color: "#5B6B82", margin: "6px 0 0" }}>{(groupRules && groupRules.holidays && groupRules.holidays.mondayMinorAbsorbsWeekend === true) ? "New years are pre-filled from the group rule (minor Monday holidays absorb the weekend before); edit any unit's days." : "New years are pre-filled with single-day holidays (the Monday-minor group rule is off in the shared setup); edit any unit's days."}</p>
-      {isScheduler && <HolidayPlanPanel css={css} dk={dk} holidays={holidays} planState={planState} nameOf={nameOf} today={today} dirty={dirty} daysUnread={daysUnread} rulesImported={rulesImported} onAccept={onAcceptPlan} showToast={showToast}/>}
+      {isScheduler && <HolidayPlanPanel css={css} dk={dk} holidays={holidays} planState={planState} nameOf={nameOf} today={today} dirty={dirty} daysUnread={daysUnread} rulesImported={rulesImported} onAccept={onAcceptPlan} showToast={showToast} heldNotices={heldNotices} onSendHeld={onSendHeldNotices}/>}
     </div>
   );
 }
@@ -10412,14 +10469,20 @@ function HolidaysCard({ css, dk, holidays, groupRules, schedule, roster, nameOf,
 //   swap            each slot's select lists holidayPlanSwapOptions (a swap with another holder, or a replacement), each
 //                   judged by holidayPlanCheck; a move that ADDS a broken rule asks first, naming it (Cancel keeps the
 //                   plan) - never a silent break. The current plan's breaks stay listed; Accept names them again. Never
-//                   listed: a move leaving one surgeon in both roles of a unit (structural - the database refuses it) and,
-//                   with today, a swap with a unit that has started (Accept would write it half).
+//                   listed: a move leaving one surgeon in both roles of a unit (structural - the database refuses it);
+//                   with today, ANY move of a unit that has started - no swap, no replacement (Accept leaves it as on
+//                   file; second review M2) - and a swap with one (Accept would write it half); and a move that puts
+//                   the holder on file in a role the plan leaves open into the unit's other role (Accept keeps him
+//                   there and would clear that role - left OPEN; second review M1, judged on planState's schedule).
 //   Accept <year>   onAccept (the App's acceptHolidayPlan: confirm -> snapshot -> CAS sync -> audit -> notices).
 //   Re-check <year> holidayPlanRecheck on the live state: every accepted slot (rows of source holiday-plan-<year>) a
 //                   newer East feed, vacation or rule refuses, with the best swap; read-only - "Apply swap" goes
 //                   through the same onAccept path (mode swap, the swap's units only) with its confirm.
+//   Send the held change notices (N)   shown while heldNotices (the App's mirror of holidayNoticePendingRef) has days
+//                   of a year - an Accept or swap whose write failed or met someone else's change; onSendHeld (the
+//                   App's sendHeldHolidayNotices) sends the days now on file as planned (second review S1).
 // The plan's inputs are the SAVED units (an unsaved Holidays edit disables Accept: save first).
-function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, daysUnread, rulesImported, onAccept, showToast }) {
+function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, daysUnread, rulesImported, onAccept, showToast, heldNotices, onSendHeld }) {
   const Tk = THEME[dk ? "dark" : "light"];
   const unitYears = Object.keys((holidays && holidays.units) || {}).filter(y => /^\d{4}$/.test(y) && Array.isArray(holidays.units[y]) && holidays.units[y].length).sort();
   const defaultYear = holidayPlanDefaultYear(holidays, today);
@@ -10483,6 +10546,7 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
   const box = { border: "1px solid " + Tk.border, borderRadius: 8, padding: "8px 10px", marginTop: 10 };
   const note = { fontSize: 11, color: Tk.muted, margin: "4px 0" };
   const blockedNow = !!daysUnread || !rulesImported;
+  const heldYears = Object.keys(heldNotices || {}).filter(y => heldNotices[y] && heldNotices[y].days > 0).sort();
   const changedFromBase = plan ? plan.assignments.some((a, i) => a.primary !== plan.base[i].primary || a.backup !== plan.base[i].backup) : false;
   const planCounts = (id, t) => { let p = 0, b = 0; (plan ? plan.assignments : []).forEach(a => { if (a.unit.tier !== t) return; if (a.primary === id) p++; if (a.backup === id) b++; }); return p + "P / " + b + "B"; };
   return (
@@ -10500,6 +10564,12 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
         {daysUnread && <span style={{ fontSize: 11, color: Tk.warnText }}>Schedule not loaded - Plan, Re-check and Accept wait for it.</span>}
         {!rulesImported && <span style={{ fontSize: 11, color: Tk.warnText }}>Rules are not imported yet.</span>}
       </div>
+      {heldYears.map(y => (
+        <div key={y} data-testid="holplan-held" data-year={y} data-days={heldNotices[y].days} style={{ ...css.warnBox, marginTop: 8 }}>
+          <div style={{ fontSize: 12 }}>{y}: the change notices of {heldNotices[y].days} holiday day(s){heldNotices[y].ids.length ? " (" + heldNotices[y].ids.map(nameOf).join(", ") + ")" : ""} are held - an Accept or swap did not save, or met someone else's change. Once the header shows Saved, send them: only the days now on file as planned are sent; a day someone else has changed since is dropped.</div>
+          <button data-testid="holplan-send-held" data-year={y} onClick={() => { if (onSendHeld) onSendHeld(Number(y)); }} disabled={busy} style={{ ...css.mini(false), marginTop: 4, opacity: busy ? 0.5 : 1 }}>Send the held change notices ({heldNotices[y].days})</button>
+        </div>
+      ))}
       {plan && live && live.error && <div style={{ ...css.errBox, marginTop: 8 }}>Couldn't judge the plan: {live.error}</div>}
       {plan && live && live.check && (
         <div data-testid="holplan-preview" data-year={plan.year} data-pass={plan.result.search.pass} style={{ marginTop: 8 }}>
@@ -10514,12 +10584,13 @@ function HolidayPlanPanel({ css, dk, holidays, planState, nameOf, today, dirty, 
                   const planned = plan.result.assignments[i];
                   const cell = (role) => {
                     const opts = live.swaps[a.unit.name + "|" + role] || [];
+                    const unitStarted = !!today && a.unit.days[0] <= today; // second review M2: no move of a started unit is listed
                     return (
                       <td style={{ whiteSpace: "nowrap" }}>
                         <span data-testid={role === "primary" ? "holplan-p" : "holplan-b"} data-id={a[role] || ""} style={{ fontWeight: 700 }}>{who(a[role])}</span>
                         {a[role] !== planned[role] && <span style={{ fontSize: 10, color: Tk.warnText, marginLeft: 4 }}>(planned {planned[role] ? nameOf(planned[role]) : "OPEN"})</span>}
-                        <select data-testid="holplan-swap" data-unit={a.unit.name} data-role={role} value="" disabled={busy} onChange={e => { const k = e.target.value; if (k !== "") applySwap(opts[Number(k)]); }} style={{ ...css.inp, padding: "1px 4px", fontSize: 11, width: 150, marginLeft: 6 }}>
-                          <option value="">swap...</option>
+                        <select data-testid="holplan-swap" data-unit={a.unit.name} data-role={role} value="" disabled={busy || !opts.length} title={unitStarted ? "This unit has started - Accept leaves it as on file; change a day in the day editor" : undefined} onChange={e => { const k = e.target.value; if (k !== "") applySwap(opts[Number(k)]); }} style={{ ...css.inp, padding: "1px 4px", fontSize: 11, width: 150, marginLeft: 6 }}>
+                          <option value="">{unitStarted ? "started" : "swap..."}</option>
                           {opts.map((o, k) => <option key={k} value={String(k)}>{o.text}{o.added.length ? " - BREAKS: " + o.added.map(b => b.rule).join(", ") : o.ok ? " - keeps the rules" : " - adds no break"}</option>)}
                         </select>
                       </td>

@@ -684,6 +684,57 @@ step("K3: review fix A - no swap or replacement ever leaves one surgeon in both 
   ok(H.holidayPlanSwapOptions(2027, P27.assignments, "Labor Day", "primary", O27({ today: "2027-07-03" })).options.every((o) => o.kind !== "swap" || o.with.unit !== "July 4th"), "a unit starting today counts as started");
 }
 
+step("K4: second review M2 - with today, a unit that has started offers NO move at all (no swap from it, no replacement): Accept leaves it as on file");
+{
+  ["primary", "backup"].forEach((role) => {
+    eq(H.holidayPlanSwapOptions(2027, P27.assignments, "Memorial Day", role, O27({ today: "2027-06-01" })).options, [], "today 2027-06-01: Memorial Day " + role + " (started 5/29) lists nothing - the 8 'keeps the rules' swaps of the re-review are gone");
+    eq(H.holidayPlanSwapOptions(2027, P27.assignments, "Memorial Day", role, O27({ today: "2027-05-29" })).options, [], "...nor on the day it starts (a 24-hour shift under way)");
+  });
+  const eve = H.holidayPlanSwapOptions(2027, P27.assignments, "Memorial Day", "primary", O27({ today: "2027-05-28" })).options;
+  ok(eve.some((o) => o.kind === "swap") && eve.some((o) => o.kind === "replace"), "the day before, swaps and replacements are listed (" + eve.length + ")");
+  ok(H.holidayPlanSwapOptions(2027, P27.assignments, "Labor Day", "backup", O27({ today: "2027-06-01" })).options.length > 0, "a unit that has not started still lists its moves (without the started partners)");
+}
+
+step("K5: second review M1 - the holder ON FILE in a role the plan leaves open stays there at Accept: no move puts him into the unit's other role (Accept would clear his role - left OPEN)");
+{
+  const TGD = ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"];
+  const file = {}; TGD.forEach((d) => { file[d] = { primary: null, backup: FIERCE, primaryLocked: false, backupLocked: false, source: "generated" }; });
+  const open = withSlot(P27.assignments, "Thanksgiving", "backup", null);   // the Plan preview with Thanksgiving's backup open
+  const U = { units: seed.holidays.units["2027"] };
+  const noClash = (o) => H.holidayPlanAcceptRows(2027, o.assignments, file, U).conflicts.every((c) => !c.clash);
+  const tgP = H.holidayPlanSwapOptions(2027, open, "Thanksgiving", "primary", O27({ schedule: file })).options;
+  ok(tgP.length > 0 && !tgP.some((o) => o.id === FIERCE), "Thanksgiving primary: no 'swap with Fierce' / 'replace with Fierce' (he is the file's Thanksgiving backup) - " + tgP.map((o) => o.text).join("; "));
+  ok(tgP.every(noClash), "...and no listed move makes Accept clear a role (no clash conflict)");
+  const without = H.holidayPlanSwapOptions(2027, open, "Thanksgiving", "primary", O27()).options;
+  eq(without.filter((o) => o.id === FIERCE).map((o) => o.text), ["swap with Fierce (New Year's primary)", "replace with Fierce", "swap with Fierce (July 4th backup)"], "(without the schedule the three moves of the re-review are listed - the filter reads the file)");
+  ok(!without.filter((o) => o.id === FIERCE).every(noClash), "(...and each of those would clear his backup at Accept)");
+  // the partner side: from New Year's primary (Fierce), a swap with the Thanksgiving primary would put him there too
+  const nyP = H.holidayPlanSwapOptions(2027, open, NY, "primary", O27({ schedule: file })).options;
+  ok(nyP.length > 0 && !nyP.some((o) => o.kind === "swap" && o.with.unit === "Thanksgiving" && o.with.role === "primary") && nyP.every(noClash), "New Year's primary: no swap that moves Fierce into the Thanksgiving primary; no listed move clashes");
+  // every option of every slot of that plan, on that file: none clashes at Accept
+  let n = 0;
+  open.forEach((a) => ["primary", "backup"].forEach((role) => H.holidayPlanSwapOptions(2027, open, a.unit.name, role, O27({ schedule: file })).options.forEach((o) => { n++; ok(noClash(o), a.unit.name + " " + role + ": '" + o.text + "' clears a role at Accept"); })));
+  ok(n > 100, "every option checked (" + n + ")");
+  // a role the plan SETS overwrites the file: Fierce on file as backup is no obstacle once the plan names a backup
+  ok(H.holidayPlanSwapOptions(2027, P27.assignments, "Thanksgiving", "primary", O27({ schedule: file })).options.some((o) => o.id === FIERCE), "with the plan's backup set (Khan), Fierce may become the Thanksgiving primary (the file's backup is overwritten)");
+  // Re-check (the re-review's R1): Thanksgiving accepted with the backup left open (Fierce on file, unlocked), Sarkar refused
+  const acc0 = H.holidayPlanAcceptRows(2027, open, file, Object.assign({ today: "2026-10-01" }, U));
+  const sched = Object.assign({}, file, acc0.rows);
+  eq([sched[TGD[0]].primary, sched[TGD[0]].backup, sched[TGD[0]].backupLocked], [SARKAR, FIERCE, false], "the row: Sarkar locked, Fierce kept unlocked");
+  const vac = [{ person_id: SARKAR, start_date: "2027-11-26", end_date: "2027-11-26" }];
+  const rc = H.holidayPlanRecheck(2027, O27({ schedule: sched, vacations: vac, today: "2026-10-02" }));
+  const b = rc.blocked.find((x) => x.unit.name === "Thanksgiving" && x.role === "primary");
+  ok(b && b.suggestion && b.valid && b.suggestion.id !== FIERCE, "Re-check suggests a valid move that is not Fierce: " + (b && b.suggestion && b.suggestion.text));
+  const s = b.suggestion, only = [s.unit].concat(s.with && s.with.unit !== s.unit ? [s.with.unit] : []);
+  const ap = H.holidayPlanAcceptRows(2027, s.assignments, sched, Object.assign({ only: only, today: "2026-10-02" }, U));
+  ok(ap.conflicts.every((c) => !c.clash) && TGD.every((d) => ap.rows[d].backup === FIERCE), "Apply keeps Fierce the Thanksgiving backup - no role left OPEN");
+  // mixed: the accepted days hold two locked backups - both stay on their days, so neither may become the primary
+  const mixed = clone(sched); TGD.forEach((d) => { mixed[d].backupLocked = true; }); mixed[TGD[3]].backup = ACTON;
+  const rcM = H.holidayPlanRecheck(2027, O27({ schedule: mixed, vacations: vac, today: "2026-10-02" }));
+  const bM = rcM.blocked.find((x) => x.unit.name === "Thanksgiving" && x.role === "primary");
+  ok(bM && bM.suggestion && [FIERCE, ACTON].indexOf(bM.suggestion.id) < 0, "a mixed backup (Fierce / Acton): the suggestion moves neither into the primary - " + (bM && bM.suggestion && bM.suggestion.text));
+}
+
 /* =================================================================== M (before L: L re-checks rows M builds) */
 step("M1: holidayPlanAcceptRows - every unit day, both roles locked, source holiday-plan-2027, the unit-only note; nothing to replace on an empty map");
 const ACC = H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2026-10-01" });
@@ -780,6 +831,17 @@ step("M2d: review fix B - holidayPlanWrittenCheck: a full Accept that skips a st
   eq(wc.added.map((b) => [b.rule, b.id, b.tier]).sort(), [["shape", BURCHETT, "minor"], ["shape", ACTON, "minor"]], "the year as written: Burchett holds two minor primaries, Acton none - named");
   eq(wc.plan.find((a) => a.unit.name === "Memorial Day").primary, BURCHETT, "...the written plan carries the file's holders");
   eq(H.holidayPlanWrittenCheck(2027, P27.assignments, H.holidayPlanAcceptRows(2027, P27.assignments, {}, { units: seed.holidays.units["2027"], today: "2026-10-01" }), O27()).added, [], "nothing skipped: nothing added");
+}
+
+step("M2e: second review N2 - a started unit with an external cover on file is named by its label in the confirm, never by its raw 'ext:' id");
+{
+  const file = {}; ["2027-05-29", "2027-05-30", "2027-05-31"].forEach((d) => { file[d] = { primary: null, backup: SARKAR, externalCover: "Locum", primaryLocked: true }; });
+  const acc = H.holidayPlanAcceptRows(2027, P27.assignments, file, { units: seed.holidays.units["2027"], today: "2027-06-01" });
+  eq(acc.skipped.map((s) => [s.unit, s.started, s.primary, s.backup]), [["Memorial Day", true, "ext:Locum", SARKAR]], "Memorial Day started - the locum and Sarkar on file stay");
+  const wc = H.holidayPlanWrittenCheck(2027, P27.assignments, acc, O27());
+  const nip = wc.added.filter((b) => b.rule === "not-in-pool");
+  eq(nip.map((b) => [b.unit, b.role, b.id, b.text]), [["Memorial Day", "primary", "ext:Locum", "Locum (external - the Memorial Day primary on file) is not an active roster surgeon"]], "the break keeps its id (the audit's key) but its text reads the label");
+  ok(wc.added.every((b) => b.text.indexOf("ext:") < 0), "no raw 'ext:' id in any text the confirm shows: " + JSON.stringify(wc.added.map((b) => b.text)));
 }
 
 step("M3: holidayPlanInputs - the planHolidays opts from the app's state (time_off + East away / unreviewed ranges; history from the schedule; seed = year)");
@@ -923,6 +985,98 @@ step("L6: review fix D - a role the plan left open keeps the (unlocked) holder o
   ok(!rc.blocked.some((b) => b.id === BURCHETT && b.unit.name === "Thanksgiving"), "Burchett's vacation inside Thanksgiving is not a Re-check item (nothing the plan set) - " + JSON.stringify(rc.blocked.map((b) => [b.unit.name, b.role, b.id])));
   const locked = clone(all); ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"].forEach((d) => { locked[d].backupLocked = true; });
   eq(H.holidayPlanRecheck(2027, O27({ schedule: locked })).accepted.find((a) => a.unit.name === "Thanksgiving").backup, BURCHETT, "(a locked holder on a plan row reads as accepted - the plan locks every role it sets)");
+}
+
+/* =================================================================== O - who the change notices go to */
+// the app's acceptHolidayPlan, restated on the helpers: notices = holidayPlanNoticeChanges(rows.days, next, lastSyncRef,
+// held); a failed / conflicted Accept holds each changed day as { before, wrote, unit, swap }; a saved one clears its days
+const U27 = { units: seed.holidays.units["2027"], today: "2026-10-01" };
+function acceptSim(heldYear, plan, local, persisted, outcome, opts) {
+  const rows = H.holidayPlanAcceptRows(2027, plan, local, Object.assign({}, U27, opts || {}));
+  const next = Object.assign({}, local, rows.rows), pend = heldYear[2027] || {};
+  const notice = H.holidayPlanNoticeChanges(rows.days, next, persisted, pend);
+  if (outcome === "ok") {
+    const left = {}; Object.keys(pend).forEach((d) => { if (rows.days.indexOf(d) < 0) left[d] = pend[d]; });
+    if (Object.keys(left).length) heldYear[2027] = left; else delete heldYear[2027];
+  } else {
+    const keep = Object.assign({}, pend), unitOf = {}, changed = new Set(notice.changes.map((c) => c.day));
+    rows.units.forEach((u) => u.days.forEach((d) => { unitOf[d] = { name: u.name, primary: u.primary, backup: u.backup }; }));
+    rows.days.forEach((d) => { if (changed.has(d)) keep[d] = { before: notice.before[d], wrote: next[d], unit: unitOf[d], swap: !!(opts && opts.only) }; else delete keep[d]; });
+    if (Object.keys(keep).length) heldYear[2027] = keep; else delete heldYear[2027];
+  }
+  return { rows, next, notice };
+}
+const PLANNED = H.holidayPlanAcceptRows(2027, P27.assignments, {}, U27).rows;
+const XMD = ["2027-12-24", "2027-12-25"];
+
+step("O1: holidayPlanNoticeChanges - the rows last persisted, or a held 'before' only while the persisted row is still it or the held 'wrote' (second review M3)");
+{
+  // nothing held: the diff against the persisted rows (review fix G)
+  const persisted = Object.assign({}, PLANNED); XMD.forEach((d) => { persisted[d] = { primary: KHAN, backup: BURCHETT, source: "generated" }; });
+  const n0 = H.holidayPlanNoticeChanges(XMD, PLANNED, persisted, {});
+  eq([n0.changes.map((c) => [c.day, c.role, c.from, c.to]), n0.affected], [[["2027-12-24", "primary", KHAN, PHILIP], ["2027-12-25", "primary", KHAN, PHILIP]], [KHAN, PHILIP]], "Christmas P Khan -> Philip (Burchett stays the backup - no notice)");
+  // the re-review's g1b: Accept 1 conflicts (another device's trade wrote Acton first); Accept 2 saves after the reload
+  const server = Object.assign({}, persisted); XMD.forEach((d) => { server[d] = { primary: ACTON, backup: BURCHETT, source: "trade" }; });
+  const held = {};
+  acceptSim(held, P27.assignments, persisted, persisted, "conflict");
+  eq(Object.keys(held[2027]), XMD, "Accept 1 (conflict) holds the two changed days only (the other units were already on file as planned)");
+  eq([held[2027][XMD[0]].before.primary, held[2027][XMD[0]].wrote.primary, held[2027][XMD[0]].unit.name], [KHAN, PHILIP, "Christmas"], "...as { before: Khan, wrote: Philip, unit }");
+  const a2 = acceptSim(held, P27.assignments, server, server, "ok");
+  eq(H.holidayPlanConflictLines(a2.rows.conflicts), ["Christmas P held by s3 -> s4 (12/24-12/25, 2 days)"], "Accept 2's confirm: Acton's Christmas is replaced");
+  eq(a2.notice.affected, [ACTON, PHILIP], "Accept 2's notices go to Acton (replaced) and Philip - not Khan, who lost the day to the trade (the re-review: [s1, s4])");
+  eq(held[2027], undefined, "...and the saved Accept clears the held days");
+  // the held 'before' still counts while the persisted row is the held 'before' (the write never landed)...
+  const h2 = {}; acceptSim(h2, P27.assignments, persisted, persisted, "failed");
+  const local2 = Object.assign({}, persisted, PLANNED);   // the failed Accept moved the local map
+  const r2 = acceptSim(h2, P27.assignments, local2, persisted, "ok");
+  eq([r2.rows.conflicts.length, r2.notice.affected], [0, [KHAN, PHILIP]], "a failed Accept, then Accept again: the confirm sees no conflict (the local map moved) but Khan / Philip are told (the held 'before')");
+  // ...or its 'wrote' (the automatic retry landed it before the next Accept)
+  const h3 = {}; acceptSim(h3, P27.assignments, persisted, persisted, "failed");
+  const r3 = acceptSim(h3, P27.assignments, local2, Object.assign({}, persisted, PLANNED), "ok");
+  eq(r3.notice.affected, [KHAN, PHILIP], "the retry landed it first: still told (the held 'before' against the plan)");
+  // the earliest 'before' wins across two failed Accepts, while it stands
+  const h4 = {}; acceptSim(h4, P27.assignments, persisted, persisted, "failed");
+  const swapPlan = withSlot(withSlot(P27.assignments, "Christmas", "primary", SARKAR), "Thanksgiving", "primary", PHILIP);
+  acceptSim(h4, swapPlan, local2, persisted, "failed");
+  eq([h4[2027][XMD[0]].before.primary, h4[2027][XMD[0]].wrote.primary], [KHAN, SARKAR], "two failed Accepts: before = Khan (the first one's), wrote = Sarkar (the latest)");
+  // a lock-only change notifies nobody; an external cover is a holder (the app keeps roster surgeons)
+  const lk = H.holidayPlanNoticeChanges([XMD[0]], { [XMD[0]]: { primary: KHAN, backup: BURCHETT, primaryLocked: true, backupLocked: true } }, { [XMD[0]]: { primary: KHAN, backup: BURCHETT } }, {});
+  eq([lk.changes, lk.affected], [[], []], "a lock change alone: no notice");
+  const ex = H.holidayPlanNoticeChanges([XMD[0]], { [XMD[0]]: { primary: PHILIP, backup: BURCHETT } }, { [XMD[0]]: { primary: null, externalCover: "Locum", backup: BURCHETT } }, null);
+  eq(ex.affected, ["ext:Locum", PHILIP], "an external cover replaced: 'ext:Locum' -> Philip");
+}
+
+step("O2: holidayPlanHeldNotices - the card's Send button: landed days are sent (before -> wrote), waiting days stay held, the rest are dropped (second review S1)");
+{
+  const persisted = Object.assign({}, PLANNED);
+  XMD.forEach((d) => { persisted[d] = { primary: KHAN, backup: BURCHETT, source: "generated" }; });
+  const TGD = ["2027-11-25", "2027-11-26", "2027-11-27", "2027-11-28"];
+  TGD.forEach((d) => { persisted[d] = { primary: ACTON, backup: KHAN, source: "generated" }; });
+  const held = {}; const a1 = acceptSim(held, P27.assignments, persisted, persisted, "failed");
+  eq(Object.keys(held[2027]), TGD.concat(XMD), "a failed Accept holds Thanksgiving (Acton -> Sarkar) and Christmas (Khan -> Philip)");
+  // nothing landed yet, the local map still carries the plan: everything waits
+  const w = H.holidayPlanHeldNotices(held[2027], persisted, a1.next);
+  eq([w.landed, w.waiting.length, w.dropped, w.affected, Object.keys(w.left).length], [[], 6, [], [], 6], "nothing on file yet: 6 days wait, nothing is sent");
+  // the retry landed Thanksgiving; another device's trade took Christmas (the conflict reload adopted Acton)
+  const now = Object.assign({}, persisted); TGD.forEach((d) => { now[d] = a1.next[d]; }); XMD.forEach((d) => { now[d] = { primary: ACTON, backup: BURCHETT, source: "trade" }; });
+  const local = Object.assign({}, a1.next); XMD.forEach((d) => { local[d] = now[d]; });
+  const s = H.holidayPlanHeldNotices(held[2027], now, local);
+  eq([s.landed, s.waiting, s.dropped], [TGD, [], XMD], "Thanksgiving landed (sent), Christmas dropped (someone else's row - the plan's change does not stand)");
+  eq([s.changes.map((c) => [c.day, c.role, c.from, c.to]).filter((c) => c[0] === TGD[0]), s.affected], [[[TGD[0], "primary", ACTON, SARKAR]], [ACTON, SARKAR]], "the notice: Acton -> Sarkar (Khan stays the backup)");
+  eq(s.units, [{ name: "Thanksgiving", days: TGD, primary: SARKAR, backup: KHAN }], "the message lists the landed unit (holidayPlanUnitLines)");
+  eq(H.holidayPlanUnitLines(s.units, (id) => ({ s6: "Sarkar", s1: "Khan" })[id]), ["Thanksgiving 11/25-11/28: P Sarkar, B Khan"], "...as the Accept's own line");
+  eq([s.swap, s.left], [false, {}], "an Accept (not a swap); nothing left held");
+  // an undo took the local map back before anything landed: dropped, not waiting forever
+  const undone = H.holidayPlanHeldNotices(held[2027], persisted, persisted);
+  eq([undone.landed, undone.waiting, undone.dropped.length], [[], [], 6], "an undo before the retry landed: all 6 dropped (nothing changed hands)");
+  // without the local map: a persisted row still equal to 'before' waits, anything else not 'wrote' is dropped
+  const noLocal = H.holidayPlanHeldNotices(held[2027], Object.assign({}, persisted, { [XMD[0]]: now[XMD[0]] }), null);
+  eq([noLocal.waiting, noLocal.dropped], [TGD.concat([XMD[1]]), [XMD[0]]], "no local map: before = waiting, someone else's row = dropped");
+  // a failed Re-check swap: the held days carry swap: true; once on file the note is the swap's
+  const sw = {}; const sa = acceptSim(sw, withSlot(withSlot(P27.assignments, "Christmas", "primary", SARKAR), "Thanksgiving", "primary", PHILIP), PLANNED, PLANNED, "failed", { only: ["Thanksgiving", "Christmas"] });
+  const swS = H.holidayPlanHeldNotices(sw[2027], Object.assign({}, PLANNED, sa.rows.rows), sa.next);
+  eq([swS.landed.length, swS.swap, swS.affected], [6, true, [SARKAR, PHILIP]], "a swap that landed later: sent as the swap's notice to Sarkar and Philip");
+  eq(H.holidayPlanHeldNotices({}, {}, {}), { landed: [], waiting: [], dropped: [], changes: [], affected: [], units: [], swap: false, left: {} }, "nothing held: nothing to do");
 }
 
 /* =================================================================== N */
