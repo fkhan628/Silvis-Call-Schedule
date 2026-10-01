@@ -933,6 +933,7 @@ const page = await context.newPage();
 
 const pageErrors = [];
 const consoleErrors = [];
+const consoleErrorWhere = []; // { text, where: "<page tag> @ <the URL the line names> (<time>)" } for every unforced console error - an unexpected one is attributed in the triage below
 const consoleWarns = [];
 const writes = [];
 const tradeStore = []; // Slice G: shift_trade_requests rows the app wrote this run (see the Supabase route)
@@ -955,7 +956,7 @@ const watchPage = (pg, tag) => {
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
       else if (pairForcedLines > 0 && /status of (404|400)/.test(msg.text()) && /\/rest\/v1\/rpc\/claim_open_weekend_pair$/.test(String((msg.location() || {}).url || "").split("?")[0])) { forcedConsoleErrors.push(msg.text()); pairForcedLines--; } // 10/1 follow-up 3: the weekend pair step's forced 404 PGRST202 / 400 CL005 (that path only)
-      else consoleErrors.push(msg.text());
+      else { consoleErrors.push(msg.text()); consoleErrorWhere.push({ text: msg.text(), where: `${tag} @ ${String((msg.location() || {}).url || "?").split("?")[0]} (${new Date().toISOString().slice(11, 19)}Z)` }); }
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
   });
@@ -11692,7 +11693,7 @@ const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => 
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
 if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh, the days-fail 500, the East 500s, ${payForcedConsumed} pay read(s) answered 404 / 500 by the pay mock - expected)`);
-if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
+if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ") + "\n     where (page @ URL):\n     " + consoleErrorWhere.filter(e => unexpected.includes(e.text)).map(e => e.text.slice(0, 120) + " <- " + e.where).join("\n     ")); else ok("no unexpected console errors");
 // Prompt 16 B9 (a): the worker fallback is quiet by design (console.warn + genWorkerBroken) - the whole-run sweep is
 // where a device that silently dropped to the inline run would show.
 const genWorkerWarns = consoleWarns.filter(t => /Generate worker failed/.test(t));
