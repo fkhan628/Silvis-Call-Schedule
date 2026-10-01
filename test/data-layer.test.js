@@ -1193,6 +1193,39 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const link = src.slice(et, src.indexOf("Propose a trade for this day", et) + 140);
       assert.ok(link.includes("onClick={() => onTrade(day, tradeLinkRole, tradePick || undefined)}") && link.includes('Propose a trade for this day{tradePick && tradePick.to ? " - suggested: " + tradePick.name : ""}'), "the link names the suggestion and passes it on");
     });
+    check("Prompt 23 review (behaviour): tradeUnitOf (lifted verbatim) - a noLoneWeekendDay holder's PRIMARY Sat + Sun pair is one 'weekend-block' unit (giving one day would leave a lone weekend day, hard lone-weekend-day); his Fri-Sun stays the block; a block-style holder without the key is unchanged", () => {
+      const R = require(path.join(ROOT, "rules.js"));
+      const SA = require(path.join(ROOT, "test", "seed-adapter.js"));
+      const seedT = require(path.join(ROOT, "docs", "silvis-seed.json"));
+      const i0 = src.indexOf("  const tradeUnitOf = (day, role, holderId) => {"), i1 = src.indexOf("  // Item C (Faraz 9/23 evening): the suggested counter-parties", i0);
+      assert.ok(i0 > 0 && i1 > i0, "tradeUnitOf at App scope, before the Item C suggestions");
+      const body = src.slice(i0, i1);
+      const mkUnit = (schedule, sr) => {
+        const rulesCtx = R.buildContext(SA.seedToContextInput(seedT, { eastDerived: [], eastBusyDays: {}, schedule, ...(sr ? { surgeonRules: sr } : {}) }));
+        return new Function("rulesCtx", "scheduleRef", "schedule", "suIsIso", "parse", "fmt", "addD", body + "\nreturn tradeUnitOf;")(rulesCtx, { current: schedule }, schedule, H.suIsIso, H.parse, H.fmt, H.addD);
+      };
+      const P = (id) => ({ primary: id });
+      // Khan (s1: noLoneWeekendDay, block style) holds Sat 1/23 + Sun 1/24/2027, someone else the Friday
+      const pair = mkUnit({ "2027-01-22": P("s2"), "2027-01-23": P("s1"), "2027-01-24": P("s1") });
+      const want = { kind: "weekend-block", name: "weekend pair", days: ["2027-01-23", "2027-01-24"] };
+      assert.deepStrictEqual(pair("2027-01-23", "primary", "s1"), want, "Saturday of his pair -> the pair");
+      assert.deepStrictEqual(pair("2027-01-24", "primary", "s1"), want, "Sunday of his pair -> the pair");
+      assert.strictEqual(pair("2027-01-22", "primary", "s2"), null, "the Friday holder's lone Friday is no unit");
+      // his Fri-Sun: the block (as before); his lone Friday beside someone else's pair: no unit (a standalone Friday is his shape)
+      const blk = mkUnit({ "2027-01-22": P("s1"), "2027-01-23": P("s1"), "2027-01-24": P("s1") });
+      ["2027-01-22", "2027-01-23", "2027-01-24"].forEach(d => assert.deepStrictEqual(blk(d, "primary", "s1"), { kind: "weekend-block", name: "weekend block", days: ["2027-01-22", "2027-01-23", "2027-01-24"] }, "his Fri-Sun from " + d + " -> the block"));
+      assert.strictEqual(mkUnit({ "2027-01-22": P("s1"), "2027-01-23": P("s2"), "2027-01-24": P("s2") })("2027-01-22", "primary", "s1"), null, "his standalone Friday -> no unit");
+      // backup weekends are not under the pair rule: his backup Sat + Sun is not a unit (block style wants all three)
+      assert.strictEqual(mkUnit({ "2027-01-23": { primary: "s2", backup: "s1" }, "2027-01-24": { primary: "s2", backup: "s1" } })("2027-01-23", "backup", "s1"), null, "a backup Sat + Sun -> no unit (the pair rule is primary only)");
+      // a weekend a holiday unit cuts is no weekend unit: Sat 12/25/2027 is the Christmas unit, his Sun 12/26 alone is exempt anyway
+      assert.strictEqual(mkUnit({ "2027-12-25": P("s1"), "2027-12-26": P("s1") })("2027-12-26", "primary", "s1"), null, "a holiday-cut weekend -> no weekend unit");
+      // generic: without noLoneWeekendDay his Sat + Sun is no unit (the pre-review reading); Philip (block style, no key) unchanged
+      const srNo = SA.seedToSurgeonRules(seedT); delete srNo.s1.noLoneWeekendDay;
+      assert.strictEqual(mkUnit({ "2027-01-23": P("s1"), "2027-01-24": P("s1") }, srNo)("2027-01-23", "primary", "s1"), null, "the key off: no pair unit");
+      assert.strictEqual(mkUnit({ "2027-01-30": P("s4"), "2027-01-31": P("s4") })("2027-01-30", "primary", "s4"), null, "Philip's Sat + Sun without his Friday: no unit (as before)");
+      // the card's unit paths read the kind: tradeUnitTag's regex and tradeGroupOf group a 'weekend-block' stamp of any length
+      assert.ok(src.includes("const tradeUnitTag = (r) => { const m = /\\[unit (holiday|weekend-block) (\\d{4}-\\d{2}-\\d{2}) (\\d+): "), "tradeUnitTag reads the weekend-block kind (the pair reuses it)");
+    });
   }
   // Prompt 19 step 2 (Faraz 9/24): "Give a day away" on the Propose card - a Trade / Give away switch; a give carries no
   // return leg, every row is sent with kind 'give' and is worded as a give; the unit rule and the receiver's eligibility
@@ -3921,7 +3954,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("U3a: offerRulesWords speaks every seed surgeon's rules from the data (no name branch), defaults when nothing is on file", () => {
     const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
     const words = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules);
-    const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu within 56 days; further ahead only as a last resort."), JSON.stringify(k)); /* Prompt 23 B4 (9/30): was "Never primary on Tue, Thu." - the notice key says how far ahead the rule is hard */ assert.ok(k.some(s => s === "Preferred: weekday primary (Mon-Thu, or a Friday on its own).") && k.some(s => s === "A Friday may stand alone; Saturday and Sunday come as a pair (never one alone as primary).") && k.some(s => s === "At most 2 weekends a month, East weekends included (preferred, not a hard limit)."), "Prompt 23 B1-B3 in his words: " + JSON.stringify(k)); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
+    const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu within 56 days; further ahead only as a last resort."), JSON.stringify(k)); /* Prompt 23 B4 (9/30): was "Never primary on Tue, Thu." - the notice key says how far ahead the rule is hard */ assert.ok(k.some(s => s === "Preferred: weekday primary (Mon-Thu, or a Friday on its own).") && k.some(s => s === "Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun - never a Saturday or Sunday alone.") && k.some(s => s === "At most 2 weekends a month, East weekends included (preferred, not a hard limit)."), "Prompt 23 B1-B3 in his words: " + JSON.stringify(k)); /* Prompt 23 review (10/1): was "A Friday may stand alone; Saturday and Sunday come as a pair (never one alone as primary)." beside "Weekends: Fri-Sun as one block." - one primary-shapes sentence, and his block style speaks of backup weekends only */ assert.ok(k.some(s => s === "Backup weekends: Fri-Sun as one block.") && !k.some(s => /^Weekends: /.test(s)), "the block style is his backup weekends': " + JSON.stringify(k)); assert.deepStrictEqual(H.offerRulesWords({ noLoneWeekendDay: true, weekendStyle: "block" }, {}).filter(s => /eekend|Saturday/.test(s)), ["Saturday and Sunday come as a pair (never one alone as primary).", "Weekends: Fri-Sun as one block."], "generic: the pair key alone keeps the style line for both roles"); assert.deepStrictEqual(H.offerRulesWords({ standaloneFriday: true, weekendStyle: "split" }, {}).filter(s => /eekend/.test(s)), ["Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun.", "Backup weekends: split with a partner."], "generic: standaloneFriday alone"); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
     const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 8 primary days a month (7 preferred)."));
     const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
     const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));

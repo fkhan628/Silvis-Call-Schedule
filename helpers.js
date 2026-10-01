@@ -3354,8 +3354,12 @@ function offerRulesWords(rules, groupRules) {
   const nd = R.hardNeverWeekdaysNoticeDays;
   const noticeOk = typeof nd === "number" && isFinite(nd) && nd >= 0 && Math.floor(nd) === nd;
   if (Array.isArray(R.hardNeverWeekdays) && R.hardNeverWeekdays.length) out.push("Never " + (Array.isArray(R.hardNeverWeekdaysRoles) && R.hardNeverWeekdaysRoles.length ? R.hardNeverWeekdaysRoles.join("/") + " " : "") + "on " + R.hardNeverWeekdays.join(", ") + (noticeOk ? " within " + nd + " days; further ahead only as a last resort" : "") + ".");
-  // Prompt 23 B2 / B3
-  if (R.standaloneFriday === true || R.noLoneWeekendDay === true) out.push([R.standaloneFriday === true ? "A Friday may stand alone" : null, R.noLoneWeekendDay === true ? "Saturday and Sunday come as a pair (never one alone as primary)" : null].filter(Boolean).join("; ") + ".");
+  // Prompt 23 B2 / B3. Review (10/1): one sentence for the PRIMARY weekend shapes - with standaloneFriday they are {Fri},
+  // {Sat, Sun} and {Fri, Sat, Sun} (rules.js), so the weekendStyle line below then speaks of BACKUP weekends only (it used
+  // to say "Weekends: Fri-Sun as one block" beside "a Friday may stand alone").
+  const sfOn = R.standaloneFriday === true, nlOn = R.noLoneWeekendDay === true;
+  if (sfOn) out.push("Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun" + (nlOn ? " - never a Saturday or Sunday alone" : "") + ".");
+  else if (nlOn) out.push("Saturday and Sunday come as a pair (never one alone as primary).");
   const wcap = R.weekendCap;
   if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? ", East weekends included" : "") + " (preferred, not a hard limit).");
   if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
@@ -3379,7 +3383,7 @@ function offerRulesWords(rules, groupRules) {
     if (ef.deriveFrom || ef.statedWeeks) out.push("Your East weeks derive your Silvis week: East primary week = Silvis backup all week, East backup week = Silvis primary all week.");
   }
   if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
-  if (R.weekendStyle) out.push("Weekends: " + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
+  if (R.weekendStyle) out.push((sfOn ? "Backup weekends: " : "Weekends: ") + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
   const cap = R.monthlyCap;
   if (typeof cap === "number") out.push("Cap: " + cap + " primary days a month.");
   else if (cap && typeof cap === "object" && typeof cap.primary === "number") out.push("Cap: " + cap.primary + " primary days a month" + (typeof cap.preferred === "number" ? " (" + cap.preferred + " preferred)" : "") + (cap.countsEastDays ? ", East primary-week days included" : "") + ".");

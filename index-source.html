@@ -3814,12 +3814,20 @@ function CallSchedule() {
       return held.length > 1 ? { kind: "holiday", name: hol.name, days: held } : null;
     }
     const P = rulesCtx.per ? rulesCtx.per[holderId] : null;
-    if (!P || P.weekendStyle !== "block") return null;
+    if (!P) return null;
     const dow = parse(day).getDay();
     if (dow !== 5 && dow !== 6 && dow !== 0) return null;
     const fri = fmt(addD(parse(day), dow === 5 ? 0 : dow === 6 ? -1 : -2));
     const days = [fri, fmt(addD(parse(fri), 1)), fmt(addD(parse(fri), 2))];
-    if (days.some(d => rulesCtx.holidayByDay[d])) return null; // a holiday unit takes precedence over the weekend it overlaps (s5)
+    if (days.some(d => rulesCtx.holidayByDay && rulesCtx.holidayByDay[d])) return null; // a holiday unit takes precedence over the weekend it overlaps (s5)
+    // Prompt 23 review (10/1): a noLoneWeekendDay holder's PRIMARY Saturday + Sunday are one commitment (rules.js: never a
+    // lone Sat / Sun as primary - hard lone-weekend-day), so the pair moves as a unit - with his Friday too when he holds
+    // it and is block style (the block below). The same "weekend-block" kind, so tradeUnitTag / tradeGroupOf group the rows.
+    if (role === "primary" && P.noLoneWeekend && dow !== 5 && holds(days[1]) && holds(days[2])) {
+      if (P.weekendStyle === "block" && holds(days[0])) return { kind: "weekend-block", name: "weekend block", days };
+      return { kind: "weekend-block", name: "weekend pair", days: days.slice(1) };
+    }
+    if (P.weekendStyle !== "block") return null;
     return days.every(holds) ? { kind: "weekend-block", name: "weekend block", days } : null;
   };
   // Item C (Faraz 9/23 evening): the suggested counter-parties for `fromId` giving `day`/`role` away - the pure
