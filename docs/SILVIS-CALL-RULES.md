@@ -38,7 +38,7 @@ the two disagree, fix both.*
 
 | id | Display | Status | Pool? |
 |---|---|---|---|
-| s1 | **Khan** (FAK) | Active; scheduler/admin; also on Davenport (East) call | Weekends; Mon/Wed auto-offered |
+| s1 | **Khan** (FAK) | Active; scheduler/admin; also on Davenport (East) call | Weekdays preferred since 9/30 (Mon/Wed auto-offered; Tue/Thu only more than 8 weeks out); at most 2 weekends a month across DSG and Silvis (§3) |
 | s2 | **Burchett** (MAB) | Active; Silvis-based; outreach DeWitt / Jackson County | Yes |
 | s3 | **Acton** (BDA) | Active; Silvis-based; outreach Maquoketa | Yes |
 | s4 | **Philip** (AFP) | Active; Silvis-based; outreach Aledo | Yes |
@@ -101,9 +101,14 @@ decides the Trauma Director role.
      `noLoneWeekendDay: true`, **hard** for primary (`lone-weekend-day:<Sat|Sun>`): holding one of the two needs the other.
      Exempt: a weekend a holiday unit cuts (the partner day is a holiday-unit day — e.g. Sun 12/26/2027 after the Christmas
      Saturday) and a holiday-unit day itself; a dated row or offer of his for the day lifts it (his own date beats his own
-     shape rule — item W); a lock is a fact (kept, rule in `conflicts`). An **East-busy partner day does not complete the
-     pair**: a Silvis Sunday alone after a DSG Saturday is still a lone Sunday (the rule is about his Silvis shapes - §8 item
-     23 (d)). His `weekendStyle "block"` keeps governing his **backup** weekends (unchanged).
+     shape rule — item W), and so does a **'home' East-vacation day** (it counts as a dated row of his — the same `rowAvail`
+     the rest of the weekday-pattern family reads); a lock is a fact (kept, rule in `conflicts`). An **East-busy partner day
+     does not complete the pair**: a Silvis Sunday alone after a DSG Saturday is still a lone Sunday (the rule is about his
+     Silvis shapes - §8 item 23 (d)). His `weekendStyle "block"` keeps governing his **backup** weekends (unchanged).
+     ⟶ *Review 10/1:* on a weekend where he holds the Friday alone, someone else's Sat–Sun block costs that surgeon his
+     style's mismatch (+3) unless he carries `standaloneFriday` himself — a block-style holder (Philip) included, as the
+     per-day check and the diagnostics always read it (§4 item 4); a trade or give of one day of his Sat–Sun primary pair
+     moves the pair (the Trades card's weekend unit; §8 item 23 (m)).
   3. **At most 2 weekends a month across DSG and Silvis** — `weekendCap: { perMonth: 2, countsEast: true, roles: ["primary"],
      weight: "strong" }`, **soft**: a weekend counts **once, in its Saturday's month** (Sat 7/31 – Sun 8/1/2027 is a July
      weekend), when he is **Silvis primary** on its Saturday or Sunday **or East-busy** on either day — the feed's busy days
@@ -111,26 +116,39 @@ decides the Trauma Director role.
      is true, his seed value — the forecast always derives them that way**), the standing days (Christmas), and the forecast
      at or over the busy threshold (0.5) outside the published coverage while Davenport is unpublished (never on a busy:false
      override day or a 'home' East-vacation day). **Silvis backup does not count. A standalone Friday is a weekday and does
-     not count** (Cowork's reading of "M-F", 9/30 — §8 item 23 (a)). A placement that adds a weekend the East data do not
-     already count, in a month that then counts more than 2, carries `weekend-cap:2` at 10 × (weekends over 2), once per
-     weekend (on its first held day). Never lifted by an offer (a cap).
+     not count** (Cowork's reading of "M-F", 9/30 — §8 item 23 (a)). **10 for each weekend over 2** (strong), carried as
+     `weekend-cap:2` on the weekend's first held day, never on a weekend the East data already count: a placement that adds
+     a weekend to a month that then counts more than 2 pays 10 (what adding it costs); read over a finished schedule the
+     terms add up to 10 × (weekends over 2) — the weekends past the cap are the latest ones, the East weekends and his
+     locked weekends counted first. ⟶ *Review 10/1: it used to read 10 × (weekends over 2) on every weekend he held in such
+     a month, which a finished schedule summed past 10 per weekend over.* Never lifted by an offer (a cap).
   4. **Tue/Thu with more than 8 weeks' notice** — `hardNeverWeekdaysNoticeDays: 56`: the Tue/Thu primary rule stays **hard
      only for a date within 56 days of the day the placement is made** (Central today — Generate's run, a claim, a trade, a
      give, the day editor; **56 days out = hard, 57 = soft**; a past date is inside). Further out the day is allowed as primary
      with the soft `hard-never-beyond-notice:<wd>` at `groupRules.weights.hardNeverBeyondNotice` (**3**, a code default — Setup's
      weights list shows it), so Mon/Wed (+1) fill first. His dated rows / offers still lift the rule entirely. His Mon/Wed
-     allow-list and auto-offer stay.
+     allow-list and auto-offer stay. ⟶ *Review 10/1:* **a Tue/Thu he already holds stays legal** — placed beyond the notice
+     (Generate on the period's generation day, published or locked), it reads the same soft term when the date comes within
+     56 days, never the hard reason (so a later fill-open-only run lists no fixed violation, the publish CLI's preflight
+     passes it, and the day editor shows him as an eligible holder). Only a **new** placement is measured from today: an open
+     slot, someone else's slot (a claim, a trade, a give to him, an editor pick — the editor judges a candidate before the
+     pick), and every candidate Generate weighs. Engine: `rules.js eligibility()` reads the holder from the evaluated slot
+     on `ctx.schedule` (never from assume-slots).
   **Unchanged:** DSG call blocks Silvis primary (`east-busy` / `east-forecast-busy`), Christmas Eve/Day on DSG (eastStanding),
   max consecutive 3 (holiday unit = one day), offers first (his offered dates still beat his patterns), backup open every day.
   **Engine:** `rules.js eligibility()` stays the single chokepoint; the today comes from the context (`ctx.today` =
   `input.today`, else the Central date when the context is built — eligibility itself reads no clock); the generator gets the
   terms through eligibility / `weekendUnitPatterns`, which adds the **`friday` pattern kind** (one surgeon alone on the
   Friday + the Saturday–Sunday as a reduced unit: a block of two, or two daily days) whenever the Friday holder or the
-  block-of-two holder carries `standaloneFriday` (build guide §6). **Live:** the seed carries the five keys (with Note keys the
+  block-of-two holder carries `standaloneFriday` (§4 item 4, build guide §6). When no full pattern exists, the weekend
+  fill keeps a Saturday + Sunday only he can take together (the pair is legal for him) instead of dropping both
+  (review 10/1). **Live:** the seed carries the five keys (with Note keys the
   importer drops); Cowork sets them in Setup → Rules → Khan → *Edit as JSON* after the ship (no seed apply). The Setup form's
   "Primary contribution" select lists only `weekends` and shows "(none)" for `weekdays`, but saving the form keeps the value
   (the draft is the whole rules object) — the other four keys exist only in the JSON editor. **Preview:** the Jan – Jun 2027
-  before/after on the 10/1 live inputs is in the Prompt 23 report (private folder).
+  before/after on the 10/1 live inputs is in the Prompt 23 report (private folder) — run before the 10/1 review fixes (the
+  block-style Sat–Sun mismatch, 10 per weekend over, the held-slot notice reading, the weekend pair fill), which can move its
+  weekend numbers; the post-fix re-run is pending.
 - ⟶ **9/22: main contribution = PRIMARY on weekends when available** (Fri+Sat+Sun as a block). ⟶ **Superseded 9/30 (above): weekdays preferred.** He is not a backup filler: his backup count is balanced like everyone else's, and the generator should prefer him as weekend *primary* over weekend *backup* whenever East allows.
 - ⟶ **Seed keys (Prompt 12 L, 9/22) — ⟶ 9/30: his value is `"weekdays"` now (Prompt 23, above); the `"weekends"` mechanics below stay generic for any surgeon:** `surgeonRules.s1.primaryContribution: "weekends"` (generic — any surgeon; seed/blob data today, no Setup field yet) with `groupRules.weights.weekendContribution` = 3 (medium; 0 = off): his full Fri+Sat+Sun primary block earns the soft `weekend-primary` (−3 per day in the score, only as a member of a whole block; once per block inside the weekend-unit choice) and any weekend backup day of his costs the soft `weekend-backup` (+3 per day; once per pattern membership in the unit choice) — both soft, never a block; the weight is editable in Setup → Rules → weights (0 = off). Holiday units are not weekend units: neither term applies on a holiday-unit day and a weekend a unit pre-empts earns no block bonus. East cross-reference sources (`east-feed.js deriveKhanBusyDays`): `dayCall` Mon–Sat, `nights.mon..thu`, `nights.wknd` (Fri + Sun), `holidayCoverage` (24 h; someone else's holiday clears his day), `dayCallOverrides`, `isBackup` weeks (busy for primary while `eastFeed.eastBackupCountsAsBusy` is true — an East backup week busies only the shifts he actually holds in it (his dayCall/override/night/weekend/holiday days), never all seven days; pinned by `test/east-feed.test.js` "never busy wholesale"); each blocks primary (`east-busy`) and leaves backup open.
 - **Mondays and Wednesdays are auto-offered as primary** whenever East is clear ("I'll have to figure it out on those days"). **Never Tuesday, never Thursday as primary** — those are his OR days (hard). ⟶ **9/22: backup on any day is fine, Tue/Thu included.** *(Supersedes the earlier "no Mon/Wed nights" statement and the "never Tue/Thu for both roles" reading.)* ⟶ **9/23 (audit RG-3): "auto-offered" = eligible with a soft +1** (`auto-offer-weekday`, `groupRules.weights.noTargetWeekday`), so on otherwise equal terms another surgeon takes the day and weekends stay his main contribution — set the weight to 0 in Setup → Rules → weights for equal footing (the Setup label reads "offer those days (soft +1, weights.noTargetWeekday)"). ⟶ **9/30 (Prompt 23): the Tue/Thu rule is hard only within 56 days (item 4 above), and weekdays are his preferred primary days (the −3 weekday-primary bonus outweighs the +1, so a Mon/Wed nets −2 and a Tue/Thu beyond the notice 0 — allowed, never preferred over a colleague).**
@@ -152,7 +170,7 @@ decides the Trauma Director role.
   ~~**11/25 backup is open.**~~ ⟶ 9/23: 11/25 backup published to Fierce (generated, unlocked). His run reads 11/25 + the unit (one day for him) = 2 commitments under his max 3.
 - ⟶ **9/22 evening — East vacations, away / home (Prompt 15).** Faraz: *"I wonder if I can transfer my vacations over to Silvis as well. The issue is that there are days where I am on vacation at East, where we are not going anywhere, and I can cover call at Silvis."* So his Davenport vacations (`time_off`, kind `vacation` only — no-call days stay a Davenport concept) are mirrored into Silvis by the East feed refresh (part 1, cached per week in the `east_feed` payload `data.vacations`, matched by roster **code**), and **nothing is mirrored blindly**: he marks each range **away** (also off at Silvis) or **home** (available at Silvis — and those are his best Silvis days: a Davenport vacation day has no East call and no OR block). **Rules:**
   - **unreviewed (the default, no decision yet) and away → a Silvis vacation, derived.** Every day of the range is treated exactly like a `time_off` range — both roles blocked (`time-off:<date>`), the day before blocked for primary (`day-before-vacation`, `dayBeforeRules.trailingEdgeRoles`) — in eligibility, the holiday-unit candidates, the generator, the day editor, the claim gate and the open-shifts eligibility. The conservative default: never schedule someone who may be out of town. No `time_off` row is ever written (a change of mind is one tap, no orphan rows); the result carries `eastVacation: 'away' | 'unreviewed'` so the UI can gloss the marker. A Silvis `time_off` day inside the range stands as the Silvis vacation. **Client-side only:** the server-side guards that read `time_off` — `rpc/claim_open_slot` (`CL009 CLAIM_VACATION`), `apply_trade`'s vacation check and the `time_off` trigger — do not see a derived East vacation; it is enforced by the client gate (`eligibility`), so a direct REST claim or a stale PWA that passes no East inputs is not stopped by the database. Extending `CL009` to read the `east_feed` vacations + `east_vacation_reviews` is a possible later migration. **Operational note (9/23):** his real Davenport range over Thanksgiving week covers the locked Thanksgiving unit 11/26–29 and his 11/25 primary — as soon as the app passes the inputs, the unreviewed default lists those four locks as `lockViolations` (`time-off:<date>`, away gloss in the day editor), blocks him for 11/25 backup and shows in any Generate over that week **until he marks the range *home***. **Where he decides (part 3, 9/23):** the *Unreviewed | Away | Home* control on each range in Setup → East feed (the card *East vacations (Davenport time off, reviewed here)*, with the conflicts list), in his own Time off view and in My schedule; the decision is one row in `east_vacation_reviews` (applied by the orchestrator the same night — until then the panel says the table is missing and every range reads unreviewed). His first action after the deploy: *Refresh from Davenport* (his Davenport rows arrive; fewer ranges where adjacent rows merge — the toast names the merged count), then **home** on the range over his Silvis Thanksgiving unit; the rest as he decides.
-  - **home → NOT a Silvis vacation.** Those days are `eastClear`: read as **a dated availability of his for both roles** — it lifts exactly what a dated available row lifts (`rules.js` `rowAvail`, Prompt 12 W): `hard-never-weekday` (the Tue/Thu OR-day rule), `recurring-unavailable`, `weekday-not-allowed`, `weekday-pattern`, `weekend-block-only`, `day-before-aledo`, `whitelist-month`, `not-recurring-available`, `outside-available-weeks`; never an obligation — `outside-window`, a vacation (`time-off`) or its trailing edge (`day-before-vacation`), `backup-opt-out`, caps, runs, the other role (Khan has none of the whitelist / Aledo rules today; the list matters for a future East surgeon who does) —, known to East (no `east-unknown`; the forecast is not consulted there, a Davenport vacation being Davenport's own statement that he is off), and they carry a small **primary-only bonus** `east-clear` (−`groupRules.weights.eastClear`, default 2, Setup → Rules → weights; 0 = off) so the generator prefers him as primary there. Backup is unchanged (open anyway).
+  - **home → NOT a Silvis vacation.** Those days are `eastClear`: read as **a dated availability of his for both roles** — it lifts exactly what a dated available row lifts (`rules.js` `rowAvail`, Prompt 12 W): `hard-never-weekday` (the Tue/Thu OR-day rule), `recurring-unavailable`, `weekday-not-allowed`, `weekday-pattern`, `weekend-block-only`, `day-before-aledo`, `whitelist-month`, `not-recurring-available`, `outside-available-weeks`, and since Prompt 23 `lone-weekend-day` (his Sat/Sun pair rule - a home Saturday may stand alone); never an obligation — `outside-window`, a vacation (`time-off`) or its trailing edge (`day-before-vacation`), `backup-opt-out`, caps, runs, the other role (Khan has none of the whitelist / Aledo rules today; the list matters for a future East surgeon who does) —, known to East (no `east-unknown`; the forecast is not consulted there, a Davenport vacation being Davenport's own statement that he is off), and they carry a small **primary-only bonus** `east-clear` (−`groupRules.weights.eastClear`, default 2, Setup → Rules → weights; 0 = off) so the generator prefers him as primary there. Backup is unchanged (open anyway).
   - **On a home day the East feed cannot also say busy.** If the data disagree, the feed wins: a published busy day, a standing day (Christmas 12/24–25) or a `busy:true` override inside a home range stays `east-busy` for primary (no bonus), and a diagnostics warning names the day so the Davenport schedule or the override can be checked.
   - **The `time_off` trigger's refusal is mirrored client-side for the derived ranges:** `rules.eastVacationConflicts(ctx)` lists every published day he holds inside an unreviewed/away range (and a published primary the day before one) — a report, never a block on a published lock; the East feed panel shows the list so he can decide *home* or trade.
   - **A refreshed feed that changes or removes a range resets its review** (the match is the exact range: same start and end) — a changed range reads unreviewed again and the old row is deleted (audit `eastvac.review`, reason reset), a removed range's row is dropped the same way, the refresh toast says so; an unchanged range keeps its decision. Audit `eastvac.review { person_id, start, end, decision }`.
@@ -342,9 +360,10 @@ decides the Trauma Director role.
 
 The generator treats Fri/Sat/Sun as one unit and chooses a pattern per weekend:
 
-1. **Block** — one surgeon Fri+Sat+Sun (Khan, Philip, Fierce — for Fierce this is the *only* way he takes a Friday).
+1. **Block** — one surgeon Fri+Sat+Sun (Khan (his backup weekends; as primary, Fri–Sun is legal but earns no bonus since 9/30), Philip, Fierce — for Fierce this is the *only* way he takes a Friday).
 2. **Split** — one surgeon Fri+Sun, another Sat (Acton/Burchett pair; also valid for any two surgeons who both accept split). Keeps each under the 2-consecutive limit. Sarkar is offered in a split or block only under her `weekendBlockPenalty` (strong soft, 9/22 evening); with Mon–Fri windows she holds no Saturday or Sunday anyway.
 3. **Daily** — three independent days; fallback only — except for Sarkar (`weekendStyle: "daily"`), for whom a window Friday is a standalone day, the normal pattern (9/22 evening); no window carries a Saturday or Sunday now.
+4. **Friday** (Prompt 23, 9/30) — one surgeon takes the **Friday alone** and the **Saturday–Sunday is its own reduced unit**: a two-day block by one surgeon, or two daily days (with the daily-pattern penalty). Primary only, on a whole weekend, and only when the Friday holder or the Sat–Sun block holder carries `standaloneFriday` (Khan today): Khan's Friday alone beside someone else's Sat–Sun, or someone else's Friday beside Khan's Sat–Sun pair (two daily days go only beside his Friday). Costs: Khan's lone Friday has no style penalty (it is his shape; it earns his weekday bonus) and his Sat–Sun pair no mismatch. Anyone else's two-day block pays his style's mismatch (+3) — a **block-style holder too** (Philip: his style wants the Friday as well; ⟶ *review 10/1: the unit choice used to charge him nothing while the per-day check and the diagnostics flagged the mismatch*), a split-style holder (Acton, Burchett) +3. Anyone else's lone Friday beside Khan's pair costs his style's daily-member penalty: 0 for Sarkar's window Fridays (daily style), +3 for a block- or split-style Friday. **Fierce never takes one** — his Friday, Saturday and Sunday outside his derived weeks are block-only (`weekend-block-only`), so neither a lone Friday nor a Sat–Sun pair is open to him. With nobody carrying the key, no `friday` pattern exists at all.
 
 Backup for the weekend is filled with the same unit logic after primary. A surgeon's `weekendStyle` is a preference; the hard constraints (availability, caps, max consecutive) always win.
 
@@ -424,7 +443,9 @@ pool, within each person's availability:
 - **Caps count primary only** (9/22). Backup runs are unlimited by count; long any-role runs are discouraged by a soft
   penalty (see §1 consecutive days and Prompt 12 A).
 - **Khan's weekend preference** is a bonus term: weekend primary for Khan scores better than weekend backup for Khan when
-  East allows; his backup count is still balanced like everyone else's.
+  East allows; his backup count is still balanced like everyone else's. ⟶ **Superseded 9/30 (Prompt 23, §3 Khan):** his
+  preference is **weekdays** now — a weekday-primary bonus (Mon–Thu or a standalone Friday), no weekend term, and a soft
+  cap of 2 weekends a month across DSG and Silvis; his backups are balanced by the share alone.
 - **Sarkar** is targeted at her window-week primaries (⟶ 9/22 evening: 2 per week to start, adjustable in Setup → Rules), alternating days when possible; she is outside the
   equal-share pool. **Fierce's** derived weeks count toward his primary/backup tallies and the pool balances the rest.
 - **Outside surgeons** (internal locums) are never in the pool; their hand-written days reduce the pool's slot count.
@@ -493,7 +514,7 @@ holds Khan's four Thanksgiving rows and the 20 November rows of the ER-panel aut
 - Seed keys touched 9/26 (Faraz 9/26: the notes are public, so neutral text — who and which days, no East, Davenport or decision history; keep the seed slug): `existingAssignments` 2026-11-09 … 11-16 `note` only — 11/9–11/15 "Fierce backup week 11/9-11/15" (Faraz's own example), Mon 11/16 "Fierce backup 11/16"; the four rows whose source is `office-er-call-panels-2026-09-22` (11/11, 11/14, 11/15, 11/16 — that slug is the primary's provenance) keep "; source fierce-2026-09-22-backup-week" for the backup slot and drop the old "backup: " prefix and the superseded tail. Every row keeps its own slug, holders and lock, so `schedule_days.note` reads e.g. "seed: fierce-2026-09-22-backup-week - Fierce backup week 11/9-11/15". Nothing else of the 11/9–11/16 wording reaches an anon-readable table (`surgeonRules` / `groupRules` note keys are dropped before the blob; `pendingDeltas` and the question lists are never imported), so the reasons — his East primary week, Faraz's 11/16 decision, the superseded Burchett entries — stay in §3 (Fierce) and in `pendingDeltas`. Same revision: `openQuestions` 1 answered (§8 item 1). Live (expected; the dry run confirms which days each step writes): the seed apply rewrites the notes of the days still seed-owned (`updated_by 'seed'`) and keeps the app-owned ones (the 9/23 publish filled their primary); those get a snapshot-first, compare-and-swap note-only rewrite (audit `schedule.note`). ⟶ **Observed 2026-09-27 (the orchestrator, on Faraz's 9/26 approval):** the pre-flight of the apply's `call_periods` / `call_offers` legs first read `Jan 2027` as a WRITE - Fierce had chosen "Go by my rules" for Jan 2027 in the app on 2026-09-26 00:16:35Z and the importer replaces `rules_only_ids` - so the seed now mirrors it (`offerPeriods` Jan 2027 `rulesOnly` ["s5"], same revision) and the re-run pre-flight read all three periods unchanged, offers 79 with no insert / update / proposal / stale delete. Dry run: blob core keys unchanged, `settings=update`; `schedule_days: insert 0, update 4, delete 0, unchanged 38, BLOCKED 31` (the 30 expected plus 10/14, edited in the app 9/25), the four updates 11/11, 11/14, 11/15, 11/16 `locks/note change`; `Total changes: 87 (+36 blocked)`. Apply 2026-09-27 03:35:59Z: `VERIFIED` (a fresh plan reads `Total changes: 0 (+36 blocked)`), offers unchanged 79, periods unchanged 3; it wrote the notes of 11/11 (v2) and 11/14 - 11/16 (v3), `updated_by 'seed'`. Note-only rewrite (snapshot `241dec1a-7586-41a1-a13a-ef33460b4697`, audit `schedule.note` `7b4a3dff-2b7c-4e46-a58a-327e2e5f33a2`): 11/9, 11/10, 11/12, 11/13 -> v3, `updated_by 's1'`; holders, locks and source unchanged on all eight. Verification: an anon read of the eight notes matches the neutral text and none names East / Davenport / a decision; the re-run dry run reads every blob key unchanged, `schedule_days` update 0 and `Total changes: 82 (+36 blocked)` (the offer / period upserts an anon dry run always counts); the re-run pre-flight reads the same three periods and 79 offers.
 
 **The open primary days in the import are 10/15 (Thu) and, since 9/22 evening, Sat 10/24 (see below).** 10/15: Philip cannot (hard), Burchett and Acton did not offer it,
-Khan never takes Thursdays, and Fierce is in Clinton on Thursdays. It needs a human decision (still open after the 9/23 publish, which left 10/15 primary OPEN). ⟶ **9/25: filled — Burchett primary (locked), Khan backup, set by the scheduler 9/25 15:24 CDT (§8 item 1).** ⟶ **9/23: from 11/2 on the
+Khan never takes Thursdays (the 9/22 reading; since 9/30 his Tue/Thu are hard only within 56 days - §3 Khan item 4), and Fierce is in Clinton on Thursdays. It needs a human decision (still open after the 9/23 publish, which left 10/15 primary OPEN). ⟶ **9/25: filled — Burchett primary (locked), Khan backup, set by the scheduler 9/25 15:24 CDT (§8 item 1).** ⟶ **9/23: from 11/2 on the
 schedule is the 24 locked import rows (20 of the ER-panel author's 9/22 entries, below, plus Khan's 11/25–29) and the generated rows published
 2026-09-23 from the committed preview** (`docs/PUBLISH-2026-09-23.md`; unlocked, editable in the day editor) — every November day
 holds a row.
@@ -505,7 +526,7 @@ Sun 10/25 and said he cannot do 10/24; Acton's rules allow a Saturday). ⟶ **Fa
 a week, October locks included — so Sarkar keeps 10/20 and 10/22 and comes OFF Sat 10/24.** 10/24 primary is now the
 second open primary day of the import (locked-open like 10/15, listed with reasons; backup 10/24 was already open).
 Candidates by the rules: Acton (a Saturday is allowed; he is primary Fri 10/23, so 10/24 would make 2 consecutive),
-Khan (weekend primary if East is clear that day), Philip (his October list is the model — check it), or an outside
+Khan (weekend primary if East is clear that day - the 9/22 reading; since 9/30 weekdays are his preference, §3), Philip (his October list is the model — check it), or an outside
 surgeon written in. Burchett said he cannot do 10/24.
 
 ### ⟶ 9/22 evening — the ER-panel author's updated document ("ER Sp Trauma 9-14-26 thru 12-13-26", sent 12:49)
@@ -642,7 +663,7 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     and his rules allow Thursday 11/5 (primary 11/4–11/6, within his max of three) with someone else as backup.
 14. **10/16, 10/27, 10/29 backup** — ~~open in the import~~ published 9/23 by the backfill as Burchett, Acton, Khan (generated, unlocked). The ER-panel author's 9/16 document had Philip primary and no backup there, and the open-backup list of her 9/22 document (10/15, 10/21, 10/23, 10/24, 10/25, 10/30, 10/31, 11/1) does not name them. Still to confirm: does her 9/22 document carry a backup on those three days? If so, send it and it is imported as a lock, replacing the generated holder (a manual/import row beats a generated one).
 15. **Tuesdays and Thursdays are the group's structural gap.** Three of six can never take them as primary (Khan: OR
-    days; Fierce: Clinton; Burchett: outreach except the 1st Tuesday), so every Tue/Thu falls on Acton, Philip or
+    days — ⟶ since 9/30 only within 56 days of the placement, see item 23 (k); Fierce: Clinton; Burchett: outreach except the 1st Tuesday), so every Tue/Thu falls on Acton, Philip or
     Sarkar — and with Acton now off Tuesdays (hard, 9/22 evening), **Tuesdays fall on Philip and Sarkar alone** (plus
     Burchett's first Tuesday, and Khan on any Tuesday/Thursday he has no East OR block and enters himself); Thursdays
     on Acton, Philip, Sarkar and those Khan dates. In a month where Acton is held to his list
@@ -762,17 +783,48 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     DSG day should complete the pair, that is a one-line engine change (the partner held OR East-busy) — say so.
     (e) **The notice's "today" is the day the context is built** (Central date): Generate builds a fresh one per run, the day
     editor per draft; the app's main context is rebuilt whenever its data change, so a claim or trade made just after
-    midnight on an untouched session can read yesterday's date — at most a one-day shift at the 56-day edge. (f) **No backup
+    midnight on an untouched session can read yesterday's date — at most a one-day shift at the 56-day edge. ⟶ *Review
+    10/1:* the notice applies to **new** placements only — a Tue/Thu he already **holds** (the evaluated slot is his on the
+    schedule: published, generated, locked) reads the soft `hard-never-beyond-notice` term inside the notice too, so a legal
+    far Tue/Thu never turns into a hard violation as the date approaches (fill-open-only `fixedViolations`, the publish
+    CLI's preflight, the day editor's holder). The flip side: a Tue/Thu written in by hand inside the notice and then saved
+    reads soft from then on (the override was recorded when it was made). (f) **No backup
     term in weekdays mode** (the 9/22 weekend-backup penalty has no mirror). (g) **The cap is soft at 10 per weekend over**
-    (strong) — Faraz may raise `weekendCap.weight`; it never blocks. (h) **A Tue/Thu beyond the notice costs +3**
-    (`weights.hardNeverBeyondNotice`, = medium): it cancels the −3 weekday bonus (net 0 against Mon/Wed's −2), so his Mon/Wed
-    fill first and a far Tue/Thu goes to him only where he is the better choice on the share — the 10/1 Jan – Jun preview read
-    17 Tue/Thu against 11 Mon/Wed at 2, 9 against 18 at 3 (8 of the 9 are Tuesdays/Thursdays nobody else may take), 8 against 16
-    at 10; Setup → Rules → weights moves it. (i) **The day
+    (strong) — Faraz may raise `weekendCap.weight`; it never blocks. ⟶ *Review 10/1:* exactly 10 per weekend over — a new
+    weekend pays 10 when its month then counts more than 2, and the terms of a finished schedule add up to 10 × (weekends
+    over 2) (the latest weekends carry them; East and locked weekends count first). It used to read 10 × (weekends over 2)
+    on every Silvis weekend of such a month. (h) **A Tue/Thu beyond the notice costs +3**
+    (`weights.hardNeverBeyondNotice`, = medium): at the **default** `weekendContribution` 3 it equals the −3 weekday bonus
+    (net 0 against Mon/Wed's −2), so his Mon/Wed fill first and a far Tue/Thu goes to him only where he is the better choice
+    on the share. It cancels the bonus only while `weekendContribution` is 3 — raising `weekendContribution` in Setup makes a
+    far Tue/Thu net negative (preferred over a colleague) again unless this weight is raised with it. The evidence (the 10/1
+    Jan – Jun 2027 previews on the live inputs, rules today 11/23 — the period's generation day; files in the private run
+    folder of 10/1): at **3**, Khan's primaries read **Mon/Wed 18, Tue/Thu 9**; at **5** and at **10**, **16 and 8** (the
+    same eight Tuesdays/Thursdays both times — the nine of the weight-3 run minus Thu 2/18). The weight-2 run of that evening
+    is not kept (the weight-3 rerun reused its file name); its reading — more Tue/Thu than Mon/Wed (17 against 11 in the
+    commit record), a far Tue/Thu netting −1 against a colleague's 0 — cannot be re-checked from the files. With rules today
+    10/1 (more dates beyond the notice) the weight-3 run read Mon/Wed 18, Tue/Thu 11. Setup → Rules → weights moves it.
+    (i) **The day
     editor:** the first of his Sat/Sun pair saved alone reads `lone-weekend-day` until the partner is saved (an override with
     the visible warning, like any hard rule), and the editor shows the new codes raw (the UI's reason glosses are an
-    index-source follow-up, not built here). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
+    index-source follow-up, not built here). ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
+    holder (item (e)); a limitation: after the draft is switched to someone else, picking him back on that day asks for the
+    override (the draft no longer holds him, so he is judged as a new placement). Clearing one day of his Sat/Sun pair in the
+    editor leaves the partner day lone without a warning (the editor judges the edited day only). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
     as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). (k) **Consequence
     for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
     periods generated more than eight weeks ahead (the Jan – Jun 2027 period is generated around 11/23: its January dates
     through 1/18 stay hard for him, later ones soft).
+    ⟶ **Review fixes (10/1, same branch):** (l) **someone else's Sat–Sun block beside his lone Friday** pays that
+    surgeon's style mismatch (+3) unless he carries `standaloneFriday` — a block-style holder (Philip) included: the unit
+    choice used to charge a block-style holder nothing while the per-day check and the diagnostics' `styleMismatch` flagged
+    him (in the 10/1 Jan – Jun previews, all 6 `friday` weekends of the rules-today-10/1 run and 6 of the 8 of the
+    rules-today-11/23 run were Khan's Friday + Philip's Sat–Sun, each with Philip in `styleMismatch`; §4 item 4).
+    (m) **Trades and gives:** his primary Sat + Sun are one unit on the Trades card (the card's "weekend-block" unit, named
+    "weekend pair"; his Fri–Sun stays the "weekend block") — a surgeon cannot give or trade one day of the pair (he is told
+    it splits the unit), the scheduler is asked to confirm a split, and the receiver is checked over both days with the
+    other assumed. Not covered: the **Open shifts board's Take** judges one day at a time, so an open Saturday + Sunday
+    cannot be taken by him as a pair there (he is refused each day alone with `lone-weekend-day` — the same shape as
+    Fierce's block-only Fridays); the day editor (item (i)). (n) **Generate:** when a weekend has no full pattern and the
+    Saturday is his alone (nobody else may take it), the fill keeps the Saturday with its open Sunday as his pair instead
+    of dropping it (before: the Saturday stayed open beside the open Friday and the Sunday went to someone else).
