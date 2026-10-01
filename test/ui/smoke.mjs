@@ -1109,11 +1109,16 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
     { id: crypto.randomUUID(), person_id: "s3", day: U3C.other.day, role_pref: U3C.other.offeredRole, note: null, entered_by: "s3", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
   ] : []);
 // 9/27 offer deadline notice: an INDEPENDENT restatement of helpers.offerDeadlineNotices over the harness's stores, read
-// at call time: every served period with status upcoming, a close after today, the person neither submitted (a row
-// inside it) nor rules-only, and the close within groupRules.offerPeriods.noticeDaysBeforeClose days (the served blob's,
-// the seed's as a fallback - see NOTICE_OP; 42 when absent); urgent = within groupRules.offerPeriods.noticeUrgentDaysBeforeClose
-// days (likewise; 14 when absent - its own key since the 9/27 ship, NOT the reminder list). Sorted by close. Today is the Central date.
-// `periods` defaults to periodStore; the notice step passes its own list (periodStore + two synthetic periods).
+// at call time: every served period with status upcoming, a close after today, and the close within
+// groupRules.offerPeriods.noticeDaysBeforeClose days (the served blob's, the seed's as a fallback - see NOTICE_OP; 42 when
+// absent); urgent = within groupRules.offerPeriods.noticeUrgentDaysBeforeClose days (likewise; 14 when absent - its own key
+// since the 9/27 ship, NOT the reminder list). Sorted by close, then start. Today is the Central date.
+// pin moved deliberately 9/30 (Prompt 26): the heads-up goes to every pool surgeon WHATEVER his status - the restatement no
+// longer drops a submitted (a row inside the period) or rules-only person; each row carries the status offer_status() reads
+// (submitted > rules_only > not_started) for the page's data-status.
+// `periods` defaults to periodStore; the notice step passes its own list (periodStore + three synthetic periods), its own
+// offers (`opts.offers`, the harness store + one s2 offer that page alone is served) and its own window (`opts.op`, the
+// served values with noticeDaysBeforeClose raised - that page's blob GET answers the same).
 // 9/30 (TASK 2): the served blob's groupRules.offerPeriods first (the page reads the live blob, and live settings move
 // ahead of the seed - Cowork set noticeDaysBeforeClose 42 -> 14 in Setup on 10/1 before the seed mirrored it), the
 // seed's only when the up-front blob read failed or carried no offerPeriods.
@@ -1125,14 +1130,16 @@ const NOTICE_OP = (() => {
 })();
 const NOTICE_SRC = (() => { const s = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods; return s && typeof s === "object" && !Array.isArray(s) ? "the served blob" : "the seed"; })();
 const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
-const expOfferNotices = (person, periods) => {
-  const nd = typeof NOTICE_OP.noticeDaysBeforeClose === "number" ? NOTICE_OP.noticeDaysBeforeClose : 42;
-  const urgentDays = typeof NOTICE_OP.noticeUrgentDaysBeforeClose === "number" && NOTICE_OP.noticeUrgentDaysBeforeClose >= 0 ? NOTICE_OP.noticeUrgentDaysBeforeClose : 14;
+const expOfferNotices = (person, periods, opts) => {
+  const op = (opts && opts.op) || NOTICE_OP;
+  const offers = (opts && opts.offers) || offerStore;
+  const nd = typeof op.noticeDaysBeforeClose === "number" ? op.noticeDaysBeforeClose : 42;
+  const urgentDays = typeof op.noticeUrgentDaysBeforeClose === "number" && op.noticeUrgentDaysBeforeClose >= 0 ? op.noticeUrgentDaysBeforeClose : 14;
+  const statusOf = (p) => offers.some(o => o.person_id === person && o.day >= p.start_day && o.day <= p.end_day) ? "submitted" : (p.rules_only_ids || []).includes(person) ? "rules_only" : "not_started";
   return (periods || periodStore).filter(p => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral
-    && !offerStore.some(o => o.person_id === person && o.day >= p.start_day && o.day <= p.end_day) && !(p.rules_only_ids || []).includes(person)
     && noticeIsoDiff(todayCentral, p.offers_close_at) <= nd)
-    .sort((a, b) => a.offers_close_at < b.offers_close_at ? -1 : 1)
-    .map(p => ({ id: p.id, label: p.label, close: p.offers_close_at, start: p.start_day, days: noticeIsoDiff(todayCentral, p.offers_close_at), urgent: noticeIsoDiff(todayCentral, p.offers_close_at) <= urgentDays }));
+    .sort((a, b) => a.offers_close_at !== b.offers_close_at ? (a.offers_close_at < b.offers_close_at ? -1 : 1) : (a.start_day < b.start_day ? -1 : a.start_day > b.start_day ? 1 : 0))
+    .map(p => ({ id: p.id, label: p.label, close: p.offers_close_at, start: p.start_day, days: noticeIsoDiff(todayCentral, p.offers_close_at), urgent: noticeIsoDiff(todayCentral, p.offers_close_at) <= urgentDays, status: statusOf(p) }));
 };
 let failSaveOffers = false;
 // applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
@@ -5246,44 +5253,80 @@ try {
   await page.setViewportSize({ width: 1180, height: 900 });
 
   // ---- 9/27: the offer deadline notice (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ----
-  // A page as surgeon s2 (Burchett: not_started on the served period - his harness row 10/14 lies outside it). The
-  // expected rows are expOfferNotices("s2", noticePeriods) (the restatement above), so nothing here depends on the
-  // calendar date: the served period drops out after its 10/2 close, the two synthetic ones below never do. The nav's Paint offers carries offer-deadline-badge = the count; Mine
-  // shows one offer-notice-row per period (data-period-id, the label, "in N days" / "tomorrow", the start M/D) inside
-  // mine-offers, and "My offers (N upcoming day(s))" still reads; the Calendar shows the URGENT rows only; "Choose
-  // shifts" opens the painter for s2 aimed at that period with zero offer writes; at 390 px no horizontal page scroll
-  // and the button is >= 36 px tall; screenshots in both themes. The scheduler page (s1 is rules-only there) shows none.
-  // Review 9/27: the served period closes 10/2, so this page gets its OWN period list (GET call_periods answered by the
-  // extra handler; periodStore and every other step are untouched): periodStore + two synthetic upcoming periods (9/30: their
-  // closes follow the served notice window - see close1 / close2 below; 9/27 used today+10 urgent and today+30 calm), both after the last served end, s2
-  // not_started on both - so the Calendar's "urgent rows only" branch is exercised on every run, whatever the date.
+  // ---- Prompt 26 (Faraz 9/30): the heads-up before a freeze - vacations in, painting optional ----
+  // A page as surgeon s2 (Burchett). The expected rows are expOfferNotices("s2", noticePeriods, { offers, op }) (the
+  // restatement above - every status since Prompt 26), so nothing here depends on the calendar date: the served period drops
+  // out after its 10/2 close, the three synthetic ones below never do. This page gets its OWN answers (the extra handler;
+  // periodStore, offerStore and every other step are untouched):
+  //   GET call_periods     = periodStore + three synthetic upcoming periods after the last served end - s2 not_started on the
+  //                          first, rules_only on the second (rules_only_ids [s2]), submitted on the third;
+  //   GET call_offers      = offerStore + one s2 offer inside the third period (so "submitted" is real, read by the app);
+  //   GET call_schedule_data = the served blob with groupRules.offerPeriods.noticeDaysBeforeClose raised above
+  //                          noticeUrgentDaysBeforeClose (the live values are 14 / 14 - no non-urgent row could exist
+  //                          otherwise), so the second period sits inside the notice window but past the urgent one and the
+  //                          Calendar's urgent-only filter is exercised on every run.
+  // Checks: no count badge anywhere (removed, not hidden); Mine shows one offer-notice-row per period (data-period-id /
+  // data-days / data-urgent / data-status = the restatement's) with the heads-up sentence naming the freeze ("Mon 11/23") and
+  // the label, an "Enter vacations" and a "Paint days (optional)" button, inside mine-offers; the Calendar shows the URGENT rows
+  // only; "Enter vacations" goes to Time off (the vacation form, s2 picked) with zero writes; "Paint days (optional)" opens the
+  // painter for s2 aimed at that period with zero offer writes; at 390 px no horizontal page scroll and both buttons are
+  // >= 36 px tall; screenshots in both themes.
   {
     const NOTICE_UID = "00000000-0000-4000-8000-00000000d1e6";
     const NOTICE_PROFILE = { id: NOTICE_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
     const NOTICE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: NOTICE_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     const lastServedEnd = periodStore.map(p => p.end_day).sort().pop() || todayCentral;
     const synthBase = isoAddDays(lastServedEnd > isoAddDays(todayCentral, 60) ? lastServedEnd : isoAddDays(todayCentral, 60), 1);
-    const synthPeriod = (n, start, end, close) => ({ id: "00000000-0000-4000-8000-0000000d1e6" + n, label: "Notice check " + n, start_day: start, end_day: end, offers_close_at: close, publish_by: isoAddDays(start, -28), status: "upcoming", rules_only_ids: [], offer_modes: {}, created_by: "harness", created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" });
-    // 9/30 (TASK 2): the two synthetic closes follow the served notice window (NOTICE_OP) instead of fixed 10 / 30 days
-    // (30 fell outside the 14-day window Cowork set live on 10/1): one inside the urgent window, one inside the notice
-    // window but past the urgent one - when the configuration has such a band (noticeDays > urgentDays); otherwise the
-    // second closes past the notice window (so it must NOT show) and the non-urgent case is skipped with a note.
+    const synthPeriod = (n, start, end, close, rulesOnly) => ({ id: "00000000-0000-4000-8000-0000000d1e6" + n, label: "Notice check " + n, start_day: start, end_day: end, offers_close_at: close, publish_by: isoAddDays(start, -28), status: "upcoming", rules_only_ids: rulesOnly ? ["s2"] : [], offer_modes: {}, created_by: "harness", created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" });
+    // Prompt 26: the served window (NOTICE_OP) with noticeDaysBeforeClose RAISED to at least urgent + 21 days - this page's
+    // blob GET answers it; closes: the first (not_started) and third (submitted) inside the urgent window, the second
+    // (rules_only) half-way through the non-urgent band. With noticeUrgentDaysBeforeClose 0 (urgent never) every row is calm.
     const nDays = typeof NOTICE_OP.noticeDaysBeforeClose === "number" && NOTICE_OP.noticeDaysBeforeClose >= 0 ? NOTICE_OP.noticeDaysBeforeClose : 42;
     const uDays = typeof NOTICE_OP.noticeUrgentDaysBeforeClose === "number" && NOTICE_OP.noticeUrgentDaysBeforeClose >= 0 ? NOTICE_OP.noticeUrgentDaysBeforeClose : 14;
-    const urgentBand = Math.min(nDays, uDays) >= 1, calmBand = nDays > uDays;
-    const close1 = urgentBand ? Math.max(1, Math.min(nDays, uDays) - 4) : Math.max(1, nDays);
-    const close2 = calmBand ? uDays + Math.max(1, Math.floor((nDays - uDays) / 2)) : nDays + 10;
-    console.log(`     (offer deadline notice: window ${nDays} day(s), urgent ${uDays} from ${NOTICE_SRC}; synthetic closes today + ${close1} and + ${close2}${calmBand ? "" : " - no non-urgent band in this configuration, so that case is not exercised"})`);
+    const wDays = Math.max(nDays, uDays + 21);
+    const NOTICE_OP_PAGE = { ...NOTICE_OP, noticeDaysBeforeClose: wDays, noticeUrgentDaysBeforeClose: uDays };
+    const urgentBand = uDays >= 1;
+    const close1 = urgentBand ? Math.max(1, uDays - 4) : 3;
+    const close3 = urgentBand ? Math.max(1, uDays - 2) : 5;
+    const close2 = urgentBand ? uDays + Math.max(1, Math.floor((wDays - uDays) / 2)) : wDays - 2;
+    console.log(`     (offer deadline notice: served window ${nDays} day(s), urgent ${uDays} from ${NOTICE_SRC}; this page's blob raises the window to ${wDays}; synthetic closes today + ${close1} (not_started), + ${close2} (rules_only) and + ${close3} (submitted))`);
     const noticePeriods = periodStore.concat([
-      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, close1)),
-      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, close2)),
+      synthPeriod(1, synthBase, isoAddDays(synthBase, 27), isoAddDays(todayCentral, close1), false),
+      synthPeriod(2, isoAddDays(synthBase, 28), isoAddDays(synthBase, 55), isoAddDays(todayCentral, close2), true),
+      synthPeriod(3, isoAddDays(synthBase, 56), isoAddDays(synthBase, 83), isoAddDays(todayCentral, close3), false),
     ]);
-    const noticeRoute = async ({ req, url, json }) => {
+    const noticeOffers = offerStore.concat([{ id: "00000000-0000-4000-8000-0000000d1e70", person_id: "s2", day: isoAddDays(synthBase, 60), role_pref: "either", note: null, entered_by: "s2", source: "app", created_at: "2026-09-30T00:00:00Z", updated_at: "2026-09-30T00:00:00Z" }]);
+    let blobRaisedServed = 0;
+    const raiseWindow = (r) => {
+      if (!r || typeof r !== "object" || r.data === undefined || r.data === null) return r;
+      const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+      const gr = { ...((d && d.groupRules) || {}) };
+      gr.offerPeriods = { ...(gr.offerPeriods || {}), noticeDaysBeforeClose: wDays };
+      blobRaisedServed++;
+      return { ...r, data: { ...d, groupRules: gr } };
+    };
+    const noticeRoute = async ({ route, req, url, json }) => {
       if (url.pathname.startsWith("/rest/v1/call_periods") && req.method() === "GET") { await json(200, noticePeriods.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1)); return true; }
+      if (url.pathname.startsWith("/rest/v1/call_offers") && req.method() === "GET") { await json(200, noticeOffers.slice().sort((a, b) => a.day < b.day ? -1 : 1)); return true; }
+      if (url.pathname.startsWith("/rest/v1/call_schedule_data") && req.method() === "GET") {
+        let rows = fixtureAnswer(url);
+        if (!rows) {
+          try {
+            const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+            if (!res.ok()) return false; // the default handler answers it (and the raised-window check below fails loudly)
+            rows = await res.json();
+          } catch (e) { return false; }
+        }
+        await json(200, Array.isArray(rows) ? rows.map(raiseWindow) : raiseWindow(rows));
+        return true;
+      }
       return false;
     };
-    const exp = expOfferNotices("s2", noticePeriods);
+    const exp = expOfferNotices("s2", noticePeriods, { offers: noticeOffers, op: NOTICE_OP_PAGE });
     const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    const DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const freezeWords = (d) => `${DOW3[new Date(d + "T12:00:00Z").getUTCDay()]} ${md(d)}`;
+    const headsUp = (n) => `Before ${freezeWords(n.close)}, enter your vacations for ${n.label}. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.`;
     let noticeThemeWas;   // the origin's storage is shared with the other pages: the dark leg puts the flag back below, thrown or not
     const np = await context.newPage();
     watchPage(np, "offer-notice");
@@ -5298,45 +5341,64 @@ try {
       await np.waitForSelector("text=Synced", { timeout: 30000 });
       await np.waitForTimeout(800);
       if ((await np.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the notice page shows a Setup tab - it is being treated as the scheduler");
-      const badge = await np.$eval("[data-testid=nav-paint-offers] [data-testid=offer-deadline-badge]", el => el.textContent.trim()).catch(() => null);
-      if (exp.length ? badge !== String(exp.length) : badge !== null) fail(`Offer deadline notice (s2): the nav's Paint offers badge should read ${exp.length ? "'" + exp.length + "'" : "nothing"}, got ${JSON.stringify(badge)}`);
-      else ok(`Offer deadline notice (s2): nav badge ${exp.length ? "'" + exp.length + "'" : "absent"} (${exp.length} period(s) waiting)`);
+      // the premises: the raised blob was served, and the restatement holds all three statuses (and both bands when there are two)
+      const statuses = ["not_started", "rules_only", "submitted"];
+      if (!blobRaisedServed) fail("Offer deadline notice (s2): this page's blob GET never carried the raised noticeDaysBeforeClose - the non-urgent band is not exercised");
+      if (!statuses.every(s => exp.some(n => n.status === s))) fail(`Offer deadline notice (s2): the synthetic periods should give one row per status (${statuses.join(", ")}) - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.status]))}`);
+      if ((urgentBand && !exp.some(n => n.urgent)) || !exp.some(n => !n.urgent)) fail(`Offer deadline notice (s2): the synthetic periods should give ${urgentBand ? "an urgent row and " : ""}a non-urgent row - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
+      // Prompt 26: the nav's count badge is REMOVED - absent from the whole page, whatever the rows
+      const badges = await np.$$eval("[data-testid=offer-deadline-badge]", els => els.length);
+      const navBtn = await np.$("[data-testid=nav-paint-offers]");
+      if (badges !== 0 || !navBtn) fail(`Offer deadline notice (s2): the nav's Paint offers must stay (${!!navBtn}) with NO count badge anywhere (found ${badges}) - ${exp.length} period(s) in the window`);
+      else ok(`Offer deadline notice (s2): no offer-deadline-badge on the page (${exp.length} period(s) in the window); nav-paint-offers stays`);
       // Calendar: urgent rows only
       await np.click('button[data-tab="calendar"]');
       await np.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
       await np.waitForTimeout(200);
-      const calRows = await np.$$eval("[data-testid=offer-deadline-notice][data-where=calendar] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
+      const calRows = await np.$$eval("[data-testid=offer-deadline-notice][data-where=calendar] .offer-notice-row", els => els.map(e => ({ id: e.getAttribute("data-period-id"), status: e.getAttribute("data-status") })));
       const expCal = exp.filter(n => n.urgent).map(n => n.id);
       const hidden = exp.filter(n => !n.urgent).map(n => n.id);
-      if ((calmBand && !hidden.length) || (urgentBand && !expCal.length)) fail(`Offer deadline notice (s2): the synthetic periods should give ${urgentBand ? "an urgent row" : ""}${urgentBand && calmBand ? " and " : ""}${calmBand ? "a non-urgent row" : ""} - the harness restatement reads ${JSON.stringify(exp.map(n => [n.id, n.days, n.urgent]))}`);
-      if (hidden.some(id => calRows.includes(id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.includes(id)))}) - only rows within noticeUrgentDaysBeforeClose belong there`);
-      else if (JSON.stringify(calRows) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows)}`);
-      else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(expCal) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
-      // Mine: every row
+      if (hidden.some(id => calRows.some(r => r.id === id))) fail(`Offer deadline notice (s2, Calendar): a non-urgent row shows on the Calendar (${JSON.stringify(hidden.filter(id => calRows.some(r => r.id === id)))}) - only rows within noticeUrgentDaysBeforeClose belong there`);
+      else if (JSON.stringify(calRows.map(r => r.id)) !== JSON.stringify(expCal)) fail(`Offer deadline notice (s2, Calendar): urgent rows only - expected ${JSON.stringify(expCal)}, got ${JSON.stringify(calRows.map(r => r.id))}`);
+      else ok(`Offer deadline notice (s2, Calendar): ${expCal.length ? expCal.length + " urgent row(s) " + JSON.stringify(calRows.map(r => r.id + ":" + r.status)) : "no notice (nothing urgent)"}; ${hidden.length} non-urgent row(s) kept off it`);
+      // Mine: every row, every status, the heads-up words
       await np.click('button[data-tab="myschedule"]');
       await np.waitForSelector("[data-testid=mine-offers]", { timeout: 8000 });
       await np.waitForTimeout(200);
-      const mine = await np.$$eval("[data-testid=mine-offers] [data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row", els => els.map(e => ({ id: e.getAttribute("data-period-id"), days: e.getAttribute("data-days"), urgent: e.getAttribute("data-urgent"), text: e.innerText.replace(/\s+/g, " ").trim() })));
+      const mine = await np.$$eval("[data-testid=mine-offers] [data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row", els => els.map(e => ({ id: e.getAttribute("data-period-id"), days: e.getAttribute("data-days"), urgent: e.getAttribute("data-urgent"), status: e.getAttribute("data-status"), text: e.innerText.replace(/\s+/g, " ").trim(), vac: !!e.querySelector("[data-testid=offer-deadline-vacations]"), paint: !!e.querySelector("[data-testid=offer-deadline-choose]") })));
       const card = await np.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
-      const wrong = exp.map((n, i) => { const r = mine[i]; const when = n.days === 1 ? "tomorrow" : `in ${n.days} days`; return !r ? `${n.id}: missing` : (r.id !== n.id || r.days !== String(n.days) || r.urgent !== (n.urgent ? "1" : "0") || !r.text.includes(n.label) || !r.text.includes(when) || !r.text.includes(md(n.close)) || !r.text.includes("before " + md(n.start)) || !/Choose shifts/.test(r.text)) ? `${n.id}: ${JSON.stringify(r)}` : null; }).filter(Boolean);
-      if (mine.length !== exp.length || wrong.length) fail(`Offer deadline notice (s2, Mine): expected ${exp.length} row(s) naming the label, the freeze M/D, 'in N days' and the start - got ${mine.length}: ${wrong.join("; ").slice(0, 300)}`);
+      const wrong = exp.map((n, i) => { const r = mine[i]; return !r ? `${n.id}: missing` : (r.id !== n.id || r.days !== String(n.days) || r.urgent !== (n.urgent ? "1" : "0") || r.status !== n.status || !r.text.includes(headsUp(n)) || !/Enter vacations/.test(r.text) || !/Paint days \(optional\)/.test(r.text) || !r.vac || !r.paint || /Choose (your )?shifts|not started|never answered/i.test(r.text)) ? `${n.id}: ${JSON.stringify(r)}` : null; }).filter(Boolean);
+      if (mine.length !== exp.length || wrong.length) fail(`Offer deadline notice (s2, Mine): expected ${exp.length} row(s) (${exp.map(n => n.status).join(", ")}) each reading '${exp.length ? headsUp(exp[0]) : ""}' with Enter vacations + Paint days (optional) - got ${mine.length}: ${wrong.join("; ").slice(0, 400)}`);
       else if (!/My offers \(\d+ upcoming days?\)/i.test(card)) fail("Offer deadline notice (s2, Mine): the My offers title no longer reads inside mine-offers: " + card.slice(0, 160));
-      else if (!exp.length) ok(`Offer deadline notice (s2, Mine): no notice - not exercised (today ${todayCentral}: no open period within its notice window for s2; the served period closes ${offerPeriod ? offerPeriod.offers_close_at : "-"})`);
-      else ok(`Offer deadline notice (s2, Mine): ${mine.length} row(s): '${mine[0].text.slice(0, 140)}'`);
+      else if (!exp.length) ok(`Offer deadline notice (s2, Mine): no notice - not exercised (today ${todayCentral}: no open period within its notice window for s2)`);
+      else ok(`Offer deadline notice (s2, Mine): ${mine.length} row(s), statuses ${mine.map(r => r.status).join(" / ")} - the same words for each: '${mine[0].text.slice(0, 160)}'`);
       if (exp.length) {
-        const geo = await np.evaluate(() => { const b = document.querySelector("[data-testid=offer-deadline-choose]"); const r = b ? b.getBoundingClientRect() : null; return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, h: r ? r.height : 0 }; });
-        if (geo.sw > geo.cw + 1 || geo.h < 36) fail(`Offer deadline notice 390px: page scrolls sideways (${geo.sw} > ${geo.cw}) or Choose shifts is under 36 px (${geo.h})`);
-        else ok(`Offer deadline notice 390px: no horizontal scroll (${geo.sw} in ${geo.cw}), Choose shifts ${Math.round(geo.h)} px tall`);
+        const geo = await np.evaluate(() => { const hOf = (sel) => { const b = document.querySelector(sel); return b ? b.getBoundingClientRect().height : 0; }; return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, hv: hOf("[data-testid=offer-deadline-notice][data-where=mine] [data-testid=offer-deadline-vacations]"), hp: hOf("[data-testid=offer-deadline-notice][data-where=mine] [data-testid=offer-deadline-choose]") }; });
+        if (geo.sw > geo.cw + 1 || geo.hv < 36 || geo.hp < 36) fail(`Offer deadline notice 390px: page scrolls sideways (${geo.sw} > ${geo.cw}) or a button is under 36 px (Enter vacations ${geo.hv}, Paint days ${geo.hp})`);
+        else ok(`Offer deadline notice 390px: no horizontal scroll (${geo.sw} in ${geo.cw}), Enter vacations ${Math.round(geo.hv)} px / Paint days ${Math.round(geo.hp)} px tall`);
         await np.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
         await np.screenshot({ path: path.join(OUT, "offer-notice-390.png"), fullPage: false });
+        // Enter vacations -> Time off: the vacation form with s2 picked, nothing written
+        const bV = writes.length;
+        await np.click(`[data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row[data-period-id="${exp[0].id}"] [data-testid=offer-deadline-vacations]`);
+        const form = await np.waitForSelector("[data-testid=timeoff-card] [data-testid=vac-add]", { timeout: 5000 }).then(() => true).catch(() => false);
+        await np.waitForTimeout(200);
+        const picked = await np.$eval("[data-testid=timeoff-card] select", el => el.value).catch(() => null);
+        const vacWrites = writes.slice(bV).filter(w => /\/rest\/v1\/(time_off|call_offers|audit_log|notifications)|rpc\/|send-notification/.test(w.path));
+        if (!form || picked !== "s2" || vacWrites.length) fail(`Offer deadline notice: Enter vacations must open Time off's vacation form for s2 with zero writes (form ${form}, person ${JSON.stringify(picked)}, writes ${JSON.stringify(vacWrites.map(w => w.method + " " + w.path))})`);
+        else ok("Offer deadline notice: Enter vacations opened Time off (the vacation form, s2 picked), zero writes");
+        await np.click('button[data-tab="myschedule"]');
+        await np.waitForSelector("[data-testid=offer-deadline-notice][data-where=mine]", { timeout: 5000 });
+        // Paint days (optional) -> the painter for s2 on that period, nothing written
         const b0 = writes.length;
         await np.click(`[data-testid=offer-deadline-notice][data-where=mine] .offer-notice-row[data-period-id="${exp[0].id}"] [data-testid=offer-deadline-choose]`);
         const sheet = await np.waitForSelector("[data-testid=ofp-sheet][data-person=s2]", { timeout: 5000 }).then(() => true).catch(() => false);
         await np.waitForTimeout(300);
         const line = await np.$eval("[data-testid=ofp-period-line]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
         const offerWrites = writes.slice(b0).filter(w => /call_offers|rpc\/(save_offers|set_offer_mode)/.test(w.path));
-        if (!sheet || !line.includes(exp[0].label) || offerWrites.length) fail(`Offer deadline notice: Choose shifts must open the painter for s2 on ${exp[0].label} with zero offer writes (sheet ${sheet}, period line '${line.slice(0, 80)}', writes ${offerWrites.length})`);
-        else ok(`Offer deadline notice: Choose shifts opened the painter for s2 on '${exp[0].label}' (period line '${line.slice(0, 60)}'), zero writes`);
+        if (!sheet || !line.includes(exp[0].label) || offerWrites.length) fail(`Offer deadline notice: Paint days (optional) must open the painter for s2 on ${exp[0].label} with zero offer writes (sheet ${sheet}, period line '${line.slice(0, 80)}', writes ${offerWrites.length})`);
+        else if (exp[0].status === "not_started" && !/following your rules/.test(line)) fail(`Offer deadline notice: the painter's period line must read 'following your rules' for s2 (not_started on ${exp[0].label}) - got '${line.slice(0, 120)}'`);
+        else ok(`Offer deadline notice: Paint days (optional) opened the painter for s2 on '${exp[0].label}' (period line '${line.slice(0, 90)}'), zero writes`);
         if (sheet) { await np.click("[data-testid=ofp-close]"); await np.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 }).catch(() => {}); }
         await np.click('button[data-tab="settings"]');
         await np.click("button:has-text('Dark')");
@@ -5395,12 +5457,14 @@ try {
       const offersCard = await page.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       if (!/My offers \(0 upcoming days\)/i.test(offersCard) || !offersCard.includes(offerPeriod.label) || !/going by my rules/.test(offersCard)) fail("Offer painter: the My offers card does not read '0 upcoming days' + the seed period + 'going by my rules' for s1: " + offersCard.slice(0, 200));
       else ok("Offer painter: My schedule shows 'My offers (0 upcoming days)' and '" + offerPeriod.label + ": going by my rules' for s1 (the seed's rulesOnly)");
-      // 9/27: the offer deadline notice speaks to not_started people only - s1 is rules-only on the served period
+      // 9/27: the offer deadline notice on the scheduler's own page (s1, linked, in the pool).
+      // pin moved deliberately 9/30 (Prompt 26): the heads-up goes to every status - s1 is rules-only on the served period and
+      // now gets its row while that period is inside the notice window (it got none before); the restatement says which
       try {
         const expS1 = expOfferNotices("s1");
-        const s1Rows = await page.$$eval("[data-testid=mine-offers] .offer-notice-row", els => els.map(e => e.getAttribute("data-period-id")));
-        if (JSON.stringify(s1Rows) !== JSON.stringify(expS1.map(n => n.id))) fail(`Offer deadline notice (scheduler as s1): expected ${JSON.stringify(expS1.map(n => n.id))} (rules-only on the served period = none), got ${JSON.stringify(s1Rows)}`);
-        else ok(`Offer deadline notice (scheduler as s1): ${s1Rows.length ? s1Rows.length + " row(s)" : "no notice - s1 goes by his rules on " + offerPeriod.label}`);
+        const s1Rows = await page.$$eval("[data-testid=mine-offers] .offer-notice-row", els => els.map(e => ({ id: e.getAttribute("data-period-id"), status: e.getAttribute("data-status") })));
+        if (JSON.stringify(s1Rows) !== JSON.stringify(expS1.map(n => ({ id: n.id, status: n.status })))) fail(`Offer deadline notice (scheduler as s1): expected ${JSON.stringify(expS1.map(n => n.id + ":" + n.status))} (every status inside the window), got ${JSON.stringify(s1Rows)}`);
+        else ok(`Offer deadline notice (scheduler as s1): ${s1Rows.length ? s1Rows.length + " row(s) " + JSON.stringify(s1Rows.map(r => r.id + ":" + r.status)) + " - a rules-only surgeon gets the heads-up too" : "no notice - no open period inside the window today (" + todayCentral + ")"}`);
       } catch (e) { fail("Offer deadline notice (s1): " + String(e && e.message || e).split("\n")[0]); }
       await page.click("[data-testid=paint-offers]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { timeout: 5000 });
@@ -5701,7 +5765,7 @@ try {
   // Every expectation is restated from the harness store AT RUN TIME (s1's standing moved with the painter save
   // above - his painted days may lie inside the period, and s5 chose "go by my rules" - so no line is pinned).
   // Desktop light: the editor on U3C.day lists "Offers (<label>):" with one span per pool surgeon (s3 offered <role>,
-  // s4 offered either, the rest rules (chose go by my rules / nothing entered) or not offered + the mode's
+  // s4 offered either, the rest rules (chose go by my rules) / following their rules (nothing entered - Prompt 26) or not offered + the mode's
   // consequence); an eligible dropdown option carries the tag; on U3C.next s4 is GREYED 'not-offered' (hard) with
   // the glossed reason line and s3 reads not offered - preferred days: penalty (soft). My schedule as s3: the
   // My-offers pill for U3C.day with the role ("(placed)" when he holds it) and the upcoming rows' offered / not
@@ -5716,7 +5780,8 @@ try {
       const rows = offerStore.filter(o => o.person_id === id && inPer(o));
       const status = rows.length ? "submitted" : (per.rules_only_ids || []).includes(id) ? "rules_only" : "not_started";
       if (status === "rules_only") return { kind: "rules", words: "rules (chose go by my rules)", tag: "rules" };
-      if (status === "not_started") return { kind: "rules", words: "rules (nothing entered)", tag: "rules" };
+      // pin moved deliberately 9/30 (Prompt 26): not_started reads "following their rules" to the scheduler (was "rules (nothing entered)")
+      if (status === "not_started") return { kind: "rules", words: "following their rules", tag: "rules" };
       const mode = per.offer_modes[id] || "preferred";
       const cons = mode === "exhaustive" ? "only these days: ineligible" : "preferred days: penalty";
       const roles = new Set(); rows.filter(o => o.day === day).forEach(o => { if (o.role_pref === "either") { roles.add("primary"); roles.add("backup"); } else roles.add(o.role_pref); });
@@ -7786,10 +7851,12 @@ try {
     // ---- Prompt 14 part 3b (U3b): Periods inside the Generate card ----
     // The status table of the seed period equals an INDEPENDENT restatement of SQL offer_status() over the harness's
     // own stores (call_offers + call_periods as they stand after the painter section: submitted = a row inside the
-    // period, else rules_only if listed, else not_started) with Remind on the not_started rows only while the
-    // period is still open (close > today, status upcoming); Remind on one of them = exactly ONE POST
-    // functions/v1/send-notification { type offers_reminder, targetIds [id], data.subject / message naming the
-    // label and the close date } and nothing else; New period -> a start inside the seed period is refused with
+    // period, else rules_only if listed, else not_started) with Remind on EVERY pool row while the period is still open
+    // (close > today, status upcoming - Prompt 26: the heads-up is for everyone); the roll call's words (Prompt 26) name
+    // who painted days and who added vacations - the vacations restated from the served time_off rows (the fixture's or
+    // the live anon read) plus the rows this run POSTed - and everyone else as 'following their rules', never 'not started';
+    // Remind on one of them = exactly ONE POST functions/v1/send-notification { type offers_reminder, targetIds [id],
+    // data.subject / message = the heads-up's words (the label, the freeze as 'Mon 11/23') } and nothing else; New period -> a start inside the seed period is refused with
     // zero writes; the 3-month preset fills end / close / publish / label = the harness's own date maths (last day
     // of the 3rd calendar month, Fri/Sat -> the following Sunday; start - 42 / - 28 days); Create = ONE POST
     // call_periods (return=representation) + ONE audit period.create and nothing else, the new box renders all six
@@ -7809,9 +7876,12 @@ try {
         const IDS = ["s1", "s2", "s3", "s4", "s5", "s6"];
         const dow = (d) => new Date(d + "T12:00:00Z").getUTCDay();
         const sundayOnOrAfter = (d) => isoAddDays(d, (7 - dow(d)) % 7);
-        // The Remind e-mail spells its dates like the morning run (daily-reminder fmtDay: "Friday, Oct 2") - restated here.
-        const DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const dayWords = (d) => `${DOW_FULL[dow(d)]}, ${MON[+d.slice(5, 7) - 1]} ${+d.slice(8, 10)}`;
+        // pin moved deliberately 9/30 (Prompt 26): the Remind e-mail is the heads-up - the freeze spelled "Mon 11/23" (three-letter
+        // weekday + M/D, Faraz 9/30's subject; was the cron's old "Friday, Oct 2") - restated here with the subject and the body.
+        const DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const freezeWords = (d) => `${DOW3[dow(d)]} ${mdOf(d)}`;
+        const headsUpSubject = (p) => `Silvis call - the ${p.label} schedule is built from your rules on ${freezeWords(p.offers_close_at)}`;
+        const headsUpBody = (p) => `Before ${freezeWords(p.offers_close_at)}, enter your vacations for ${p.label} in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.`;
         const SELF = FAKE_PROFILE.person_id; // the harness signs in as the scheduler s1: his own row reads "Paint my offers"
         const per = periodStore[0];
         if (!per) throw new Error("the seed carries no offerPeriods[0] - nothing to read the table against");
@@ -7820,21 +7890,48 @@ try {
         const expOffered = (id, p) => new Set(offerStore.filter(o => o.person_id === id && inPer(o, p)).map(o => o.day)).size;
         const isOpen = (p) => (p.status || "upcoming") === "upcoming" && p.offers_close_at > todayCentral;
         const boxSel = (id) => `[data-testid=prd-period][data-period-id="${id}"]`;
-        const readBox = (id) => page.$eval(boxSel(id), el => ({ status: el.getAttribute("data-status"), label: el.querySelector("[data-testid=prd-label-text]").textContent.trim(), pill: el.querySelector("[data-testid=prd-status]").textContent.trim(), closeNow: !!el.querySelector("[data-testid=prd-close-now]"), remind: Array.from(el.querySelectorAll("[data-testid=prd-remind]")).map(b => b.closest("tr").getAttribute("data-person")), rows: Array.from(el.querySelectorAll("[data-testid=prd-row]")).map(r => ({ id: r.getAttribute("data-person"), status: r.getAttribute("data-status"), offered: Number(r.getAttribute("data-offered")), text: r.innerText.replace(/\s+/g, " ").trim(), enter: (r.querySelector("[data-testid=prd-enter-for]") || {}).textContent || "" })) }));
+        const readBox = (id) => page.$eval(boxSel(id), el => ({ status: el.getAttribute("data-status"), label: el.querySelector("[data-testid=prd-label-text]").textContent.trim(), pill: el.querySelector("[data-testid=prd-status]").textContent.trim(), closeNow: !!el.querySelector("[data-testid=prd-close-now]"), summary: (el.querySelector("[data-testid=prd-summary]") || {}).textContent || "", remind: Array.from(el.querySelectorAll("[data-testid=prd-remind]")).map(b => b.closest("tr").getAttribute("data-person")), rows: Array.from(el.querySelectorAll("[data-testid=prd-row]")).map(r => ({ id: r.getAttribute("data-person"), status: r.getAttribute("data-status"), offered: Number(r.getAttribute("data-offered")), kind: r.getAttribute("data-kind"), vac: (r.getAttribute("data-vacations") || "").split(",").filter(Boolean), text: r.innerText.replace(/\s+/g, " ").trim(), enter: (r.querySelector("[data-testid=prd-enter-for]") || {}).textContent || "" })) }));
+        // Prompt 26: the vacations the roll call should name, restated - the served time_off rows (the fixture's, or the live
+        // table's anon read: time_off is anon-readable) overlapping the period MUST be on the row; anything else on it must be a
+        // row this run POSTed (the Time off steps' entries, echoed by the harness and kept by the page until a poll drops them).
+        let servedTimeOff = null;
+        try {
+          if (fixture) servedTimeOff = fixture.time_off;
+          else { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/time_off?select=person_id,start_date,end_date`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error("HTTP " + r.status); servedTimeOff = await r.json(); if (!Array.isArray(servedTimeOff)) throw new Error("the body is not an array"); }
+        } catch (e) { fail("Periods (Prompt 26): could not read the served time_off rows - the vacations of the roll call cannot be restated: " + String(e && e.message || e).split("\n")[0]); }
+        const postedTimeOff = () => writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/time_off")).map(bodyOf).flatMap(b => Array.isArray(b) ? b : b ? [b] : []);
+        const vacKeys = (rows, id, p) => (rows || []).filter(t => t && t.person_id === id && t.start_date <= p.end_day && t.end_date >= p.start_day).map(t => t.start_date + ".." + t.end_date);
+        // words + attributes of one row, restated: painted N day(s) / added vacations M/D-M/D / following their rules; kind; never the old words
+        const rowWordsWrong = (r, p) => {
+          const must = vacKeys(servedTimeOff, r.id, p), may = new Set(must.concat(vacKeys(postedTimeOff(), r.id, p)));
+          if (servedTimeOff && (must.some(k => !r.vac.includes(k)) || r.vac.some(k => !may.has(k)))) return `${r.id}: vacations ${JSON.stringify(r.vac)}, expected the served ${JSON.stringify(must)} (plus at most this run's posted rows)`;
+          const kind = r.offered > 0 ? "painted" : r.vac.length ? "vacations" : "rules";
+          if (r.kind !== kind) return `${r.id}: kind ${r.kind}, expected ${kind}`;
+          if (r.offered > 0 && !new RegExp(`painted ${r.offered} days?`).test(r.text)) return `${r.id}: no 'painted ${r.offered} day(s)' in '${r.text}'`;
+          if (r.vac.length && !(r.text.includes("added vacations ") && r.vac.every(k => { const [s, e] = k.split(".."); return r.text.includes(s === e ? mdOf(s) : mdOf(s) + "-" + mdOf(e)); }))) return `${r.id}: the vacations ${JSON.stringify(r.vac)} are not named in '${r.text}'`;
+          if (kind === "rules" && !/following their rules/.test(r.text)) return `${r.id}: no 'following their rules' in '${r.text}'`;
+          if (/not started|never answered|missing|rules only/i.test(r.text)) return `${r.id}: an old word in '${r.text}'`;
+          return null;
+        };
+        const summaryOf = (rows) => `painted days: ${rows.filter(r => r.offered > 0).length}, added vacations: ${rows.filter(r => r.vac.length > 0).length}, following their rules: ${rows.filter(r => r.kind === "rules").length}`;
         await page.waitForSelector("[data-testid=periods-section]", { timeout: 5000 });
         await page.waitForSelector(boxSel(per.id), { timeout: 5000 });
         // (a) the seed period's table against the stores
         const box0 = await readBox(per.id);
         const wrong0 = IDS.map(id => { const r = box0.rows.find(x => x.id === id); const es = expStatus(id, per), eo = expOffered(id, per); return !r ? `${id}: missing` : (r.status !== es || r.offered !== eo) ? `${id}: ${r.status}/${r.offered}, expected ${es}/${eo}` : null; }).filter(Boolean);
-        const expRemind = isOpen(per) ? IDS.filter(id => expStatus(id, per) === "not_started") : [];
-        const wordsOk = box0.rows.every(r => (r.status === "submitted" && new RegExp(`submitted ${r.offered} days?`).test(r.text)) || (r.status === "rules_only" && /rules only/.test(r.text) && / - /.test(r.text)) || (r.status === "not_started" && /not started/.test(r.text)));
+        // pin moved deliberately 9/30 (Prompt 26): Remind on EVERY pool row of an open period (was not_started rows only); the
+        // words are the roll call's (painted / added vacations / following their rules - was 'submitted N days' / 'rules only' /
+        // 'not started'); the status keys (data-status) are offer_status()'s, unchanged
+        const expRemind = isOpen(per) ? IDS.slice() : [];
+        const wordsWrong0 = box0.rows.map(r => rowWordsWrong(r, per)).filter(Boolean);
+        const wordsOk = !wordsWrong0.length && box0.summary.trim() === summaryOf(box0.rows);
         // the scheduler's own row offers "Paint my offers" (his own offers: entered_by him, source app); every other row "Enter for <name>" (relayed)
         const enterOk = box0.rows.every(r => r.id === SELF ? r.enter.trim() === "Paint my offers" : /^Enter for \S+/.test(r.enter.trim()));
         if (box0.rows.length !== 6 || wrong0.length) fail(`Periods: the ${per.label} table differs from the stores: ${wrong0.join("; ") || box0.rows.length + " rows"}`);
-        else if (box0.label !== per.label || box0.status !== (per.status || "upcoming") || !wordsOk) fail(`Periods: box header / words off for ${per.label}: ${JSON.stringify({ label: box0.label, status: box0.status, pill: box0.pill, rows: box0.rows.map(r => r.text) })}`);
+        else if (box0.label !== per.label || box0.status !== (per.status || "upcoming") || !wordsOk) fail(`Periods: box header / words off for ${per.label}: ${JSON.stringify({ label: box0.label, status: box0.status, pill: box0.pill, summary: box0.summary, expSummary: summaryOf(box0.rows), wrong: wordsWrong0, rows: box0.rows.map(r => r.text) }).slice(0, 700)}`);
         else if (!enterOk) fail(`Periods: the scheduler's own row (${SELF}) must read 'Paint my offers' and every other row 'Enter for <name>': ${JSON.stringify(box0.rows.map(r => r.id + ": " + r.enter.trim()))}`);
-        else if (JSON.stringify(box0.remind) !== JSON.stringify(expRemind)) fail(`Periods: Remind must appear on the not_started rows only while the period is open (expected ${JSON.stringify(expRemind)}, got ${JSON.stringify(box0.remind)})`);
-        else ok(`Periods: ${per.label} (${box0.pill}) = ${IDS.map(id => id + " " + expStatus(id, per) + (expStatus(id, per) === "submitted" ? " " + expOffered(id, per) + "d" : "")).join(", ")}; Remind on ${expRemind.length ? expRemind.join(", ") : "nobody (frozen)"} only; ${SELF}'s row 'Paint my offers', the others 'Enter for <name>'`);
+        else if (JSON.stringify(box0.remind) !== JSON.stringify(expRemind)) fail(`Periods: Remind must appear on every pool row while the period is open, none once frozen (expected ${JSON.stringify(expRemind)}, got ${JSON.stringify(box0.remind)})`);
+        else ok(`Periods: ${per.label} (${box0.pill}) = ${IDS.map(id => id + " " + expStatus(id, per) + (expStatus(id, per) === "submitted" ? " " + expOffered(id, per) + "d" : "")).join(", ")}; words '${box0.rows.map(r => r.text.split(" ").slice(1, 6).join(" ")).join(" | ").slice(0, 200)}'; summary '${box0.summary.trim()}'; Remind on ${expRemind.length ? expRemind.join(", ") : "nobody (frozen)"}; ${SELF}'s row 'Paint my offers', the others 'Enter for <name>'`);
         // (a2) 9/27 lead-time lines (helpers.offerPeriodLeadWarnings), restated from the stores - date-independent: the served
         // period is upcoming with its close 10/2 only 31 days before its 11/2 start (later than start - 6 weeks), so its
         // box MUST carry prd-lead-warn[data-kind=short-lead] naming 4 weeks (31 days); "create the next period" shows iff
@@ -7855,9 +7952,10 @@ try {
           if (nx ? !(nt && nt.includes(`from ${mdOf(nx.from)}`) && nt.includes(`close by ${mdOf(nx.closeBy)}`)) : nt !== null) fail(`Periods lead (a2): 'Create the next period' should be ${nx ? "shown (from " + mdOf(nx.from) + ", close by " + mdOf(nx.closeBy) + ")" : "absent"} today ${todayCentral}, got ${JSON.stringify(nt)}`);
           else ok(`Periods lead (a2): 'Create the next period' ${nx ? "shown: '" + nt.slice(0, 100) + "'" : "absent - not due yet (not exercised today " + todayCentral + ")"}`);
         } catch (e) { fail("Periods lead (a2): " + String(e && e.message || e).split("\n")[0]); }
-        // (b) Remind on a not_started surgeon = ONE send-notification offers_reminder and nothing else
+        // (b) Remind on a pool surgeon = ONE send-notification offers_reminder and nothing else. Prompt 26: any status - a
+        // rules_only / submitted row is picked when there is one (it had no Remind before), never the scheduler's own row
         if (expRemind.length) {
-          const who = expRemind[0];
+          const who = expRemind.filter(id => id !== SELF).sort((a, b) => (expStatus(a, per) === "not_started" ? 1 : 0) - (expStatus(b, per) === "not_started" ? 1 : 0))[0];
           const b0 = writes.length;
           await page.click(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
           await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
@@ -7867,11 +7965,13 @@ try {
           const m = mails[0];
           const note = await page.$eval(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind-note]`, el => el.textContent.trim()).catch(() => null);
           if (mails.length !== 1 || !m || m.type !== "offers_reminder" || JSON.stringify(m.targetIds) !== JSON.stringify([who])) fail(`Periods Remind: expected exactly ONE send-notification { type offers_reminder, targetIds [${who}] }: ${JSON.stringify(mails).slice(0, 400)}`);
-          else if (!m.data || String(m.data.subject) !== `Your call dates for ${per.label} freeze on ${dayWords(per.offers_close_at)}` || !String(m.data.message).includes(`(${dayWords(per.start_day)} to ${dayWords(per.end_day)}) freeze on ${dayWords(per.offers_close_at)}`) || !/paint them in the app or choose 'go by my rules'/.test(String(m.data.message)) || !/#offers$/.test(String(m.data.detail))) fail(`Periods Remind: the composed words must be the morning run's - subject 'Your call dates for ${per.label} freeze on ${dayWords(per.offers_close_at)}', message '(<start> to <end>) freeze on <close>' in the same "Friday, Oct 2" spelling + the painter hint, the #offers deep link as detail: ` + JSON.stringify(m.data).slice(0, 400));
+          // pin moved deliberately 9/30 (Prompt 26): the words are the heads-up (the cron's first reminder) - subject 'Silvis call -
+          // the <label> schedule is built from your rules on <Mon 11/23>', the body word for word as the message's first paragraph
+          else if (!m.data || String(m.data.subject) !== headsUpSubject(per) || !String(m.data.message).startsWith(headsUpBody(per) + "\n\nSent now by ") || /Choose your shifts|go by my rules|not started|never answered/i.test(String(m.data.subject) + String(m.data.message)) || !/#offers$/.test(String(m.data.detail))) fail(`Periods Remind (${who}, ${expStatus(who, per)}): the composed words must be the heads-up - subject '${headsUpSubject(per)}', message '${headsUpBody(per)}' + the sender line, the #offers deep link as detail: ` + JSON.stringify(m.data).slice(0, 500));
           else if (others.length) fail("Periods Remind: nothing but the e-mail call may be written: " + JSON.stringify(others.map(w => w.method + " " + w.path)));
-          else if (!noAddress(m)) fail("Periods Remind: the payload carries an e-mail address");
+          else if (!noAddress(JSON.stringify(m))) fail("Periods Remind: the payload carries an e-mail address");
           else if (!note || !/^reminded /.test(note)) fail(`Periods Remind: the row should read 'reminded <time>' after the 200, got ${JSON.stringify(note)}`);
-          else ok(`Periods Remind (${who}): ONE send-notification offers_reminder -> targetIds [${who}], subject "${m.data.subject}", nothing else written; row reads '${note}'`);
+          else ok(`Periods Remind (${who}, ${expStatus(who, per)}): ONE send-notification offers_reminder -> targetIds [${who}], subject "${m.data.subject}", the heads-up body, nothing else written; row reads '${note}'`);
         } else console.log(`     (today ${todayCentral} is past ${per.label}'s close ${per.offers_close_at} - the Remind call is exercised on the new period below)`);
         // (c) New period: a start inside the seed period is refused with zero writes; the 3-month preset fills the dates
         const expDefaultStart = isoAddDays(per.end_day, 1) > todayCentral ? isoAddDays(periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1).pop().end_day, 1) : todayCentral;
@@ -7959,8 +8059,12 @@ try {
           await page.waitForSelector(boxSel(created.id), { timeout: 5000 });
           const box1 = await readBox(created.id);
           const expRemind1 = isOpen(created) ? IDS.slice() : [];
+          // Prompt 26: the new box's words are the roll call's too - nobody painted, so each row reads 'following their rules' or
+          // names the vacations overlapping the new range (restated like the seed period's above)
+          const wordsWrong1 = box1.rows.map(r => rowWordsWrong(r, created)).filter(Boolean);
           if (box1.rows.length !== 6 || box1.rows.some(r => r.status !== "not_started" || r.offered !== 0) || box1.label !== expLabel || box1.status !== "upcoming" || JSON.stringify(box1.remind) !== JSON.stringify(expRemind1) || !box1.closeNow || (await page.$("[data-testid=prd-form]"))) fail(`Periods create: the new box should read '${expLabel}' upcoming, six not_started rows, Remind on all six, Close now, form folded: ` + JSON.stringify({ label: box1.label, status: box1.status, remind: box1.remind, closeNow: box1.closeNow, rows: box1.rows.map(r => r.text) }));
-          else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six not_started rows and Remind on each`);
+          else if (wordsWrong1.length || box1.summary.trim() !== summaryOf(box1.rows)) fail(`Periods create (Prompt 26): the new box's roll call words are off: ${JSON.stringify({ wrong: wordsWrong1, summary: box1.summary, expSummary: summaryOf(box1.rows) }).slice(0, 500)}`);
+          else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six not_started rows reading '${box1.summary.trim()}' and Remind on each`);
           // 9/27: the new period closes exactly start - 6 weeks - no short-lead line (strict); the next-period line follows the new last end
           try {
             const lk1 = await leadKinds(created.id);
@@ -7974,8 +8078,10 @@ try {
             await page.click(`${boxSel(created.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
             await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
             const mails = writesSince(b0).filter(w => /send-notification/.test(w.path)).map(bodyOf);
-            if (mails.length !== 1 || mails[0].type !== "offers_reminder" || JSON.stringify(mails[0].targetIds) !== JSON.stringify([who]) || !String(mails[0].data && mails[0].data.message).includes(`freeze on ${dayWords(expClose)}`)) fail("Periods Remind (new period): expected ONE offers_reminder to " + who + " naming the freeze '" + dayWords(expClose) + "': " + JSON.stringify(mails).slice(0, 300));
-            else ok(`Periods Remind (new period, ${who}): ONE send-notification offers_reminder naming the freeze ${dayWords(expClose)}`);
+            // pin moved deliberately 9/30 (Prompt 26): the heads-up's subject and body, the freeze spelled 'Mon 11/23'
+            const expP = { label: expLabel, offers_close_at: expClose };
+            if (mails.length !== 1 || mails[0].type !== "offers_reminder" || JSON.stringify(mails[0].targetIds) !== JSON.stringify([who]) || String(mails[0].data && mails[0].data.subject) !== headsUpSubject(expP) || !String(mails[0].data && mails[0].data.message).startsWith(headsUpBody(expP))) fail("Periods Remind (new period): expected ONE offers_reminder to " + who + " with the heads-up '" + headsUpSubject(expP) + "': " + JSON.stringify(mails).slice(0, 400));
+            else ok(`Periods Remind (new period, ${who}): ONE send-notification offers_reminder - '${headsUpSubject(expP)}'`);
           }
           // (e) Close now: dismissed = zero writes; confirmed = ONE CAS PATCH + ONE audit period.close
           const bD = writes.length;
@@ -7983,7 +8089,9 @@ try {
           await page.click(`${boxSel(created.id)} [data-testid=prd-close-now]`);
           await page.waitForTimeout(400);
           const dismissed = prdDialogs[prdDialogs.length - 1] || "";
+          // Prompt 26: the confirm's roll call ('Standing now - <name>: <words>; ...') names painted days / vacations / following their rules - never 'nothing' / 'not started'
           if (writesSince(bD).length || !/^Close offers for /.test(dismissed) || (await page.$eval(boxSel(created.id), el => el.getAttribute("data-status"))) !== "upcoming") fail(`Periods Close now (dismissed): zero writes expected and the status kept (writes ${writesSince(bD).length}, dialog '${dismissed.slice(0, 60)}')`);
+          else if (!/Standing now - .*(following their rules|painted \d+ days?|added vacations)/.test(dismissed.replace(/\s+/g, " ")) || /: nothing\b|not started|never answered/i.test(dismissed)) fail(`Periods Close now (Prompt 26): the confirm's roll call must name painted days / vacations / following their rules, never 'nothing' / 'not started': '${dismissed.replace(/\s+/g, " ").slice(0, 300)}'`);
           else ok(`Periods Close now: the confirm ("${dismissed.split("\n")[0]}") dismissed -> zero writes, still upcoming`);
           const bE = writes.length;
           await page.click(`${boxSel(created.id)} [data-testid=prd-close-now]`);
@@ -7995,6 +8103,8 @@ try {
           const box2 = await readBox(created.id);
           if (patches.length !== 1 || patches[0].method !== "PATCH" || patches[0].path !== `/rest/v1/call_periods?id=eq.${created.id}&status=eq.upcoming` || (bodyOf(patches[0]) || {}).status !== "closed" || !/return=representation/.test(patches[0].prefer)) fail("Periods Close now: expected exactly ONE PATCH /rest/v1/call_periods?id=eq.<id>&status=eq.upcoming { status closed } (return=representation): " + JSON.stringify(patches.map(w => w.method + " " + w.path + " " + w.body)));
           else if (eAud.length !== 1 || eAud[0].detail.period_id !== created.id || eAud[0].detail.by !== "scheduler" || !Array.isArray(eAud[0].detail.rollcall) || eAud[0].detail.rollcall.length !== 6) fail("Periods Close now: expected ONE audit period.close with period_id, by scheduler and the six-row roll call: " + JSON.stringify(eAud));
+          // Prompt 26: the audit's roll call rows carry kind + vacations (days only) and its summary the roll call's words
+          else if (!eAud[0].detail.rollcall.every(r => r && ["painted", "vacations", "rules"].includes(r.kind) && Array.isArray(r.vacations)) || !/following their rules|painted \d+ days?|added vacations/.test(String(eAud[0].detail.summary || "")) || /: nothing\b|not started|never answered/i.test(String(eAud[0].detail.summary || "")) || !noAddress(JSON.stringify(eAud[0]))) fail("Periods Close now (Prompt 26): the period.close audit must carry the freeze roll call (kind / vacations per row) and its words, never 'nothing' / 'not started', no address: " + JSON.stringify(eAud[0]).slice(0, 500));
           else if (eOther.length) fail("Periods Close now: nothing but the PATCH and the audit may be written: " + JSON.stringify(eOther.map(w => w.method + " " + w.path)));
           else if (box2.status !== "closed" || created.status !== "closed" || box2.closeNow || box2.remind.length) fail(`Periods Close now: the box should read closed with no Close now / Remind (box ${box2.status}, store ${created.status}, closeNow ${box2.closeNow}, remind ${box2.remind.length})`);
           else ok(`Periods Close now: ONE CAS PATCH (status=eq.upcoming -> closed) + ONE audit period.close ("${eAud[0].detail.summary.slice(0, 80)}"); the box reads closed, Remind / Close now gone`);
@@ -10457,7 +10567,7 @@ try {
             "users-card", "seed-card", "import-file", "reset-all-data", "export-backup", "snapshot-restore", "avail-add", "east-override-save", "east-refresh",
             "prd-new", "notif-give-accept", "notif-give-decline", "trade-kind-give", "trade-kind-trade",
             "mine-give", "editor-give", "editor-open-shifts", // day-click summary (9/27): the linked surgeon's actions
-            "offer-deadline-notice", "offer-deadline-choose", "offer-deadline-badge", // 9/27: the offer deadline notice is the linked surgeon's only
+            "offer-deadline-notice", "offer-deadline-choose", "offer-deadline-vacations", "offer-deadline-badge", // 9/27: the offer deadline notice is the linked surgeon's only (Prompt 26: + its Enter vacations button; the badge stays listed - removed from the app, it must never come back for a follower)
             "notif-trade-accept", "notif-trade-decline", "trade-waiting-accept", "trade-waiting-decline", "ofp-goto-period"];
           // P20 R2: "notif-pref" left this list - a follower's OWN prefs switches (Settings > Notification settings, his row
           // by profile_id) are his; (c2) checks them and (e) counts their writes. Everything above stays forbidden, and so does

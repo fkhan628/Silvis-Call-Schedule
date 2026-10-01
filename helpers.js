@@ -3052,6 +3052,11 @@ function offerNextPeriod(periods, today) {
  * OTM_DEFAULTS, and offerTimeline's output (pinned against the mirror) never carries either key: the cron does not
  * read them. The urgent window is its own key since 9/27 (Faraz: the six-week e-mail, remindDaysBeforeClose
  * [42, 14, 3]) - reading the largest reminder offset would have made every notice urgent for all 42 days.
+ * Prompt 26 (Faraz 9/30): the notice is a heads-up before the freeze - enter your vacations, painting days is optional,
+ * otherwise the schedule follows your rules - for every pool member whatever his status (offerDeadlineNotices); the
+ * scheduler's roll call at the freeze names who painted days and who added vacations, everyone else as following
+ * their rules (offerFreezeRollcall / offerFreezeWords); offerHeadsUpWords is the first reminder's subject and body.
+ * Wording only: offerStatus / offerRollcall (mirrored in the daily-reminder cron) are unchanged.
  * Pure: nothing here reads the clock, the DOM or the network. */
 const OP_NOTICE_DEFAULTS = { noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 };
 // opNoticeRules(groupRules) -> the numbers the notices read from groupRules.offerPeriods, each absent / junk key
@@ -3071,17 +3076,21 @@ function opNoticeRules(groupRules) {
     publishWeeks: pos(R.publishWeeksBeforeStart, OP_PERIOD_DEFAULTS.publishWeeksBeforeStart),
   };
 }
-// offerDeadlineNotices({ periods, offers, personId, today, groupRules }) -> one notice per period that asks this
-// person to choose now: status upcoming (absent = upcoming), offers_close_at after today (offerPeriodOpen's reading;
-// an absent close is start - closeWeeksBeforeStart through offerTimeline), the person's offerStatus is not_started
-// (never rules_only, never submitted) and daysToClose <= noticeDaysBeforeClose. Several periods can be open at once
-// (Jan 2027 and Feb - Apr 2027 on 9/27) - every one gets its notice, earliest freeze first:
-// [{ periodId, label, closeAt, daysToClose, startDay, publishBy, urgent }] with urgent = daysToClose <=
+// offerDeadlineNotices({ periods, offers, personId, poolIds, today, groupRules }) -> one notice per period this person
+// is told about now: status upcoming (absent = upcoming), offers_close_at after today (offerPeriodOpen's reading; an
+// absent close is start - closeWeeksBeforeStart through offerTimeline) and daysToClose <= noticeDaysBeforeClose.
+// Prompt 26 (Faraz 9/30, "vacations in, painting optional"): EVERY pool member gets it, whatever his offerStatus -
+// submitted, rules_only and not_started alike (vacations matter for everyone; painting is optional), and the row
+// carries that status for the words. poolIds (offerPoolIds of the roster) is the caller's pool: a list that does not
+// hold the person answers [] (an outside surgeon is never told); absent = the caller has checked. Several periods
+// can be open at once (Jan 2027 and Feb - Apr 2027 on 9/27) - every one gets its notice, earliest freeze first:
+// [{ periodId, label, closeAt, daysToClose, startDay, publishBy, urgent, status }] with urgent = daysToClose <=
 // noticeUrgentDaysBeforeClose (default 14). [] for a missing person, a non-ISO today or no list.
 function offerDeadlineNotices(args) {
   const a = args && typeof args === "object" ? args : {};
   const today = opDay(a.today);
   if (!today || !a.personId || !Array.isArray(a.periods)) return [];
+  if (Array.isArray(a.poolIds) && a.poolIds.map(String).indexOf(String(a.personId)) < 0) return [];
   const N = opNoticeRules(a.groupRules);
   const out = [];
   a.periods.forEach(p => {
@@ -3090,10 +3099,9 @@ function offerDeadlineNotices(args) {
     if (status !== "upcoming") return;
     const t = offerTimeline(p, N.rules);
     if (!t || !(t.offers_close_at > today)) return;
-    if (offerStatus(p, a.offers, a.personId) !== "not_started") return;
     const daysToClose = suDaysBetween(today, t.offers_close_at);
     if (daysToClose > N.noticeDays) return;
-    out.push({ periodId: p.id === undefined || p.id === null ? null : String(p.id), label: String(p.label || ""), closeAt: t.offers_close_at, daysToClose, startDay: t.start_day, publishBy: t.publish_by, urgent: daysToClose <= N.urgentDays });
+    out.push({ periodId: p.id === undefined || p.id === null ? null : String(p.id), label: String(p.label || ""), closeAt: t.offers_close_at, daysToClose, startDay: t.start_day, publishBy: t.publish_by, urgent: daysToClose <= N.urgentDays, status: offerStatus(p, a.offers, a.personId) });
   });
   return out.sort((x, y) => (x.closeAt !== y.closeAt ? (x.closeAt < y.closeAt ? -1 : 1) : (x.startDay < y.startDay ? -1 : x.startDay > y.startDay ? 1 : 0)));
 }
@@ -3142,6 +3150,63 @@ function offerPeriodLeadWarnings(args) {
     if (today >= suAddDays(closeBy, -N.noticeDays)) res.next = { from, closeBy, daysToClose: suDaysBetween(today, closeBy) };
   }
   return res;
+}
+// offerFreezeRollcall(period, offers, timeOff, ids) -> the scheduler's roll call at the freeze (Prompt 26): offerRollcall's
+// rows ({ id, status, offered }, ids order, status unchanged) plus vacations = the person's time_off rows overlapping
+// [start_day, end_day] as [{ start, end }] (the row's own dates, not clipped; sorted, duplicates dropped; start_date /
+// end_date, or start / end as aliases; a row without both ISO dates or ending before it starts is skipped) and kind =
+// 'painted' (offered days inside the period), else 'vacations' (none painted, a vacation overlaps), else 'rules'
+// (following their rules). [] when the period has no usable dates or ids is not a list.
+function offerFreezeRollcall(period, offers, timeOff, ids) {
+  const b = opBounds(period);
+  if (!b || !Array.isArray(ids)) return [];
+  const vac = Object.create(null);
+  (Array.isArray(timeOff) ? timeOff : []).forEach(r => {
+    if (!r || typeof r !== "object" || !r.person_id) return;
+    const s = opDay(r.start_date !== undefined ? r.start_date : r.start), e = opDay(r.end_date !== undefined ? r.end_date : r.end);
+    if (!s || !e || e < s || s > b.end || e < b.start) return;
+    const k = String(r.person_id), list = vac[k] = vac[k] || [];
+    if (!list.some(x => x.start === s && x.end === e)) list.push({ start: s, end: e });
+  });
+  return offerRollcall(period, offers, ids).map(r => {
+    const v = (vac[r.id] || []).slice().sort((x, y) => (x.start !== y.start ? (x.start < y.start ? -1 : 1) : (x.end < y.end ? -1 : x.end > y.end ? 1 : 0)));
+    return { id: r.id, status: r.status, offered: r.offered, vacations: v, kind: r.offered > 0 ? "painted" : v.length ? "vacations" : "rules" };
+  });
+}
+// offerFreezeWords(row, audience) -> the roll call's words for one offerFreezeRollcall row: "painted N day(s)",
+// "added vacations M/D-M/D, M/D" (a one-day vacation is one date), both joined by " and ", or - neither -
+// "following their rules" ("following your rules" when audience is "you"). Never "missing", "not started" or "never
+// answered" (Prompt 26). '' for junk.
+function offerFreezeWords(row, audience) {
+  if (!row || typeof row !== "object") return "";
+  const parts = [];
+  const n = Number(row.offered) || 0;
+  if (n > 0) parts.push("painted " + n + " day" + (n === 1 ? "" : "s"));
+  const v = Array.isArray(row.vacations) ? row.vacations.filter(x => x && suIsIso(x.start) && suIsIso(x.end)) : [];
+  if (v.length) parts.push("added vacations " + v.map(x => x.start === x.end ? fmtMD(x.start) : fmtMD(x.start) + "-" + fmtMD(x.end)).join(", "));
+  return parts.length ? parts.join(" and ") : (audience === "you" ? "following your rules" : "following their rules");
+}
+// offerFreezeDay(iso) -> the freeze as the heads-up e-mails spell it: "Mon 11/23" (three-letter weekday, M/D without
+// leading zeros); the raw string for a non-ISO input.
+const OP_DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function offerFreezeDay(iso) {
+  const d = opDay(iso);
+  if (!d) return String(iso || "");
+  return OP_DOW3[new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay()] + " " + fmtMD(d);
+}
+// offerHeadsUpWords({ label, closeAt }) -> { subject, body } of the FIRST heads-up reminder to a pool surgeon (Prompt 26,
+// Faraz 9/30 - the daily-reminder cron's first e-mail and the Periods "Remind" button say the same):
+//   subject "Silvis call - the <label> schedule is built from your rules on <Mon 11/23>"
+//   body    "Before <Mon 11/23>, enter your vacations for <label> in the app. If there are days you'd like to work, or
+//            can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules."
+function offerHeadsUpWords(args) {
+  const a = args && typeof args === "object" ? args : {};
+  const label = String(a.label || "").trim() || "next period";
+  const freeze = offerFreezeDay(a.closeAt);
+  return {
+    subject: "Silvis call - the " + label + " schedule is built from your rules on " + freeze,
+    body: "Before " + freeze + ", enter your vacations for " + label + " in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.",
+  };
 }
 // offerPeriodJump(period, today, shown) -> the painter's "Go to <label> (freezes M/D, in N days)" jump, or null.
 // Non-null only while `period` is still OPEN for offers (offerPeriodOpen) and the month shown ({ y, m }, m 0-based)
@@ -4005,6 +4070,7 @@ if (typeof module !== "undefined" && module.exports) {
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
+    offerFreezeRollcall, offerFreezeWords, offerFreezeDay, offerHeadsUpWords,
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
   };
 }

@@ -216,7 +216,9 @@ check("the new notes carry rules, no reasons (the importer's own denylist) and n
 // urgent) runs on explicit inputs: GR927 = the seed's groupRules with the 9/27 values (noticeDaysBeforeClose 42,
 // remindDaysBeforeClose [42, 14, 3]) and PRE_FOLD = the periods as the seed carried them until 9/30 (Jan 2027 1/4 - 1/31,
 // rulesOnly s5; Feb 2027 - Apr 2027 2/1 - 5/2, freeze 12/21, publish by 1/4).
-console.log("\n[E] offer deadline notices: offerDeadlineNotices / offerPeriodLeadWarnings");
+// Prompt 26 (Faraz 9/30, "vacations in, painting optional"): the notice is a heads-up for EVERY pool surgeon whatever his
+// status (E1 / E3 / E3b / E4 moved deliberately); the freeze roll call and the heads-up e-mail words are E8 - E10.
+console.log("\n[E] offer deadline notices: offerDeadlineNotices / offerPeriodLeadWarnings / offerFreezeRollcall / offerHeadsUpWords");
 const SP = seed.offerPeriods.map((p, i) => ({ id: "p" + i, label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: p.status, rules_only_ids: (p.rulesOnly || []).slice() }));
 const GR = seed.groupRules;
 const GR927 = Object.assign({}, GR, { offerPeriods: Object.assign({}, GR.offerPeriods, { noticeDaysBeforeClose: 42, remindDaysBeforeClose: [42, 14, 3] }) });
@@ -229,8 +231,10 @@ check("E1: nothing before the window opens; Jan 2027 - Jun 2027 (freeze 11/23) e
   eq(notices("2026-09-27", "s2"), [], "9/27: Jan - Jun 2027 is 57 days from its freeze - no notice yet");
   eq(notices("2026-10-12", "s2"), [], "10/12 (42 days out, the 9/27 window's first day): no notice since 9/30");
   eq(notices("2026-11-08", "s2"), [], "15 days out: outside");
-  eq(notices("2026-11-09", "s2"), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 14, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true }], "14 days out: inside (<=) - and already urgent (noticeUrgentDaysBeforeClose 14 = the window: the notice joins the Calendar on its first day)");
-  eq(notices("2026-10-12", "s2", { groupRules: GR927 }), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 42, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: false }], "with the 9/27 window (42) the period enters it 42 days out (10/12), not urgent");
+  // pin moved deliberately 9/30 (Prompt 26): each notice row carries the person's offer status (the heads-up goes to every
+  // status now) - s2 has nothing on file here, so status not_started; every other field is unchanged
+  eq(notices("2026-11-09", "s2"), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 14, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true, status: "not_started" }], "14 days out: inside (<=) - and already urgent (noticeUrgentDaysBeforeClose 14 = the window: the notice joins the Calendar on its first day)");
+  eq(notices("2026-10-12", "s2", { groupRules: GR927 }), [{ periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 42, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: false, status: "not_started" }], "with the 9/27 window (42) the period enters it 42 days out (10/12), not urgent");
   eq(notices("2026-10-11", "s2", { groupRules: GR927 }), [], "...and not 43 days out (10/11)");
 });
 check("E2: several open periods at once - one notice each, earliest freeze first; the published first period never", () => {
@@ -244,25 +248,49 @@ check("E2: several open periods at once - one notice each, earliest freeze first
   eq(notices("2026-11-09", "s2").map(x => [x.periodId, x.label, x.daysToClose, x.urgent]), [["p1", "Jan 2027 - Jun 2027", 14, true]], "the seed since 9/30, 11/9: one notice - Jan 2027 - Jun 2027 (14 days, urgent); no Feb - Apr");
   eq(notices("2026-10-12", "s2", { groupRules: GR927 }).some(x => x.periodId === "p0"), false, "the seed's published first period never, whatever the window");
 });
-check("E3: rules_only and submitted people get nothing for that period; an offer outside it does not count", () => {
+check("E3 (Prompt 26): rules_only and submitted people get the notice too - the row carries their status; an offer outside the period does not count", () => {
   // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): with Feb - Apr folded into Jan - Jun no second period is left
   // over for s5 or a submitter; Fierce's 'go by my rules' (rulesOnly s5) now covers January - June, and an offer in May 2027
   // (Feb - Apr's range until 9/30) counts for Jan - Jun. The pre-fold reading stays pinned on PRE_FOLD.
-  eq(notices("2026-11-09", "s5"), [], "s5 chose 'go by my rules' for Jan 2027 (rulesOnly, kept by the widened row) - no notice at all now");
+  // pin moved deliberately 9/30 (Prompt 26): Faraz 9/30 "requested vacation dates and painted dates in" - the heads-up goes to
+  // EVERY pool surgeon whatever his status (vacations matter for everyone, painting is optional), so a rules_only or a
+  // submitted surgeon now gets the same notice (was []); the status rides on the row. What counts as submitted is
+  // offer_status()'s reading, unchanged.
+  const st = (today, person, extra) => notices(today, person, extra).map(x => [x.periodId, x.status, x.daysToClose, x.urgent]);
+  eq(st("2026-11-09", "s5"), [["p1", "rules_only", 14, true]], "s5 chose 'go by my rules' for Jan - Jun 2027 (rulesOnly) - he gets the heads-up, status rules_only");
   const sub = [{ person_id: "s2", day: "2027-01-10", role_pref: "either" }];
-  eq(notices("2026-11-09", "s2", { offers: sub }), [], "one offer inside Jan - Jun 2027 = submitted");
-  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-05-15", role_pref: "backup" }] }), [], "an offer on 5/15/2027 (inside Feb - Apr's old range) lies inside the widened period = submitted");
-  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2026-12-01", role_pref: "primary" }] }).map(x => x.periodId), ["p1"], "an offer outside the period (12/1, inside the published first one) changes nothing");
-  eq(notices("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-07-01", role_pref: "primary" }] }).map(x => x.periodId), ["p1"], "...nor one the day after it ends (7/1/2027)");
-  eq(notices("2026-11-09", "s3", { offers: sub }).map(x => x.periodId), ["p1"], "another person's offer changes nothing");
-  eq(notices("2026-11-09", "s5", { periods: PRE_FOLD, groupRules: GR927 }).map(x => x.periodId), ["p2"], "pre-fold (until 9/30) s5's rules-only choice covered Jan 2027 only - Feb - Apr remained");
+  eq(st("2026-11-09", "s2", { offers: sub }), [["p1", "submitted", 14, true]], "one offer inside Jan - Jun 2027 = submitted - and the heads-up still shows");
+  eq(st("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-05-15", role_pref: "backup" }] }), [["p1", "submitted", 14, true]], "an offer on 5/15/2027 (inside Feb - Apr's old range) lies inside the widened period = submitted");
+  eq(st("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2026-12-01", role_pref: "primary" }] }), [["p1", "not_started", 14, true]], "an offer outside the period (12/1, inside the published first one) changes nothing - not_started");
+  eq(st("2026-11-09", "s2", { offers: [{ person_id: "s2", day: "2027-07-01", role_pref: "primary" }] }), [["p1", "not_started", 14, true]], "...nor one the day after it ends (7/1/2027)");
+  eq(st("2026-11-09", "s3", { offers: sub }), [["p1", "not_started", 14, true]], "another person's offer changes nothing");
+  eq(st("2026-11-09", "s5", { periods: PRE_FOLD, groupRules: GR927 }), [["p1", "rules_only", 14, true], ["p2", "not_started", 42, false]], "pre-fold (until 9/30) s5's rules-only choice covered Jan 2027 only - both periods notify, each with its own status");
+  // the window and the urgency do not depend on the status: the three statuses side by side on the same day
+  eq(["s2", "s5"].map(id => notices("2026-11-22", id, { offers: [{ person_id: "s2", day: "2027-02-01", role_pref: "primary" }] })[0]).map(x => [x.status, x.daysToClose, x.urgent]), [["submitted", 1, true], ["rules_only", 1, true]], "1 day out: submitted and rules_only both shown, urgent");
+  eq(["s2", "s5", "s3"].map(id => notices("2026-11-08", id, { offers: sub })), [[], [], []], "15 days out: nobody, whatever the status (outside the seed's 14-day window)");
+  eq(["s2", "s5", "s3"].map(id => notices("2026-11-23", id, { offers: sub })), [[], [], []], "the freeze day: nobody, whatever the status");
+});
+check("E3b (Prompt 26): the pool - poolIds (offerPoolIds of the roster) gates the person: a pool surgeon of any status is told, an outside surgeon / an inactive one / no person never; absent poolIds = the caller's check", () => {
+  const roster = [{ id: "s1", active: true }, { id: "s2", active: true }, { id: "s5", active: true }, { id: "s6", active: false }, { id: "x1", active: true, type: "external" }];
+  const pool = H.offerPoolIds(roster);
+  eq(pool, ["s1", "s2", "s5"], "offerPoolIds: active, non-external");
+  const withPool = (id, extra) => notices("2026-11-09", id, Object.assign({ poolIds: pool }, extra || {})).map(x => [x.periodId, x.status]);
+  eq(withPool("s2"), [["p1", "not_started"]], "pool, not_started");
+  eq(withPool("s5"), [["p1", "rules_only"]], "pool, rules_only");
+  eq(withPool("s2", { offers: [{ person_id: "s2", day: "2027-03-01", role_pref: "backup" }] }), [["p1", "submitted"]], "pool, submitted");
+  eq(withPool("x1"), [], "an outside surgeon (type external) is never told");
+  eq(withPool("s6"), [], "an inactive roster entry is never told");
+  eq(withPool(""), [], "no person (a viewer / the office / a follower has no roster link) - nothing");
+  eq(notices("2026-11-09", "s2", { poolIds: [] }), [], "an empty pool tells nobody");
+  eq(notices("2026-11-09", "x1").map(x => x.periodId), ["p1"], "absent poolIds: the helper does not judge the pool (the app always passes it - data-layer pin)");
 });
 check("E4: boundaries - the freeze day itself and after: no notice (frozen); the day before: 1 day, urgent; urgent = <= noticeUrgentDaysBeforeClose (14)", () => {
   // pin moved deliberately 9/30 (TASK 2, Jan - Jun 2027 fold): no Feb - Apr period remains after the Jan - Jun freeze, and the
   // seed's window is 14 = the urgent threshold, so 15 days out has no notice at all - the 'not urgent at 15 days' line and the
   // 'urgent threshold is data' line run on GR927 (window 42)
   eq(notices("2026-11-23", "s2"), [], "11/23 = Jan - Jun 2027's freeze: closed to surgeons, no notice (and no later period on file)");
-  eq(notices("2026-11-22", "s2")[0], { periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 1, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true });
+  // pin moved deliberately 9/30 (Prompt 26): the row carries the status (not_started here) - the boundary itself is unchanged
+  eq(notices("2026-11-22", "s2")[0], { periodId: "p1", label: "Jan 2027 - Jun 2027", closeAt: "2026-11-23", daysToClose: 1, startDay: "2027-01-04", publishBy: "2026-12-07", urgent: true, status: "not_started" });
   eq(notices("2026-11-08", "s2"), [], "15 days out: no notice (outside the seed's 14-day window)");
   eq(notices("2026-11-08", "s2", { groupRules: GR927 })[0].urgent, false, "15 days out with the 9/27 window: shown, not urgent (noticeUrgentDaysBeforeClose 14)");
   eq(notices("2026-11-09", "s2")[0].urgent, true, "14 days out: urgent");
@@ -333,6 +361,77 @@ check("E7 (9/27 ship): urgent reads noticeUrgentDaysBeforeClose (default 14), ne
   eq(notices("2026-11-09", "s2", { groupRules: op({ noticeUrgentDaysBeforeClose: -1 }) })[0].urgent, true, "a negative number reads the default 14");
   eq(notices("2026-11-08", "s2", { groupRules: null })[0].urgent, false, "no groupRules at all -> 14");
   eq(notices("2026-11-09", "s2", { groupRules: null })[0].urgent, true, "no groupRules at all -> 14 (14 days out)");
+});
+
+// Prompt 26 (Faraz 9/30): the scheduler's roll call at the freeze names who PAINTED DAYS (offers inside the period) and who
+// ADDED VACATIONS (a time_off row overlapping the period's days); everyone else is "following their rules" - never "missing",
+// "not started" or "never answered". helpers.offerFreezeRollcall = offerRollcall's rows (status unchanged) + vacations + kind;
+// offerFreezeWords = the words; offerHeadsUpWords = the first reminder's subject / body (the Periods Remind button sends it).
+check("E8 (Prompt 26): offerFreezeRollcall - offerRollcall's rows plus the vacations overlapping the period (own dates, sorted, deduplicated; start_date / end_date or start / end) and kind painted / vacations / rules", () => {
+  const P1 = SP[1]; // Jan 2027 - Jun 2027 (2027-01-04 .. 2027-06-30)
+  const ids = ["s1", "s2", "s3", "s4", "s5", "s6"];
+  const offers = [{ person_id: "s2", day: "2027-01-10", role_pref: "either" }, { person_id: "s2", day: "2027-01-10", role_pref: "primary" }, { person_id: "s2", day: "2027-02-03", role_pref: "backup" }, { person_id: "s3", day: "2026-12-30", role_pref: "primary" }];
+  const timeOff = [
+    { person_id: "s3", start_date: "2026-12-28", end_date: "2027-01-05" },   // overlaps the start
+    { person_id: "s3", start_date: "2027-03-01", end_date: "2027-03-01" },   // a one-day vacation inside
+    { person_id: "s3", start_date: "2027-03-01", end_date: "2027-03-01" },   // its duplicate
+    { person_id: "s2", start: "2027-06-28", end: "2027-07-04" },             // the seed's alias shape, overlapping the end
+    { person_id: "s4", start_date: "2027-07-01", end_date: "2027-07-10" },   // the day after the end: outside
+    { person_id: "s4", start_date: "2026-12-20", end_date: "2027-01-03" },   // ends the day before the start: outside
+    { person_id: "s6", start_date: "2027-05-10", end_date: "2027-05-01" },   // ends before it starts: skipped
+    { person_id: "s6", start_date: "05/10/2027", end_date: "2027-05-12" },   // not ISO: skipped
+    { start_date: "2027-02-01", end_date: "2027-02-02" },                    // no person: skipped
+  ];
+  const roll = H.offerFreezeRollcall(P1, offers, timeOff, ids);
+  eq(roll.map(r => ({ id: r.id, status: r.status, offered: r.offered })), H.offerRollcall(P1, offers, ids), "id / status / offered are offerRollcall's, unchanged");
+  eq(roll.map(r => [r.id, r.kind, r.vacations]), [
+    ["s1", "rules", []],
+    ["s2", "painted", [{ start: "2027-06-28", end: "2027-07-04" }]],
+    ["s3", "vacations", [{ start: "2026-12-28", end: "2027-01-05" }, { start: "2027-03-01", end: "2027-03-01" }]],
+    ["s4", "rules", []],
+    ["s5", "rules", []],
+    ["s6", "rules", []],
+  ], "kind and vacations per person");
+  eq(roll.find(r => r.id === "s5").status, "rules_only", "s5's chosen 'go by my rules' is still offer_status()'s rules_only (the words, not the status, change)");
+  eq(roll.find(r => r.id === "s2").offered, 2, "s2 painted two distinct days (a role_pref never counts twice)");
+  eq([H.offerFreezeRollcall({ id: "x" }, offers, timeOff, ids), H.offerFreezeRollcall(P1, offers, timeOff, null), H.offerFreezeRollcall(P1, null, null, ["s1"])], [[], [], [{ id: "s1", status: "not_started", offered: 0, vacations: [], kind: "rules" }]], "junk: a period without dates or no id list -> []; no offers / time off -> following their rules");
+});
+check("E9 (Prompt 26): offerFreezeWords - 'painted N day(s)', 'added vacations M/D-M/D, M/D', both joined by ' and ', else 'following their rules' ('following your rules' to the person); never 'missing' / 'not started' / 'never answered'", () => {
+  const W = H.offerFreezeWords;
+  eq(W({ offered: 1, vacations: [] }), "painted 1 day");
+  eq(W({ offered: 12, vacations: [] }), "painted 12 days");
+  eq(W({ offered: 0, vacations: [{ start: "2027-01-10", end: "2027-01-14" }, { start: "2027-03-01", end: "2027-03-01" }] }), "added vacations 1/10-1/14, 3/1");
+  eq(W({ offered: 3, vacations: [{ start: "2026-12-28", end: "2027-01-05" }] }), "painted 3 days and added vacations 12/28-1/5");
+  eq(W({ offered: 0, vacations: [], status: "not_started" }), "following their rules", "to the scheduler");
+  eq(W({ offered: 0, vacations: [], status: "rules_only" }), "following their rules", "a chosen 'go by my rules' reads the same");
+  eq(W({ offered: 0, vacations: [] }, "you"), "following your rules", "to the person");
+  eq([W(null), W("junk")], ["", ""]);
+  const P1 = SP[1];
+  const all = H.offerFreezeRollcall(P1, [{ person_id: "s2", day: "2027-04-01", role_pref: "primary" }], [{ person_id: "s3", start_date: "2027-04-05", end_date: "2027-04-09" }], ["s1", "s2", "s3", "s4", "s5", "s6"]).map(r => W(r)).join("; ");
+  eq(all, "following their rules; painted 1 day; added vacations 4/5-4/9; following their rules; following their rules; following their rules", "a whole roll call in words");
+  assert.ok(!/missing|not started|never answered|nothing/i.test(all), "never 'missing' / 'not started' / 'never answered' / 'nothing'");
+});
+check("E10 (Prompt 26): offerHeadsUpWords = the first reminder's subject and body (Faraz 9/30 wording, the freeze as 'Mon 11/23'); offerFreezeDay spells the freeze", () => {
+  eq(H.offerFreezeDay("2026-11-23"), "Mon 11/23");
+  eq(H.offerFreezeDay("2027-01-04"), "Mon 1/4");
+  eq(H.offerFreezeDay("2026-10-02T00:00:00Z"), "Fri 10/2", "a timestamp is read by its date");
+  eq(H.offerFreezeDay("11/23/2026"), "11/23/2026", "a non-ISO input comes back as given");
+  const w = H.offerHeadsUpWords({ label: SP[1].label, closeAt: SP[1].offers_close_at });
+  eq(w.subject, "Silvis call - the Jan 2027 - Jun 2027 schedule is built from your rules on Mon 11/23");
+  eq(w.body, "Before Mon 11/23, enter your vacations for Jan 2027 - Jun 2027 in the app. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules.");
+  assert.ok(!/choose your shifts|go by my rules|not started|never answered|missing/i.test(w.subject + " " + w.body), "the old 'choose your shifts' wording is gone");
+  assert.ok(!/@|\$\d/.test(w.subject + w.body), "no address, no amount");
+  eq(H.offerHeadsUpWords({ label: "  ", closeAt: "2027-05-20" }).subject, "Silvis call - the next period schedule is built from your rules on Thu 5/20", "a blank label falls back to words (never an empty name)");
+});
+check("E11 (Prompt 26): the app's notice per role - a linked pool surgeon (mySurgeon, in offerPoolIds of the roster, any status) on his own My schedule, never the public page / a viewer / the office / a follower (no roster link); no count badge on the nav", () => {
+  const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+  assert.ok(src.includes("const offerPool = useMemo(() => offerPoolIds(surgeons), [surgeons]);"), "the pool is offerPoolIds of the roster");
+  assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, poolIds: offerPool, today: todayStr, groupRules }) : [];"), "a linked account (mySurgeon) outside ?public=1, gated on the pool inside the helper - viewers / the office / followers have no mySurgeon");
+  const hs = fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8");
+  const fnBody = hs.slice(hs.indexOf("function offerDeadlineNotices("), hs.indexOf("function offerPeriodLeadWarnings("));
+  assert.ok(fnBody.length > 200 && !/!== "not_started"|=== "not_started"/.test(fnBody), "offerDeadlineNotices filters on no status any more");
+  assert.strictEqual(src.includes("offer-deadline-badge"), false, "the nav's count badge is removed (not hidden)");
+  assert.ok(src.includes('{pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}'), "My schedule shows it on his own page only");
 });
 
 /* ---------------- D. claim-as-offer migration ---------------- */

@@ -4033,7 +4033,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(gate > 0 && gate < card, "the Setup view's isScheduler gate must precede the mount");
       ["periods-section", "prd-new", "prd-form", "prd-label", "prd-start", "prd-end", "prd-close", "prd-publish", "prd-create", "prd-cancel", "prd-form-warn", "prd-form-error", "prd-period", "prd-label-text", "prd-status", "prd-close-now", "prd-generate", "prd-table", "prd-row", "prd-remind", "prd-enter-for", "prd-remind-note"].forEach(t => assert.ok(src.includes('data-testid="' + t + '"'), "missing data-testid " + t));
       assert.ok(src.includes('data-testid={"prd-preset-" + n}') && src.includes("const presets = Array.isArray(rules.presets) && rules.presets.length ? rules.presets : OP_PERIOD_DEFAULTS.presets;"), "the presets come from groupRules.offerPeriods.presets (prd-preset-<n>), defaults otherwise");
-      assert.ok(src.includes("const roll = offerRollcall(p, offers || [], ids);") && src.includes("const ids = React.useMemo(() => offerPoolIds(roster || []), [roster]);"), "status must be derived through helpers.offerRollcall over offerPoolIds - never stored");
+      // pin moved deliberately 9/30 (Prompt 26): the table reads helpers.offerFreezeRollcall - offerRollcall's rows (status
+      // unchanged, offer_status()'s reading) plus the vacations overlapping the period from the time_off rows (timeOff prop)
+      assert.ok(src.includes("const roll = offerFreezeRollcall(p, offers || [], timeOff || [], ids);") && src.includes("const ids = React.useMemo(() => offerPoolIds(roster || []), [roster]);"), "status must be derived through helpers.offerFreezeRollcall (offerRollcall + vacations) over offerPoolIds - never stored");
+      assert.ok(src.includes("<PeriodsSection css={css} periods={periodRows} offers={offerRows} timeOff={timeOffRows} roster={surgeons}") && src.includes("function PeriodsSection({ css, periods, offers, timeOff, roster,"), "the parent hands the time_off rows over (timeOff={timeOffRows})");
       assert.ok(src.includes("const t = offerTimeline({ start_day: start, length_months: months }, rules);"), "the presets must fill the dates through helpers.offerTimeline");
       assert.ok(src.includes('if (d.offers_close_at > d.start_day) return "Offers must close on or before the start day') && src.includes('if (o) return "This range overlaps "'), "the form refuses a close after the start (the DB check) and an overlapping period before any request");
     });
@@ -4053,12 +4056,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(eBody.indexOf("if (!confirm(`Close offers for ") < eBody.indexOf("rest/v1/call_periods") && eBody.indexOf("rest/v1/call_periods") < eBody.indexOf('logAudit("period.close"'), "Close now: confirm, then the PATCH, then the audit");
       assert.ok(cBody.includes('return { ok: false, error: describeDbError(text) }') && eBody.includes('return { ok: false, error: describeDbError(text) }'), "a failed request returns the verbatim reason and writes nothing more");
     });
-    check("U3b pins: Remind = ONE sendEmailNotif('offers_reminder', words composed here, targetIds [that person]) on not_started rows of an open period, honouring schedule_updates_email, writing nothing else; Enter for someone opens the painter targeted at the period (entered_by / source left to the SQL); Generate this period = runGenerate with the period's range", () => {
+    check("U3b pins: Remind = ONE sendEmailNotif('offers_reminder', words composed here, targetIds [that person]) on any pool row of an open period (Prompt 26), honouring schedule_updates_email, writing nothing else; Enter for someone opens the painter targeted at the period (entered_by / source left to the SQL); Generate this period = runGenerate with the period's range", () => {
       assert.strictEqual((src.match(/sendEmailNotif\("offers_reminder"/g) || []).length, 1, "exactly one offers_reminder send site");
       assert.ok(src.includes('const r = await sendEmailNotif("offers_reminder", { subject, message, detail }, [personId]);'), "the reminder is targeted at the one person (never a broadcast)");
-      assert.ok(src.includes("const closeLabel = prdDayWords(close);") && src.includes("const subject = `Your call dates for ${p.label} freeze on ${closeLabel}`;") && src.includes("(${prdDayWords(start)} to ${prdDayWords(end)}) freeze on ${closeLabel}${when} - paint them in the app or choose 'go by my rules'."), "the client composes the same words as the morning run (daily-reminder buildOffersReminder), dates in the cron's spelling");
+      // pin moved deliberately 9/30 (Prompt 26): the Remind e-mail is the heads-up - the cron's FIRST reminder's subject and
+      // body (helpers.offerHeadsUpWords, the freeze as "Mon 11/23"), then one line saying who sent it from where; the old
+      // "Your call dates for <label> freeze on <Friday, Oct 2> ... paint them in the app or choose 'go by my rules'" is gone
+      assert.ok(src.includes("const { subject, body } = offerHeadsUpWords({ label: p.label, closeAt: close });") && src.includes("const message = `${body}\\n\\nSent now by ${nameOf(mySurgeon) || \"the scheduler\"} from the Periods page${cadence}.`;"), "the client composes the heads-up through helpers.offerHeadsUpWords - its body word for word, then the sender line");
+      assert.strictEqual(/Your call dates for \$\{p\.label\} freeze on|paint them in the app or choose 'go by my rules'|Nothing is entered for you yet/.test(src), false, "the old 'choose your shifts' Remind words are gone");
+      assert.ok(src.includes("if (!isScheduler || !p || !p.id || !personId || !offerPoolIds(surgeons).includes(String(personId))) return { ok: false };"), "Remind mails pool surgeons only");
       assert.ok(src.includes("if (pref && pref.schedule_updates_email === false) {"), "a person with schedule-update e-mails off is not mailed (the server gates too)");
-      assert.ok(src.includes('{r.status === "not_started" && status === "upcoming" && open && ('), "Remind renders on not_started rows of an open upcoming period only");
+      // pin moved deliberately 9/30 (Prompt 26): Remind is offered on EVERY pool row of an open upcoming period (vacations matter
+      // for everyone) - it was not_started rows only
+      assert.ok(src.includes('{status === "upcoming" && open && (\n                              <button type="button" data-testid="prd-remind"'), "Remind renders on every row (the pool) of an open upcoming period");
+      assert.strictEqual(src.includes('{r.status === "not_started" && status === "upcoming" && open && ('), false, "no not_started-only Remind left");
       const remindBody = src.slice(src.indexOf("const remindOffers = async"), src.indexOf("const enterOffersFor"));
       assert.strictEqual(/logAudit\(|rest\/v1\//.test(remindBody), false, "Remind writes nothing but the e-mail call");
       assert.ok(src.includes("const enterOffersFor = (p, personId) => { if (!isScheduler || !personId) return; setOfferSheet({ personId, periodId: p && p.id ? p.id : null }); };"), "Enter for someone must open the painter as that surgeon with the period id");
@@ -4067,13 +4078,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(/entered_by\s*:|source\s*:\s*"/.test(prdBlock), false, "the client never sends entered_by / source - the SQL stamps them from the caller identity");
       assert.ok(src.includes("setGenOpts(o => ({ ...o, start, end }));\n    runGenerate({ ...genOpts, start, end });"), "Generate this period = the existing runGenerate with the period's range (same options, confirmations and writes)");
     });
-    check("U3b review pins (9/23): Remind dates spelled like the cron's fmtDay; the section paints its own text in the remapped muted token (no #3a4a58 outside the pill); the scheduler's own row reads 'Paint my offers'; a Start change keeps hand-edited fields; the New-period draft is CallSchedule state; the copy says Generate places by the rules today", () => {
-      // prdDayWords mirrors edge-functions/daily-reminder fmtDay: full weekday, short month, day-of-month
-      const cron = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
-      const dow = 'const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];';
-      const mon = 'const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];';
-      assert.ok(cron.includes(dow) && cron.includes(mon) && cron.includes("return `${WEEKDAYS[dt.getUTCDay()]}, ${MONTHS[m - 1]} ${d}`;"), "the cron's fmtDay changed - re-mirror prdDayWords");
-      assert.ok(src.includes(dow.replace("WEEKDAYS", "PRD_DOW")) && src.includes(mon.replace("MONTHS", "PRD_MON")) && src.includes('return PRD_DOW[dt.getUTCDay()] + ", " + PRD_MON[dt.getUTCMonth()] + " " + dt.getUTCDate();'), "prdDayWords must spell dates exactly like the cron's fmtDay");
+    check("U3b review pins (9/23): Remind spells the freeze like the heads-up e-mails (Prompt 26: helpers.offerFreezeDay, 'Mon 11/23'); the section paints its own text in the remapped muted token (no #3a4a58 outside the pill); the scheduler's own row reads 'Paint my offers'; a Start change keeps hand-edited fields; the New-period draft is CallSchedule state; the copy says Generate places by the rules today", () => {
+      // pin moved deliberately 9/30 (Prompt 26): prdDayWords mirrored the cron's fmtDay ("Friday, Oct 2") for the old Remind
+      // words; the heads-up spells the freeze "Mon 11/23" (Faraz 9/30's subject) through helpers.offerFreezeDay, so the
+      // mirror and its function left the app - the spelling is pinned on the helper instead (offers.test.js E10 too)
+      assert.strictEqual(/function prdDayWords\(|PRD_DOW/.test(src), false, "prdDayWords / PRD_DOW are gone (nothing reads them)");
+      assert.deepStrictEqual([H.offerFreezeDay("2026-11-23"), H.offerFreezeDay("2026-10-02"), H.offerFreezeDay("2027-01-04")], ["Mon 11/23", "Fri 10/2", "Mon 1/4"], "the freeze spelling: three-letter weekday + M/D");
+      assert.ok(src.includes('const PRD_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'), "PRD_MON stays (prdLabelFor names the period)");
       const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
       assert.ok(sec.length > 2000, "PeriodsSection body not found");
       assert.strictEqual((sec.match(/#3a4a58/g) || []).length, 1, "only the status pill (its own light background) may use #3a4a58 - the dark sheet does not remap it");
@@ -4087,8 +4098,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
 
     // 9/27 (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
-    // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar, a count on the nav's Paint
-    // offers) and the scheduler's lead-time lines in Periods. Display only - no write, no send; data-driven
+    // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar; the nav's count badge was
+    // removed by Prompt 26) and the scheduler's lead-time lines in Periods. Display only - no write, no send; data-driven
     // (groupRules.offerPeriods.noticeDaysBeforeClose + noticeUrgentDaysBeforeClose, defaults in helpers OP_NOTICE_DEFAULTS, never in the edge mirror's set).
     check("9/27 offer deadline notice: helpers export the two pure readers; OP_PERIOD_DEFAULTS stays literally the daily-reminder mirror's OTM_DEFAULTS (the notice default lives apart)", () => {
       assert.strictEqual(typeof H.offerDeadlineNotices, "function");
@@ -4101,22 +4112,55 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/noticeDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeDaysBeforeClose/.test(cron), "the notice key never reaches the timeline defaults or the cron");
       assert.ok(!/noticeUrgentDaysBeforeClose/.test(lit(hs, "OP_PERIOD_DEFAULTS")) && !/noticeUrgentDaysBeforeClose/.test(cron), "nor does the urgent key");
     });
-    check("9/27 offer deadline notice: the linked surgeon only (mySurgeon && !isPublicMode), every open period on his own My schedule, URGENT rows only on the Calendar, a count badge on nav-paint-offers; 'Choose shifts' opens the painter for mySurgeon aimed at that period; T tokens only; writes nothing", () => {
-      assert.ok(src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");
+    // Prompt 26 (Faraz 9/30, "vacations in, painting optional"): the notice became the heads-up before the freeze - the same
+    // words for EVERY pool surgeon whatever his status, an "Enter vacations" button (Time off) and a "Paint days (optional)"
+    // button (the painter, testid offer-deadline-choose kept); the nav's count badge is removed.
+    check("9/27 offer deadline notice (Prompt 26 heads-up): a linked pool surgeon (mySurgeon && !isPublicMode, poolIds offerPoolIds), any status, every open period on his own My schedule, URGENT rows only on the Calendar, NO count badge; 'Enter vacations' -> Time off, 'Paint days (optional)' opens the painter for mySurgeon aimed at that period; T tokens only; writes nothing", () => {
+      // pin moved deliberately 9/30 (Prompt 26): the helper call passes the pool (offerPoolIds of the roster) - the helper no
+      // longer filters on the status, so the pool is what keeps an outside surgeon out
+      assert.ok(src.includes("const offerPool = useMemo(() => offerPoolIds(surgeons), [surgeons]);") && src.includes("return mySurgeon && !isPublicMode ? offerDeadlineNotices({ periods: periodRows, offers: offerRows, personId: mySurgeon, poolIds: offerPool, today: todayStr, groupRules }) : [];"), "offerNotices = helpers.offerDeadlineNotices for the linked pool surgeon, [] otherwise (followers / viewers / the office / ?public=1 have no mySurgeon)");
+      assert.ok(src.includes("}, [mySurgeon, isPublicMode, periodRows, offerRows, offerPool, todayStr, groupRules]);"), "the memo depends on the pool too");
       const i = src.indexOf("const offerNoticeBox = (list, where) => {"), j = src.indexOf("const isWeekendDay", i);
       assert.ok(i > 0 && j > i, "offerNoticeBox not found");
       const box = src.slice(i, j);
-      assert.ok(box.includes('data-testid="offer-deadline-notice"') && box.includes('className="offer-notice-row" data-period-id={n.periodId || ""}') && box.includes('data-testid="offer-deadline-choose"'), "one notice box, one row per period (data-period-id), a Choose shifts button per row");
-      assert.ok(box.includes("onClick={()=>setOfferSheet({ personId: mySurgeon, periodId: n.periodId || null })}") && box.includes(">Choose shifts</button>"), "Choose shifts opens the offer painter for mySurgeon on that period");
+      // pin moved deliberately 9/30 (Prompt 26): the row carries data-status; the sentence is the heads-up; "Choose shifts"
+      // became "Paint days (optional)" (same testid, same painter call) beside a new "Enter vacations" (offer-deadline-vacations)
+      assert.ok(box.includes('data-testid="offer-deadline-notice"') && box.includes('className="offer-notice-row" data-period-id={n.periodId || ""}') && box.includes('data-status={n.status || ""}') && box.includes('data-testid="offer-deadline-choose"') && box.includes('data-testid="offer-deadline-vacations"'), "one notice box, one row per period (data-period-id, data-status), Enter vacations + Paint days per row");
+      assert.ok(box.includes("Before <strong>{dowShort(n.closeAt)} {fmtMD(n.closeAt)}</strong>, enter your vacations for <strong>{n.label || fmtMD(n.startDay)}</strong>. If there are days you'd like to work, or can't, paint them too. Otherwise there is nothing to do - the schedule follows your rules."), "the heads-up sentence (Faraz 9/30), the same for every status");
+      assert.strictEqual(/Choose your shifts|Choose shifts|n\.status ===|not_started|rules_only/.test(box), false, "no 'choose your shifts' left and no per-status wording in the box");
+      assert.ok(box.includes("onClick={()=>setOfferSheet({ personId: mySurgeon, periodId: n.periodId || null })}") && box.includes(">Paint days (optional)</button>"), "Paint days (optional) opens the offer painter for mySurgeon on that period");
+      assert.ok(box.includes('onClick={()=>{ setVacSurgeon(mySurgeon); setView("timeoff"); }}') && box.includes(">Enter vacations</button>"), "Enter vacations goes to Time off with the person picked");
       assert.ok(box.includes("color:T.noticeText,background:T.noticeBg,border:`1px solid ${T.noticeBorder}`"), "the box paints with the THEME tokens");
       assert.strictEqual(/#[0-9a-fA-F]{3,6}\b/.test(box), false, "no literal colour in the notice (T tokens only - the dark sheet repaints light literals only)");
       assert.strictEqual(/fetch\(|rest\/v1|logAudit\(|sendEmailNotif\(|confirm\(/.test(box), false, "the notice writes, sends and asks nothing");
       assert.ok(src.includes('{pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}') && src.includes('{offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}'), "My schedule shows every notice on his own page; the Calendar only the urgent ones");
       assert.strictEqual((src.match(/offerNoticeBox\(/g) || []).length, 2, "exactly two mounts (My schedule, Calendar)");
       const nav = src.slice(src.indexOf('<button data-testid="nav-paint-offers"'), src.indexOf("</button>", src.indexOf('<button data-testid="nav-paint-offers"')));
-      assert.ok(nav.includes('position:"relative"') && nav.includes('{offerNotices.length > 0 && (') && nav.includes('data-testid="offer-deadline-badge"') && nav.includes("background:T.accent,color:T.onAccent"), "the nav's Paint offers carries the count badge in the accent tokens");
+      // pin moved deliberately 9/30 (Prompt 26): the nav's count badge is REMOVED (not hidden) - painting is optional, so a
+      // count of "periods waiting" would nag every surgeon; the button itself stays
+      assert.ok(nav.length > 50 && nav.includes(">Paint offers"), "the nav's Paint offers button stays");
+      assert.strictEqual(/offerNotices|offer-deadline-badge|background:T\.accent,color:T\.onAccent/.test(nav), false, "no count badge on nav-paint-offers");
+      assert.strictEqual(src.includes("offer-deadline-badge"), false, "the badge's testid is gone from the app altogether (removed, not hidden)");
       ["noticeText", "noticeBg", "noticeBorder"].forEach(k => assert.ok(/^#[0-9A-F]{6}$/.test(styles.THEME.light[k]) && /^#[0-9A-F]{6}$/.test(styles.THEME.dark[k]), "THEME token " + k + " in both themes"));
       assert.ok(src.includes(".offer-notice-row .offer-notice-text { flex-basis: 100% !important; }"), "the phone breakpoint stacks the sentence over the button (a class - inline styles cannot do media queries)");
+    });
+    check("Prompt 26 labels (Faraz 9/30): 'not started' reads 'following your rules' to the person / 'following their rules' to the scheduler; the Periods roll call (table, summary, Close now's confirm + period.close audit) names who painted days / added vacations and everyone else as following their rules - never 'not started' / 'missing' / 'never answered' / 'nothing'", () => {
+      const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
+      assert.ok(sec.includes("const statusWord = (r) => offerFreezeWords(r);") && sec.includes('const statusColor = (r) => r.kind === "rules" ? PRD_MUTED : "#1a6030";'), "the table's words come from helpers.offerFreezeWords; following-their-rules rows are muted, never the red of an alarm");
+      assert.ok(sec.includes('<span data-testid="prd-summary">painted days: {nPainted}, added vacations: {nVac}, following their rules: {nRules}</span>') && sec.includes('const nPainted = roll.filter(r => r.offered > 0).length, nVac = roll.filter(r => r.vacations.length > 0).length, nRules = roll.filter(r => r.kind === "rules").length;'), "the summary counts painted / vacations / following their rules");
+      assert.ok(sec.includes('data-kind={r.kind} data-vacations={r.vacations.map(v => v.start + ".." + v.end).join(",")}'), "each row exposes its kind and vacations (the smoke reads them)");
+      assert.ok(sec.includes("who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules."), "the intro says what the roll call is");
+      const secCode = sec.replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, ""); // the words the page shows (a comment may name what is gone)
+      assert.ok(secCode.length > 2000 && secCode.length < sec.length, "comments stripped");
+      assert.strictEqual(/not started|never answered|"missing"|nNot\b/.test(secCode), false, "no 'not started' / 'never answered' / 'missing' in the Periods section");
+      const close = src.slice(src.indexOf("const closePeriodNow = async"), src.indexOf("const remindOffers = async"));
+      assert.ok(close.includes("const roll = offerFreezeRollcall(p, offerRows, timeOffRows, offerPoolIds(surgeons));") && close.includes("const words = roll.map(r => `${nameOf(r.id)}: ${offerFreezeWords(r)}`).join(\"; \");"), "Close now's confirm and the period.close audit read the freeze roll call");
+      assert.ok(close.includes("Standing now - ${words}.") && close.includes("logAudit(\"period.close\", `Offers for ${p.label} closed now by the scheduler (${words})`, { period_id: p.id, label: p.label, offers_close_at: p.offers_close_at, by: \"scheduler\", rollcall: roll });"), "the confirm and the audit carry the words; the audit's roll call carries ids / status / days / vacation dates only");
+      assert.strictEqual(/"nothing"|not started|never answered/.test(close), false, "Close now never says 'nothing' / 'not started' / 'never answered'");
+      // to the person / to the scheduler
+      assert.ok(src.includes('{st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : pid === mySurgeon ? "following your rules" : "following their rules"}'), "My schedule's offer status line: his own page 'following your rules', the scheduler viewing another 'following their rules'");
+      assert.ok(src.includes('periodStatus === "rules_only" ? "by your rules" : asScheduler ? "following their rules" : "following your rules"}') && src.includes('periodStatus === "rules_only" ? "You go by your rules for it" : asScheduler ? "Following their rules for it" : "Following your rules for it"}'), "the painter's period line and its closed note: 'following your rules' to the person, 'following their rules' when the scheduler / office paints for him");
+      assert.strictEqual(/"nothing yet"|"You entered nothing for it"|"nothing entered yet"|rules \(nothing entered\)/.test(src), false, "the old not-started words are gone everywhere a person reads them");
     });
     check("9/27 Periods lead-time lines: prd-lead-warn per period (short lead / publish-by due or passed with open slots) and 'create the next period', from helpers.offerPeriodLeadWarnings over the parent's open-slot counts; css.warnBox; the draft's short-lead warning is STRICT (start - 6 weeks exactly is the rule)", () => {
       const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
@@ -4132,7 +4176,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // offerCandidateWords lives in index-source.html at MODULE scope as plain JS (no JSX) so the day editor and My
     // schedule share one vocabulary; the test lifts its source text and runs it here (a behaviour test, not a pin).
     const ocwSrc = (() => { const a = src.indexOf("\nfunction offerCandidateWords("); if (a < 0) return null; const b = src.indexOf("\n}\n", a); return src.slice(a, b + 3); })();
-    check("U3c: offerCandidateWords speaks the labels from rules.offerState - 'offered <primary|backup|either>', 'offered <x> only, not <role>' + the mode's consequence, 'not offered' + the consequence (exhaustive: ineligible, preferred: penalty), 'rules' (chose / nothing entered); null outside every period or for junk", () => {
+    check("U3c: offerCandidateWords speaks the labels from rules.offerState - 'offered <primary|backup|either>', 'offered <x> only, not <role>' + the mode's consequence, 'not offered' + the consequence (exhaustive: ineligible, preferred: penalty), 'rules' (chose go by my rules) / 'following their rules' (Prompt 26: not_started); null outside every period or for junk", () => {
       assert.ok(ocwSrc, "no module-scope offerCandidateWords in index-source.html");
       const fn = new Function(ocwSrc + "\nreturn offerCandidateWords;")();
       const per = { key: "p1", label: "Nov 2026 - Jan 2027" };
@@ -4145,7 +4189,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "exhaustive", roles: [] }, "primary"), { kind: "not-offered", tag: "not offered", words: "not offered - only these days: ineligible", mode: "exhaustive" });
       assert.deepStrictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: [] }, "backup"), { kind: "not-offered", tag: "not offered", words: "not offered - preferred days: penalty", mode: "preferred" });
       assert.deepStrictEqual(fn({ period: per, status: "rules_only", mode: "preferred", roles: [] }, "primary"), { kind: "rules", tag: "rules", words: "rules (chose go by my rules)", mode: null });
-      assert.deepStrictEqual(fn({ period: per, status: "not_started", mode: "preferred", roles: [] }, "primary"), { kind: "rules", tag: "rules", words: "rules (nothing entered)", mode: null });
+      // pin moved deliberately 9/30 (Prompt 26): not_started reads "following their rules" to the scheduler (the day editor) - was
+      // "rules (nothing entered)"; kind / tag / mode unchanged (a label only)
+      assert.deepStrictEqual(fn({ period: per, status: "not_started", mode: "preferred", roles: [] }, "primary"), { kind: "rules", tag: "rules", words: "following their rules", mode: null });
       // an unknown role asks about the day, not a role: an offered day is 'offered <x>' whatever was asked
       assert.strictEqual(fn({ period: per, status: "submitted", mode: "preferred", roles: ["backup"] }, undefined).kind, "offered");
     });
