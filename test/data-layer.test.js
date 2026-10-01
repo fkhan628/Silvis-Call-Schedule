@@ -2574,10 +2574,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(appCode.includes("soft: r.soft || [], eastVacation: r.eastVacation || null };"), "boardElig carries the eastVacation gloss");
     assert.ok(appCode.includes("const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? \"allowed - \" + soft.map(x => reasonLabel(x.reason, nameOf)).join(\"; \") : \"no rule warnings\"}"), "the board's eligible chip hover");
     assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");'), "the Take button's title");
-    assert.ok(appCode.includes("setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });") && (appCode.match(/setClaimSheet\(\{/g) || []).length === 1, "the claim sheet's list is masked where the sheet is opened (its one setClaimSheet({...}))");
+    // pin moved deliberately 10/1 (the weekend pair claim, 10/1 follow-up 3): a second setClaimSheet({...}) opens the pair's sheet,
+    // its notes (the pair's union) masked the same way where it is opened; kept intent: every list the sheet shows is masked at open
+    assert.ok(appCode.includes("setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });") && appCode.includes("setClaimSheet({ day: pp.sat, role: slot.role, unit: slot.unit, soft: eastMaskedReasons(pp.soft, eastDetailsVisible), mates: obUnitMates(boardSlots, slot).filter(m => m.day !== pp.sat && m.day !== pp.sun), pair: { sat: pp.sat, sun: pp.sun } });") && (appCode.match(/setClaimSheet\(\{/g) || []).length === 2, "the claim sheet's list is masked where the sheet is opened (its two setClaimSheet({...}): one day, the Sat + Sun pair)");
+    assert.ok(appCode.includes('showToast("Not eligible any more: " + (pg ? reasonLabel(eastMaskedReasons(pg.hard, eastDetailsVisible, pg.eastVacation)[0], nameOf) : "the Saturday and the Sunday are no longer both open to you"), "error");'), "the pair's claim-gate toast reads its reason through eastMaskedReasons");
     assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
     assert.ok(appCode.includes("const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];") && appCode.includes("Allowed with a note: {toNotes.map(softTag).join(\", \")}."), "the trade card's 'Allowed with a note'");
-    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 7, "seven call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note) - a new one needs its pin here");
+    // pin moved deliberately 10/1 (the weekend pair claim): + the pair's sheet and the pair's claim gate (7 -> 9)
+    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 9, "nine call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note, the pair's sheet, the pair's gate) - a new one needs its pin here");
     // nothing on those surfaces reads a reason around the helper: no hard[0] left in the App, every reasonLabel( there takes
     // the helper's answer, a constant or x.reason of a masked list (the chip's soft, the sheet's claimSheet.soft), every softTag the notes
     assert.strictEqual((appCode.match(/hard\[0\]/g) || []).length, 0, "a raw hard[0] read in the App (outside the helper)");
@@ -2593,9 +2597,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // once in the boardElig row; gate.hard the claim gate; me.hard the Take title; me.soft the claim sheet (masked at open);
     // o.soft the chip; claimSheet.soft x2 the sheet (already masked); toElig.soft x2 toNotes; e.hard the greyed option. A
     // new read of a reason list goes through eastMaskedReasons and is added here, or this fails.
+    // 10/1 (the weekend pair claim): entry.hard in the boardElig row is read by obLoneOnly only (a gate, never rendered);
+    // pp.soft is the pair's sheet (masked at open), pg.hard the pair's claim gate (masked).
     const reasonReads = {};
     (appCode.match(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*\.(?:hard|soft)\b/g) || []).forEach(k => { reasonReads[k] = (reasonReads[k] || 0) + 1; });
-    assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
+    assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1, "entry.hard": 1, "pp.soft": 1, "pg.hard": 1 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
     // the flag is declared before every reader (a const read before its line is a TDZ crash), the ref mirrors it
     const flagAt = src.indexOf("const eastDetailsVisible = isScheduler && !isPublicMode;");
     assert.ok(flagAt > 0 && flagAt < src.indexOf("  const loadEastTables = async (quiet) => {") && flagAt < src.indexOf("const tradeReasonText = ") && src.indexOf("const isScheduler") < flagAt, "eastDetailsVisible declared with the role flags, before the loaders and tradeReasonText");

@@ -5626,7 +5626,19 @@ function CallSchedule() {
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
         // Item E4 (9/26): eastVacation (the derived East-vacation gloss of a time-off / day-before-vacation code) rides along
         // for eastMaskedReasons - the Take title and the claim gate read it
-        return { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [], eastVacation: r.eastVacation || null };
+        const entry = { id: sg.id, ok: !!r.ok, hard: (r.hard && r.hard.length) ? r.hard : (r.ok ? [] : ["unknown-surgeon"]), soft: r.soft || [], eastVacation: r.eastVacation || null };
+        // 10/1 follow-up 3 (the weekend pair claim, PREPARED - claim_open_weekend_pair): refused on this Saturday / Sunday by
+        // lone-weekend-day ALONE (noLoneWeekendDay - his weekend days come as a pair) while the partner day is listed open and
+        // unlocked in the same role -> the pair is asked too (helpers.obPairEligibility: each day with the other assumed, the
+        // claim flag, as a block member when he holds that Friday). entry.pair.ok offers "Take Sat + Sun": one call, both days
+        // or neither - never two one-day claims.
+        const pairSlot = !entry.ok && obLoneOnly(entry.hard) ? obPairSlot(boardSlots, s, schedule) : null;
+        if (pairSlot) {
+          const sat = parse(s.day).getDay() === 6 ? s.day : pairSlot.day;
+          const fri = suAddDays(sat, -1);
+          entry.pair = obPairEligibility(eligibility, rulesCtx, sat, s.role, sg.id, { asBlockMember: !!(schedule[fri] && schedule[fri][s.role] === sg.id) });
+        }
+        return entry;
       });
     });
     return out;
@@ -5665,10 +5677,39 @@ function CallSchedule() {
       return { ok: true, result: body };
     } catch (e) { console.warn("claim_open_slot call failed:", e); return { ok: false, error: "network error - nothing was changed; check your connection and try again" }; }
   };
-  const openClaimSheet = (slot, opener) => {
+  // 10/1 follow-up 3: POST rest/v1/rpc/claim_open_weekend_pair { p_saturday, p_role } - the Saturday AND the Sunday after it
+  // in ONE transaction (sql/migrations/2026-10-01-weekend-pair-claim.sql, PREPARED): both days or neither, so a refusal
+  // never leaves a lone day. Refusals are claim_open_slot's CLAIM_* sentences (+ CLAIM_NOT_SATURDAY), shown verbatim. A 404 /
+  // PGRST202 = the function is not applied yet (or PostgREST has not reloaded) - said in plain words. There is NO fallback to
+  // two claim_open_slot calls.
+  const PAIR_NOT_ON = "the two-day claim is not switched on yet - ask the scheduler";
+  const claimWeekendPairRpc = async (sat, role) => {
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/claim_open_weekend_pair`, { method: "POST", body: JSON.stringify({ p_saturday: sat, p_role: role }) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, error: res.status === 404 || /PGRST202/.test(text) ? PAIR_NOT_ON : (describeDbError(text) || `HTTP ${res.status}`) };
+      let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) { console.warn("claim_open_weekend_pair: 2xx with a non-JSON body", text.slice(0, 160), e); body = null; }
+      return { ok: true, result: body };
+    } catch (e) { console.warn("claim_open_weekend_pair call failed:", e); return { ok: false, error: "network error - nothing was changed; check your connection and try again" }; }
+  };
+  // The pair a surgeon may take from this slot's row, read from the board's eligibility - from the slot's own row or its
+  // partner's (each row carries the same pair when its one-day answer is lone-weekend-day alone); null when neither has one.
+  const myBoardPair = (day, role) => {
+    const at = (d) => { const e = d ? (boardElig[openSlotKey(d, role)] || []).find(o => o.id === mySurgeon) : null; return e && e.pair ? e.pair : null; };
+    return at(day) || at(obWeekendPartner(day));
+  };
+  const openClaimSheet = (slot, opener, asPair) => {
     if (!mySurgeon) return;
     const me = (boardElig[openSlotKey(slot.day, slot.role)] || []).find(o => o.id === mySurgeon);
     claimReturnRef.current = opener || null;
+    // 10/1 follow-up 3: the pair's sheet - both days named, the pair's notes (through eastMaskedReasons, like the one-day
+    // sheet's), the unit's other open days minus the two it takes
+    if (asPair) {
+      const pp = myBoardPair(slot.day, slot.role);
+      if (!pp || !pp.ok) return;
+      setClaimSheet({ day: pp.sat, role: slot.role, unit: slot.unit, soft: eastMaskedReasons(pp.soft, eastDetailsVisible), mates: obUnitMates(boardSlots, slot).filter(m => m.day !== pp.sat && m.day !== pp.sun), pair: { sat: pp.sat, sun: pp.sun } });
+      return;
+    }
     // The other open days of the same unit in this role (holiday unit; weekend
     // 'block'): a single-day claim is allowed but the sheet names what stays open.
     // Item E4 (Faraz 9/26): the sheet's "Allowed, shown so you know" list is these notes - read through eastMaskedReasons
@@ -5696,9 +5737,38 @@ function CallSchedule() {
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   };
+  // 10/1 follow-up 3: the pair's confirm - the gate re-read at confirm time (the pair's eligibility on the board, both days
+  // with the other assumed), then ONE call; a refusal changes nothing (the function rolls both days back) and is logged
+  // once, a success sends one shift_claimed e-mail naming both days (the function wrote the two audit and feed rows).
+  const runPairClaim = async (s) => {
+    const sat = s.pair.sat, sun = s.pair.sun;
+    const pg = myBoardPair(sat, s.role);
+    if (!pg || !pg.ok) { showToast("Not eligible any more: " + (pg ? reasonLabel(eastMaskedReasons(pg.hard, eastDetailsVisible, pg.eastVacation)[0], nameOf) : "the Saturday and the Sunday are no longer both open to you"), "error"); closeClaimSheet(); return; }
+    setClaimBusy(true);
+    const label = `${DAY_HDR[parse(sat).getDay()]} ${fmtMD(sat)} + ${DAY_HDR[parse(sun).getDay()]} ${fmtMD(sun)} ${s.role}`;
+    const a = await claimWeekendPairRpc(sat, s.role);
+    if (!a.ok) {
+      console.warn("claim_open_weekend_pair refused:", a.error);
+      showToast(`Couldn't take ${label}: ${a.error}`, "error");
+      logAudit("schedule.claim", `claim refused: ${label}`, { day: sat, days: [sat, sun], role: s.role, person: mySurgeon, outcome: "failed", error: String(a.error).slice(0, 300) });
+      setClaimBusy(false); closeClaimSheet();
+      try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after a refused pair claim failed:", e); }
+      return;
+    }
+    setClaimBusy(false); closeClaimSheet();
+    showToast(`You took ${label}`, "success");
+    try { if (refreshDaysRef.current) await refreshDaysRef.current(); } catch (e) { console.warn("schedule refetch after claim_open_weekend_pair failed:", e); showToast("Shifts taken, but the calendar could not be refreshed - reload to see them.", "error"); }
+    const ids = await schedulerIdsLoud();
+    if (ids) {
+      const targets = [...new Set([...ids, mySurgeon])];
+      const msg = `${nameOf(mySurgeon)} took the open ${s.role} shifts on ${DAY_HDR[parse(sat).getDay()]} ${fmtMD(sat)} and ${DAY_HDR[parse(sun).getDay()]} ${fmtMD(sun)} (07:00 Saturday to 07:00 Monday).`;
+      sendEmailNotif("shift_claimed", { subject: `${nameOf(mySurgeon)} took ${label}`, message: msg, day: sat, days: [sat, sun], role: s.role, surgeon_id: mySurgeon }, targets);
+    }
+  };
   const runClaim = async () => {
     const s = claimSheet;
     if (!s || claimBusy || !mySurgeon) return;
+    if (s.pair) { await runPairClaim(s); return; }
     // P13R (c): the gate is eligibility() - read it again at confirm time (the rules or the schedule may have
     // moved since the sheet opened); a refusal here never reached the function, so no audit row.
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
@@ -7007,6 +7077,9 @@ function CallSchedule() {
           // note is dropped and an East hard reason reads "not available" for everyone but the scheduler (eastDetailsVisible)
           const chip = (o) => { const c = colorOf(o.id); const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? "allowed - " + soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings"} style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)}</span>; };
           const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");
+          // 10/1 follow-up 3: a surgeon refused this day alone by lone-weekend-day who may take the Saturday + Sunday together
+          // (entry.pair.ok) - listed after the day's own chips with "(Sat + Sun)"; no notes on the hover (the sheet shows them)
+          const pairChip = (o) => { const c = colorOf(o.id); return <span key={"pair-" + o.id} data-eligible-pair-id={o.id} title="may take the Saturday and the Sunday together (weekend days come as a pair)" style={{background:c.tg,color:c.tx,border:"1px dashed " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)} (Sat + Sun)</span>; };
           const sheetDate = (d) => { try { return parse(d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); } catch (e) { return d; } };
           return (
             <div style={css.card} data-testid="openshifts-card">
@@ -7036,6 +7109,7 @@ function CallSchedule() {
                       const key = openSlotKey(s.day, s.role);
                       const elig = boardElig[key] || null;
                       const eligible = elig ? elig.filter(o => o.ok) : [];
+                      const pairEligible = elig ? elig.filter(o => !o.ok && o.pair && o.pair.ok) : [];   // 10/1 follow-up 3: Sat + Sun together only
                       const me = elig ? elig.find(o => o.id === mySurgeon) || null : null;
                       const announced = obLastAnnounced(boardAnnounced, s.day, s.role);
                       // A locked-but-empty slot is open (a lock never holds a slot) but the function refuses CLAIM_LOCKED - the scheduler assigns it from the editor.
@@ -7046,13 +7120,15 @@ function CallSchedule() {
                           <td style={{whiteSpace:"nowrap"}}><span style={{color:T.open,fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
                           <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit)}</td>
                           <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>
-                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
+                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length || pairEligible.length ? eligible.map(chip).concat(pairEligible.map(pairChip)) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
                           <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>
                           {canAct && <td style={{whiteSpace:"nowrap"}}>
                             <div style={{display:"flex",gap:4,alignItems:"center"}}>
                               {mySurgeon ? (me && me.ok && !locked
                                 ? <button type="button" data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)} style={{...css.btn(true),padding:"6px 10px",fontSize:11}}>Take this shift</button>
                                 : <button type="button" data-testid="ob-take" disabled title={locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me)} style={{...css.btn(false),padding:"6px 10px",fontSize:11,opacity:0.55,cursor:"not-allowed"}}>Take this shift</button>) : null}
+                              {/* 10/1 follow-up 3: refused this day alone only by lone-weekend-day, eligible for the pair -> one claim for both days */}
+                              {mySurgeon && me && !me.ok && me.pair && me.pair.ok && !locked && <button type="button" data-testid="ob-take-pair" data-sat={me.pair.sat} onClick={(e) => openClaimSheet(s, e.currentTarget, true)} title={"Take " + DAY_HDR[parse(me.pair.sat).getDay()] + " " + fmtMD(me.pair.sat) + " and " + DAY_HDR[parse(me.pair.sun).getDay()] + " " + fmtMD(me.pair.sun) + " together - both or neither"} style={{...css.btn(true),padding:"6px 10px",fontSize:11}}>Take Sat + Sun</button>}
                               {/* A title never shows on a touch screen: a surgeon reads why Take is off beside it (the scheduler's board is unchanged) */}
                               {mySurgeon && !isScheduler && !(me && me.ok && !locked) && <span data-testid="ob-take-why" style={{fontSize:10.5,color:T.muted,whiteSpace:"normal",lineHeight:1.3,maxWidth:150}}>{locked ? "slot locked - ask the scheduler" : takeTitle(me)}</span>}
                               {isScheduler && <button type="button" data-testid="ob-assign" onClick={() => { setEditorFocus(null); setEditorDay(s.day); }} title="Open the day editor on this day" style={{...css.mini(false),padding:"6px 9px"}}>Assign...</button>}
@@ -7083,25 +7159,34 @@ function CallSchedule() {
               </div>
               {claimSheet && (
                 <div data-testid="claim-sheet" onClick={() => { if (!claimBusy) closeClaimSheet(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
-                  <div role="dialog" aria-modal="true" aria-label="Take this shift" onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:460,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
-                    <h3 style={{margin:"0 0 8px",fontSize:16,color:dkText}}>Take this shift?</h3>
+                  <div role="dialog" aria-modal="true" aria-label={claimSheet.pair ? "Take Saturday and Sunday" : "Take this shift"} data-pair={claimSheet.pair ? claimSheet.pair.sat : undefined} onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:460,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+                    <h3 style={{margin:"0 0 8px",fontSize:16,color:dkText}}>{claimSheet.pair ? "Take Saturday and Sunday?" : "Take this shift?"}</h3>
+                    {claimSheet.pair ? (
+                    <div style={{fontSize:13,lineHeight:1.7}} data-testid="claim-pair-days">
+                      <div><strong>{DAY_HDR[parse(claimSheet.pair.sat).getDay()]} {fmtMD(claimSheet.pair.sat)} + {DAY_HDR[parse(claimSheet.pair.sun).getDay()]} {fmtMD(claimSheet.pair.sun)}</strong> - {sheetDate(claimSheet.pair.sat)} and {sheetDate(claimSheet.pair.sun)}</div>
+                      <div>Role: <strong>{claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"}</strong> - two 24-hour shifts, 07:00 Saturday to 07:00 Monday.</div>
+                      <div>Your weekend days come as a pair, so both are taken together - both or neither: if one of them can no longer be taken, nothing changes.</div>
+                      <div>Unit: {boardUnitText(claimSheet.unit)}</div>
+                    </div>
+                    ) : (
                     <div style={{fontSize:13,lineHeight:1.7}}>
                       <div><strong>{DAY_HDR[parse(claimSheet.day).getDay()]} {fmtMD(claimSheet.day)}</strong> - {sheetDate(claimSheet.day)}</div>
                       <div>Role: <strong>{claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"}</strong> - one 24-hour shift, 07:00 to 07:00.</div>
                       <div>Unit: {boardUnitText(claimSheet.unit)}</div>
                     </div>
+                    )}
                     {claimSheet.mates.length > 0 && (
                       <div data-testid="claim-unit-mates" style={{...css.warnBox,marginTop:10}}>
-                        <strong>This takes one day only.</strong> The group keeps one primary and one backup through a {claimSheet.unit.kind === "holiday" ? "holiday unit" : "weekend block"}; the other open {claimSheet.role} day{claimSheet.mates.length === 1 ? "" : "s"} of this unit stay{claimSheet.mates.length === 1 ? "s" : ""} open: {claimSheet.mates.map(m => DAY_HDR[parse(m.day).getDay()] + " " + fmtMD(m.day)).join(", ")}. Take {claimSheet.mates.length === 1 ? "it" : "them"} too from the board, or tell the scheduler.
+                        <strong>{claimSheet.pair ? "This takes the Saturday and the Sunday only." : "This takes one day only."}</strong> The group keeps one primary and one backup through a {claimSheet.unit.kind === "holiday" ? "holiday unit" : "weekend block"}; the other open {claimSheet.role} day{claimSheet.mates.length === 1 ? "" : "s"} of this unit stay{claimSheet.mates.length === 1 ? "s" : ""} open: {claimSheet.mates.map(m => DAY_HDR[parse(m.day).getDay()] + " " + fmtMD(m.day)).join(", ")}. Take {claimSheet.mates.length === 1 ? "it" : "them"} too from the board, or tell the scheduler.
                       </div>
                     )}
                     {claimSheet.soft.length
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
-                      : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
+                      : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>{claimSheet.pair ? "No rule warnings for you on these days." : "No rule warnings for you on this day."}</div>}
                     <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
                     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
-                      <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
+                      <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : claimSheet.pair ? "Confirm - take both days" : "Confirm - take this shift"}</button>
                     </div>
                   </div>
                 </div>

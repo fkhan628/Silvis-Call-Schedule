@@ -122,7 +122,9 @@ the day is theirs (no approval step, no waiting for the scheduler), it shows on 
 the scheduler and the surgeon each get an e-mail, and the audit log keeps the entry. The button is offered only when the
 hard schedule rules allow it (their OR / outreach days, monthly and backup caps, vacations, holiday opt-outs). Soft
 preferences are shown as warnings on the confirm sheet but do not block. When Take is greyed out the reason is written
-next to it (on a phone the button's tooltip never shows). The scheduler can still reassign the
+next to it (on a phone the button's tooltip never shows). A surgeon whose weekend days come as a pair (never a Saturday or
+Sunday alone as primary - Khan today) sees **Take Sat + Sun** on an open Saturday and its open Sunday instead: one confirm
+takes both days, or nothing changes if one of them can no longer be taken. The scheduler can still reassign the
 day from the day editor afterwards. The group is also e-mailed on publish (from the app's Accept & Publish dialog; the 9/23 command-line publish sent
 nothing) and every Monday 07:00 Central while any shift in the next 30 days is open (the Monday cron job
 `silvis-open-shifts-weekly`, `edge-functions/README.md` section 4 / guide 16.4 — active; first observed run

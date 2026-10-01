@@ -670,6 +670,67 @@ function obUnitMates(slots, slot) {
     return o.unit.friday === u.friday;
   });
 }
+/* The weekend pair claim (10/1 follow-up 3; sql/migrations/2026-10-01-weekend-pair-claim.sql - claim_open_weekend_pair,
+   PREPARED). A surgeon whose rules carry noLoneWeekendDay (rules.js, Prompt 23 B2 - his weekend days come as a pair) is
+   refused a lone Saturday or Sunday as primary (hard 'lone-weekend-day:<Sat|Sun>'), so the board refuses each day of an
+   open weekend alone. These three pure helpers decide where the board offers "Take Sat + Sun" instead - ONE call to the
+   database function, which takes both days in one transaction or neither (never two one-day claims). */
+// obWeekendPartner(day) -> the other day of the Saturday + Sunday pair: a Saturday's Sunday (+1), a Sunday's Saturday
+// (-1); any other day or junk -> null. Pure.
+function obWeekendPartner(day) {
+  if (!openSlotIsDay(day)) return null;
+  const dow = parse(day).getDay();
+  return dow === 6 ? suAddDays(day, 1) : dow === 0 ? suAddDays(day, -1) : null;
+}
+// obLoneOnly(hard) -> true when a refusal is the lone-weekend rule and nothing else: hard is a non-empty array and every
+// code starts 'lone-weekend-day:'. Any other hard reason beside it (a cap, a vacation, a lock) -> false - the pair would
+// not lift that. Pure.
+function obLoneOnly(hard) {
+  return Array.isArray(hard) && hard.length > 0 && hard.every(h => typeof h === "string" && h.indexOf("lone-weekend-day:") === 0);
+}
+// obPairSlot(boardSlots, slot, schedule) -> the partner day's board slot in the same role, or null. The partner must be
+// LISTED on the board (boardSlots - open, today or later, not covered from outside: the board's own list, so nothing is
+// re-decided here) and neither day's slot may be locked (claim_open_weekend_pair refuses CLAIM_LOCKED; the scheduler
+// assigns a locked slot from the editor). The slot's own day must be a Saturday or a Sunday. Pure.
+function obPairSlot(boardSlots, slot, schedule) {
+  const s = slot && typeof slot === "object" ? slot : null;
+  if (!s || (s.role !== "primary" && s.role !== "backup")) return null;
+  const partner = obWeekendPartner(s.day);
+  if (!partner) return null;
+  const list = Array.isArray(boardSlots) ? boardSlots : [];
+  const p = list.find(o => o && typeof o === "object" && o.day === partner && o.role === s.role) || null;
+  if (!p) return null;
+  const sched = schedule && typeof schedule === "object" ? schedule : {};
+  const locked = (d) => !!(sched[d] && sched[d][s.role + "Locked"]);
+  return locked(s.day) || locked(partner) ? null : p;
+}
+// obPairEligibility(eligibility, ctx, sat, role, id, opts) -> { sat, sun, ok, hard, soft, eastVacation }: the pair's gate.
+// rules.js eligibility() (passed in - helpers.js does not load rules.js) for the Saturday with the Sunday assumed held by
+// him in the role, and for the Sunday with the Saturday assumed, both with the claim flag (a claim is an offer made on the
+// spot, Prompt 14 P2) and opts.asBlockMember when he holds the Friday in that role (the pair completes his Fri-Sun block -
+// the board's boardBlockMember reading). ok = both ok; hard = the Saturday's codes then the Sunday's not already listed;
+// soft = the two lists' entries, the first of each reason + weight kept; eastVacation = the first gloss (for
+// eastMaskedReasons). A throw reads as 'rules-unavailable:<message>' (the board's own fallback). sat must be a Saturday,
+// else { ok: false, hard: ['bad-pair'] }. Pure apart from the eligibility it is handed.
+function obPairEligibility(eligibility, ctx, sat, role, id, opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  const sun = openSlotIsDay(sat) && parse(sat).getDay() === 6 ? suAddDays(sat, 1) : null;
+  if (!sun || typeof eligibility !== "function") return { sat: sat, sun: sun, ok: false, hard: ["bad-pair"], soft: [], eastVacation: null };
+  const ask = (day, other) => {
+    try { return eligibility(ctx, day, role, id, Object.assign({ claim: true, assume: [{ date: other, role: role }] }, o.asBlockMember ? { asBlockMember: true } : {})) || {}; }
+    catch (e) { return { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
+  };
+  const a = ask(sat, sun), b = ask(sun, sat);
+  const hard = [];
+  [a, b].forEach(r => (Array.isArray(r.hard) ? r.hard : []).forEach(h => { if (hard.indexOf(h) < 0) hard.push(h); }));
+  [a, b].forEach(r => { if (!r.ok && !(Array.isArray(r.hard) && r.hard.length) && hard.indexOf("unknown-surgeon") < 0) hard.push("unknown-surgeon"); });
+  const soft = [], seen = {};
+  [a, b].forEach(r => (Array.isArray(r.soft) ? r.soft : []).forEach(x => {
+    const k = x && typeof x === "object" ? String(x.reason) + "|" + String(x.weight) : null;
+    if (k && !seen[k]) { seen[k] = true; soft.push(x); }
+  }));
+  return { sat: sat, sun: sun, ok: !!a.ok && !!b.ok, hard: hard, soft: soft, eastVacation: a.eastVacation || b.eastVacation || null };
+}
 
 /* ═══ DAILY MODEL - row <-> assignment ═══
    In-memory: schedule = { "YYYY-MM-DD": { primary, backup, primaryLocked,
@@ -6002,7 +6063,7 @@ if (typeof module !== "undefined" && module.exports) {
     GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow, GROUP_CALL_SHARE_CSS, GROUP_CALL_PRINT_CSS,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays,
-    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, OPEN_SLOT_PATTERN_WORDS, openSlotPatternWords, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
+    openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, OPEN_SLOT_PATTERN_WORDS, openSlotPatternWords, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates, obWeekendPartner, obLoneOnly, obPairSlot, obPairEligibility,
     openSlotReason, openSlotReasonCurrent, openSlotsMessageCurrent, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,
     undoEntry, undoNoteWrite, undoApply, undoMessage,

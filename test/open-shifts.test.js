@@ -1294,5 +1294,86 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   });
 }
 
+/* ---- 10/1 follow-up 3: the weekend pair claim (claim_open_weekend_pair, PREPARED) - the board's pure helpers ---- */
+check("10/1 follow-up 3: obWeekendPartner - a Saturday's Sunday, a Sunday's Saturday, anything else null", () => {
+  assert.strictEqual(H.obWeekendPartner("2026-11-07"), "2026-11-08", "Sat -> Sun");
+  assert.strictEqual(H.obWeekendPartner("2026-11-08"), "2026-11-07", "Sun -> Sat");
+  assert.strictEqual(H.obWeekendPartner("2027-01-02"), "2027-01-03", "across a year end");
+  ["2026-11-06", "2026-11-09", "2026-11-31", "x", null, undefined, 3].forEach(d => assert.strictEqual(H.obWeekendPartner(d), null, String(d)));
+});
+check("10/1 follow-up 3: obLoneOnly - true only when every hard code is lone-weekend-day", () => {
+  assert.strictEqual(H.obLoneOnly(["lone-weekend-day:Sat"]), true);
+  assert.strictEqual(H.obLoneOnly(["lone-weekend-day:Sun", "lone-weekend-day:Sat"]), true);
+  assert.strictEqual(H.obLoneOnly(["lone-weekend-day:Sat", "monthly-cap:4"]), false, "a cap beside it - the pair would not lift that");
+  assert.strictEqual(H.obLoneOnly(["time-off:2026-11-07"]), false);
+  [[], null, undefined, "lone-weekend-day:Sat", [3]].forEach(h => assert.strictEqual(H.obLoneOnly(h), false, JSON.stringify(h)));
+});
+check("10/1 follow-up 3: obPairSlot - the partner's board slot in the same role, only when it is listed and neither day is locked", () => {
+  const sl = (day, role) => ({ day, role, unit: { kind: "weekend", pattern: null, friday: "2026-11-06" }, reason: null });
+  const board = [sl("2026-11-06", "primary"), sl("2026-11-07", "primary"), sl("2026-11-08", "primary"), sl("2026-11-08", "backup")];
+  assert.strictEqual(H.obPairSlot(board, board[1], {}), board[2], "Sat primary -> Sun primary");
+  assert.strictEqual(H.obPairSlot(board, board[2], {}), board[1], "Sun primary -> Sat primary");
+  assert.strictEqual(H.obPairSlot(board, board[3], {}), null, "Sun backup: the Saturday backup is not listed (held / not open)");
+  assert.strictEqual(H.obPairSlot(board, board[0], {}), null, "a Friday has no pair");
+  assert.strictEqual(H.obPairSlot(board, board[1], { "2026-11-08": { primaryLocked: true } }), null, "the partner's slot locked");
+  assert.strictEqual(H.obPairSlot(board, board[1], { "2026-11-07": { primaryLocked: true } }), null, "the slot's own lock");
+  assert.strictEqual(H.obPairSlot(board, board[1], { "2026-11-08": { backupLocked: true } }), board[2], "a lock of the other role does not matter");
+  assert.strictEqual(H.obPairSlot(null, board[1], {}), null);
+  assert.strictEqual(H.obPairSlot(board, { day: "2026-11-07", role: "observer" }, {}), null);
+});
+check("10/1 follow-up 3: obPairEligibility over rules.js - Khan (seed noLoneWeekendDay) is refused Sat 11/7 alone (lone-weekend-day:Sat), the pair is ok; a real hard reason on either day keeps the pair refused; each day is asked with the other assumed + the claim flag", () => {
+  const R = require(path.join(ROOT, "rules.js"));
+  const SA = require(path.join(__dirname, "seed-adapter.js"));
+  const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+  const sched = {}; ["2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"].forEach(d => { sched[d] = { primary: null, backup: null, primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null }; });
+  const mk = (extra) => R.buildContext(SA.seedToContextInput(seed, Object.assign({ eastDerived: [], eastFeedCoverage: { from: "2026-09-28", to: "2026-12-31" }, eastBusyDays: {}, schedule: sched }, extra || {})));
+  const ctx = mk();
+  const solo = R.eligibility(ctx, "2026-11-07", "primary", "s1", { claim: true });
+  assert.deepStrictEqual([solo.ok, solo.hard], [false, ["lone-weekend-day:Sat"]], "the board's one-day answer: lone-weekend-day alone");
+  assert.strictEqual(H.obLoneOnly(solo.hard), true);
+  const p = H.obPairEligibility(R.eligibility, ctx, "2026-11-07", "primary", "s1");
+  assert.deepStrictEqual([p.sat, p.sun, p.ok, p.hard], ["2026-11-07", "2026-11-08", true, []], "the pair: " + JSON.stringify(p));
+  assert.ok(Array.isArray(p.soft), "soft is a list");
+  // each day is asked with the other assumed and the claim flag (a spy records the opts)
+  const calls = [];
+  H.obPairEligibility((c, d, role, id, opts) => { calls.push([d, role, id, JSON.stringify(opts)]); return { ok: true, hard: [], soft: [{ reason: "outside-offers", weight: 4 }] }; }, ctx, "2026-11-07", "primary", "s1", { asBlockMember: true });
+  assert.deepStrictEqual(calls, [["2026-11-07", "primary", "s1", JSON.stringify({ claim: true, assume: [{ date: "2026-11-08", role: "primary" }], asBlockMember: true })], ["2026-11-08", "primary", "s1", JSON.stringify({ claim: true, assume: [{ date: "2026-11-07", role: "primary" }], asBlockMember: true })]]);
+  const dup = H.obPairEligibility(() => ({ ok: true, hard: [], soft: [{ reason: "outside-offers", weight: 4 }] }), ctx, "2026-11-07", "primary", "s1");
+  assert.deepStrictEqual(dup.soft, [{ reason: "outside-offers", weight: 4 }], "the same note on both days is listed once");
+  // his vacation on the Sunday: the pair is refused (time-off on the Sunday, never lone-weekend-day once the pair is assumed)
+  const vac = mk({ timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: "s1", start_date: "2026-11-08", end_date: "2026-11-08" }]) });
+  const pv = H.obPairEligibility(R.eligibility, vac, "2026-11-07", "primary", "s1");
+  assert.strictEqual(pv.ok, false, "a Sunday vacation keeps the pair refused: " + JSON.stringify(pv));
+  assert.ok(pv.hard.length > 0 && !pv.hard.every(h => /^lone-weekend-day:/.test(h)), "a real reason, not the lone rule: " + JSON.stringify(pv.hard));
+  // without the key the one-day answer is ok (no pair is needed); a Friday is no Saturday
+  const srNo = SA.seedToSurgeonRules(seed); srNo.s1 = Object.assign({}, srNo.s1); delete srNo.s1.noLoneWeekendDay;
+  assert.strictEqual(R.eligibility(mk({ surgeonRules: srNo }), "2026-11-07", "primary", "s1", { claim: true }).ok, true, "without noLoneWeekendDay the Saturday alone is fine");
+  assert.deepStrictEqual(H.obPairEligibility(R.eligibility, ctx, "2026-11-06", "primary", "s1").hard, ["bad-pair"], "a Friday is refused as a pair start");
+  // a throwing eligibility reads as rules-unavailable (the board's fallback)
+  const pt = H.obPairEligibility(() => { throw new Error("boom"); }, ctx, "2026-11-07", "primary", "s1");
+  assert.deepStrictEqual([pt.ok, pt.hard], [false, ["rules-unavailable:boom"]]);
+});
+{
+  const appSrc = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+  check("10/1 follow-up 3 (index-source): the board asks the pair only for a lone-only refusal with a listed partner; 'Take Sat + Sun' makes ONE rpc/claim_open_weekend_pair call - never claim_open_slot - with a plain 404 reading, a refusal logged once and one e-mail", () => {
+    assert.ok(appSrc.includes("const pairSlot = !entry.ok && obLoneOnly(entry.hard) ? obPairSlot(boardSlots, s, schedule) : null;"), "the boardElig row asks the pair only for a lone-only refusal with a listed, unlocked partner");
+    assert.ok(appSrc.includes("entry.pair = obPairEligibility(eligibility, rulesCtx, sat, s.role, sg.id, { asBlockMember: !!(schedule[fri] && schedule[fri][s.role] === sg.id) });"), "the pair's gate is helpers.obPairEligibility over rules.js eligibility (as a block member when he holds the Friday)");
+    assert.ok(/data-testid="ob-take-pair"/.test(appSrc) && appSrc.includes("{mySurgeon && me && !me.ok && me.pair && me.pair.ok && !locked && <button"), "the row shows Take Sat + Sun only for his own lone-only refusal with an ok pair, on an unlocked slot");
+    const rpcAt = appSrc.indexOf("const claimWeekendPairRpc = async (sat, role) => {");
+    const rpc = appSrc.slice(rpcAt, appSrc.indexOf("\n  };\n", rpcAt));
+    assert.ok(rpcAt > 0 && rpc.includes("/rest/v1/rpc/claim_open_weekend_pair`, { method: \"POST\", body: JSON.stringify({ p_saturday: sat, p_role: role }) }"), "one POST rpc/claim_open_weekend_pair { p_saturday, p_role }");
+    assert.ok(rpc.includes("res.status === 404 || /PGRST202/.test(text) ? PAIR_NOT_ON : (describeDbError(text)") && appSrc.includes('const PAIR_NOT_ON = "the two-day claim is not switched on yet - ask the scheduler";'), "a 404 / PGRST202 reads 'not switched on yet'; refusals verbatim (describeDbError)");
+    const runAt = appSrc.indexOf("const runPairClaim = async (s) => {");
+    const run = appSrc.slice(runAt, appSrc.indexOf("\n  };\n", runAt));
+    assert.ok(runAt > 0 && (run.match(/claimWeekendPairRpc\(/g) || []).length === 1 && !/claimOpenSlotRpc|claim_open_slot/.test(run), "the pair's confirm makes ONE pair call and never a one-day claim (no non-atomic fallback)");
+    assert.ok(run.includes("const pg = myBoardPair(sat, s.role);") && run.indexOf("if (!pg || !pg.ok)") < run.indexOf("claimWeekendPairRpc("), "the gate is re-read at confirm time, before the call");
+    assert.strictEqual((run.match(/logAudit\("schedule\.claim"/g) || []).length, 1, "a refusal is logged once (the function writes the success rows)");
+    assert.ok(run.includes('logAudit("schedule.claim", `claim refused: ${label}`, { day: sat, days: [sat, sun], role: s.role, person: mySurgeon, outcome: "failed"'), "the refusal's audit row names both days");
+    assert.strictEqual((run.match(/sendEmailNotif\("shift_claimed"/g) || []).length, 1, "one shift_claimed e-mail on success");
+    assert.ok(appSrc.includes("if (s.pair) { await runPairClaim(s); return; }"), "runClaim hands a pair sheet to runPairClaim");
+    assert.ok(/data-testid="claim-pair-days"/.test(appSrc) && appSrc.includes('"Confirm - take both days"'), "the pair's sheet names both days and says what Confirm takes");
+  });
+}
+
 console.log(`\nopen-shifts: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

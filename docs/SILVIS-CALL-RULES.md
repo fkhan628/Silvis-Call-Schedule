@@ -109,6 +109,10 @@ decides the Trauma Director role.
      style's mismatch (+3) unless he carries `standaloneFriday` himself — a block-style holder (Philip) included, as the
      per-day check and the diagnostics always read it (§4 item 4); a trade or give of one day of his Sat–Sun primary pair
      moves the pair (the Trades card's weekend unit; §8 item 23 (m)).
+     ⟶ *Prepared 10/1 (follow-up 3; branch `feat/weekend-pair-claim`, NOT shipped - it waits for the database apply):* on
+     the Open shifts board, where he is refused an open Saturday and its open Sunday each alone by `lone-weekend-day` only,
+     both rows offer **"Take Sat + Sun"** - one claim for both days through the new database function
+     `claim_open_weekend_pair` (both days in one transaction or neither, so he is never left on a lone day; §8 item 23 (m)).
   3. **At most 2 weekends a month across DSG and Silvis** — `weekendCap: { perMonth: 2, countsEast: true, roles: ["primary"],
      weight: "strong" }`, **soft**: a weekend counts **once, in its Saturday's month** (Sat 7/31 – Sun 8/1/2027 is a July
      weekend), when he is **Silvis primary** on its Saturday or Sunday **or East-busy** on either day — the feed's busy days
@@ -998,7 +1002,13 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     it splits the unit), the scheduler is asked to confirm a split, and the receiver is checked over both days with the
     other assumed. Not covered: the **Open shifts board's Take** judges one day at a time, so an open Saturday + Sunday
     cannot be taken by him as a pair there (he is refused each day alone with `lone-weekend-day` — the same shape as
-    Fierce's block-only Fridays); the day editor (item (i)). (n) **Generate:** when a weekend has no full pattern and the
+    Fierce's block-only Fridays) ⟶ *prepared 10/1 (follow-up 3, branch `feat/weekend-pair-claim`, NOT shipped - it waits
+    for the database apply):* "Take Sat + Sun" on both rows where his one-day answer is `lone-weekend-day` alone and the
+    partner day is listed open and unlocked in the same role (`helpers.obPairSlot` / `obPairEligibility`: each day asked
+    with the other assumed and the claim flag, as a block member when he holds the Friday); ONE call to
+    `rpc/claim_open_weekend_pair` (`sql/migrations/2026-10-01-weekend-pair-claim.sql`, report-first - both days in one
+    transaction or neither; a 404 before the apply reads "the two-day claim is not switched on yet"); no fallback to two
+    one-day claims. The button shows only once his `noLoneWeekendDay` is set live (Setup > Rules); the day editor (item (i)). (n) **Generate:** when a weekend has no full pattern and the
     Saturday is his alone (nobody else may take it), the fill keeps the Saturday with its open Sunday as his pair instead
     of dropping it (before: the Saturday stayed open beside the open Friday and the Sunday went to someone else).
 24. **The yearly holiday plan's inputs and readings (Prompt 25, Faraz 9/30; §5) — default taken, confirm.** (a) **Khan off

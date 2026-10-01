@@ -1001,6 +1001,24 @@ right after `apply_trade()`, applied live only through `sql/migrations/2026-09-2
 git push), proven by the rolled-back `sql/probes/claim-open-slot-probe.sql` and `scripts/verify-rls.sh` section 7
 (`docs/SCHEMA-REVIEW.md`).
 
+**The weekend pair claim (10/1 follow-up 3; PREPARED on `feat/weekend-pair-claim`, NOT shipped - the client waits for the
+database apply).** A surgeon whose rules carry `noLoneWeekendDay` (Khan's Prompt 23 key) is refused a lone Saturday or
+Sunday as primary (`lone-weekend-day`), so the board refused each day of an open weekend alone. The `boardElig` row now
+asks the pair where his one-day answer is `lone-weekend-day` and nothing else (`helpers.obLoneOnly`) and the partner day
+is on the board, open and unlocked in the same role (`helpers.obPairSlot`): `helpers.obPairEligibility` asks
+`eligibility()` for each day with the other assumed held (`assume`), the claim flag, and `asBlockMember` when he holds
+that Friday; `entry.pair.ok` shows **"Take Sat + Sun"** (`data-testid="ob-take-pair"`) on both rows beside the disabled
+one-day Take (its reason in words), and the Eligible column lists him as "(Sat + Sun)". The sheet names both days; the
+confirm re-reads the pair gate and makes ONE `POST rpc/claim_open_weekend_pair { p_saturday, p_role }` - the security
+definer function takes both days in one transaction or neither (`claim_open_slot`'s checks per day, `CL010
+CLAIM_NOT_SATURDAY`; section 4.3) - and never falls back to two `claim_open_slot` calls (the second could fail and leave a
+lone day). A 404 / `PGRST202` (not applied, or PostgREST not reloaded) reads "the two-day claim is not switched on yet - ask
+the scheduler"; a refusal is shown verbatim and logged once (`schedule.claim`, `outcome: "failed"`, `detail.days`); a
+success refetches and sends one `shift_claimed` e-mail naming both days (the function writes the two audit rows and the
+two feed rows). Pinned in `test/open-shifts.test.js` (the helpers over `rules.js`, the source shape) and
+`test/data-layer.test.js` (Item E4: the pair's notes and gate read through `eastMaskedReasons`); the smoke's "Weekend pair
+claim" step drives it on a surgeon page with the function mocked (404, CL005, success).
+
 ### 16.3 The three notification paths
 
 **The group is told** on Accept & Publish when open

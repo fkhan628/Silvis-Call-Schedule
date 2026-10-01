@@ -518,6 +518,7 @@ let followerPrefs400Lines = 0;
 // Item E4 (review, Faraz 9/26): the browser's own "status of 500" line for each east_feed / east_vacation_reviews read
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
+let pairForcedLines = 0;      // 10/1 follow-up 3: the browser's own 404 / 400 line for each answer the weekend pair step forces (not applied yet / CL005) - consumed one each
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
@@ -953,6 +954,7 @@ const watchPage = (pg, tag) => {
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
+      else if (pairForcedLines > 0 && /status of (404|400)/.test(msg.text()) && /\/rest\/v1\/rpc\/claim_open_weekend_pair$/.test(String((msg.location() || {}).url || "").split("?")[0])) { forcedConsoleErrors.push(msg.text()); pairForcedLines--; } // 10/1 follow-up 3: the weekend pair step's forced 404 PGRST202 / 400 CL005 (that path only)
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -5484,6 +5486,239 @@ try {
       if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
     }
     await np.close();
+  }
+
+  // ---- 10/1 follow-up 3: the weekend pair claim - "Take Sat + Sun" on the Open shifts board (claim_open_weekend_pair, PREPARED) ----
+  // A page as SURGEON s1 (Khan) whose answers this step overlays (the extra handler; no other step's state moves):
+  //   GET call_schedule_data = the served blob with surgeonRules.s1.noLoneWeekendDay = true (the live blob carries none of
+  //                            Prompt 23's keys yet - Faraz enters them from khan-s1-for-setup.json), so a lone Saturday /
+  //                            Sunday as primary is his hard lone-weekend-day;
+  //   GET schedule_days      = the served rows with the PRIMARY of one Sat + Sun pair blanked (pairBlank) - chosen from the
+  //                            served rows by asking the page's own rules (rulesHardOn): each day asked alone reads exactly
+  //                            lone-weekend-day, each day with the other assumed reads no hard reason - and, once the mocked
+  //                            function took them, both days held by s1 (version + 1, source claim: what its UPDATEs leave);
+  //   POST rpc/claim_open_weekend_pair (not live - the function waits for Faraz's apply) = the function's answers: armed
+  //                            once with 404 PGRST202 (not applied yet), once with CL005 CLAIM_HELD (someone took the Sunday
+  //                            in between), then the success JSON; CL010 for a non-Saturday, CL005 for a held day.
+  // Checks: both rows listed with the one-day Take disabled and its reason in words ("a Saturday on its own - ..."), the
+  // pair chip and "Take Sat + Sun" on both rows; the sheet names both days; the 404 reads "not switched on yet", the CL005
+  // refusal is shown verbatim, each refusal logs ONE audit row naming both days and changes nothing; the confirm makes ONE
+  // POST { p_saturday, p_role } with the Saturday (never the Sunday, never rpc/claim_open_slot, never a schedule_days write);
+  // the success toast names both days, both rows leave the board after the refetch, one shift_claimed e-mail names both days.
+  {
+    const PAIR_UID = "00000000-0000-4000-8000-0000000a1e20";
+    const PAIR_PROFILE = { id: PAIR_UID, person_id: "s1", role: "surgeon", display_name: "Khan", email: null, created_at: "2026-09-24T00:00:00Z" };
+    const PAIR_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: PAIR_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const pairBlank = [];           // the two days whose PRIMARY this page's schedule_days answers blank
+    const pairClaimed = {};         // day -> { primary_id, source, updated_by, updated_at } after the mocked function took the pair
+    let pairArm = [];               // the next answers of the mocked function: "404" | "held" (consumed in order), then success
+    let pairBlobServed = 0;
+    const pairWrite0 = writes.length;
+    const pairPosts = () => writes.slice(pairWrite0).filter(w => w.path === "/rest/v1/rpc/claim_open_weekend_pair");
+    const pairRoute = async ({ route, req, url, json }) => {
+      if (url.pathname.startsWith("/rest/v1/call_schedule_data") && req.method() === "GET") {
+        let rows = fixtureAnswer(url);
+        if (!rows) {
+          try { const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } }); if (!res.ok()) return false; rows = await res.json(); }
+          catch (e) { return false; }
+        }
+        const lone = (r) => {
+          if (!r || typeof r !== "object" || r.data === undefined || r.data === null) return r;
+          const d = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+          const sr = { ...((d && d.surgeonRules) || {}) };
+          sr.s1 = { ...(sr.s1 || {}), noLoneWeekendDay: true };
+          pairBlobServed++;
+          return { ...r, data: { ...d, surgeonRules: sr } };
+        };
+        await json(200, Array.isArray(rows) ? rows.map(lone) : lone(rows));
+        return true;
+      }
+      if (url.pathname === "/rest/v1/schedule_days" && req.method() === "GET" && (pairBlank.length || Object.keys(pairClaimed).length)) {
+        const rows = await scheduleDayRows(route, req, url);
+        await json(200, rows.map(r => {
+          let o = r;
+          if (pairBlank.includes(o.day)) o = { ...o, primary_id: null };
+          if (pairClaimed[o.day]) o = { ...o, ...pairClaimed[o.day], version: (Number(r.version) || 0) + 1 };
+          return o;
+        }));
+        return true;
+      }
+      if (url.pathname === "/rest/v1/rpc/claim_open_weekend_pair") {
+        const body = req.postData() || "";
+        writes.push({ method: req.method(), path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "" });
+        let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+        const arm = pairArm.shift();
+        if (arm === "404") { await json(404, { code: "PGRST202", details: "Searched for the function public.claim_open_weekend_pair with parameters p_role, p_saturday or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.", hint: null, message: "Could not find the function public.claim_open_weekend_pair(p_role, p_saturday) in the schema cache" }); return true; }
+        const sat = String(b.p_saturday || ""), sun = /^\d{4}-\d{2}-\d{2}$/.test(sat) ? isoPlus(sat, 1) : "";
+        if (arm === "held") { await json(400, { message: `CLAIM_HELD: ${sun} primary is already held by s2`, code: "CL005", details: null, hint: null }); return true; }
+        if (b.p_role !== "primary" && b.p_role !== "backup") { await json(400, { message: "CLAIM_BAD_ROLE: role must be primary or backup (got " + (b.p_role || "null") + ")", code: "CL002", details: null, hint: null }); return true; }
+        if (!sat || new Date(sat + "T12:00:00Z").getUTCDay() !== 6) { await json(400, { message: `CLAIM_NOT_SATURDAY: ${sat || "null"} is not a Saturday - the two-day claim takes a Saturday and the Sunday after it`, code: "CL010", details: null, hint: null }); return true; }
+        const heldBy = [sat, sun].map(d => pairClaimed[d] ? "s1" : null).find(Boolean);
+        if (heldBy) { await json(400, { message: `CLAIM_HELD: ${sat} ${b.p_role} is already held by ${heldBy}`, code: "CL005", details: null, hint: null }); return true; }
+        const at = new Date().toISOString();
+        [sat, sun].forEach(d => { pairClaimed[d] = { primary_id: "s1", source: "claim", updated_by: "s1", updated_at: at }; });
+        await json(200, { ok: true, days: [sat, sun], role: b.p_role, person_id: "s1", versions: [2, 2], offers: [true, true] });
+        return true;
+      }
+      return false;
+    };
+    const pp = await context.newPage();
+    watchPage(pp, "pair-claim");
+    // every console error of this page with the URL it names: beyond the two forced rpc answers (and the pay mock's 404s /
+    // the run's expected noise) the step fails and names it - an unexpected line is attributed here, not only in the run total
+    const pairPageErrors = [];
+    pp.on("console", (m) => { if (m.type() === "error") pairPageErrors.push(m.text().replace(/\s+/g, " ").slice(0, 200) + " @ " + String((m.location() || {}).url || "").split("?")[0]); });
+    await pp.setViewportSize({ width: 1180, height: 900 });
+    await pp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, PAIR_JWT);
+    await pp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await pp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(PAIR_PROFILE, pairRoute));
+    pp.on("dialog", (d) => d.accept());
+    const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    const toastText = async () => { const t = await pp.$("[data-testid=toast]"); return t ? (await t.innerText()).replace(/\s+/g, " ").trim() : ""; };
+    const dismissToast = async () => { await pp.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); }); await pp.waitForTimeout(150); };
+    const openBoardPair = async () => {
+      await pp.click('button[data-tab="openshifts"]');
+      await pp.waitForSelector("[data-testid=openshifts-table]", { timeout: 10000 });
+      await pp.click("[data-testid=ob-horizon-all]"); await pp.waitForTimeout(250);
+    };
+    const pairRow = (slot) => pp.evaluate((slot) => {
+      const tr = document.querySelector(`tr[data-slot="${slot}"]`);
+      if (!tr) return null;
+      const t = tr.querySelector("[data-testid=ob-take]"), p = tr.querySelector("[data-testid=ob-take-pair]"), w = tr.querySelector("[data-testid=ob-take-why]");
+      return { take: t ? (t.disabled ? "disabled" : "enabled") : "none", title: t ? t.getAttribute("title") || "" : "", why: w ? w.innerText.trim() : "", pair: p ? { sat: p.getAttribute("data-sat"), h: p.getBoundingClientRect().height, text: p.innerText.trim() } : null, pairChip: !!tr.querySelector('[data-eligible-pair-id="s1"]'), chip: !!tr.querySelector('[data-eligible-id="s1"]') };
+    }, slot);
+    const reloadPair = async () => { await loadWithRetry(pp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "pair page reload"); await pp.waitForSelector("text=Synced", { timeout: 30000 }); await pp.waitForTimeout(600); };
+    try {
+      await loadWithRetry(pp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (weekend pair claim)");
+      await pp.waitForSelector("text=Synced", { timeout: 30000 });
+      await pp.waitForTimeout(800);
+      if ((await pp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the pair page shows a Setup tab - it is being treated as the scheduler");
+      if (!pairBlobServed) throw new Error("the page's blob GET never carried surgeonRules.s1.noLoneWeekendDay - the lone rule is not exercised");
+      // the candidates: served Sat + Sun pairs from today + 3 days on, both rows present, neither primary locked nor covered
+      // from outside, no holiday-unit day, s1 holding neither role on either day (the rows the app is served = liveByDay)
+      const cands = [];
+      for (let d = isoPlus(todayCentral, 3); d <= lastLiveDay && cands.length < 40; d = isoPlus(d, 1)) {
+        if (new Date(d + "T12:00:00Z").getUTCDay() !== 6) continue;
+        const sun = isoPlus(d, 1), a = liveByDay[d], b = liveByDay[sun];
+        if (!a || !b || a.primary_locked || b.primary_locked || a.external_cover || b.external_cover || holidayUnitDays.has(d) || holidayUnitDays.has(sun)) continue;
+        if ([a.primary_id, a.backup_id, b.primary_id, b.backup_id].includes("s1")) continue;
+        cands.push(d);
+      }
+      const qs = [];
+      cands.forEach(sat => {
+        const sun = isoPlus(sat, 1), fri = isoPlus(sat, -1), blk = !!(liveByDay[fri] && liveByDay[fri].primary_id === "s1") ? { asBlockMember: true } : {};
+        qs.push({ day: sat, role: "primary", id: "s1", opts: { claim: true } });
+        qs.push({ day: sat, role: "primary", id: "s1", opts: { claim: true, assume: [{ date: sun, role: "primary" }], ...blk } });
+        qs.push({ day: sun, role: "primary", id: "s1", opts: { claim: true, assume: [{ date: sat, role: "primary" }], ...blk } });
+      });
+      const rh = qs.length ? await rulesHardOn(pp, qs) : { out: [] };
+      if (rh.error) throw new Error("rulesHardOn: " + rh.error);
+      let sat = null;
+      for (let i = 0; i < cands.length && !sat; i++) {
+        const [solo, a, b] = rh.out.slice(i * 3, i * 3 + 3);
+        if (JSON.stringify(solo) === JSON.stringify(["lone-weekend-day:Sat"]) && a.length === 0 && b.length === 0) sat = cands[i];
+      }
+      if (!sat) {
+        fail(`Weekend pair claim: no served Sat + Sun among ${cands.length} candidate(s) where s1's one-day answer is lone-weekend-day alone and the pair is ok (the page's own rules) - the pair flow is not exercised`);
+      } else {
+        const sun = isoPlus(sat, 1);
+        pairBlank.push(sat, sun);
+        console.log(`     (weekend pair claim: the harness blanks the primary of Sat ${sat} + Sun ${sun} in this page's answers - s1 is refused each day alone by lone-weekend-day and eligible for the pair per the page's own rules; ${cands.length} candidate(s) screened)`);
+        await reloadPair();
+        await openBoardPair();
+        const rs = await pairRow(sat + "|primary"), ru = await pairRow(sun + "|primary");
+        const satWords = "a Saturday on its own - weekend days come as a pair (Sat + Sun)", sunWords = "a Sunday on its own - weekend days come as a pair (Sat + Sun)";
+        if (!rs || !ru) fail(`Weekend pair claim: the blanked rows are not on the board (${sat}|primary ${!!rs}, ${sun}|primary ${!!ru})`);
+        else if (rs.take !== "disabled" || ru.take !== "disabled" || rs.title !== satWords || ru.title !== sunWords || rs.why !== satWords || ru.why !== sunWords) fail(`Weekend pair claim: the one-day Take must be disabled with its reason in words on both rows (title and visible text) - Sat ${JSON.stringify(rs)}, Sun ${JSON.stringify(ru)}`);
+        else if (!rs.pair || !ru.pair || rs.pair.sat !== sat || ru.pair.sat !== sat || rs.pair.text !== "Take Sat + Sun" || ru.pair.text !== "Take Sat + Sun") fail(`Weekend pair claim: "Take Sat + Sun" (data-sat ${sat}) must show on both rows - Sat ${JSON.stringify(rs.pair)}, Sun ${JSON.stringify(ru.pair)}`);
+        else if (!rs.pairChip || !ru.pairChip || rs.chip || ru.chip) fail(`Weekend pair claim: the Eligible column must list s1 as "(Sat + Sun)" (never as a one-day chip) on both rows - Sat ${JSON.stringify(rs)}, Sun ${JSON.stringify(ru)}`);
+        else ok(`Weekend pair claim: Sat ${md(sat)} + Sun ${md(sun)} primary listed; the one-day Take disabled on both ('${rs.why}' / '${ru.why}'), the "(Sat + Sun)" chip and "Take Sat + Sun" (data-sat ${sat}) on both rows`);
+        // the phone tap target: under 600 px every button is >= 36 px (index-source's mobile rule) - the pair button at 390 px
+        // (at this desktop width it is the one-day Take's 26 px, as every board button is)
+        await pp.setViewportSize({ width: 390, height: 844 }); await pp.waitForTimeout(300);
+        const h390 = await pp.evaluate((slots) => slots.map(sl => { const b = document.querySelector(`tr[data-slot="${sl}"] [data-testid=ob-take-pair]`); return b ? Math.round(b.getBoundingClientRect().height) : null; }), [sat + "|primary", sun + "|primary"]);
+        await pp.setViewportSize({ width: 1180, height: 900 }); await pp.waitForTimeout(300);
+        if (h390.some(h => h === null || h < 36)) fail(`Weekend pair claim 390px: "Take Sat + Sun" must be a >= 36 px tap target on both rows (Sat ${h390[0]}, Sun ${h390[1]})`);
+        else ok(`Weekend pair claim 390px: "Take Sat + Sun" is a ${h390[0]} / ${h390[1]} px tap target on the two rows`);
+        // the sheet, opened from the SUNDAY row: both days named, Escape closes it without a write
+        const w0 = writes.length;
+        await pp.click(`tr[data-slot="${sun}|primary"] [data-testid=ob-take-pair]`);
+        await pp.waitForSelector("[data-testid=claim-sheet]", { timeout: 5000 });
+        const sheet = await pp.$eval("[data-testid=claim-sheet]", el => ({ text: el.innerText.replace(/\s+/g, " "), pair: (el.querySelector("[role=dialog]") || {}).getAttribute ? el.querySelector("[role=dialog]").getAttribute("data-pair") : null, confirm: (el.querySelector("[data-testid=claim-confirm]") || { innerText: "" }).innerText.trim(), days: !!el.querySelector("[data-testid=claim-pair-days]") }));
+        await pp.screenshot({ path: path.join(OUT, "openshifts-pair-sheet.png"), fullPage: false });
+        if (sheet.pair !== sat || !sheet.days || !sheet.text.includes(`Sat ${md(sat)} + Sun ${md(sun)}`) || !/both or neither/.test(sheet.text) || sheet.confirm !== "Confirm - take both days" || !/Take Saturday and Sunday\?/.test(sheet.text)) fail("Weekend pair claim: the sheet must name both days, say both-or-neither and offer 'Confirm - take both days': " + JSON.stringify(sheet).slice(0, 400));
+        else ok(`Weekend pair claim: the sheet (opened from the Sunday row) names Sat ${md(sat)} + Sun ${md(sun)}, says both or neither, offers "${sheet.confirm}" (screenshot test/ui/out/openshifts-pair-sheet.png)`);
+        await pp.keyboard.press("Escape");
+        await pp.waitForSelector("[data-testid=claim-sheet]", { state: "detached", timeout: 3000 });
+        if (writes.length !== w0) fail("Weekend pair claim: closing the sheet with Escape produced a write");
+        // one confirm: open from the Saturday row, confirm, wait for the POST and the toast
+        const confirmOnce = async (label) => {
+          await dismissToast();
+          const before = writes.length;
+          await pp.click(`tr[data-slot="${sat}|primary"] [data-testid=ob-take-pair]`);
+          await pp.waitForSelector("[data-testid=claim-sheet]", { timeout: 5000 });
+          await pp.click("[data-testid=claim-confirm]");
+          await waitFor(() => writes.slice(before).some(w => w.path === "/rest/v1/rpc/claim_open_weekend_pair"), 8000);
+          await pp.waitForSelector("[data-testid=claim-sheet]", { state: "detached", timeout: 5000 }).catch(() => {});
+          await waitFor(async () => /Couldn't take|You took/.test(await toastText()), 5000);
+          const toast = await toastText();
+          // the refusal's audit row / the success's e-mail are sent after the toast (fire and forget) - wait for them
+          if (label === "success") await waitFor(() => writes.slice(before).some(w => /send-notification/.test(w.path)), 6000);
+          else await waitFor(() => writes.slice(before).some(w => w.path.startsWith("/rest/v1/audit_log")), 4000);
+          await pp.waitForTimeout(300);
+          return { since: writes.slice(before), toast, label };
+        };
+        const parseW = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
+        const refusedAudit = (since) => since.filter(w => w.path.startsWith("/rest/v1/audit_log")).map(parseW).filter(b => b && b.action === "schedule.claim");
+        // (1) the function not applied yet: 404 PGRST202 -> "not switched on yet", one audit row, nothing changes
+        pairArm = ["404"]; pairForcedLines++;
+        const r1 = await confirmOnce("404");
+        const a1 = refusedAudit(r1.since);
+        const label = `Sat ${md(sat)} + Sun ${md(sun)} primary`;
+        if (!r1.toast.includes(`Couldn't take ${label}: the two-day claim is not switched on yet - ask the scheduler`)) fail("Weekend pair claim (404): the toast must say the two-day claim is not switched on yet: " + r1.toast);
+        else if (a1.length !== 1 || a1[0].detail.outcome !== "failed" || JSON.stringify(a1[0].detail.days) !== JSON.stringify([sat, sun]) || a1[0].detail.day !== sat || a1[0].detail.summary !== `claim refused: ${label}`) fail("Weekend pair claim (404): one audit row 'claim refused: <both days>' (detail.summary) with detail.days [sat, sun], outcome failed: " + JSON.stringify(a1));
+        else ok(`Weekend pair claim (404 PGRST202 - not applied yet): toast "${r1.toast}"; one audit row '${a1[0].detail.summary}' (detail.days ${JSON.stringify(a1[0].detail.days)})`);
+        // (2) someone took the Sunday in between: CL005 shown verbatim, one audit row, the rows stay (the mock changed nothing)
+        pairArm = ["held"]; pairForcedLines++;
+        const r2 = await confirmOnce("held");
+        const a2 = refusedAudit(r2.since);
+        if (!r2.toast.includes(`Couldn't take ${label}: CLAIM_HELD: ${sun} primary is already held by s2`)) fail("Weekend pair claim (CL005): the refusal must be shown verbatim: " + r2.toast);
+        else if (a2.length !== 1 || !/CLAIM_HELD/.test(String(a2[0].detail.error))) fail("Weekend pair claim (CL005): one audit row carrying the refusal: " + JSON.stringify(a2));
+        else ok(`Weekend pair claim (CL005 - the function refused, nothing changed): toast "${r2.toast}"; one audit row`);
+        const still = await pairRow(sat + "|primary");
+        if (!still || !still.pair) fail("Weekend pair claim: after the two refusals the pair must still be offered (nothing was written): " + JSON.stringify(still));
+        // (3) the success
+        const r3 = await confirmOnce("success");
+        const posts3 = r3.since.filter(w => w.path === "/rest/v1/rpc/claim_open_weekend_pair");
+        const b3 = posts3.length ? parseW(posts3[0]) || {} : {};
+        if (posts3.length !== 1 || posts3[0].method !== "POST" || b3.p_saturday !== sat || b3.p_role !== "primary" || Object.keys(b3).length !== 2) fail(`Weekend pair claim: the confirm must make ONE POST rpc/claim_open_weekend_pair { p_saturday: ${sat}, p_role: primary } - saw ${JSON.stringify(posts3)}`);
+        else ok(`Weekend pair claim: Confirm -> ONE POST /rest/v1/rpc/claim_open_weekend_pair ${posts3[0].body}`);
+        if (!r3.toast.includes(`You took ${label}`)) fail("Weekend pair claim: no 'You took Sat M/D + Sun M/D primary' toast: " + r3.toast); else ok(`Weekend pair claim: toast "${r3.toast}"`);
+        const gone = await waitFor(async () => !(await pp.$(`tr[data-slot="${sat}|primary"]`)) && !(await pp.$(`tr[data-slot="${sun}|primary"]`)), 10000);
+        if (!gone) fail(`Weekend pair claim: the rows ${sat}|primary / ${sun}|primary are still on the board after the claim + refetch`);
+        else ok(`Weekend pair claim: both rows left the board after the refetch (the mocked rows now hold s1 on both days)`);
+        const mail = r3.since.filter(w => /send-notification/.test(w.path)).map(parseW).filter(b => b && b.type === "shift_claimed");
+        const okAudit = refusedAudit(r3.since);
+        if (mail.length !== 1 || !Array.isArray(mail[0].targetIds) || !mail[0].targetIds.includes("s1") || !String(mail[0].data && mail[0].data.message).includes(`Sat ${md(sat)} and Sun ${md(sun)}`) || JSON.stringify(mail[0].data.days) !== JSON.stringify([sat, sun])) fail("Weekend pair claim: one send-notification shift_claimed to the scheduler + claimer naming both days: " + JSON.stringify(mail));
+        else if (okAudit.length) fail("Weekend pair claim: the client wrote a schedule.claim audit row on SUCCESS (the SQL function writes the two rows): " + JSON.stringify(okAudit));
+        else ok(`Weekend pair claim: one shift_claimed e-mail (targetIds ${JSON.stringify(mail[0].targetIds)}) - "${String(mail[0].data.message).slice(0, 110)}"; no client audit row on success`);
+        // the whole step: three pair POSTs, every one with the Saturday; never a one-day claim, never a schedule_days write
+        const all = writes.slice(pairWrite0);
+        const bodies = pairPosts().map(parseW);
+        if (bodies.length !== 3 || !bodies.every(b => b && b.p_saturday === sat && b.p_role === "primary")) fail("Weekend pair claim: three pair POSTs (404, CL005, success), each with the Saturday: " + JSON.stringify(bodies));
+        else if (all.some(w => /\/rpc\/claim_open_slot/.test(w.path))) fail("Weekend pair claim: the page called rpc/claim_open_slot - the pair must never fall back to one-day claims");
+        else if (all.some(w => w.path.startsWith("/rest/v1/schedule_days"))) fail("Weekend pair claim: the page wrote schedule_days directly");
+        else if (!all.every(w => !/@(?!example\.com)[a-z0-9.-]+\.[a-z]{2,}/i.test(w.body || ""))) fail("Weekend pair claim: a write body carries an email address");
+        else ok("Weekend pair claim: 3 pair POSTs, every one with the Saturday " + sat + "; no rpc/claim_open_slot call and no schedule_days write from this page");
+      }
+    } catch (e) { fail("Weekend pair claim: the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
+    await pp.waitForTimeout(300);
+    const strayPair = pairPageErrors.filter(t => !/status of (404|400)\b.* @ .*\/rest\/v1\/rpc\/claim_open_weekend_pair$/.test(t) && !/status of (404|500)\b.* @ .*\/rest\/v1\/call_pay_(settings|logs)$/.test(t) && !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
+    const forcedPair = pairPageErrors.filter(t => /\/rest\/v1\/rpc\/claim_open_weekend_pair$/.test(t));
+    if (strayPair.length) fail("Weekend pair claim: the pair page logged console errors beyond the forced answers: " + strayPair.join(" | "));
+    else ok(`Weekend pair claim: the pair page's console errors are the forced ones only (${forcedPair.length} rpc answer(s) - 404 + 400 - of ${pairPageErrors.length})`);
+    pairForcedLines = 0;   // a forced answer whose console line never came must not absorb a later page's real 404 / 400
+    await pp.close();
   }
 
   // ---- Prompt 27 (Faraz 9/30: "need at least 2 surgeons around"): the vacation guard on the Time off form, as a SURGEON ----
