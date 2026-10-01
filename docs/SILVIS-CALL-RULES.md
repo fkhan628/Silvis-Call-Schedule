@@ -451,7 +451,7 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    over the pool of last year's days in the tier × this year's days**, the rearrangement reading (a surgeon with no unit
    last year adds 0 whether counted as 0 days or left out); a seeded draw.
 5. **Hard per-person limits are data:** `holidaysOff` (Acton: Thanksgiving; **Khan: Christmas, both roles** — he is on
-   Davenport call 12/24–12/25 every year; default taken 9/30, Faraz to confirm, seed `openQuestions` 20 — data only:
+   Davenport call 12/24–12/25 every year; default taken 9/30, Faraz to confirm, seed `openQuestions` 21 — data only:
    `surgeonRules.s1.holidayRules.holidaysOff ["Christmas"]`, which the generator reads too, so once applied he is no
    Christmas backup candidate there either), `maxMajorHolidays` (Philip: 1 per rolling 12 months — unit START months fewer
    than 12 apart, history included, the engine's window), and **Fierce's derived week**: a unit on any day of one of his
@@ -461,7 +461,7 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    being planned count — the planned year never, and a later year on file feeds only the `maxMajorHolidays` 12-month window
    and rule 4)
    plus `groupRules.holidayPlan.history`, the units before the app — `[{ year, name, primary, backup }]` with
-   roster ids, **empty until the office supplies the 2026 minors** (seed `openQuestions` 20); the schedule wins a unit
+   roster ids, **empty until the office supplies the 2026 minors** (seed `openQuestions` 21); the schedule wins a unit
    both carry. 2026 on record, verified on the live `schedule_days` rows 10/1: Thanksgiving Khan / Philip (the import
    locks), Christmas Acton / Fierce and New Year's Burchett / Khan (the 9/23 publish, generated, unlocked).
 
@@ -497,7 +497,10 @@ scheduler's only:
   confirm past** — the database refuses such a day outright (`schedule_days_distinct_roles`), so no move that leaves it
   is ever listed, and Accept stops before its confirm if a unit still has one (nothing is written). A swap with a unit
   that starts today or has started is not listed either (Accept leaves that unit as on file, so the swap would land
-  half).
+  half). ⟶ 10/1 second review: nor is **any move of such a unit itself** — no swap from it, no replacement (its list
+  reads *started*; the day editor changes it); and no move puts **the surgeon on file in a role the plan leaves open**
+  into that unit's other role (Accept keeps him in his role, so it would have to clear it and leave it OPEN — a move
+  labelled *keeps the rules* that left a role open; judged on the schedule as it stands).
 - **Accept ‹year›** locks every planned unit day for everyone: **both roles locked, source `holiday-plan-‹year›`, note
   "‹unit› unit - holiday plan ‹year›"** (the unit only — no name, no reason; `schedule_days` is anon-readable; a note
   already on a unit day that is not a plan note is **kept**, and the confirm lists it). One
@@ -513,9 +516,18 @@ scheduler's only:
   year, the units with roster ids, the slots replaced, the broken rules, the snapshot counts — no amounts), and the
   notices a hand edit of those days would send — one in-app *Schedule changed* note and one e-mail (category *schedule
   updates*) to the surgeons whose slot changed hands (judged against the rows last saved, not the screen), one message
-  for the whole plan. If the write fails or hits someone else's change, the notices are held and go out with the next
-  Accept of that year that saves (the failure toast says to press Accept again once the header shows *Saved*). The
-  office notice stays Settings → Office notifications → *Publish and notify office*.
+  for the whole plan. If the write fails or hits someone else's change, the notices are held. ⟶ 10/1 second review:
+  the failure toast says which (the plan's days retry on their own — no need to Accept again; a failed Re-check swap
+  leaves nothing to Apply again, since the Re-check list already reads the swapped holders; on someone else's change the
+  schedule is reloaded and the days that did not collide save on their own), names the surgeons whose notices are held,
+  and points at **Send the held change notices (N)** on the plan card (shown while a year has held days). Pressed once
+  the header shows *Saved*, it sends — one note and one e-mail, as the Accept would — for the days **now on file as the
+  Accept wrote them** (judged against the rows last saved), keeps the days not saved yet, and drops a day someone else
+  has changed since (or an undo took back): nothing is sent for it. The next Accept of that year that saves still sends
+  the held days it rewrites; its "before" is the held one only while the saved row is still that row or the one the
+  held Accept wrote — after someone else's change in between, the notice is judged against that change, so the surgeon
+  the plan actually replaces is told. The office notice stays Settings → Office notifications → *Publish and notify
+  office*.
 - **After Accept the units are kept as locks:** Generate never touches them (locks are respected); a trade or
   a give moves the whole unit (the trade card reads the unit from the holiday units, not from the row's source), and a
   locked slot moves only when the scheduler applies the trade (the database's rule for every lock). A hand edit or a
@@ -534,8 +546,10 @@ scheduler's only:
   Davenport one included), a rule change (an opt-out, a 12-month limit) or a surgeon leaving the roster. Each comes with
   the best swap by the planner's own ordering (fewest broken rules, then the planner's cost terms) and whether it keeps
   every rule; never a swap with a unit that has started, and no suggestion for a unit that has itself started (the
-  day editor changes it). *Apply swap* goes through the same Accept path (its confirm, the snapshot first, audit
-  `holiday_plan.swap`, the same notices) and writes the swap's units only.
+  day editor changes it). ⟶ 10/1 second review: never a move that puts the holder the plan left open on file (or one of
+  the holders of a role whose accepted days disagree) into that unit's other role — *Apply* would have to clear his
+  role and leave it OPEN. *Apply swap* goes through the same Accept path (its confirm, the snapshot first, audit
+  `holiday_plan.swap`, the same notices, the same held notices if its write fails) and writes the swap's units only.
 
 ## 6. Fairness model (differs from Davenport) — ⟶ rewritten 9/22; ⟶ water-filled share decided 9/23
 
@@ -991,6 +1005,9 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     Cowork's order instead (Thanksgiving Fierce, New Year's Sarkar). (d) **Should the rules engine read an accepted
     holiday-plan row as the holder's own availability** (so Generate stops listing the waived ones and a trade of a plan
     unit is judged like the plan)? Default taken: **no** — kept as locks, listed as lock violations (§5 *After Accept*);
-    changing it is an engine change (`rules.js`), not data. Known gap (review G): the change notices of an Accept whose
-    write failed wait for the next Accept of that year that saves — if nobody presses Accept again, they are not sent
-    on their own. Seed `openQuestions` 21.
+    changing it is an engine change (`rules.js`), not data. Known gap (review G), narrowed 10/1 (second review S1): the
+    change notices of an Accept or swap whose write failed or met someone else's change are held and still **not sent
+    on their own** — the plan card shows *Send the held change notices (N)* while a year has held days, and the
+    scheduler presses it once the header shows *Saved* (or Accepts that year again); the held days live in this device's
+    memory only, so a reload before that drops them (nobody is told). A plan day that landed and was then changed by
+    someone else before the button was pressed is dropped too (its holder sees the current row). Seed `openQuestions` 21.

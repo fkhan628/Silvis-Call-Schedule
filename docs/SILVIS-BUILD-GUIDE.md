@@ -1977,3 +1977,13 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   (`repeatYears` / `repeatText`; never in the rates). The notices of an Accept diff the rows last persisted
   (`lastSyncRef`, read only) and a failed / conflicted Accept keeps its "before" rows (`holidayNoticePendingRef`) for the
   next Accept of that year that saves. Tests: holiday-plan D2–D5, F2b, I1, K3, L5, L6, M2–M3b, N1; data-layer [P25].
+- **Review fixes 2 (10/1).** `hplOptions` lists no move of a unit that starts on or before `today` (no swap from it, no
+  replacement; the card's select reads *started*), and takes `fileHeld` (`hplFileHeld`: per unit, the holders on file
+  in a role the plan leaves open - Accept keeps them): `twoRoles` reads each as that role's holder, so no move puts him
+  into the unit's other role (Accept's clash branch would clear it - left OPEN). `holidayPlanSwapOptions` reads it from
+  `opts.schedule`, `holidayPlanRecheck` from its schedule. The held change notices: `holidayNoticePendingRef[year][day]`
+  = `{ before, wrote, unit, swap }`; `holidayPlanNoticeChanges` gives an Accept's notices (the held `before` only while
+  the persisted row is still it or the held `wrote`, else the persisted row), `holidayPlanHeldNotices` the card's *Send
+  the held change notices (N)* (`sendHeldHolidayNotices`: landed days sent, waiting kept, the rest dropped);
+  `holidayNoticeHeld` mirrors the ref for the render. The failure toast is worded per mode and shows on a conflict too.
+  An external cover's not-in-pool text reads its label. Tests: holiday-plan K4, K5, M2e, O1, O2; data-layer [P25].
