@@ -458,7 +458,7 @@ separately, and `diagnostics.impliedTargets` shows every level plus, per member,
 **Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
 (locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
 `diagnostics.fixedSlots`, and a held unlocked slot that breaks a rule is a fact in `diagnostics.fixedViolations`, never a
-hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups).
+hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
 Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
 the pool's open-slot count.
 
