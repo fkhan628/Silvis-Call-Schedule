@@ -1694,7 +1694,7 @@ observed: applied 2026-09-28 01:15:26Z (`supabase db query --linked --workdir <d
 
 ## 2026-09-30 - data change: fold January into Jan 2027 - Jun 2027 (Faraz 9/30; TASK 2 of Cowork's 9/30 queue)
 
-**Status: PREPARED - NOT APPLIED.** Faraz 9/30: "go from January to June. We will do 6 months." The apply was attempted by
+**Status: APPLIED 2026-10-01 04:33:12Z** (Faraz, in the Supabase SQL editor - the observed line below). Faraz 9/30: "go from January to June. We will do 6 months." The apply was first attempted by
 the orchestrator on 10/1 (Faraz's standing go for the queue) and **refused by the session's permission classifier**; it was
 not retried by any other route. Faraz (or a session he permits) runs the file below - one batch, one implicit transaction.
 No schema, RLS, policy, schedule row, lock or offer changes; `call_periods` has no foreign key and no trigger pointing at it.
@@ -1762,4 +1762,4 @@ the offers cron's next mornings (11/9 reminder, 11/20 last call, 11/23 close). T
 (2026-09-30 revision: the widened row, no Feb - Apr row, `groupRules.offerPeriods` lengthMonths 6, remind [14, 3], notice
 14), so a later seed apply cannot bring the Feb - Apr period back. **Order: Run fold-jan-jun.sql BEFORE any seed apply: an apply first would widen the live Jan row to 6/30 while the live Feb - Apr row stays (two overlapping upcoming periods - the importer upserts by start_day and never deletes), and the fold's pre-check would then refuse; the recovery is to delete the Feb - Apr row with its period.delete audit row by hand.**
 
-observed: _not applied - waiting for Faraz (the classifier refused the orchestrator's apply on 10/1)_
+observed: applied by Faraz in the Supabase SQL editor, committed 2026-10-01 04:33:12Z (the file above, one batch; the orchestrator's own apply had been refused by the session's permission classifier earlier that night). Verified read-only right after by Cowork and again by the orchestrator (linked CLI): `call_periods` holds two rows - Nov 2026 - Jan 2027 unchanged (published, updated_at 2026-09-23 21:26:53Z) and **Jan 2027 - Jun 2027** (2027-01-04 .. 2027-06-30, offers close 2026-11-23, publish by 2026-12-07, upcoming, rules_only_ids ["s5"], offer_modes {}, updated_at 2026-10-01 04:33:12.509979Z); the Feb 2027 - Apr 2027 row is gone; `audit_log` holds `period.update` (label Jan 2027 - Jun 2027) and `period.delete` (label Feb 2027 - Apr 2027), both actor s1 / Khan at 04:33:12.509979Z. The app (build 2026.09.30d) shows the one period to 6/30 in Setup > Periods. The fold ran before any seed apply (the order this section requires), and the seed already mirrors it, so a later apply changes nothing for periods. Fierce's "go by my rules" choice for January now covers January - June.
