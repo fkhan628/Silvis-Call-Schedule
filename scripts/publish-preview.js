@@ -90,7 +90,10 @@
 //   schedule (live rows overlaid with the planned rows) and rules.eligibility
 //   run for every placed slot of both ranges: a lock holder's conflicts are the
 //   known locked facts (the preview's lockViolations), any other hard reason
-//   ABORTS; a ctx the builder could not complete (no East id for an eastBlocks
+//   ABORTS (review 2, 10/1: the rules' "already held" reading - a Khan Tue/Thu
+//   inside his notice is soft only when he holds it - reads the LIVE rows, never
+//   the final map, so a preview's own new row inside the notice ABORTS while an
+//   unchanged live row passes); a ctx the builder could not complete (no East id for an eastBlocks
 //   surgeon) FAILS the preflight outright - never a silent PASS;
 //   (c) every day of both ranges has a covered slot or is listed open;
 //   (d) primary <> backup on every written row.
@@ -228,6 +231,7 @@ function planPublish(preview, liveRows, opts) {
   const live = {}, liveMap = {};
   (liveRows || []).forEach((r) => { if (r && r.day) live[String(r.day).slice(0, 10)] = r; });
   Object.keys(live).forEach((d) => { liveMap[d] = H.dayRowToAssignment(live[d]); out.final[d] = H.dayRowToAssignment(live[d]); });
+  out.live = liveMap;   // review 2 (10/1): the standing rows - the preflight's "already held" test reads these, never plan.final
 
   built.days.forEach((d) => {
     const month = d.slice(0, 7);
@@ -413,30 +417,56 @@ function holdsFullBlock(F, day, role, id) {
   return true;
 }
 
+// standingOf(plan) -> the LIVE holders { day: { primary, backup } } (review 2, 10/1): plan.live (planPublish's live rows)
+// when the plan carries it, else plan.final with every planned change put back to its `from` holder (a hand-built plan).
+function standingOf(plan) {
+  if (plan && plan.live && typeof plan.live === "object") return plan.live;
+  const F = (plan && plan.final) || {}, out = {};
+  Object.keys(F).forEach((d) => { const e = F[d]; out[d] = { primary: (e && e.primary) || null, backup: (e && e.backup) || null }; });
+  ((plan && plan.changes) || []).forEach((c) => {
+    if (!c || !c.day || ROLES.indexOf(c.role) < 0) return;
+    if (!out[c.day]) out[c.day] = { primary: null, backup: null };
+    out[c.day][c.role] = c.from || null;
+  });
+  return out;
+}
+
 // preflight(ctx, plan, ctxNotes?) -> (b)(c)(d) over plan.final for plan.days. ctx
 // must have been built with schedule = plan.final (the caller does that).
 // ctxNotes: what buildLiveContext could NOT put into the ctx (an eastBlocks
 // surgeon without an East id, a failed roster resolve). Any note is FATAL: a
 // ctx missing Khan's East busy days would evaluate every East day ok:true - a
 // silent PASS, this codebase's signature failure class.
+// Review 2 (10/1): the rules' "already held" reading (a hardNeverWeekdaysNoticeDays Tue/Thu he holds reads the soft
+// term inside the notice) must come from the LIVE rows, never from plan.final - there every preview row would read as
+// held, so a never-published Khan Tue/Thu inside the notice (a preview generated weeks before the publish) would pass.
+// The preflight therefore evaluates with ctx.heldSchedule = the live holders (standingOf(plan)), whatever the ctx was
+// built with, and puts the ctx's own snapshot back afterwards: an unchanged live slot passes, a new or changed slot
+// inside the notice fails.
 function preflight(ctx, plan, ctxNotes) {
   const res = { ok: true, hardRemaining: [], lockedFacts: [], missingDays: [], distinctRoleViolations: [], evaluated: 0, ctxNotes: (ctxNotes || []).slice() };
   const F = plan.final || {};
   const openSet = new Set((plan.openSlots || []).map((o) => o.day + "|" + o.role));
-  (plan.days || []).forEach((d) => {
-    const e = F[d] || null;
-    ROLES.forEach((role) => {
-      const holder = e ? e[role] : null;
-      const covered = !!holder || (role === "primary" && !!(e && e.externalCover));
-      if (!covered) { if (!openSet.has(d + "|" + role) && res.missingDays.indexOf(d) < 0) res.missingDays.push(d); return; }
-      if (!holder) return;
-      const r = R.eligibility(ctx, d, role, holder, { asBlockMember: holdsFullBlock(F, d, role, holder) });
-      res.evaluated++;
-      if (r.lockHolder && r.conflicts && r.conflicts.length) res.lockedFacts.push({ day: d, role, id: holder, conflicts: r.conflicts.slice() });
-      if (!r.ok) res.hardRemaining.push({ day: d, role, id: holder, reasons: (r.hard || []).slice() });
+  const ctxHeld = ctx.heldSchedule;
+  ctx.heldSchedule = R.heldSnapshot(standingOf(plan));
+  try {
+    (plan.days || []).forEach((d) => {
+      const e = F[d] || null;
+      ROLES.forEach((role) => {
+        const holder = e ? e[role] : null;
+        const covered = !!holder || (role === "primary" && !!(e && e.externalCover));
+        if (!covered) { if (!openSet.has(d + "|" + role) && res.missingDays.indexOf(d) < 0) res.missingDays.push(d); return; }
+        if (!holder) return;
+        const r = R.eligibility(ctx, d, role, holder, { asBlockMember: holdsFullBlock(F, d, role, holder) });
+        res.evaluated++;
+        if (r.lockHolder && r.conflicts && r.conflicts.length) res.lockedFacts.push({ day: d, role, id: holder, conflicts: r.conflicts.slice() });
+        if (!r.ok) res.hardRemaining.push({ day: d, role, id: holder, reasons: (r.hard || []).slice() });
+      });
+      if (e && e.primary && e.primary === e.backup) res.distinctRoleViolations.push(d);
     });
-    if (e && e.primary && e.primary === e.backup) res.distinctRoleViolations.push(d);
-  });
+  } finally {
+    ctx.heldSchedule = ctxHeld;
+  }
   res.ok = !res.hardRemaining.length && !res.missingDays.length && !res.distinctRoleViolations.length && !res.ctxNotes.length;
   return res;
 }
@@ -700,10 +730,13 @@ async function fetchLive(cfg) {
   return { blob: (blobRows[0] && blobRows[0].data) || {}, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, dayRows, timeOffRows, availabilityRows, feedRows, forecastRows, overrideRows };
 }
 
-// buildLiveContext(live, schedule, range) -> { ctx, notes[] }: the ctx build of
+// buildLiveContext(live, schedule, range, heldSchedule?) -> { ctx, notes[] }: the ctx build of
 // scripts/preview-generate.js, duplicated faithfully (that script is a top-level
 // runner with no exports), with `schedule` = the FINAL map and the union range.
-async function buildLiveContext(live, schedule, range) {
+// heldSchedule (review 2, 10/1): the standing rows for the rules' "already held" reading - main passes the live
+// map (plan.live); absent, the ctx snapshots `schedule` (rules.buildContext's default). preflight() installs the live
+// holders from the plan either way.
+async function buildLiveContext(live, schedule, range, heldSchedule) {
   const notes = [];
   const blob = live.blob || {};
   const roster = blob.roster || [];
@@ -740,6 +773,7 @@ async function buildLiveContext(live, schedule, range) {
     }
   }
   const input = { roster, surgeonRules, groupRules, holidays, timeOffRows: live.timeOffRows, availabilityRows: live.availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, rangeStart: range.start, rangeEnd: range.end };
+  if (heldSchedule) input.heldSchedule = heldSchedule;
   const ctx = R.buildContext(input);
   return { ctx, notes, eastFeedCoverage, eastDerived };
 }
@@ -836,7 +870,7 @@ async function main() {
   const union = { start: plan.ranges[0].start, end: plan.ranges[plan.ranges.length - 1].end };
   let pf = null, ctxInfo = null;
   if (plan.ok) {
-    ctxInfo = await buildLiveContext(live, plan.final, union);
+    ctxInfo = await buildLiveContext(live, plan.final, union, plan.live);
     ctxInfo.notes.forEach((n) => console.log("ctx note: " + n));
     if (ctxInfo.ctx.warnings && ctxInfo.ctx.warnings.length) ctxInfo.ctx.warnings.forEach((w) => console.log("ctx warning: " + w));
     console.log("ctx: East coverage " + (ctxInfo.eastFeedCoverage ? ctxInfo.eastFeedCoverage.from + ".." + ctxInfo.eastFeedCoverage.to : "none") + "; derived weeks " + (ctxInfo.eastDerived.map((d) => d.weekMonday + ":" + d.silvisRole).join(", ") || "none"));
@@ -928,7 +962,7 @@ async function main() {
 module.exports = {
   TAG, STANDARD_SOURCES, SNAPSHOT_REASON, AUDIT_ACTION, AUTH_NOTE,
   buildDesired, planPublish, applyToLive, verifyApplied, verifyUntouched, tallies,
-  previewChecks, preflight, holdsFullBlock,
+  previewChecks, preflight, holdsFullBlock, standingOf,
   publishSql, auditDetail, renderPlan, renderPreflight, renderReport, renderTallies,
   fetchLive, buildLiveContext, parseCliRows,
   parseArgs, defaultApplyReport, reportDestination, DEFAULT_PREVIEW

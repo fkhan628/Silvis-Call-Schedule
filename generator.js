@@ -33,7 +33,8 @@
 //   ctx comes from rules.buildContext(). rules.js reads ctx.schedule live on
 //   every eligibility() call, so each candidate installs its own working copy
 //   as ctx.schedule for the duration of the run and the original is restored
-//   in a finally block. Only days inside [startDate, endDate] are ever written;
+//   in a finally block (ctx.heldSchedule likewise: narrowed for the run by
+//   genRunHeld, restored after). Only days inside [startDate, endDate] are ever written;
 //   earlier published days stay visible to the rules (consecutive runs,
 //   back-to-back weekends, month-to-date counts).
 //
@@ -155,7 +156,9 @@
 // other term: the soft weekday-primary (primaryContribution "weekdays"), the soft
 // weekend-cap:<n> (weekendCap; counted once per weekend, on its first held day), the
 // soft hard-never-beyond-notice:<wd> (hardNeverWeekdaysNoticeDays - the notice is
-// measured from ctx.today, so Generate uses the day it runs) and the hard
+// measured from ctx.today, so Generate uses the day it runs; review 2, 10/1: the
+// "already held" reading is narrowed for the run to the rows it starts from -
+// genRunHeld - so its own placements are judged as new) and the hard
 // lone-weekend-day:<wd> (noLoneWeekendDay). This file adds only bookkeeping: a
 // 'friday' weekend pattern (standaloneFriday - one surgeon on the Friday, the
 // Saturday-Sunday as their own reduced unit) is written like any other pattern,
@@ -164,8 +167,9 @@
 // mismatch (genStyleMismatch); buildUnits' allowed-slot count judges a surgeon
 // blocked ONLY by lone-weekend-day with the partner day assumed, and (review 10/1)
 // genFillWeekend's reduced-unit fallback keeps such a surgeon's Sat + Sun together
-// instead of dropping both. With none of the keys on the roster the output is
-// byte-identical to the pre-23 engine.
+// instead of dropping the day only he can take (before the fix that Saturday stayed
+// open while its Sunday, fillable by others, went to someone else). With none of
+// the keys on the roster the output is byte-identical to the pre-23 engine.
 
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -573,6 +577,26 @@ function genSeedLocks(G, original) {
     G.warnings.push("derived week " + parts[0] + " (" + ((r && r.name) || parts[2]) + " Silvis " + parts[1] + ") yields to published entries on " + yieldWeeks[k].join(", "));
   });
   return base;
+}
+
+// Review 2 (10/1): the standing schedule the run's hardNeverWeekdaysNoticeDays test reads (rules.js ctx.heldSchedule -
+// "a slot he already holds" reads the soft hard-never-beyond-notice inside the notice; a new placement the hard rule).
+// Outside the range the caller's snapshot stands. Inside it a slot is held only when the run STARTS from it (G.base:
+// the locks / fixed slots genSeedLocks keeps, derived locks included) AND the caller's snapshot holds it with the same
+// surgeon - so every slot the run places itself is a NEW placement measured from ctx.today (the default mode clears
+// every unlocked slot first, so a Khan Tue/Thu it puts back inside the notice is hard and genEvaluate / genDiagnostics
+// report it as a hard violation), a fill-open-only run's kept rows stay standing (soft), and a derived lock the
+// caller's rows do not carry is new as well. A caller without a snapshot -> nothing held (the conservative reading).
+function genRunHeld(G, callerHeld) {
+  var out = Object.create(null), src = callerHeld || {};
+  Object.keys(src).forEach(function (d) { out[d] = src[d]; });
+  G.days.forEach(function (d) {
+    var b = G.base[d], h = src[d];
+    var p = b && h && b.primary && h.primary === b.primary ? b.primary : null;
+    var k = b && h && b.backup && h.backup === b.backup ? b.backup : null;
+    if (p || k) out[d] = { primary: p, backup: k }; else delete out[d];
+  });
+  return out;
 }
 
 /* ------------------------------------------------------------- units */
@@ -1026,9 +1050,10 @@ function genFillWeekend(G, S, unit, role, rng) {
     // Prompt 23 review (10/1): a Saturday / Sunday only a noLoneWeekendDay surgeon can take fails every solo check with
     // lone-weekend-day, yet the PAIR is legal for him (buildUnits and weekendUnitPatterns judge him with the partner
     // assumed). Such a day is kept together with its open partner when one surgeon blocked solo ONLY by lone-weekend-day
-    // passes both days with the other assumed - so the pair stays in the reduced unit instead of both days being dropped
-    // (one open Friday, not an open Friday + Saturday). The pair-kept set is tried first; when it yields no pattern the
-    // solo set below runs exactly as before. Nobody with the key on the roster -> nothing here runs (byte-identical).
+    // passes both days with the other assumed - so the pair stays in the reduced unit instead of that day being dropped
+    // while its partner (fillable by others) goes to someone else (one open Friday, not an open Friday + Saturday). The
+    // pair-kept set is tried first; when it yields no pattern the solo set below runs exactly as before. Nobody with the
+    // key on the roster -> nothing here runs (byte-identical).
     var tries = [];
     if (ctx.activeIds.some(function (id) { return ctx.per[id] && ctx.per[id].noLoneWeekend; })) {
       var pairKept = unit.present.filter(function (d) {
@@ -1806,6 +1831,7 @@ function generate(ctx, startDate, endDate, opts) {
   var bestOf = Math.max(1, Math.floor(Number(opts.bestOf) || 200));
   var W = ctx.weights || R.defaultWeights();
   var original = ctx.schedule;
+  var originalHeld = ctx.heldSchedule; // review 2 (10/1): the caller's standing snapshot - narrowed for the run, restored below
   var days = genDaysList(startDate, endDate);
   var months = [];
   days.forEach(function (d) { var m = genMonthOf(d); if (months.indexOf(m) < 0) months.push(m); });
@@ -1826,6 +1852,7 @@ function generate(ctx, startDate, endDate, opts) {
   try {
     G.base = genSeedLocks(G, original);
     ctx.schedule = G.base;
+    ctx.heldSchedule = genRunHeld(G, originalHeld);
     G.units = buildUnits(ctx, startDate, endDate);
     G.units.all.forEach(function (u) {
       var list = u.kind === "holiday" ? u.inRange : u.kind === "weekend" ? u.present : [u.day];
@@ -1854,6 +1881,7 @@ function generate(ctx, startDate, endDate, opts) {
     return { schedule: schedule, diagnostics: diagnostics };
   } finally {
     ctx.schedule = original;
+    ctx.heldSchedule = originalHeld;
   }
 }
 

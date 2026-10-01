@@ -118,7 +118,8 @@ decides the Trauma Director role.
      override day or a 'home' East-vacation day). **Silvis backup does not count. A standalone Friday is a weekday and does
      not count** (Cowork's reading of "M-F", 9/30 — §8 item 23 (a)). **10 for each weekend over 2** (strong), carried as
      `weekend-cap:2` on the weekend's first held day, never on a weekend the East data already count: a placement that adds
-     a weekend to a month that then counts more than 2 pays 10 (what adding it costs); read over a finished schedule the
+     a weekend to a month that then counts more than 2 pays 10 (what adding it costs - a day of a weekend that already
+     counts through another day he holds adds nothing and pays 0, review 2 10/1); read over a finished schedule the
      terms add up to 10 × (weekends over 2) — the weekends past the cap are the latest ones, the East weekends and his
      locked weekends counted first. ⟶ *Review 10/1: it used to read 10 × (weekends over 2) on every weekend he held in such
      a month, which a finished schedule summed past 10 per weekend over.* Never lifted by an offer (a cap).
@@ -128,12 +129,19 @@ decides the Trauma Director role.
      with the soft `hard-never-beyond-notice:<wd>` at `groupRules.weights.hardNeverBeyondNotice` (**3**, a code default — Setup's
      weights list shows it), so Mon/Wed (+1) fill first. His dated rows / offers still lift the rule entirely. His Mon/Wed
      allow-list and auto-offer stay. ⟶ *Review 10/1:* **a Tue/Thu he already holds stays legal** — placed beyond the notice
-     (Generate on the period's generation day, published or locked), it reads the same soft term when the date comes within
-     56 days, never the hard reason (so a later fill-open-only run lists no fixed violation, the publish CLI's preflight
-     passes it, and the day editor shows him as an eligible holder). Only a **new** placement is measured from today: an open
-     slot, someone else's slot (a claim, a trade, a give to him, an editor pick — the editor judges a candidate before the
-     pick), and every candidate Generate weighs. Engine: `rules.js eligibility()` reads the holder from the evaluated slot
-     on `ctx.schedule` (never from assume-slots).
+     (Generate on the period's generation day, then published or locked), it reads the same soft term when the date comes
+     within 56 days, never the hard reason (so a later fill-open-only run lists no fixed violation, the publish CLI's
+     preflight passes it, and the day editor shows his saved day as an eligible holder). ⟶ *Review 2 (10/1):* **"holds"
+     means held on the standing schedule** — the published / saved rows, or the rows a fill-open-only run keeps — never on a
+     preview or a draft. Everything else is a **new** placement, measured from today: an open slot, someone else's slot (a
+     claim, a trade, a give to him, an editor pick), **a preview's own new rows** (the publish CLI checks them against the
+     live rows: a Khan Tue/Thu the preview adds inside the notice fails the preflight, an unchanged live one passes) and
+     **every slot Generate places itself** (the default mode clears the unlocked slots first, so even his own published
+     unlocked Tue/Thu inside the notice is not put back; Generate's hard-violation check reads its own placements as new).
+     Engine: `rules.js buildContext()` snapshots the standing rows into `ctx.heldSchedule` (`input.heldSchedule` when the
+     caller passes one — the publish CLI the live rows, the day editor the saved rows — else the schedule it is given), and
+     `eligibility()` reads the holder only there (never on `ctx.schedule`, never from assume-slots); `generate()` narrows it
+     for the run to the rows the run starts from.
   **Unchanged:** DSG call blocks Silvis primary (`east-busy` / `east-forecast-busy`), Christmas Eve/Day on DSG (eastStanding),
   max consecutive 3 (holiday unit = one day), offers first (his offered dates still beat his patterns), backup open every day.
   **Engine:** `rules.js eligibility()` stays the single chokepoint; the today comes from the context (`ctx.today` =
@@ -784,16 +792,25 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     (e) **The notice's "today" is the day the context is built** (Central date): Generate builds a fresh one per run, the day
     editor per draft; the app's main context is rebuilt whenever its data change, so a claim or trade made just after
     midnight on an untouched session can read yesterday's date — at most a one-day shift at the 56-day edge. ⟶ *Review
-    10/1:* the notice applies to **new** placements only — a Tue/Thu he already **holds** (the evaluated slot is his on the
-    schedule: published, generated, locked) reads the soft `hard-never-beyond-notice` term inside the notice too, so a legal
-    far Tue/Thu never turns into a hard violation as the date approaches (fill-open-only `fixedViolations`, the publish
-    CLI's preflight, the day editor's holder). The flip side: a Tue/Thu written in by hand inside the notice and then saved
-    reads soft from then on (the override was recorded when it was made). (f) **No backup
+    10/1:* the notice applies to **new** placements only — a Tue/Thu he already **holds** reads the soft
+    `hard-never-beyond-notice` term inside the notice too, so a legal far Tue/Thu never turns into a hard violation as the
+    date approaches (fill-open-only `fixedViolations`, the publish CLI's preflight, the day editor's saved holder). ⟶
+    *Review 2 (10/1):* "holds" = held on the **standing** schedule the caller declares, snapshotted when the rules context is
+    built (`ctx.heldSchedule`): the published / saved rows (the app's main context; the day editor passes the saved rows
+    for its draft; the publish CLI the live rows), or the rows a fill-open-only run keeps. It is **never** read on the
+    working schedule: a preview's own new rows and every slot Generate places itself are new placements, measured from
+    today (the first review's reading took the holder from the evaluated schedule itself, so the publish preflight - whose
+    context is the live rows with the preview laid over them - read every preview row as held: a never-published Khan
+    Tue/Thu inside the notice passed it, and Generate's own hard-violation check could not see a within-notice placement of
+    its own). The flip side: a Tue/Thu written in by hand inside the notice and then saved reads soft from then on (the
+    override was recorded when it was made). (f) **No backup
     term in weekdays mode** (the 9/22 weekend-backup penalty has no mirror). (g) **The cap is soft at 10 per weekend over**
     (strong) — Faraz may raise `weekendCap.weight`; it never blocks. ⟶ *Review 10/1:* exactly 10 per weekend over — a new
     weekend pays 10 when its month then counts more than 2, and the terms of a finished schedule add up to 10 × (weekends
     over 2) (the latest weekends carry them; East and locked weekends count first). It used to read 10 × (weekends over 2)
-    on every Silvis weekend of such a month. (h) **A Tue/Thu beyond the notice costs +3**
+    on every Silvis weekend of such a month. ⟶ *Review 2 (10/1):* a candidate day of a weekend that **already counts**
+    through a day he holds (a Saturday beside his locked lone Sunday) pays **0** - it adds no weekend (it used to pay 10).
+    (h) **A Tue/Thu beyond the notice costs +3**
     (`weights.hardNeverBeyondNotice`, = medium): at the **default** `weekendContribution` 3 it equals the −3 weekday bonus
     (net 0 against Mon/Wed's −2), so his Mon/Wed fill first and a far Tue/Thu goes to him only where he is the better choice
     on the share. It cancels the bonus only while `weekendContribution` is 3 — raising `weekendContribution` in Setup makes a
@@ -808,8 +825,13 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     editor:** the first of his Sat/Sun pair saved alone reads `lone-weekend-day` until the partner is saved (an override with
     the visible warning, like any hard rule), and the editor shows the new codes raw (the UI's reason glosses are an
     index-source follow-up, not built here). ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
-    holder (item (e)); a limitation: after the draft is switched to someone else, picking him back on that day asks for the
-    override (the draft no longer holds him, so he is judged as a new placement). Clearing one day of his Sat/Sun pair in the
+    holder (item (e)). ⟶ *Review 2 (10/1):* the editor judges "held" on the **saved** rows, not the draft: his saved day
+    stays eligible even after the draft is switched to someone else and he is picked back (the first review's reading asked
+    for the override there), while picking him **new** on a Tue/Thu inside the notice is hard and goes through the Override
+    panel - and after that pick he still shows as ineligible with the override tag, like any overridden pick. Known
+    difference (conservative, no code change): `scripts/day-edit.js` judges each edited role on a draft with that role
+    cleared, so re-saving (e.g. re-locking) his own saved Tue/Thu inside the notice from the CLI is judged as a new
+    placement and refused without `--override`. Clearing one day of his Sat/Sun pair in the
     editor leaves the partner day lone without a warning (the editor judges the edited day only). (j) **The Open shifts board** shows a weekend filled with the new `friday` pattern
     as plain "weekend" (the board's pattern words and the daily-reminder mirror know block / split / daily). (k) **Consequence
     for §8 item 15:** a Khan Tue/Thu more than 56 days out is now a (soft) candidate — the Tuesday/Thursday gap eases for
@@ -820,6 +842,13 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     choice used to charge a block-style holder nothing while the per-day check and the diagnostics' `styleMismatch` flagged
     him (in the 10/1 Jan – Jun previews, all 6 `friday` weekends of the rules-today-10/1 run and 6 of the 8 of the
     rules-today-11/23 run were Khan's Friday + Philip's Sat–Sun, each with Philip in `styleMismatch`; §4 item 4).
+    ⟶ *Review 2 (10/1), known pre-existing inconsistency (no code change):* a **reduced** weekend unit (two of Fri–Sun
+    present - a holiday unit takes the third day, or Generate's fallback dropped a day nobody may take) still scores a
+    block-style holder's block of the present days with **no** mismatch in the unit choice (`weekendUnitPatterns`' block
+    loop: two present days = a block for a "block" style), while the per-day check charges him `pattern-mismatch:block` on
+    each day (he does not hold the third day) and that is what the final evaluation reads. Aligning the two needs a holiday-cut
+    vs. dropped-day distinction in the unit choice (the cut weekend is his whole block), not a one-liner - left for a later
+    pass.
     (m) **Trades and gives:** his primary Sat + Sun are one unit on the Trades card (the card's "weekend-block" unit, named
     "weekend pair"; his Fri–Sun stays the "weekend block") — a surgeon cannot give or trade one day of the pair (he is told
     it splits the unit), the scheduler is asked to confirm a split, and the receiver is checked over both days with the

@@ -8716,7 +8716,10 @@ function DayEditor(props) {
     };
   }, []); // eslint-disable-line
 
-  const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } } }), [ctxInputs, day, draft]);
+  // Review 2 (10/1): heldSchedule = the SAVED rows - the rules' "already held" reading (a hardNeverWeekdaysNoticeDays
+  // Tue/Thu he holds reads the soft term inside the notice) must not take the draft's own pick as held: his saved holder
+  // reads soft, a newly picked Khan Tue/Thu inside the notice reads hard and goes through the Override panel.
+  const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } }, heldSchedule: ctxInputs.schedule }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
   // Item E3 (Faraz 9/25): the East lines - the East-vacation review state and its diamond included - are the
