@@ -8566,6 +8566,7 @@ const REASON_WORDS = {
   "derived-lock-held": "East week slot belongs to someone else", "rules-error": "eligibility check failed",
   // soft vocabulary (softTag falls back here) - Prompt 12 L / N / A, 9/22
   "weekend-primary": "weekend primary block (contribution bonus)", "weekend-backup": "weekend backup (contribution penalty)",
+  "weekday-primary": "weekday primary (contribution bonus)", // Prompt 23 B1 (primaryContribution "weekdays"), worded 10/1
   "window-week-below-target": "at or under the window-week target", "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)", "long-run": "long any-role run",
   "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)", // Prompt 15 part 2, primary-only bonus
@@ -8611,7 +8612,13 @@ function reasonLabel(code, nameOf) {
     case "backup-cap": return "backup cap of " + arg + " per month reached";
     case "backup-weekend-cap": return "backup weekend cap of " + arg + " reached";
     case "max-major-holidays": return "already holds " + arg + " major holiday(s) in 12 months";
-    default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : s;
+    // Prompt 23's codes, worded 10/1 (follow-up of the 10/1 queue; rules doc section 3 Khan items 2-4)
+    case "lone-weekend-day": return "a " + (arg === "Sun" ? "Sunday" : arg === "Sat" ? "Saturday" : "weekend day") + " on its own - weekend days come as a pair (Sat + Sun)";
+    case "weekend-cap": return "past the weekend cap of " + arg + " a month (penalty)";
+    case "hard-never-beyond-notice": return arg + " is a never-on day - allowed when set far enough ahead (penalty)";
+    // a soft code with no words here reads its softTag (the claim sheet and the board chip label soft notes through this
+    // function); an unknown code still prints raw (softTag's own fallback)
+    default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : softTag({ reason: s });
   }
 }
 // Compact tag for a soft penalty ("avoid: Tue", "preferred", "East 25%").
@@ -8634,10 +8641,13 @@ function softTag(soft) {
     case "back-to-back-weekend": return "back-to-back weekend";
     case "backup-after-primary": return "backup after primary";
     case "pattern-mismatch": return "style: " + arg;
+    case "pattern-daily": return "daily weekend pattern"; // generator.js unit-level term (the Generate diagnostics), worded 10/1
     case "aledo-week": return "Aledo week";
     case "holiday-waiver": return "holiday waiver";
     case "offered": return "offered day (bonus)";
     case "outside-offers": return "outside the offered days (penalty)";
+    case "weekend-cap": return "over weekend cap " + arg;
+    case "hard-never-beyond-notice": return "never-on " + arg + " (set far ahead)";
     default: return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }
 }

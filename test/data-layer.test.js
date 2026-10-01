@@ -2619,6 +2619,47 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(L.rOnQuiet.toasts, [], "a quiet (poll) read never toasts");
     assert.ok(L.rPublic.r === true && L.rPublic.reads.length === 0 && L.rPublic.toasts.length === 0, "public mode still never reads the reviews");
   });
+  // Follow-ups 10/1 item 1 (the 10/1 queue report): Prompt 23's codes get plain words - lone-weekend-day (hard),
+  // weekend-cap and hard-never-beyond-notice (soft), weekday-primary (soft, same gap) - reasonLabel falls back to softTag
+  // for a soft code it has no words for (the claim sheet and the board chip label soft notes through reasonLabel), and a
+  // vocabulary pin: every rules.HARD_REASONS code reads words through reasonLabel, every soft reason literal rules.js /
+  // generator.js push reads words through softTag and reasonLabel - a future code cannot show raw silently.
+  check("Follow-ups 10/1 (1): reason glosses for lone-weekend-day / weekend-cap / hard-never-beyond-notice / weekday-primary; reasonLabel falls back to softTag; no rules.js / generator.js code reads raw", () => {
+    const labelsSrc = e4Lift("const REASON_WORDS = {", "\n};\n") + "\n" + e4Lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + e4Lift("function softTag(soft) {", "\n}\n");
+    const L = new Function(labelsSrc + "\nreturn { reasonLabel, softTag };")();
+    assert.strictEqual(L.reasonLabel("lone-weekend-day:Sat", nameOf), "a Saturday on its own - weekend days come as a pair (Sat + Sun)");
+    assert.strictEqual(L.reasonLabel("lone-weekend-day:Sun", nameOf), "a Sunday on its own - weekend days come as a pair (Sat + Sun)");
+    assert.strictEqual(L.reasonLabel("weekend-cap:2", nameOf), "past the weekend cap of 2 a month (penalty)");
+    assert.strictEqual(L.softTag({ reason: "weekend-cap:2", weight: 10 }), "over weekend cap 2");
+    assert.strictEqual(L.reasonLabel("hard-never-beyond-notice:Tue", nameOf), "Tue is a never-on day - allowed when set far enough ahead (penalty)");
+    assert.strictEqual(L.softTag({ reason: "hard-never-beyond-notice:Tue", weight: 3 }), "never-on Tue (set far ahead)");
+    assert.strictEqual(L.reasonLabel("weekday-primary", nameOf), "weekday primary (contribution bonus)");
+    assert.strictEqual(L.softTag({ reason: "weekday-primary", weight: -3 }), "weekday primary (contribution bonus)");
+    assert.strictEqual(L.softTag({ reason: "pattern-daily", weight: 2 }), "daily weekend pattern");
+    // the fallback: a softTag-only code reads its tag through reasonLabel; an unknown code and "not available" pass through
+    assert.strictEqual(L.reasonLabel("recurring-avoid:Tue", nameOf), "avoid: Tue");
+    assert.strictEqual(L.reasonLabel("over-target:2", nameOf), "over target +2");
+    assert.strictEqual(L.reasonLabel("no-such-code:x", nameOf), "no-such-code:x");
+    assert.strictEqual(L.reasonLabel("not available", nameOf), "not available");
+    // words that were there stay as they were (REASON_WORDS and the explicit cases win over the fallback)
+    assert.strictEqual(L.reasonLabel("monthly-cap:4", nameOf), "monthly cap of 4 reached");
+    assert.strictEqual(L.reasonLabel("east-busy", nameOf), "on East (Davenport) call");
+    assert.strictEqual(L.reasonLabel("outside-offers", nameOf), "outside the offered days (penalty)");
+    assert.strictEqual(L.reasonLabel("slot-locked:s2", nameOf), "slot locked to Burchett");
+    // the vocabulary: hard through reasonLabel, soft through softTag and reasonLabel - never the raw code
+    const R = require(path.join(ROOT, "rules.js"));
+    const withArg = (c) => c.endsWith(":") ? c + "Sat" : c;
+    const rawHard = R.HARD_REASONS.map(withArg).filter(c => L.reasonLabel(c, nameOf) === c);
+    assert.deepStrictEqual(rawHard, [], "rules.HARD_REASONS codes reasonLabel prints raw: " + rawHard.join(", "));
+    const softSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8") + "\n" + fs.readFileSync(path.join(ROOT, "generator.js"), "utf8");
+    const softCodes = Array.from(new Set(Array.from(softSrc.matchAll(/reason: "([a-z-]+)(:?)/g)).map(x => x[1] + (x[2] ? ":2" : "")))).sort();
+    ["weekend-cap:2", "hard-never-beyond-notice:2", "weekday-primary", "pattern-daily", "recurring-avoid:2", "east-forecast:2"].forEach(c => assert.ok(softCodes.indexOf(c) >= 0, "the soft literal scan missed " + c + ": " + softCodes.join(", ")));
+    const PLAIN = ["preferred"]; // a code that is its own plain word (softTag "preferred" since Prompt 12)
+    const rawSoftTag = softCodes.filter(c => PLAIN.indexOf(c) < 0 && L.softTag({ reason: c, weight: 1 }) === c);
+    assert.deepStrictEqual(rawSoftTag, [], "soft codes softTag prints raw: " + rawSoftTag.join(", "));
+    const rawSoftLabel = softCodes.filter(c => PLAIN.indexOf(c) < 0 && L.reasonLabel(c, nameOf) === c);
+    assert.deepStrictEqual(rawSoftLabel, [], "soft codes reasonLabel prints raw: " + rawSoftLabel.join(", "));
+  });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
   console.log("\n[M] outside surgeons pins");

@@ -957,8 +957,13 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     10/1 (more dates beyond the notice) the weight-3 run read Mon/Wed 18, Tue/Thu 11. Setup → Rules → weights moves it.
     (i) **The day
     editor:** the first of his Sat/Sun pair saved alone reads `lone-weekend-day` until the partner is saved (an override with
-    the visible warning, like any hard rule), and the editor shows the new codes raw (the UI's reason glosses are an
-    index-source follow-up, not built here). ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
+    the visible warning, like any hard rule), and the editor showed the new codes raw (the UI's reason glosses were an
+    index-source follow-up). ⟶ *Done 10/1 (follow-ups of the 10/1 queue):* the reason glosses word them - `lone-weekend-day:Sat`
+    "a Saturday on its own - weekend days come as a pair (Sat + Sun)", `weekend-cap:2` "past the weekend cap of 2 a month
+    (penalty)" (tag "over weekend cap 2"), `hard-never-beyond-notice:Tue` "Tue is a never-on day - allowed when set far
+    enough ahead (penalty)" (tag "never-on Tue (set far ahead)"), `weekday-primary` "weekday primary (contribution bonus)";
+    a soft code with no long words reads its short tag on the claim sheet and the board chip instead of the raw code (the
+    dropdown option of an ineligible holder keeps the raw code by design). ⟶ *Review 10/1:* his own held Tue/Thu inside the notice shows as an eligible
     holder (item (e)). ⟶ *Review 2 (10/1):* the editor judges "held" on the **saved** rows, not the draft: his saved day
     stays eligible even after the draft is switched to someone else and he is picked back (the first review's reading asked
     for the override there), while picking him **new** on a Tue/Thu inside the notice is hard and goes through the Override
