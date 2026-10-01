@@ -5413,8 +5413,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(B1SRC.includes("if (r.restored.length) { scheduleRef.current = r.next; setSchedule(r.next); }"), "the map moves only when a day came back");
       assert.ok(B1SRC.includes('showToast(r.message, r.skipped.length ? "error" : "info");'), "the toast says what was restored and what was skipped");
       // every push site hands over both maps
-      for (const site of ["pushUndo(schedule, { ...schedule, [day]: after });", "pushUndo(schedule, next);", "pushUndo(cur, next);", "pushUndo(scheduleRef.current || schedule, m.next);", "pushUndo(scheduleRef.current, sched);"]) assert.strictEqual(B1count(B1SRC, site), 1, "push site: " + site);
-      assert.strictEqual(B1count(B1SRC, "pushUndo("), 5, "the five sites and nothing else - no one-argument push left");
+      // pin moved deliberately 10/1 (Prompt 25 step 3): acceptHolidayPlan is the sixth site - pushUndo(base, next) over the
+      // map the plan rows were merged into (the current map, or the one re-read after the snapshot)
+      for (const site of ["pushUndo(schedule, { ...schedule, [day]: after });", "pushUndo(schedule, next);", "pushUndo(cur, next);", "pushUndo(scheduleRef.current || schedule, m.next);", "pushUndo(scheduleRef.current, sched);", "pushUndo(base, next);"]) assert.strictEqual(B1count(B1SRC, site), 1, "push site: " + site);
+      assert.strictEqual(B1count(B1SRC, "pushUndo("), 6, "the six sites and nothing else - no one-argument push left");
       assert.strictEqual(B1count(B1SRC, "setScheduleHistory("), 1, "the state setter is reached only through setHistory (ref + state together)");
       assert.ok(B1SRC.includes('data-testid="undo-btn"'), "the smoke's handle on the button");
     });
