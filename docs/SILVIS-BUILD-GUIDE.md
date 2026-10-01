@@ -279,6 +279,10 @@ Proof: `sql/probes/call-pay-probe.sql` (rolled back; 52 cases in its header - th
 
 Proof: `sql/probes/vacation-guard-probe.sql` (rolled back; 20 cases in its header - P1-P4 the live picture and the triggers, S1-S4 the count / partial range / widening / narrowing, E1-E3 away / home / unreviewed East, I1 an inactive id, K1-K2 the on-call trigger first / also, C1 the office, M1 a bulk insert, A1 the scheduler, N1 no signed-in user, D1 a person already off that day, U1 a row moved to another person; PROBE_SETUP before the apply), `sql/probes/vacation-guard-overlimit.sql` (read-only: the days already under the minimum), `scripts/verify-rls.sh` section 15 (the graded probe + leftovers; `SILVIS_VACATION_GUARD_APPLIED=1` on the run right after the apply), the record in `docs/SCHEMA-REVIEW.md` "2026-09-30 - vacation guard" (pre-apply 2026-10-01: the over-limit query 0 rows at ~05:10 UTC, probe BEFORE `PROBE_SETUP`; the orchestrator's apply was refused by the permission classifier - Faraz applies it; applied: _to be filled after the apply_).
 
+- **No-primary days (2026-10-01, Prompt 28, report-first, NOT applied; `sql/migrations/2026-10-01-no-primary-days.sql`, revision t).** Faraz 10/1: surgeons mark their own no-primary days. `save_offers` gains two optional parameters `p_np_add date[]` / `p_np_clear date[]` (the five-argument signature is dropped and re-created with seven, so an older build's five-key call resolves to it; still `security invoker`) and calls the NEW `save_no_primary(p_person, p_add, p_clear)` (`security definer`, `search_path = public, pg_temp`) inside the same transaction: one `availability` row per day, kind `backup_only`, role `any`, note NULL, source `app` / `office-relay` / `email-relay` - surgeons still cannot write `availability` under RLS (no policy changes). Refusals NP001-NP009 (`NO_PRIMARY_*`): not linked, not yours, unknown person (the office), bad day, past (everyone), frozen (not the scheduler), part of a longer range (everyone), holds primary that day (everyone), and an offer conflict (a primary / either offer on a no-primary day after the Save).
+
+Proof: `sql/probes/no-primary-probe.sql` (rolled back; 42 cases; PROBE_SETUP before the apply), `sql/probes/no-primary-precheck.sql` (read-only), `scripts/verify-rls.sh` section 16 (`SILVIS_NO_PRIMARY_APPLIED=1` on the run right after the apply), one command `bash scripts/apply-no-primary-days.sh` (Faraz runs it and pastes the log back), the record in `docs/SCHEMA-REVIEW.md` "2026-10-01 - no-primary days"; applied: _to be filled after the apply_.
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),
@@ -1153,7 +1157,7 @@ through `readAuthOnlyTable` (authenticated-only tables: no fresh token = the rea
 adopted), on load, on the 60-s poll and on realtime changes to either table; My schedule also shows the person's own
 future offers and their status on the next period. The sheet: a vertical day list (one row per day, min 52 px,
 safe-area padding), month ‹ › from the current Central month forward without limit (‹ is disabled on the current month); brushes Primary / Backup / Either /
-Clear (`css.brush` + `OFFER_BRUSH` tokens in `app-styles.js`: the armed chip is a gradient with white text, which the
+Clear / No primary (Prompt 28) (`css.brush` + `OFFER_BRUSH` tokens in `app-styles.js`: the armed chip is a gradient with white text, which the
 dark stylesheet exempts); tap = paint the armed brush, tap again with the same brush = clear; a **Range** toggle turns
 taps into start / end (same day twice = one day; the hint line names the step and offers "x cancel start"); a
 paste-a-date-list box reusing `suParseDateList` (rows become drafts with the armed brush, never writes). Each row shows
@@ -1166,7 +1170,9 @@ classified by `helpers.offerDayWhy` (`OFFER_BLOCK_WORDS`: time-off, day-before-v
 derived-lock / derived-lock-held, outside-window, holiday-opt-out, backup-opt-out, inactive, **and the person's own
 dated rows** unavailable-row / no-backup-row / backup-only-row — `rules.js` keeps those hard whatever an offer says, an
 offer only adds a dated *available* bit and never clears a dated statement, so the painter greys them with "ask the
-scheduler to change that row first" rather than promising a lift it cannot deliver; 9/23 review). Blocked in one role
+scheduler to change that row first" rather than promising a lift it cannot deliver; 9/23 review). ⟶ Prompt 28 (10/1): own
+`backup_only` rows are no longer an obligation grey in the painter - they are the **No primary** state (below);
+unavailable / no-backup rows still grey. Blocked in one role
 only = paintable in the other ("backup only - East busy"). The **weekday-pattern family** (`OFFER_CONFIRM_WORDS`:
 hard-never-weekday, weekday-not-allowed, recurring-unavailable, not-recurring-available, weekday-pattern,
 weekend-block-only, day-before-aledo, whitelist-month, outside-available-weeks) never greys: painting such a day asks
@@ -1218,6 +1224,49 @@ attempt, nothing else written, every entry named, draft kept), the real Save = e
 clearing, tap-again = "will clear", Close confirming, the scheduler's relay for Fierce with Change → "Go by my rules"
 (one mode call, one audit), dark at both widths; screenshots `offers-greyed-390.png`, `offers-armed-390.png`,
 `offers-range-390.png`, `offers-saved-390.png`, `offers-desktop.png`, `offers-desktop-dark.png`, `offers-390-dark.png`.
+
+**No primary (Prompt 28, 10/1 - Faraz: "I do want them to be able to do that").** Burchett's e-mail of 10/1 asked to be
+blocked out for primary on his Jackson County days while still covering backup; the painter's fifth brush **No primary**
+(`ofp-brush-noprimary`, the purple `OFFER_BRUSH.noprimary` token) gives every surgeon that: not on primary that day, backup
+is fine. **Storage:** one `availability` row per day, kind `backup_only`, role `any`, note NULL (no reason in an
+anon-readable table) - the engine already reads it (`rules.js`: primary hard `backup-only-row`, backup available, which also
+lifts the weekday-pattern family for backup that day). The rows are written only through the one Save: `rpc/save_offers`
+carries `p_np_add` / `p_np_clear` (days) **only when non-empty** - so an offers-only Save keeps the five keys the pre-apply
+function knows and keeps working before the apply and after a rollback, while a No primary Save before the apply fails
+loudly ("nothing was saved", draft kept) - and the function hands them to the security-definer `save_no_primary` inside its
+transaction (section 4.3; a surgeon cannot write `availability` under RLS). That is why the client ships only after the
+apply. **What the painter shows:** the person's own SINGLE-day `backup_only` rows of any source (the app's, Setup's - e.g.
+Burchett's 13 Jackson County days entered by Cowork - or the seed's) are his **No primary** days, editable here; a
+multi-day `backup_only` row (a range the scheduler entered in Setup) reads **"No primary (set by the scheduler)"**
+(`NO_PRIMARY_RANGE_WORDS`) on each of its days, dashed, and stays read-only (the database never splits it, NP007); the
+painter receives `availabilityRows` at its one mount (no new read) and filters `backup-only-row` out of the PRIMARY hard
+list before `offerDayWhy` (`OFFER_BLOCK_WORDS` unchanged for other readers). **The brushes**
+(`helpers.offerPaintCell(cell, brush, { single })`, first matching rule wins): No primary on a day with a Primary or
+Either offer **replaces** the offer (the hint adds "No primary replaced the offer on N day(s)"), a Backup offer **stays**
+beside it (backup preferred that day); Primary or Either on a No primary day **lifts** it after **one question per batch**
+("Tuesday 1/12 is marked No primary - offer primary there and lift it?" / "N of these days are marked No primary (...) -
+offer ... there and lift the block?"; declined days are left out, "N No primary day(s) left out"); Backup leaves the mark
+alone; **Clear** takes back both; a single tap with No primary on a marked day takes it back; **Range** and **Paste dates**
+take the brush like the others (a batch over an already-marked day changes nothing). Greyed for No primary: past, frozen
+(not for the scheduler, as OF003), both roles blocked, and **a day he holds as primary** on the saved schedule ("you hold
+primary that day - trade it first", `NO_PRIMARY_HELD_WORDS`, NP008) - the row's `data-np-why` names it while the brush is
+armed. A legend (`ofp-legend`, only while the brush is armed) and the hint ("Tap a day to mark yourself No primary (backup
+is still fine); tap again to take it back.") explain it; each row carries `data-noprimary` own / range, `data-np-draft`
+add / clear and the pill `ofp-np-pill` ("No primary", "No primary (set by the scheduler)", "will lift No primary");
+`data-state` keeps meaning the OFFER (a saved No primary day with no offer reads `free`); the header adds "N no primary"
+(`data-month-noprimary`). A No primary day is not an offer: the period count, the derived status and "Go by my rules" keep
+reading offers only. **The audit:** the one `offers.save` row's summary names the days through
+`helpers.offersAuditSummary` - "Burchett: no primary on 1/6, 1/15" or "Burchett: 2 offer change(s); no primary on 1/6; no
+primary lifted on 2/3 (Jan 2027 - Jun 2027)" - byte-for-byte the old text when no No primary day changed; the detail
+carries `np_add` / `np_clear` (days only). A refusal (`NO_PRIMARY_*`, NP001-NP009) is shown in the error box without its
+token (`helpers.noPrimaryErrorWords`; `describeDbError` passes `NO_PRIMARY_[A-Z_]+` verbatim). Helpers: `noPrimaryDays`,
+`offerPaintCell`, `noPrimaryDraftDiff`, `offersAuditSummary`, `noPrimaryErrorWords`, `NO_PRIMARY_RANGE_WORDS`,
+`NO_PRIMARY_HELD_WORDS`. Tests: `test/offers.test.js` section F (every brush rule - replace, keep Backup, lift, clear, the
+read-only range, past / frozen / held primary - the draft diff, the four audit texts, the error words, the engine's reading
+of the row), `test/data-layer.test.js` [P28] (the source pins and `commitOffersPaint` evaluated: five keys for an
+offers-only Save, ONE request carrying the days, the audit text, a refusal shown verbatim), and the smoke step "No primary
+(s2)" (a surgeon page as Burchett marks two days, saves - ONE `save_offers` with `p_np_add` - reloads, the lift question
+once for two days, clears one; screenshot `no-primary-390.png`). Setup > Availability statements is unchanged.
 
 **The scheduler's side — Periods (part 3b, U3b, 9/23):** Setup → Generate grows a **Periods** section above the
 Generate panel (`PeriodsSection`, module scope, behind the Setup view's scheduler gate; RLS on `call_periods` is

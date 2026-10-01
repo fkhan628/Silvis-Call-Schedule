@@ -3985,11 +3985,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("U3a pins: one Save = ONE rpc/save_offers request (rows + period + mode together) through authFetch (dbAuthHeaders at send time, Prompt 16 A3) + ONE audit row offers.save; a mode-only save = ONE rpc/set_offer_mode; nothing to write = no request and no audit; no direct call_offers / call_periods write", () => {
       assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: \"POST\", body: JSON.stringify("), "save_offers must be one POST through authFetch");
       assert.strictEqual((src.match(/rest\/v1\/rpc\/save_offers/g) || []).length, 1, "save_offers is called from exactly one place");
-      assert.ok(src.includes("body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null })"), "the rows request must carry the period + mode when the same Save changed the toggle (one commit or nothing - the 9/23 review's finding 3)");
+      // pin moved deliberately 10/1 (Prompt 28): the body is built as `payload` (the same five keys) and the No primary days ride in
+      // the SAME call (p_np_add / p_np_clear, added only when non-empty - pinned in [P28] below); kept intent: ONE request carries
+      // rows + period + mode (one commit or nothing - the 9/23 review's finding 3).
+      assert.ok(src.includes("const payload = { p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null };") && src.includes("`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: \"POST\", body: JSON.stringify(payload) })"), "the rows request must carry the period + mode when the same Save changed the toggle (one commit or nothing - the 9/23 review's finding 3)");
       assert.ok(src.includes("`${SUPABASE_URL}/rest/v1/rpc/set_offer_mode`, { method: \"POST\", body: JSON.stringify("), "set_offer_mode must be one POST through authFetch");
-      assert.ok(/if \(diff\.count > 0\) \{[\s\S]*?\} else \{\s*const r2 = await authFetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/set_offer_mode`/.test(src), "set_offer_mode is the MODE-ONLY path (the else of diff.count > 0), never a second request after the rows");
-      assert.ok(src.includes("if (diff.count === 0 && !withMode) return { ok: true, nothing: true };"), "nothing to write must return before any request or audit row (finding 10)");
-      assert.ok(src.includes("if (diff.count === 0 && !mode) { setBusy(false); setDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote(\"Already saved - nothing to write\");"), "the sheet's Save must drop an equalised draft without calling onCommit");
+      // pin moved deliberately 10/1 (Prompt 28): the rows branch is taken for offer changes OR No primary changes; kept intent:
+      // set_offer_mode stays the MODE-ONLY path (the else), never a second request after the rows.
+      assert.ok(/if \(diff\.count > 0 \|\| npCount > 0\) \{[\s\S]*?\} else \{\s*const r2 = await authFetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/rpc\/set_offer_mode`/.test(src), "set_offer_mode is the MODE-ONLY path (the else of diff.count > 0 || npCount > 0), never a second request after the rows");
+      // pin moved deliberately 10/1 (Prompt 28): nothing to write now also means no No primary change; kept intent: no request, no audit row.
+      assert.ok(src.includes("if (diff.count === 0 && npCount === 0 && !withMode) return { ok: true, nothing: true };"), "nothing to write must return before any request or audit row (finding 10)");
+      // pin moved deliberately 10/1 (Prompt 28): the sheet's equalised-draft drop also checks the No primary diff and resets that draft; kept intent: no onCommit.
+      assert.ok(src.includes("if (diff.count === 0 && npDiff.add.length + npDiff.clear.length === 0 && !mode) { setBusy(false); setDraft({}); setNpDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote(\"Already saved - nothing to write\");"), "the sheet's Save must drop an equalised draft without calling onCommit");
       assert.strictEqual(src.includes("modeError"), false, "no partial 'rows saved, mode not' state may remain (the combined Save is atomic)");
       assert.strictEqual((src.match(/logAudit\("offers\.save"/g) || []).length, 1, "exactly one offers.save audit site");
       assert.strictEqual(/rest\/v1\/call_offers[^\n]*method: "(POST|PATCH|DELETE)"/.test(src), false, "a direct call_offers write bypasses the atomic RPC");
@@ -4016,10 +4023,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('data-testid="ofp-period-closed"') && src.includes("closed{periodClose ? \" \" + fmtMD(periodClose) : \"\"} - ask the scheduler for a late change."), "a frozen period must render read-only with the closed date and 'ask the scheduler'");
       assert.ok(src.includes("{period && periodOpen && <button data-testid=\"ofp-period-toggle\""), "the Change button (and so the toggle) must exist only on an open period");
       // findings 4 / 9: Clear never queues a past / frozen day, but may take back a saved offer under a later obligation
-      assert.ok(src.includes("const clearable = (r) => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];"), "clearable(): a saved offer on an obligation-greyed row, never past / frozen");
-      assert.ok(src.includes("if (r.grey && !clearable(r)) { skipped.push(dayText(ds) + \": \" + r.grey); return; }"), "the Clear branch must skip and NAME greyed rows it cannot clear (a range must not fail the whole batch on OF003)");
-      assert.ok(src.includes("if (!r || (r.grey && !(armed === \"clear\" && clearable(r)))) return;"), "tapDay must let Clear through on a clearable greyed row");
-      assert.ok(src.includes("const tappable = !grey || (armed === \"clear\" && clearable(r));") && src.includes("disabled={!tappable}"), "the row button must be enabled for Clear on a clearable greyed row");
+      // pin moved deliberately 10/1 (Prompt 28): clearable also takes a saved own No primary; kept intent: a saved entry under a later
+      // obligation can be cleared, never a past / frozen day.
+      assert.ok(src.includes("const clearable = (r) => !!r && !r.past && !r.frozen && (!!savedByDay[r.ds] || !!np.own[r.ds]);"), "clearable(): a saved offer / own No primary on an obligation-greyed row, never past / frozen");
+      // pin moved deliberately 10/1 (Prompt 28): the Clear skip line now lives in helpers.offerPaintCell (its clear branch skips and
+      // names a greyed day with neither a saved offer nor a saved No primary - test/offers.test.js [F]); the sheet lists out.skip.
+      // Kept intent: a range never fails the whole batch on OF003 - greyed days it cannot clear are skipped and named.
+      assert.ok(src.includes("const out = offerPaintCell(cellOf(r), brush, { single });") && src.includes("if (out.skip) { skipped.push(dayText(ds) + \": \" + out.skip); return; }"), "the sheet must skip and NAME the days offerPaintCell refuses (a range must not fail the whole batch on OF003)");
+      assert.ok(src.includes("if (brush === \"clear\" && !effective(ds) && !effNp(ds)) return; // nothing to clear"), "Clear's nothing-to-clear stays silent BEFORE any grey is named");
+      // pin moved deliberately 10/1 (Prompt 28): tapDay and the row button share canTap (Clear on a clearable greyed row as before;
+      // the No primary brush by its own rule); kept intent: Clear reaches a clearable greyed row.
+      assert.ok(src.includes("const canTap = (r) => armed === \"noprimary\" ? (!r.past && !r.frozen && !r.npRange && (effNp(r.ds) || (!r.grey && !r.holdsPrimary))) : (!r.grey || (armed === \"clear\" && clearable(r)));"), "canTap: Clear on a clearable greyed row; No primary never on a past / frozen / range day, nor a greyed or held-primary day unless it takes his own mark back");
+      assert.ok(src.includes("if (!r || !canTap(r)) return;"), "tapDay must let Clear through on a clearable greyed row (canTap)");
+      assert.ok(src.includes("const tappable = canTap(r);") && src.includes("disabled={!tappable}"), "the row button must be enabled for Clear on a clearable greyed row (canTap)");
       // findings 5 / 7: the period box is one line by default
       assert.ok(src.includes("const periodExpanded = periodOpen && (periodOpenBox || modeDirty);"), "the period box expands only on Change or while the mode is dirty");
       assert.ok(src.includes('data-testid="ofp-period-line"') && src.includes('data-testid="ofp-list"'), "the one-line period summary and the day list need their test ids (the smoke measures the list's height)");
@@ -4028,17 +4044,105 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('data-testid="paint-offers"'), "My schedule lacks the Paint my offers button");
       assert.ok(src.includes('data-testid="nav-paint-offers"'), "the nav bar lacks the Paint offers action");
       assert.ok(src.includes('window.location.hash === "#offers"'), "no #offers deep link");
-      assert.ok(src.includes('{["primary", "backup", "either", "clear"].map(k => (\n            <button key={k} data-testid={"ofp-brush-" + k}'), "the four brushes (ofp-brush-<key>) are missing");
+      // pin moved deliberately 10/1 (Prompt 28): five brushes - No primary (ofp-brush-noprimary) between Either and Clear; kept intent:
+      // one button per brush, data-testid ofp-brush-<key>.
+      assert.ok(src.includes('{["primary", "backup", "either", "noprimary", "clear"].map(k => (\n            <button key={k} data-testid={"ofp-brush-" + k}'), "the five brushes (ofp-brush-<key>) are missing");
       ["ofp-range", "ofp-mode-exhaustive", "ofp-mode-preferred", "ofp-rules-only", "ofp-paste-text", "ofp-paste-add", "ofp-save", "ofp-discard", "ofp-close", "ofp-counts", "ofp-error", "ofp-saved", "ofp-day", "ofp-why", "ofp-cancel-start", "ofp-period-toggle", "ofp-period-line", "ofp-period-closed", "ofp-list", "ofp-footer"].forEach(t => assert.ok(src.includes('data-testid="' + t + '"'), "missing data-testid " + t));
       assert.ok(src.includes("suParseDateList(pasteText, pasteYear)"), "the paste box must reuse the availability paste parser");
       assert.ok(src.includes("data-testid=\"ofp-prev\" disabled={atCurrentMonth}"), "< must be disabled on the current month (navigation is from the current month forward)");
       assert.ok(src.includes("setTimeout(() => setSavedNote(\"\"), 3000)"), "the saved note must clear after 3 s");
     });
     check("U3a pins: app-styles carries the brush tokens the sheet reads (never literals in the JSX)", () => {
-      assert.ok(styles.OFFER_BRUSH && styles.OFFER_BRUSH.primary && styles.OFFER_BRUSH.backup && styles.OFFER_BRUSH.either && styles.OFFER_BRUSH.clear, "OFFER_BRUSH tokens missing");
-      ["primary", "backup", "either", "clear"].forEach(k => { const b = styles.OFFER_BRUSH[k]; assert.ok(/^linear-gradient\(/.test(b.gradient), k + " armed brush must be a gradient (the dark sheet exempts gradient buttons)"); assert.ok(/^#[0-9A-Fa-f]{6}$/.test(b.text) && /^#[0-9A-Fa-f]{6}$/.test(b.tint) && /^#[0-9A-Fa-f]{6}$/.test(b.border), k + " tokens must be hex"); });
+      // pin moved deliberately 10/1 (Prompt 28): the noprimary token joins the four; kept intent: every brush the sheet renders has
+      // a gradient + hex tokens in app-styles.
+      assert.ok(styles.OFFER_BRUSH && styles.OFFER_BRUSH.primary && styles.OFFER_BRUSH.backup && styles.OFFER_BRUSH.either && styles.OFFER_BRUSH.noprimary && styles.OFFER_BRUSH.clear, "OFFER_BRUSH tokens missing");
+      assert.strictEqual(styles.OFFER_BRUSH.noprimary.label, "No primary", "the noprimary brush reads 'No primary'");
+      ["primary", "backup", "either", "noprimary", "clear"].forEach(k => { const b = styles.OFFER_BRUSH[k]; assert.ok(/^linear-gradient\(/.test(b.gradient), k + " armed brush must be a gradient (the dark sheet exempts gradient buttons)"); assert.ok(/^#[0-9A-Fa-f]{6}$/.test(b.text) && /^#[0-9A-Fa-f]{6}$/.test(b.tint) && /^#[0-9A-Fa-f]{6}$/.test(b.border), k + " tokens must be hex"); });
       assert.strictEqual(typeof styles.css.brush, "function", "css.brush(on, key) missing");
       assert.ok(src.includes("css.brush(armed === k, k)"), "the sheet's brushes must read css.brush");
+    });
+
+    /* ---------------- P28. Prompt 28 (10/1): No primary days in the offer painter - source pins + the commit / error behaviour ---------------- */
+    console.log("\n[P28] Prompt 28: No primary days - painter source pins, the one save_offers request, the audit text, the error words");
+    check("P28 pins: the painter receives the availability rows at its one mount (no new read), models own backup_only rows itself (backup-only-row filtered from the PRIMARY hard list before offerDayWhy; OFFER_BLOCK_WORDS unchanged), range days read NO_PRIMARY_RANGE_WORDS, held primary from the schedule", () => {
+      assert.ok(src.includes("          schedule={schedule} availability={availabilityRows}\n          ctx={rulesCtx} ctxError={rulesCtxState.error}"), "the mount passes availability={availabilityRows} on the schedule line");
+      assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, ctx,"), "the sheet takes the availability prop after schedule");
+      assert.ok(src.includes("const np = React.useMemo(() => noPrimaryDays(availability, pid), [availability, pid]);"), "own / range days through helpers.noPrimaryDays");
+      const filt = src.indexOf("const hard = elig ? elig.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [];");
+      assert.ok(filt > 0 && src.indexOf("const why = offerDayWhy(hard);") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
+      assert.ok(src.includes("if (row.npRange && !row.block.primary) row.block.primary = NO_PRIMARY_RANGE_WORDS;"), "a range day blocks primary with the range words");
+      assert.ok(src.includes("row.holdsPrimary = !!pid && row.holders.primary === pid;"), "held primary comes from the schedule the sheet already gets");
+      assert.ok(src.includes("const out = offerPaintCell(cellOf(r), brush, { single });"), "every paint goes through helpers.offerPaintCell");
+      assert.ok(src.includes("is marked No primary - offer ${roleWord(brush)} there and lift it?") && src.includes("of these days are marked No primary (") && src.includes("there and lift the block?"), "the lift question (once per batch)");
+      assert.ok(src.includes("No primary replaced the offer on "), "the hint names replaced offers");
+      assert.ok(src.includes("const npHint = `Tap a day to mark ${asScheduler && person ? person.name : \"yourself\"} No primary (backup is still fine); tap again to take it back.`;"), "the No primary tap hint (relay names the surgeon)");
+      assert.ok(src.includes("{armed === \"noprimary\" && !rangeMode ? npHint : rangeHint}"), "npHint replaces rangeHint while No primary is armed and Range is off");
+    });
+    check("P28 pins: the testids / attributes (ofp-brush-noprimary, ofp-legend, ofp-np-pill own / range / lift, data-noprimary, data-np-draft, data-np-why, data-month-noprimary), the legend words, data-state keeps its offer meaning", () => {
+      ["data-testid={\"ofp-brush-\" + k}", "data-testid=\"ofp-legend\"", "data-testid=\"ofp-np-pill\" data-np=\"own\"", "data-testid=\"ofp-np-pill\" data-np=\"range\"", "data-testid=\"ofp-np-pill\" data-np=\"lift\"", "data-noprimary={effN ? \"own\" : r.npRange ? \"range\" : \"\"}", "data-np-draft={npDrafted ? (npDraft[ds] ? \"add\" : \"clear\") : \"\"}", "data-np-why={npWhy}", "data-month-noprimary={monthCounts.noprimary}"].forEach(t => assert.ok(src.includes(t), "missing " + t));
+      assert.ok(src.includes("{armed === \"noprimary\" && <div data-testid=\"ofp-legend\""), "the legend shows only while the No primary brush is armed");
+      assert.ok(src.includes(">No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.</div>"), "the legend words");
+      assert.ok(src.includes("data-state={grey && !drafted ? \"blocked\" : drafted ? \"draft\" : eff ? \"saved\" : \"free\"}") && src.includes("const drafted = offerDrafted || npDrafted;"), "data-state: draft = either draft holds the day; saved = a saved OFFER");
+      assert.ok(src.includes("will lift No primary"), "a drafted lift of a saved No primary reads 'will lift No primary'");
+      assert.ok(src.includes("\" - saved No primary: Clear can take it back\""), "a greyed row with a saved own No primary says Clear can take it back");
+      const cut = src.slice(src.indexOf("\nfunction OfferPainterSheet("), src.indexOf("\nfunction Collapsible("));
+      assert.strictEqual(/[^\x00-\x7F]/.test(cut), false, "the painter source stays ASCII");
+    });
+    check("P28 pins: Save stays ONE rpc/save_offers - p_np_add / p_np_clear added only when non-empty; the one offers.save audit site goes through helpers.offersAuditSummary; availability re-read after a No primary Save; the error box drops the NO_PRIMARY_ token", () => {
+      assert.ok(src.includes("if (npCount > 0) { payload.p_np_add = npAdd; payload.p_np_clear = npClear; }"), "the np keys ride only when non-empty (an offers-only Save keeps the five keys the pre-apply function knows)");
+      assert.ok(src.includes("logAudit(\"offers.save\", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, period ? period.label : null), summary);"), "the one audit site names the No primary days through offersAuditSummary");
+      assert.ok(src.includes("if (npCount > 0) loadAvailability(true);"), "the availability rows are re-read after a No primary Save");
+      assert.ok(src.includes("({noPrimaryErrorWords(commitError.msg)}) - your taps are kept; fix the issue and Save again."), "the painter's error box shows NP refusals in plain words");
+      assert.ok(src.includes("r = await onCommit({ personId: pid, diff, np: { add: npDiff.add, clear: npDiff.clear }, mode, period: period || null, items });"), "the sheet hands the commit both diffs in one call");
+      assert.ok(src.includes("const npDiff = noPrimaryDraftDiff(np.own, npLive);"), "the No primary diff through helpers.noPrimaryDraftDiff");
+      assert.strictEqual((src.match(/rest\/v1\/rpc\/save_no_primary/g) || []).length, 0, "the client never calls save_no_primary directly (save_offers calls it in the same transaction)");
+      assert.strictEqual(/rest\/v1\/availability[^\n]*method: "(POST|PATCH|DELETE)"/.test(src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"))), false, "the painter's commit never writes availability directly");
+    });
+    const p28check = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    await p28check("P28 behaviour: commitOffersPaint (evaluated from the source) - an offers-only Save sends the five keys; a No primary Save sends ONE save_offers with p_rows [] + p_np_add / p_np_clear, ONE audit 'Burchett: no primary on 1/6, 1/15 (<label>)' and re-reads availability; a refusal returns the NO_PRIMARY_ text verbatim and writes no audit; nothing to write = no request", async () => {
+      const body = src.slice(src.indexOf("const commitOffersPaint = async"), src.indexOf("// --- Periods (Prompt 14 part 3b, U3b)"));
+      const dbe = src.slice(src.indexOf("const describeDbError = (err) => {"), src.indexOf("// Scheduler / admin person ids for targeted notifications."));
+      assert.ok(body.length > 500 && dbe.length > 200, "commitOffersPaint / describeDbError not found");
+      const run = async (args, answer) => {
+        const calls = [], audits = [], loads = [];
+        const authFetch = async (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return answer ? answer(url) : { ok: true, status: 200, text: async () => "{}", json: async () => ({}) }; };
+        const fn = new Function("authFetch", "SUPABASE_URL", "logAudit", "offersAuditSummary", "nameOf", "loadOffers", "loadPeriods", "loadAvailability", "console", dbe + "\n" + body + "\nreturn commitOffersPaint;")(
+          authFetch, "https://x.test", (a, s, d) => audits.push({ a, s, d }), H.offersAuditSummary, (id) => ({ s2: "Burchett" }[id] || id),
+          () => loads.push("offers"), () => loads.push("periods"), () => loads.push("availability"), { warn: () => {} });
+        const r = await fn(args);
+        return { r, calls, audits, loads };
+      };
+      const none = { insert: [], update: [], delete: [], bad: [], count: 0 };
+      const per = { id: "p1", label: "Nov 2026 - Jan 2027" };
+      const a = await run({ personId: "s2", diff: { insert: [{ day: "2027-01-07", role_pref: "backup" }], update: [], delete: [], bad: [], count: 1 }, np: { add: [], clear: [] }, mode: null, period: per });
+      assert.strictEqual(a.calls.length, 1); assert.deepStrictEqual(Object.keys(a.calls[0].body), ["p_person", "p_rows", "p_clear", "p_period", "p_mode"], "an offers-only Save keeps the five keys");
+      assert.strictEqual(a.audits[0].s, "Burchett: 1 offer change(s) (Nov 2026 - Jan 2027)", "the offers-only summary is byte-for-byte the old text");
+      assert.ok(a.loads.indexOf("availability") < 0, "no availability re-read after an offers-only Save");
+      const b = await run({ personId: "s2", diff: none, np: { add: ["2027-01-06", "2027-01-15"], clear: [] }, mode: null, period: per });
+      assert.strictEqual(b.calls.length, 1, "ONE request"); assert.ok(/\/rest\/v1\/rpc\/save_offers$/.test(b.calls[0].url));
+      assert.deepStrictEqual(b.calls[0].body, { p_person: "s2", p_rows: [], p_clear: [], p_period: null, p_mode: null, p_np_add: ["2027-01-06", "2027-01-15"], p_np_clear: [] });
+      assert.strictEqual(b.audits.length, 1); assert.strictEqual(b.audits[0].a, "offers.save"); assert.strictEqual(b.audits[0].s, "Burchett: no primary on 1/6, 1/15 (Nov 2026 - Jan 2027)", "the Activity log text");
+      assert.deepStrictEqual([b.audits[0].d.np_add, b.audits[0].d.np_clear, b.audits[0].d.count], [["2027-01-06", "2027-01-15"], [], 0], "the audit detail carries the days (no amount, no contact)");
+      assert.ok(b.loads.indexOf("availability") >= 0, "availability is re-read");
+      const c = await run({ personId: "s2", diff: none, np: { add: [], clear: ["2027-01-06"] }, mode: null, period: null });
+      assert.deepStrictEqual([c.calls[0].body.p_np_add, c.calls[0].body.p_np_clear, c.audits[0].s], [[], ["2027-01-06"], "Burchett: no primary lifted on 1/6"]);
+      const msg = "NO_PRIMARY_ON_CALL: Burchett holds primary on 1/6 - trade those days first, then mark them No primary";
+      const d = await run({ personId: "s2", diff: none, np: { add: ["2027-01-06"], clear: [] }, mode: null, period: null }, () => ({ ok: false, status: 400, text: async () => JSON.stringify({ code: "NP008", message: msg, details: null, hint: null }) }));
+      assert.deepStrictEqual([d.r.ok, d.r.error, d.audits.length], [false, msg, 0], "a refusal returns the raised message verbatim and writes no audit row");
+      assert.strictEqual(H.noPrimaryErrorWords(d.r.error), "Burchett holds primary on 1/6 - trade those days first, then mark them No primary", "the error box's plain words");
+      const conflict = "NO_PRIMARY_OFFER_CONFLICT: Burchett offers primary on 1/6 and marks it No primary - keep one of the two (nothing was saved)";
+      const e = await run({ personId: "s2", diff: none, np: { add: ["2027-01-06"], clear: [] }, mode: null, period: null }, () => ({ ok: false, status: 400, text: async () => "garbled " + conflict + "\"}" }));
+      assert.ok(e.r.error.indexOf("NO_PRIMARY_OFFER_CONFLICT: Burchett offers primary on 1/6") === 0, "the extracting regex keeps the whole NO_PRIMARY_ token (not just its OFFER_ tail): " + e.r.error);
+      const f = await run({ personId: "s2", diff: none, np: null, mode: null, period: per });
+      assert.deepStrictEqual([f.r, f.calls.length, f.audits.length], [{ ok: true, nothing: true }, 0, 0], "nothing to write: no request, no audit (a missing np reads as empty)");
+    });
+    check("P28: the noprimary brush token clears contrast - white on its armed gradient's light end >= 4.5:1, its text on its tint >= 4.5:1", () => {
+      const lum = (hex) => { const v = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const b = styles.OFFER_BRUSH.noprimary;
+      const light = (b.gradient.match(/#[0-9A-Fa-f]{6}/g) || []).pop();
+      assert.ok(ratio("#FFFFFF", light) >= 4.5, "white on " + light + " = " + ratio("#FFFFFF", light).toFixed(2));
+      assert.ok(ratio(b.text, b.tint) >= 4.5, b.text + " on " + b.tint + " = " + ratio(b.text, b.tint).toFixed(2));
     });
 
     /* ---------------- G. Prompt 14 part 3b (U3b): the Periods section - the helpers it leans on + source pins ---------------- */
@@ -4888,7 +4992,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("          asScheduler={(isScheduler || isCoordinator) && offerSheet.personId !== mySurgeon}\n          relayWord={isCoordinator ? \"the office\" : \"the scheduler\"}\n          isScheduler={isScheduler}"), "the sheet is opened as a relay for the office, with isScheduler=false (frozen periods stay frozen)");
       assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler,"), "the sheet takes relayWord");
       assert.ok(src.includes('as {relayWord || "the scheduler"} (relayed)'), "the header names the relay");
-      assert.ok(src.includes("body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null })"), "commitOffersPaint is unchanged: p_person, nothing about entered_by / source");
+      // pin moved deliberately 10/1 (Prompt 28): the body is the `payload` object (the same five keys; p_np_add / p_np_clear join it
+      // only when non-empty); kept intent: the commit sends p_person and nothing about entered_by / source.
+      assert.ok(src.includes("const payload = { p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null };"), "commitOffersPaint: p_person, nothing about entered_by / source");
+      assert.ok(!/payload\.(entered_by|source|p_entered_by|p_source)\b/.test(src), "the client never adds entered_by / source to the save_offers payload");
       assert.ok(!/entered_by:\s*(authUser|userProfile)/.test(src.slice(src.indexOf("const commitOffersPaint"), src.indexOf("const commitOffersPaint") + 3000)), "the client never stamps entered_by on an offer");
     });
     check("A7: Setup -> Users offers the coordinator role and refuses a linked coordinator; the roster-link placeholder names both unlinked roles", () => {
@@ -7501,8 +7608,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/\$\s*\d|@/.test(JSON.stringify(audit)), "the override detail carries days and counts only (no amount, no contact)");
     });
     check("VG pins: describeDbError shows VACATION_* verbatim (both regexes); vacEastAway = eastVacPeople's ranges not reviewed home; vacGuardFor = helpers.vacationGuard over timeOffRows (+ the painter's draft) / vacEastAway / surgeons / groupRules / excludeId", () => {
-      assert.ok(src.includes("const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+/;"), "the OWN token list");
-      assert.ok(src.includes("const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+)[^\"}\\\\]*/.exec(s);"), "the extracting regex");
+      // pin moved deliberately 10/1 (Prompt 28): both regexes end with NO_PRIMARY_[A-Z_]+ (save_no_primary's NP001-NP009) AFTER
+      // VACATION_[A-Z_]+; kept intent: our own tokens (VACATION_* included) are shown verbatim - the substring pin above
+      // (OFFERS?_[A-Z_]+|MODE_[A-Z_]+) still holds.
+      assert.ok(src.includes("const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+/;"), "the OWN token list");
+      assert.ok(src.includes("const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+)[^\"}\\\\]*/.exec(s);"), "the extracting regex");
       assert.ok(src.includes('eastVacPeople.forEach(p => { const rs = (p.ranges || []).filter(r => r.state !== "home").map(r => ({ start: r.start, end: r.end, state: r.state })); if (rs.length) m[p.id] = rs; });'), "vacEastAway: unreviewed / away ranges, home left out");
       // pin moved deliberately 10/1 (review item 1): vacGuardFor also passes eastReviewsLoaded (the East review rows loaded -
       // eastVacReviewState 'ok'), and the preview memo depends on that state too; kept intent: one call into the pure helper over
