@@ -1092,6 +1092,7 @@ function CallSchedule() {
     setAuthUser(null); setUserProfile(null); setProfileLoadFailed(false);
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
+    setErrorLog([]); setShowErrorLog(false); // review 9/27 Do first 8: the next person on this device never reads this one's errors
   };
 
   // Prompt 16 B7: the pair from a recovery / invite hash. config.js auth.adoptLinkSession stores it only for this
@@ -1391,12 +1392,48 @@ function CallSchedule() {
   }, [view, isCoordinator]);
 
   // --- Toast (non-blocking notifications) ---
-  const [toast, setToast] = useState(null); // { msg, tone } | null
+  // Review 9/27 Do first 8: ONE visible slot and the newest shows at once (helpers.toastNext - an identical repeat of
+  // the toast on screen counts up instead); success / info fade after 4.5 s, an error stays until tapped or for
+  // max(8 s, 60 ms per character) (helpers.toastDurationMs); every error also goes on the header's stack of the last
+  // TOAST_ERROR_LOG_MAX (helpers.toastErrorLogPush; "N errors" in the header opens it - never by itself). Refs, not
+  // state, decide the repeat and own the timer: showToast is called from closures of older renders.
+  const [toast, setToast] = useState(null); // { msg, tone, count, at } | null
+  const toastRef = useRef(null);
   const toastTimerRef = useRef(null);
-  const showToast = (msg, tone) => {
-    setToast({ msg: msg, tone: tone || "info" });
+  const [errorLog, setErrorLog] = useState([]); // [{ msg, at, first, count }], newest first
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [errorCopied, setErrorCopied] = useState(""); // the copied entry's text ("!" + text: the copy was blocked)
+  const dismissToast = () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+    toastTimerRef.current = null;
+    toastRef.current = null;
+    setToast(null);
+  };
+  const showToast = (msg, tone) => {
+    const now = Date.now();
+    const t = toastNext(toastRef.current, msg, tone, now);
+    toastRef.current = t;
+    setToast(t);
+    if (t.tone === "error") setErrorLog(p => toastErrorLogPush(p, t.msg, now));
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(dismissToast, toastDurationMs(t.msg, t.tone));
+  };
+  // Recent errors > Copy: the clipboard, else the hidden-textarea copy; never a prompt() and never a toast (a blocked
+  // copy would only push another error onto the stack it is read from) - the button says Copied / Blocked.
+  const copyErrorEntry = async (text) => {
+    let copied = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); copied = true; } }
+    catch (e) { console.warn("Recent errors: the clipboard refused the copy:", e); }
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        copied = document.execCommand("copy"); document.body.removeChild(ta);
+      } catch (e) { console.warn("Recent errors: the fallback copy failed:", e); }
+    }
+    setErrorCopied(copied ? text : "!" + text);
+    setTimeout(() => setErrorCopied(""), 2500);
   };
 
   // ====================================================================
@@ -6255,10 +6292,41 @@ function CallSchedule() {
           onClose={() => setOfferSheet(null)}
         />
       )}
-      {/* Non-blocking toast */}
+      {/* Non-blocking toast. Review 9/27 Do first 8: data-testid "toast" is the message alone (the smoke reads its text
+          and clicks it to dismiss); the box around it carries the position, the repeat count (toast-count) and, for an
+          error or over a painter sheet (where the toast sits on the sheet's header and its Close), a close control. */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
-          {toast.msg}
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+          <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
+          {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
+          {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-8px -12px -8px 0",minWidth:32,minHeight:32,lineHeight:1,fontFamily:font}}>x</button>}
+        </div>
+      )}
+      {/* Review 9/27 Do first 8: Recent errors - the header's stack of the last TOAST_ERROR_LOG_MAX error toasts, newest
+          first, each with its time, its repeat count and Copy: an error a later toast replaced (the override reasons
+          when both audit rows were refused) is read and copied here. Opened from the header's "N errors" only - never
+          by itself, so it can never cover a flow that is still running. Every role, ?public=1 too. */}
+      {showErrorLog && (
+        <div data-testid="error-log" onClick={()=>setShowErrorLog(false)} onKeyDown={(e)=>{ if (e.key === "Escape") setShowErrorLog(false); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9550,padding:16}}>
+          <div role="dialog" aria-modal="true" aria-label="Recent errors" onClick={e=>e.stopPropagation()} style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:12,padding:16,maxWidth:520,width:"100%",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
+              <h3 style={{margin:0,fontSize:15,color:T.text}}>Recent errors</h3>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {errorLog.length > 0 && <button type="button" data-testid="error-log-clear" onClick={()=>{ setErrorLog([]); setShowErrorLog(false); }} style={{background:"none",border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:font,minHeight:32}}>Clear</button>}
+                <button type="button" data-testid="error-log-close" autoFocus aria-label="Close recent errors" onClick={()=>setShowErrorLog(false)} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",fontFamily:font,minWidth:36,minHeight:36}}>x</button>
+              </div>
+            </div>
+            <p style={{margin:"0 0 8px",fontSize:12,color:T.muted,lineHeight:1.5}}>The last {TOAST_ERROR_LOG_MAX} error messages on this device, newest first - kept until you clear them, sign out or reload.</p>
+            {errorLog.length === 0 ? <p style={{fontSize:13,color:T.muted,margin:"8px 0"}}>No errors.</p> : errorLog.map(e => (
+              <div key={e.msg} data-testid="error-log-row" style={{borderTop:`1px solid ${T.border}`,padding:"8px 0",display:"flex",gap:8,alignItems:"flex-start"}}>
+                <div style={{flex:"1 1 auto",minWidth:0}}>
+                  <div style={{fontSize:11,color:T.muted}}>{new Date(e.at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}{e.count > 1 ? " - " + e.count + " times since " + new Date(e.first).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : ""}</div>
+                  <div data-testid="error-log-msg" style={{fontSize:13,lineHeight:1.45,color:T.text,userSelect:"text",overflowWrap:"anywhere"}}>{e.msg}</div>
+                </div>
+                <button type="button" data-testid="error-log-copy" onClick={()=>copyErrorEntry(e.msg)} style={{flexShrink:0,background:"none",border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:font,minHeight:32}}>{errorCopied === e.msg ? "Copied" : errorCopied === "!" + e.msg ? "Blocked" : "Copy"}</button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {/* Publish dialog - rendered at the top level so Setup > Generate (Accept & Publish)
@@ -6506,6 +6574,8 @@ function CallSchedule() {
                   {!loaded && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Connecting</span>}
                 </>
               )}
+              {/* Review 9/27 Do first 8: the stack of the last errors (newest first) - opens Recent errors */}
+              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" onClick={()=>setShowErrorLog(true)} title="The last error messages, newest first - read or copy them again" style={{marginLeft:8,background:"none",border:"1px solid #FF8A8A",color:"#FF8A8A",borderRadius:9,padding:"2px 8px",fontSize:10,fontWeight:700,letterSpacing:0.8,cursor:"pointer",fontFamily:font,minHeight:24,verticalAlign:"middle"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}
             </p>
           </div>
         </div>

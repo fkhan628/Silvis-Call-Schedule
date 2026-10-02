@@ -5582,7 +5582,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5'), "the update-available banner");
       assert.strictEqual(A5count(A5SRC, "css.bottomBanner("), 3, "exactly the three banners");
       for (const gone of ["bottom:updateAvailable?44:0", "bottom:(forceUpdate?44:0)+(updateAvailable?44:0)", "bottom:0,zIndex:9998"]) assert.strictEqual(A5count(A5SRC, gone), 0, "literal offset left: " + gone);
-      assert.ok(A5line('data-testid="toast"').includes("...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), "the toast: lifted by the top inset over a painter sheet, by the bottom inset otherwise");
+      // Review 9/27 Do first 8 - pin moved deliberately: the positioned box is data-testid "toast-box" now; "toast" is the
+      // message span inside it (the smoke reads that text alone, without the repeat count or the close control).
+      assert.ok(A5line('data-testid="toast-box"').includes("...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), "the toast: lifted by the top inset over a painter sheet, by the bottom inset otherwise");
     });
     check("A5 pins: the day editor's sticky Cancel / Save row pads its bottom by the inset after its padding shorthand (the painter sheets' own four env() literals stay; every other site reads SAFE_AREA)", () => {
       assert.ok(A5line('data-testid="editor-footer"').includes('position:"sticky",bottom:-16,background:panelBg,margin:"0 -18px -16px",padding:"8px 18px 12px",paddingBottom:`calc(${SAFE_AREA.bottom} + 12px)`,borderTop:'), "the editor footer");
@@ -6521,7 +6523,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="day-editor" onClick')).includes("zIndex:9500"), "day editor 9500");
       assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="claim-sheet"')).includes("zIndex:9500"), "claim sheet 9500");
       assert.strictEqual(B9count('data-testid="ofp-sheet" style={{ position: "fixed", inset: 0, zIndex: 9300'), 1, "painter sheet 9300");
-      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="toast"')).includes("zIndex:9999"), "toast 9999");
+      // Review 9/27 Do first 8 - pin moved deliberately: the z-index sits on the box (data-testid "toast-box"), the
+      // "toast" testid on the message span inside it. Recent errors (9550) stays under the toast too.
+      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="toast-box"')).includes("zIndex:9999"), "toast 9999");
+      assert.ok(B9SRC.split("\n").find(l => l.includes('data-testid="error-log" onClick')).includes("zIndex:9550"), "recent errors 9550, under the toast");
     });
 
     // (d) "Browser notification sent." only when new Notification() did not throw.
@@ -7777,6 +7782,168 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       [["signIn", signIn], ["resetPassword", reset]].forEach(([n, body]) => {
         assert.ok(/try \{[\s\S]*?fetch\(/.test(body) && body.includes("await res.json().catch(() => null)") && body.includes('return { ' + (n === "signIn" ? "user: null, " : "") + 'error: "No connection - try again" };'), n + ": try/catch + res.json().catch");
       });
+    });
+  })();
+
+  /* ---------------- DF8. Review 9/27 Do first 8: error toasts stay, the newest at once, repeats counted, the header's stack ---------------- */
+  console.log("\n[DF8] review 9/27 Do first 8 (an error toast stays until tapped or max(8 s, 60 ms per character); success / info keep 4.5 s; the newest shows at once; an identical repeat counts up; the last 10 errors on the header's stack, with Copy)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle) => src.split(needle).length - 1;
+    const liftOrNull = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); return (i < 0 || j < 0) ? null : src.slice(i, j); };
+    const lifted = (x, what) => { if (x === null) throw new Error("lift: " + what + " not found in index-source.html"); return x; };
+    const acheck8 = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const LONG = "x".repeat(370); // the review's longest toasts run to about 370 characters
+
+    check("DF8 helpers: toastDurationMs - success / info / no tone keep 4.5 s; an error max(8 s, 60 ms per character): 8 s for a short one, 8.04 s at 134 characters, 22.2 s at 370", () => {
+      assert.strictEqual(typeof H.toastDurationMs, "function", "helpers.js exports toastDurationMs");
+      assert.deepStrictEqual([H.TOAST_MS, H.TOAST_ERROR_MIN_MS, H.TOAST_ERROR_MS_PER_CHAR, H.TOAST_ERROR_LOG_MAX], [4500, 8000, 60, 10]);
+      assert.strictEqual(H.toastDurationMs("Saved.", "success"), 4500);
+      assert.strictEqual(H.toastDurationMs(LONG, "info"), 4500, "a long info toast keeps 4.5 s");
+      assert.strictEqual(H.toastDurationMs("Schedule loaded.", undefined), 4500);
+      assert.strictEqual(H.toastDurationMs("Couldn't save.", "error"), 8000);
+      assert.strictEqual(H.toastDurationMs("x".repeat(133), "error"), 8000, "133 x 60 = 7980 < 8000");
+      assert.strictEqual(H.toastDurationMs("x".repeat(134), "error"), 8040);
+      assert.strictEqual(H.toastDurationMs(LONG, "error"), 22200);
+      assert.strictEqual(H.toastDurationMs(null, "error"), 8000);
+    });
+    check("DF8 helpers: toastNext - a new text (or the same text in another tone) is a new toast at count 1; the same text and tone while it is on screen counts up with the new time; nothing on screen starts again at 1; no tone reads info; the input is never mutated", () => {
+      assert.strictEqual(typeof H.toastNext, "function", "helpers.js exports toastNext");
+      const a = H.toastNext(null, "Couldn't save.", "error", 1);
+      assert.deepStrictEqual(a, { msg: "Couldn't save.", tone: "error", count: 1, at: 1 });
+      const b = H.toastNext(a, "Couldn't save.", "error", 2);
+      assert.deepStrictEqual(b, { msg: "Couldn't save.", tone: "error", count: 2, at: 2 });
+      assert.strictEqual(a.count, 1, "not mutated");
+      assert.strictEqual(H.toastNext(b, "Couldn't save.", "error", 3).count, 3);
+      assert.deepStrictEqual(H.toastNext(b, "Saved.", "success", 4), { msg: "Saved.", tone: "success", count: 1, at: 4 }, "a different toast replaces it at once");
+      assert.strictEqual(H.toastNext(b, "Couldn't save.", "info", 5).count, 1, "another tone is another toast");
+      assert.deepStrictEqual(H.toastNext(null, "Hi", undefined, 6), { msg: "Hi", tone: "info", count: 1, at: 6 });
+    });
+    check("DF8 helpers: toastErrorLogPush - newest first; a repeat moves to the top with count + 1 and keeps its first time; at most 10 entries (the oldest drop - a stack, not a queue); the input is never mutated", () => {
+      assert.strictEqual(typeof H.toastErrorLogPush, "function", "helpers.js exports toastErrorLogPush");
+      let log = H.toastErrorLogPush(H.toastErrorLogPush([], "A", 1), "B", 2);
+      assert.deepStrictEqual(log.map(e => e.msg), ["B", "A"]);
+      const before = log;
+      log = H.toastErrorLogPush(log, "A", 3);
+      assert.deepStrictEqual(log, [{ msg: "A", at: 3, first: 1, count: 2 }, { msg: "B", at: 2, first: 2, count: 1 }]);
+      assert.deepStrictEqual(before.map(e => e.msg + e.count), ["B1", "A1"], "not mutated");
+      for (let i = 0; i < 12; i++) log = H.toastErrorLogPush(log, "E" + i, 10 + i);
+      assert.strictEqual(log.length, 10);
+      assert.deepStrictEqual([log[0].msg, log[9].msg], ["E11", "E2"], "newest first, the oldest dropped");
+      assert.ok(!log.some(e => e.msg === "A" || e.msg === "B"));
+      assert.deepStrictEqual(H.toastErrorLogPush(null, "X", 1), [{ msg: "X", at: 1, first: 1, count: 1 }]);
+    });
+
+    // dismissToast + showToast, lifted verbatim and run with fake timers (a lift that is not found fails its checks)
+    const toastBlock = liftOrNull("  const dismissToast = () => {", "\n  // Recent errors > Copy:");
+    const runToasts = () => {
+      lifted(toastBlock, "dismissToast / showToast");
+      const st = { shown: [], log: [], timers: [], now: 1000 };
+      const setT = (fn, ms) => { const t = { fn, ms, live: true }; st.timers.push(t); return t; };
+      const clearT = (t) => { if (t) t.live = false; };
+      const api = new Function("toastRef", "toastTimerRef", "setToast", "setErrorLog", "setTimeout", "clearTimeout", "Date", "toastNext", "toastDurationMs", "toastErrorLogPush", toastBlock + "\nreturn { dismissToast, showToast };")(
+        { current: null }, { current: null }, (t) => st.shown.push(t), (u) => { st.log = typeof u === "function" ? u(st.log) : u; }, setT, clearT, { now: () => st.now }, H.toastNext, H.toastDurationMs, H.toastErrorLogPush);
+      const live = () => st.timers.filter(t => t.live);
+      const last = () => st.shown[st.shown.length - 1];
+      const fire = () => { const l = live(); assert.strictEqual(l.length, 1, "one live timer, got " + l.length); l[0].live = false; l[0].fn(); };
+      return { st, api, live, last, fire };
+    };
+    check("DF8 showToast (lifted): an error stays max(8 s, 60 ms per character) - 8 s, then 22.2 s for a 370-character one that replaces it AT ONCE (the first's timer cleared); a success keeps 4.5 s and is not on the stack; the timer's end clears the slot", () => {
+      const R = runToasts();
+      R.api.showToast("Couldn't save.", "error");
+      assert.deepStrictEqual([R.last().msg, R.last().tone, R.last().count], ["Couldn't save.", "error", 1]);
+      assert.deepStrictEqual(R.live().map(t => t.ms), [8000], "an error: 8 s, not 4.5");
+      R.st.now = 2000; R.api.showToast(LONG, "error");
+      assert.strictEqual(R.last().msg, LONG, "the newest shows at once");
+      assert.deepStrictEqual(R.live().map(t => t.ms), [22200], "the first error's timer was cleared; 370 x 60 ms");
+      R.st.now = 3000; R.api.showToast("Saved.", "success");
+      assert.deepStrictEqual(R.live().map(t => t.ms), [4500], "success keeps 4.5 s");
+      assert.deepStrictEqual(R.st.log.map(e => e.msg), [LONG, "Couldn't save."], "both errors on the stack, newest first; the success is not");
+      R.fire();
+      assert.strictEqual(R.last(), null, "the timer's end clears the slot (the older error does not come back - a stack, not a queue)");
+      R.api.showToast("Schedule loaded.");
+      assert.deepStrictEqual([R.last().tone, R.live()[0].ms, R.st.log.length], ["info", 4500, 2], "no tone: info, 4.5 s, not on the stack");
+    });
+    check("DF8 showToast (lifted): an identical repeat while it is on screen is ONE toast whose count goes up and whose time restarts (one live timer); the stack counts it too; once it went away (timer or tap) the same text starts again at 1", () => {
+      const R = runToasts();
+      R.api.showToast("Couldn't save - check your connection.", "error");
+      R.st.now = 4000; R.api.showToast("Couldn't save - check your connection.", "error");
+      assert.deepStrictEqual([R.last().msg, R.last().count, R.last().at], ["Couldn't save - check your connection.", 2, 4000]);
+      assert.strictEqual(R.live().length, 1, "the time restarted - one live timer");
+      assert.deepStrictEqual(R.st.log.map(e => [e.msg, e.count, e.first, e.at]), [["Couldn't save - check your connection.", 2, 1000, 4000]], "one stack entry, counted");
+      R.fire();
+      R.api.showToast("Couldn't save - check your connection.", "error");
+      assert.strictEqual(R.last().count, 1, "after the timer: a new toast");
+      R.api.dismissToast();
+      assert.deepStrictEqual([R.last(), R.live().length], [null, 0], "a tap clears the slot and its timer");
+      R.api.showToast("Couldn't save - check your connection.", "error");
+      assert.strictEqual(R.last().count, 1, "after a tap: a new toast");
+      assert.strictEqual(R.st.log.length, 1);
+      assert.strictEqual(R.st.log[0].count, 4, "the stack counted every showing");
+    });
+
+    // Recent errors > Copy, lifted verbatim: no prompt(), no toast (neither is passed in - calling one throws)
+    const copyBlock = liftOrNull("  const copyErrorEntry = async (text) => {", "\n  };\n");
+    const runCopy = async (clip, exec) => {
+      lifted(copyBlock, "copyErrorEntry");
+      const st = { copied: [], warns: 0, appended: 0, removed: 0 };
+      const doc = { createElement: () => ({ style: {}, select() {} }), body: { appendChild: () => { st.appended++; }, removeChild: () => { st.removed++; } }, execCommand: () => { if (exec === "throw") throw new Error("no copy"); return exec; } };
+      const nav = clip === null ? {} : { clipboard: { writeText: async (t) => { if (clip === "reject") throw new Error("denied"); st.clip = t; } } };
+      const fn = new Function("navigator", "window", "document", "console", "setErrorCopied", "setTimeout", copyBlock + "\n  };\nreturn copyErrorEntry;")(
+        nav, { isSecureContext: true }, doc, { warn: () => { st.warns++; } }, (v) => st.copied.push(v), () => 0);
+      await fn("MSG");
+      return st;
+    };
+    await acheck8("DF8 Recent errors Copy (lifted copyErrorEntry): the clipboard first; refused -> the hidden-textarea copy; both failing -> 'Blocked' (\"!\" + text) - never a prompt(), never a toast that would push another error onto the stack", async () => {
+      let st = await runCopy("ok", false);
+      assert.deepStrictEqual([st.clip, st.copied[0], st.appended], ["MSG", "MSG", 0]);
+      st = await runCopy("reject", true);
+      assert.deepStrictEqual([st.copied[0], st.appended, st.removed, st.warns], ["MSG", 1, 1, 1]);
+      st = await runCopy(null, false);
+      assert.strictEqual(st.copied[0], "!MSG");
+      st = await runCopy("reject", "throw");
+      assert.deepStrictEqual([st.copied[0], st.warns], ["!MSG", 2]);
+    });
+
+    check("DF8 pins: data-testid 'toast' is the message span ALONE (the smoke's ~17 reads and clicks); the box (toast-box) dismisses on tap and carries the repeat count and, for an error or over a painter sheet, a close control; only dismissToast / showToast set the slot (no 4.5 s for every tone left)", () => {
+      assert.strictEqual(count('<span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>'), 1, "the message span");
+      assert.strictEqual(count('data-testid="toast"'), 1, "one 'toast' testid");
+      const box = liftOrNull('<div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast}', "\n        </div>\n      )}");
+      assert.ok(box !== null, "the box dismisses on tap");
+      const msgAt = box.indexOf('data-testid="toast"'), cntAt = box.indexOf('{toast.count > 1 && <span data-testid="toast-count"'), closeAt = box.indexOf('{(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }}');
+      assert.ok(msgAt > 0 && cntAt > msgAt && closeAt > cntAt, "the count and the close control follow the message span, outside it: " + [msgAt, cntAt, closeAt]);
+      assert.ok(box.includes(">x</button>"), "the close control reads x (ASCII, like the app's other Dismiss buttons)");
+      assert.strictEqual(count("setToast("), 2, "only dismissToast and showToast set the slot");
+      assert.strictEqual(count("onClick={()=>setToast(null)}"), 0);
+      assert.strictEqual(count("4500"), 0, "no fixed 4.5 s in the app - helpers.toastDurationMs decides");
+      assert.ok(src.includes("toastTimerRef.current = setTimeout(dismissToast, toastDurationMs(t.msg, t.tone));"), "the timer reads the duration per toast");
+      assert.ok(src.includes('if (t.tone === "error") setErrorLog(p => toastErrorLogPush(p, t.msg, now));'), "every error goes on the stack");
+    });
+    check("DF8 pins: the header's 'N errors' button is the ONLY opener of Recent errors (it never opens by itself); the dialog lists the stack newest first with each entry's Copy, Clear and Close; sign-out empties the stack", () => {
+      assert.ok(src.includes('{errorLog.length > 0 && <button type="button" data-testid="hdr-errors" onClick={()=>setShowErrorLog(true)}'), "the header button");
+      assert.ok(src.includes('{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}'), "its label");
+      assert.strictEqual(count("setShowErrorLog(true)"), 1, "opened from the header only");
+      const hdr = liftOrNull('<div data-testid="app-header"', "{!isPublicMode && <div style={css.nav}>");
+      assert.ok(hdr !== null && hdr.includes('data-testid="hdr-errors"'), "the button lives in the header's status line (every role, ?public=1 too)");
+      assert.ok(!/synced|saved|not saving|connecting|schedule not loaded/i.test("1 error 2 errors"), "the label carries none of the words the smoke reads off the header");
+      const dlg = liftOrNull("{showErrorLog && (", "{/* Publish dialog");
+      assert.ok(dlg !== null, "the dialog");
+      assert.ok(dlg.includes("errorLog.map(e => (") && dlg.includes('data-testid="error-log-row"') && dlg.includes('data-testid="error-log-copy" onClick={()=>copyErrorEntry(e.msg)}'), "each entry with its Copy");
+      assert.ok(dlg.includes('data-testid="error-log-clear" onClick={()=>{ setErrorLog([]); setShowErrorLog(false); }}') && dlg.includes('data-testid="error-log-close"'), "Clear and Close");
+      assert.ok(dlg.includes('role="dialog" aria-modal="true" aria-label="Recent errors"'), "a labelled dialog");
+      const so = liftOrNull("  const handleSignOut = async () => {", "\n  };\n");
+      assert.ok(so !== null && so.includes("setErrorLog([]); setShowErrorLog(false);"), "sign-out empties the stack");
+      // the override reasons when both audit rows were refused still raise an ERROR toast (pinned in the E3 section),
+      // so they land on this stack and stay readable after the sync-failure toast replaces them ~1 s later
+      assert.strictEqual(count('if (!de && !ov) showToast("Override on " + fmtMD(day) + ": the audit log refused both rows'), 1);
+    });
+    check("DF8 pins (smoke): every smoke toast read goes through [data-testid=toast] (the message span); the __df2Toasts and __toastLog recorders key on the text AND the toast-count chip, so a repeat while the toast is still up counts as a showing (the DF2 streak's second toast arrives inside the 8 s)", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      ["__df2Toasts", "__toastLog"].forEach(n => {
+        const line = smoke.split("\n").find(l => l.includes("window." + n + " = [];")) || "";
+        assert.ok(line.includes('const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.' + n + ".push(txt); last = key;"), n + " keys on the count: " + line.slice(0, 160));
+      });
+      assert.strictEqual((smoke.match(/data-testid=toast-box/g) || []).length, 0, "no smoke read of the box (its text carries the count and the close control)");
     });
   })();
 

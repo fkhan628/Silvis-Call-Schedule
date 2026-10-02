@@ -5670,9 +5670,43 @@ function notifPermissionText(permission) {
   return "This browser can't show pop-ups (on an iPhone, add the app to the Home Screen first).";
 }
 
+/* === Toasts (review 9/27 Do first 8) === */
+// The app keeps ONE visible toast and the newest always shows at once (the smoke reads the current one). A success /
+// info toast fades after TOAST_MS (4.5 s, as before); an ERROR stays until tapped or for max(8 s, 60 ms per
+// character) - the long ones (~370 characters) could not be read in 4.5 s. An identical repeat of the toast on screen
+// (same text, same tone) is not a new toast: its count goes up and its time restarts. Every error also goes on a short
+// stack, newest first (TOAST_ERROR_LOG_MAX), that the header opens - so an error a later toast replaced (the override
+// reasons when both audit rows were refused, overwritten ~1 s later by the sync failure) can still be read and copied.
+// A stack, not a queue: the slot never brings an older toast back. All three are pure.
+const TOAST_MS = 4500;
+const TOAST_ERROR_MIN_MS = 8000;
+const TOAST_ERROR_MS_PER_CHAR = 60;
+const TOAST_ERROR_LOG_MAX = 10;
+function toastDurationMs(msg, tone) {
+  if (tone !== "error") return TOAST_MS;
+  return Math.max(TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR * String(msg == null ? "" : msg).length);
+}
+// The toast to show next: { msg, tone, count, at }. `current` is the toast on screen (null once it went away).
+function toastNext(current, msg, tone, at) {
+  const m = String(msg == null ? "" : msg);
+  const t = tone || "info";
+  const same = !!current && current.msg === m && current.tone === t;
+  return { msg: m, tone: t, count: same ? (Number(current.count) || 1) + 1 : 1, at: at };
+}
+// The error stack after one more error: [{ msg, at, first, count }], newest first, one entry per distinct text (a
+// repeat moves to the top with its count + 1 and keeps its first time), at most `max` (TOAST_ERROR_LOG_MAX) entries.
+function toastErrorLogPush(list, msg, at, max) {
+  const m = String(msg == null ? "" : msg);
+  const prev = (Array.isArray(list) ? list : []).filter(e => e && typeof e.msg === "string");
+  const same = prev.find(e => e.msg === m) || null;
+  const entry = { msg: m, at: at, first: same ? same.first : at, count: same ? (Number(same.count) || 1) + 1 : 1 };
+  return [entry].concat(prev.filter(e => e.msg !== m)).slice(0, Math.max(1, Number(max) || TOAST_ERROR_LOG_MAX));
+}
+
 // (e) The toasts for Setup saves that wait for the blob write: ONE toast naming every distinct label, in order
 // ("Group rules and Holiday units saved.") - the app's toast is single-slot (a second showToast replaces the
-// first), so one line per settled run is the only way every label is seen (B9 review 9/24).
+// first), so one line per settled run is the only way every label is seen (B9 review 9/24; still one visible slot
+// since Do first 8 - an error it replaced stays on the header's stack, a success does not).
 function setupSaveToasts(labels, ok, why) {
   const seen = new Set();
   const list = (Array.isArray(labels) ? labels : []).map(l => String(l || "").trim()).filter(k => { if (!k || seen.has(k)) return false; seen.add(k); return true; });
@@ -6059,6 +6093,7 @@ function payLogAuditText(verb, name, row) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
+    TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE, SESSION_UNREACHED_MESSAGE, SESSION_STILL_UNREACHED_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES, notifPopupStep, notifSeenAdd,

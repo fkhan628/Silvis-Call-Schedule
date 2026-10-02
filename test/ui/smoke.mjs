@@ -4792,7 +4792,12 @@ try {
         const dayWrites = (from) => writes.slice(from).filter(w => w.path.startsWith("/rest/v1/schedule_days") && (w.path.includes("day=eq." + wd + "&") || parse(w).day === wd));
         const okPatches = (from) => dayWrites(from).filter(w => w.method === "PATCH" && !w.aborted);
         const hdr = () => page.$eval("[data-testid=app-header]", el => ({ text: el.textContent, failLine: (el.querySelector("[data-testid=hdr-sync-failed]") || { textContent: "" }).textContent })); // textContent: the sub line is uppercased by CSS
-        await page.evaluate(() => { if (window.__df2Toasts) return; window.__df2Toasts = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__df2Toasts.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+        // Review 9/27 Do first 8 - adapted deliberately: an error toast now stays at least 8 s (it faded at 4.5 s), so the
+        // streak's second "check your connection" (~6.5 s after the first) arrives while the first is still up, and an
+        // identical repeat is one toast whose count goes up (data-testid toast-count, "x2"), not a new text. The recorder
+        // keys on the text AND that count, so a repeat still counts as one more showing - what the fade-and-reappear of the
+        // 4.5 s toast used to record.
+        await page.evaluate(() => { if (window.__df2Toasts) return; window.__df2Toasts = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.__df2Toasts.push(txt); last = key; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
         const toasts = () => page.evaluate(() => window.__df2Toasts.slice());
         const NET_TOAST = "Couldn't save schedule changes - check your connection.";
         await freshPollWindow("Do first 2 network failure");
@@ -10128,7 +10133,9 @@ try {
       await sess.goto(BASE, { waitUntil: "domcontentloaded" });
       await sess.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
       await sess.waitForSelector("text=Synced", { timeout: 30000 });
-      await sess.evaluate(() => { window.__toastLog = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__toastLog.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+      // Review 9/27 Do first 8 - adapted deliberately (as __df2Toasts): an identical repeat while the toast is up is a
+      // count (toast-count), not a new text - keyed on both, it still shows up here as another toast.
+      await sess.evaluate(() => { window.__toastLog = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.__toastLog.push(txt); last = key; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
       await sess.waitForTimeout(3500); // past the autosave hydration window; the heartbeat's refresh attempt has happened
       // (1) the first write path already found the session dead: one refresh attempt, the banner once
       const bannerAtLoad = await banners();
