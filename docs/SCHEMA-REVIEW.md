@@ -2114,7 +2114,7 @@ assumed (`assume`), the Friday held as a block member - the accepted boundary fo
 **The client on the same branch.** The board's eligibility memo asks the pair only for a surgeon whose one-day answer is
 refused by `lone-weekend-day` alone and whose partner day is listed on the board, open and unlocked in the same role. Then
 the Saturday and Sunday rows show "Take Sat + Sun" (`data-testid="ob-take-pair"`) beside the disabled one-day Take (its
-reason in words: "a Saturday on its own - weekend days come as a pair (Sat + Sun)"); the confirm sheet names both days; the
+reason in words: "a Saturday alone as primary, without its Sunday" - reasonLabel's words since the 10/1 follow-ups); the confirm sheet names both days; the
 confirm re-reads the pair gate and makes ONE `POST rest/v1/rpc/claim_open_weekend_pair { p_saturday, p_role }` - no
 two-call fallback. A 404 / `PGRST202` (the function not applied yet, or PostgREST not reloaded) reads "the two-day claim is
 not switched on yet - ask the scheduler". A refusal writes one client audit row (`claim refused: Sat M/D + Sun M/D role`);

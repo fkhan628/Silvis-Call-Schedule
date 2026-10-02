@@ -5644,7 +5644,9 @@ try {
         await reloadPair();
         await openBoardPair();
         const rs = await pairRow(sat + "|primary"), ru = await pairRow(sun + "|primary");
-        const satWords = "a Saturday on its own - weekend days come as a pair (Sat + Sun)", sunWords = "a Sunday on its own - weekend days come as a pair (Sat + Sun)";
+        // pin moved deliberately 10/2 at the merge of main's follow-ups (7cf2931 re-worded reasonLabel's lone-weekend-day -
+        // the painter's words; test/data-layer.test.js pins them): the disabled one-day Take reads main's words
+        const satWords = "a Saturday alone as primary, without its Sunday", sunWords = "a Sunday alone as primary, without its Saturday";
         if (!rs || !ru) fail(`Weekend pair claim: the blanked rows are not on the board (${sat}|primary ${!!rs}, ${sun}|primary ${!!ru})`);
         else if (rs.take !== "disabled" || ru.take !== "disabled" || rs.title !== satWords || ru.title !== sunWords || rs.why !== satWords || ru.why !== sunWords) fail(`Weekend pair claim: the one-day Take must be disabled with its reason in words on both rows (title and visible text) - Sat ${JSON.stringify(rs)}, Sun ${JSON.stringify(ru)}`);
         else if (!rs.pair || !ru.pair || rs.pair.sat !== sat || ru.pair.sat !== sat || rs.pair.text !== "Take Sat + Sun" || ru.pair.text !== "Take Sat + Sun") fail(`Weekend pair claim: "Take Sat + Sun" (data-sat ${sat}) must show on both rows - Sat ${JSON.stringify(rs.pair)}, Sun ${JSON.stringify(ru.pair)}`);
