@@ -699,17 +699,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       if (at < 0 || from < 0 || to < 0) throw new Error("D15: the time_off / availability loaders not found");
       return SRC15.slice(from + "\n  };\n".length, to);
     })();
-    const mkLoaders15 = (st) => new Function("db", "adoptTimeOffRows", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", "useRef", LOADERS15 + "\nreturn { loadTimeOff, loadAvailability };")(
-      Q.db, (rows) => st.sets.push(rows), (rows) => st.sets.push(rows), st.ref, (m, k) => st.toasts.push([m, k]), { warn: () => {} }, (v) => ({ current: v }));
+    const mkLoaders15 = (st) => new Function("db", "adoptTimeOffRows", "setAvailabilityRows", "setAvailabilityReadOk", "everHadRealDataRef", "showToast", "console", "useRef", LOADERS15 + "\nreturn { loadTimeOff, loadAvailability };")(
+      Q.db, (rows) => st.sets.push(rows), (rows) => st.sets.push(rows), (v) => st.readOk.push(v), st.ref, (m, k) => st.toasts.push([m, k]), { warn: () => {} }, (v) => ({ current: v }));
     const mkLoadAvailability = () => {
       const la = SRC15.slice(SRC15.indexOf("const loadAvailability = async (quiet) => {"), SRC15.indexOf("// Prompt 14 part 3a: offers and periods."));
-      const st = { sets: [], toasts: [], ref: { current: false }, src: la };
+      const st = { sets: [], toasts: [], readOk: [], ref: { current: false }, src: la };
       st.fn = mkLoaders15(st).loadAvailability;
       return st;
     };
     const mkLoadTimeOff = () => {
       const lt = SRC15.slice(SRC15.indexOf("const loadTimeOff = async (quiet) => {"), SRC15.indexOf("const loadAvailability = async (quiet) => {"));
-      const st = { sets: [], toasts: [], ref: { current: false }, src: lt };
+      const st = { sets: [], toasts: [], readOk: [], ref: { current: false }, src: lt };
       st.fn = mkLoaders15(st).loadTimeOff;
       return st;
     };
@@ -719,10 +719,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : resp(200, rowsOf(P - 1, 4))));
       assert.strictEqual(await ok1.fn(false), true);
       assert.strictEqual(ok1.sets.length, 1); assert.strictEqual(ok1.sets[0].length, P + 3); assert.strictEqual(ok1.ref.current, true);
+      // Prompt 28 ship review (10/2): an adopted read marks availability read (the painter's No primary brush waits for it)
+      assert.deepStrictEqual(ok1.readOk, [true], "an adopted read sets availabilityReadOk");
       for (const quiet of [false, true]) {
         const st = mkLoadAvailability();
         setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : resp(503, "upstream")));
         assert.strictEqual(await st.fn(quiet), false, "quiet=" + quiet);
+        assert.deepStrictEqual(st.readOk, [], "quiet=" + quiet + ": a failed read must not mark availability read");
         assert.strictEqual(st.sets.length, 0, "quiet=" + quiet + ": a partial list was adopted (" + (st.sets[0] && st.sets[0].length) + " rows)");
         assert.strictEqual(st.toasts.length, quiet ? 0 : 1, "quiet=" + quiet + ": toasts " + JSON.stringify(st.toasts));
         if (!quiet) assert.ok(/Couldn't load availability statements/.test(st.toasts[0][0]) && st.toasts[0][1] === "error");
@@ -2785,8 +2788,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
           query: async () => { throw new Error("an unpaged read"); },
         };
         const q = quiet === "sink" ? (m) => got.push(m) : quiet;
-        const both = new Function("db", "adoptTimeOffRows", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", "useRef", plainRegion + "\nreturn { timeOff: loadTimeOff, availability: loadAvailability };")(
-          db, () => {}, () => {}, { current: false }, (m, t) => toasts.push(t + " " + m), { warn: (m) => warns.push(String(m)) }, (v) => ({ current: v }));
+        const both = new Function("db", "adoptTimeOffRows", "setAvailabilityRows", "setAvailabilityReadOk", "everHadRealDataRef", "showToast", "console", "useRef", plainRegion + "\nreturn { timeOff: loadTimeOff, availability: loadAvailability };")(
+          db, () => {}, () => {}, () => {}, { current: false }, (m, t) => toasts.push(t + " " + m), { warn: (m) => warns.push(String(m)) }, (v) => ({ current: v }));
         const r = await both[which](q);
         return { toasts, warns, got, r };
       };
@@ -4439,7 +4442,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('window.location.hash === "#offers"'), "no #offers deep link");
       // pin moved deliberately 10/1 (Prompt 28): five brushes - No primary (ofp-brush-noprimary) between Either and Clear; kept intent:
       // one button per brush, data-testid ofp-brush-<key>.
-      assert.ok(src.includes('{["primary", "backup", "either", "noprimary", "clear"].map(k => (\n            <button key={k} data-testid={"ofp-brush-" + k}'), "the five brushes (ofp-brush-<key>) are missing");
+      // pin moved deliberately 10/2 (Prompt 28 ship review): the map's callback has a body now (the No primary brush is disabled
+      // until the first availability read); kept intent: one button per brush, data-testid ofp-brush-<key>.
+      assert.ok(src.includes('{["primary", "backup", "either", "noprimary", "clear"].map(k => {') && src.includes('            return <button key={k} data-testid={"ofp-brush-" + k}'), "the five brushes (ofp-brush-<key>) are missing");
       ["ofp-range", "ofp-mode-exhaustive", "ofp-mode-preferred", "ofp-rules-only", "ofp-paste-text", "ofp-paste-add", "ofp-save", "ofp-discard", "ofp-close", "ofp-counts", "ofp-error", "ofp-saved", "ofp-day", "ofp-why", "ofp-cancel-start", "ofp-period-toggle", "ofp-period-line", "ofp-period-closed", "ofp-list", "ofp-footer"].forEach(t => assert.ok(src.includes('data-testid="' + t + '"'), "missing data-testid " + t));
       assert.ok(src.includes("suParseDateList(pasteText, pasteYear)"), "the paste box must reuse the availability paste parser");
       assert.ok(src.includes("data-testid=\"ofp-prev\" disabled={atCurrentMonth}"), "< must be disabled on the current month (navigation is from the current month forward)");
@@ -4458,8 +4463,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     /* ---------------- P28. Prompt 28 (10/1): No primary days in the offer painter - source pins + the commit / error behaviour ---------------- */
     console.log("\n[P28] Prompt 28: No primary days - painter source pins, the one save_offers request, the audit text, the error words");
     check("P28 pins: the painter receives the availability rows at its one mount (no new read), models own backup_only rows itself (backup-only-row filtered from the PRIMARY hard list before offerDayWhy; OFFER_BLOCK_WORDS unchanged), range days read NO_PRIMARY_RANGE_WORDS, held primary from the schedule", () => {
-      assert.ok(src.includes("          schedule={schedule} availability={availabilityRows}\n          ctx={rulesCtx} ctxError={rulesCtxState.error}"), "the mount passes availability={availabilityRows} on the schedule line");
-      assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, ctx,"), "the sheet takes the availability prop after schedule");
+      // pins moved deliberately 10/2 (Prompt 28 ship review): availabilityRead={availabilityReadOk} joins the line and the props;
+      // kept intent: the rows come in at the one mount (no new read), after schedule.
+      assert.ok(src.includes("          schedule={schedule} availability={availabilityRows} availabilityRead={availabilityReadOk}\n          ctx={rulesCtx} ctxError={rulesCtxState.error}"), "the mount passes availability={availabilityRows} on the schedule line");
+      assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx,"), "the sheet takes the availability prop after schedule");
       assert.ok(src.includes("const np = React.useMemo(() => noPrimaryDays(availability, pid), [availability, pid]);"), "own / range days through helpers.noPrimaryDays");
       const filt = src.indexOf("const hard = elig ? elig.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [];");
       assert.ok(filt > 0 && src.indexOf("const why = offerDayWhy(hard);") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
@@ -4472,6 +4479,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // through npWho; kept intent: the relay names the surgeon and the plain words stay "backup is still fine".
       assert.ok(src.includes("const npWho = asScheduler && person ? person.name : \"yourself\";") && src.includes("    : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`;"), "the No primary tap hint (relay names the surgeon)");
       assert.ok(src.includes("{armed === \"noprimary\" && !rangeMode ? npHint : rangeHint}"), "npHint replaces rangeHint while No primary is armed and Range is off");
+    });
+    // Ship review 10/2 (Prompt 28, confirmed finding): a failed availability read leaves availabilityRows at its initial [] - the
+    // painter would show none of the person's No primary days and he could lift none. Until an availability read has been adopted
+    // the No primary brush is disabled and one alert line says so (the smoke's Do first 4 step shows it with every read failing).
+    check("P28 ship review: the painter's No primary brush waits for the first adopted availability read (disabled, a title) and one alert line (ofp-np-unread) says so; availabilityReadOk has one writer, loadAvailability's adopt path", () => {
+      assert.strictEqual(count("const [availabilityReadOk, setAvailabilityReadOk] = useState(false);"), 1, "the state, false at start");
+      assert.strictEqual(count("setAvailabilityReadOk("), 1, "one writer");
+      const la = src.slice(src.indexOf("  const loadAvailability = async (quiet) => {"), src.indexOf("  // Prompt 14 part 3a: offers and periods."));
+      const wAt = la.indexOf("      setAvailabilityReadOk(true);");
+      assert.ok(wAt > la.indexOf("availabilityReadSeqRef.current.adopted = seq;") && wAt > la.indexOf("setAvailabilityRows(list);") && wAt < la.indexOf("} catch (e) {"), "set after the adoption, inside the try (never by a failed or dropped read)");
+      assert.strictEqual(count("availabilityRead={availabilityReadOk}"), 1, "the painter's one mount passes it");
+      assert.ok(src.includes('const npOff = k === "noprimary" && !availabilityRead;') && src.includes("disabled={npOff} title={npOff ? \"The No primary days have not loaded - reload first\" : undefined}"), "the No primary brush is disabled (with a title) until read");
+      assert.ok(src.includes("{!availabilityRead && <div role=\"alert\" data-testid=\"ofp-np-unread\" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Couldn't load {asScheduler && person ? person.name + \"'s\" : \"your\"} No primary days - reload before marking or lifting one.</div>}"), "the alert line (a relay names the surgeon)");
     });
     // Review 10/1 (Prompt 28, confirmed finding): in an "Only these days" (exhaustive) period a No primary day is not an offer - the
     // generator places him on backup there only with a Backup offer (rules.js not-offered) - so the legend, the hint and the replace
@@ -8165,11 +8185,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     await acheckD("DF4 review (10/1): runGenerate's head (lifted) refuses an unread schedule with its own toast before the offers verdict and the busy flag - 'still loading' while the load runs (no banner yet), the Retry wording after it; with the days read it goes on", async () => {
       const head = between("  const runGenerate = async (o) => {", "    setGenBusy(true);");
       const msgOf = (name) => JSON.parse(src.match(new RegExp("const " + name + " = (\"[^\"]*\");"))[1]);
-      const UNREAD = msgOf("GEN_DAYS_UNREAD_MSG"), LOADING = msgOf("GEN_DAYS_LOADING_MSG");
-      const gen = async (daysRead, loaded) => {
+      const UNREAD = msgOf("GEN_DAYS_UNREAD_MSG"), LOADING = msgOf("GEN_DAYS_LOADING_MSG"), TA = msgOf("GEN_TA_UNREAD_MSG");
+      // Prompt 28 ship review (10/2): taRead = [time_off read, availability read] - adopted reads counted by the loaders' refs
+      const gen = async (daysRead, loaded, taRead) => {
         const st = { toasts: [], verdict: 0 };
-        const fn = new Function("isScheduler", "suIsIso", "suDaysBetween", "rulesImported", "showToast", "daysReadOkRef", "loaded", "GEN_DAYS_UNREAD_MSG", "GEN_DAYS_LOADING_MSG", "offersLoadVerdict", "offersLoad",
-          head + "    return \"ran\";\n  };\n  return runGenerate;")(true, (s) => /^\d{4}-\d{2}-\d{2}$/.test(s), () => 30, true, (m, tone) => st.toasts.push(tone + " " + m), ref(daysRead), loaded, UNREAD, LOADING, () => { st.verdict++; return { verdict: "ok" }; }, {});
+        const ta = taRead || [true, true];
+        const fn = new Function("isScheduler", "suIsIso", "suDaysBetween", "rulesImported", "showToast", "daysReadOkRef", "loaded", "GEN_DAYS_UNREAD_MSG", "GEN_DAYS_LOADING_MSG", "offersLoadVerdict", "offersLoad", "timeOffReadSeqRef", "availabilityReadSeqRef", "GEN_TA_UNREAD_MSG",
+          head + "    return \"ran\";\n  };\n  return runGenerate;")(true, (s) => /^\d{4}-\d{2}-\d{2}$/.test(s), () => 30, true, (m, tone) => st.toasts.push(tone + " " + m), ref(daysRead), loaded, UNREAD, LOADING, () => { st.verdict++; return { verdict: "ok" }; }, {},
+          ref({ started: 3, adopted: ta[0] ? 2 : 0 }), ref({ started: 3, adopted: ta[1] ? 3 : 0 }), TA);
         st.r = await fn({ start: "2026-11-02", end: "2026-11-30", bestOf: 10 });
         return st;
       };
@@ -8177,6 +8200,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(u.r === undefined && u.verdict === 0 && u.toasts.length === 1 && u.toasts[0] === "error " + UNREAD, "loaded, days unread: " + JSON.stringify(u));
       assert.ok(l.r === undefined && l.verdict === 0 && l.toasts.length === 1 && l.toasts[0] === "error " + LOADING, "still loading: " + JSON.stringify(l));
       assert.ok(ok.r === "ran" && ok.verdict === 1 && ok.toasts.length === 0, "days read: it goes on to the offers verdict: " + JSON.stringify(ok));
+      // Prompt 28 ship review (10/2): with the days read, a time_off or an availability list never read this session refuses too
+      // (the run would ignore every vacation / No primary day) - before the offers verdict; 'still loading' while the load runs
+      for (const taRead of [[false, true], [true, false], [false, false]]) {
+        const t = await gen(true, true, taRead), tl = await gen(true, false, taRead);
+        assert.ok(t.r === undefined && t.verdict === 0 && t.toasts.length === 1 && t.toasts[0] === "error " + TA, "loaded, read " + JSON.stringify(taRead) + ": " + JSON.stringify(t));
+        assert.ok(tl.r === undefined && tl.verdict === 0 && tl.toasts.length === 1 && tl.toasts[0] === "error " + LOADING, "loading, read " + JSON.stringify(taRead) + ": " + JSON.stringify(tl));
+      }
+      assert.ok(/^Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day\. [^"]*Nothing was run\.$/.test(TA), "the refusal names what is missing, the risk, and that nothing ran: " + TA);
     });
 
     check("DF4 pins: the mount load is ONE Promise.allSettled over Leg A, Leg B and the secondary reads - no sequential await of a loader left at its top level; one toast site for the load; runGenerate refuses an unread schedule (daysReadOkRef) BEFORE the offers verdict, the busy flag and the ctx build", () => {
@@ -8192,8 +8223,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // review of Do first 4 (10/1, moved deliberately): the wording follows `loaded` ("still loading" before the banner can exist)
       const iDays = rg.indexOf('if (!daysReadOkRef.current) { showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }'), iVerdict = rg.indexOf("const ov = offersLoadVerdict(offersLoad);"), iBusy = rg.indexOf("setGenBusy(true);"), iBuild = rg.indexOf("safeBuildContext(");
       assert.ok(iDays > 0 && iDays < iVerdict && iVerdict < iBusy && iBusy < iBuild, "the refusal comes first (" + [iDays, iVerdict, iBusy, iBuild].join(", ") + ")");
+      // Prompt 28 ship review (10/2): the time_off / availability refusal right after the days one, before the offers verdict
+      const iTa = rg.indexOf('if (timeOffReadSeqRef.current.adopted === 0 || availabilityReadSeqRef.current.adopted === 0) { showToast(loaded ? GEN_TA_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }');
+      assert.ok(iTa > iDays && iTa < iVerdict, "the time_off / availability refusal sits between the days refusal and the offers verdict (" + [iDays, iTa, iVerdict].join(", ") + ")");
+      assert.strictEqual(count("GEN_TA_UNREAD_MSG"), 2, "GEN_TA_UNREAD_MSG declared once, used once");
+      assert.ok(src.indexOf("const GEN_TA_UNREAD_MSG = ") > 0 && src.indexOf("const GEN_TA_UNREAD_MSG = ") < src.indexOf("  const runGenerate = async (o) => {"), "GEN_TA_UNREAD_MSG declared before runGenerate");
       assert.strictEqual(count("GEN_DAYS_UNREAD_MSG"), 2, "declared once, used once");
-      assert.strictEqual(count("GEN_DAYS_LOADING_MSG"), 2, "declared once, used once");
+      // pin moved deliberately 10/2 (Prompt 28 ship review): the time_off / availability refusal says "still loading" too while the
+      // load runs; kept intent: one declaration, no use outside runGenerate's head
+      assert.strictEqual(count("GEN_DAYS_LOADING_MSG"), 3, "declared once, used by the two unread refusals");
+      assert.strictEqual(count("GEN_DAYS_LOADING_MSG", rg), 2, "both uses in runGenerate");
       // the leg-1 gates (review of Do first 4, 10/1): switchedUserRef before the payload is armed; both gates first in the timer
       const leg1 = between(LEG1_FROM, LEG1_TO);
       assert.ok(leg1.indexOf("    if (switchedUserRef.current) return;\n    const payload = buildStateBundle();") > leg1.indexOf("if (loadFailedRef.current) {"), "leg 1: the switch gate after the loadFailedRef gate, before the payload is armed");

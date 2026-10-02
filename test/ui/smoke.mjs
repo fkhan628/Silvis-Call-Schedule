@@ -11072,6 +11072,37 @@ try {
       else if (phone.some(t => !(t.h > 0) || t.h / t.vh >= 0.2)) fail(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high - over 20% of the screen: ${JSON.stringify(phone)}`);
       else ok(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high (${Math.round(100 * Math.max(...phone.map(t => t.h)) / 812)}% of the screen)`);
       await p4.screenshot({ path: path.join(OUT, "do-first-4-startup.png"), fullPage: true }).catch(() => {});
+      // Prompt 28 ship review (10/2): time_off / availability never read this session (every GET answers 500, Realtime silenced,
+      // the poll's re-reads fail too): the painter shows its alert line with the No primary brush disabled (the marks it would
+      // show are unknown), and Generate refuses with its own toast - no preview, nothing written (it ran with both lists empty)
+      await p4.setViewportSize({ width: 1180, height: 900 });
+      await p4.waitForTimeout(300);
+      await p4.click("[data-testid=nav-paint-offers]");
+      await p4.waitForSelector("[data-testid=ofp-sheet][data-person]", { timeout: 8000 });
+      await p4.waitForTimeout(300);
+      const npUnread = await p4.$eval("[data-testid=ofp-np-unread]", el => el.textContent.trim()).catch(() => null);
+      const npBrush = await p4.$eval("[data-testid=ofp-brush-noprimary]", el => ({ disabled: el.disabled, armed: el.getAttribute("data-armed") })).catch(() => null);
+      if (npUnread !== "Couldn't load your No primary days - reload before marking or lifting one.") fail(`Do first 4 + Prompt 28: with availability never read the painter must say so (ofp-np-unread) - got ${JSON.stringify(npUnread)}`);
+      else if (!npBrush || npBrush.disabled !== true || npBrush.armed !== "0") fail(`Do first 4 + Prompt 28: with availability never read the No primary brush must be disabled - ${JSON.stringify(npBrush)}`);
+      else ok(`Do first 4 + Prompt 28: availability never read -> the painter's alert line '${npUnread}' and the No primary brush disabled`);
+      await p4.click("[data-testid=ofp-close]");
+      await p4.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 5000 });
+      await p4.click('button[data-tab="setup"]');
+      if ((await p4.locator("[data-testid=card-setup_generate]").getAttribute("data-open")) !== "1") { await p4.click("[data-testid=card-toggle-setup_generate]"); await p4.waitForTimeout(200); }
+      await p4.waitForSelector("[data-testid=gen-run]", { timeout: 5000 });
+      const df4Writes = [];
+      const onDf4Req = (req) => { if (req.method() !== "GET" && req.method() !== "OPTIONS" && req.method() !== "HEAD" && /\/rest\/v1\/(schedule_days|call_schedule_snapshots|call_schedule_data|availability|time_off)\b/.test(req.url())) df4Writes.push(req.method() + " " + new URL(req.url()).pathname); };
+      p4.on("request", onDf4Req);
+      await p4.click("[data-testid=gen-run]");
+      await p4.waitForTimeout(500);
+      p4.off("request", onDf4Req);
+      const genToast = await p4.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      const genPreview = await p4.$("[data-testid=gen-preview]");
+      const GEN_TA = "Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day. Reload, then generate. Nothing was run.";
+      if (genToast !== GEN_TA) fail(`Do first 4 + Prompt 28: Generate with time_off / availability never read must refuse with '${GEN_TA}' - toast ${JSON.stringify(genToast.slice(0, 200))}`);
+      else if (genPreview) fail("Do first 4 + Prompt 28: Generate refused but a preview was drawn");
+      else if (df4Writes.length) fail(`Do first 4 + Prompt 28: the refused Generate wrote: ${df4Writes.join(", ")}`);
+      else ok(`Do first 4 + Prompt 28: Generate refused with time_off / availability never read ('${genToast.slice(0, 70)}...'), no preview, no write`);
     } catch (e) { fail("Do first 4: " + errLine(e)); try { await p4.screenshot({ path: path.join(OUT, "failure-do-first-4.png"), fullPage: true }); } catch (e2) {} }
     await settle4();
     await df4Ctx.close();

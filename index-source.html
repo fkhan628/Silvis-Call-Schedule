@@ -290,6 +290,9 @@ function CallSchedule() {
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]); // raw rows (export / restore)
   const [availabilityRows, setAvailabilityRows] = useState([]); // dated availability statements
+  // Ship review 10/2 (Prompt 28): true once an availability read was adopted this session. A failed read leaves the list
+  // at its initial [] (never a sign of "no rows"), so the painter cannot show the person's No primary days until then.
+  const [availabilityReadOk, setAvailabilityReadOk] = useState(false);
   // Offers (Prompt 14 part 3a): call_offers / call_periods rows, authenticated-only tables read through
   // readAuthOnlyTable (a missing / expired token skips the read; an anon read answers 200 + [] and would wipe
   // the lists). The painter (OfferPainterSheet, module scope) reads them; offerSheet = { personId } while it is open.
@@ -441,6 +444,10 @@ function CallSchedule() {
   // Review of Do first 4 (10/1): the same refusal while the load is still running (header "Connecting") - there is no
   // banner to retry yet.
   const GEN_DAYS_LOADING_MSG = "Not run: the schedule is still loading - wait for it, then generate. Nothing was run.";
+  // Ship review 10/2 (Prompt 28): the same while time_off or availability has never been read this session (no read
+  // adopted - timeOffReadSeqRef / availabilityReadSeqRef .adopted still 0): a failed read leaves the lists at their initial
+  // [], and the run would ignore every vacation and every No primary day (no schedule_days trigger checks either).
+  const GEN_TA_UNREAD_MSG = "Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day. Reload, then generate. Nothing was run.";
   // Bumped after a successful login/biometric-unlock to re-run the data-load
   // effect WITH the now-stored session JWT, without a full page reload (a
   // page reload re-triggers the mount auth-gate and loops on biometric).
@@ -1445,6 +1452,7 @@ function CallSchedule() {
       availabilityReadSeqRef.current.adopted = seq;
       const list = Array.isArray(rows) ? rows : [];
       setAvailabilityRows(list);
+      setAvailabilityReadOk(true);
       if (list.length > 0) everHadRealDataRef.current = true;
       return true;
     } catch (e) {
@@ -3504,6 +3512,7 @@ function CallSchedule() {
     // nothing that is locked on file. Before the parallel startup this was refused only indirectly (offers and periods
     // were read inside the days leg's try, so offersLoadVerdict refused - and only until the first poll read them).
     if (!daysReadOkRef.current) { showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }
+    if (timeOffReadSeqRef.current.adopted === 0 || availabilityReadSeqRef.current.adopted === 0) { showToast(loaded ? GEN_TA_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? (1 + Math.floor(Math.random() * 2147483646)) : (/^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn);
@@ -6366,7 +6375,7 @@ function CallSchedule() {
           relayWord={isCoordinator ? "the office" : "the scheduler"}
           isScheduler={isScheduler}
           offers={offerRows} periods={periodRows}
-          schedule={schedule} availability={availabilityRows}
+          schedule={schedule} availability={availabilityRows} availabilityRead={availabilityReadOk}
           ctx={rulesCtx} ctxError={rulesCtxState.error}
           surgeonRules={surgeonRules} groupRules={groupRules}
           today={todayStr} nameOf={nameOf}
@@ -8248,7 +8257,7 @@ function writeCollapseFlag(ck, open) {
 //    rpc/save_offers request: the no-primary days ride in p_np_add / p_np_clear (sent only when non-empty) and the
 //    function writes them through save_no_primary in the same transaction - all or nothing. A no-primary day is not an
 //    offer: the period count, the status and "Go by my rules" keep reading offers only.
-function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
+function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
   const t0 = parse(today);
@@ -8562,9 +8571,11 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : ""}</>}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
-          {["primary", "backup", "either", "noprimary", "clear"].map(k => (
-            <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={css.brush(armed === k, k)}>{OFFER_BRUSH[k].label}</button>
-          ))}
+          {["primary", "backup", "either", "noprimary", "clear"].map(k => {
+            // Ship review 10/2: the No primary brush waits for the first availability read (the marks it would show are unknown)
+            const npOff = k === "noprimary" && !availabilityRead;
+            return <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} disabled={npOff} title={npOff ? "The No primary days have not loaded - reload first" : undefined} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={{ ...css.brush(armed === k, k), ...(npOff ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}>{OFFER_BRUSH[k].label}</button>;
+          })}
           <button data-testid="ofp-range" data-on={rangeMode ? "1" : "0"} onClick={() => { setRangeMode(v => !v); setPendingStart(null); setHint(""); }} title="Paint a run of days: tap the start day, then the end day" style={{ ...css.btn(false), minHeight: 44, padding: "8px 12px", fontSize: 12, marginLeft: "auto", ...(rangeMode ? { background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`, color: "#fff", borderColor: T.navy } : {}) }}>{rangeMode ? "Range: on" : "Range"}</button>
         </div>
         <div data-testid="ofp-hint" style={{ fontSize: 11, color: hint ? "#a05010" : muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", lineHeight: 1.4 }}>
@@ -8577,6 +8588,8 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
         </div>
         {/* Prompt 28: the No primary legend - only while that brush is armed (the day list keeps the phone's height) */}
         {armed === "noprimary" && <div data-testid="ofp-legend" data-exh={npExh ? "1" : "0"} style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.35 }}>{npLegend}</div>}
+        {/* Ship review 10/2: no availability read adopted yet (a failed read) - the No primary days shown would be none */}
+        {!availabilityRead && <div role="alert" data-testid="ofp-np-unread" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Couldn't load {asScheduler && person ? person.name + "'s" : "your"} No primary days - reload before marking or lifting one.</div>}
         {!ctx && <div role="alert" data-testid="ofp-rules-unavailable" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Rules unavailable{ctxError ? " (" + String(ctxError).slice(0, 120) + ")" : ""} - only past and frozen days are greyed; the database still refuses a vacation day.</div>}
       </div>
 
