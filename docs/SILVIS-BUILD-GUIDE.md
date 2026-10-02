@@ -2091,7 +2091,10 @@ too (`user_profiles_app_viewer`). Only the admin writes `user_profiles`.
   the APP rows per theme; `test/ui/smoke.mjs` "Prompt 29: APP call days" with the table and functions mocked (APP A adds two
   days, APP B is refused on one, A removes one; a surgeon, the coordinator and a plain viewer see it without controls; the
   scheduler sets / changes / clears; Setup > Users; `?public=1` and the share page show nothing; the "absent" state). The
-  database side: the probe (66 cases), the pre-check, verify-rls section 18, the schema test pins (the DB lane's).
+  database side: the probe (66 cases), the pre-check, verify-rls section 18, the schema test pins (the DB lane's). The
+  integration cross pins (`test/data-layer.test.js` [P29] "cross pins") read the migration and hold the client to it: the
+  four RPC keys = the function's parameters, `APP_DAY_CODES` = the codes and tokens it raises, the return keys, the GET of the
+  stable `app_call_names` and its OUT columns, the table's columns, the smoke mock's refusal words, this guide's 4.3 bullet.
 - Apply order: pre-check -> probe BEFORE (`PROBE_SETUP` absent) -> the migration -> probe AFTER (66 cases) ->
   `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` -> the record step -> the client push on Faraz's go (after Prompt
   28's client) -> Faraz switches the APP accounts. A rollback after the client push only empties the APP features (the client
