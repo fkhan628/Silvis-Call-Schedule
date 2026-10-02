@@ -679,9 +679,11 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   (`signOutForLink`) empty it like Sign out, which also takes the toast down. A second Copy restarts one label timer.
   Smoke: "Do first 8 toast 390px" (a page whose availability reads answer 500; the day editor opens while the error is up -
   the box >= 300 px wide, Save's and Cancel's centres not in it, the close control and "N errors" >= 36 px). At the
-  rebase onto main (Do first 4/5 merged), main's "Do first 4" recorder (`__df4Toasts`, keyed on the text only, with
-  `DF4_GAP_MS` built on the 4.5 s fade) needs the same adaptation - the patch and its offline replay are in the gate
-  folder (`run-2026-10-01/3b/df69-fix/`).
+  merge of main (Do first 4/5, 10/2), main's "Do first 4" recorder (`__df4Toasts`, keyed on the text only, with
+  `DF4_GAP_MS` built on the 4.5 s fade) took the same adaptation: it keys on the text and the `toast-count` chip and
+  measures the `toast-box`, and `DF4_GAP_MS` waits out `helpers.toastDurationMs` (8 s for its 109 characters), so each
+  load's combined toast is recorded on its own (pinned in data-layer next to the toast-390 pin; the patch and its offline
+  replay are in the gate folder, `run-2026-10-01/3b/df69-fix/`).
   Second review fixes (10/2): the layout effect runs after a render of the app only, but a choice inside the day editor
   (a pick that raises the override box) re-renders `DayEditor` alone - the centred dialog grew, its row moved under a toast
   that had been clear of it (1180 x 800: Save covered). While a toast and the day editor / claim sheet are up

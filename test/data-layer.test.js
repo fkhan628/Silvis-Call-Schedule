@@ -8690,7 +8690,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // centre lands); no other smoke step reads the box (its text carries the count and the close control)
       const t390 = smoke.slice(smoke.indexOf("// ====================== Review of Do first 8 (10/2): an error toast at 390 px"), smoke.indexOf("toast390Forced500Lines = 0; // a forced answer"));
       assert.ok(t390.length > 500, "the toast-390 step");
-      assert.strictEqual((smoke.match(/data-testid=toast-box/g) || []).length, (t390.match(/data-testid=toast-box/g) || []).length, "no smoke read of the box outside the toast-390 geometry step");
+      // merge of main (Do first 4, 10/2): the DF4 recorder keys on the count too and measures the box; its gap waits out an error toast
+      const df4 = smoke.split("\n").find(l => l.includes("window.__df4Toasts.push(")) || "";
+      assert.ok(df4.includes('const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key;') && df4.includes('const box = t.closest("[data-testid=toast-box]") || t;'), "__df4Toasts keys on the count and measures the box: " + df4.slice(0, 200));
+      assert.ok(smoke.includes('const DF4_GAP_MS = DF4_HOLD_MS + HELPERS.toastDurationMs(DF4_TOAST, "error") + 1200;') && !smoke.includes("DF4_HOLD_MS + 4500"), "DF4_GAP_MS waits out the error toast (helpers.toastDurationMs), not the old 4.5 s");
+      const boxReads = (smoke.match(/data-testid=toast-box/g) || []).length - (t390.match(/data-testid=toast-box/g) || []).length - (df4.match(/data-testid=toast-box/g) || []).length;
+      assert.strictEqual(boxReads, 0, "no smoke read of the box outside the toast-390 geometry step and the DF4 height");
       assert.ok(!/toast-box[^\n]{0,80}textContent/.test(t390), "and that step reads no text off the box");
       // second review fixes (10/2): the same page at 1180 x 800 - a pick inside the day editor (or a spacer) grows the dialog
       // with no render of the app; Save and Cancel must stay clear (the ResizeObserver re-measure)
@@ -9404,13 +9409,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
       assert.ok(i > 0 && j > i, "the switched branch");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", adopt.slice(i, j));
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
       const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
       const run = (prevUid, uid, persisted) => {
         const st = { set: [], chained: 0, refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
         // review 2 (10/1): an idle day-sync queue (nothing in flight) - the switch must not wait on it
         fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {},
-          ref(0), ref({ then: () => { st.chained++; } }));
+          ref(0), ref({ then: () => { st.chained++; } }), () => {}, () => {});
         return st;
       };
       const sw = run("uA", "uB", TABLE);
@@ -9426,14 +9431,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     await acheckD("DF4 review 2 (10/1): a day write of the previous account still IN FLIGHT at the switch (lifted switched branch) - once its queue drains, the map follows lastSyncRef (the landed value), so a later merge cannot keep the old value as a local edit and write it back under the new JWT; a map replaced meanwhile (the re-run's adoption, a merge, an edit) is left alone", async () => {
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", adopt.slice(i, j));
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
       const BEFORE = { "2026-11-15": { primary: "s2", backup: "s4" } }, LANDED = { "2026-11-15": { primary: "s1", backup: "s3" } };
       const go = () => {
         let release; const chain = new Promise(r => { release = r; });
         const st = { cur: A_MAP, sets: 0, release, refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
         // setSchedule as React runs it: a value, or an updater handed the latest state
         const setSchedule = (m) => { st.cur = typeof m === "function" ? m(st.cur) : m; st.sets++; };
-        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain));
+        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), () => {}, () => {});
         return st;
       };
       const a = go();

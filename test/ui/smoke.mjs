@@ -11198,13 +11198,17 @@ try {
   // replacing the first) - on both loads of a signed-in open (the mount run, then the stored session's re-run).
   // Review of Do first 4 (10/1): the recorder logs every time a toast is SHOWN (it resets when the toast goes), and every later
   // blob GET is held until DF4_GAP_MS after the first one was issued - the re-run's toast then comes after the mount run's has
-  // gone (4.5 s), so each load's toast is seen on its own (same text twice used to collapse into one record). Both must be the
+  // gone, so each load's toast is seen on its own (same text twice used to collapse into one record). Do first 8 (merge
+  // 10/2): the combined toast is an error, up max(8 s, 60 ms per character) (helpers.toastDurationMs - 8 s for these 109
+  // characters), no longer the old 4.5 s fade - with the old gap the re-run's toast became an "x2" count on the first and
+  // the 375 px measure saw none - and the recorder keys on the text AND the toast-count chip (as __df2Toasts / __toastLog),
+  // measuring the toast-box (the message span sits inside its 10 + 10 px padding). Both must be the
   // compact sentence naming both reads; the viewport turns 375 x 812 after the first load and the re-run's toast must stay
   // under 20% of the screen height there (the joined sentences covered up to half a phone screen).
   {
     const DF4_HOLD_MS = 2500;
-    const DF4_GAP_MS = DF4_HOLD_MS + 4500 + 1200;
     const DF4_TOAST = "Couldn't load vacations and availability - check your connection and reload. What is shown may be incomplete.";
+    const DF4_GAP_MS = DF4_HOLD_MS + HELPERS.toastDurationMs(DF4_TOAST, "error") + 1200; // Do first 8: the error toast's own time (8 s here), not the old 4.5 s
     const DF4_READS = ["schedule_days", "time_off", "availability", "east_feed", "east_forecast", "east_overrides", "client_versions", "shift_trade_requests", "notifications", "call_offers", "call_periods", "east_vacation_reviews"];
     const df4Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     const df4Ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
@@ -11212,7 +11216,7 @@ try {
     await df4Ctx.addInitScript(() => {
       window.__df4Toasts = [];
       let last = "";
-      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt === last) return; last = txt; if (txt) window.__df4Toasts.push({ txt, h: Math.round(t.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); };
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key; if (txt) { const box = t.closest("[data-testid=toast-box]") || t; window.__df4Toasts.push({ txt, h: Math.round(box.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); } };
       new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
     });
     await df4Ctx.route(cdnMatcher, routeCdn);
