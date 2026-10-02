@@ -3027,9 +3027,14 @@ ok(/p4_15=\$\(case_val15 P4\)/.test(s15code) && s15code.includes('"inactive=rost
 ok(/expect_err15 K1 P0001 "ON_CALL_CONFLICT"/.test(s15code) && /expect_err15 K2 P0001 "ON_CALL_CONFLICT"/.test(s15code), "section 15 grades K1 / K2 as the on-call refusal");
 ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.includes("note like 'probe-vacguard%'") && s15code.includes("source = 'probe-vacguard'") && s15code.includes("data->>'probe' = 'vacguard'") && s15code.includes("decided_by = 'probe-vacguard'") && /LEFT ROWS BEHIND/.test(s15code), "section 15 counts leftovers over auth.users / time_off / schedule_days / east_feed / east_vacation_reviews and fails on non-zero");
 // pin moved deliberately 10/1 (the record step): the header still names section 15; the header and --help no longer name the flag
-// pin moved deliberately 10/1 (the merge with Prompt 28): --help's env-var list now ends at SILVIS_NO_PRIMARY_APPLIED (section 16's
-// flag until its own record step), right after SILVIS_PREFS_ROWS_BEFORE. Kept intent: the vacation guard's flag is not listed
-ok(/vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))) && /SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_NO_PRIMARY_APPLIED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header must name section 15 and --help must list SILVIS_PREFS_ROWS_BEFORE / SILVIS_NO_PRIMARY_APPLIED at the end of its env-var list (SILVIS_VACATION_GUARD_APPLIED dropped)");
+// pin moved deliberately 10/1 (the merge with Prompt 28; review of the merge): vacation-guard-only - the header names section 15
+// and the --help line lists SILVIS_PREFS_ROWS_BEFORE but no SILVIS_VACATION_GUARD_APPLIED. The tail of --help's env-var list
+// (SILVIS_NO_PRIMARY_APPLIED until Prompt 28's record step) is pinned in the Prompt 28 step only, so that record step moves one
+// pin, not this one. Kept intent: the vacation guard's flag is not listed
+{
+  const helpLine = (vr.slice(0, vr.indexOf("set -u")).match(/-h\|--help\) echo "[^\n]*/) || [""])[0];
+  ok(/vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))) && /SILVIS_PREFS_ROWS_BEFORE/.test(helpLine) && /see the header of this file/.test(helpLine) && !/SILVIS_VACATION_GUARD_APPLIED/.test(helpLine), "verify-rls.sh's header must name section 15 and --help must list SILVIS_PREFS_ROWS_BEFORE without SILVIS_VACATION_GUARD_APPLIED (dropped at the record step)");
+}
 {
   // Prompt 28 (10/1): the faked run stops at section 16 when it is present (else at the RESULT line) - section 16's anon curls and
   // its own probe never run here (section 16 has its own faked run below)

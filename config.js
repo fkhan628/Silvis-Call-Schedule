@@ -223,21 +223,24 @@ var supabase = {
 // 1000 rows as if they were all of them. availability grows by one row per No primary day (Prompt 28), so the app reads it
 // - and time_off beside it - in pages: limit / offset of DB_PAGE until a short page (the PAY_PAGE pattern below;
 // loadScheduleDays and the snapshot reader page the same way). DB_PAGE must not exceed the server's max-rows: a capped
-// page would read as the short last one. DB_MAX_PAGES (200 000 rows) only stops a server that answers the same page again
-// (an ignored offset) - the read THROWS there, it never loops and never returns what it has.
+// page would read as the short last one (an assumption - Supabase's default max-rows is 1000 and this project keeps it).
+// Every page after the first starts ON the last row of the page before (one row of overlap, review 10/1), so a server that
+// ignores offset is caught on the second request; DB_MAX_PAGES (about 200 000 rows) is only the backstop - the read
+// THROWS there, it never loops and never returns what it has.
 const DB_PAGE = 1000;
 const DB_MAX_PAGES = 200;
 
 // Extended DB helpers for new tables
 const db = {
-  async query(table, { eq, order, limit, offset, select } = {}) {
+  async query(table, { eq, order, limit, offset, select, headers } = {}) {
     let url = `${SUPABASE_URL}/rest/v1/${table}?select=${select || "*"}`;
     if (eq) Object.entries(eq).forEach(([k, v]) => { url += `&${k}=eq.${v}`; });
     if (order) url += `&order=${order}`;
     if (limit) url += `&limit=${limit}`;
     if (offset) url += `&offset=${offset}`;
-    // Read path → expiry-aware headers (anon fallback on a dead token).
-    const res = await fetch(url, { headers: dbReadHeaders() });
+    // Read path → expiry-aware headers (anon fallback on a dead token). `headers` (review 10/1): db.queryAll passes the ones
+    // it built once for its first page, so every page of one read goes out under one identity.
+    const res = await fetch(url, { headers: headers || dbReadHeaders() });
     // HTTP failure THROWS, exactly like a network failure already does — a
     // failed read must never be indistinguishable from an empty table. (An
     // RLS-filtered read is HTTP 200 + [] — that's data, not an error, and
@@ -252,22 +255,41 @@ const db = {
     }
     return await res.json();
   },
-  // queryAll(table, { eq, order, select }): every row, in pages of DB_PAGE (see DB_PAGE above), through db.query - the same
-  // read headers, and a non-2xx THROWS. `order` must be a TOTAL order ending on the table's unique `id` (e.g.
-  // "start_date.asc,id.asc"): offset pages over tied rows may repeat one row and skip another. Every page must be an array
-  // of at most DB_PAGE rows. Any failed page throws, so the caller's catch keeps its prior rows - a partial list is never
-  // returned as the table (CLAUDE.md: a failed read must never look like an empty or a shorter table).
+  // queryAll(table, { eq, order, select }): every row, in pages of DB_PAGE (see DB_PAGE above), through db.query, and a non-2xx
+  // THROWS. `order` must be a TOTAL order ending on the table's unique `id` (e.g. "start_date.asc,id.asc"): offset pages over
+  // tied rows may repeat one row and skip another. Every page must be an array of at most DB_PAGE rows. Any failed page
+  // throws, so the caller's catch keeps its prior rows - a partial list is never returned as the table (CLAUDE.md: a failed
+  // read must never look like an empty or a shorter table).
+  // Review 10/1: (a) ONE identity per read - the read headers are built once, before page 1, and sent on every page; a token
+  // that dies mid-read makes a later page 401 and throw instead of quietly going out as anon. Still, dbReadHeaders falls back
+  // to anon when the token is stale at the start, so this is for tables anon may read IN FULL (availability, time_off: using
+  // true) - an authenticated-only table (call_offers) answers anon 200 + [], which would read as an empty table; page such a
+  // table with the user's token (readAuthOnlyTable's fresh-token gate, or the PAY_PAGE pattern), never through this as is.
+  // (b) Offset pages are no snapshot: a row deleted or inserted before the page boundary between two requests shifts every
+  // later row by one (one row skipped or one doubled). So each page after the first starts ON the last row of the page before
+  // (offset advances by DB_PAGE - 1) and that row must come back first (same id); otherwise the read THROWS (the table changed
+  // under it, or the server ignores offset) and the caller keeps its rows - the write's Realtime event or the next poll reads
+  // again. A delete and an insert both before the boundary between the same two requests cancel out and are not seen; no row
+  // of the list is then doubled or skipped relative to its own page's moment.
   async queryAll(table, { eq, order, select } = {}) {
     if (!/(^|,)id\.(asc|desc)$/.test(String(order || ""))) throw new Error(`db.queryAll(${table}) needs a total order ending on id (e.g. "start_date.asc,id.asc"), got "${order || ""}"`);
+    const headers = dbReadHeaders();
+    const keyOf = (r) => (r && typeof r === "object" && r.id !== undefined && r.id !== null) ? "id:" + r.id : "row:" + JSON.stringify(r);
     const all = [];
+    let offset = 0;
     for (let page = 0; page < DB_MAX_PAGES; page++) {
-      const rows = await db.query(table, { eq, order, select, limit: DB_PAGE, offset: page * DB_PAGE });
+      const rows = await db.query(table, { eq, order, select, limit: DB_PAGE, offset, headers });
       if (!Array.isArray(rows)) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} is not an array`);
       if (rows.length > DB_PAGE) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} has ${rows.length} rows (limit ${DB_PAGE} ignored)`);
-      for (const r of rows) all.push(r);
+      if (page === 0) { for (const r of rows) all.push(r); }
+      else {
+        if (!rows.length || keyOf(rows[0]) !== keyOf(all[all.length - 1])) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} does not start on the last row of page ${page} (the table changed during the read, or the server ignores offset) - read again`);
+        for (let i = 1; i < rows.length; i++) all.push(rows[i]);
+      }
       if (rows.length < DB_PAGE) return all;
+      offset += DB_PAGE - 1;
     }
-    throw new Error(`db.queryAll(${table}) failed: more than ${DB_MAX_PAGES} pages of ${DB_PAGE} rows (the server may be ignoring offset)`);
+    throw new Error(`db.queryAll(${table}) failed: more than ${DB_MAX_PAGES} pages of ${DB_PAGE} rows`);
   },
   // opts.returning (Prompt 21 step 2, Faraz 9/26; supabase-js v1's option name, as onConflict is for upsert): "minimal"
   // sends Prefer: return=minimal - PostgREST reads no column of the new row back and answers 201 with an empty body, so

@@ -1390,9 +1390,18 @@ function CallSchedule() {
   // Prompt 28 residual 4 (Faraz 10/1): time_off and availability are read in pages (db.queryAll - PostgREST caps an answer
   // at max-rows, 1000, without a word; availability grows by one row per No primary day). A failed page throws: the catch
   // keeps the rows on screen, never a shorter list.
+  // Newest-started read wins (review 10/1): the poll, one Realtime event per changed row and the painter's re-read run these
+  // loaders at once, and a paged read can finish after a later one. Each read takes a number when it starts; it is adopted
+  // only when no read that started after it has been adopted already (an older answer finishing late is dropped - the newer
+  // one on screen saw at least as much; the drop still returns true).
+  const timeOffReadSeqRef = useRef({ started: 0, adopted: 0 });
+  const availabilityReadSeqRef = useRef({ started: 0, adopted: 0 });
   const loadTimeOff = async (quiet) => {
+    const seq = ++timeOffReadSeqRef.current.started;
     try {
       const rows = await db.queryAll("time_off", { order: "start_date.asc,id.asc" });
+      if (seq < timeOffReadSeqRef.current.adopted) return true;
+      timeOffReadSeqRef.current.adopted = seq;
       adoptTimeOffRows(Array.isArray(rows) ? rows : []);
       return true;
     } catch (e) {
@@ -1402,8 +1411,11 @@ function CallSchedule() {
     }
   };
   const loadAvailability = async (quiet) => {
+    const seq = ++availabilityReadSeqRef.current.started;
     try {
       const rows = await db.queryAll("availability", { order: "start_date.asc,id.asc" });
+      if (seq < availabilityReadSeqRef.current.adopted) return true;
+      availabilityReadSeqRef.current.adopted = seq;
       const list = Array.isArray(rows) ? rows : [];
       setAvailabilityRows(list);
       if (list.length > 0) everHadRealDataRef.current = true;

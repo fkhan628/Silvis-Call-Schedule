@@ -726,8 +726,8 @@ async function fetchLive(cfg) {
   const [blobRows, dayRows, timeOffRows, availabilityRows, feedRows, forecastRows, overrideRows] = await Promise.all([
     fetchAll(cfg, "call_schedule_data", "id=eq.main&select=data,updated_at"),
     fetchAll(cfg, "schedule_days", "select=*&order=day.asc"),
-    fetchAll(cfg, "time_off", "select=*&order=start_date.asc"),
-    fetchAll(cfg, "availability", "select=*&order=start_date.asc"),
+    fetchAll(cfg, "time_off", "select=*&order=start_date.asc,id.asc"),
+    fetchAll(cfg, "availability", "select=*&order=start_date.asc,id.asc"),
     fetchAll(cfg, "east_feed", "select=week_monday,data,fetched_at&order=week_monday.asc"),
     fetchAll(cfg, "east_forecast", "select=week_monday,data,generated_at&order=week_monday.asc"),
     fetchAll(cfg, "east_overrides", "select=*")

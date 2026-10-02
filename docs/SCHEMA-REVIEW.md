@@ -2160,8 +2160,12 @@ day adds a row. It now reads it - and `time_off` beside it - in pages: `config.j
 limit / offset pages of `DB_PAGE` 1000 until a short page, on a total order ending on `id` - `start_date.asc,id.asc`; any failed
 page throws, so the caller keeps the rows it had, never a shorter list), used by `loadAvailability` / `loadTimeOff` (the
 initial load, the 60-second poll, Realtime, the painter's re-read after a Save) and the seed import's live read; the snapshot
-reader's two orders gained the same `id` tiebreaker (`test/data-layer.test.js` D15). The migration's and the pre-check's
-header sentence "the client reads availability unpaged" predates the fix - both files are kept byte for byte as reviewed
+reader's two orders gained the same `id` tiebreaker (`test/data-layer.test.js` D15). Its review (10/1) added: one identity per
+read (the read headers built once, before page 1); each later page starts ON the last row of the page before and the read throws
+unless that row comes back first (a row deleted or inserted before the boundary between two requests, or an ignored offset);
+the newest-started read wins in both loaders (an older read finishing late is dropped); the CLI readers
+(`scripts/preview-generate.js`, `scripts/publish-preview.js`, `scripts/import-seed.js`) order on `id` last too. The migration's
+and the pre-check's header sentence "the client reads availability unpaged" predates the fix - both files are kept byte for byte as reviewed
 (sha256-pinned by the apply script). The pre-check still prints the total. (5) closed in review (10/1): `save_offers` now takes
 `save_no_primary`'s per-person advisory lock before its first write (the lock is re-entrant, so the nested call takes it again),
 so its own `NP009` read and a concurrent mark of the same person from another device run one after the other - before, two
@@ -2170,8 +2174,10 @@ binds the two RPCs only: a direct `call_offers` REST write (the `call_offers_ins
 `claim_open_slot`'s offer upsert can still put a primary / either offer on a day the person's own `backup_only` row covers -
 harmless for the schedule (`eligibility` blocks primary on a `backup_only` day) and the pre-check's "offer conflict" section
 lists such a day. (7) No horizon or size cap in `save_no_primary`: a signed-in surgeon can mark days years ahead and thousands in
-one call (each one an anon-readable row) - since the paged read (residual 4) no row is cut from the client, however many; kept
-as built (Cowork's review of 10/1; a cap such as today + 548 days would need the probe's 2030 fixtures moved, and is Faraz's call).
+one call (each one an anon-readable row) - since the paged read (residual 4) the client no longer stops at the first 1000 rows (it
+assumes the project's max-rows is not below `DB_PAGE`, Supabase's default 1000; a table that moves mid-read throws and is read
+again, so a large table costs one request per 999 rows on every poll and Realtime event); kept as built (Cowork's review of
+10/1; a cap such as today + 548 days would need the probe's 2030 fixtures moved, and is Faraz's call).
 
 **What could break.** The probe and verify-rls section 16 were written against an AFTER picture observed OFFLINE only: on
 2026-10-01 the migration, the probe, the pre-check and the five older probes ran on PGlite (WASM PostgreSQL 18) with stubbed
@@ -2306,11 +2312,15 @@ primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers(
 5. `SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh` - sections 1-16 green (the flag makes the probe's PROBE_SETUP and the
    anon 404s a FAIL; 16b is the gate before the client push; section 16 counts the leftovers either way).
 6. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; table (a)'s `availability` row;
-   `sql/schema.sql` revision t -> "applied <timestamp>" (and its block comment); the migration's and the probe's headers ->
-   APPLIED; a `test/schema.test.js` pin of the applied file's sha256 (the `OFFERS_APPLIED_SHA256` pattern) from the log's sha256
-   line; `SILVIS_NO_PRIMARY_APPLIED` dropped from verify-rls (strict becomes the default, with its pin moved like call pay's);
-   guide 4.3's Proof line "applied:" and its pin; the rules doc's section 1 row "prepared" -> "applied <date>". Then, on Faraz's
-   go, the client push (a merge to `main` is a live deploy).
+   `sql/schema.sql` revision t -> "applied <timestamp>" (and its block comment); the migration file kept byte for byte as it
+   ran - its header does NOT turn APPLIED; the apply is noted in ONE trailer line after the body (the vacation guard's and the
+   offers' convention; the trailer may also say that the header's "the client reads availability unpaged" predates residual 4's
+   paged read) - with a `test/schema.test.js` pin of the body's sha256, everything before that trailer (the `VG_APPLIED_SHA256` /
+   `OFFERS_APPLIED_SHA256` pattern), taken from the log's sha256 line; the probe's and the pre-check's headers -> APPLIED;
+   `SILVIS_NO_PRIMARY_APPLIED` dropped from verify-rls (strict becomes the default, with its pins moved like call pay's: section
+   16's strict grading and the `--help` env-var list pin in the Prompt 28 step of `test/schema.test.js` - the vacation guard's
+   `--help` pin does not name the flag); guide 4.3's Proof line "applied:" and its pin; the rules doc's section 1 row "prepared"
+   -> "applied <date>". Then, on Faraz's go, the client push (a merge to `main` is a live deploy).
 
 **One command (Faraz):** his apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts
 carry machine paths and do not live in the repo), run from the repo root on the commit its header names, with the CLI dir
