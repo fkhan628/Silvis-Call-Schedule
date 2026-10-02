@@ -438,7 +438,7 @@ const payDb = {
   },
 };
 
-// ---- APP call days (Prompt 29, Faraz 10/1; sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT applied yet) ----
+// ---- APP call days (Prompt 29, Faraz 10/1; sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02) ----
 // The ONLY client file that names the APP table app_call_days and its two functions (index-source.html and helpers.js never
 // do). Decided 10/1: any day; one APP per day (the table's primary key); everyone signed in sees it, never anon / ?public=1;
 // no e-mails - the save function writes the one audit row. The table is authenticated-only (no anon policy, anon's

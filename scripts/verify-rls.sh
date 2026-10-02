@@ -6,7 +6,6 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_APP_DAYS_APPLIED=1   grade section 18 strictly (the probe's PROBE_SETUP and the anon 404s = FAIL): only on the run right after sql/migrations/2026-10-02-app-call-days.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -17,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_APP_DAYS_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1063,52 +1062,52 @@ fi
 
 echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_days / app_call_names + user_profiles.is_app - anon refused, rolled-back probe =="
 # Section 18 (16 = Prompt 28's no-primary days and 17 = the weekend pair claim are taken on other branches).
-# sql/migrations/2026-10-02-app-call-days.sql (report-first, NOT applied; revision v): app_call_days (one APP per day - day is the
-# primary key; read by every signed-in role through app_call_days_read, never anon: no anon policy AND anon's table privileges
-# revoked, so an anon request is refused 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke did not
-# take); save_app_days (security definer, the only write path; AP001-AP007 APP_DAY_* refuse before any write) and app_call_names
-# (security definer, stable) - EXECUTE for authenticated, never anon; user_profiles.is_app (admin-set, pinned in the two self
-# policies). 18a-18d go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object
-# exists and anon holds no privilege; 404 = not applied yet (18c: PGRST202 - the schema cache does not know the four keys, the gate
+# sql/migrations/2026-10-02-app-call-days.sql (report-first; applied 2026-10-02 19:19:27Z, revision v): app_call_days (one APP per
+# day - day is the primary key; read by every signed-in role through app_call_days_read, never anon: no anon policy AND anon's table
+# privileges revoked, so an anon request is refused 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke
+# did not take); save_app_days (security definer, the only write path; AP001-AP007 APP_DAY_* refuse before any write) and
+# app_call_names (security definer, stable) - EXECUTE for authenticated, never anon; user_profiles.is_app (admin-set, pinned in the
+# two self policies). 18a-18d go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the
+# object exists and anon holds no privilege; a 404 is a FAIL (18c: PGRST202 - the schema cache does not know the four keys, the gate
 # before the Prompt 29 client push). 18e (only with SILVIS_SURGEON_JWT) reads as a surgeon and sends an empty save (refused AP001 at
 # the first check). 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
-# its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP: app_call_days is absent - a PASS, like the anon 404s,
-# unless SILVIS_APP_DAYS_APPLIED=1 (the run right after the apply), then each is a FAIL; its partly-applied raise and its collision
-# guard (PROBE_SETUP: live rows already sit in the probe window) are always a FAIL. 18g counts the probe's leftovers either way, by
-# the probe's identity only: its auth users and its audit rows (tagged), and app_call_days rows in its window (in_window).
-APSTRICT18="${SILVIS_APP_DAYS_APPLIED:-}"
+# its header lists each AFTER string). The table and the functions exist since the apply, so the probe's PROBE_SETUP (app_call_days
+# is absent) and a 404 are FAILs - strict since the record step, which dropped the flag for the run right after the apply (before
+# the apply they passed as the not-applied picture); its partly-applied raise and its collision guard (PROBE_SETUP: live rows
+# already sit in the probe window) are FAILs too. 18g counts the probe's leftovers either way, by the probe's identity only: its
+# auth users and its audit rows (tagged), and app_call_days rows in its window (in_window).
 # 18a. anon may not read app_call_days (revoked: a refusal, never 200 + [])
 line=$(curl -s -o $T/vr18a.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_call_days?select=day&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
 echo "   18a anon GET app_call_days: $line  body: $(head -c 160 $T/vr18a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon read of app_call_days refused ($line - the table exists, anon holds no privilege)";;
-  "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "anon GET app_call_days: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1 (the table should exist after the apply - or the schema cache is stale)"; else ok "anon GET app_call_days: HTTP 404 - not applied yet (before the migration)"; fi;;
+  "HTTP 404") bad "anon GET app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
   "HTTP 200") bad "anon read of app_call_days: HTTP 200 - anon's privileges are revoked, so a refusal (401 / 403) is expected, not an answer (an APP day must never reach anon)";;
-  *) bad "anon GET app_call_days: $line (expected 401/403, or 404 before the apply)";;
+  *) bad "anon GET app_call_days: $line (expected 401/403)";;
 esac
 # 18b. anon may not execute app_call_names (GET: the function is stable)
 line=$(curl -s -o $T/vr18b.json -w 'HTTP %{http_code}' "$URL/rest/v1/rpc/app_call_names" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
 echo "   18b anon GET rpc/app_call_names: $line  body: $(head -c 160 $T/vr18b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc app_call_names refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "anon rpc app_call_names: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc app_call_names: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc app_call_names: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the names)";;
+  "HTTP 404") bad "anon rpc app_call_names: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) bad "anon rpc app_call_names: $line (expected 401/403; anything else - a 200 included - means anon reached the names)";;
 esac
 # 18c. anon may not execute save_app_days; PostgREST must know its four keys before the Prompt 29 client is pushed
 line=$(curl -s -o $T/vr18c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
 echo "   18c anon rpc save_app_days: $line  body: $(head -c 160 $T/vr18c.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_app_days refused ($line): PostgREST knows the four keys - the Prompt 29 client may be pushed";;
-  "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "anon rpc save_app_days: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1 (PGRST202: the schema cache does not know the function or its four keys) - do NOT push the Prompt 29 client"; else ok "anon rpc save_app_days: HTTP 404 - not applied yet (do not push the Prompt 29 client before the apply)"; fi;;
-  *) bad "anon rpc save_app_days: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc save_app_days: HTTP 404 (PGRST202: the schema cache does not know the function or its four keys, which exist since the 2026-10-02 apply) - do NOT push the Prompt 29 client";;
+  *) bad "anon rpc save_app_days: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 18d. anon may not write app_call_days directly (no privilege; the zero uuid names no profile, so even an acceptance could not land)
 line=$(curl -s -o $T/vr18d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/app_call_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"day":"2030-12-31","profile_id":"00000000-0000-0000-0000-000000000000","source":"app"}')
 echo "   18d anon POST app_call_days: $line  body: $(head -c 160 $T/vr18d.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon insert into app_call_days refused ($line)";;
-  "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "anon POST app_call_days: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1 (the table should exist after the apply)"; else ok "anon POST app_call_days: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) if grep -q '42501' $T/vr18d.json; then ok "anon insert into app_call_days refused (42501)"; else bad "anon POST app_call_days: $line (expected 401/403 or 42501, or 404 before the apply)"; fi;;
+  "HTTP 404") bad "anon POST app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) if grep -q '42501' $T/vr18d.json; then ok "anon insert into app_call_days refused (42501)"; else bad "anon POST app_call_days: $line (expected 401/403 or 42501)"; fi;;
 esac
 # 18e. as a surgeon (read-only): the table answers 200; an (empty) save is refused at the first check, AP001
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
@@ -1116,14 +1115,14 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   echo "   18e surgeon GET app_call_days: $line"
   case "$line" in
     "HTTP 200") ok "a surgeon reads app_call_days (every signed-in role sees the APP days)";;
-    "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "surgeon GET app_call_days: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1"; else ok "surgeon GET app_call_days: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon GET app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
     *) bad "surgeon GET app_call_days: $line (expected 200)";;
   esac
   line=$(curl -s -o $T/vr18f.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
   echo "   18e surgeon rpc save_app_days (empty lists): $line  body: $(head -c 160 $T/vr18f.json)"
   case "$line" in
     "HTTP 400") if grep -q 'AP001' $T/vr18f.json; then ok "a surgeon's save_app_days is refused AP001 (only an APP or the scheduler)"; else bad "surgeon rpc save_app_days: HTTP 400 without AP001 ($(head -c 160 $T/vr18f.json))"; fi;;
-    "HTTP 404") if [ "$APSTRICT18" = "1" ]; then bad "surgeon rpc save_app_days: HTTP 404 with SILVIS_APP_DAYS_APPLIED=1"; else ok "surgeon rpc save_app_days: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon rpc save_app_days: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc save_app_days: $line (expected 400 AP001)";;
   esac
 else
@@ -1133,7 +1132,7 @@ if linked; then
   PROBE18="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/app-call-days-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE18" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: app_call_days is absent'; then
-    if [ "$APSTRICT18" = "1" ]; then bad "APP days probe: PROBE_SETUP - app_call_days is absent with SILVIS_APP_DAYS_APPLIED=1 (the table should exist after the apply)"; else ok "APP days probe: app_call_days is absent (before the migration: PROBE_SETUP)"; fi
+    bad "APP days probe: PROBE_SETUP - app_call_days is absent (the table exists since the 2026-10-02 apply)"
   elif echo "$out" | grep -q 'PROBE_SETUP: user_profiles.is_app is absent'; then
     bad "APP days probe: PROBE_SETUP - user_profiles.is_app is absent while app_call_days exists (the migration is partly applied - ask Claude Code)"
   elif echo "$out" | grep -q 'PROBE_SETUP: live rows already sit in the probe window'; then
@@ -1225,8 +1224,9 @@ if linked; then
   fi
   # 18g. leftovers, by the probe's identity only: tagged = its auth users (profiles and their app_call_days rows cascade) and its
   # appdays.save audit rows (summaries 'probe app ...'); in_window = app_call_days rows in 2030-12 or on 2020-05-04 (read through
-  # query_to_xml, guarded by to_regclass: before the apply the table does not exist). The collision guard refuses to start while an
-  # in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent raise before the apply) such rows can only be
+  # query_to_xml, guarded by to_regclass: before the apply - or after a rollback - the table does not exist). The collision guard
+  # refuses to start while an in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent raise - a FAIL
+  # itself since the record step) such rows can only be
   # the probe's; after a run that stopped at the guard (or at the partly-applied raise) they are live rows it never wrote - listed for
   # review, never counted as a leftover and never given a DELETE (a probe row and a real APP day look alike).
   LEFTOVER18_SQL="select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window"

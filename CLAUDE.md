@@ -9,8 +9,9 @@ Daily primary + backup trauma / acute-care surgery call schedule generator (Reac
 (`github.com/fkhan628/Call-Schedule-App`, live at `fkhan628.github.io/Call-Schedule-App`) — same stack and pipeline,
 different shift model. Frontend on GitHub Pages, backend on Supabase project `bzhsroegtagqhutbnsrp`
 (`https://bzhsroegtagqhutbnsrp.supabase.co`). Faraz Khan (FAK, roster `s1`) is the scheduler, admin, sole
-developer, one of the six surgeons, and the user you're working with. Live users once launched: 6 surgeons + 1 viewer
-(the office contact). Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
+developer, one of the six surgeons, and the user you're working with. Live users: 6 surgeons, the office coordinator(s) and
+viewers / followers; APP accounts - viewers with `user_profiles.is_app` who put themselves on call days (Prompt 29, applied
+2026-10-02) - once Faraz switches them on. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
 
 ## Identity model — get this right
 
@@ -58,7 +59,9 @@ blob or any anon-readable table (a deliberate exception to "defaults are data in
 rates. No $ in notifications, e-mails, calendar feeds, the public page or exports others see; pay audit rows carry keys /
 roster ids / days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
-every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, vacation approvals, weighted accounting.
+every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
+applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
+approvals, weighted accounting.
 
 ## Working locations
 

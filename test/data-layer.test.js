@@ -8934,7 +8934,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P29 cross pins (integration): the build guide's 4.3 bullet names the migration, revision v, verify-rls section 18 and the probe's 69 cases (= the probe header's count)", () => {
       const g43 = between(GUIDEP, "### 4.3 RLS posture", "### 4.4 ");
-      const b = between(g43, "- **APP call days (2026-10-02, report-first, NOT applied; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).**", "### 4.4 ");
+      // pin moved deliberately 10/2 (the record step): the bullet reads applied (it read "report-first, NOT applied" before)
+      const b = between(g43, "- **APP call days (2026-10-02, report-first, applied 2026-10-02 19:19 UTC; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).**", "### 4.4 ");
       assert.ok(/Proof: `sql\/probes\/app-call-days-probe\.sql` \(rolled back; 69 cases in its header/.test(b), "69 cases");
       assert.ok(b.includes("`scripts/verify-rls.sh` section 18"), "section 18");
       const PROBE = fs.readFileSync(path.join(ROOT, "sql", "probes", "app-call-days-probe.sql"), "utf8").replace(/\r\n/g, "\n");

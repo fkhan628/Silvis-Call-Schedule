@@ -553,7 +553,7 @@ const payForcedLine = (msg) => {
 // require > 0, so that state is never assumed from the live project (whose tables exist since the 2026-09-28 apply)
 const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status === 404).length;
 // Prompt 29 (APP call days): the APP table and its two functions are answered by the harness ITSELF (appRoute below), never
-// by the live project (the migration is report-first, not applied). Defaults keep every existing step's picture unchanged:
+// by the live project (applied there 2026-10-02; the smoke never touches it). Defaults keep every existing step's picture unchanged:
 // mode "ok", no APP day, and NO APP account (appProfiles empty), so app_call_names answers the scheduler no APP and the day
 // editor shows no APP block. The main page is always served the empty picture (its later steps read the grid); the P29
 // steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
@@ -10485,7 +10485,7 @@ try {
 
   // ====================== Prompt 29: APP call days (Faraz 10/1) ======================
   // Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log
-  // only. The APP table and its two functions are MOCKED here (appRoute: the migration is report-first, not applied - nothing
+  // only. The APP table and its two functions are MOCKED here (appRoute: the live ones exist since the 2026-10-02 apply - nothing
   // reaches the live project). M = next month (Central); D10 / D11 / D12 = its 10th / 11th / 12th. Each APP page runs in its
   // own BrowserContext at 390 x 844 (the token is read from localStorage at send time).
   //  1. APP A adds D10 + D11 on My APP days: ONE save POST with exactly { p_profile: A, p_add: [D10, D11], p_clear: [],

@@ -93,7 +93,7 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
--- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql, report-first, NOT yet applied): Faraz 10/1 (Prompt 29) - the
+-- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql, applied 2026-10-02 19:19:27Z after the probe): Faraz 10/1 (Prompt 29) - the
 -- APPs put themselves on call days; any day, ONE APP per day, everyone signed in sees it (never anon / the ?public=1 page), no e-mails
 -- (the Activity log only). user_profiles.is_app boolean not null default false - a FLAG, not a role (an APP stays role 'viewer': the
 -- follower e-mails pick followers by role, Setup's followsPatch clears follows on a role change) - with the check user_profiles_app_viewer
@@ -138,7 +138,7 @@ alter table public.user_profiles add column if not exists follows jsonb not null
 alter table public.user_profiles drop constraint if exists user_profiles_follows_shape;
 alter table public.user_profiles add constraint user_profiles_follows_shape
   check (case when jsonb_typeof(follows) = 'array' then not jsonb_path_exists(follows, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
--- Prompt 29 (APP call days, sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT yet applied): the APP flag on an EXISTING
+-- Prompt 29 (APP call days, sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z): the APP flag on an EXISTING
 -- table and its rule - an APP is a viewer account, never a roster entry. Only the admin writes it (user_profiles_admin;
 -- user_profiles_self_update and _self_insert below pin it).
 alter table public.user_profiles add column if not exists is_app boolean not null default false;
@@ -185,7 +185,7 @@ language sql stable security definer set search_path = public as $$
   select public.silvis_role() = 'coordinator';
 $$;
 
--- Prompt 29 (APP call days, revision v - report-first, NOT yet applied): the APP flag of the caller (save_app_days asks it; no
+-- Prompt 29 (APP call days, revision v - report-first; applied 2026-10-02 19:19:27Z): the APP flag of the caller (save_app_days asks it; no
 -- policy uses it). The constraint makes the role / person_id terms redundant; they stay as defence in depth.
 create or replace function public.silvis_is_app() returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
@@ -1477,7 +1477,7 @@ revoke truncate, references, trigger on table public.call_pay_logs from authenti
 grant select, insert, update, delete on table public.call_pay_settings to authenticated;
 grant select, insert, update, delete on table public.call_pay_logs to authenticated;
 
--- ---------- APP call days (Prompt 29, revision v; sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT yet applied)
+-- ---------- APP call days (Prompt 29, revision v; sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z)
 -- Faraz 10/1: the APPs put themselves on call days - any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page;
 -- no e-mails, the Activity log only. One row per day (day is the primary key - the database enforces one APP per day). Read by every
 -- signed-in role (app_call_days_read below), never anon: not in the read_all loop and anon's table privileges revoked, so an anon
@@ -1741,7 +1741,7 @@ create policy east_vacation_reviews_self_delete on public.east_vacation_reviews 
 -- only: role, person_id AND email are pinned against self-service (the Resend sender must never be re-pointed by its
 -- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
 -- Prompt 20 F1: follows (whom an account follows) is pinned the same way, and a self-insert follows nobody - the admin sets it.
--- Prompt 29 (APP call days, revision v - report-first, NOT yet applied): is_app (an APP account) is pinned the same way - a
+-- Prompt 29 (APP call days, revision v - report-first; applied 2026-10-02 19:19:27Z): is_app (an APP account) is pinned the same way - a
 -- self-insert is never an APP and self-service never flips the flag; the admin sets it in Setup > Users. An APP's display_name
 -- is pinned too (review 10/2: app_call_names shows it to every signed-in user - the calendar's A line, the refusal texts, the
 -- audit summary), so the admin names APPs; every other account still renames itself. Both texts are the followers texts plus
@@ -1881,7 +1881,7 @@ drop policy if exists call_pay_logs_delete on public.call_pay_logs;
 create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
   using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 
--- app_call_days (Prompt 29, revision v - report-first, NOT yet applied): every signed-in role reads (surgeon, coordinator, viewer,
+-- app_call_days (Prompt 29, revision v - report-first; applied 2026-10-02 19:19:27Z): every signed-in role reads (surgeon, coordinator, viewer,
 -- APP, follower, scheduler - the calendar's third line); never anon (not in the read_all loop; anon's privileges revoked). No write
 -- policy and no write privilege for authenticated: save_app_days() is the door (an APP for its own days, the scheduler for any APP).
 drop policy if exists app_call_days_read on public.app_call_days;

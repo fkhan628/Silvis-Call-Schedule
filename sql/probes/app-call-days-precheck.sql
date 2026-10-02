@@ -1,7 +1,11 @@
 -- ============================================================================
 -- Silvis Call Schedule - APP call days PRE-CHECK (2026-10-02, Prompt 29; sql/migrations/2026-10-02-app-call-days.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again
+-- REPORT-FIRST; APPLIED 2026-10-02 19:19:27Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again
 -- right after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record, only the first one is a gate.
+-- As run (2026-10-02): before the apply the gate read table=no is_app=no is_app_fn=no save_fn=no names_fn=no pins=0 and right
+-- after it table=yes is_app=yes is_app_fn=yes save_fn=yes names_fn=yes pins=2, rows 2-4 the same both times (counts only) -
+-- docs/SCHEMA-REVIEW.md "2026-10-02 - APP call days" quotes them. This header was kept byte for byte as reviewed until the apply
+-- (the apply script pinned its sha256); the record step turned it APPLIED.
 -- It runs before the migration, so it never names the new column or table outside catalog lookups (pg_attribute, pg_policies,
 -- to_regclass, to_regprocedure).
 --

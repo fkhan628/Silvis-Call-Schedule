@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - APP call days PROBE (2026-10-02, Faraz 10/1 - Prompt 29: the APPs put themselves on call days;
--- sql/migrations/2026-10-02-app-call-days.sql, REPORT-FIRST, NOT APPLIED). Proves app_call_days, save_app_days(),
+-- sql/migrations/2026-10-02-app-call-days.sql, REPORT-FIRST; APPLIED 2026-10-02 19:19:27Z). Proves app_call_days, save_app_days(),
 -- app_call_names(), silvis_is_app() and the user_profiles.is_app pins on the LIVE database WITHOUT PERSISTING ANYTHING.
 --
 -- Same mechanism as the other probes: run the whole file as ONE batch through the linked Supabase CLI (the Management API
@@ -18,6 +18,10 @@
 -- without the column 'PROBE_SETUP: user_profiles.is_app is absent - ... is partly applied'; then the collision guard (it reads the
 -- table, so it cannot run before it exists): any app_call_days row in 2030-12 or on 2020-05-04 raises 'PROBE_SETUP: live rows
 -- already sit in the probe window ...'. AFTER the migration every case below must read as listed.
+-- As run: the migration was applied 2026-10-02 19:19:27Z (schema.sql revision v); the probe read PROBE_SETUP (app_call_days is
+-- absent) before it and all 69 cases below as listed after it (<today M/D> = 10/2). Until the record step verify-rls read
+-- PROBE_SETUP and the anon 404s as the not-applied picture (unless its flag for the run right after the apply was set); since the
+-- record step, which dropped that flag, section 18 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is history.
 --
 -- Fixtures: no app_call_days row is written by the setup. Every day a case touches is FAR-FUTURE (2030-12, and 2031-01-01 ..
 -- 2032-02-05 for the refused 401-day case), the past day 2020-05-04 or infinity / -infinity (A17, refused before any write).

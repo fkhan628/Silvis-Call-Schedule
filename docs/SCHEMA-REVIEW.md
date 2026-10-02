@@ -11,7 +11,7 @@ Verification: `scripts/verify-rls.sh`.*
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). Prompt 29 (prepared 2026-10-02, NOT APPLIED - report-first, section at the end): `is_app` boolean, an APP account (an unlinked viewer row; admin-set, pinned in self-insert / self-update; the check `user_profiles_app_viewer`). |
+| `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). Prompt 29 (prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end): `is_app` boolean, an APP account (an unlinked viewer row; admin-set, pinned in self-insert / self-update; the check `user_profiles_app_viewer`). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
@@ -22,7 +22,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
-| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; prepared, NOT APPLIED: `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
+| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the two SQL functions' rows do so since the item 5b migration (applied 2026-09-24; the two earlier `trade.apply` rows backfilled - section at the end); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
@@ -31,9 +31,9 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
-| `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, NOT APPLIED - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
+| `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
 
-Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, prepared 2026-10-02, NOT APPLIED: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
+Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
 
 ## (b) RLS policies — who can read / write
 
@@ -43,7 +43,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `client_versions` | anon: row `main` only; authenticated: all rows | scheduler/admin all rows; each authenticated user may insert/update **their own** heartbeat row (`id = auth.uid()`) |
 | `time_off` | anyone (anon) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `east_overrides` | anyone (anon) | scheduler/admin |
-| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (applied 2026-09-27): self-insert and self-update pin `follows` too (only the admin sets it) - Prompt 29 (prepared 2026-10-02, NOT APPLIED): self-insert and self-update pin `is_app` too (only the admin marks an APP account) |
+| `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (applied 2026-09-27): self-insert and self-update pin `follows` too (only the admin sets it) - Prompt 29 (applied 2026-10-02 19:19 UTC): self-insert and self-update pin `is_app` too (only the admin marks an APP account) |
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
 | `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
@@ -55,7 +55,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `east_vacation_reviews` (applied 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `call_pay_settings` - applied 2026-09-28, call pay 9/27 | scheduler/admin; the office coordinator (read-only, 9/27 item 5a); a surgeon-role account linked to a roster id that is paid by the call stipend (`silvis_pay_enabled`, item 5b); never a switched-off surgeon / viewer / follower / anon (anon privileges revoked) | scheduler/admin (all verbs) |
 | `call_pay_logs` - applied 2026-09-28, call pay 9/27 | scheduler/admin and the office coordinator every row (a switched-off surgeon's earlier rows included); a surgeon-role account his own rows while switched on (`person_id = silvis_person_id() and silvis_pay_enabled(person_id)`); nobody else (anon privileges revoked) | insert/update/delete: scheduler/admin, and that surgeon his own rows while switched on - never the coordinator; `call_pay_logs_guard` (PY004 office, PY005 switched off, PY001-PY003) applies to every caller, the scheduler included |
-| `app_call_days` - prepared 2026-10-02, NOT APPLIED | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest) |
+| `app_call_days` - applied 2026-10-02 19:19 UTC | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest) |
 
 ## (c) Findings
 
@@ -2060,7 +2060,7 @@ Not re-run against the live project after the record step (the record lane ran n
 
 ## 2026-10-02 - APP call days: app_call_days + save_app_days / app_call_names + user_profiles.is_app (Faraz 10/1, Prompt 29; `sql/migrations/2026-10-02-app-call-days.sql`)
 
-**Status: PREPARED - report-first, NOT APPLIED.**
+**Status: APPLIED 2026-10-02 19:19:27Z** (Faraz, from PowerShell through Git's bash.exe - `apply-app-call-days.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then.
 
 Faraz 10/1 6:33 PM: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me
 ... This would also show up on the calendar". The four decisions (Faraz 10/1): **any day; ONE APP per day; everyone signed in
@@ -2249,7 +2249,10 @@ the migration left the database unchanged, the rollback lines restored main's `u
 `postgres` role, which bypasses RLS as the owner of `app_call_days` and `audit_log` - no `force row level security` anywhere),
 Supabase's own `auth.uid()` and grants (the default privileges grant every new table to anon - the migration revokes them, P1
 checks), and PostgREST (the HTTP codes of 18a-18e, the schema-cache reload). The live database is what the apply proves; section 18
-grades exact strings and names any difference by case. Residuals accepted at the review (10/2): (1) a FORMER APP (`is_app` false)
+grades exact strings and names any difference by case. *As run (2026-10-02): the first live run read all 69 cases exactly as
+their header strings (`<today M/D>` = 10/2) - no typo, no other wording; P1-P3 included (the live owner, search_path, grants and
+the default-privilege revoke), A2 / D2 (the definer's audit row) and X1 (the cascade); 18a-18d answered HTTP 401 `42501` (the
+schema cache resolved the four-key call right after the reload); section 18 graded 74 / 0.* Residuals accepted at the review (10/2): (1) a FORMER APP (`is_app` false)
 that still holds days can still rename itself (the clause binds current APPs) until the scheduler clears its days; (2)
 `display_name` has no length limit for any role (an APP can no longer set its own; the admin's Setup > Users input is the path);
 (3) "any day" is unbounded ahead - no horizon refusal (Faraz's call if he wants one; the client pages the whole table on every
@@ -2397,11 +2400,22 @@ read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days is 
 7. The client push, on Faraz's go, after Prompt 28's client.
 8. Faraz (or Cowork on his go) sets Role = `app` on each APP account in Setup > Users (no roster link; a display name first).
 
+*As run (2026-10-02): items 1-5 by `apply-app-call-days.sh` (Faraz, from PowerShell through Git's bash.exe, the repo at
+`5b9964e`), its steps 0-7 in this order: the sha256 checks, the pre-check, a function-absent check (none of the three
+functions), probe BEFORE, the migration (after typing APPLY), the gate again with the new signatures, probe AFTER,
+`SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` - the first failure of any step stops the script. Item 6 is the record
+commit, as listed except the migration file: it is kept byte for byte as it ran (sha256
+`9a03c834010cbb1a8eee5fa4b36fb57ada091c89364172709c6a5da800d27880`, pinned in `test/schema.test.js`), the apply noted in ONE
+trailer line instead of its header turning APPLIED; the probe's and the pre-check's headers read APPLIED with an as-run note;
+`SILVIS_APP_DAYS_APPLIED` no longer exists (section 18 is strict by default). Items 7-8 wait for Faraz's go.*
+
 **One command (Faraz):** his apply script `apply-app-call-days.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
 paths) - it checks that the migration's sha256 is the reviewed one (and the probe's, the pre-check's and verify-rls's), runs steps
 1-5 above, stops at the first failure (nothing after it runs), asks for `APPLY` before step 3, has a `--dry-run` (steps 1-2 only),
 exports `AI_AGENT=1`, reads both output shapes of `supabase db query -o json` (the bare array and the
 `{"warning","boundary","rows"}` envelope), writes a log and ends with a PASTE THIS BACK TO CLAUDE CODE block for the record step.
+Faraz ran it on 2026-10-02 at `5b9964e` (the observed lines at the end; two earlier runs that day stopped at the APPLY prompt and
+applied nothing); the record step followed from its paste-back block.
 
 **Rolling back** (in this order - the policies depend on the column, so they are restored first; the APP days are lost: export
 them first with `select * from public.app_call_days order by day;`):
@@ -2430,4 +2444,113 @@ notify pgrst, 'reload schema';
 A rollback after the client push only empties the APP features (the client reads the missing table / functions as
 "unavailable").
 
-observed: _to be filled from Faraz's apply log_
+observed (apply, 2026-10-02): applied 2026-10-02 19:19:27Z (`apply-app-call-days.sh` step 4: the migration file through
+`supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz, from PowerShell through Git's
+bash.exe (log `apply-app-call-days-20261002T191907Z.log`, outside the repo, result `APPLIED AND VERIFIED`; repo HEAD
+`5b9964e` on `feat/app-call-days`; the migration's sha256 `9a03c834010cbb1a8eee5fa4b36fb57ada091c89364172709c6a5da800d27880`
+= the expected one, the probe's, the pre-check's and `scripts/verify-rls.sh`'s sha256 matched too (`all four matched: yes`);
+supabase CLI 2.84.2, the workdir linked to `bzhsroegtagqhutbnsrp`; APPLY typed at the prompt). Step 1, the pre-check (read-only) - gate
+before: `table=no is_app=no is_app_fn=no save_fn=no names_fn=no pins=0`; its facts (never a stop; counts only), as the log printed them:
+
+```text
+2 profiles admin: n=1 linked=1 following=0 named=1
+2 profiles coordinator: n=2 linked=0 following=0 named=2
+2 profiles surgeon: n=5 linked=5 following=0 named=5
+2 profiles viewer: n=3 linked=0 following=2 named=3
+3 audit: appdays_rows=0
+4 realtime: publication=yes all_tables=no app_call_days_published=no
+```
+
+Step 2, the function-absent check: 0 rows - `OK - none of the three functions exists` (signatures before: none). Step 3, probe BEFORE:
+`PROBE_SETUP: app_call_days is absent - sql/migrations/2026-10-02-app-call-days.sql is not applied` (nothing else ran). Step 5, gate after:
+`table=yes is_app=yes is_app_fn=yes save_fn=yes names_fn=yes pins=2` (rows 2-4 unchanged); signatures after: `app_call_names() definer;save_app_days(uuid, date[], date[], boolean) definer;silvis_is_app() definer`. Step 6, probe AFTER - 69 cases, every one as the probe table above lists
+(`<today M/D>` = 10/2), as the log printed them (A18, V3, I1, E4 and E5 keep the CLI's JSON escaping - a backslash before each
+double quote - which section 18's case reader strips):
+
+```text
+A1=ok added=3 removed=0 kept=0 source=app 12/2=one/app 12/3=one/app 12/11=one/app by=self
+A10=ERR AP006 APP_DAY_PAST: 5/4 is before today (10/2) in Central time - a past day stays as it was
+A10s=12/5=none
+A11=ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler
+A12=ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day
+A13=ERR 42501 permission denied for table app_call_days
+A14=ERR 42501 permission denied for table app_call_days
+A15=rows=2
+A16=names=1 self=yes
+A17=ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved
+A18=ERR 42501 new row violates row-level security policy for table \"user_profiles\"
+A19=updated=1
+A2=audit=1 actor=self name=probe app one sums=probe app one: on call 12/2, 12/3, 12/11
+A3=ok added=0 kept=2 audit=false audit_rows=1
+A4=ok removed=1 12/3=none sums=probe app one: on call 12/2, 12/3, 12/11 | probe app one: removed 12/3
+A5=ok removed=0 absent=1 audit=false
+A6=ERR AP004 APP_DAY_BAD_DAY: 12/4 is both added and removed in one save - nothing was saved
+A7=ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved
+A8=ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved
+A9=ERR AP006 APP_DAY_PAST: 5/4 is before today (10/2) in Central time - a past day stays as it was
+B1=ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved
+B1s=12/2=one/app
+B2=ok added=2 source=app 12/7=two/app 12/8=two/app
+B3=ERR AP002 APP_DAY_NOT_YOURS: 12/2 is probe app one's day - only that APP or the scheduler can remove it (nothing was saved)
+B4=ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one, 12/11 already has probe app one - nothing was saved
+B4s=12/9=none
+B5=names=2
+C1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+C2=rows=4
+D1=ok added=1 source=scheduler 12/10=two/scheduler by=admin
+D10=ERR AP003 APP_DAY_NOT_APP: that account is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+D11=ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)
+D12=names=2 one=app two=app
+D13=updated=1 is_app=false
+D2=actor=s1 name=probe admin sums=probe app two: on call 12/10
+D3=ok removed=1 12/10=none
+D4=ok added=1 5/4=one/scheduler
+D5=ok removed=1 5/4=none
+D6=ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved
+D7=ok added=1 replaced=1 12/2=two/scheduler last=probe app two: on call 12/2 (was probe app one)
+D8=ERR AP007 APP_DAY_STALE: 12/2 is probe app two's day - reload the calendar (nothing was saved)
+D9=ERR AP003 APP_DAY_NOT_APP: probe viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+E1=names=2 one=former two=app
+E2=ok removed=1 12/11=none
+E3=ERR AP003 APP_DAY_NOT_APP: probe app one is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+E4=ERR 23514 new row for relation \"user_profiles\" violates check constraint \"user_profiles_app_viewer\"
+E5=ERR 23514 new row for relation \"user_profiles\" violates check constraint \"user_profiles_app_viewer\"
+F1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+F2=12/11=one/app
+I1=ERR 42501 new row violates row-level security policy for table \"user_profiles\"
+I2=ok is_app=false
+N1=ERR 42501 permission denied for table app_call_days
+N2=ERR 42501 permission denied for function app_call_names
+N3=ERR 42501 permission denied for function save_app_days
+N4=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+N5=names=0
+P1=table=yes rls=yes pk=day fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no
+P2=save_definer=yes names_definer=yes isapp_definer=yes paths=3 names_stable=yes save_volatile=yes save_anon=no save_auth=yes names_anon=no names_auth=yes isapp_anon=no isapp_auth=yes
+P3=is_app=boolean not_null=yes default=false check=user_profiles_app_viewer self_pins=2
+S1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+S2=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+S3=rows=4
+S4=ERR 42501 permission denied for table app_call_days
+S5=names=2 one=probe app one two=probe app two
+V1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day
+V2=rows=4
+V3=ERR 42501 new row violates row-level security policy for table \"user_profiles\"
+V4=updated=1
+X1=before=3 after=0 audit_kept=yes
+```
+
+Step 7, `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` (section 18 graded strictly): `RESULT: 366 passed, 0 failed` -
+section 18 74 / 0: 18a `HTTP 401` (`42501`, the table), 18b `HTTP 401` (`permission denied for function app_call_names`), 18c
+`HTTP 401` (`permission denied for function save_app_days`: PostgREST knows the four keys), 18d `HTTP 401` (`42501`, the
+insert), every one of the 69 cases PASS and `APP days probe persisted nothing (leftover count 0: ...)`; sections 1-15 green with
+every leftover count 0 (16 and 17 are on other branches); the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d, 14c, 18e) skipped - no
+JWT set. Two earlier runs that afternoon (logs `apply-app-call-days-20261002T191239Z.log` and
+`apply-app-call-days-20261002T191603Z.log`) stopped at step 4 and changed nothing: steps 0-3 read as above (the same sha256s,
+gate, facts and PROBE_SETUP), then `apply` was typed in lower case at the prompt - `STOPPED at step 4: not confirmed (you typed 'apply'; an unreadable terminal reads as empty)`
+(the script takes `APPLY` only); no migration, no probe AFTER, no verify-rls. The record step (one commit, item 6 and its as-run
+note): this status, tables (a) / (b)'s `user_profiles`, `audit_log` and `app_call_days` rows and the helper line, schema.sql
+revision v and its block comments, the migration's trailer line and sha256 pin, the probe's and the pre-check's headers,
+verify-rls section 18 strict by default with `SILVIS_APP_DAYS_APPLIED` dropped, guide 4.3 / 21 / 21.4, the rules doc's APP call
+days row, ONBOARDING, CLAUDE.md, `config.js`'s APP block comment, and the test pins with them. Not re-run against the live
+project after the record step (the record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grades section 18
+strictly with no flag.
