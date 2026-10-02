@@ -668,8 +668,16 @@ function CallSchedule() {
 
   // --- Scheduler Mode (role-based via user_profiles.role) ---
   const [isScheduler, setIsScheduler] = useState(false);
+  // Review 2 of Do first 4/5 (10/1): the role as a ref for the mount load, whose effect closes over reloadTrigger only - the
+  // isScheduler of its closure is the render's that bumped reloadTrigger, BEFORE this effect moved the state: false on app open,
+  // after a fresh sign-in and after an in-place switch from a member, still true after a switch from the scheduler to a member.
+  // Set HERE with the state (not mirrored one render later), so it moves in the same commit as the profile; this effect is
+  // declared above the load's, so the re-run that commit starts (adoptSignedInUser) already reads the new role.
+  const isSchedulerRef = useRef(false);
   useEffect(() => {
-    setIsScheduler(userProfile?.role === "scheduler" || userProfile?.role === "admin");
+    const sched = userProfile?.role === "scheduler" || userProfile?.role === "admin";
+    isSchedulerRef.current = sched;
+    setIsScheduler(sched);
   }, [userProfile]);
   const isAdmin = userProfile?.role === "admin";
   // Prompt 16 A7: the office role - enters / edits any surgeon's vacations and relays their offered dates into the
@@ -923,7 +931,14 @@ function CallSchedule() {
       // Review of Do first 4 (10/1): the previous account's unsaved DAY edits go too - the local map falls back to the map
       // last known persisted (lastSyncRef). Kept, a re-run whose days read fails would leave them in place, and the next
       // poll's merge (mergeLoadedDays keeps an unsaved local edit) would hand them to leg 1 / the re-sync under the new JWT.
-      if (lastSyncRef.current) { const persisted = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = persisted; setSchedule(persisted); }
+      // Review 2 (10/1): a day write of the previous account still in flight lands AFTER this copy - its day moves on in
+      // lastSyncRef while the map keeps the old value, which a later merge would keep as a local edit and write back under the
+      // new JWT. Once the queue it is in drains, the map follows lastSyncRef again - only while nothing has replaced the copy
+      // (the re-run's adoption, a merge and every edit set a new map; the updater sees the latest state, pending ones included).
+      if (lastSyncRef.current) {
+        const persisted = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = persisted; setSchedule(persisted);
+        if (daySyncBusyRef.current > 0) daySyncChainRef.current.then(() => setSchedule(cur => { if (cur !== persisted || !lastSyncRef.current) return cur; const landed = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = landed; return landed; }));
+      }
       setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
@@ -2078,15 +2093,16 @@ function CallSchedule() {
               if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
             } else {
               // Do first 4: said in the load's one toast (a toast of its own would be replaced by it)
-              if (rerun && isScheduler && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
+              if (rerun && isSchedulerRef.current && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
               if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
               adoptBlob(d);
             }
           }
         } catch (e) {
           console.error("Supabase load error (call_schedule_data):", e);
-          // review of Do first 4 (10/1): the Setup clause is the scheduler's (nobody else can change Setup)
-          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isScheduler ? " Setup changes won't save until it loads." : ""));
+          // review of Do first 4 (10/1): the Setup clause is the scheduler's (nobody else can change Setup); review 2 (10/1): the
+          // role read NOW through isSchedulerRef - the role state in this effect's closure is stale (see isSchedulerRef)
+          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isSchedulerRef.current ? " Setup changes won't save until it loads." : ""));
         }
       };
       const legB = async () => {
@@ -2148,14 +2164,21 @@ function CallSchedule() {
         loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),
       ]);
       // Review of Do first 4 (10/1): two or more failed reads in one compact sentence; "Retry" only while the banner with
-      // the Retry button is up (no days read taken in), the Setup clause for the scheduler only.
-      const loadFailToast = combinedLoadToast(loadFails, { retry: !daysReadOkRef.current, isScheduler });
+      // the Retry button is up (no days read taken in), the Setup clause for the scheduler only (review 2: the role read now,
+      // through isSchedulerRef - never the stale role state of this effect's closure).
+      const loadFailToast = combinedLoadToast(loadFails, { retry: !daysReadOkRef.current, isScheduler: isSchedulerRef.current });
       if (loadFailToast) showToast(loadFailToast, "error");
       setLoaded(true);
+      // Review 2 of Do first 4/5 (10/1): leg 1 returned while switchedUserRef was up, and dropping the flag changes no state, so
+      // nothing re-fires it - a change made in that window through setSchedule alone (no direct write) would wait for the next
+      // trigger and sit outside pendingSaveRef. The re-sync bridge sends the map now (its own gates: loadFailedRef - a failed
+      // days read sends nothing - the signed-in account, the flag itself); the adopted table alone is an empty diff.
+      const switchEnds = switchedUserRef.current;
       // The hydration window opens once, after the FIRST load; a re-run after a sign-in keeps the state that is
       // already hydrated, and a new edit made right after the card closes must sync like any other (9/23 review).
       if (!loadedAtRef.current) loadedAtRef.current = Date.now();
       switchedUserRef.current = false;
+      if (switchEnds) resyncPendingRef.current("switch");
     })();
 
     // --- Realtime subscriptions (preferred) with safety-net poll ---
