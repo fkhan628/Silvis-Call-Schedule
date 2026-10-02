@@ -391,8 +391,11 @@ check("obLastAnnounced(notifications, day, role): newest 'open_shifts' row whose
     assert.ok(/node test\/open-shifts\.test\.js/.test(pkg.scripts.test), "package.json test script runs test/open-shifts.test.js");
     const yml = fs.readFileSync(path.join(ROOT, ".github", "workflows", "build.yml"), "utf8");
     assert.ok(/run: node test\/open-shifts\.test\.js/.test(yml), "build.yml has a step for test/open-shifts.test.js");
-    assert.ok(/- "test\/open-shifts\.test\.js"/.test(yml), "build.yml paths list includes test/open-shifts.test.js");
-    assert.ok(/- "test\/fixtures\/open-slots\.json"/.test(yml), "build.yml paths list includes test/fixtures/open-slots.json");
+    // Do first 10 (10/2): a push touching only this suite or test/fixtures/open-slots.json runs it through test.yml
+    // (npm test on every push, no paths filter); build.yml's filter is the runtime inputs only.
+    const tyml = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
+    assert.ok(/^\s*run:\s*npm test\s*$/m.test(tyml) && !/^\s*paths(-ignore)?\s*:/m.test(tyml), "test.yml runs npm test with no paths filter");
+    assert.ok(!/- "test\/open-shifts\.test\.js"/.test(yml) && !/- "test\/fixtures\//.test(yml), "build.yml's paths list no longer watches the suite or its fixture (no deploy on a test-only push)");
   });
 
   /* ---- Prompt 13 part 3: the Open shifts board (index-source.html) ---- */

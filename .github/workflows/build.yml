@@ -9,76 +9,57 @@ name: Build & deploy
 #
 # A failed build (bad transpile, injected imports, syntax error) exits non-zero
 # and commits nothing, so a broken build can never reach the live site.
+#
+# It runs only when a push to main touches a RUNTIME input (the paths filter
+# below), and it still runs every suite of the chain, step by step, before it
+# bumps or builds - the deploy keeps its own gate. Every other push, on any
+# branch, and every PR runs the same chain in .github/workflows/test.yml.
 
 on:
   push:
     branches: [main]
+    # The deploy's RUNTIME inputs and nothing else (review 2026-09-27 Do first
+    # 10): what build.js / bump-version.js read, what npm ci installs for the
+    # transpile, and what Pages serves next to the built index.html. A push here
+    # is a deploy - the suites below run, APP_VERSION bumps (cache-busted clients
+    # refetch every ?v= file) and index.html is rebuilt. test/ci.test.js pins
+    # this list EXACTLY and pins that every file the page loads (the ?v= loader
+    # list, the <link> shell files) and every build input is in it, and that
+    # every tracked file outside it is a known non-runtime path - so a new
+    # runtime file cannot be left out silently (it would never deploy).
+    # Deliberately NOT watched: test/** (suites, fixtures, the seed adapter),
+    # docs/** (the seed too), sql/**, scripts/**, edge-functions/** (deployed by
+    # hand with the Supabase CLI), README / CLAUDE.md, .github/**. A push that
+    # touches only those is no deploy and no update banner on every client;
+    # .github/workflows/test.yml runs the whole chain on EVERY push and PR.
     paths:
+      # The JSX source and the build machinery.
       - "index-source.html"
       - "build.js"
       - "bump-version.js"
+      # npm ci installs the Babel packages that transpile index.html from the
+      # lockfile: a dependency bump changes the build.
       - "package.json"
-      # Runtime modules: changing these must (a) run the generator regression
-      # test and (b) bump APP_VERSION so cache-busted clients refetch them —
-      # previously a module-only push skipped CI and stale clients kept the
-      # old file indefinitely.
-      - "generator.js"
-      - "rules.js"
-      - "east-feed.js"
+      - "package-lock.json"
+      # The ?v=APP_VERSION loader list in index-source.html (after the vendored
+      # trio below), in its order.
       - "config.js"
       - "helpers.js"
-      - "app-styles.js"
-      - "test/rules.test.js"
-      - "test/east-feed.test.js"
-      - "test/data-layer.test.js"
-      - "test/ui/contrast.mjs"
-      - "test/ui/theme-regions.js"
-      - "test/importer.test.js"
-      - "test/week-rows.test.js"
-      - "test/exports.test.js"
-      - "test/totals.test.js"
-      - "test/pay.test.js"
-      - "test/holidays.test.js"
-      - "test/holiday-plan.test.js"
-      - "test/publish.test.js"
-      - "test/day-edit.test.js"
-      - "test/open-shifts.test.js"
-      - "test/edge-functions.test.js"
-      - "test/fixtures/open-slots.json"
-      - "test/fixtures/last-generate-diagnostics.json"
-      - "test/schema.test.js"
-      - "test/offers.test.js"
-      - "test/offers-timeline.test.js"
-      - "test/fixtures/offer-timeline.json"
-      - "edge-functions/daily-reminder/index.ts"
-      - "edge-functions/send-notification/index.ts"
+      - "rules.js"
+      - "east-feed.js"
+      - "generator.js"
       - "importer.js"
-      - "test/generator-regression.js"
-      - "test/nov-backups.test.js"
-      - "test/water-fill.test.js"
-      - "test/ci.test.js"
-      - "test/privacy.test.js"
-      # Inputs the suites consume (a seed-, fixture- or adapter-only push must
-      # re-run the tests that read them) and the PWA shell (a manifest/icon-only
-      # push must bump APP_VERSION so cache-busted clients refetch them).
-      # test/ci.test.js pins this list against package.json's test chain.
-      # Deliberately NOT watched (review 2026-09-23): scripts/**, sql/**,
-      # edge-functions/** and the docs/*.json / docs/*.md inputs some suites
-      # read. A push touching only one of them skips its guard suite, but
-      # adding them would make every SQL-, script- or doc-only push a Pages
-      # redeploy with an APP_VERSION bump (an update banner on every client
-      # for a no-op). Run `npm test` locally before such a push instead.
-      - "docs/silvis-seed.json"
-      - "test/fixtures/**"
-      - "test/seed-adapter.js"
-      - "manifest.json"
-      - "icon-512.png"
-      - "icon-192.png"
-      - "apple-touch-icon.png"
+      - "app-styles.js"
       # Vendored runtime libraries (vendor/README.md): a bump is a deploy - the
       # suites re-check the pinned hashes and APP_VERSION bumps so cache-busted
       # clients refetch them.
       - "vendor/**"
+      # The PWA shell index-source.html links (a manifest/icon-only push must
+      # bump APP_VERSION so clients refetch them).
+      - "manifest.json"
+      - "icon-512.png"
+      - "icon-192.png"
+      - "apple-touch-icon.png"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 # Nothing by default; the build job grants itself contents: write for the
@@ -227,8 +208,9 @@ jobs:
       # the README's verification steps. Pure - no network, no Deno.
       - name: Edge-function gate tests + source pins
         run: node test/edge-functions.test.js
-      # CI + gate hygiene: package.json's test chain, the steps above and the
-      # paths filter stay aligned, the exports step stays offline, the three
+      # CI + gate hygiene: package.json's test chain and the steps above stay
+      # aligned, the paths filter is exactly the runtime inputs (test.yml runs
+      # the chain on every push and PR), the exports step stays offline, the three
       # wall-clock gates (rules 5000 ms via SILVIS_RULES_BUDGET_MS; regression
       # 10000 ms, water-fill 6000 ms and holidays 4000 ms via SILVIS_GEN_BUDGET_MS)
       # stay overridable failing assertions, and neither variable is set here.
@@ -270,10 +252,11 @@ jobs:
       # Commit back. main may have moved while this run was queued or running
       # (audit T3, 9/23): the concurrency group serialises runs but does not
       # rebase them, so a push from the checked-out sha would be non-fast-forward.
-      #   - the move touched only UNWATCHED paths (docs / sql / scripts): no run
-      #     was queued for it, so this run carries it - reset onto origin/main and
-      #     rebuild (the build inputs are unchanged, so the suites above still
-      #     cover the result);
+      #   - the move touched only UNWATCHED paths (tests / docs / sql / scripts /
+      #     edge-function sources): no build run was queued for it, so this run
+      #     carries it - reset onto origin/main and rebuild (the build inputs are
+      #     unchanged, so the suites above still cover the result; test.yml runs
+      #     the chain on that push itself);
       #   - the move touched a WATCHED path: its own queued run owns the deploy,
       #     so this run steps aside (exit 0, nothing pushed) instead of forcing a
       #     push that the queued run would then reject.

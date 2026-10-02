@@ -4,9 +4,10 @@
 // commit-back step (audit T3, 9/23): when main moved while the run was queued
 // or running, a move that touched a WATCHED path has its own queued run (the
 // concurrency group serialises them) and owns the deploy; a move outside the
-// filter (docs / sql / scripts only) queued nothing, so the running job rebuilds
-// on top of it. The filter itself stays the single source of truth - nothing is
-// duplicated here.
+// filter (tests / docs / sql / scripts / edge-function sources only - since
+// review 2026-09-27 Do first 10 the filter is the deploy's runtime inputs alone)
+// queued no build run, so the running job rebuilds on top of it. The filter
+// itself stays the single source of truth - nothing is duplicated here.
 //
 //   node scripts/ci-watched-paths.js <path> [<path> ...]
 //   exit 0 = none watched (prints nothing), exit 1 = at least one watched (prints

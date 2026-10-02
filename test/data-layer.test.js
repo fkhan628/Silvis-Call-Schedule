@@ -6086,7 +6086,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(pkg.scripts.test.split("&&").map(s => s.trim()).includes("node test/ui/contrast.mjs"), "package.json test chain lacks `node test/ui/contrast.mjs`");
       const yml = fs.readFileSync(path.join(ROOT, ".github", "workflows", "build.yml"), "utf8");
       assert.ok(/run:\s*node test\/ui\/contrast\.mjs/.test(yml), "build.yml has no `run: node test/ui/contrast.mjs` step");
-      assert.ok(/-\s*"test\/ui\/contrast\.mjs"/.test(yml) && /-\s*"test\/ui\/theme-regions\.js"/.test(yml), "build.yml paths filter must watch test/ui/contrast.mjs and test/ui/theme-regions.js");
+      // Do first 10 (10/2): a push touching only test/ui/contrast.mjs or test/ui/theme-regions.js runs them through
+      // test.yml (the whole chain on every push, no paths filter); build.yml's filter is the runtime inputs only.
+      const tyml = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
+      assert.ok(/^\s*run:\s*npm test\s*$/m.test(tyml) && !/^\s*paths(-ignore)?\s*:/m.test(tyml), "test.yml must run `npm test` with no paths filter (it is what runs the contrast gate on a test-only push)");
+      assert.ok(!/-\s*"test\//.test(yml), "build.yml's paths filter watches no test file (a test-only push is no deploy)");
       const good = 'data-sucheck="" style={css.suCheck}>';
       assert.ok(B2SRC.includes(good), "SuCheck label style not found");
       const bad = B2SRC.replace(good, 'data-sucheck="" style={{ ...css.suCheck, color: "#3a4a58" }}>');
