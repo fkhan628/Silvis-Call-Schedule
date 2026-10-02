@@ -1318,7 +1318,9 @@ function CallSchedule() {
   // snapshot. The generator, the rules, offers, trades, the open-shifts board, Totals, pay, the calendar feeds, the exports
   // and the office digest never read these rows. No realtime subscription: the 60 s poll (refreshAll) and the reload after
   // every save keep the picture fresh. appDaysState: "unread" | "ok" | "unavailable" (not applied yet, or rolled back: the
-  // sentence, no toast) | "failed" (the last loaded rows are kept; toast once) | "skipped" (no fresh token: nothing read).
+  // sentence, no toast) | "failed" (the last loaded rows are kept; no toast on a passive read - the mount, the poll - only on an
+  // explicit reload: the APP's Retry / Save, the scheduler's editor save, a Users APP switch; review 10/2) | "skipped" (no fresh
+  // token: nothing read - shown only while nothing was read yet).
   // ====================================================================
   const [appDayRows, setAppDayRows] = useState([]);
   const [appNameRows, setAppNameRows] = useState([]);
@@ -1326,7 +1328,6 @@ function CallSchedule() {
   const [appDaysBusy, setAppDaysBusy] = useState(false);
   const appGenRef = useRef(0);   // bumped when the account changes: a read that started for the previous one is dropped
   const appSeqRef = useRef(0);   // bumped by every loadAppDays: only the LATEST request's answer lands
-  const appToastShownRef = useRef(false);
   // mirrored every render (the poll's refreshAll closes over the mount effect's closure): the loader reads the flag of now
   const appDaysAllowedRef = useRef(false);
   appDaysAllowedRef.current = appDaysAllowed;
@@ -1341,16 +1342,18 @@ function CallSchedule() {
     if (r.state === "failed") {
       console.warn("APP days read failed", r.error || "");
       setAppDaysState("failed");
-      if (explicit || !appToastShownRef.current) { appToastShownRef.current = true; showToast("Couldn't load the APP days - the last loaded days are kept.", "error"); }
+      if (explicit) showToast("Couldn't load the APP days - the last loaded days are kept.", "error");
+      return;
     }
-    // "skipped" (no fresh token): nothing changes - the next poll reads again
+    // "skipped" (no fresh token): the rows stay; the first read of this account says so (My APP days' sign-in line) - the next poll reads again
+    if (r.state === "skipped") setAppDaysState(s => s === "unread" ? "skipped" : s);
   };
   const loadAppDaysRef = useRef(null);
   loadAppDaysRef.current = loadAppDays;
   // Another account on this page (sign-out / sign-in) or the public page: drop what the previous one read before anything shows.
   useEffect(() => {
     appGenRef.current++;
-    setAppDayRows([]); setAppNameRows([]); setAppDaysState("unread"); appToastShownRef.current = false;
+    setAppDayRows([]); setAppNameRows([]); setAppDaysState("unread");
     if (appDaysAllowed) loadAppDays(false);
   }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line
   const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);
@@ -7686,7 +7689,7 @@ function CallSchedule() {
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
               <div>
                 <p style={{fontSize:13,color:dkText,margin:"0 0 2px"}}>
-                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))}</strong>
+                  Signed in as <strong style={{color:T.title}}>{mySurgeon ? nameOf(mySurgeon) : (userProfile?.display_name || (isApp ? "an APP account" : isViewer ? "a read-only account" : "unlinked account"))}</strong>
                   <span data-testid="account-role" style={{...muted,marginLeft:6}}>({isApp ? "APP" : (userProfile?.role || "viewer")})</span>
                 </p>
                 <p style={{fontSize:11,color:T.muted,margin:0}}>{authUser?.email}</p>
@@ -8996,15 +8999,16 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
   const [saving, setSaving] = React.useState(false);
   const held = byDay || {};
   const ctx = { byDay: held, me: profileId, today: todayC };
-  // a reload (the poll, a refused Save) that made a drafted change impossible drops it (helpers.appDaysDraftPrune)
-  React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId)); }, [byDay, profileId]); // eslint-disable-line
+  // a reload (the poll, a refused Save) that made a drafted change impossible drops it, and so does midnight (Central) for a
+  // drafted day that became past - review 10/2 (helpers.appDaysDraftPrune)
+  React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId, todayC)); }, [byDay, profileId, todayC]); // eslint-disable-line
   const ok = state === "ok";
   const locked = !ok || !!busy || saving;
   const atStart = ym.y < curY || (ym.y === curY && ym.m <= curM);
   const move = (n) => { setYm(p => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
   const monthPrefix = ym.y + "-" + String(ym.m + 1).padStart(2, "0") + "-";
   const days = monthGridDays(ym.y, ym.m, weekStartsOn);
-  const diff = appDaysDraftDiff(draft, held, profileId);
+  const diff = appDaysDraftDiff(draft, held, profileId, todayC);   // a drafted day that became past never counts (review 10/2)
   const listOf = (items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
   const applyPlan = (list, label, bad) => {
     const plan = appDaysPlan(list, ctx);
@@ -9051,7 +9055,7 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
     } finally { setSaving(false); }
   };
   const upcoming = Object.keys(held).filter(d => d >= todayC && held[d].profileId === profileId).sort().slice(0, 10);
-  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP days - nothing was changed." : state === "skipped" ? "Sign in again to load the APP days." : "";
+  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP days - the calendar below may be out of date." : state === "skipped" ? "Sign in again to load the APP days." : "";
   const small = { fontSize: 12, color: T.muted, lineHeight: 1.5 };
   const cellLook = (st) => {
     if (st === "mine") return { bg: T.appTint, border: "1px solid " + T.appText, fg: T.text, line: "You", lineFg: T.appText, strike: false };
@@ -10314,7 +10318,7 @@ function UsersCard({ css, roster, profiles, error, loading, onSave, nameOf, myId
                     {/* Prompt 29: "app" = a viewer account marked APP (user_profiles.is_app) - offered once the loaded rows carry the column
                         (helpers.appColumnState), or on a row that already is one; helpers.userRolePatch sends only the keys that change */}
                     <select data-testid={"user-role-" + p.id} value={userRoleValue(p)} onChange={e => { const patch = userRolePatch(p, e.target.value); if (patch) onSave(p, patch); }} style={{ ...inp, width: 110 }}>
-                      {["viewer", "app", "surgeon", "coordinator", "scheduler", "admin"].filter(r => r !== "app" || appState === "present" || p.is_app === true).map(r => <option key={r} value={r}>{r === "app" ? "app (APP: viewer + own call days)" : r}</option>)}
+                      {["viewer", "app", "surgeon", "coordinator", "scheduler", "admin"].filter(r => r !== "app" || appState === "present" || p.is_app === true).map(r => <option key={r} value={r} title={r === "app" ? "APP: a viewer account that puts itself on call days" : undefined}>{r}</option>)}
                     </select>
                   </td>
                   <td>

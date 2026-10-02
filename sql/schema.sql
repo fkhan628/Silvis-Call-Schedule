@@ -97,7 +97,8 @@
 -- APPs put themselves on call days; any day, ONE APP per day, everyone signed in sees it (never anon / the ?public=1 page), no e-mails
 -- (the Activity log only). user_profiles.is_app boolean not null default false - a FLAG, not a role (an APP stays role 'viewer': the
 -- follower e-mails pick followers by role, Setup's followsPatch clears follows on a role change) - with the check user_profiles_app_viewer
--- (an APP is an unlinked viewer row) and the is_app pin added to user_profiles_self_insert / _self_update (re-created in place); one NEW
+-- (an APP is an unlinked viewer row) and the is_app pin added to user_profiles_self_insert / _self_update (re-created in place;
+-- _self_update also pins an APP's display_name - every signed-in user sees it); one NEW
 -- helper silvis_is_app() and one NEW table app_call_days (day date PRIMARY KEY - one APP per day; profile_id -> user_profiles on delete
 -- cascade; source 'app' / 'scheduler'; authenticated read through app_call_days_read, never anon - not in the read_all loop, anon's table
 -- privileges revoked; authenticated keeps SELECT only); app_call_names() (security definer, stable: the display names of the APP days)
@@ -1487,12 +1488,13 @@ grant select, insert, update, delete on table public.call_pay_logs to authentica
 --   AP001 APP_DAY_NOT_ALLOWED   no signed-in user / neither an APP nor the scheduler; the scheduler named no APP
 --   AP002 APP_DAY_NOT_YOURS     an APP names another profile / sends p_replace / removes a day another APP holds
 --   AP003 APP_DAY_NOT_APP       an add for a profile that is not a current APP (the scheduler too; clears stay allowed)
---   AP004 APP_DAY_BAD_DAY       an empty day, more than 400 days in one save, a day both added and removed
+--   AP004 APP_DAY_BAD_DAY       an empty day, a day that is not a calendar day (infinity), more than 400 days in one save,
+--                               a day both added and removed
 --   AP005 APP_DAY_TAKEN         an add on a day another APP holds (without p_replace)
 --   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
 --   AP007 APP_DAY_STALE         the scheduler removes a day another profile holds (a stale picture)
 create table if not exists public.app_call_days (
-  day         date primary key,                                                        -- one APP per day: the database enforces it
+  day         date primary key check (isfinite(day)),                                  -- one APP per day: the database enforces it (never infinity)
   profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
   source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP
   created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)
@@ -1553,6 +1555,10 @@ begin
   end if;
   if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
     raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';
+  end if;
+  -- infinity / -infinity are dates to PostgreSQL but no calendar day: to_char gives NULL, so every message below would drop them
+  if exists (select 1 from unnest(coalesce(p_add, '{}'::date[]) || coalesce(p_clear, '{}'::date[])) d where not isfinite(d)) then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';
   end if;
   if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then
     raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';
@@ -1736,8 +1742,10 @@ create policy east_vacation_reviews_self_delete on public.east_vacation_reviews 
 -- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
 -- Prompt 20 F1: follows (whom an account follows) is pinned the same way, and a self-insert follows nobody - the admin sets it.
 -- Prompt 29 (APP call days, revision v - report-first, NOT yet applied): is_app (an APP account) is pinned the same way - a
--- self-insert is never an APP and self-service never flips the flag; the admin sets it in Setup > Users. Both texts are the
--- followers texts plus that one clause.
+-- self-insert is never an APP and self-service never flips the flag; the admin sets it in Setup > Users. An APP's display_name
+-- is pinned too (review 10/2: app_call_names shows it to every signed-in user - the calendar's A line, the refusal texts, the
+-- audit summary), so the admin names APPs; every other account still renames itself. Both texts are the followers texts plus
+-- those clauses (self_insert: not is_app; self_update: the is_app pin and the APP display_name pin).
 drop policy if exists user_profiles_read on public.user_profiles;
 create policy user_profiles_read on public.user_profiles for select to authenticated
   using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));
@@ -1752,7 +1760,8 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
     and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
     and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())
-    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email, nor choose whom it follows or flip the APP flag
+    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid())
+    and (not is_app or display_name is not distinct from (select display_name from public.user_profiles p where p.id = auth.uid())));   -- self-service may not re-point person_id or email, nor choose whom it follows or flip the APP flag; an APP may not rename itself
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');

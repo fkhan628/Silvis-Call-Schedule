@@ -33,7 +33,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 | `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, NOT APPLIED - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
 
-Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, prepared 2026-10-02, NOT APPLIED: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated only).
+Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, prepared 2026-10-02, NOT APPLIED: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
 
 ## (b) RLS policies — who can read / write
 
@@ -2071,7 +2071,7 @@ Totals, pay, the calendar feeds, the exports and every e-mail ignore APP days.
 | object | before | after |
 |---|---|---|
 | `user_profiles.is_app` | - | new column `boolean not null default false` (an APP = an unlinked viewer row with the flag; the admin sets it in Setup > Users) and the check `user_profiles_app_viewer` |
-| `user_profiles_self_insert`, `user_profiles_self_update` | the followers texts (Prompt 20 F1) | re-created with one more clause each that pins `is_app` against self-service (byte for byte the followers texts otherwise) |
+| `user_profiles_self_insert`, `user_profiles_self_update` | the followers texts (Prompt 20 F1) | re-created: `self_insert` with one more clause that pins `is_app` against self-service, `self_update` with two - the `is_app` pin and, on an APP's row, a `display_name` pin (review 10/2: every signed-in user sees an APP's name) - byte for byte the followers texts otherwise |
 | `silvis_is_app()` | - | new helper: `language sql stable security definer set search_path = public, pg_temp`; EXECUTE for authenticated / service_role only; no policy uses it |
 | `app_call_days` | - | new table, one row per day (`day` is the primary key); authenticated read (`app_call_days_read`), never anon (no anon policy, anon's table privileges revoked); authenticated keeps SELECT only |
 | `app_call_names()` | - | new function: `language sql stable security definer set search_path = public, pg_temp`; the display names of the APP days |
@@ -2093,14 +2093,16 @@ the role default / check, `handle_new_auth_user` (signup lands as a viewer, `is_
 APP that follows keeps them), `audit_insert` (unchanged: the function writes the audit row as owner), `audit_read_own` (it may read
 its own `appdays.save` rows; no UI), the call pay policies (no pay) and the anon loop (the table is not added) - all **unchanged**;
 the new sibling check `user_profiles_app_viewer` (`not is_app or (role = 'viewer' and person_id is null)`); the two self policies
-re-created with the `is_app` pin; `silvis_is_app()` new.
+re-created with the `is_app` pin (and `self_update` with the APP `display_name` pin); `silvis_is_app()` new. The client side of
+the same list (the Mine tab, Settings > Account, Setup > Users, the cards an APP keeps as a viewer) is in `docs/SILVIS-BUILD-GUIDE.md`
+section 21.1.
 
 **The table and its RLS** (the migration, verbatim; in `sql/schema.sql` the enable line sits in the RLS list and the policy among
 the policies):
 
 ```sql
 create table if not exists public.app_call_days (
-  day         date primary key,                                                        -- one APP per day: the database enforces it
+  day         date primary key check (isfinite(day)),                                  -- one APP per day: the database enforces it (never infinity)
   profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
   source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP
   created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)
@@ -2146,7 +2148,7 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));
 ```
 
-After (one clause more each):
+After (`self_insert`: one clause more; `self_update`: two - the `is_app` pin and the APP `display_name` pin, review 10/2):
 
 ```sql
 drop policy if exists user_profiles_self_insert on public.user_profiles;
@@ -2160,11 +2162,18 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
     and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
     and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())
-    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));
+    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid())
+    and (not is_app or display_name is not distinct from (select display_name from public.user_profiles p where p.id = auth.uid())));
 ```
 
 Blast radius of the two: nil for the shipped client (public sign-ups are off; the client never self-inserts or self-PATCHes a
-profile); the pins close a self-promotion hole (without them a viewer could flip `is_app` on its own row).
+profile); the pins close a self-promotion hole (without them a viewer could flip `is_app` on its own row). **The APP
+`display_name` pin (review 10/2):** before Prompt 29 a viewer's self-written `display_name` reached only the account itself and the
+scheduler / admin (`user_profiles_read`); `app_call_names()` now gives an APP's name to every signed-in role - the calendar's A
+line, the AP002 / AP005 / AP007 texts other APPs receive, the `appdays.save` summary - so an APP may no longer rename itself (a
+raw PATCH of its own row with a new name is `42501`; the same name still lands). The admin names APPs in Setup > Users
+(`user_profiles_admin`); every other account still renames itself (V4, the followers probe's F2). The clause binds rows that ARE
+APPs (`not is_app or ...` reads the new row, whose `is_app` the clause before pins to the old value).
 
 **silvis_is_app()** - true when the signed-in account is an APP (`is_app and role = 'viewer' and person_id is null`; the
 constraint makes the last two terms redundant - defence in depth); `save_app_days` asks it. **app_call_names()** - `returns table
@@ -2187,16 +2196,17 @@ write, in this order:
 | 3 | `AP002` | an APP names another profile | `APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler` |
 | 4 | `AP002` | `p_replace` true from an APP | `APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day` |
 | 5 | `AP004` | a NULL element in either list | `APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved` |
-| 6 | `AP004` | more than 400 days in one save (the raw counts of both lists) | `APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved` |
-| 7 | `AP004` | a day in both lists | `APP_DAY_BAD_DAY: <days> is both added and removed in one save - nothing was saved` |
-| 8 | `AP003` | adds for a profile that is not a current APP (missing, not flagged, or a former APP) - **the scheduler included** | `APP_DAY_NOT_APP: <name, else that account> is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)` |
-| 9 | `AP006` | a non-scheduler adds or removes a day before today (Central); **the scheduler is exempt**; today is allowed | `APP_DAY_PAST: <days> is before today (<M/D>) in Central time - a past day stays as it was` |
-| 10 | `AP002` | an APP removes a day another profile holds | `APP_DAY_NOT_YOURS: <M/D> is <name>'s day[, ...] - only that APP or the scheduler can remove it (nothing was saved)` |
-| 11 | `AP007` | the scheduler removes a day held by a profile other than `p_profile` (a stale picture) | `APP_DAY_STALE: <M/D> is <name>'s day[, ...] - reload the calendar (nothing was saved)` |
-| 12 | `AP005` | an add on a day another profile holds, without `p_replace` (the scheduler too) | `APP_DAY_TAKEN: <M/D> already has <name>[; <M/D> already has <name>] - nothing was saved` |
-| 13 | `AP005` | defensive post-insert invariant (cannot happen under the lock) | `APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)` |
+| 6 | `AP004` | `infinity` / `-infinity` in either list (dates to PostgreSQL, no calendar day: `to_char` gives NULL, so every later message - AP006 included - would drop them; review 10/2) | `APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved` |
+| 7 | `AP004` | more than 400 days in one save (the raw counts of both lists) | `APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved` |
+| 8 | `AP004` | a day in both lists | `APP_DAY_BAD_DAY: <days> is both added and removed in one save - nothing was saved` |
+| 9 | `AP003` | adds for a profile that is not a current APP (missing, not flagged, or a former APP) - **the scheduler included** | `APP_DAY_NOT_APP: <name, else that account> is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)` |
+| 10 | `AP006` | a non-scheduler adds or removes a day before today (Central); **the scheduler is exempt**; today is allowed | `APP_DAY_PAST: <days> is before today (<M/D>) in Central time - a past day stays as it was` |
+| 11 | `AP002` | an APP removes a day another profile holds | `APP_DAY_NOT_YOURS: <M/D> is <name>'s day[, ...] - only that APP or the scheduler can remove it (nothing was saved)` |
+| 12 | `AP007` | the scheduler removes a day held by a profile other than `p_profile` (a stale picture) | `APP_DAY_STALE: <M/D> is <name>'s day[, ...] - reload the calendar (nothing was saved)` |
+| 13 | `AP005` | an add on a day another profile holds, without `p_replace` (the scheduler too) | `APP_DAY_TAKEN: <M/D> already has <name>[; <M/D> already has <name>] - nothing was saved` |
+| 14 | `AP005` | defensive post-insert invariant (cannot happen under the lock) | `APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)` |
 
-After check 8 the function takes `pg_advisory_xact_lock(hashtext('app_call_days:save'))` - one APP-day write at a time across ALL
+After check 9 the function takes `pg_advisory_xact_lock(hashtext('app_call_days:save'))` - one APP-day write at a time across ALL
 profiles (the conflicts are cross-profile), so every read after it sees the commit of a Save that ran first. **Idempotent:** an add
 of a day the profile already holds is "kept", a clear of a day nobody holds is "absent" (no error) - a Save re-sent after a lost
 response is safe. **All or nothing:** one transaction (PostgREST wraps the RPC); every refusal raises before the first write.
@@ -2228,17 +2238,23 @@ weekend pair claim - no shared object, either apply order. The client (Prompt 29
 push only empties the APP features.
 
 **What could break.** The probe and verify-rls section 18 are written against an AFTER picture observed OFFLINE only: on
-2026-10-01 the migration, the probe, the pre-check and the eight older probes that act through `user_profiles` / `audit_log` ran
-on PGlite (WASM PostgreSQL 18) with stubbed Supabase roles, `auth.uid()` and the live-shaped roster - every one of the 66 cases read
-its header string (also with a live-like APP account holding a day outside the window, a second live APP and a live `appdays.save`
+2026-10-01 (and again on 2026-10-02 after the independent review's fixes - the APP `display_name` pin, the non-finite AP004,
+A10 removing the past day, A17-A19) the migration, the probe, the pre-check and the eight older probes that act through
+`user_profiles` / `audit_log` ran on PGlite (WASM PostgreSQL 18) with stubbed Supabase roles, `auth.uid()` and the live-shaped
+roster - every one of the 69 cases read its header string (also with a live-like APP account holding a day outside the window, a second live APP and a live `appdays.save`
 row), the leftover count was 0, the eight older probes read the same before and after (and after the rollback), a failure inside
 the migration left the database unchanged, the rollback lines restored main's `user_profiles` policies byte for byte, the branch's
 `schema.sql` re-ran wholesale (on itself and over main's database) to the migrated picture, and section 18 graded the real output
-71 / 0 (also with the CLI's HTML escape of `>`). What PGlite cannot show: there the functions' owner is a superuser (live: the
+74 / 0 (also with the CLI's HTML escape of `>`). What PGlite cannot show: there the functions' owner is a superuser (live: the
 `postgres` role, which bypasses RLS as the owner of `app_call_days` and `audit_log` - no `force row level security` anywhere),
 Supabase's own `auth.uid()` and grants (the default privileges grant every new table to anon - the migration revokes them, P1
 checks), and PostgREST (the HTTP codes of 18a-18e, the schema-cache reload). The live database is what the apply proves; section 18
-grades exact strings and names any difference by case.
+grades exact strings and names any difference by case. Residuals accepted at the review (10/2): (1) a FORMER APP (`is_app` false)
+that still holds days can still rename itself (the clause binds current APPs) until the scheduler clears its days; (2)
+`display_name` has no length limit for any role (an APP can no longer set its own; the admin's Setup > Users input is the path);
+(3) "any day" is unbounded ahead - no horizon refusal (Faraz's call if he wants one; the client pages the whole table on every
+poll); (4) the probe's fixtures expire: from 2030-12-02 (Central) its 2030-12 days are past for the APP cases, and one real APP
+day in 2030-12 or on 2020-05-04 trips the collision guard (18f FAILs by design) - re-date the window before either happens.
 
 **The pre-check (read-only; run before and after the apply).** `sql/probes/app-call-days-precheck.sql` - one SELECT returning
 `ord, section, role, detail`; row 1 is the apply gate (`table=no is_app=no is_app_fn=no save_fn=no names_fn=no pins=0` before,
@@ -2302,7 +2318,7 @@ read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days is 
 | A7 | U1 '{NULL}' as p_add | `ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved` |
 | A8 | U1 adds 401 days (2031-01-01 .. 2032-02-05) | `ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved` |
 | A9 | U1 adds 2020-05-04 | `ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was` |
-| A10 | U1 adds {12/5, 2020-05-04} | `ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was` |
+| A10 | U1 adds {12/5} and removes 2020-05-04 | `ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was` |
 | A10s | state of 12/5 after A10 (all or nothing) | `12/5=none` |
 | A11 | U1 sad(U2, {12/5}, null) | `ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler` |
 | A12 | U1 sad(U1, {12/5}, null, true) | `ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day` |
@@ -2310,6 +2326,9 @@ read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days is 
 | A14 | U1 direct delete of its own row 12/2 | `ERR 42501 permission denied for table app_call_days` |
 | A15 | U1 reads the window | `rows=2` |
 | A16 | U1 app_call_names() | `names=1 self=yes` |
+| A17 | U1 adds -infinity and removes infinity | `ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved` |
+| A18 | U1 (an APP) renames itself | `ERR 42501 new row violates row-level security policy for table "user_profiles"` |
+| A19 | U1 sets its own display_name to the same value | `updated=1` |
 | B1 | U2 sad(null, {12/2}, null) | `ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved` |
 | B1s | state of 12/2 after B1 | `12/2=one/app` |
 | B2 | U2 sad(U2, {12/7, 12/8}, null) | `ok added=2 source=app 12/7=two/app 12/8=two/app` |
@@ -2357,7 +2376,8 @@ read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days is 
 | I1 | postgres deletes UV's profile; UV self-inserts with is_app = true | `ERR 42501 new row violates row-level security policy for table "user_profiles"` |
 | I2 | UV self-inserts (viewer, no is_app key) | `ok is_app=false` |
 
-(A9 / A10: `<today M/D>` is the Central date of the run - verify-rls grades them by the prefix up to `before today (`.)
+(A9 / A10: `<today M/D>` is the Central date of the run - verify-rls grades them as the exact text with any M/D between
+`before today (` and `) in Central time - a past day stays as it was`. A10 REMOVES the past day: AP006 binds removals too.)
 
 **Apply order:**
 
@@ -2367,7 +2387,7 @@ read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days is 
    app_call_days is absent - sql/migrations/2026-10-02-app-call-days.sql is not applied`.
 3. The migration: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-02-app-call-days.sql` (one implicit
    transaction - a failure changes nothing).
-4. Probe AFTER: every case as the table lists (66 cases).
+4. Probe AFTER: every case as the table lists (69 cases).
 5. `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` - section 18 strict (the anon 404s and PROBE_SETUP are FAILs), every
    other section green.
 6. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed lines; table (a) / (b)'s `app_call_days` and

@@ -1071,7 +1071,7 @@ echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_day
 # policies). 18a-18d go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object
 # exists and anon holds no privilege; 404 = not applied yet (18c: PGRST202 - the schema cache does not know the four keys, the gate
 # before the Prompt 29 client push). 18e (only with SILVIS_SURGEON_JWT) reads as a surgeon and sends an empty save (refused AP001 at
-# the first check). 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 66 cases graded by name -
+# the first check). 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
 # its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP: app_call_days is absent - a PASS, like the anon 404s,
 # unless SILVIS_APP_DAYS_APPLIED=1 (the run right after the apply), then each is a FAIL; its partly-applied raise and its collision
 # guard (PROBE_SETUP: live rows already sit in the probe window) are always a FAIL. 18g counts the probe's leftovers either way, by
@@ -1144,12 +1144,13 @@ if linked; then
     results18=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
     echo "$results18" | tr ';' '\n' | sed 's/^/   /'
     # one case per line, the CLI's JSON escapes decoded ONCE: an HTML character (> for '>', <, &) and the backslashes
-    # (an escaped double quote); the graders then read a case in plain bash (no process per case - 66 of them)
+    # (an escaped double quote); the graders then read a case in plain bash (no process per case - 69 of them)
     lines18=$(echo "$results18" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
     case_val18()   { CV18=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV18="${l#"$1="}"; return 0;; esac; done <<< "$lines18"; }
     expect_eq18()  { case_val18 "$1"; v="$CV18"; [ "$v" = "$2" ] && ok "APP days probe $1: $3" || bad "APP days probe $1: $3 (got '$v', expected '$2')"; }
     expect_err18() { case_val18 "$1"; v="$CV18"; case "$v" in "ERR $2 "*"$3"*) ok "APP days probe $1: $4";; *) bad "APP days probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
-    expect_ap18()  { case_val18 "$1"; v="$CV18"; case "$v" in "ERR $2 $3: $4"*) ok "APP days probe $1: $5";; *) bad "APP days probe $1: $5 (got '$v', expected ERR $2 $3: $4...)";; esac; }
+    # expect_ap18 <case> <code> <token> <head> <tail> <words>: the exact text with the run's Central date (M/D) between head and tail
+    expect_ap18()  { case_val18 "$1"; v="$CV18"; case "$v" in "ERR $2 $3: $4"[0-9]*/[0-9]*"$5") ok "APP days probe $1: $6";; *) bad "APP days probe $1: $6 (got '$v', expected ERR $2 $3: $4<M/D>$5)";; esac; }
     NOTAPP18=" is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)"
     ALLOW18="ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day"
     expect_eq18  P1  "table=yes rls=yes pk=day fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "app_call_days: RLS on, day the primary key, profile_id cascades, one select policy for authenticated; anon holds nothing, authenticated SELECT only"
@@ -1163,8 +1164,8 @@ if linked; then
     expect_eq18  A6  "ERR AP004 APP_DAY_BAD_DAY: 12/4 is both added and removed in one save - nothing was saved" "a day both added and removed is refused"
     expect_eq18  A7  "ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved" "an empty day in the list is refused"
     expect_eq18  A8  "ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved" "more than 400 days in one save are refused"
-    expect_ap18  A9  AP006 APP_DAY_PAST "5/4 is before today (" "a past day (Central time) is refused for an APP"
-    expect_ap18  A10 AP006 APP_DAY_PAST "5/4 is before today (" "one past day refuses the whole save"
+    expect_ap18  A9  AP006 APP_DAY_PAST "5/4 is before today (" ") in Central time - a past day stays as it was" "a past day (Central time) is refused for an APP"
+    expect_ap18  A10 AP006 APP_DAY_PAST "5/4 is before today (" ") in Central time - a past day stays as it was" "removing a past day is refused too, and the whole save with it"
     expect_eq18  A10s "12/5=none" "... and its other day was not written (all or nothing)"
     expect_eq18  A11 "ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler" "an APP cannot add days for another APP"
     expect_eq18  A12 "ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day" "an APP cannot replace (p_replace is the scheduler's)"
@@ -1172,6 +1173,9 @@ if linked; then
     expect_err18 A14 42501 "permission denied for table app_call_days" "an APP cannot delete from app_call_days directly, not even its own row"
     expect_eq18  A15 "rows=2" "an APP reads the APP days"
     expect_eq18  A16 "names=1 self=yes" "app_call_names gives an APP its own name (and the names of the days' holders)"
+    expect_eq18  A17 "ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved" "infinity / -infinity are refused (no calendar day)"
+    expect_err18 A18 42501 'row-level security policy for table "user_profiles"' "an APP cannot rename itself (every signed-in user sees its name; the admin names APPs)"
+    expect_eq18  A19 "updated=1" "... while an update to its own name, unchanged, still lands"
     expect_eq18  B1  "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" "a second APP is refused on a taken day, naming the holder (one APP per day)"
     expect_eq18  B1s "12/2=one/app" "... and the day keeps its APP"
     expect_eq18  B2  "ok added=2 source=app 12/7=two/app 12/8=two/app" "the second APP adds free days"

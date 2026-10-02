@@ -1285,6 +1285,7 @@ const appDaysRpc = (b, sub) => {
   if (repl && !sched) return err("AP002", "APP_DAY_NOT_YOURS", "only the scheduler can replace another APP on a day");
   const addRaw = Array.isArray(b.p_add) ? b.p_add : [], clrRaw = Array.isArray(b.p_clear) ? b.p_clear : [];
   if (addRaw.some(d => d === null) || clrRaw.some(d => d === null)) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is empty - nothing was saved");
+  if (addRaw.concat(clrRaw).some(d => d === "infinity" || d === "-infinity")) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is not a calendar day - nothing was saved");
   if (addRaw.length + clrRaw.length > 400) return err("AP004", "APP_DAY_BAD_DAY", "at most 400 days in one save - nothing was saved");
   const adds = [...new Set(addRaw)].sort(), clears = [...new Set(clrRaw)].sort();
   const both = adds.filter(d => clears.includes(d));
@@ -10703,6 +10704,39 @@ try {
       else ok(`${P} 3: the grid keeps 'A ...' on ${D10}, none on ${D11}`);
       if (appAudit.slice(audit0).map(a => a.summary).pop() !== `Pat Appleton: removed ${appMd(D11)}`) fail(`${P} 3: the audit row should read 'Pat Appleton: removed ${appMd(D11)}': ${JSON.stringify(appAudit.slice(audit0))}`);
     } catch (e) { fail(`${P} 3 (the first APP removes one): ` + errLine(e)); }
+    // ---- 3b. Range and Paste dates only draft (review 10/2: the card's glue was never driven): Range D10-D13 with D10 his own
+    //      = 3 adds + "skipped <D10> is already yours"; Paste "<M>/20, x" = 1 add + "not a date: x"; Discard; nothing is sent ----
+    try {
+      if (!A) throw new Error("the APP A page did not open");
+      await toMineM(A.pg);
+      const s0 = appSaves().length;
+      const D13 = isoM(13), D20 = isoM(20);
+      const hintOf = () => A.pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
+      const countOf = () => A.pg.$eval("[data-testid=appdays-count]", el => el.textContent.trim());
+      await A.pg.click("[data-testid=appdays-range]");
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);
+      const h1 = await hintOf();
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D13}"]`);
+      const h2 = await hintOf();
+      const states = (await Promise.all([D11, D12, D13].map(d => cellOf(A.pg, d)))).map(c => c.state).join(",");
+      const wantH2 = `Range ${appMd(D10)}-${appMd(D13)}: 3 days added to your changes - skipped ${appMd(D10)} is already yours`;
+      if (h1 !== `Range from ${appMd(D10)} - now tap the last day.`) fail(`${P} 3b: the first Range tap should ask for the last day, got '${h1}'`);
+      else if (h2 !== wantH2 || states !== "add,add,add" || (await countOf()) !== "3 changes") fail(`${P} 3b: Range ${D10}-${D13} should draft 3 adds and say '${wantH2}': hint '${h2}', cells ${states}, count '${await countOf()}'`);
+      else ok(`${P} 3b: Range drafts the free days and names the skip - '${h2}'`);
+      await A.pg.click("[data-testid=appdays-range]");   // Range off
+      await A.pg.click("[data-testid=appdays-paste-toggle]");
+      await A.pg.fill("[data-testid=appdays-paste]", `${NM.m}/20, x`);
+      await A.pg.click("[data-testid=appdays-paste-add]");
+      const h3 = await hintOf();
+      const c20 = await cellOf(A.pg, D20);
+      if (h3 !== "Paste: 1 day added to your changes - not a date: x" || c20.state !== "add" || (await countOf()) !== "4 changes") fail(`${P} 3b: Paste '${NM.m}/20, x' should draft ${D20} and say 'not a date: x': hint '${h3}', ${D20} ${c20.state}, count '${await countOf()}'`);
+      else ok(`${P} 3b: Paste dates drafts ${D20} and names the bad token - '${h3}'`);
+      await A.pg.click("[data-testid=appdays-discard]");
+      const back = (await Promise.all([D11, D12, D13, D20].map(d => cellOf(A.pg, d)))).map(c => c.state).join(",");
+      if (appSaves().length !== s0) fail(`${P} 3b: Range / Paste / Discard sent ${appSaves().length - s0} save(s) - they only draft`);
+      else if (back !== "free,free,free,free" || (await countOf()) !== "No changes") fail(`${P} 3b: Discard should drop every drafted day: ${back}, '${await countOf()}'`);
+      else ok(`${P} 3b: Discard drops the drafted days; nothing was sent`);
+    } catch (e) { fail(`${P} 3b (Range / Paste dates): ` + errLine(e)); }
     if (A) { try { await A.settle(); await A.pg.close(); } catch (e) {} }
     // ---- 4. A surgeon, the coordinator and a plain viewer see the APP line but get no add / remove ----
     {

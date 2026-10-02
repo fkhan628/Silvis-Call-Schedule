@@ -165,7 +165,8 @@ A coordinator account is created like any other (invite from the dashboard), the
 ## APPs: putting yourself on a call day (Prompt 29, 10/1)
 
 *Prepared, not live yet: it works once Faraz has run the database update (`apply-app-call-days.sh`) and the client that
-follows it is pushed. Until then My APP days says "APP days are available after the next database update."*
+follows it is pushed. Until then the day editor's APP line reads "APP days are available after the next database update." and
+no account can be marked APP.*
 
 **What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
 viewer has — the calendar, follows and the follower e-mails, its preferences — and adds one thing: the APP puts itself on
@@ -174,7 +175,8 @@ one); **one APP per day** (the database enforces it); **everyone signed in sees 
 e-mails** — the Activity log only.
 
 **How you mark one (Setup → Users).** Invite the APP like a viewer (above). Give the account a **display name** first (a
-nameless APP shows as "APP" on the calendar), leave the **roster link** at *none*, then set **Role** to `app`. The app
+nameless APP shows as "APP" on the calendar; the calendar shows the last name - a credential such as "PA-C" after it is
+dropped - and an APP cannot rename itself, so the name you set is the one everyone sees), leave the **roster link** at *none*, then set **Role** to `app`. The app
 refuses `app` on a linked account (and a roster link on an APP), and the database refuses it too. The switch writes the
 usual `users.link` Activity log row ("Account <APP name>: APP on"). Setting the role back to `viewer` takes the APP
 feature away; that person's days stay on the calendar until you clear them (deleting the account removes them).
@@ -182,8 +184,9 @@ feature away; that person's days stay on the calendar until you clear them (dele
 **What the APP does.** **Mine → My APP days**: a month of days on the phone. Tap a day to put yourself on call; tap it
 again to take it off. A day with another APP's name on it is taken and cannot be picked. **Range** (tap the first and the
 last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once and say which days they skipped and
-why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, the
-taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"). Past days stay as they are.
+why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, your
+other taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"; a tap the refusal made
+impossible, such as a day another APP just took, drops out). Past days stay as they are.
 
 **What you do (the day editor).** Every day's editor has an **APP** line: pick any APP and **Set APP** (it replaces the
 APP already on that day), or **Clear APP**. It is saved at once, apart from the day's own Save, and works on past days too.
@@ -199,8 +202,8 @@ shifts board ignore APP days.
 
 **Three lines to send an APP (phone):**
 1. Open the Silvis call schedule and sign in, then tap **Mine**.
-2. Under **My APP days**, tap each day you will take call (tap it again to take it off) - a day showing someone else's name is taken.
-3. Tap **Save** - your days appear on everyone's calendar as "A <your name>".
+2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
+3. Tap **Save** - your days appear on the calendar of everyone signed in as "A <your last name>".
 
 ## Removing or changing someone
 

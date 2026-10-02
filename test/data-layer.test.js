@@ -4963,8 +4963,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/entered_by:\s*(authUser|userProfile)/.test(src.slice(src.indexOf("const commitOffersPaint"), src.indexOf("const commitOffersPaint") + 3000)), "the client never stamps entered_by on an offer");
     });
     check("A7: Setup -> Users offers the coordinator role and refuses a linked coordinator; the roster-link placeholder names both unlinked roles", () => {
-      // moved deliberately (Prompt 29): the options line gains the pseudo-role "app" (a viewer marked APP) and the placeholder names it
-      assert.ok(src.includes('{["viewer", "app", "surgeon", "coordinator", "scheduler", "admin"].filter(r => r !== "app" || appState === "present" || p.is_app === true).map(r => <option key={r} value={r}>{r === "app" ? "app (APP: viewer + own call days)" : r}</option>)}'), "the role select lists coordinator");
+      // moved deliberately (Prompt 29): the options line gains the pseudo-role "app" (a viewer marked APP) and the placeholder names it;
+      // review 10/2: the option reads "app" (the 110 px select cut the long label off) with the explanation in its title
+      assert.ok(src.includes('{["viewer", "app", "surgeon", "coordinator", "scheduler", "admin"].filter(r => r !== "app" || appState === "present" || p.is_app === true).map(r => <option key={r} value={r} title={r === "app" ? "APP: a viewer account that puts itself on call days" : undefined}>{r}</option>)}'), "the role select lists coordinator");
       assert.ok(src.includes('<option value="">none (viewer / APP / coordinator)</option>'), "the roster-link placeholder");
       const sup = src.slice(src.indexOf("  const saveUserProfile = async (p, patch) => {"), src.indexOf("  const saveUserProfile = async (p, patch) => {") + 2200);
       assert.ok(sup.includes("const nextRole = patch.role || p.role, nextPerson = patch.person_id !== undefined ? patch.person_id : p.person_id;"), "the next role / link are computed from the patch over the row");
@@ -5816,7 +5817,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B3count("{(isScheduler || isViewer) && <>"), 1, "the calendar-sync card's full-schedule block renders for a viewer");
       assert.strictEqual(B3count('data-testid="calsync-full"'), 1, "the full-schedule feed input carries a test id");
       assert.strictEqual(B3count('{isScheduler ? "these URLs" : isFollowing ? (isViewer ? "the feed of each surgeon you follow, or the full-schedule feed" : "the feed of each surgeon you follow") : isViewer ? "the full-schedule feed" : "your personal URL"}'), 1, "the card's sentence names the full-schedule feed for a viewer (Prompt 20 F3: and the followed feeds for a follower)");
-      assert.strictEqual(B3count('(userProfile?.display_name || (isViewer ? "a read-only account" : "unlinked account"))'), 1, "the Account line does not call a viewer 'unlinked'");
+      // moved deliberately (Prompt 29 review, 10/2): a nameless APP account reads "an APP account" (it writes its own days - not read-only)
+      assert.strictEqual(B3count('(userProfile?.display_name || (isApp ? "an APP account" : isViewer ? "a read-only account" : "unlinked account"))'), 1, "the Account line does not call a viewer 'unlinked'");
       assert.strictEqual(B3count('["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"]'), 1, "the nav tab reads 'Time off' for a viewer or the office - the trades section returns null for both, so the label must not promise trades");
       // The per-surgeon pills stay the scheduler's: the block that maps surgeons to calendar-sync?surgeon= pills is inside an isScheduler-only guard.
       const calCard = B3SRC.slice(B3SRC.indexOf("<div style={css.cardT}>Live calendar sync</div>"), B3SRC.indexOf("{/* calendar-sync card end */}"));
@@ -8385,6 +8387,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appShortName(null), "APP");
       assert.strictEqual(H.appShortName(undefined), "APP");
       assert.strictEqual(H.appShortName(", PA-C"), "APP");
+      // review 10/2: trailing credentials without a comma are dropped (capitals only - a surname 'Do' / 'Pa' stays); a lone word stays
+      assert.strictEqual(H.appShortName("Pat Appleton PA-C"), "Appleton");
+      assert.strictEqual(H.appShortName("Pat Appleton NP"), "Appleton");
+      assert.strictEqual(H.appShortName("Pat Appleton P.A.-C."), "Appleton");
+      assert.strictEqual(H.appShortName("Lee Bramble MSN FNP-BC"), "Bramble");
+      assert.strictEqual(H.appShortName("Lee Bramble MSN, FNP-C"), "Bramble");
+      assert.strictEqual(H.appShortName("Kim Do"), "Do");
+      assert.strictEqual(H.appShortName("Ann Pa"), "Pa");
+      assert.strictEqual(H.appShortName("NP"), "NP");
     });
     check("P29 helpers: appDaysByDay - keyed by day; junk / non-ISO / profile-less rows skipped; name from the names rows (else 'APP'); a former APP reads isApp false; source kept", () => {
       assert.deepStrictEqual(Object.keys(BY).sort(), ["2026-12-02", "2026-12-03", "2026-12-05"]);
@@ -8461,6 +8472,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plain(H.appDaysDraftDiff({}, byDay, PA)), { add: [], clear: [], count: 0 });
       assert.deepStrictEqual(plain(H.appDaysDraftDiff(null, null, null)), { add: [], clear: [], count: 0 });
       assert.deepStrictEqual(plain(H.appDaysDraftDiff({ "2026-12-03": true }, BY, PA)), { add: ["2026-12-03"], clear: [], count: 1 }, "a day another APP holds stays in add - the server refuses it with its own words (AP005)");
+      // review 10/2: with today, a drafted day before it never counts (it became past while the card was open); today itself counts
+      assert.deepStrictEqual(plain(H.appDaysDraftDiff(d, byDay, PA, "2026-12-10")), { add: ["2026-12-12"], clear: ["2026-12-11"], count: 2 }, "12/9 (now past) dropped from add");
+      assert.deepStrictEqual(plain(H.appDaysDraftDiff({ "2026-12-11": false, "2026-12-08": false }, byDay, PA, "2026-12-11")), { add: [], clear: ["2026-12-11"], count: 1 }, "a removal of a now-past day of his is dropped; today stays");
+      assert.deepStrictEqual(plain(H.appDaysDraftDiff(d, byDay, PA, "junk")), { add: ["2026-12-09", "2026-12-12"], clear: ["2026-12-11"], count: 3 }, "a non-ISO today = no date filter");
     });
     check("P29 helpers: appDaysDraftPrune - after a reload, an add on a held day and a removal of a day no longer his drop out; nothing to drop = the SAME object", () => {
       const byDay = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA } };
@@ -8468,6 +8483,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plain(H.appDaysDraftPrune(d, byDay, PA)), { "2026-12-09": true, "2026-12-08": false });
       const keep = { "2026-12-09": true, "2026-12-08": false };
       assert.strictEqual(H.appDaysDraftPrune(keep, byDay, PA), keep);
+      // review 10/2: with today, the days before it go too (midnight Central passed while the card was open); today stays
+      assert.deepStrictEqual(plain(H.appDaysDraftPrune(keep, byDay, PA, "2026-12-09")), { "2026-12-09": true }, "12/8 (his, drafted off) is past now");
+      assert.strictEqual(H.appDaysDraftPrune(keep, byDay, PA, "2026-12-08"), keep, "nothing past: the SAME object");
     });
     check("P29 helpers: appDaysErrorWords - the function's own sentence after the token; unavailable / permission / session / network / other words; appDaysErrorCode reads AP00n from the code or the token", () => {
       const pg = (code, message) => JSON.stringify({ code, details: null, hint: null, message });
@@ -8482,6 +8500,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), "Couldn't reach the server - check your connection and try again. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), "Couldn't reach the server - check your connection and try again. Nothing was saved.", "an Error-like object");
       assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP days: " + "x".repeat(160));
+      // review 10/2: an HTTP error whose body is no PostgREST JSON (a gateway's HTML page) shows the status, never the page
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), "Couldn't save the APP days (HTTP 502) - nothing was saved. Try again.");
+      assert.strictEqual(H.appDaysErrorWords("", 503), "Couldn't save the APP days (HTTP 503) - nothing was saved. Try again.");
+      assert.strictEqual(H.appDaysErrorWords("unexpected response from save_app_days: {}", 200), "Couldn't save the APP days: unexpected response from save_app_days: {}", "a 2xx with an unexpected body keeps its words");
       assert.strictEqual(H.appDaysErrorCode(pg("AP005", "APP_DAY_TAKEN: ...")), "AP005");
       assert.strictEqual(H.appDaysErrorCode("APP_DAY_STALE: 12/2 is Lee's day - reload the calendar (nothing was saved)"), "AP007", "from the token");
       assert.strictEqual(H.appDaysErrorCode("APP_DAY_NOT_ALLOWED: x"), "AP001", "NOT_ALLOWED is not NOT_APP");
@@ -8647,14 +8669,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(SRC.indexOf("  const isApp = ") < SRC.indexOf("  const loadAppDays = "), "declared before the loader");
       assert.strictEqual(cnt(SRC, "appDaysAllowedRef.current = appDaysAllowed;"), 1, "the ref is mirrored every render");
     });
-    await acheckP("P29 behaviour: loadAppDays (lifted verbatim) - no request unless appDaysAllowedRef.current; ok sets rows + names; unavailable clears them, no toast; failed keeps them and toasts once (again when explicit); skipped changes nothing; a stale answer is dropped", async () => {
+    await acheckP("P29 behaviour: loadAppDays (lifted verbatim) - no request unless appDaysAllowedRef.current; ok sets rows + names; unavailable clears them, no toast; failed keeps them, toasts only when explicit (review 10/2: the mount / poll stay quiet); skipped marks an unread state only; a stale answer is dropped", async () => {
       const mk = (answer, allowed) => {
         const st = { rows: ["old"], names: ["oldn"], state: "ok", toasts: [], loads: 0 };
         const ctx = {
           console: { warn() {}, log() {} },
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appToastShownRef: { current: false },
+          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 },
           appDaysDb: { load: async () => { st.loads++; return typeof answer === "function" ? answer(ctx) : answer; } },
-          setAppDayRows: (v) => { st.rows = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = v; },
+          setAppDayRows: (v) => { st.rows = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
           showToast: (m, k) => { st.toasts.push(m + "|" + k); },
         };
         return { st, ctx, fn: lift(loadSrc, "loadAppDays", ctx) };
@@ -8671,12 +8693,21 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       t = mk({ state: "failed", error: "HTTP 500" }, true);
       await t.fn(false); await t.fn(false);
       assert.deepStrictEqual([t.st.rows, t.st.names, t.st.state], [["old"], ["oldn"], "failed"], "the last loaded rows are kept");
-      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP days - the last loaded days are kept.|error"], "one toast for two quiet failures");
+      assert.deepStrictEqual(t.st.toasts, [], "no toast for two passive failures (the mount, the 60 s poll) - every role shares the poll");
       await t.fn(true);
-      assert.strictEqual(t.st.toasts.length, 2, "an explicit reload toasts again");
+      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP days - the last loaded days are kept.|error"], "an explicit reload (Retry, a Save, the editor, a Users switch) toasts");
+      await t.fn(true);
+      assert.strictEqual(t.st.toasts.length, 2, "... every time");
+      assert.ok(!/appToastShownRef/.test(SRC), "no once-per-session toast flag is left");
       t = mk({ state: "skipped" }, true);
       await t.fn(false);
       assert.deepStrictEqual([t.st.rows, t.st.state, t.st.toasts.length], [["old"], "ok", 0]);
+      t = mk({ state: "skipped" }, true); t.st.state = "unread";
+      await t.fn(false);
+      assert.strictEqual(t.st.state, "skipped", "a first read with no fresh token says so (My APP days' 'Sign in again' line), instead of 'Loading' until the next poll");
+      t = mk({ state: "skipped" }, true); t.st.state = "failed";
+      await t.fn(false);
+      assert.strictEqual(t.st.state, "failed", "skipped never hides a failure");
       t = mk((ctx) => { ctx.appGenRef.current++; return { state: "ok", rows: [9], names: [] }; }, true);
       await t.fn(false);
       assert.deepStrictEqual(t.st.rows, ["old"], "an answer for the previous account (appGenRef moved) is dropped");
@@ -8776,6 +8807,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(rxCount(cardSrc, /onSave\(/g), 1, "one onSave call");
       const sv = between(cardSrc, "  const save = async () => {", "\n  };\n");
       assert.ok(sv.includes("const r = await onSave(diff.add, diff.clear);"), "Save sends the draft diff once");
+      assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId, todayC)); }, [byDay, profileId, todayC]);") && cardSrc.includes("const diff = appDaysDraftDiff(draft, held, profileId, todayC);"), "review 10/2: the draft is pruned and counted against today - a day that turns past while the card is open leaves it");
+      assert.ok(cardSrc.includes('state === "failed" ? "Couldn\'t load the APP days - the calendar below may be out of date."') && !/nothing was changed/.test(cardSrc), "review 10/2: the failed line never claims 'nothing was changed' (a Save may just have landed)");
       assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
       assert.ok(!/opacity/.test(cardSrc), "no opacity");
       assert.ok(!/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(cardSrc), "no literal hex colour - THEME tokens only");
@@ -8836,13 +8869,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RAISES.some(r => r.code === "AP004" && r.text === "at most " + H.APP_DAYS_MAX_SAVE + " days in one save - nothing was saved"), "the server's AP004 cap words");
       assert.ok(SRC.includes('return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " days in one save - nothing was saved" };'), "the client's local refusal says the server's words");
     });
-    check("P29 cross pins (integration): APP_DAY_CODES = the codes and tokens the migration raises (13 raises, AP001-AP007), every message 'APP_DAY_<TOKEN>: <text>' (what appDaysErrorWords / appDaysErrorCode parse); the stale-picture reload codes exist", () => {
-      assert.strictEqual(RAISES.length, 13, "13 raises: " + RAISES.map(r => r.code).join(","));
+    check("P29 cross pins (integration): APP_DAY_CODES = the codes and tokens the migration raises (14 raises, AP001-AP007), every message 'APP_DAY_<TOKEN>: <text>' (what appDaysErrorWords / appDaysErrorCode parse); the stale-picture reload codes exist", () => {
+      assert.strictEqual(RAISES.length, 14, "14 raises: " + RAISES.map(r => r.code).join(","));
       assert.strictEqual(rxCount(MIGS, /errcode = 'AP\d{3}'/g), RAISES.length, "every AP errcode sits on a parsed raise");
       const seen = {};
       RAISES.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token (" + seen[r.code] + " / " + r.token + ")"); seen[r.code] = r.token; });
       assert.deepStrictEqual(seen, plain(H.APP_DAY_CODES), "the client's code table = the migration's code -> token pairs");
-      assert.deepStrictEqual(RAISES.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP003", "AP006", "AP007", "AP002", "AP005", "AP005"], "the check order (spec B.5)");
+      assert.deepStrictEqual(RAISES.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP004", "AP003", "AP006", "AP007", "AP002", "AP005", "AP005"], "the check order (spec B.5; review 10/2 adds the non-finite AP004 after the empty one)");
       ["AP002", "AP005", "AP006", "AP007"].forEach(c => { assert.ok(seen[c], c + " is raised"); assert.ok(SRC.includes('code === "' + c + '"'), "saveMyAppDays reloads on " + c); });
       // the probe's B1 answer, as PostgREST relays it, read by the client's parsers
       const b1 = JSON.stringify({ code: "AP005", details: null, hint: null, message: "APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" });
@@ -8890,14 +8923,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ["' already has '", "'''s day'", "'another APP'", "'that account'", "'FMMM/FMDD'"].forEach(p => assert.ok(MIGS.includes(p), "the migration builds " + p));
       ['" already has "', "\"'s day\"", '"another APP"', '"that account"'].forEach(p => assert.ok(SMOKEP.includes(p), "the mock builds " + p));
       assert.ok(SMOKEP.includes('const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));'), "the mock's M/D = to_char FMMM/FMDD");
+      // review 10/2: the joiners of several days - AP005 joins its parts with '; ', AP002 / AP007 / AP004 / AP006 with ', ' - on both sides
+      assert.ok(MIGS.includes("' already has ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP'), '; ' order by a.day)"), "the migration's AP005 parts are joined by '; '");
+      assert.ok(MIGS.includes("'''s day', ', ' order by a.day)"), "the migration's AP002 / AP007 parts are joined by ', '");
+      const mockLine = (code, token) => SMOKEP.split("\n").filter(l => l.includes('err("' + code + '", "' + token + '", ')).join("\n");
+      assert.ok(/already has " \+ appNameOfP\(r\.profile_id\)\)\.join\("; "\) \+ " - nothing was saved"/.test(mockLine("AP005", "APP_DAY_TAKEN")), "the mock's AP005 joins with '; '");
+      assert.ok(SMOKEP.includes('const txt = heldOther.map(r => appMd(r.day) + " is " + appNameOfP(r.profile_id) + "\'s day").join(", ");'), "the mock's AP002 / AP007 join with ', '");
     });
-    check("P29 cross pins (integration): the build guide's 4.3 bullet names the migration, revision v, verify-rls section 18 and the probe's 66 cases (= the probe header's count)", () => {
+    check("P29 cross pins (integration): the build guide's 4.3 bullet names the migration, revision v, verify-rls section 18 and the probe's 69 cases (= the probe header's count)", () => {
       const g43 = between(GUIDEP, "### 4.3 RLS posture", "### 4.4 ");
       const b = between(g43, "- **APP call days (2026-10-02, report-first, NOT applied; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).**", "### 4.4 ");
-      assert.ok(/Proof: `sql\/probes\/app-call-days-probe\.sql` \(rolled back; 66 cases in its header/.test(b), "66 cases");
+      assert.ok(/Proof: `sql\/probes\/app-call-days-probe\.sql` \(rolled back; 69 cases in its header/.test(b), "69 cases");
       assert.ok(b.includes("`scripts/verify-rls.sh` section 18"), "section 18");
       const PROBE = fs.readFileSync(path.join(ROOT, "sql", "probes", "app-call-days-probe.sql"), "utf8").replace(/\r\n/g, "\n");
-      assert.ok(/\n-- 66 cases\.\n/.test(PROBE), "the probe header says 66 cases");
+      assert.ok(/\n-- 69 cases\.\n/.test(PROBE), "the probe header says 69 cases");
       const VR = fs.readFileSync(path.join(ROOT, "scripts", "verify-rls.sh"), "utf8").replace(/\r\n/g, "\n");
       assert.ok(VR.includes('echo "== 18. APP call days (2026-10-02, Prompt 29)'), "verify-rls section 18 exists");
       const SCH = fs.readFileSync(path.join(ROOT, "sql", "schema.sql"), "utf8").replace(/\r\n/g, "\n");

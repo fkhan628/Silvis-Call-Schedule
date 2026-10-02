@@ -5572,11 +5572,15 @@ const APP_DAYS_UNAVAILABLE_TEXT = "APP days are available after the next databas
 const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" };
 const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004); the client refuses a bigger save before any request
 const appDayIsIso = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
-// appShortName(displayName) -> the grid's name: the part before the first comma (drops ", PA-C"), trimmed, its last word.
-// "Pat Appleton" -> "Appleton"; a nameless APP reads "APP".
+// appShortName(displayName) -> the grid's name: the part before the first comma (drops ", PA-C"), trimmed, its last word -
+// after trailing credential words written without a comma ("Pat Appleton PA-C", "... NP", "... P.A.-C"; review 10/2), matched
+// in capitals only so a surname such as "Do" or "Pa" stays; a lone word is kept. "Pat Appleton" -> "Appleton"; a nameless APP
+// reads "APP".
+const APP_CREDENTIAL_WORDS = ["PA-C", "PA", "NP", "NP-C", "APRN", "APRN-CNP", "ARNP", "CRNP", "CNP", "FNP", "FNP-C", "FNP-BC", "AGNP", "AGNP-C", "AGACNP", "AGACNP-BC", "ACNP", "ACNP-BC", "CNS", "CRNA", "DNP", "MSN", "BSN", "RN", "MPAS", "MSPAS", "MHS", "MMS", "MPA", "PHD"];
 function appShortName(displayName) {
   const head = String(displayName === null || displayName === undefined ? "" : displayName).split(",")[0].trim();
   const words = head.split(/\s+/).filter(Boolean);
+  while (words.length > 1 && APP_CREDENTIAL_WORDS.includes(words[words.length - 1].replace(/\./g, "").replace(/^PhD$/, "PHD"))) words.pop();
   return words.length ? words[words.length - 1] : "APP";
 }
 // appDaysByDay(rows, names) -> { "YYYY-MM-DD": { day, profileId, name, short, isApp, source } } from the APP table's rows
@@ -5647,20 +5651,25 @@ function appDaysPlan(days, ctx) {
   });
   return { go, skipped };
 }
-// appDaysDraftDiff(draft, byDay, me) -> { add: [drafted-true days not held by me, sorted], clear: [drafted-false days held
-// by me, sorted], count } - what one Save sends.
-function appDaysDraftDiff(draft, byDay, me) {
+// appDaysDraftDiff(draft, byDay, me, today) -> { add: [drafted-true days not held by me, sorted], clear: [drafted-false days
+// held by me, sorted], count } - what one Save sends. With today (ISO), a day before it never counts (a drafted day that became
+// past while the card was open - the server refuses it with AP006; review 10/2).
+function appDaysDraftDiff(draft, byDay, me, today) {
   const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
+  const t = appDayIsIso(today) ? today : null;
   const held = (day) => !!(b[day] && me && b[day].profileId === me);
-  const add = Object.keys(d).filter(day => appDayIsIso(day) && d[day] === true && !held(day)).sort();
-  const clear = Object.keys(d).filter(day => appDayIsIso(day) && d[day] === false && held(day)).sort();
+  const live = (day) => appDayIsIso(day) && !(t && day < t);
+  const add = Object.keys(d).filter(day => live(day) && d[day] === true && !held(day)).sort();
+  const clear = Object.keys(d).filter(day => live(day) && d[day] === false && held(day)).sort();
   return { add, clear, count: add.length + clear.length };
 }
-// appDaysDraftPrune(draft, byDay, me) -> the draft without the entries a reload made impossible (an add on a day somebody
-// now holds, a removal of a day that is no longer mine); the SAME object when nothing goes.
-function appDaysDraftPrune(draft, byDay, me) {
+// appDaysDraftPrune(draft, byDay, me, today) -> the draft without the entries a reload made impossible (an add on a day somebody
+// now holds, a removal of a day that is no longer mine) and, with today (ISO), without the days before it (midnight Central
+// passed while the card was open; review 10/2); the SAME object when nothing goes.
+function appDaysDraftPrune(draft, byDay, me, today) {
   const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
-  const drop = Object.keys(d).filter(day => d[day] === true ? !!b[day] : !(b[day] && me && b[day].profileId === me));
+  const t = appDayIsIso(today) ? today : null;
+  const drop = Object.keys(d).filter(day => (t && day < t) || (d[day] === true ? !!b[day] : !(b[day] && me && b[day].profileId === me)));
   if (!drop.length) return d;
   const next = { ...d };
   drop.forEach(day => { delete next[day]; });
@@ -5686,7 +5695,14 @@ function appDaysErrorWords(body, status) {
   if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
   if (/JWT|PGRST301/.test(all) || Number(status) === 401) return "Your session expired - sign in again. Nothing was saved.";
   if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - check your connection and try again. Nothing was saved.";
+  // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
+  if (Number(status) >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP days (HTTP " + Number(status) + ") - nothing was saved. Try again.";
   return "Couldn't save the APP days: " + msg.slice(0, 160);
+}
+// true when a save's error body is a PostgREST error (an object, or JSON text, with a message)
+function appDayErrorIsJson(body) {
+  if (body && typeof body === "object") return typeof body.message === "string";
+  try { const j = JSON.parse(String(body === null || body === undefined ? "" : body)); return !!(j && typeof j.message === "string"); } catch (e) { return false; }
 }
 // appDaysErrorCode(body) -> the AP00n code of a PostgREST error body (its code, else the token in its message), else null -
 // the client reloads the picture after AP002 / AP005 / AP006 / AP007 (it was stale).

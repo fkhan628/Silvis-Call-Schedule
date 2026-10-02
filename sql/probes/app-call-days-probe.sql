@@ -20,8 +20,9 @@
 -- already sit in the probe window ...'. AFTER the migration every case below must read as listed.
 --
 -- Fixtures: no app_call_days row is written by the setup. Every day a case touches is FAR-FUTURE (2030-12, and 2031-01-01 ..
--- 2032-02-05 for the refused 401-day case) or the past day 2020-05-04. The acting users are six throwaway auth.users rows
--- (email probe-appdays-<uuid>@example.test) whose user_profiles rows the handle_new_auth_user trigger creates; postgres then
+-- 2032-02-05 for the refused 401-day case), the past day 2020-05-04 or infinity / -infinity (A17, refused before any write).
+-- The acting users are six throwaway auth.users rows (email probe-appdays-<uuid>@example.test) whose user_profiles rows the
+-- handle_new_auth_user trigger creates; postgres then
 -- sets them: U1 viewer + is_app 'probe app one'; U2 viewer + is_app 'probe app two'; US surgeon linked to s3 'probe surgeon';
 -- UC coordinator 'probe office'; UV viewer (not an APP) 'probe viewer'; UA admin linked to s1 'probe admin'. Acting as a user:
 -- SET LOCAL ROLE authenticated + request.jwt.claims.sub; anon: SET LOCAL ROLE anon + claims ''; no signed-in user = postgres with
@@ -51,7 +52,7 @@
 --   A7  U1 '{NULL}' as p_add -> ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved
 --   A8  U1 adds 401 days (2031-01-01 .. 2032-02-05) -> ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved
 --   A9  U1 adds 2020-05-04 -> ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was
---   A10 U1 adds {12/5, 2020-05-04} -> ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was
+--   A10 U1 adds {12/5} and removes 2020-05-04 -> ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was
 --   A10s state of 12/5 after A10 (all or nothing) -> 12/5=none
 --   A11 U1 sad(U2, {12/5}, null) -> ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler
 --   A12 U1 sad(U1, {12/5}, null, true) -> ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day
@@ -59,6 +60,9 @@
 --   A14 U1 direct delete of its own row 12/2 -> ERR 42501 permission denied for table app_call_days
 --   A15 U1 reads the window -> rows=2
 --   A16 U1 app_call_names() -> names=1 self=yes
+--   A17 U1 adds -infinity and removes infinity -> ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved
+--   A18 U1 (an APP) renames itself -> ERR 42501 new row violates row-level security policy for table "user_profiles"
+--   A19 U1 sets its own display_name to the same value -> updated=1
 --   B1  U2 sad(null, {12/2}, null) -> ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved
 --   B1s state of 12/2 after B1 -> 12/2=one/app
 --   B2  U2 sad(U2, {12/7, 12/8}, null) -> ok added=2 source=app 12/7=two/app 12/8=two/app
@@ -105,7 +109,7 @@
 --   X1  postgres deletes U2's auth user (U2 held 12/2, 12/7, 12/8) -> before=3 after=0 audit_kept=yes
 --   I1  postgres deletes UV's profile; UV self-inserts with is_app = true -> ERR 42501 new row violates row-level security policy for table "user_profiles"
 --   I2  UV self-inserts (viewer, no is_app key) -> ok is_app=false
--- 66 cases.
+-- 69 cases.
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -250,7 +254,7 @@ do $$ declare s regprocedure; n regprocedure; i regprocedure; begin
   exception when others then insert into probe_results values ('P3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
 end $$;
 
--- A1-A16: as the APP U1
+-- A1-A19: as the APP U1
 do $$ declare u text; u2 text; r jsonb; n int; begin
   select v into u from probe_ctx where k = 'u1';
   select v into u2 from probe_ctx where k = 'u2';
@@ -299,7 +303,7 @@ do $$ declare u text; u2 text; r jsonb; n int; begin
     insert into probe_results values ('A9', 'saved (NO refusal)');
   exception when others then insert into probe_results values ('A9', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
-    r := public.save_app_days(u::uuid, '{2030-12-05,2020-05-04}', null);
+    r := public.save_app_days(u::uuid, '{2030-12-05}', '{2020-05-04}');
     insert into probe_results values ('A10', 'saved (NO refusal)');
   exception when others then insert into probe_results values ('A10', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
@@ -328,6 +332,20 @@ do $$ declare u text; u2 text; r jsonb; n int; begin
   begin
     insert into probe_results values ('A16', replace(pg_temp.ad_names('self'), ';', ','));
   exception when others then insert into probe_results values ('A16', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_days(u::uuid, '{-infinity}', '{infinity}');
+    insert into probe_results values ('A17', 'saved (NO refusal)');
+  exception when others then insert into probe_results values ('A17', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.user_profiles set display_name = 'probe app one renamed' where id = auth.uid();
+    get diagnostics n = row_count;
+    insert into probe_results values ('A18', 'updated=' || n || ' (NO refusal)');
+  exception when others then insert into probe_results values ('A18', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    update public.user_profiles set display_name = 'probe app one' where id = auth.uid();
+    get diagnostics n = row_count;
+    insert into probe_results values ('A19', 'updated=' || n);
+  exception when others then insert into probe_results values ('A19', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 

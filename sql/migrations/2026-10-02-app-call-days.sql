@@ -8,8 +8,10 @@
 --
 -- What changes. (1) user_profiles gains is_app boolean not null default false (an APP = an unlinked viewer row with the flag,
 -- set by the admin in Setup > Users) and the check user_profiles_app_viewer (an APP is a viewer account, never a roster entry);
--- user_profiles_self_insert and user_profiles_self_update are re-created with one more clause each that pins is_app against
--- self-service (byte for byte the followers texts otherwise). (2) ONE new helper public.silvis_is_app() (security definer,
+-- user_profiles_self_insert is re-created with one more clause that pins is_app against self-service, user_profiles_self_update
+-- with two: the is_app pin and, on an APP's row, a display_name pin (an APP's name reaches every signed-in user through
+-- app_call_names - the calendar's A line, the refusal texts, the audit summary - so the admin names APPs in Setup > Users; every
+-- other account keeps renaming itself) - byte for byte the followers texts otherwise. (2) ONE new helper public.silvis_is_app() (security definer,
 -- search_path public, pg_temp). (3) ONE new table public.app_call_days (day date PRIMARY KEY - one APP per day, the database
 -- enforces it; profile_id -> user_profiles on delete cascade; source 'app' / 'scheduler'; created_by; created_at): read by every
 -- signed-in role (policy app_call_days_read), never anon (no anon policy AND anon's table privileges revoked - an anon request is
@@ -33,6 +35,7 @@
 --   AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler
 --   AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day
 --   AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved
+--   AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved   (infinity / -infinity)
 --   AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved
 --   AP004 APP_DAY_BAD_DAY: <days> is both added and removed in one save - nothing was saved
 --   AP003 APP_DAY_NOT_APP: <name, else that account> is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
@@ -58,8 +61,8 @@
 -- (display names only). No notification row, no e-mail.
 --
 -- Blast radius. Every self INSERT / UPDATE of user_profiles re-evaluates the two re-created policies - the shipped client sends
--- none (public sign-ups are off; the client never self-inserts or self-PATCHes a profile); the pins close a self-promotion hole.
--- The column add is NOT NULL DEFAULT false (no table rewrite; the new check passes on every existing row). A new
+-- none (public sign-ups are off; the client never self-inserts or self-PATCHes a profile); the pins close a self-promotion hole
+-- and keep an APP from renaming itself on everyone's calendar. The column add is NOT NULL DEFAULT false (no table rewrite; the new check passes on every existing row). A new
 -- authenticated-only table and three new functions; no existing function, table or anon surface changes; the anon read_all loop
 -- does not gain the table. Independent of Prompt 28 (no-primary days) and the weekend pair claim - no shared object, either apply
 -- order. The client that reads and writes the APP days ships AFTER the apply (and after Prompt 28's client), on Faraz's go; it
@@ -73,7 +76,7 @@
 -- paste into the SQL editor runs as one session too - a failure anywhere changes nothing.
 -- Order: 1. pre-check sql/probes/app-call-days-precheck.sql (read-only; the objects row must read table=no is_app=no
 -- is_app_fn=no save_fn=no names_fn=no pins=0); 2. probe BEFORE sql/probes/app-call-days-probe.sql (expects PROBE_SETUP:
--- app_call_days is absent ...); 3. this file; 4. probe AFTER (66 cases, each as its header lists); 5. SILVIS_APP_DAYS_APPLIED=1
+-- app_call_days is absent ...); 3. this file; 4. probe AFTER (69 cases, each as its header lists); 5. SILVIS_APP_DAYS_APPLIED=1
 -- bash scripts/verify-rls.sh (sections 1-15 and 18 green); 6. the record step in docs/SCHEMA-REVIEW.md "2026-10-02 - APP call
 -- days"; 7. the client push on Faraz's go, after Prompt 28's client; 8. Faraz sets Role = app on each APP account in Setup > Users.
 -- Re-running: idempotent (add column if not exists, drop constraint / policy if exists, create table / index if not exists,
@@ -128,10 +131,11 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
     and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
     and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())
-    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));
+    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid())
+    and (not is_app or display_name is not distinct from (select display_name from public.user_profiles p where p.id = auth.uid())));
 
 create table if not exists public.app_call_days (
-  day         date primary key,                                                        -- one APP per day: the database enforces it
+  day         date primary key check (isfinite(day)),                                  -- one APP per day: the database enforces it (never infinity)
   profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
   source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP
   created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)
@@ -195,6 +199,10 @@ begin
   end if;
   if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
     raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';
+  end if;
+  -- infinity / -infinity are dates to PostgreSQL but no calendar day: to_char gives NULL, so every message below would drop them
+  if exists (select 1 from unnest(coalesce(p_add, '{}'::date[]) || coalesce(p_clear, '{}'::date[])) d where not isfinite(d)) then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';
   end if;
   if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then
     raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';
