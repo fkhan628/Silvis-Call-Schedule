@@ -92,9 +92,11 @@ flush("build.yml parse");
 chain.forEach(p => ok(stepRuns.includes(p), "suite `" + p + "` is in package.json's test chain but has no `run: node " + p + "` step in build.yml"));
 // b. (until 10/2: every suite in the paths filter - retired by Do first 10; a
 //    test-only push now runs in test.yml, section 2b, and is no deploy.)
-//    Every test step runs BEFORE the version bump and the build.
-const bumpAt = yml.indexOf("run: node bump-version.js"), buildAt = yml.indexOf("run: node build.js");
-const lastTestAt = Math.max(...testSteps.map(p => yml.indexOf("run: node " + p)));
+//    Every test step runs BEFORE the version bump and the build (measured on the file
+//    without its comment lines - a comment naming `run: node bump-version.js` is no step).
+const ymlCode = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+const bumpAt = ymlCode.indexOf("run: node bump-version.js"), buildAt = ymlCode.indexOf("run: node build.js");
+const lastTestAt = Math.max(...testSteps.map(p => ymlCode.indexOf("run: node " + p)));
 ok(bumpAt > 0 && buildAt > bumpAt && lastTestAt > 0 && lastTestAt < bumpAt, "every `run: node test/...` step must come before `run: node bump-version.js` and `run: node build.js` (a failing suite stops the deploy before anything is bumped)");
 // c. every test step is in the chain (nothing runs in CI that `npm test`,
 //    the CLAUDE.md pre-push gate, would not run locally).
@@ -104,6 +106,12 @@ testSteps.forEach(p => ok(chain.includes(p), "build.yml runs `" + p + "` but pac
 const stepOrder = testSteps.filter(p => chain.includes(p));
 ok(JSON.stringify(stepOrder) === JSON.stringify(chain.filter(p => testSteps.includes(p))),
   "build.yml test steps run in a different order than package.json's chain: " + JSON.stringify(stepOrder));
+// e. nothing can quietly soften the gate (review 10/2 of Do first 10): no `continue-on-error` anywhere (a failing
+//    suite would let the deploy go on), and the ONLY `if:` is the job-level [skip ci] guard - a job `if: false` or a
+//    step-level `if:` on a suite would show a green or skipped run while the suite never ran.
+ok(!/continue-on-error/.test(ymlCode), "build.yml must not use `continue-on-error` (a failing suite would let the bump and build go on)");
+const ymlIfLines = ymlCode.split("\n").filter(l => /^\s*-?\s*if\s*:/.test(l)).map(l => l.replace(/\s+$/, ""));
+ok(JSON.stringify(ymlIfLines) === JSON.stringify(["    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}"]), "build.yml's only `if:` must be the job-level `if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}` (no step-level condition on a suite), found " + JSON.stringify(ymlIfLines));
 flush("chain vs steps");
 
 // ---- 2. the build filter is exactly the deploy's RUNTIME inputs (review 2026-09-27 Do first 10) ----
@@ -135,7 +143,7 @@ loaderFiles.forEach(f => {
 const pageRefs = Array.from(idx.matchAll(/\b(?:href|src)="([^"]+)"/g)).map(m => m[1])
   .filter(u => !/^(https?:|data:|blob:|mailto:|#)/.test(u) && !/['+]/.test(u));
 const SHELL = ["manifest.json", "apple-touch-icon.png", "icon-192.png", "icon-512.png"];
-ok(JSON.stringify(pageRefs.slice().sort()) === JSON.stringify(SHELL.slice().sort()), "index-source.html's local href / src literals changed (expected the PWA shell " + JSON.stringify(SHELL) + ", found " + JSON.stringify(pageRefs) + ") - a new served file belongs in the filter, RUNTIME_FILTER and this list together");
+ok(JSON.stringify(Array.from(new Set(pageRefs)).sort()) === JSON.stringify(SHELL.slice().sort()), "index-source.html's local href / src literals changed (expected the PWA shell " + JSON.stringify(SHELL) + ", found " + JSON.stringify(pageRefs) + ") - a new served file belongs in the filter, RUNTIME_FILTER and this list together");
 pageRefs.forEach(u => ok(watched(u), "index-source.html references `" + u + "` but build.yml's paths filter does not watch it (a manifest/icon-only push must bump APP_VERSION)"));
 // c. the build inputs: build.js / bump-version.js default to the JSX source, require nothing local, and npm ci reads
 //    package.json + package-lock.json; every local require of a loader module resolves to a watched file.
@@ -171,6 +179,29 @@ tracked.filter(f => /^test\/.+\.test\.(js|mjs)$/.test(f) && !chain.includes(f)).
   ok(!!host, "test file `" + f + "` is neither in package.json's test chain nor required by a chain suite - a test that never runs cannot fail");
 });
 ok(!chain.includes("test/nov-backups.test.js") && /require\("\.\/nov-backups\.test\.js"\)/.test(read("test/generator-regression.js")) && /NB\.run\(/.test(read("test/generator-regression.js")), "test/nov-backups.test.js runs inside test/generator-regression.js (require + NB.run), not as a chain entry of its own");
+// f. files the page loads INDIRECTLY (review 10/2 of Do first 10): (d) classifies by folder, so a runtime file placed
+//    under docs/ or test/ (Pages serves those too) and loaded through the generator worker, a relative fetch or the
+//    manifest would pass it and never deploy. (1) the worker's importScripts list (helpers.js GEN_WORKER_MODULES) is
+//    loader files only; (2) every path-shaped relative literal handed to fetch / importScripts / new URL / new Worker /
+//    serviceWorker.register / sendBeacon / window.open in index-source.html and the loader modules is watched, or is the
+//    CI-owned version.json that every deploy rewrites; (3) every manifest icon is watched.
+const GWM = require(path.join(ROOT, "helpers.js")).GEN_WORKER_MODULES;
+ok(Array.isArray(GWM) && GWM.length > 0, "could not read helpers.js GEN_WORKER_MODULES (the generator worker's importScripts list)");
+(GWM || []).forEach(f => ok(loaderFiles.includes(f) && watched(f), "the generator worker imports `" + f + "` (helpers.js GEN_WORKER_MODULES), which is not a watched ?v= loader file - a push changing only it would never deploy"));
+const URL_CALL = /\b(fetch|importScripts|new\s+URL|new\s+Worker|new\s+SharedWorker|serviceWorker\.register|sendBeacon|window\.open)\s*\(\s*(['"`])([^'"`]*)/g;
+const relUrls = [];
+["index-source.html"].concat(loaderFiles.filter(f => /^[^/]+\.js$/.test(f))).forEach(f => {
+  const src = f === "index-source.html" ? idx : read(f);
+  for (const m of src.matchAll(URL_CALL)) {
+    const pm = m[3].match(/^(?:\.\/)?([A-Za-z0-9_][A-Za-z0-9_.\/-]*)(?:[?#]|\$\{|$)/);
+    if (pm) relUrls.push([f, pm[1]]);
+  }
+});
+ok(relUrls.some(([, u]) => u === "version.json"), "the relative-URL scan no longer finds the page's version.json fetch (the scan itself is broken)");
+relUrls.forEach(([f, u]) => ok(u === "version.json" || watched(u), "`" + f + "` loads the relative URL `" + u + "`, which build.yml's paths filter does not watch - a runtime file belongs in the filter and RUNTIME_FILTER (only the CI-owned version.json is exempt)"));
+const manifest = JSON.parse(read("manifest.json"));
+ok(Array.isArray(manifest.icons) && manifest.icons.length > 0, "manifest.json lists no icons (the parse below would pass vacuously)");
+(manifest.icons || []).forEach(i => ok(watched(String(i.src).replace(/^\.\//, "")), "manifest.json icon `" + i.src + "` is not in build.yml's paths filter"));
 flush("build filter = runtime inputs");
 
 // ---- 2b. test.yml: the whole chain on every push and pull request (review 2026-09-27 Do first 10) ----
@@ -193,6 +224,13 @@ const tTestStep = tymlCode.split(/\n(?=\s*-\s*name:)/).find(b => /run:\s*npm tes
 ok(/env:\s*\n\s+EXPORTS_OFFLINE:\s*"1"/.test(tTestStep), "test.yml's npm test step must set env EXPORTS_OFFLINE: \"1\" (a runner never reads the live project)");
 ok(!/SILVIS_GEN_BUDGET_MS\s*:/.test(tymlCode) && !/SILVIS_RULES_BUDGET_MS\s*:/.test(tymlCode), "test.yml must not set SILVIS_GEN_BUDGET_MS / SILVIS_RULES_BUDGET_MS - the default budgets are the gate");
 ok(!/git (push|commit)|bump-version|build\.js|pages/i.test(tymlCode), "test.yml must not bump, build, commit, push or deploy (read-only)");
+// review 10/2: nothing quietly turns the run off or green (no `if:` at any level, no continue-on-error), a hung suite
+// cannot burn the 6 h default, and the checkout leaves no token in .git/config.
+ok(!/^\s*-?\s*if\s*:/m.test(tymlCode), "test.yml must carry no `if:` (a job- or step-level condition would show a skipped run while no suite ran)");
+ok(!/continue-on-error/.test(tymlCode), "test.yml must not use `continue-on-error` (a failing suite would read as a green run)");
+const tTimeout = Number((tymlCode.match(/^ {4}timeout-minutes:\s*(\d+)\s*$/m) || [])[1]);
+ok(tTimeout >= 10 && tTimeout <= 60, "test.yml's job must set `timeout-minutes:` between 10 and 60 (found " + tTimeout + ")");
+ok(/uses: actions\/checkout@\S+[^\n]*\n\s+with:[ \t]*\n\s+persist-credentials: false[ \t]*$/m.test(tymlCode), "test.yml's checkout must set `with: persist-credentials: false` (nothing here pushes)");
 flush("test.yml");
 
 // ---- 3. step environment pins --------------------------------------------
@@ -331,6 +369,21 @@ const starArm = commitStep.split(/^\s*\*\)\s*$/m)[1] || "";
 ok(/::error::[^\n]*ci-watched-paths\.js[^\n]*exit \$rc/.test(starArm) && /^\s*exit 1\s*$/m.test(starArm.split("esac")[0]), "the *) arm must print ::error:: naming ci-watched-paths.js and the exit code, then exit 1 (never the ::notice:: + exit 0 of the step-aside arm)");
 // the matcher reads the SAME paths filter this file parses (WP is required in section 2)
 ok(JSON.stringify(WP.watchedGlobs(yml)) === JSON.stringify(filter), "scripts/ci-watched-paths.js reads the same paths filter as this test");
+// review 10/2 of Do first 10: (1) the matcher reads the filter AS OF origin/main - GitHub judged the push that moved
+// main with the filter in the pushed commit, not the one this run checked out (a move that edits the filter would
+// otherwise step aside for a run that was never queued: a green run, nothing deployed); (2) the rebuild arm re-runs
+// the whole chain on origin/main after the reset and before the bump - the move may carry a test, fixture or seed
+// change that fails against the runtime about to deploy, and test.yml's run of that push does not gate this deploy.
+ok(/node scripts\/ci-watched-paths\.js --ref=origin\/main \$changed \|\| rc=\$\?/.test(commitStep), "the commit step must call `node scripts/ci-watched-paths.js --ref=origin/main $changed || rc=$?` (the filter of the pushed commit decides)");
+const zeroArm = (commitStep.split(/^\s*0\)\s*$/m)[1] || "").split(/^\s*1\)\s*$/m)[0];
+const zReset = zeroArm.search(/git reset --hard(?: --quiet)? origin\/main/), zTest = zeroArm.search(/^\s*EXPORTS_OFFLINE=1 npm test \|\| \{ echo "::error::[^\n]*"; exit 1; \}\s*$/m);
+const zBump = zeroArm.indexOf("node bump-version.js"), zBuild = zeroArm.indexOf("node build.js");
+ok(zReset >= 0 && zTest > zReset && zBump > zTest && zBuild > zBump, "the 0) arm must reset onto origin/main, then `EXPORTS_OFFLINE=1 npm test || { echo \"::error::...\"; exit 1; }`, then bump, then build (reset " + zReset + ", test " + zTest + ", bump " + zBump + ", build " + zBuild + ")");
+const wpRun = (args) => cp.spawnSync(process.execPath, [path.join(ROOT, "scripts", "ci-watched-paths.js")].concat(args), { cwd: ROOT, encoding: "utf8" });
+const wr1 = wpRun(["--ref=HEAD", "index-source.html", "docs/x.md"]), wr0 = wpRun(["--ref=HEAD", "docs/x.md", "test/rules.test.js"]);
+ok(wr1.status === 1 && String(wr1.stdout).trim() === "index-source.html", "ci-watched-paths.js --ref=HEAD must report the watched index-source.html (exit 1), got exit " + wr1.status + " " + JSON.stringify(String(wr1.stdout || "") + String(wr1.stderr || "")));
+ok(wr0.status === 0 && String(wr0.stdout).trim() === "", "ci-watched-paths.js --ref=HEAD must exit 0 on unwatched paths only, got exit " + wr0.status + " " + JSON.stringify(String(wr0.stderr || "")));
+[["--ref=no-such-ref-ci-test"], ["--ref=-p"], ["--ref="]].forEach(a => { const r = wpRun(a.concat(["index-source.html"])); ok(r.status === 2, "ci-watched-paths.js " + a[0] + " must exit 2 (an unreadable filter is never 'none watched' or 'watched'), got " + r.status); });
 // Do first 10: tests, fixtures, the seed adapter, the seed and the edge-function sources joined the unwatched set.
 const unwatchedSample = ["docs/PUBLISH-x.md", "sql/schema.sql", "scripts/day-edit.js", "edge-functions/x/index.ts", "README.md",
   "test/rules.test.js", "test/fixtures/x/y.json", "test/seed-adapter.js", "docs/silvis-seed.json",

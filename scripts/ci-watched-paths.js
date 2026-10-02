@@ -9,16 +9,24 @@
 // queued no build run, so the running job rebuilds on top of it. The filter
 // itself stays the single source of truth - nothing is duplicated here.
 //
-//   node scripts/ci-watched-paths.js <path> [<path> ...]
+//   node scripts/ci-watched-paths.js [--ref=<rev>] <path> [<path> ...]
 //   exit 0 = none watched (prints nothing), exit 1 = at least one watched (prints
-//   them, one per line), exit 2 = usage error. -h / --help prints this usage.
-//   Pure file I/O: reads the workflow file only.
+//   them, one per line), exit 2 = usage error (or the filter could not be read).
+//   -h / --help prints this usage.
+//   Without --ref it reads the working tree's build.yml. With --ref=<rev> it reads
+//   build.yml AS OF <rev> (`git show <rev>:.github/workflows/build.yml`, local, no
+//   network): the commit-back step passes --ref=origin/main, because GitHub decided
+//   whether main's move queued a build run with the filter in the PUSHED commit,
+//   not with the filter of the commit this run checked out (a move that edits the
+//   filter itself - review 10/2 of Do first 10).
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const cp = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const USAGE = "usage: node scripts/ci-watched-paths.js <repo path> [<repo path> ...]   (exit 0 none watched / 1 some watched / 2 usage)";
+const WORKFLOW = ".github/workflows/build.yml";
+const USAGE = "usage: node scripts/ci-watched-paths.js [--ref=<rev>] <repo path> [<repo path> ...]   (exit 0 none watched / 1 some watched / 2 usage or unreadable filter)";
 
 // The `- "..."` entries under `paths:` - the same walk test/ci.test.js pins.
 function watchedGlobs(yml) {
@@ -50,14 +58,31 @@ function watchedOf(paths, globs) {
 
 function main(argv) {
   const paths = [];
+  let ref = null;
   for (const t of argv) {
     if (t === "-h" || t === "--help") { console.log(USAGE); return 0; }
+    const rm = t.match(/^--ref=(.*)$/);
+    if (rm) {
+      // a rev name, never an option or a pathspec (no shell: execFileSync with an argument array)
+      if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(rm[1])) { console.error("ci-watched-paths: bad --ref value: " + rm[1] + "\n" + USAGE); return 2; }
+      ref = rm[1];
+      continue;
+    }
     if (/^--/.test(t)) { console.error("unknown argument: " + t + "\n" + USAGE); return 2; }
     if (t.trim()) paths.push(t.trim());
   }
   if (!paths.length) { console.error(USAGE); return 2; }
-  const globs = watchedGlobs(fs.readFileSync(path.join(ROOT, ".github", "workflows", "build.yml"), "utf8"));
-  if (!globs.length) { console.error("ci-watched-paths: no `paths:` filter found in .github/workflows/build.yml"); return 2; }
+  let yml;
+  try {
+    yml = ref === null
+      ? fs.readFileSync(path.join(ROOT, WORKFLOW), "utf8")
+      : cp.execFileSync("git", ["show", ref + ":" + WORKFLOW], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    console.error("ci-watched-paths: cannot read " + WORKFLOW + (ref === null ? "" : " at " + ref) + ": " + String(e.message || e).split("\n")[0]);
+    return 2;
+  }
+  const globs = watchedGlobs(yml);
+  if (!globs.length) { console.error("ci-watched-paths: no `paths:` filter found in " + WORKFLOW + (ref === null ? "" : " at " + ref)); return 2; }
   const hit = watchedOf(paths, globs);
   hit.forEach(p => console.log(p));
   return hit.length ? 1 : 0;

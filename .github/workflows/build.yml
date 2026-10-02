@@ -24,9 +24,11 @@ on:
     # is a deploy - the suites below run, APP_VERSION bumps (cache-busted clients
     # refetch every ?v= file) and index.html is rebuilt. test/ci.test.js pins
     # this list EXACTLY and pins that every file the page loads (the ?v= loader
-    # list, the <link> shell files) and every build input is in it, and that
-    # every tracked file outside it is a known non-runtime path - so a new
-    # runtime file cannot be left out silently (it would never deploy).
+    # list, the <link> shell files, the manifest icons, the generator worker's
+    # imports, every relative URL literal the page fetches) and every build
+    # input is in it, and that every tracked file outside it is a known
+    # non-runtime path - so a new runtime file loaded any of those ways cannot
+    # be left out silently (it would never deploy).
     # Deliberately NOT watched: test/** (suites, fixtures, the seed adapter),
     # docs/** (the seed too), sql/**, scripts/**, edge-functions/** (deployed by
     # hand with the Supabase CLI), README / CLAUDE.md, .github/**. A push that
@@ -254,12 +256,17 @@ jobs:
       # rebase them, so a push from the checked-out sha would be non-fast-forward.
       #   - the move touched only UNWATCHED paths (tests / docs / sql / scripts /
       #     edge-function sources): no build run was queued for it, so this run
-      #     carries it - reset onto origin/main and rebuild (the build inputs are
-      #     unchanged, so the suites above still cover the result; test.yml runs
-      #     the chain on that push itself);
+      #     carries it - reset onto origin/main, re-run the whole chain there
+      #     (`npm test`: the move may have added a test, a fixture or a seed change
+      #     that fails against the runtime this run is about to deploy - review
+      #     10/2 of Do first 10; test.yml's run of that push does not gate this
+      #     deploy), then bump and rebuild;
       #   - the move touched a WATCHED path: its own queued run owns the deploy,
       #     so this run steps aside (exit 0, nothing pushed) instead of forcing a
       #     push that the queued run would then reject.
+      # The matcher reads the filter AS OF origin/main (--ref=origin/main): GitHub
+      # decided whether that push queued a run with the filter in the pushed
+      # commit, not with the one this run checked out.
       # Never `git pull --rebase` here: rebasing a compiled index.html over a
       # changed index-source.html would deploy a stale build under a new version.
       - name: Commit built files
@@ -277,11 +284,12 @@ jobs:
             # inside an `if` condition, and a matcher crash must never read as "watched" -
             # that arm is a green run with nothing pushed and no queued run to follow.
             rc=0
-            if [ -n "$changed" ]; then node scripts/ci-watched-paths.js $changed || rc=$?; fi
+            if [ -n "$changed" ]; then node scripts/ci-watched-paths.js --ref=origin/main $changed || rc=$?; fi
             case "$rc" in
               0)
-                echo "only unwatched paths changed - rebuilding on top of origin/main"
+                echo "only unwatched paths changed - re-running the chain on origin/main, then rebuilding on top of it"
                 git reset --hard --quiet origin/main
+                EXPORTS_OFFLINE=1 npm test || { echo "::error::the test chain failed on origin/main ($(git rev-parse --short origin/main)) after main moved with unwatched paths only - nothing is pushed from this run. Recovery: fix main, then re-run 'Build & deploy' from the Actions tab (workflow_dispatch) or push any watched file; the live site stays on the previous build until then."; exit 1; }
                 node bump-version.js
                 node build.js
                 ;;

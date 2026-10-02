@@ -82,8 +82,9 @@ every safety feature, trades. Dropped: APPs, Fierce backup weeks, no-call days, 
   `[skip ci]`, Pages redeploys.
 - Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 21 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
-  offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain, the
-  workflow steps and the paths filter aligned, so trust it over this list);
+  offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain and
+  build.yml's steps aligned and pins build.yml's paths filter to exactly the runtime inputs (`.github/workflows/test.yml`
+  runs the chain on every push and PR since 10/2), so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
