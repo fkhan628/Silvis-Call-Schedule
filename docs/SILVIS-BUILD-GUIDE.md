@@ -661,7 +661,11 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   grid's) sets **`max-height: none; overflow-y: visible`** (the page scrolls; no cap on the rows - the smoke compares the
   count with the served rows) and **`.mine-acts { flex-basis: 100%; justify-content: flex-end; }`**, so a phone row is
   date (padlock inside) / role / holder on one line and, on the own view, Trade + Give away right-aligned on the line
-  under it (each >= 36 px by the phone `button` rule). Measured offline on the seed rows at 390 px: a Following row 25 px
+  under it (each >= 36 px by the phone `button` rule). A holiday-unit badge (`data-badge="H"`) carries the unit's name
+  (`.mine-hol-name`) and the legend letter (`.mine-hol-letter`, hidden outside the phone block); on a phone the name gives
+  way to **H** (the full words stay on its `title`, as the grid's `.cal-hol` gives way) - gate fix 10/2: the full smoke
+  found Acton's Christmas rows wrapping at 390 px ("Christmas" + "not offered" need ~314 px beside the date and role, ~308
+  px is there). Measured offline on the seed rows at 390 px: a Following row 25 px
   (was 44-48), an own row 67 px (was 71), the list part of the page (was a 420 px box). The `mine-give` line, the
   `mine-trade` prefix and the `mine-role` span are unchanged (pinned). Proof: `test/data-layer.test.js` section DF9
   (`daysBlock` lifted and run on a `createElement` stub - the padlock in the date span, the holder's style, `mine-acts`

@@ -8077,6 +8077,40 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const btn = style.indexOf("button { min-height: 36px; }");
       assert.ok(btn > 0 && where(btn) === phoneBlocks[0], "every button is >= 36 px tall at <= 600px");
     });
+    // Gate fix (10/2, the full smoke's "DF9 390px own rows"): Acton's Christmas rows wrapped at 390 px - the badge's unit
+    // name + the offer tag ("not offered") need ~314 px beside the 92 px date and 58 px role; ~308 px is there.
+    check("DF9 gate fix: a holiday-unit badge (data-badge H) carries the unit's name (class mine-hol-name) AND the legend letter H (class mine-hol-letter); the title keeps the full words; every other badge is its text alone; the CSS hides the letter outside every @media and, in the phone block with .mine-acts, hides the name and shows the letter", () => {
+      const { daysBlock, box } = liftDaysBlock();
+      box.DAYS = [DAY("2026-11-26", "primary", "s1", true)];
+      box.badgesFor = () => [{ k: "H", text: "Thanksgiving", title: "Thanksgiving (major holiday unit)", bg: "#a", fg: "#b" }, { k: "F", text: "F", title: "East forecast 80% (treated as busy)", bg: "#c", fg: "#d" }];
+      box.offerTagOf = () => ({ kind: "outside", text: "not offered", title: "t", bg: "#e", fg: "#f" });
+      for (const own of [true, false]) {
+        const row = byId(daysBlock("s2", own), "mine-day")[0];
+        const h = all(row, x => x.props && x.props["data-badge"] === "H");
+        assert.strictEqual(h.length, 1, "one H badge (own " + own + ")");
+        assert.strictEqual(h[0].props.title, "Thanksgiving (major holiday unit)", "the badge's title keeps the unit's full words");
+        const nm = all(h[0], x => x.props && x.props.className === "mine-hol-name"), lt = all(h[0], x => x.props && x.props.className === "mine-hol-letter");
+        assert.ok(nm.length === 1 && text(nm[0]) === "Thanksgiving", "the unit's name in span.mine-hol-name");
+        assert.ok(lt.length === 1 && text(lt[0]) === "H", "the legend letter in span.mine-hol-letter");
+        const f = all(row, x => x.props && x.props["data-badge"] === "F");
+        assert.ok(f.length === 1 && text(f[0]) === "F" && all(f[0], x => x.props && x.props.className).length === 0, "another badge is its text alone");
+      }
+      const style = src.slice(src.indexOf("<style>"), src.indexOf("</style>"));
+      const media = [];
+      for (let i = style.indexOf("@media"); i >= 0; i = style.indexOf("@media", i + 1)) {
+        const open = style.indexOf("{", i);
+        let depth = 0, j = open;
+        for (; j < style.length; j++) { if (style[j] === "{") depth++; else if (style[j] === "}" && --depth === 0) break; }
+        media.push({ q: style.slice(i, open).trim(), a: open, b: j });
+      }
+      const where = (pos) => media.find(x => pos > x.a && pos < x.b) || null;
+      const rules = (sel) => { const out = []; let k = -1; while ((k = style.indexOf(sel + " {", k + 1)) >= 0) out.push({ at: where(k), body: style.slice(style.indexOf("{", k) + 1, style.indexOf("}", k)).trim() }); return out; };
+      const acts = rules(".mine-acts"), name = rules(".mine-hol-name"), letter = rules(".mine-hol-letter");
+      assert.ok(letter.length === 2 && letter[0].at === null && letter[0].body === "display: none;", "the letter is hidden on a wide screen: " + JSON.stringify(letter));
+      assert.ok(acts.length === 1 && acts[0].at !== null, "the phone block with .mine-acts");
+      assert.ok(letter[1].at === acts[0].at && letter[1].body === "display: inline;", "the phone block shows the letter: " + JSON.stringify(letter[1]));
+      assert.ok(name.length === 1 && name[0].at === acts[0].at && name[0].body === "display: none;", "the phone block hides the name: " + JSON.stringify(name));
+    });
     check("DF9 pins kept: the mine-give line byte-identical, the mine-trade prefix, the mine-role span; no standalone padlock item, no 'Propose a trade' row label, no inline maxHeight:420 left in daysBlock", () => {
       const db = src.slice(d0, d1);
       assert.ok(db.includes('{own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}'), "mine-give byte-identical");

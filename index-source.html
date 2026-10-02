@@ -83,6 +83,9 @@
     /* My schedule / Following's 90-day list (review 9/27 Do first 9, 10/1): a 420 px scroller on a wide screen; the phone
        block below drops it (the page scrolls) and gives a row's Trade + Give away (mine-acts) a line of their own. */
     .mine-upcoming { max-height: 420px; overflow-y: auto; }
+    /* A row's holiday-unit badge: the unit's name on a wide screen; on a phone the letter H (the legend above the list),
+       as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
+    .mine-hol-letter { display: none; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
        role letter, holiday name, weekend label and NOTE tag give way (line
        order = role, the cell title still spells everything out), the pill
@@ -129,6 +132,8 @@
          holder keep one line */
       .mine-upcoming { max-height: none; overflow-y: visible; }
       .mine-acts { flex-basis: 100%; justify-content: flex-end; }
+      .mine-hol-name { display: none; }
+      .mine-hol-letter { display: inline; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -7334,7 +7339,8 @@ function CallSchedule() {
                       <span data-testid="mine-date" style={{fontFamily:mono,fontSize:12,color:dkText,width:92,flexShrink:0,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{dowShort(x.day)} {fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>
                       <span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>{roleWord(x.role)}</span>
                       <span data-testid="mine-holder" title={(x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf)} style={{...muted,flex:"1 1 0",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
-                      {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
+                      {/* the holiday unit's name gives way to its legend letter H on a phone (the phone block's .mine-hol-name / .mine-hol-letter) */}
+                      {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.k === "H" ? <><span className="mine-hol-name">{b.text}</span><span className="mine-hol-letter">H</span></> : b.text}</span>)}
                       {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
                       {own && <span data-testid="mine-acts" className="mine-acts" style={{display:"flex",gap:8,alignItems:"center",marginLeft:"auto"}}>
                         {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} title="Propose a trade for this day" style={{...css.mini(false),color:"#6030a0",borderColor:"#c0a8e0"}}>Trade</button>}
