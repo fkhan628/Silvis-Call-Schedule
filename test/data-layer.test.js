@@ -7947,6 +7947,154 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
+  /* ---------------- DF9. Review 9/27 Do first 9: My schedule / Following rows on a phone ---------------- */
+  console.log("\n[DF9] review 9/27 Do first 9 (the padlock inside the date span; the holder flex 1 1 0 with an ellipsis; Trade + Give away together in mine-acts, a line of their own at <= 600px; the list a 420 px scroller on a wide screen only - no nested scroller and no cap on a phone)");
+  (() => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const babel = require("@babel/core");
+    const d0 = src.indexOf("          const daysBlock = (who, own) => {"), d1 = src.indexOf("}; // end of daysBlock", d0);
+    // daysBlock lifted verbatim and run on a React.createElement stub: the rows are asserted as the element tree they render
+    const liftDaysBlock = () => {
+      assert.ok(d0 > 0 && d1 > d0, "daysBlock is one marked block in the Mine view");
+      const code = babel.transformSync(src.slice(d0, d1) + "};\n", { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const calls = [];
+      const Padlock = function Padlock() { return null; };
+      const box = {
+        React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" },
+        T: { primaryStart: "#1", primaryEnd: "#2", raised: "#3", title: "#4", backupText: "#5", text: "#6", border: "#7" },
+        dkText: "#8", dkCardBorder: "#9", mono: "monospace", loaded: true, daysReadOk: true, daysShown: true,
+        muted: { fontSize: 12, color: "#5B6B82" },
+        css: { subT: {}, mini: (a) => ({ border: "1px solid x", padding: "3px 9px", fontSize: 11, active: !!a }) },
+        MO: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        parse: (d) => new Date(d + "T12:00:00"), dowShort: () => "Thu", fmtMD: (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10)),
+        countdown: () => "in 3 days", roleWord: (r) => r === "primary" ? "Primary" : "Backup",
+        nameOf: (id) => nameOf(id), holderLabel: (v, nm) => v ? nm(v) : "OPEN",
+        badgesFor: () => [], offerTagOf: () => null, Padlock,
+        proposeTradeForDay: (d, r) => calls.push(["trade", d, r]), proposeGiveForDay: (d, r, w) => calls.push(["give", d, r, w]),
+        DAYS: [],
+      };
+      box.upcomingDaysOf = () => box.DAYS.slice();
+      vm.createContext(box);
+      const daysBlock = vm.runInContext(code + "\n;daysBlock", box, { filename: "daysBlock.jsx" });
+      return { daysBlock, box, calls, Padlock };
+    };
+    const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+    const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+    const byId = (n, id) => all(n, x => x.props && x.props["data-testid"] === id);
+    const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+    const DAY = (day, role, other, locked) => ({ day, role, other, locked });
+    const isoPlus = (iso, n) => { const t = new Date(iso + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+
+    check("DF9 rows (daysBlock lifted and run): a locked day's padlock is INSIDE the date span (mine-date: the date text, then the Padlock) and nowhere else in the row; an unlocked day has none - the padlock no longer takes a row item of its own (at 390 px it wrapped onto a line by itself)", () => {
+      const { daysBlock, box, Padlock } = liftDaysBlock();
+      box.DAYS = [DAY("2026-10-15", "primary", "s1", true), DAY("2026-10-20", "backup", "s3", false)];
+      const tree = daysBlock("s2", false);
+      const rows = byId(tree, "mine-day");
+      assert.strictEqual(rows.length, 2, "two upcoming days, two rows");
+      const [lk, un] = rows;
+      const date = byId(lk, "mine-date");
+      assert.strictEqual(date.length, 1, "the locked row has one mine-date span");
+      assert.strictEqual(date[0].type, "span");
+      const dk = kids(date[0]);
+      assert.ok(dk.length >= 2 && dk[dk.length - 1].type === Padlock && dk[dk.length - 1].props.title === "locked" && dk[dk.length - 1].props.size === 9, "the padlock is the date span's last child (9 px, 'locked')");
+      assert.strictEqual(text(date[0]), "Thu 10/15", "the date words come first");
+      assert.strictEqual(all(lk, x => x.type === Padlock).length, 1, "one padlock in the locked row");
+      assert.ok(!kids(lk).some(c => c.type === Padlock), "no padlock as a row item of its own");
+      assert.strictEqual(all(un, x => x.type === Padlock).length, 0, "an unlocked row has no padlock");
+      const ds = date[0].props.style;
+      assert.ok(ds.width === 92 && ds.flexShrink === 0 && ds.display === "inline-flex" && ds.alignItems === "center" && ds.whiteSpace === "nowrap" && ds.gap === 4, "the date span keeps its 92 px, does not shrink, and lays the padlock beside the date on its line: " + JSON.stringify(ds));
+      assert.strictEqual(lk.props.style.flexWrap, "wrap", "the row still wraps (the own view's actions take the second line on a phone)");
+    });
+    check("DF9 rows: the holder (mine-holder) takes what is left of the line - flex 1 1 0, minWidth 0, overflow hidden, an ellipsis, nowrap (no minWidth 120 any more) - and carries the full words on its title; an OPEN slot reads OPEN", () => {
+      const { daysBlock, box } = liftDaysBlock();
+      box.DAYS = [DAY("2026-10-15", "primary", "s1", true), DAY("2026-10-16", "backup", null, false)];
+      const rows = byId(daysBlock("s2", true), "mine-day");
+      const h = byId(rows[0], "mine-holder");
+      assert.strictEqual(h.length, 1, "one holder span per row");
+      const s = h[0].props.style;
+      assert.ok(s.flex === "1 1 0" && s.minWidth === 0 && s.overflow === "hidden" && s.textOverflow === "ellipsis" && s.whiteSpace === "nowrap", "flex 1 1 0 / minWidth 0 / ellipsis: " + JSON.stringify(s));
+      assert.ok(s.fontSize === 12 && s.color === "#5B6B82", "the muted words, as before");
+      assert.strictEqual(text(h[0]), "backup: Khan");
+      assert.strictEqual(h[0].props.title, "backup: Khan", "the title spells the clipped words out");
+      assert.strictEqual(text(byId(rows[1], "mine-holder")[0]), "primary: OPEN");
+      assert.strictEqual(byId(rows[0], "mine-role").length, 1, "the role word is still its own span");
+    });
+    check("DF9 own view: Trade + Give away sit together in mine-acts (class mine-acts, marginLeft auto); the trade button reads 'Trade' (title 'Propose a trade for this day') and hands the day + role to proposeTradeForDay; Give away hands the day, the role and the row owner; the Following view (own false) has no mine-acts, no button and no offer tag", () => {
+      const { daysBlock, box, calls } = liftDaysBlock();
+      box.DAYS = [DAY("2026-10-15", "backup", "s1", true)];
+      box.offerTagOf = () => ({ kind: "offered", text: "offered", title: "t", bg: "#a", fg: "#b" });
+      const row = byId(daysBlock("s2", true), "mine-day")[0];
+      const acts = byId(row, "mine-acts");
+      assert.strictEqual(acts.length, 1, "one mine-acts group on an own row");
+      assert.ok(kids(row).includes(acts[0]), "mine-acts is a row item (the line break on a phone is its flex-basis)");
+      assert.strictEqual(acts[0].props.className, "mine-acts", "the phone rule finds it by class");
+      assert.ok(acts[0].props.style.marginLeft === "auto" && acts[0].props.style.display === "flex", "right-aligned on a wide screen: " + JSON.stringify(acts[0].props.style));
+      const btns = all(acts[0], x => x.type === "button");
+      assert.deepStrictEqual(btns.map(b => b.props["data-testid"]), ["mine-trade", "mine-give"], "Trade, then Give away, both inside mine-acts");
+      assert.strictEqual(all(row, x => x.type === "button").length, 2, "no other button in the row");
+      const [tb, gb] = btns;
+      assert.strictEqual(text(tb), "Trade", "the trade button reads 'Trade' (was 'Propose a trade')");
+      assert.strictEqual(tb.props.title, "Propose a trade for this day");
+      assert.ok(tb.props.style.marginLeft === undefined && tb.props.style.color === "#6030a0" && tb.props.style.borderColor === "#c0a8e0", "the group, not the button, carries marginLeft auto; the colours are unchanged");
+      assert.strictEqual(text(gb), "Give away");
+      tb.props.onClick(); gb.props.onClick();
+      assert.deepStrictEqual(calls, [["trade", "2026-10-15", "backup"], ["give", "2026-10-15", "backup", "s2"]], "the handlers get the day, the role and (Give away) the row owner");
+      assert.strictEqual(byId(row, "mine-offer-tag").length, 1, "the own row keeps its offer tag");
+      const fol = byId(daysBlock("s2", false), "mine-day")[0];
+      assert.strictEqual(byId(fol, "mine-acts").length + all(fol, x => x.type === "button").length + byId(fol, "mine-offer-tag").length, 0, "the Following row: no mine-acts, no button, no offer tag");
+    });
+    check("DF9 list: mine-upcoming carries the class mine-upcoming and NO inline maxHeight / overflowY (an inline one would beat the phone rule); every upcoming day is a row - 60 days, 60 rows (no cap: the smoke compares the count with the served rows)", () => {
+      const { daysBlock, box } = liftDaysBlock();
+      box.DAYS = Array.from({ length: 60 }, (_, i) => DAY(isoPlus("2026-10-02", i), i % 2 ? "backup" : "primary", "s1", i % 3 === 0));
+      const tree = daysBlock("s2", true);
+      const ul = byId(tree, "mine-upcoming");
+      assert.strictEqual(ul.length, 1);
+      assert.strictEqual(ul[0].props.className, "mine-upcoming");
+      const st = ul[0].props.style || {};
+      assert.ok(!("maxHeight" in st) && !("overflowY" in st) && !("overflow" in st), "no inline scroller: " + JSON.stringify(st));
+      assert.strictEqual(byId(tree, "mine-day").length, 60, "no cap on the rows");
+      assert.strictEqual(all(tree, x => x.props && x.props["data-testid"] === "mine-date" && kids(x).some(c => c.type && c.type.name === "Padlock")).length, 20, "every third day locked: 20 padlocks, each in its date span");
+    });
+    check("DF9 CSS: '.mine-upcoming { max-height: 420px; overflow-y: auto; }' outside every @media (the wide-screen scroller); inside the phone block (the second @media (max-width: 600px), after .cal-grid) '.mine-upcoming { max-height: none; overflow-y: visible; }' and '.mine-acts { flex-basis: 100%; justify-content: flex-end; }'; the first phone block still gives every button min-height 36px (Trade / Give away are tap targets)", () => {
+      const style = src.slice(src.indexOf("<style>"), src.indexOf("</style>"));
+      const media = [];
+      for (let i = style.indexOf("@media"); i >= 0; i = style.indexOf("@media", i + 1)) {
+        const open = style.indexOf("{", i);
+        let depth = 0, j = open;
+        for (; j < style.length; j++) { if (style[j] === "{") depth++; else if (style[j] === "}" && --depth === 0) break; }
+        media.push({ q: style.slice(i, open).trim(), a: open, b: j });
+      }
+      const where = (pos) => media.find(x => pos > x.a && pos < x.b) || null;
+      const rules = (sel) => { const out = []; let k = -1; while ((k = style.indexOf(sel + " {", k + 1)) >= 0) out.push({ at: where(k), body: style.slice(style.indexOf("{", k) + 1, style.indexOf("}", k)).trim() }); return out; };
+      const ul = rules(".mine-upcoming"), acts = rules(".mine-acts");
+      assert.strictEqual(ul.length, 2, ".mine-upcoming: one wide rule, one phone rule");
+      assert.ok(ul[0].at === null && ul[0].body === "max-height: 420px; overflow-y: auto;", "the wide-screen scroller is outside every @media: " + JSON.stringify(ul[0]));
+      const phoneBlocks = media.filter(m => m.q === "@media (max-width: 600px)");
+      assert.strictEqual(phoneBlocks.length, 2, "two phone blocks (the general one, then the grid's)");
+      assert.ok(ul[1].at === phoneBlocks[1] && ul[1].body === "max-height: none; overflow-y: visible;", "the phone rule drops the scroller: " + JSON.stringify(ul[1]));
+      assert.ok(phoneBlocks[1].a > style.indexOf(".cal-grid {"), "the second phone block is the one after .cal-grid");
+      assert.ok(acts.length === 1 && acts[0].at === phoneBlocks[1] && acts[0].body === "flex-basis: 100%; justify-content: flex-end;", "mine-acts takes a line of its own on a phone: " + JSON.stringify(acts));
+      const btn = style.indexOf("button { min-height: 36px; }");
+      assert.ok(btn > 0 && where(btn) === phoneBlocks[0], "every button is >= 36 px tall at <= 600px");
+    });
+    check("DF9 pins kept: the mine-give line byte-identical, the mine-trade prefix, the mine-role span; no standalone padlock item, no 'Propose a trade' row label, no inline maxHeight:420 left in daysBlock", () => {
+      const db = src.slice(d0, d1);
+      assert.ok(db.includes('{own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}'), "mine-give byte-identical");
+      assert.ok(db.includes('{own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)}'), "the mine-trade prefix");
+      assert.ok(db.includes('<span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>'), "the mine-role span");
+      assert.ok(db.includes('{fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>'), "the padlock closes the date span");
+      assert.ok(!/\n\s*\{x\.locked && <Padlock/.test(db), "no padlock on a line (a row item) of its own");
+      assert.ok(!db.includes(">Propose a trade</button>") && !db.includes("maxHeight:420") && !db.includes("minWidth:120"), "the old label, the inline scroller and the holder's 120 px floor are gone");
+    });
+    check("DF9 pins (smoke): the 390 px checks exist - the own rows (Acton, the scheduler's picker: padlock in the date, date / role / holder one line, Trade + Give away one line under it at >= 36 px, no nested scroller), the follower's (a locked row is ONE line, both themes) and the 1180 px scroller, all through DF9_ROWS_PROBE", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      assert.ok(smoke.includes("const DF9_ROWS_PROBE = (scope) => {"), "the probe");
+      assert.ok(smoke.includes('await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]")') && smoke.includes("DF9 390px own rows"), "the own-rows check");
+      assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every locked row is one line"), "the follower's one-line check");
+      assert.ok(smoke.includes("DF9 1180px"), "the wide-screen scroller check");
+    });
+  })();
+
   /* ---------------- Prompt 25 steps 3-5: the holiday plan card (Setup > Holidays > Plan / Accept / Re-check) ---------------- */
   console.log("\n[P25] holiday plan: scheduler-only, Accept = confirm -> snapshot -> CAS sync -> one audit row -> notices; no write without Accept");
   (() => {

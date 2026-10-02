@@ -1227,6 +1227,29 @@ const offerModeRpc = (b, json) => {
   if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
 };
+// Review 9/27 Do first 9 (10/1): the geometry of My schedule / Following's 90-day rows, read in the page (`scope` = a card
+// selector, or null for the whole page). A row's items other than the actions (mine-acts) are on ONE line when every
+// one's vertical centre lies within 6 px of the date span's (font metrics move a top by a pixel or two); `lockOutside`
+// counts padlocks that are not inside the date span; `lists` = each mine-upcoming's computed scroller.
+const DF9_ROWS_PROBE = (scope) => {
+  const root = scope ? document.querySelector(scope) : document;
+  if (!root) return null;
+  const mid = (el) => { const b = el.getBoundingClientRect(); return (b.top + b.bottom) / 2; };
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const lists = Array.from(root.querySelectorAll("[data-testid=mine-upcoming]")).map(ul => { const cs = getComputedStyle(ul); return { maxH: cs.maxHeight, overflowY: cs.overflowY, nested: ul.scrollHeight > ul.clientHeight + 1 }; });
+  const per = Array.from(root.querySelectorAll("[data-testid=mine-day]")).map(r => {
+    const date = r.querySelector("[data-testid=mine-date]"), acts = r.querySelector("[data-testid=mine-acts]");
+    const locks = Array.from(r.querySelectorAll("svg"));
+    const items = Array.from(r.children).filter(k => k !== acts);
+    const dm = date ? mid(date) : null;
+    const db = date ? date.getBoundingClientRect() : null, ab = acts ? acts.getBoundingClientRect() : null;
+    const btns = Array.from(r.querySelectorAll("button")).map(b => { const bb = b.getBoundingClientRect(); return { id: b.getAttribute("data-testid"), text: b.textContent.trim(), h: r1(bb.height), top: Math.round(bb.top), inActs: !!(acts && acts.contains(b)) }; });
+    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length,
+      spread: dm === null ? null : r1(Math.max(...items.map(k => Math.abs(mid(k) - dm)))), actsSpread: dm === null || !acts ? null : r1(Math.abs(mid(acts) - dm)),
+      rowH: r1(r.getBoundingClientRect().height), dateH: db ? r1(db.height) : null, dateBottom: db ? r1(db.bottom) : null, actsTop: ab ? r1(ab.top) : null, btns };
+  });
+  return { rows: per.length, lists, per, pageW: document.documentElement.scrollWidth, viewW: document.documentElement.clientWidth };
+};
 // Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
 // other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
 // B3: an optional `extra({ route, req, url, json })` runs before the shared route and answers `true` when it fulfilled
@@ -6079,10 +6102,46 @@ try {
     if (outsidePer.length) fail(`U3c My schedule (Acton): a day outside every period carries an offer chip: ${outsidePer.slice(0, 3).join(", ")}`); else ok("U3c My schedule (Acton): no chip on a day outside the period");
     await page.screenshot({ path: path.join(OUT, "myschedule-offers.png"), fullPage: false });
     ok("screenshot test/ui/out/myschedule-offers.png");
+    // review 9/27 Do first 9 (10/1), 1180 px: the 90-day list is still a 420 px scroller on a wide screen and a row is one
+    // line with its 'Trade' + 'Give away' at the right end
+    try {
+      const w = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!w || !w.rows) console.log("     (DF9 1180px: Acton has no upcoming row - not exercised)");
+      else {
+        const off = w.per.filter(p => p.spread === null || p.spread > 6 || p.actsSpread === null || p.actsSpread > 6 || !p.btns.some(b => b.id === "mine-trade" && b.text === "Trade"));
+        if (w.lists[0].maxH !== "420px" || w.lists[0].overflowY !== "auto") fail(`DF9 1180px: the 90-day list should stay a 420 px scroller on a wide screen, got ${JSON.stringify(w.lists[0])}`);
+        else if (off.length) fail(`DF9 1180px: ${off.length} of ${w.rows} own row(s) are not one line with 'Trade' + 'Give away' on it: ${JSON.stringify(off.slice(0, 2))}`);
+        else ok(`DF9 1180px: the list is a 420 px scroller (overflow-y auto); ${w.rows} own row(s), each one line with 'Trade' + 'Give away' at its end`);
+      }
+    } catch (e) { fail("DF9 1180px: " + errLine(e)); }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(250);
     const m390 = await page.evaluate(() => { const c = document.querySelector("[data-testid=mine-offers]"); const p = document.querySelector("[data-testid=mine-offer]"); return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, csw: c ? c.scrollWidth : 0, ccw: c ? c.clientWidth : 0, pill: p ? p.scrollWidth <= p.clientWidth + 0.5 : null }; });
     if (m390.sw > m390.cw + 1 || m390.csw > m390.ccw + 1 || m390.pill === false) fail(`U3c 390px My schedule: the offers card / a pill overflows (${JSON.stringify(m390)})`); else ok(`U3c 390px My schedule: no horizontal scroll (page ${m390.sw} in ${m390.cw}, card ${m390.csw} in ${m390.ccw}), pills unclipped`);
+    // review 9/27 Do first 9 (10/1), 390 px: the own rows (the scheduler's picker on Acton) - the padlock inside the date
+    // span, the date / role / holder on ONE line, 'Trade' + 'Give away' together on the line under it (each >= 36 px), and
+    // the list part of the page (no nested 420 px scroller; every row there - the count is checked against the served rows
+    // in the My schedule step)
+    try {
+      const g = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!g || !g.rows) console.log("     (DF9 390px own rows: Acton has no upcoming row - not exercised)");
+      else {
+        const bad = [];
+        if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) bad.push(`the list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
+        if (g.pageW > g.viewW + 1) bad.push(`the page scrolls sideways (${g.pageW} > ${g.viewW})`);
+        for (const p of g.per) {
+          const t = p.btns.find(b => b.id === "mine-trade"), gv = p.btns.find(b => b.id === "mine-give");
+          if (p.lockOutside) bad.push(`${p.day}: a padlock outside the date span`);
+          else if (p.spread === null || p.spread > 6) bad.push(`${p.day}: the date / role / holder are not one line (centre spread ${p.spread} px)`);
+          else if (!t || !gv || t.text !== "Trade" || !t.inActs || !gv.inActs) bad.push(`${p.day}: 'Trade' + 'Give away' not together in mine-acts ${JSON.stringify(p.btns)}`);
+          else if (t.h < 36 || gv.h < 36) bad.push(`${p.day}: a row button under 36 px (Trade ${t.h}, Give away ${gv.h})`);
+          else if (Math.abs(t.top - gv.top) > 2 || p.actsTop < p.dateBottom) bad.push(`${p.day}: 'Trade' + 'Give away' are not one line under the date (tops ${t.top} / ${gv.top}, mine-acts ${p.actsTop}, date bottom ${p.dateBottom})`);
+        }
+        const locked = g.per.filter(p => p.locked);
+        if (bad.length) fail(`DF9 390px own rows (Acton, ${g.rows} row(s)): ${bad.slice(0, 4).join(" | ")}`);
+        else ok(`DF9 390px own rows (Acton): ${g.rows} row(s), ${locked.length} locked - the padlock inside the date span, date / role / holder one line, 'Trade' + 'Give away' one line under it (>= ${Math.min(...g.per.map(p => Math.min(...p.btns.map(b => b.h))))} px), rows ${Math.min(...g.per.map(p => p.rowH))}-${Math.max(...g.per.map(p => p.rowH))} px; the list is part of the page (max-height none)${locked.length ? "" : " (no locked row this run - the padlock placement is not exercised here; the follower step reads it)"}`);
+      }
+    } catch (e) { fail("DF9 390px own rows: " + errLine(e)); }
     await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(OUT, "myschedule-offers-390.png"), fullPage: false });
     ok("screenshot test/ui/out/myschedule-offers-390.png");
@@ -11253,6 +11312,20 @@ try {
           if (bad.length) fail(`F3 follower (${theme}): Following does not match the served rows - ${bad.join(" | ")}`);
           else ok(`F3 follower (${theme}): Following = two cards (${counts.join("; ")}), each list equal to the page's own schedule_days rows for that surgeon from ${today} to ${limit}; no trade / offer / painter / vacation / download control`);
         }
+        // review 9/27 Do first 9 (10/1), 390 px: a locked row is ONE line (its padlock sits inside the date span - it used to
+        // wrap onto a line of its own), no row carries a button, and each list is part of the page (no nested scroller)
+        try {
+          const g = await pf.evaluate(DF9_ROWS_PROBE, null);
+          const locked = g ? g.per.filter(p => p.locked) : [];
+          if (!g || !g.lists.length) fail(`DF9 follower (${theme}) 390px: no mine-upcoming list on the Following view`);
+          else if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) fail(`DF9 follower (${theme}) 390px: a list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
+          else if (!locked.length) console.log(`     (DF9 follower (${theme}) 390px: no locked row in the followed lists this run - the one-line check is not exercised)`);
+          else {
+            const bad = locked.filter(p => p.lockOutside || p.spread === null || p.spread > 6 || p.btns.length || p.rowH > p.dateH + 16);
+            if (bad.length) fail(`DF9 follower (${theme}) 390px: ${bad.length} of ${locked.length} locked row(s) take more than one line: ${JSON.stringify(bad.slice(0, 2))}`);
+            else ok(`DF9 follower (${theme}) 390px: every locked row is one line (${locked.length} of ${g.rows} row(s); ${Math.max(...locked.map(p => p.rowH))} px tall at most, the padlock inside the date span); the lists are part of the page (no nested scroller)`);
+          }
+        } catch (e) { fail(`DF9 follower (${theme}) 390px: ` + errLine(e)); }
         // (c) Settings -> Live calendar sync
         await pf.click('button[data-tab="settings"]');
         await pf.waitForSelector("[data-testid=follow-sync]", { timeout: 8000 });
