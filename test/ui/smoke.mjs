@@ -3270,21 +3270,25 @@ try {
   //  - the board (every signed-in page): the whole card's text and titles (chip hovers, Take titles, the Why column);
   //    Khan's Take title on E4_BUSY and his claim sheet on E4_SOFT (his two pages), Khan's chip on E4_SOFT (every page);
   //  - the claim gate, driven on Khan's surgeon page: the sheet open on E4_SOFT, that page's east_overrides answer turns
-  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> loadEastTables(true); up to a minute), Confirm ->
+  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> refreshEastTables: east_overrides on every run, the
+  //    cache tables every 10 minutes - Do first 5; up to a minute), Confirm ->
   //    "Not eligible any more: not available" and no claim_open_slot call. The scheduler's wording of the same toast is a
   //    self-test of the page's shipped helper (eastMaskedReasons + reasonLabel), not a driven surface;
   //  - the trade card (the scheduler page with From = Burchett, then Burchett's own page): T_HARD to Khan - the greyed
   //    option, the trade-to-reason box and the "Blocked: ..." toast after Propose (refused in the client: no
   //    shift_trade_requests write) - and T_SOFT to Khan ("Allowed with a note");
   //  - the two toasts: every page reloaded with its east_feed and east_vacation_reviews GETs answering 500, a recorder
-  //    (init script) keeping every toast shown: the scheduler must see both, no other role either - non-vacuous when the
+  //    (init script) keeping every toast shown: the scheduler must see both East reads named in ONE toast (Do first 4: the
+  //    load says every failed read in one combined toast - two or more by their short names), no other role either - non-vacuous when the
   //    page did read the table (counted in the wrapper; ?public=1 never reads the reviews - a no-op there by
   //    construction, its feed-cache toast is the proof). The browser's own "status of 500" line of each forced answer is
   //    expected (watchPage's e4Forced500Lines on the signed-in pages; the public page reports page errors only, as in E3).
   {
     const E4_RE = /\beast\b|davenport|east-(?:busy|forecast|derived|unknown|clear)|derived-lock/i;
     const E4_NA = "not available";
-    const E4_TOAST_RE = /Couldn't load the East/;
+    // review of Do first 4 (10/1, adapted deliberately): a load's two or more failed reads come as ONE compact sentence that
+    // names each by its short name ("Couldn't load the East feed cache and the East vacation reviews - ...")
+    const E4_TOAST_RE = /Couldn't load the East|the East feed cache|the East vacation reviews/;
     const E4_STAMP = "2026-09-26T00:00:00Z";
     const e4Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     // What every E4 page is served on top of its route (the pick fills it): blank = primary blanked, busy = Khan's
@@ -3724,17 +3728,22 @@ try {
         await waitFor(() => st.forced.feed >= wantLoads && (!wantReviews || st.forced.reviews >= wantLoads), 25000);
         await rp.waitForTimeout(1500);
         const shown = (await e4Toasts(rp)).filter(t => E4_TOAST_RE.test(t));
-        const feedT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t)), revT = shown.some(t => /Couldn't load the East vacation reviews/.test(t));
+        // review of Do first 4 (10/1): either the reader's own sentence or the compact form's short name
+        const FEED_RE = /Couldn't load the East \(Davenport\) feed cache|the East feed cache/, REV_RE = /Couldn't load the East vacation reviews|the East vacation reviews/;
+        const feedT = shown.some(t => FEED_RE.test(t)), revT = shown.some(t => REV_RE.test(t));
         const reads = `east_feed read ${st.forced.feed}x, east_vacation_reviews ${st.forced.reviews}x (500)`;
         if (!st.forced.feed || (wantReviews && !st.forced.reviews)) fail(`${T}: the forced failure never reached the page (${reads}) - the toast check proves nothing`);
         else if (R.kind === "scheduler") {
           // Review 9/27 Do first 4 (adapted deliberately): the startup reads run in parallel and the load says every failed
           // read in ONE toast, so the scheduler's two East sentences arrive together - each in a toast of its own would
           // replace the other (the flakiness the review named for this check).
-          const oneT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t) && /Couldn't load the East vacation reviews/.test(t));
-          if (!feedT || !revT) fail(`${T}: the scheduler must still see both toasts - ${reads}; shown: ${JSON.stringify(shown)}`);
-          else if (!oneT) fail(`${T}: the two East sentences came in separate toasts (Do first 4: one combined toast for the load) - ${reads}; shown: ${JSON.stringify(shown)}`);
-          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' sentences show, in one combined toast`);
+          // Review of Do first 4 (10/1, adapted deliberately): two failed reads are ONE compact sentence naming both
+          const oneT = shown.some(t => FEED_RE.test(t) && REV_RE.test(t));
+          const compact = shown.some(t => t.includes("Couldn't load the East feed cache and the East vacation reviews - check your connection"));
+          if (!feedT || !revT) fail(`${T}: the scheduler must still see both East reads named - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!oneT) fail(`${T}: the two East failures came in separate toasts (Do first 4: one combined toast for the load) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!compact) fail(`${T}: the two East failures are not in the compact sentence (review of Do first 4: two or more failed reads by their short names, one piece of advice) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else ok(`${T}: with ${reads} both East reads are named in one compact toast`);
         } else if (shown.length) fail(`${T}: a 'Couldn't load the East ...' toast shows to a non-scheduler - ${JSON.stringify(shown)} (${reads})`);
         else ok(`${T}: ${reads} - no 'Couldn't load the East ...' toast${wantReviews ? "" : " (public mode never reads the reviews - the feed-cache toast is its proof)"}`);
         st.failEast = false;
@@ -10693,15 +10702,23 @@ try {
   // the blob is held the header still says "Connecting" (`loaded` waits for every read) and "Synced" comes only after it
   // answered; the two failures reach the person in ONE toast that names both (each toasted on its own before, the second
   // replacing the first) - on both loads of a signed-in open (the mount run, then the stored session's re-run).
+  // Review of Do first 4 (10/1): the recorder logs every time a toast is SHOWN (it resets when the toast goes), and every later
+  // blob GET is held until DF4_GAP_MS after the first one was issued - the re-run's toast then comes after the mount run's has
+  // gone (4.5 s), so each load's toast is seen on its own (same text twice used to collapse into one record). Both must be the
+  // compact sentence naming both reads; the viewport turns 375 x 812 after the first load and the re-run's toast must stay
+  // under 20% of the screen height there (the joined sentences covered up to half a phone screen).
   {
     const DF4_HOLD_MS = 2500;
+    const DF4_GAP_MS = DF4_HOLD_MS + 4500 + 1200;
+    const DF4_TOAST = "Couldn't load vacations and availability - check your connection and reload. What is shown may be incomplete.";
     const DF4_READS = ["schedule_days", "time_off", "availability", "east_feed", "east_forecast", "east_overrides", "client_versions", "shift_trade_requests", "notifications", "call_offers", "call_periods", "east_vacation_reviews"];
     const df4Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     const df4Ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
     await df4Ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: df4Jwt, version: APP_VERSION });
     await df4Ctx.addInitScript(() => {
       window.__df4Toasts = [];
-      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && window.__df4Toasts[window.__df4Toasts.length - 1] !== txt) window.__df4Toasts.push(txt); };
+      let last = "";
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt === last) return; last = txt; if (txt) window.__df4Toasts.push({ txt, h: Math.round(t.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); };
       new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
     });
     await df4Ctx.route(cdnMatcher, routeCdn);
@@ -10722,7 +10739,10 @@ try {
         rec.answeredAt = Date.now();
         return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: Do first 4 forced read failure", details: null, hint: null }) });
       }
-      if (rec.path === "call_schedule_data") await new Promise(r => setTimeout(r, DF4_HOLD_MS));
+      if (rec.path === "call_schedule_data") {
+        const first = reads4.find(r => r.path === "call_schedule_data");
+        await new Promise(r => setTimeout(r, first === rec ? DF4_HOLD_MS : Math.max(DF4_HOLD_MS, first.at + DF4_GAP_MS - Date.now())));
+      }
       const out = await routeSupabase(route);
       rec.answeredAt = Date.now();
       return out;
@@ -10736,8 +10756,9 @@ try {
       const hdrHeld = await p4.$eval("[data-testid=app-header]", el => el.textContent).catch(() => "");
       await p4.waitForSelector("text=Synced", { timeout: 30000 });
       const syncedAt = Date.now();
+      await p4.setViewportSize({ width: 375, height: 812 }); // the re-run's toast is measured at phone width
       // both loads (the mount run and the sign-in re-run) have read the blob and every read has settled
-      await waitFor(() => reads4.filter(r => r.path === "call_schedule_data" && r.answeredAt).length >= 2, 15000);
+      await waitFor(() => reads4.filter(r => r.path === "call_schedule_data" && r.answeredAt).length >= 2, 20000);
       await settle4();
       await p4.waitForTimeout(600);
       const firstAt = {}; reads4.forEach(r => { if (firstAt[r.path] === undefined) firstAt[r.path] = r.at; });
@@ -10750,13 +10771,17 @@ try {
       else if (syncedAt < blob0.answeredAt) fail(`Do first 4: 'Synced' showed ${blob0.answeredAt - syncedAt} ms before the held blob read answered`);
       else ok(`Do first 4: 'Connecting' while the blob read was held; 'Synced' ${syncedAt - blob0.answeredAt} ms after it answered`);
       const toasts = await p4.evaluate(() => (window.__df4Toasts || []).slice());
-      const failT = toasts.filter(t => /Couldn't load (vacations|availability statements)/.test(t));
-      const both = (t) => t.includes("Couldn't load vacations - data shown may be incomplete.") && t.includes("Couldn't load availability statements - data shown may be incomplete.");
+      const failT = toasts.filter(t => /Couldn't load (vacations|availability)/.test(t.txt));
       const forced = reads4.filter(r => r.path === "time_off" || r.path === "availability").length;
+      const phone = failT.filter(t => t.vw === 375);
       if (forced < 4) fail(`Do first 4: expected both loads to read time_off and availability (4 forced 500s), the route answered ${forced}`);
       else if (!failT.length) fail("Do first 4: no toast named the failed time_off / availability reads: " + JSON.stringify(toasts));
-      else if (!failT.every(both)) fail("Do first 4: the two failed reads toasted separately (each toast replaces the one before) - expected ONE toast naming both: " + JSON.stringify(failT));
-      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> ${failT.length} toast(s), each naming both: '${failT[0].slice(0, 140)}'`);
+      else if (!failT.every(t => t.txt === DF4_TOAST)) fail("Do first 4: expected every load's toast to be ONE compact sentence naming both failed reads ('" + DF4_TOAST + "') - each toast of its own replaces the one before: " + JSON.stringify(failT));
+      else if (failT.length < 2) fail(`Do first 4: ${forced} forced 500s over the two loads but the combined toast was shown ${failT.length} time(s) - one per load expected (the mount run, then the re-run): ${JSON.stringify(toasts)}`);
+      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> the combined toast shown ${failT.length} times (one per load), each the compact sentence: '${DF4_TOAST}'`);
+      if (!phone.length) fail("Do first 4: no combined toast was shown at 375 px (the re-run's) - nothing to measure: " + JSON.stringify(failT));
+      else if (phone.some(t => !(t.h > 0) || t.h / t.vh >= 0.2)) fail(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high - over 20% of the screen: ${JSON.stringify(phone)}`);
+      else ok(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high (${Math.round(100 * Math.max(...phone.map(t => t.h)) / 812)}% of the screen)`);
       await p4.screenshot({ path: path.join(OUT, "do-first-4-startup.png"), fullPage: true }).catch(() => {});
     } catch (e) { fail("Do first 4: " + errLine(e)); try { await p4.screenshot({ path: path.join(OUT, "failure-do-first-4.png"), fullPage: true }); } catch (e2) {} }
     await settle4();
@@ -10833,9 +10858,10 @@ try {
       await A.pg.evaluate(() => window.__df5SetHidden(true));
       await A.settle();
       const hid = await tickAndSettle(A);
-      const hidFull = hid.filter(p => DF5_FULL.includes(p) || p === "east_feed" || p === "east_forecast");
+      // review of Do first 5 (10/1): exactly notifications - any other table read by a hidden tick fails (not only the full poll's list)
+      const hidFull = hid.filter(p => p !== "notifications");
       if (!hid.includes("notifications")) fail(`Do first 5 (hidden tab): the tick did not read notifications (background pop-ups depend on it): ${JSON.stringify(hid)}`);
-      else if (hidFull.length) fail(`Do first 5 (hidden tab): the tick ran the full poll - ${hidFull.length} read(s) beyond notifications: ${JSON.stringify(hid)}`);
+      else if (hidFull.length) fail(`Do first 5 (hidden tab): the tick read ${hidFull.length} table(s) beyond notifications (${DF5_FULL.some(p => hidFull.includes(p)) ? "the full poll ran" : "a read the hidden head must not make"}): ${JSON.stringify(hid)}`);
       else ok(`Do first 5 (hidden tab): one tick read ${JSON.stringify(hid)} - notifications only, no schedule_days / blob / East / offers / profile`);
       // (2) shown again inside the minute
       let n = A.reads.length;

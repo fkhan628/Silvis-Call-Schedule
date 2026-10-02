@@ -438,6 +438,9 @@ function CallSchedule() {
   const refuseUnreadDay = () => { if (!loaded || daysReadOkRef.current) return false; showToast(DAYS_UNREAD_DAY_MSG, "error"); return true; };
   // Review 9/27 Do first 4: runGenerate's own refusal over an unread schedule (see there).
   const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded, so this run would treat every day as open and ignore the locks on file. Retry the load (the banner above), then generate. Nothing was run.";
+  // Review of Do first 4 (10/1): the same refusal while the load is still running (header "Connecting") - there is no
+  // banner to retry yet.
+  const GEN_DAYS_LOADING_MSG = "Not run: the schedule is still loading - wait for it, then generate. Nothing was run.";
   // Bumped after a successful login/biometric-unlock to re-run the data-load
   // effect WITH the now-stored session JWT, without a full page reload (a
   // page reload re-triggers the mount auth-gate and loops on biometric).
@@ -917,6 +920,10 @@ function CallSchedule() {
       resetWriteRetryState();
       blobLoadedRef.current = false;
       blobTsRef.current = null;
+      // Review of Do first 4 (10/1): the previous account's unsaved DAY edits go too - the local map falls back to the map
+      // last known persisted (lastSyncRef). Kept, a re-run whose days read fails would leave them in place, and the next
+      // poll's merge (mergeLoadedDays keeps an unsaved local edit) would hand them to leg 1 / the re-sync under the new JWT.
+      if (lastSyncRef.current) { const persisted = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = persisted; setSchedule(persisted); }
       setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
@@ -1739,7 +1746,9 @@ function CallSchedule() {
   // Merge a freshly loaded table into the live map (the background refresh, and - Prompt 16 A3 - every re-run of
   // the data load after a sign-in): adopt only days that differ from what we last persisted AND that we have not
   // edited locally since (an unsaved local edit is the truth; it re-syncs as a CAS write against the fresh version).
-  const mergeLoadedDays = (fresh) => {
+  // Review of Do first 4 (10/1): sink (optional) - the mount load's collector (key daysEmpty): the tripwire's sentence then
+  // joins the load's ONE combined toast instead of toasting on its own and being replaced by it; the poll toasts as before.
+  const mergeLoadedDays = (fresh, sink) => {
     // Prompt 16 B9 (h): zero rows after N > 0 is a failed read, not an empty table (helpers.daysReadTripped) - keep
     // the map and the persisted base exactly as they are, say so once, and report false so the caller does not
     // treat the read as a success. A read with rows (or a first empty read) goes on as before.
@@ -1747,7 +1756,8 @@ function CallSchedule() {
       console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
       if (!daysTripwireWarnedRef.current) {
         daysTripwireWarnedRef.current = true;
-        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+        const msg = `The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`;
+        if (typeof sink === "function") sink(msg); else showToast(msg, "error");
       }
       return false;
     }
@@ -2040,6 +2050,10 @@ function CallSchedule() {
       // first, then the shared setup, then the rest) - parallel toasts would replace each other.
       const loadFails = {};
       const sayLoadFail = (key) => (msg) => { loadFails[key] = msg; };
+      // Review of Do first 4 (10/1): whether a Setup write was owed when this run STARTED - read here, before any read is
+      // out. The other reads' state changes re-arm (leg 1) and release pendingSaveRef while the blob read is still in flight,
+      // so the live value at the moment the blob lands no longer says whether something of the session's was pending.
+      const setupOwedAtStart = !!(pendingSaveRef.current || blobDirtyRef.current);
       // Leg A - the config blob. Its OWN try: a failure leaves blobLoadedRef
       // false (the blob leg of autosave stays off) but must not stop the
       // schedule from loading. A missing row (fresh install) is a SUCCESSFUL
@@ -2064,14 +2078,15 @@ function CallSchedule() {
               if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
             } else {
               // Do first 4: said in the load's one toast (a toast of its own would be replaced by it)
-              if (rerun && isScheduler && pendingSaveRef.current) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
+              if (rerun && isScheduler && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
               if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
               adoptBlob(d);
             }
           }
         } catch (e) {
           console.error("Supabase load error (call_schedule_data):", e);
-          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.");
+          // review of Do first 4 (10/1): the Setup clause is the scheduler's (nobody else can change Setup)
+          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isScheduler ? " Setup changes won't save until it loads." : ""));
         }
       };
       const legB = async () => {
@@ -2083,7 +2098,8 @@ function CallSchedule() {
           // First load: adopt the table. A re-run (reloadTrigger - a sign-in of the SAME account after the session
           // expired, Prompt 16 A3): MERGE like the background refresh so an edit made while expired survives, then
           // re-sync it (a no-op when nothing is pending). A different account adopts the table wholesale.
-          if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);
+          // Review of Do first 4 (10/1): the merge's empty-read tripwire sentence goes to the load's one toast (daysEmpty).
+          if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty")); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);
           // Review 9/27 Do first 1: the read was taken in. A merge that tripped (0 rows over N > 0) kept a map an
           // earlier read of this session already took in (lastDaysCountRef > 0 only after one), so the map is the
           // table's either way.
@@ -2131,7 +2147,9 @@ function CallSchedule() {
         loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")),
         loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),
       ]);
-      const loadFailToast = combinedLoadToast(loadFails);
+      // Review of Do first 4 (10/1): two or more failed reads in one compact sentence; "Retry" only while the banner with
+      // the Retry button is up (no days read taken in), the Setup clause for the scheduler only.
+      const loadFailToast = combinedLoadToast(loadFails, { retry: !daysReadOkRef.current, isScheduler });
       if (loadFailToast) showToast(loadFailToast, "error");
       setLoaded(true);
       // The hydration window opens once, after the FIRST load; a re-run after a sign-in keeps the state that is
@@ -2295,6 +2313,10 @@ function CallSchedule() {
     const pollTick = async () => {
       const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });
       if (mode === "skip") return;
+      // Review of Do first 5 (10/1): a full refresh that started under half a poll period ago is enough - an iOS PWA
+      // brought back fires the overdue interval right after the visible-again catch-up (helpers.js pollFullRecent). The
+      // catch-up itself runs only when the last full refresh is over a minute old, so this never holds it back.
+      if (mode === "full" && pollFullRecent(lastFullPollAt, Date.now())) return;
       if (mode === "full") { await refreshAll(); return; }
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
@@ -2434,11 +2456,19 @@ function CallSchedule() {
       if (daysReadOkRef.current) { setSaveError(true); setSaveStatus(LOAD_FAILED_STATUS); }
       return;
     }
+    // Review of Do first 4 (10/1): the startup reads run in parallel, so time_off / availability can land - and re-fire this
+    // leg - before the re-run's schedule_days read. A different account just signed in: the map is still the previous
+    // account's until that read is adopted (switchedUserRef drops when the run ends) - nothing of it is armed or written
+    // under the new JWT (the same gate as resyncPendingRef).
+    if (switchedUserRef.current) return;
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     // Arm the guard as soon as we hold real data locally.
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
     const timer = setTimeout(() => {
+      // Review of Do first 4 (10/1): re-checked when the timer fires - an account switch, or a load whose schedule_days read
+      // failed (loadFailedRef: no autosave until a read succeeds), may have come after the timer was armed.
+      if (loadFailedRef.current || switchedUserRef.current) return;
       // -- Empty-save guard --
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
@@ -3435,7 +3465,7 @@ function CallSchedule() {
     // read failed - the "Schedule not loaded" banner). Generate would read the empty map as every slot open and override
     // nothing that is locked on file. Before the parallel startup this was refused only indirectly (offers and periods
     // were read inside the days leg's try, so offersLoadVerdict refused - and only until the first poll read them).
-    if (!daysReadOkRef.current) { showToast(GEN_DAYS_UNREAD_MSG, "error"); return; }
+    if (!daysReadOkRef.current) { showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? (1 + Math.floor(Math.random() * 2147483646)) : (/^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn);

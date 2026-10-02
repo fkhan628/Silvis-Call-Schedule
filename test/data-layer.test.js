@@ -2507,7 +2507,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // Review 9/27 Do first 4: `quiet` may be a function - the mount load's collector for its ONE combined toast
       const sink = () => { const got = []; const f = (m) => got.push(m); f.got = got; return f; };
       const tSinkOn = sink(), tSinkOff = sink(), rSinkOn = sink(), rSinkOff = sink(), rSink404 = sink();
+      // review of Do first 4 (10/1): the real loadTimeOff / loadAvailability too (their collector path was pinned by a line count only)
+      const plainSrc = { timeOff: e4Lift("  const loadTimeOff = async (quiet) => {", "\n  };\n"), availability: e4Lift("  const loadAvailability = async (quiet) => {", "\n  };\n") };
+      const plain = async (which, fails, quiet) => {
+        const toasts = [], warns = [], got = [];
+        const db = { query: async () => { if (fails) throw new Error("HTTP 500"); return []; } };
+        const q = quiet === "sink" ? (m) => got.push(m) : quiet;
+        const fn = which === "timeOff"
+          ? new Function("db", "adoptTimeOffRows", "showToast", "console", plainSrc.timeOff + "\nreturn loadTimeOff;")(db, () => {}, (m, t) => toasts.push(t + " " + m), { warn: (m) => warns.push(String(m)) })
+          : new Function("db", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", plainSrc.availability + "\nreturn loadAvailability;")(db, () => {}, { current: false }, (m, t) => toasts.push(t + " " + m), { warn: (m) => warns.push(String(m)) });
+        const r = await fn(q);
+        return { toasts, warns, got, r };
+      };
+      const plainCases = {};
+      for (const w of ["timeOff", "availability"]) plainCases[w] = { sink: await plain(w, true, "sink"), loud: await plain(w, true, false), quiet: await plain(w, true, true), okSink: await plain(w, false, "sink") };
       return {
+        plainCases,
         tOff: await tables(false, "east_feed", false), tOn: await tables(true, "east_feed", false), tOnQuiet: await tables(true, "east_overrides", true), tOnOk: await tables(true, null, false),
         rOff: await reviews(false, "HTTP 500", false), rOn: await reviews(true, "HTTP 500", false), rOn404: await reviews(true, "HTTP 404 not found", false), rOnQuiet: await reviews(true, "HTTP 500", true), rPublic: await reviews(false, "HTTP 500", false, true),
         tOnSink: { ...(await tables(true, "east_forecast", tSinkOn)), got: tSinkOn.got }, tOffSink: { ...(await tables(false, "east_forecast", tSinkOff)), got: tSinkOff.got },
@@ -2616,6 +2631,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error");'), 4, "time_off, availability and the two East loaders: the collector, a toast, or nothing");
     assert.ok(!e4Loaders.error, "the loaders could not be lifted / run: " + e4Loaders.error);
     const L = e4Loaders;
+    // review of Do first 4 (10/1): the real time_off / availability loaders - a collector gets the sentence and nothing toasts; true =
+    // console only; falsy = the toast; a read that lands hands nothing on
+    for (const [w, sentence] of [["timeOff", "Couldn't load vacations - data shown may be incomplete."], ["availability", "Couldn't load availability statements - data shown may be incomplete."]]) {
+      const P = L.plainCases[w];
+      assert.ok(P.sink.r === false && P.sink.toasts.length === 0 && P.sink.got.length === 1 && P.sink.got[0] === sentence, w + " with the collector: " + JSON.stringify(P.sink));
+      assert.ok(P.loud.r === false && P.loud.toasts.length === 1 && P.loud.toasts[0] === "error " + sentence && P.loud.got.length === 0, w + " loud: " + JSON.stringify(P.loud));
+      assert.ok(P.quiet.r === false && P.quiet.toasts.length === 0 && P.quiet.warns.length === 1, w + " quiet: console only: " + JSON.stringify(P.quiet));
+      assert.ok(P.okSink.r === true && P.okSink.got.length === 0 && P.okSink.toasts.length === 0, w + " landed: nothing said: " + JSON.stringify(P.okSink));
+    }
     assert.deepStrictEqual(L.tOff.toasts, [], "a non-scheduler gets no feed-cache toast");
     assert.ok(L.tOff.warns.some(w => /^east_feed load failed/.test(w)) && L.tOff.ok === false, "... but the console.warn and the failed result stay");
     assert.deepStrictEqual(L.tOn.toasts, ["error Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads."], "the scheduler gets it, unchanged");
@@ -3089,7 +3113,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(!/setDaysReadOk\(false\)|daysReadOkRef\.current = false/.test(src), "daysReadOk never turns back");
     const adopt = src.slice(src.indexOf("  const adoptLoadedDays = (loadedDays) => {"), src.indexOf("  const sameAssignment"));
     assert.ok(adopt.includes("markDaysRead();"), "adoptLoadedDays marks the read");
-    const rerunLine = "if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);";
+    // review of Do first 4 (10/1, pin moved deliberately): the merge takes the load's collector for its empty-read tripwire
+    const rerunLine = 'if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty")); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);';
     const afterRerun = src.slice(src.indexOf(rerunLine), src.indexOf("// Independent secondary loads", src.indexOf(rerunLine)));
     assert.ok(afterRerun.includes("daysReadThisRun = true;") && afterRerun.includes("markDaysRead();"), "the mount / sign-in re-run marks the read right after the (unchanged) adopt-or-merge line");
     const rd = src.slice(src.indexOf("    const refreshDays = async () => {"), src.indexOf("    // Authenticated-read tables"));
@@ -3548,6 +3573,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // Review 9/27 Do first 5 (pin moved deliberately): the poll reads the East tables through refreshEastTables (the overrides every
     // run, the cache tables every 10 minutes) and the reviews on every run, as before
     assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true),"), "the 60-s poll refreshes the reviews too");
+    // review of Do first 5 (10/1): the old line also fixed that the poll reads the East tables QUIETLY; that half lives in
+    // refreshEastTables now - pinned here and run in section DF5 (its stub records the quiet argument)
+    assert.strictEqual(src.split("const r = await loadEastTables(true, !all);").length - 1, 1, "the poll's East read stays quiet (no toast once a minute)");
   });
   check("P15: the review write path - dbAuthHeaders() on every mutation, an upsert on (person_id,start,end) with merge-duplicates + representation checked non-empty, a reset is a DELETE by the exact triple, one audit eastvac.review, own rows or the scheduler", () => {
     const ws = src.indexOf("const saveEastVacationReview = async");
@@ -4909,7 +4937,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!handler.includes("biometric.unenroll") && !handler.includes("reload") && !handler.includes("auth.signOut") && !handler.includes("setSchedule"), "the banner's button must not unenroll, reload, sign out or drop data: " + handler);
       assert.ok(handler.includes("setAuthUser(null)") && handler.includes('setAuthMode("login")'), "it shows the sign-in card in place");
       assert.strictEqual(count("auth.onSessionChange("), 1, "the component subscribes to the session events once");
-      assert.ok(src.includes("if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);"), "a re-run of the data load (after a re-auth of the same account) merges and re-syncs instead of adopting the table wholesale; a different account adopts");
+      // review of Do first 4 (10/1, pin moved deliberately): the merge takes the load's collector for its empty-read tripwire
+      assert.ok(src.includes('if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty")); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);'), "a re-run of the data load (after a re-auth of the same account) merges and re-syncs instead of adopting the table wholesale; a different account adopts");
       // the blob leg of the re-run (9/23 review, major): the row unchanged since our last read -> keep the local state and re-fire the autosave; moved -> adopt and say so
       const legA = src.slice(src.indexOf("// Leg A - the config blob."), src.indexOf("// Leg B - the schedule itself"));
       assert.ok(legA.includes("const rerun = !!loadedAtRef.current && !switchedUserRef.current;"), "leg A knows a re-run of the same account");
@@ -4918,7 +4947,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const iSkip = legA.indexOf("if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {"), iAdopt = legA.indexOf("adoptBlob(d);");
       assert.ok(iSkip > 0 && iAdopt > iSkip && legA.slice(iSkip, iAdopt).includes("} else {"), "adoptBlob sits in the else branch only");
       // Review 9/27 Do first 4 (pin moved deliberately): announced in the load's ONE combined toast (a toast of its own would be replaced)
-      assert.ok(legA.includes('if (rerun && isScheduler && pendingSaveRef.current) sayLoadFail("blobMoved")('), "a moved row over an armed payload is announced");
+      // review of Do first 4 (10/1, pin moved deliberately): what was owed is read when the run STARTS (setupOwedAtStart), not
+      // when the blob lands - the parallel reads re-arm and release pendingSaveRef meanwhile (run in section DF4)
+      assert.ok(legA.includes('if (rerun && isScheduler && setupOwedAtStart) sayLoadFail("blobMoved")('), "a moved row over a payload armed at the start is announced");
       // the hydration window opens once; the switched-account flag is consumed at the end of the load
       assert.ok(src.includes("if (!loadedAtRef.current) loadedAtRef.current = Date.now();\n      switchedUserRef.current = false;"), "loadedAtRef is set on the FIRST load only (a re-run does not re-open the 3-s autosave window) and the switch flag is cleared");
       assert.strictEqual(count("loadedAtRef.current = Date.now()"), 1, "one place sets loadedAtRef");
@@ -6500,7 +6531,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.daysReadTripped(undefined, 120), false);
     });
     await (async () => {
-      const body = B9slice("  const mergeLoadedDays = (fresh) => {", "  const writeFailToast = ");
+      const body = B9slice("  const mergeLoadedDays = (fresh, sink) => {", "  const writeFailToast = ");
       const sameAssignment = (day, a, b) => JSON.stringify(H.assignmentToDayRow(day, a || H.emptyDayAssignment())) === JSON.stringify(H.assignmentToDayRow(day, b || H.emptyDayAssignment()));
       const mk = (lastCount) => {
         const s = { sets: [], toasts: [], warns: 0 };
@@ -6522,6 +6553,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.strictEqual(t.warnedRef.current, true);
         const r2 = t.fn({ sched: {}, vers: {}, count: 0 });
         assert.strictEqual(r2, false); assert.strictEqual(t.s.toasts.length, 1, "warned once"); assert.strictEqual(t.s.warns, 2, "the console names every tripped read");
+      });
+      check("B9h review of Do first 4 (10/1): with a sink (the mount load's collector) the tripwire's sentence goes to the sink, not a toast - still once; the map is kept exactly as without one", () => {
+        const t = mk(3), got = [];
+        const r1 = t.fn({ sched: {}, vers: {}, count: 0 }, (m) => got.push(m));
+        assert.strictEqual(r1, false); assert.deepStrictEqual(t.s.sets, []); assert.deepStrictEqual(t.s.toasts, [], "no toast of its own");
+        assert.ok(got.length === 1 && /came back empty/.test(got[0]) && /3 day/.test(got[0]), JSON.stringify(got));
+        t.fn({ sched: {}, vers: {}, count: 0 }, (m) => got.push(m));
+        assert.strictEqual(got.length, 1, "warned once, sink or not");
       });
       check("B9h: a normal read (3 rows, one changed on the server) merges as before and records the count; an empty FIRST read (lastCount 0) adopts the empty table - that is a real empty table, not a failure", () => {
         const t = mk(3);
@@ -6579,8 +6618,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(genericAt > 0 && settleAt > genericAt, `the specific line toasts after the generic one (generic ${genericAt}, settle ${settleAt})`);
     });
     check("B9h fix: the two tripwire toasts name the other cause of an empty read - the schedule cleared on another device (its factory reset) - and say reload to confirm; the only local path that DELETEs schedule_days rows is the factory reset (a Clear range writes the days empty, it never removes rows, so it cannot trip this device)", () => {
-      const lines = B9SRC.split("\n").filter(l => /came back empty/.test(l) && /showToast/.test(l));
+      // review of Do first 4 (10/1, pin moved deliberately): the poll's tripwire sentence is built as `const msg` (a toast, or the
+      // mount load's collector - mergeLoadedDays' sink); the conflict reload's stays an inline showToast
+      const lines = B9SRC.split("\n").filter(l => /came back empty/.test(l) && (/showToast/.test(l) || /^\s*const msg = `The schedule read came back empty/.test(l)));
       assert.strictEqual(lines.length, 2, "the poll toast and the conflict-reload toast");
+      assert.ok(B9SRC.includes('        if (typeof sink === "function") sink(msg); else showToast(msg, "error");'), "the tripwire sentence: the sink or a toast");
       lines.forEach(l => assert.ok(/cleared on another device - reload to confirm/.test(l), l.trim().slice(0, 240)));
       const deletes = B9SRC.split("\n").filter(l => /\/rest\/v1\/schedule_days\?/.test(l) && /method: "DELETE"/.test(l));
       assert.strictEqual(deletes.length, 1, "one schedule_days DELETE (the factory reset)");
@@ -7201,9 +7243,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const run = (loadFailed, daysRead) => {
         const st = { status: [], error: [], timers: [], syncs: 0 };
         const pendingSaveRef = ref(null);
-        const eff = new Function("loaded", "isPublicMode", "loadedAtRef", "loadFailedRef", "daysReadOkRef", "setSaveError", "setSaveStatus", "LOAD_FAILED_STATUS", "buildStateBundle", "pendingSaveRef", "payloadLooksWiped", "everHadRealDataRef", "setTimeout", "clearTimeout", "allowWipeSaveRef", "console", "syncScheduleDays", "return (" + legOneFn + ");");
+        // review of Do first 4 (10/1): leg 1 reads switchedUserRef too (an account switch arms and writes nothing - section DF4)
+        const eff = new Function("loaded", "isPublicMode", "loadedAtRef", "loadFailedRef", "daysReadOkRef", "setSaveError", "setSaveStatus", "LOAD_FAILED_STATUS", "buildStateBundle", "pendingSaveRef", "payloadLooksWiped", "everHadRealDataRef", "setTimeout", "clearTimeout", "allowWipeSaveRef", "console", "syncScheduleDays", "switchedUserRef", "return (" + legOneFn + ");");
         eff(true, false, ref(0), ref(loadFailed), ref(daysRead), (v) => st.error.push(v), (s) => st.status.push(s), "Not saving - data failed to load", () => ({ schedule: EDIT, vacations: [], availability: [] }), pendingSaveRef,
-          () => false, ref(true), (fn, ms) => { st.timers.push({ fn, ms }); return 1; }, () => {}, ref(false), { warn: () => {} }, () => { st.syncs++; return Promise.resolve({ ok: true }); })();
+          () => false, ref(true), (fn, ms) => { st.timers.push({ fn, ms }); return 1; }, () => {}, ref(false), { warn: () => {} }, () => { st.syncs++; return Promise.resolve({ ok: true }); }, ref(false))();
         return { st, pendingSaveRef };
       };
       const unread = run(true, false), read = run(true, true), fine = run(false, true);
@@ -7290,7 +7333,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const PARAMS = ["loadFailedRef", "supabase", "blobLoadedRef", "loadedAtRef", "switchedUserRef", "blobTsRef", "pendingSaveRef", "blobDirtyRef", "setSaveTick", "isScheduler", "adoptBlob", "console",
       "loadScheduleDays", "mergeLoadedDays", "syncScheduleDays", "scheduleRef", "adoptLoadedDays", "markDaysRead", "setDaysLoadFailed",
       "readAuthOnlyTable", "setTradeRequests", "setNotifications", "setNotifsRead", "loadOffers", "loadPeriods", "db", "versionCmp", "APP_VERSION", "setForceUpdate",
-      "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "combinedLoadToast", "showToast", "setLoaded"];
+      "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "combinedLoadToast", "showToast", "setLoaded",
+      "daysReadOkRef"]; // review of Do first 4 (10/1): the combined toast's "Retry" follows the banner (no days read taken in)
     const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews"];
     const LOUD = ["time_off", "availability", "east", "east_vacation_reviews"]; // the loaders that toasted on their own before
     const FAILMSG = {
@@ -7307,26 +7351,31 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const opt = o || {};
       const st = { started: [], settled: [], toasts: [], loaded: [], adoptBlob: 0, adoptDays: 0, merge: 0, sync: 0, marked: 0, saveTick: 0, daysFailed: [], quiet: {}, d: {} };
       const defer = (name) => { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); st.started.push(name); st.d[name] = { res: (v) => { st.settled.push(name); res(v); }, rej: (e) => { st.settled.push(name); rej(e); } }; return p; };
-      const refs = { loadFailedRef: ref(!!opt.loadFailed), blobLoadedRef: ref(false), loadedAtRef: ref(opt.loadedAt || null), switchedUserRef: ref(!!opt.switched), blobTsRef: ref(opt.blobTs || null), pendingSaveRef: ref(opt.pending || null), blobDirtyRef: ref(false), scheduleRef: ref({}) };
-      // a loader that takes the collector: answered { fail: true } it fails and hands its sentence on exactly like the real one
+      const refs = { loadFailedRef: ref(!!opt.loadFailed), blobLoadedRef: ref(false), loadedAtRef: ref(opt.loadedAt || null), switchedUserRef: ref(!!opt.switched), blobTsRef: ref(opt.blobTs || null), pendingSaveRef: ref(opt.pending || null), blobDirtyRef: ref(!!opt.blobDirty), scheduleRef: ref({}), daysReadOkRef: ref(!!opt.daysReadOk) };
+      // a loader that takes the collector: answered { fail: true } it fails and hands its sentence on exactly like the real one;
+      // opt.onLand(name) runs when one lands (the state change the real loader makes - the switched re-run case drives leg 1 with it)
       const loader = (name) => async (quiet) => {
         st.quiet[name] = quiet;
         const r = await defer(name);
         const ok = !(r && r.fail);
         if (!ok) { if (typeof quiet === "function") quiet(FAILMSG[name]); else if (!quiet) st.toasts.push("error " + FAILMSG[name]); }
+        if (ok && opt.onLand) opt.onLand(name);
         return name === "east" ? { ok, feedRows: ok ? [] : null } : ok;
       };
       const supabase = { from: () => ({ select: () => ({ eq: () => ({ single: () => defer("blob") }) }) }) };
       const run = new Function(...PARAMS, "return async () => {\n" + mountBody + "\n};")(
         refs.loadFailedRef, supabase, refs.blobLoadedRef, refs.loadedAtRef, refs.switchedUserRef, refs.blobTsRef, refs.pendingSaveRef, refs.blobDirtyRef, () => { st.saveTick++; }, !!opt.scheduler,
         () => { st.adoptBlob++; }, { error: () => {}, warn: () => {} },
-        () => defer("days"), () => { st.merge++; return true; }, () => { st.sync++; }, refs.scheduleRef, () => { st.adoptDays++; }, () => { st.marked++; }, (v) => st.daysFailed.push(v),
+        () => defer("days"),
+        (fresh, sink) => { st.merge++; st.mergeSink = sink; if (opt.trip) { if (typeof sink === "function") sink("TRIPWIRE."); else st.toasts.push("error TRIPWIRE."); return false; } return true; },
+        () => { st.sync++; }, refs.scheduleRef, (ld) => { st.adoptDays++; if (opt.onAdopt) opt.onAdopt(ld); }, () => { st.marked++; refs.daysReadOkRef.current = true; }, (v) => st.daysFailed.push(v),
         (t) => defer(t), () => {}, () => {}, () => {},
         (q) => { st.quiet.call_offers = q; return defer("call_offers"); }, (q) => { st.quiet.call_periods = q; return defer("call_periods"); },
         { query: (t) => defer(t) }, () => 0, "2026.10.01", () => {},
         loader("time_off"), loader("availability"), loader("east"), loader("east_vacation_reviews"),
         H.combinedLoadToast, (m, tone) => st.toasts.push(tone + " " + m),
-        (v) => st.loaded.push({ v, pending: READS.filter(n => !st.settled.includes(n)) }));
+        (v) => st.loaded.push({ v, pending: READS.filter(n => !st.settled.includes(n)) }),
+        refs.daysReadOkRef);
       const OK = { blob: { data: { data: { roster: [] }, updated_at: opt.rowTs || "t-blob" } }, days: { sched: {}, vers: {}, count: 0 }, shift_trade_requests: [], notifications: [], call_offers: true, call_periods: true, client_versions: [] };
       st.ok = (name) => st.d[name].res(OK[name] !== undefined ? OK[name] : {});
       st.failRead = (name) => (LOUD.includes(name) ? st.d[name].res({ fail: true }) : st.d[name].rej(new Error("HTTP 500 harness")));
@@ -7334,12 +7383,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       return { st, refs, run };
     };
 
-    check("DF4 helpers: combinedLoadToast says every collected failure in ONE line - the schedule, then the shared setup (read, then the re-run notice), then time off, availability and the two East parts - whatever order they were collected in; an unknown key goes last; '' when nothing failed", () => {
-      assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"]);
+    check("DF4 helpers: combinedLoadToast says every collected failure in ONE toast - one failed read keeps its own sentence; two or more are ONE compact sentence naming each read once by its short name (the schedule, the shared setup, vacations, availability, the East feed cache, the East vacation reviews) with one piece of advice ('Retry' only while the banner is up) and the Setup clause for the scheduler only; the notices (daysEmpty, blobMoved) and unknown keys keep their sentence, in order; '' when nothing failed", () => {
+      // review of Do first 4 (10/1, pins moved deliberately): daysEmpty joins the order right after days; the six-part join became
+      // the compact sentence (the joined sentences ran to 300-500 characters on a phone for 4.5 s)
+      assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"]);
       assert.strictEqual(H.combinedLoadToast({}), "");
       assert.strictEqual(H.combinedLoadToast(null), "");
       assert.strictEqual(H.combinedLoadToast({ timeOff: FAILMSG.time_off }), FAILMSG.time_off, "one failure reads exactly as the loader's own toast did");
-      assert.strictEqual(H.combinedLoadToast({ eastReviews: "E2.", other: "X.", eastFeed: "E1.", timeOff: "T.", blob: "B.", days: "D.", availability: "A.", blobMoved: "M." }), "D. B. M. T. A. E1. E2. X.");
+      assert.strictEqual(H.combinedLoadToast({ blobMoved: "M.", days: "D." }), "D. M.", "one failure and a notice: both sentences, in order");
+      const ADV = " - check your connection and reload. What is shown may be incomplete.";
+      assert.strictEqual(H.combinedLoadToast({ availability: FAILMSG.availability, timeOff: FAILMSG.time_off }), "Couldn't load vacations and availability" + ADV);
+      assert.strictEqual(H.combinedLoadToast({ eastReviews: "E2.", other: "X.", eastFeed: "E1.", timeOff: "T.", blob: "B.", days: "D.", availability: "A.", blobMoved: "M." }),
+        "Couldn't load the schedule, the shared setup, vacations, availability, the East feed cache and the East vacation reviews" + ADV + " M. X.", "the failed reads collapse into one sentence at the first one's place; the notice and the unknown key follow verbatim");
+      assert.strictEqual(H.combinedLoadToast({ days: "D.", blob: "B." }, { retry: true }), "Couldn't load the schedule and the shared setup - check your connection, then Retry or reload. What is shown may be incomplete.", "Retry while the banner is up");
+      assert.strictEqual(H.combinedLoadToast({ days: "D.", blob: "B." }, { isScheduler: true }), "Couldn't load the schedule and the shared setup" + ADV + " Setup changes won't save until the shared setup loads.", "the Setup clause is the scheduler's");
+      assert.strictEqual(H.combinedLoadToast({ days: "D.", timeOff: "T." }, { isScheduler: true }), "Couldn't load the schedule and vacations" + ADV, "no Setup clause when the shared setup loaded");
+      assert.strictEqual(H.combinedLoadToast({ eastFeed: "E1.", daysEmpty: "EMPTY.", timeOff: "T." }), "EMPTY. Couldn't load vacations and the East feed cache" + ADV, "the empty-read notice comes first (it precedes every failed read in the order)");
+      const all = H.combinedLoadToast({ days: FAILMSG.days, blob: FAILMSG.blob, timeOff: FAILMSG.time_off, availability: FAILMSG.availability, eastFeed: FAILMSG.east, eastReviews: FAILMSG.east_vacation_reviews }, { retry: true, isScheduler: true });
+      assert.ok(all.length <= 260, "the scheduler's worst case stays short (" + all.length + " chars; the joined sentences were 506): " + all);
+      assert.strictEqual(all.split("check your connection").length - 1, 1, "one piece of advice");
       assert.strictEqual(H.combinedLoadToast({ days: "  D.  ", blob: "", timeOff: 3 }), "D.", "blank and non-string parts are dropped");
     });
 
@@ -7381,7 +7443,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(st.loaded.length, 0, "the days read is still out");
       st.failRead("days");
       await bounded(p);
-      const one = "error " + [FAILMSG.days, FAILMSG.blob, FAILMSG.time_off, FAILMSG.east, FAILMSG.east_vacation_reviews].join(" ");
+      // review of Do first 4 (10/1, moved deliberately): the compact sentence - Retry (the banner is up: no days read), the
+      // scheduler's Setup clause
+      const one = "error Couldn't load the schedule, the shared setup, vacations, the East feed cache and the East vacation reviews - check your connection, then Retry or reload. What is shown may be incomplete. Setup changes won't save until the shared setup loads.";
       assert.deepStrictEqual(st.toasts, [one], "one toast, in the fixed order");
       assert.strictEqual(refs.loadFailedRef.current, true, "the days failure arms loadFailedRef");
       assert.deepStrictEqual(st.daysFailed, [true], "and raises the banner flag");
@@ -7399,8 +7463,41 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       await bounded(p);
       assert.strictEqual(refs.loadFailedRef.current, false, "only the schedule_days catch arms loadFailedRef");
       assert.ok(st.marked === 1 && st.adoptDays === 1 && st.daysFailed.length === 0, "the days read was taken in");
-      assert.deepStrictEqual(st.toasts, ["error " + [FAILMSG.blob, FAILMSG.time_off, FAILMSG.availability].join(" ")]);
+      // review of Do first 4 (10/1): not the scheduler - no Setup clause; the days read landed - no Retry (no banner)
+      assert.deepStrictEqual(st.toasts, ["error Couldn't load the shared setup, vacations and availability - check your connection and reload. What is shown may be incomplete."]);
       assert.strictEqual(typeof st.quiet.east, "function", "the East loader got the collector");
+      // one failure keeps its reader's sentence: the shared setup's, without the Setup clause for a non-scheduler, with it for the scheduler
+      for (const sch of [false, true]) {
+        const t = mk({ scheduler: sch });
+        const pt = t.run(); await tick();
+        t.st.failRead("blob"); t.st.okRest(); await bounded(pt);
+        assert.deepStrictEqual(t.st.toasts, ["error Couldn't load the shared setup (roster/rules) - check your connection and reload." + (sch ? " Setup changes won't save until it loads." : "")], "the blob read alone, scheduler=" + sch);
+      }
+    });
+
+    await acheckD("DF4 review (10/1): a re-run whose schedule_days read trips the empty-read wire (0 rows over N) hands its sentence to the load's collector - it leads the ONE toast with another failure instead of toasting alone and being replaced by it", async () => {
+      const { st, run } = mk({ loadedAt: 12345, blobTs: "t-blob", trip: true, daysReadOk: true });
+      const p = run(); await tick();
+      st.failRead("time_off"); st.okRest(); await bounded(p);
+      assert.strictEqual(typeof st.mergeSink, "function", "Leg B passes the collector to mergeLoadedDays");
+      assert.deepStrictEqual(st.toasts, ["error TRIPWIRE. " + FAILMSG.time_off], "the tripwire, then the failed read - one toast");
+    });
+
+    await acheckD("DF4 review (10/1): the 'shared setup changed elsewhere' notice follows what was owed when the run STARTED - a payload leg 1 arms while the blob read is out does not raise it; one armed at the start and released meanwhile still does; a failed Setup write (blobDirtyRef) counts", async () => {
+      const spurious = mk({ loadedAt: 12345, blobTs: "t-old", rowTs: "t-new", scheduler: true, onLand: (n) => { if (n === "time_off") spurious.refs.pendingSaveRef.current = { armed: "by leg 1 meanwhile" }; } });
+      const p1 = spurious.run(); await tick();
+      spurious.st.ok("time_off"); await tick();
+      spurious.st.okRest(); await bounded(p1);
+      assert.strictEqual(spurious.st.adoptBlob, 1);
+      assert.deepStrictEqual(spurious.st.toasts, [], "nothing was owed at the start - no notice");
+      const lost = mk({ loadedAt: 12345, blobTs: "t-old", rowTs: "t-new", scheduler: true, pending: { roster: [] }, onLand: (n) => { if (n === "time_off") lost.refs.pendingSaveRef.current = null; } });
+      const p2 = lost.run(); await tick();
+      lost.st.ok("time_off"); await tick();
+      lost.st.okRest(); await bounded(p2);
+      assert.deepStrictEqual(lost.st.toasts, ["error " + FAILMSG.blobMoved], "owed at the start, released meanwhile - the notice still shows");
+      const dirty = mk({ loadedAt: 12345, blobTs: "t-old", rowTs: "t-new", scheduler: true, blobDirty: true });
+      const p3 = dirty.run(); await tick(); dirty.st.okRest(); await bounded(p3);
+      assert.deepStrictEqual(dirty.st.toasts, ["error " + FAILMSG.blobMoved], "an owed failed Setup write counts");
     });
 
     await acheckD("DF4 (lifted): a sign-in re-run of the same account merges + re-syncs (loadedAtRef kept, not re-opened); an unchanged blob row re-fires the armed save and is not adopted; a moved row over an armed payload is announced IN the one toast, ahead of a failed read", async () => {
@@ -7421,6 +7518,111 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(c.st.adoptDays === 1 && c.st.merge === 0 && c.refs.switchedUserRef.current === false, "a different account adopts the table wholesale; the flag is cleared after the load");
     });
 
+    // Review of Do first 4 (10/1): leg 1 of the autosave, lifted verbatim, driven together with the lifted load by a tiny effect
+    // runner (the effect re-runs when one of its deps changes, the old timer cleared first, as React does; the 800 ms timers are
+    // a queue the test fires - "more than 800 ms pass").
+    const LEG1_FROM = "  useEffect(() => {\n    if (!loaded) return;\n    if (isPublicMode) return;  // Public viewers never write to the DB\n    if (loadedAtRef.current && Date.now() - loadedAtRef.current < 3000) return; // hydration window";
+    const LEG1_TO = "\n  }, [loaded, schedule, vacations, availabilityRows, saveTick]);";
+    const A_MAP = { "2026-11-15": { primary: "s1", backup: "s3" } }; // the map holding the previous account's unsaved edit
+    const drive = (o) => {
+      const leg1Src = between(LEG1_FROM, LEG1_TO).slice("  useEffect(".length) + "\n  }";
+      const timers = [], syncs = [];
+      const state = { schedule: A_MAP, vacations: {}, availabilityRows: [], saveTick: 0 };
+      let cleanup = null, deps = [state.schedule, state.vacations, state.availabilityRows, state.saveTick]; // the effect last ran long ago
+      const eff = new Function("loaded", "isPublicMode", "loadedAtRef", "loadFailedRef", "daysReadOkRef", "setSaveError", "setSaveStatus", "LOAD_FAILED_STATUS", "buildStateBundle", "pendingSaveRef", "payloadLooksWiped", "everHadRealDataRef", "setTimeout", "clearTimeout", "allowWipeSaveRef", "console", "syncScheduleDays", "switchedUserRef", "return (" + leg1Src + ");");
+      const t = mk({ ...o, onLand: (n) => { if (n === "time_off") set("vacations", {}); if (n === "availability") set("availabilityRows", []); }, onAdopt: () => set("schedule", { "2026-11-15": { primary: "s2", backup: "s4" } }) });
+      const commit = () => {
+        const d = [state.schedule, state.vacations, state.availabilityRows, state.saveTick];
+        if (d.every((x, i) => x === deps[i])) return;
+        deps = d;
+        if (cleanup) { cleanup(); cleanup = null; }
+        const snap = { ...state };
+        const r = eff(true, false, t.refs.loadedAtRef, t.refs.loadFailedRef, t.refs.daysReadOkRef, () => {}, () => {}, "Not saving - data failed to load",
+          () => ({ schedule: snap.schedule, vacations: snap.vacations, availability: snap.availabilityRows }), t.refs.pendingSaveRef, () => false, ref(true),
+          (fn, ms) => { const id = timers.length + 1; timers.push({ id, fn, ms, live: true }); return id; }, (id) => { const x = timers.find(z => z.id === id); if (x) x.live = false; },
+          ref(false), { warn: () => {} },
+          (m) => { syncs.push({ aEdit: m === A_MAP, switched: t.refs.switchedUserRef.current, loadFailed: t.refs.loadFailedRef.current }); return Promise.resolve({ ok: true }); },
+          t.refs.switchedUserRef)();
+        if (typeof r === "function") cleanup = r;
+      };
+      const set = (k, v) => { state[k] = v; commit(); };
+      const fire = () => timers.filter(x => x.live).forEach(x => { x.live = false; x.fn(); });
+      return { t, syncs, fire, set };
+    };
+    await acheckD("DF4 review (10/1): a SWITCHED sign-in re-run - time_off / availability land first and re-fire leg 1 while schedule_days is slower than the 800 ms timer, or fails: nothing of the previous account's map is armed or synced (switchedUserRef gates leg 1, as it gates resyncPendingRef); after the run the new account's own edits sync", async () => {
+      const a = drive({ loadedAt: 12345, switched: true, scheduler: true });
+      const pa = a.t.run(); await tick();
+      a.t.st.ok("time_off"); a.t.st.ok("availability"); await tick();
+      a.fire();
+      assert.deepStrictEqual(a.syncs, [], "no leg-1 sync while the map is still the previous account's");
+      assert.strictEqual(a.t.refs.pendingSaveRef.current, null, "and no payload armed with it (the keepalive flush reads pendingSaveRef)");
+      a.t.st.okRest(); await bounded(pa); a.fire();
+      assert.deepStrictEqual(a.syncs, [], "the adoption under the switch flag arms nothing either");
+      a.set("saveTick", 1); a.fire();
+      assert.ok(a.syncs.length === 1 && !a.syncs[0].aEdit && !a.syncs[0].switched, "after the run the new account's map syncs: " + JSON.stringify(a.syncs));
+      const b = drive({ loadedAt: 12345, switched: true, scheduler: true });
+      const pb = b.t.run(); await tick();
+      b.t.st.ok("time_off"); await tick(); b.fire();
+      b.t.st.failRead("days"); b.t.st.okRest(); await bounded(pb); b.fire();
+      b.set("availabilityRows", []); b.fire();
+      assert.deepStrictEqual(b.syncs, [], "the days read failed: nothing is written, during or after the run (loadFailedRef)");
+    });
+    await acheckD("DF4 review (10/1): leg 1's timer re-checks when it fires - armed before an account switch, or before the same run's schedule_days read failed, it writes nothing; a same-account re-run whose days land still re-syncs the edit made while expired", async () => {
+      const a = drive({ loadedAt: 12345 });
+      a.set("vacations", {});                       // armed with the map under the previous account
+      a.t.refs.switchedUserRef.current = true;      // adoptSignedInUser's switched branch, inside the 800 ms
+      a.fire();
+      assert.deepStrictEqual(a.syncs, [], "armed before the switch: the timer writes nothing");
+      const b = drive({ loadedAt: 12345, blobTs: "t-blob" });
+      const pb = b.t.run(); await tick();
+      b.t.st.ok("time_off"); await tick();          // armed (the load was fine so far)
+      b.t.st.failRead("days"); await tick();        // the same run's days read fails before the timer fires
+      b.fire();
+      assert.deepStrictEqual(b.syncs, [], "the days read failed after the timer was armed: nothing written");
+      b.t.st.okRest(); await bounded(pb);
+      const c = drive({ loadedAt: 12345, blobTs: "t-blob" });
+      const pc = c.t.run(); await tick();
+      c.t.st.ok("time_off"); await tick();
+      c.t.st.okRest(); await bounded(pc); c.fire();
+      assert.ok(c.syncs.length === 1 && c.syncs[0].aEdit && !c.syncs[0].switched && !c.syncs[0].loadFailed, "the same account's edit made while expired re-syncs: " + JSON.stringify(c.syncs));
+    });
+    check("DF4 review (10/1): adoptSignedInUser's switched branch (lifted) drops the previous account's unsaved DAY edits too - the local map falls back to a copy of lastSyncRef (so a later merge cannot keep them as local changes); the same account, or no persisted map, leaves the map alone", () => {
+      const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
+      const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
+      assert.ok(i > 0 && j > i, "the switched branch");
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", adopt.slice(i, j));
+      const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
+      const run = (prevUid, uid, persisted) => {
+        const st = { set: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {});
+        return st;
+      };
+      const sw = run("uA", "uB", TABLE);
+      assert.deepStrictEqual(sw.refs.scheduleRef.current, TABLE, "the map is the last persisted one");
+      assert.ok(sw.refs.scheduleRef.current !== TABLE && sw.set.length === 1 && sw.set[0] === sw.refs.scheduleRef.current, "a copy, set as the state");
+      assert.ok(sw.refs.switchedUserRef.current === true && sw.refs.pendingSaveRef.current === null, "the flag and the dropped payload as before");
+      const same = run("uA", "uA", TABLE);
+      assert.ok(same.refs.scheduleRef.current === A_MAP && same.set.length === 0, "the same account keeps its edit (it re-syncs)");
+      const none = run("uA", "uB", null);
+      assert.ok(none.refs.scheduleRef.current === A_MAP && none.set.length === 0, "no persisted map: nothing to fall back to");
+    });
+    await acheckD("DF4 review (10/1): runGenerate's head (lifted) refuses an unread schedule with its own toast before the offers verdict and the busy flag - 'still loading' while the load runs (no banner yet), the Retry wording after it; with the days read it goes on", async () => {
+      const head = between("  const runGenerate = async (o) => {", "    setGenBusy(true);");
+      const msgOf = (name) => JSON.parse(src.match(new RegExp("const " + name + " = (\"[^\"]*\");"))[1]);
+      const UNREAD = msgOf("GEN_DAYS_UNREAD_MSG"), LOADING = msgOf("GEN_DAYS_LOADING_MSG");
+      const gen = async (daysRead, loaded) => {
+        const st = { toasts: [], verdict: 0 };
+        const fn = new Function("isScheduler", "suIsIso", "suDaysBetween", "rulesImported", "showToast", "daysReadOkRef", "loaded", "GEN_DAYS_UNREAD_MSG", "GEN_DAYS_LOADING_MSG", "offersLoadVerdict", "offersLoad",
+          head + "    return \"ran\";\n  };\n  return runGenerate;")(true, (s) => /^\d{4}-\d{2}-\d{2}$/.test(s), () => 30, true, (m, tone) => st.toasts.push(tone + " " + m), ref(daysRead), loaded, UNREAD, LOADING, () => { st.verdict++; return { verdict: "ok" }; }, {});
+        st.r = await fn({ start: "2026-11-02", end: "2026-11-30", bestOf: 10 });
+        return st;
+      };
+      const u = await gen(false, true), l = await gen(false, false), ok = await gen(true, true);
+      assert.ok(u.r === undefined && u.verdict === 0 && u.toasts.length === 1 && u.toasts[0] === "error " + UNREAD, "loaded, days unread: " + JSON.stringify(u));
+      assert.ok(l.r === undefined && l.verdict === 0 && l.toasts.length === 1 && l.toasts[0] === "error " + LOADING, "still loading: " + JSON.stringify(l));
+      assert.ok(ok.r === "ran" && ok.verdict === 1 && ok.toasts.length === 0, "days read: it goes on to the offers verdict: " + JSON.stringify(ok));
+    });
+
     check("DF4 pins: the mount load is ONE Promise.allSettled over Leg A, Leg B and the secondary reads - no sequential await of a loader left at its top level; one toast site for the load; runGenerate refuses an unread schedule (daysReadOkRef) BEFORE the offers verdict, the busy flag and the ctx build", () => {
       assert.ok(!liftErr, "the mount body could not be lifted: " + liftErr);
       assert.strictEqual(count("await Promise.allSettled([", mountBody), 1, "one settled batch");
@@ -7431,9 +7633,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(mountBody.indexOf("if (loadFailToast) showToast(loadFailToast, \"error\");") > mountBody.indexOf("await Promise.allSettled([") && mountBody.indexOf("setLoaded(true);") > mountBody.indexOf("if (loadFailToast) showToast("), "the toast, then setLoaded, after the batch");
       assert.strictEqual(count("loadFailedRef.current = true", mountBody), 1, "one arm of loadFailedRef in the load (the schedule_days catch)");
       const rg = between("  const runGenerate = async (o) => {", "  const rerollGenerate = () => {");
-      const iDays = rg.indexOf('if (!daysReadOkRef.current) { showToast(GEN_DAYS_UNREAD_MSG, "error"); return; }'), iVerdict = rg.indexOf("const ov = offersLoadVerdict(offersLoad);"), iBusy = rg.indexOf("setGenBusy(true);"), iBuild = rg.indexOf("safeBuildContext(");
+      // review of Do first 4 (10/1, moved deliberately): the wording follows `loaded` ("still loading" before the banner can exist)
+      const iDays = rg.indexOf('if (!daysReadOkRef.current) { showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }'), iVerdict = rg.indexOf("const ov = offersLoadVerdict(offersLoad);"), iBusy = rg.indexOf("setGenBusy(true);"), iBuild = rg.indexOf("safeBuildContext(");
       assert.ok(iDays > 0 && iDays < iVerdict && iVerdict < iBusy && iBusy < iBuild, "the refusal comes first (" + [iDays, iVerdict, iBusy, iBuild].join(", ") + ")");
       assert.strictEqual(count("GEN_DAYS_UNREAD_MSG"), 2, "declared once, used once");
+      assert.strictEqual(count("GEN_DAYS_LOADING_MSG"), 2, "declared once, used once");
+      // the leg-1 gates (review of Do first 4, 10/1): switchedUserRef before the payload is armed; both gates first in the timer
+      const leg1 = between(LEG1_FROM, LEG1_TO);
+      assert.ok(leg1.indexOf("    if (switchedUserRef.current) return;\n    const payload = buildStateBundle();") > leg1.indexOf("if (loadFailedRef.current) {"), "leg 1: the switch gate after the loadFailedRef gate, before the payload is armed");
+      assert.ok(leg1.includes("    const timer = setTimeout(() => {\n      // Review of Do first 4 (10/1): re-checked when the timer fires") && leg1.indexOf("      if (loadFailedRef.current || switchedUserRef.current) return;\n      // -- Empty-save guard --") > leg1.indexOf("const timer = setTimeout("), "the timer re-checks both first");
+      assert.strictEqual(count("if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays, sayLoadFail(\"daysEmpty\")); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);", mountBody), 1, "Leg B hands the tripwire to the collector");
+      assert.ok(mountBody.indexOf("const setupOwedAtStart = !!(pendingSaveRef.current || blobDirtyRef.current);") >= 0 && mountBody.indexOf("const setupOwedAtStart") < mountBody.indexOf("const legA = async () => {"), "what was owed is read before any read starts");
+      assert.ok(mountBody.includes("const loadFailToast = combinedLoadToast(loadFails, { retry: !daysReadOkRef.current, isScheduler });"), "the toast's options");
       assert.ok(src.indexOf("const GEN_DAYS_UNREAD_MSG = ") > 0 && src.indexOf("const GEN_DAYS_UNREAD_MSG = ") < src.indexOf("  const runGenerate = async (o) => {"), "declared before runGenerate");
       assert.ok(/const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded[^"]*Nothing was run\.";/.test(src), "the refusal says so and that nothing ran");
     });
@@ -7462,6 +7673,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.eastPollDue(0, 1000), true, "never read (the first run after a load) / the last read failed");
       assert.strictEqual(H.eastPollDue(1000, 600999), false);
       assert.strictEqual(H.eastPollDue(1000, 601000), true);
+      // review of Do first 5 (10/1): a clock set backwards is due (the poll must not stall until the clock passes the old stamp)
+      assert.strictEqual(H.pollCatchUpDue(7200000, 1000), true, "the device clock went back 2 h: the catch-up is due");
+      assert.strictEqual(H.eastPollDue(7200000, 1000), true, "the device clock went back 2 h: the cache tables are due");
+      // pollFullRecent: under half a poll period since a full refresh started (the interval's tick skips); never for no stamp or a clock gone back
+      assert.strictEqual(H.pollFullRecent(1000, 1000), true);
+      assert.strictEqual(H.pollFullRecent(1000, 30999), true);
+      assert.strictEqual(H.pollFullRecent(1000, 31000), false, "half a minute on: the tick runs");
+      assert.strictEqual(H.pollFullRecent(0, 5000), false, "no full refresh yet");
+      assert.strictEqual(H.pollFullRecent(7200000, 1000), false, "the clock went back: not recent - the tick runs");
     });
 
     // refreshEastTables + refreshAll (the clocks comment .. refreshDaysRef) and pollTick + onPollVisibility, lifted verbatim
@@ -7479,17 +7699,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const auth = { ensureFresh: async () => { st.reads.push("ensureFresh"); return { ok: true, refreshed: !!opt.refreshed }; }, sessionExpired: false };
       const fns = new Function("auth", "resyncPendingRef", "refreshOwnProfile", "refreshBlobRow", "refreshDays", "refreshTradeReqs", "refreshNotifs", "refreshMinVersion",
         "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "loadOffers", "loadPeriods", "blobDirtyRef", "authUserRef", "isPublicMode", "document", "Date",
-        "pollTickMode", "pollCatchUpDue", "eastPollDue",
+        "pollTickMode", "pollCatchUpDue", "eastPollDue", "pollFullRecent",
         pollSrc + "\nreturn { refreshAll, refreshEastTables, pollTick, onPollVisibility, clocks: () => ({ lastFullPollAt, lastEastPollAt }) };")(
         auth, refs.resyncPendingRef, async () => { st.reads.push("profile"); }, rd("blob"), rd("days"), rd("trades"), rd("notifications"), rd("minVersion"),
         async (q) => { st.reads.push("time_off:" + q); }, async (q) => { st.reads.push("availability:" + q); },
-        async (q, overridesOnly) => { st.reads.push(overridesOnly ? "east:overrides" : "east:all"); return { ok: !st.eastFail, feedRows: null }; },
+        // review of Do first 5 (10/1): the stub records the quiet argument too - the poll's East read must stay quiet (a transient
+        // outage must not toast once a minute); the moved P15 pin no longer fixed it
+        async (q, overridesOnly) => { st.reads.push((overridesOnly ? "east:overrides" : "east:all") + ":" + q); return { ok: !st.eastFail, feedRows: null }; },
         async (q) => { st.reads.push("reviews:" + q); }, async (q) => { st.reads.push("offers:" + q); }, async (q) => { st.reads.push("periods:" + q); },
-        refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue);
+        refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue, H.pollFullRecent);
       st.take = () => { const r = st.reads.slice(); st.reads.length = 0; return r; };
       return { st, refs, doc, fns };
     };
-    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all", "reviews:true", "offers:true", "periods:true"];
+    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all:true", "reviews:true", "offers:true", "periods:true"];
     const sorted = (a) => a.slice().sort();
     const flush = () => new Promise(r => setImmediate(r));
 
@@ -7500,7 +7722,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       a.doc.hidden = true; await a.fns.pollTick();
       assert.deepStrictEqual(a.st.take(), [], "hidden sign-in card: no read");
       const b = mk({ signedOut: true, publicMode: true });
-      await b.fns.pollTick();
+      b.st.now += 60000; await b.fns.pollTick(); // the first tick comes a poll period after the load (review of Do first 5, 10/1: pollFullRecent)
       assert.deepStrictEqual(sorted(b.st.take()), sorted(FULL_FIRST), "?public=1 keeps the full poll");
       b.doc.hidden = true; await b.fns.pollTick();
       assert.deepStrictEqual(b.st.take(), [], "a hidden ?public=1 tab reads nothing (no session, no pop-ups)");
@@ -7521,22 +7743,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
 
     await acheckD("DF5 (lifted poll): a visible tick is refreshAll - every reader; the first run after the load reads the East cache tables too, a run a minute later the overrides only, ten minutes after the last cache read all three again; a failed cache read is retried by the next run", async () => {
       const a = mk();
-      await a.fns.pollTick();
+      a.st.now += 60000; await a.fns.pollTick(); // the first tick, a poll period after the load
       assert.deepStrictEqual(sorted(a.st.take()), sorted(FULL_FIRST), "the full refresh, East cache tables included (first run after the load)");
       a.st.now += 61000; await a.fns.pollTick();
       const r2 = a.st.take();
-      assert.ok(r2.includes("east:overrides") && !r2.includes("east:all") && r2.includes("days") && r2.includes("reviews:true"), "a minute later: overrides (and the reviews) every run, not the cache tables: " + JSON.stringify(r2));
+      assert.ok(r2.includes("east:overrides:true") && !r2.includes("east:all:true") && r2.includes("days") && r2.includes("reviews:true"), "a minute later: overrides (and the reviews) every run, not the cache tables: " + JSON.stringify(r2));
       a.st.now += 8 * 60000; await a.fns.pollTick();
-      assert.ok(a.st.take().includes("east:overrides"), "nine minutes after the cache read: still overrides only");
+      assert.ok(a.st.take().includes("east:overrides:true"), "nine minutes after the cache read: still overrides only");
       a.st.now += 60000; await a.fns.pollTick();
-      assert.ok(a.st.take().includes("east:all"), "ten minutes after the cache read: all three");
+      assert.ok(a.st.take().includes("east:all:true"), "ten minutes after the cache read: all three");
       const b = mk({ eastFail: true });
       await b.fns.refreshAll();
-      assert.ok(b.st.take().includes("east:all"));
+      assert.ok(b.st.take().includes("east:all:true"));
       b.st.eastFail = false; b.st.now += 61000; await b.fns.refreshAll();
-      assert.ok(b.st.take().includes("east:all"), "after a failed cache read the next run reads all three again");
+      assert.ok(b.st.take().includes("east:all:true"), "after a failed cache read the next run reads all three again");
       b.st.now += 61000; await b.fns.refreshAll();
-      assert.ok(b.st.take().includes("east:overrides"), "and then the 10-minute cadence again");
+      assert.ok(b.st.take().includes("east:overrides:true"), "and then the 10-minute cadence again");
     });
 
     await acheckD("DF5 (lifted poll): becoming visible - nothing while still hidden or within a minute of the last full refresh (the load counts); after more than a minute refreshAll at once, which resets the clock; nothing for a signed-out page", async () => {
@@ -7548,13 +7770,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(b.st.take(), [], "shown half a minute after the load: no catch-up");
       b.st.now += 31000; b.fns.onPollVisibility(); await flush();
       const r = b.st.take();
-      assert.ok(r.includes("days") && r.includes("profile") && r.includes("east:all"), "shown 61 s after the load: refreshAll at once: " + JSON.stringify(r));
+      assert.ok(r.includes("days") && r.includes("profile") && r.includes("east:all:true"), "shown 61 s after the load: refreshAll at once: " + JSON.stringify(r));
       assert.strictEqual(b.fns.clocks().lastFullPollAt, b.st.now, "the catch-up is a full refresh (clock reset)");
       b.st.now += 5000; b.fns.onPollVisibility(); await flush();
       assert.deepStrictEqual(b.st.take(), [], "shown again 5 s later: nothing");
       const c = mk({ signedOut: true });
       c.st.now += 120000; c.fns.onPollVisibility(); await flush();
       assert.deepStrictEqual(c.st.take(), [], "signed out: the catch-up skips too");
+    });
+
+    await acheckD("DF5 review (10/1): the catch-up, then the overdue interval tick at once (an iOS PWA brought back) - ONE refreshAll; a tick under half a minute after any full refresh (SUBSCRIBED, Retry) skips, one half a minute on runs; the hidden head is never held back; a clock set backwards does not stall the tick", async () => {
+      const a = mk();
+      a.st.now += 120000; a.fns.onPollVisibility(); await flush();
+      assert.ok(a.st.take().includes("days"), "the catch-up ran refreshAll");
+      a.st.now += 50; await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), [], "the overdue tick right after it reads nothing");
+      a.st.now += 20000; await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), [], "20 s on: still nothing");
+      a.st.now += 10000; await a.fns.pollTick();
+      assert.ok(a.st.take().includes("days"), "half a minute after the last full refresh: the tick runs it");
+      a.doc.hidden = true; a.st.now += 1000; await a.fns.pollTick();
+      assert.deepStrictEqual(a.st.take(), ["ensureFresh", "notifications"], "a hidden tick right after a full refresh still keeps the session and reads notifications");
+      a.doc.hidden = false; a.st.now -= 2 * 3600000; await a.fns.pollTick();
+      assert.ok(a.st.take().includes("days"), "the device clock went back 2 h: the tick runs (not 'recent' until the clock passes the old stamp)");
     });
 
     await acheckD("DF5 (lifted loadEastTables): overridesOnly reads east_overrides alone (feedRows null); without it all three, as before", async () => {
@@ -7588,6 +7826,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
       assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
       assert.ok(!/loadEastTables\(true\)/.test(ra) && ra.includes("refreshEastTables()"), "the poll's East read goes through the 10-minute cadence");
+      // review of Do first 5 (10/1): the P15 pin that fixed quiet=true on the poll's East read moved to refreshAll's batch line,
+      // which no longer names loadEastTables - pinned here (and run: the DF5 stub records the quiet argument)
+      assert.strictEqual(count("const r = await loadEastTables(true, !all);"), 1, "the poll's East read stays quiet");
+      assert.ok(pt.includes('      if (mode === "full" && pollFullRecent(lastFullPollAt, Date.now())) return;\n      if (mode === "full") { await refreshAll(); return; }'), "the interval's full tick skips right after a full refresh");
     });
   })();
 
