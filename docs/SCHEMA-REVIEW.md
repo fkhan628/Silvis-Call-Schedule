@@ -2003,8 +2003,9 @@ now sets the CLI's agent mode itself (`export AI_AGENT="${AI_AGENT:-1}"` - the f
 public.time_off_vacation_guard();` (nothing else refers to either; the client's own check stays).
 
 One command (10/1): Faraz's apply script `apply-vacation-guard.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts carry
-machine paths and do not live in the repo). He runs it from the repo root with the linked CLI dir; it runs steps 2-6 above in
-order, stops at the first failure and ends with a block to paste back; the record step follows.
+machine paths and do not live in the repo). He ran it from the repo root with the linked CLI dir; it ran steps 2-6 above in
+order (the first failure of any step stops it) and ended with a block to paste back; the record step followed (the as-run
+paragraph above and the observed lines below).
 
 observed (pre-apply, 2026-10-01): the read-only over-limit query (`sql/probes/vacation-guard-overlimit.sql`) returned 0 rows on
 2026-10-01 ~05:10 UTC - no day under the minimum in live data (the 10/1 review's per-person aggregation changes only its `off`
