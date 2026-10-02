@@ -2165,7 +2165,7 @@ read (the read headers built once, before page 1); each later page starts ON the
 unless that row comes back first (a row deleted or inserted before the boundary between two requests, or an ignored offset);
 the newest-started read wins in both loaders (an older read finishing late is dropped); the CLI readers
 (`scripts/preview-generate.js`, `scripts/publish-preview.js`, `scripts/import-seed.js`) order on `id` last too. The migration's
-and the pre-check's header sentence "the client reads availability unpaged" predates the fix - both files were kept byte for byte as
+header sentence "The availability read of the client is unpaged" and the pre-check's "the client reads availability unpaged" predate the fix - both files were kept byte for byte as
 reviewed (sha256-pinned by the apply script). *As run (2026-10-02): the migration stays byte for byte as it ran (its body sha256-pinned in
 `test/schema.test.js`; its trailer line notes the stale sentence); the record step corrected the pre-check's header (comment only).*
 The pre-check still prints the total. (5) closed in review (10/1): `save_offers` now takes
@@ -2327,6 +2327,19 @@ primary 11/3, backup 11/4, primary 11/13; a vacation 11/14. `sp` = `save_offers(
    `--help` pin does not name the flag); guide 4.3's Proof line "applied:" and its pin; the rules doc's section 1 row "prepared"
    -> "applied <date>". Then, on Faraz's go, the client push (a merge to `main` is a live deploy).
 
+*As run (2026-10-02): a `--dry-run` first (log `apply-no-primary-days-20261002T120333Z.log`, started 12:03:33Z, the repo at
+`3c59e79`): its steps 0-3 - the checks, the pre-check (the same gate `np_fn=no offers5=yes offers7=no overloads=1` and the same
+three facts), the old-signature check, probe BEFORE (`PROBE_SETUP: save_no_primary is absent ...`) - then `DRY RUN - nothing
+applied`. Then items 1-5 by `apply-no-primary-days.sh` (Faraz, log `apply-no-primary-days-20261002T120405Z.log`, started
+12:04:05Z, the same commit), its steps 1-7 in this order: the pre-check (item 1), the function-absent / old-signature check (step
+2, not an item), probe BEFORE (item 2), the migration after a typed APPLY (item 3), the gate again with the new signatures (step
+5), probe AFTER (item 4) and `SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh` (item 5, as written - the flag was still in
+the script at `3c59e79`); the first failure of any step would have stopped the script. Item 6 is the record commit, as listed:
+the migration kept byte for byte as it ran (body sha256 `e77a005aceb2ff74acd293b12102295836870faf3d5564c5fb2651e038296f08`,
+pinned as `NP_APPLIED_SHA256` in `test/schema.test.js`) with ONE trailer line. `SILVIS_NO_PRIMARY_APPLIED` is gone from
+`scripts/verify-rls.sh` since then - section 16 is strict by default (a PROBE_SETUP or an anon 404 FAILs) - so item 5's flag is
+history.*
+
 **One command (Faraz):** his apply script `apply-no-primary-days.sh`, kept OUTSIDE the repo (Faraz 10/1: the apply scripts
 carry machine paths and do not live in the repo), run from the repo root on the commit its header names, with the CLI dir
 linked by `supabase link --project-ref bzhsroegtagqhutbnsrp` - `--dry-run` first (steps 1-3 only, nothing applied). It prints
@@ -2337,8 +2350,9 @@ failure, asks for a typed APPLY before the migration, writes everything to a tim
 "PASTE THIS BACK TO CLAUDE CODE" block; the record step is done from that block. Its CLI calls pass `--agent=yes` (review
 10/1): the CLI's `-o json` is a bare array in a plain terminal and the `{boundary, rows, warning}` envelope when it detects an
 AI agent, so the flag makes every run read the same shape - and its parsers accept both. A stop after the migration applied
-prints the rollback lines below. Faraz ran it on 2026-10-02 at `3c59e79` (the observed lines at the end); the record step followed
-from its paste-back block.
+prints the rollback lines below. Faraz ran it on 2026-10-02 at `3c59e79` (the observed lines at the end) - the `--dry-run` at
+12:03:33Z (nothing applied), then the run at 12:04:05Z (the as-run note above); the record step followed from its paste-back
+block.
 
 **Rolling back** (nothing else refers to `save_no_primary`; the five-argument text is the coordinator file's):
 

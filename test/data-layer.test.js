@@ -687,21 +687,30 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       await assert.rejects(Q.db.queryAll("availability", { order: ord }), /more than \d+ pages/);
       assert.strictEqual(calls.length, Q.DB_MAX_PAGES);
     });
-    // the loaders evaluated from the source: their sequence refs (newest-started read wins, review 10/1) are passed in
+    // the loaders evaluated from the source. Prompt 28 ship review (10/2): their sequence refs (newest-started read wins,
+    // review 10/1) are no longer passed in - the source between adoptTimeOffRows and the offers loaders is lifted whole (the
+    // two `useRef` declarations with both loaders, a stub useRef), so a merge that drops a declaration fails these checks
+    // too (the `++...ReadSeqRef` sits before the try: the loader rejects, and in the app Promise.allSettled swallows it)
     const SRC15 = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
-    const seqRef = () => ({ current: { started: 0, adopted: 0 } });
+    const LOADERS15 = (() => {
+      const at = SRC15.indexOf("  const loadTimeOff = async (quiet) => {");
+      const from = at < 0 ? -1 : SRC15.lastIndexOf("\n  };\n", at);
+      const to = at < 0 ? -1 : SRC15.indexOf("  // Prompt 14 part 3a: offers and periods.", at);
+      if (at < 0 || from < 0 || to < 0) throw new Error("D15: the time_off / availability loaders not found");
+      return SRC15.slice(from + "\n  };\n".length, to);
+    })();
+    const mkLoaders15 = (st) => new Function("db", "adoptTimeOffRows", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", "useRef", LOADERS15 + "\nreturn { loadTimeOff, loadAvailability };")(
+      Q.db, (rows) => st.sets.push(rows), (rows) => st.sets.push(rows), st.ref, (m, k) => st.toasts.push([m, k]), { warn: () => {} }, (v) => ({ current: v }));
     const mkLoadAvailability = () => {
       const la = SRC15.slice(SRC15.indexOf("const loadAvailability = async (quiet) => {"), SRC15.indexOf("// Prompt 14 part 3a: offers and periods."));
       const st = { sets: [], toasts: [], ref: { current: false }, src: la };
-      st.fn = new Function("db", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", "availabilityReadSeqRef", la + "\nreturn loadAvailability;")(
-        Q.db, (rows) => st.sets.push(rows), st.ref, (m, k) => st.toasts.push([m, k]), { warn: () => {} }, seqRef());
+      st.fn = mkLoaders15(st).loadAvailability;
       return st;
     };
     const mkLoadTimeOff = () => {
       const lt = SRC15.slice(SRC15.indexOf("const loadTimeOff = async (quiet) => {"), SRC15.indexOf("const loadAvailability = async (quiet) => {"));
-      const st = { sets: [], toasts: [], src: lt };
-      st.fn = new Function("db", "adoptTimeOffRows", "showToast", "console", "timeOffReadSeqRef", lt + "\nreturn loadTimeOff;")(
-        Q.db, (rows) => st.sets.push(rows), (m, k) => st.toasts.push([m, k]), { warn: () => {} }, seqRef());
+      const st = { sets: [], toasts: [], ref: { current: false }, src: lt };
+      st.fn = mkLoaders15(st).loadTimeOff;
       return st;
     };
     await acheck("D15 loadAvailability (evaluated from the source): pages adopted whole (DB_PAGE + 3 rows, true); a failing second page adopts NOTHING - the rows on screen stay, false, a toast unless quiet", async () => {
@@ -752,6 +761,21 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         }
       }
     });
+    // Prompt 28 ship review (10/2): the merged combination - a paged read that fails on a LATER page while `quiet` is the
+    // mount load's collector (review 9/27 Do first 4): the sentence goes to the collector exactly once, no toast, nothing adopted
+    await acheck("D15 + Do first 4 (both loaders): page 1 full, page 2 HTTP 503, quiet = the mount load's collector - the sentence is handed over once, nothing toasts, nothing is adopted, false", async () => {
+      for (const [mk, rx] of [[mkLoadAvailability, /^Couldn't load availability statements - data shown may be incomplete\.$/], [mkLoadTimeOff, /^Couldn't load vacations - data shown may be incomplete\.$/]]) {
+        const st = mk();
+        const got = [];
+        calls.length = 0;
+        setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : resp(503, "upstream")));
+        assert.strictEqual(await st.fn((m) => got.push(m)), false);
+        assert.strictEqual(calls.length, 2, "both pages requested");
+        assert.strictEqual(st.sets.length, 0, "a partial list was adopted (" + (st.sets[0] && st.sets[0].length) + " rows)");
+        assert.strictEqual(st.toasts.length, 0, "toasts " + JSON.stringify(st.toasts));
+        assert.ok(got.length === 1 && rx.test(got[0]), "collected: " + JSON.stringify(got));
+      }
+    });
     await acheck("D15 source pins: every app read of availability / time_off pages through db.queryAll on an order ending in id (initial load, the 60-s poll and Realtime via loadAvailability / loadTimeOff, the painter's re-read, the seed import's live read); the snapshot reader's orders end in id too", async () => {
       const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
       const CFG = fs.readFileSync(path.join(ROOT, "config.js"), "utf8").replace(/\r\n/g, "\n");
@@ -780,6 +804,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       for (const s of qa) assert.ok(/order: "[a-z_.,]*,id\.asc"/.test(s), "not a total order: " + s);
       const lt = SRC.slice(SRC.indexOf("const loadTimeOff = async (quiet) => {"), SRC.indexOf("const loadAvailability = async (quiet) => {"));
       assert.ok(lt.includes('db.queryAll("time_off", { order: "start_date.asc,id.asc" })'), "loadTimeOff pages");
+      // Prompt 28 ship review (10/2): each newest-started ref is declared exactly once, inside CallSchedule, before its loader
+      // (the merge's one conflict hunk held both declarations - taking the other side dropped them and no check failed)
+      const appAt = SRC.indexOf("function CallSchedule() {");
+      for (const [decl, loader] of [["  const timeOffReadSeqRef = useRef({ started: 0, adopted: 0 });", "  const loadTimeOff = async (quiet) => {"], ["  const availabilityReadSeqRef = useRef({ started: 0, adopted: 0 });", "  const loadAvailability = async (quiet) => {"]]) {
+        assert.strictEqual(SRC.split(decl).length - 1, 1, "declared exactly once: " + decl.trim());
+        const dAt = SRC.indexOf(decl), lAt = SRC.indexOf(loader);
+        assert.ok(appAt > 0 && dAt > appAt && lAt > dAt, "declared inside CallSchedule, before its loader: " + decl.trim());
+      }
       const fl = SRC.slice(SRC.indexOf("const fetchLiveForImport = async () => {"), SRC.indexOf("const pickSeedFile = async (file) => {"));
       assert.ok(fl.includes('time_off: await db.queryAll("time_off", { order: "start_date.asc,id.asc" })') && fl.includes('availability: await db.queryAll("availability", { order: "start_date.asc,id.asc" })'), "fetchLiveForImport pages both");
       assert.ok(CFG.includes('this._readAll("time_off?select=*&order=start_date.asc,person_id.asc,id.asc", "time_off")') && CFG.includes('this._readAll("availability?select=*&order=start_date.asc,person_id.asc,id.asc", "availability")'), "the snapshot reader's time_off / availability pages run on a total order (id last)");
