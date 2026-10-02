@@ -4936,11 +4936,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(store.getItem("silvis-auth-token"), null, "control: a rejected refresh clears the pair");
       df7Reset();
     });
-    await acheck("DF7 signIn: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 (body not JSON) -> 'Couldn't reach the server (HTTP 502)'; a JSON 503 / 429 / 400 -> GoTrue's own words; a 2xx that is not a session (an HTML page) -> an error; nothing is stored on any failure", async () => {
+    // review of Do first 7 (10/2) - expectation moved deliberately: a JSON 5xx / 408 says "Couldn't reach the server (HTTP n) -
+    // try again" too (GoTrue's "Service Unavailable" / "Database error querying schema" gave no hint to try again later);
+    // a 429 and a 4xx keep GoTrue's own words
+    await acheck("DF7 signIn: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 (body not JSON), a JSON 503 / 500 and a 408 -> 'Couldn't reach the server (HTTP n) - try again' whatever the body; a JSON 429 / 400 -> GoTrue's own words; a 2xx that is not a session (an HTML page) -> an error; nothing is stored on any failure", async () => {
       const cases = [
         ["thrown", () => { throw new TypeError("Failed to fetch"); }, (e) => e === "No connection - try again"],
         ["HTML 502", () => df7Html(502, "<html>502 Bad Gateway</html>"), (e) => /^Couldn't reach the server \(HTTP 502\)/.test(e)],
-        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), (e) => e === "Service Unavailable"],
+        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), (e) => e === "Couldn't reach the server (HTTP 503) - try again"],
+        ["500 JSON", () => resp(500, { code: 500, msg: "Database error querying schema" }), (e) => e === "Couldn't reach the server (HTTP 500) - try again"],
+        ["408 JSON", () => resp(408, { msg: "Request Timeout" }), (e) => e === "Couldn't reach the server (HTTP 408) - try again"],
         ["429", () => resp(429, { msg: "Request rate limit reached" }), (e) => e === "Request rate limit reached"],
         ["400 bad password", () => resp(400, { error: "invalid_grant", error_description: "Invalid login credentials" }), (e) => e === "Invalid login credentials"],
         ["400 empty body", () => df7Html(400, ""), (e) => e === "Sign in failed (HTTP 400)"],
@@ -4956,10 +4961,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       df7Reset();
     });
-    await acheck("DF7 resetPassword: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 -> 'Couldn't reach the server (HTTP 502) - try again'; a JSON 429 -> GoTrue's words; a 4xx with an empty body -> 'Reset failed (HTTP n)'; 200 -> { error: null }", async () => {
+    await acheck("DF7 resetPassword: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 or a JSON 503 -> 'Couldn't reach the server (HTTP n) - try again' (whatever the body); a JSON 429 -> GoTrue's words; a 4xx with an empty body -> 'Reset failed (HTTP n)'; 200 -> { error: null }", async () => {
       const cases = [
         ["thrown", () => { throw new TypeError("Failed to fetch"); }, "No connection - try again"],
         ["HTML 502", () => df7Html(502, "<html>502</html>"), "Couldn't reach the server (HTTP 502) - try again"],
+        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), "Couldn't reach the server (HTTP 503) - try again"],
         ["429", () => resp(429, { msg: "For security purposes, you can only request this after 37 seconds." }), "For security purposes, you can only request this after 37 seconds."],
         ["422 empty", () => df7Html(422, ""), "Reset failed (HTTP 422)"],
         ["400 empty", () => df7Html(400, ""), "Reset failed (HTTP 400)"],
@@ -5007,7 +5013,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.strictEqual(e401.r.ok, false);
       });
       check("A3 syncScheduleDaysNow: a 401 without the banner (the refresh hit a network error) toasts once, still does not re-arm and says 'will retry' - NOT 'sign in again' (no sign-in is needed; the next granted refresh re-sends it); a 403 toasts once, no retry; a 500 keeps the retry + toast", () => {
-        assert.strictEqual(e401noBanner.state.retries, 0); assert.deepStrictEqual(e401noBanner.state.toasts, ["write failed 401"]);
+        // review of Do first 7 (10/2) - expectation moved deliberately: the toast says what the header says (the refresh failed;
+        // the change goes out once it is), not writeFailToast's "your session expired. Sign in again." (no sign-in is needed)
+        assert.strictEqual(e401noBanner.state.retries, 0); assert.deepStrictEqual(e401noBanner.state.toasts, ["Couldn't save the schedule - your session couldn't be refreshed; the change goes out once it is."]);
+        assert.ok(!e401noBanner.state.toasts.some(t => /sign in/i.test(t)), "no 'sign in' in the toast while no sign-in is needed");
         assert.ok(e401noBanner.state.statuses.includes("Save failed - will retry") && !e401noBanner.state.statuses.some(s => /sign in again/i.test(s)), JSON.stringify(e401noBanner.state.statuses));
         assert.strictEqual(e403.state.retries, 0); assert.deepStrictEqual(e403.state.toasts, ["write failed 403"]); assert.ok(e403.state.statuses.includes("Not saved - no permission"), JSON.stringify(e403.state.statuses));
         assert.strictEqual(e500.state.retries, 1); assert.deepStrictEqual(e500.state.toasts, ["write failed 500"]); assert.ok(e500.state.statuses.includes("Save failed - retrying"));
@@ -5066,7 +5075,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const iAuthBranch = sync.indexOf("if (failed && authFail) {");
       assert.ok(iAuthBranch > 0 && iAuthBranch < sync.indexOf("scheduleDaySyncRetry();"), "the auth-failure branch (no retry) must come before the retry branch");
       // review 9/27 Do first 2 (deliberate pin change): and only the first failure of a streak toasts
-      assert.ok(sync.includes("if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, \"error\");"), "the 401 toast is skipped beside the banner");
+      // review of Do first 7 (10/2) - pin moved deliberately: a 401 without the banner toasts the refresh wording (above)
+      assert.ok(sync.includes("if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(authFail === 401 ? \"Couldn't save the schedule - your session couldn't be refreshed; the change goes out once it is.\" : failMsg, \"error\");"), "the 401 toast is skipped beside the banner");
       assert.strictEqual((sync.match(/scheduleDaySyncRetry\(\);/g) || []).length, 1, "one retry site, in the non-auth branch");
       const blob = src.slice(src.indexOf("// --- Supabase: Auto-save on changes ---"), src.indexOf("// --- Flush pending save when app is backgrounded or closing ---"));
       // review 9/27 Do first 2 (deliberate pin change): the blob leg toasts once per failure streak as well
@@ -5846,6 +5856,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.strictEqual(saves, 0, label);
         assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same", "POST /auth/v1/token refresh=link-r2"], label);
       }
+    });
+    // review of Do first 7 (10/2): the 2xx-without-a-pair branch of _probeLinkPair had no test (back to "dead" passed 518/0)
+    await bcheck("DF7 B7 probe: the link's access token rejected (401) and its refresh POST answered 200 WITHOUT an access token (a proxy's JSON) is not a dead link - { status: 'ok', kept: true }, nothing stored", async () => {
+      setSession(STORED, "r1"); reset(); probe[LINK_SAME] = "dead"; grants["link-r2"] = () => resp(200, { ok: true });
+      const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+      assert.deepStrictEqual([r.status, r.kept], ["ok", true], JSON.stringify(r));
+      assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" });
+      assert.strictEqual(saves, 0);
+      assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same", "POST /auth/v1/token refresh=link-r2"]);
     });
     await bcheck("B7 different user: { status: 'conflict', signedIn: { id, email }, linkEmail } - NOTHING stored (the stored pair untouched, _saveSession never called, one getUser call on the stored token, no expired flag)", async () => {
       setSession(STORED, "r1"); reset();
@@ -7604,6 +7623,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(dev.shown.length, 2, "a different account on the device: seeded at its own read, no pop storm");
       assert.strictEqual(dev.ref.current.uid, "u2");
     });
+    // review of Do first 6 (10/2): the `userProfile.id === uid` clause of `ready` had no test (deleting it left 518 / 0)
+    check("DF6 effect (lifted): an in-place account switch - B (surgeon s2) signed in while A's scheduler profile is still in state (openSignInAgain keeps it) and isScheduler still true: a trade between s3 and s4 that lands while B's profile is fetched WAITS (not shown, not marked seen); once B's own profile commits (isScheduler false) it is marked seen and never pops - B's Alerts feed does not show it", () => {
+      const dev = device();
+      const profA = { id: "u1", role: "scheduler", person_id: "s1" };
+      commit(dev, { authUser: { id: "u1" }, userProfile: profA, isScheduler: true, notifsRead: "ok", notifications: full(1, 50) });
+      assert.strictEqual(dev.ref.current.uid, "u1");
+      commit(dev, { authUser: { id: "u2" }, userProfile: profA, isScheduler: true, notifsRead: "unread", notifications: full(1, 50) });
+      const bFeed = full(100, 149);
+      commit(dev, { authUser: { id: "u2" }, userProfile: profA, isScheduler: true, notifsRead: "ok", notifications: bFeed });
+      assert.strictEqual(dev.ref.current.uid, "u2", "B's set seeded at B's first authenticated read");
+      const trade = { ...row(151, "trade_proposed", { from_surgeon_id: "s3", to_surgeon_id: "s4" }) };
+      const feed = [trade].concat(bFeed.slice(0, 49));
+      commit(dev, { authUser: { id: "u2" }, userProfile: profA, isScheduler: true, notifsRead: "ok", notifications: feed });
+      assert.deepStrictEqual(dev.shown, [], "A's scheduler profile does not decide B's pop-ups: " + JSON.stringify(dev.shown));
+      assert.ok(!dev.ref.current.ids.has("n151"), "not marked seen while the profile is not B's");
+      commit(dev, { authUser: { id: "u2" }, userProfile: { id: "u2", role: "surgeon", person_id: "s2" }, isScheduler: false, notifsRead: "ok", notifications: feed });
+      assert.deepStrictEqual(dev.shown, [], "B's own profile: the s3 / s4 trade is not in his feed - no pop-up");
+      assert.ok(dev.ref.current.ids.has("n151"), "and it is marked seen now (a later follow of s3 never pops it)");
+    });
     await acheck6("DF6 addNotification (lifted): this device's own inserted row is marked seen BEFORE it enters the feed (so the effect never pops it back), the feed keeps its 50-row cap; a failed insert adds nothing", async () => {
       const an = between("  const addNotification = useCallback(async (type, title, message, data = {}) => {", "\n  }, []);") + "\n  }, []);";
       const base = full(1, 50);
@@ -7691,15 +7729,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
 
     const retryBody = liftOrNull("  const retrySessionCheck = async () => {", "\n  };\n");
     const retrySrc = retryBody === null ? null : retryBody + "\n  };";
-    const runRetry = async (getUser) => {
+    // review of Do first 7 (10/2) - harness moved deliberately: the Retry sets its own retryBusy (never the card's shared
+    // authBusy - Sign in stays usable while a check hangs) and numbers its check on sessionCheckReqRef
+    const mkRetry = (getUser) => {
       lifted(retrySrc, "retrySessionCheck");
-      const st = { busy: [], errors: [], unreached: [], adopted: [] };
-      const fn = new Function("auth", "adoptSignedInUser", "setAuthError", "setAuthBusy", "setSessionUnreached", "SESSION_STILL_UNREACHED_MESSAGE", "console", retrySrc + "\nreturn retrySessionCheck;")(
-        { getUser }, async (u) => { st.adopted.push(u); }, (m) => st.errors.push(m), (b) => st.busy.push(b), (m) => st.unreached.push(m), MSG2, { warn: () => {} });
-      await fn();
-      return st;
+      const st = { busy: [], authBusy: [], errors: [], unreached: [], adopted: [], warns: 0 };
+      const ref = { current: 0 };
+      const fn = new Function("auth", "adoptSignedInUser", "setAuthError", "setRetryBusy", "setAuthBusy", "setSessionUnreached", "SESSION_STILL_UNREACHED_MESSAGE", "sessionCheckReqRef", "console", retrySrc + "\nreturn retrySessionCheck;")(
+        { getUser }, async (u) => { ref.current++; st.adopted.push(u); }, (m) => st.errors.push(m), (b) => st.busy.push(b), (b) => st.authBusy.push(b), (m) => st.unreached.push(m), MSG2, ref, { warn: () => { st.warns++; } });
+      return { st, ref, fn };
     };
-    await acheck7("DF7 Retry (lifted retrySessionCheck): still unreachable -> the 'Still couldn't reach' wording; a live session -> adoptSignedInUser (which clears the notice); a rejected one -> the notice goes and the card says 'Session expired'; a throw -> a message; the busy state always ends", async () => {
+    const runRetry = async (getUser) => { const x = mkRetry(getUser); await x.fn(); return x.st; };
+    await acheck7("DF7 Retry (lifted retrySessionCheck): still unreachable -> the 'Still couldn't reach' wording; a live session -> adoptSignedInUser (which clears the notice); a rejected one -> the notice goes and the card says 'Session expired'; a throw -> a message; its OWN busy state (retryBusy) always ends and the card's authBusy is never touched", async () => {
       let st = await runRetry(async () => ({ user: null, error: "network" }));
       assert.deepStrictEqual(st.unreached, [MSG2]); assert.deepStrictEqual(st.busy, [true, false]); assert.deepStrictEqual(st.adopted, []);
       st = await runRetry(async () => ({ user: { id: "u1" } }));
@@ -7708,6 +7749,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(st.unreached, [""]); assert.ok(st.errors.includes("Session expired. Please sign in with your password to refresh."), JSON.stringify(st.errors)); assert.deepStrictEqual(st.busy, [true, false]);
       st = await runRetry(async () => { throw new Error("boom"); });
       assert.ok(st.errors.includes("boom")); assert.deepStrictEqual(st.busy, [true, false], "never a stuck button");
+      assert.deepStrictEqual(st.authBusy, [], "the Retry never sets the card's shared authBusy (Sign in stays usable)");
+    });
+    await acheck7("DF7 Retry (lifted): a check that hangs while the person signs in with the password is DROPPED when it answers - no adoptSignedInUser of the stored account over the new one, no 'Still couldn't reach' / 'Session expired' after the sign-in, no warning; its button still comes back", async () => {
+      for (const late of [{ user: { id: "stored-A" } }, { user: null, error: "network" }, { user: null }, "throw"]) {
+        let release; const held = new Promise(r => { release = r; });
+        const x = mkRetry(() => held.then(v => { if (v === "throw") throw new Error("late boom"); return v; }));
+        const p = x.fn();
+        assert.deepStrictEqual(x.st.busy, [true], "Checking");
+        x.ref.current++; // handleAuthSubmit / adoptSignedInUser of account B bump the check number
+        release(late); await p;
+        assert.deepStrictEqual([x.st.adopted.length, x.st.unreached.length, x.st.errors.filter(Boolean).length, x.st.warns], [0, 0, 0, 0], "late " + JSON.stringify(late) + ": " + JSON.stringify(x.st));
+        assert.deepStrictEqual(x.st.busy, [true, false], "the Retry button comes back");
+      }
     });
 
     const resetSrc = liftOrNull("  const submitReset = () => {", "\n\n  return (");
@@ -7720,7 +7774,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       return { st, api, ref };
     };
     const flush = () => new Promise(r => setTimeout(r, 0));
-    await acheck7("DF7 submitReset (lifted): a resetPassword that REJECTS still ends the busy state with a message (the .catch); an error object -> busy off + the error; success -> 'sent'; no e-mail -> a message and no request", async () => {
+    // review of Do first 7 (10/2): a lifted submitReset without its .catch rejected with no handler and Node crashed the
+    // whole suite (exit 1, no FAIL line, every later check unrun) - an unhandled rejection while these checks run is
+    // collected and reported as this check's FAIL instead
+    const watchUnhandled = async (fn) => {
+      const seen = [];
+      const onUnhandled = (r) => { seen.push(String((r && r.message) || r)); };
+      process.on("unhandledRejection", onUnhandled);
+      try { await fn(); await flush(); await flush(); } finally { process.removeListener("unhandledRejection", onUnhandled); }
+      assert.deepStrictEqual(seen, [], "a rejection nobody handled (submitReset's .catch missing?)");
+    };
+    await acheck7("DF7 submitReset (lifted): a resetPassword that REJECTS still ends the busy state with a message (the .catch); an error object -> busy off + the error; success -> 'sent'; no e-mail -> a message and no request; no rejection is left unhandled", async () => watchUnhandled(async () => {
       let x = mkReset(() => Promise.reject(new Error("Failed to fetch")));
       x.api.submitReset(); await flush();
       assert.deepStrictEqual(x.st.busy, [true, false], "the 'Sending' button comes back"); assert.deepStrictEqual(x.st.errors, ["", "Failed to fetch"]);
@@ -7734,8 +7798,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       x = mkReset(async () => { called++; return { error: null }; }, "");
       x.api.submitReset(); await flush();
       assert.deepStrictEqual([called, x.st.busy.length], [0, 0]); assert.deepStrictEqual(x.st.errors, ["Please enter your email"]);
-    });
-    await acheck7("DF7 'Back to sign in' (lifted backToSignIn): ends the shared busy state at once while a reset hangs (Sign in is usable again) and the abandoned request's late answer is dropped - no busy flip under a later sign-in, no 'sent' on the login card", async () => {
+    }));
+    await acheck7("DF7 'Back to sign in' (lifted backToSignIn): ends the shared busy state at once while a reset hangs (Sign in is usable again) and the abandoned request's late answer is dropped - no busy flip under a later sign-in, no 'sent' on the login card; no rejection is left unhandled", async () => watchUnhandled(async () => {
       let release; const pending = new Promise(r => { release = r; });
       const x = mkReset(() => pending);
       x.api.submitReset();
@@ -7750,8 +7814,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const y = mkReset(() => pending2);
       y.api.submitReset(); y.api.backToSignIn(); rejectIt(new Error("late")); await flush();
       assert.deepStrictEqual(y.st.busy, [true, false]); assert.ok(!y.st.errors.includes("late"), "a late rejection is dropped too");
-    });
+    }));
 
+    check("DF7 pins (review 10/2): the Retry button reads retryBusy (disabled + 'Checking'), never authBusy; any sign-in (adoptSignedInUser) and a Sign in press (handleAuthSubmit) bump sessionCheckReqRef before anything else; sign-out ends the notice", () => {
+      assert.ok(src.includes('<button data-testid="auth-retry" onClick={retrySessionCheck} disabled={retryBusy} style={{...css.cta,display:"block",width:"100%",marginTop:8,padding:"9px 14px",fontSize:13,fontWeight:700,opacity:retryBusy?0.6:1}}>{retryBusy ? "Checking" : "Retry"}</button>'), "the Retry button");
+      assert.strictEqual(count("const [retryBusy, setRetryBusy] = useState(false);"), 1);
+      assert.strictEqual(count("const sessionCheckReqRef = useRef(0);"), 1);
+      assert.ok(retrySrc.includes("const req = ++sessionCheckReqRef.current;") && retrySrc.includes("if (req !== sessionCheckReqRef.current) return;") && retrySrc.includes("finally { setRetryBusy(false); }") && !retrySrc.includes("setAuthBusy("), "retrySessionCheck numbers its check and owns retryBusy only");
+      const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
+      assert.ok(adopt.startsWith("const adoptSignedInUser = async (user) => {\n    sessionCheckReqRef.current++;"), "adoptSignedInUser bumps first");
+      assert.ok(src.includes("const handleAuthSubmit = async () => {\n    sessionCheckReqRef.current++;"), "a Sign in press bumps first");
+      const so = src.slice(src.indexOf("  const handleSignOut = async () => {"), src.indexOf("// Prompt 16 B7: the pair from a recovery / invite hash."));
+      assert.ok(so.includes('setSessionUnreached("");'), "sign-out ends the notice");
+    });
     check("DF7 pins: both 'Back to sign in' buttons call backToSignIn (which ends authBusy); submitReset carries a .catch; the card's notice (data-testid auth-unreached, role alert) with its Retry (auth-retry -> retrySessionCheck) renders from sessionUnreached; adoptSignedInUser clears it; the biometric path reads the same message constant", () => {
       assert.strictEqual(count(">Back to sign in</button>"), 2, "two Back buttons");
       assert.strictEqual(count("<button onClick={backToSignIn} "), 2, "both call backToSignIn");
@@ -7781,7 +7856,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(ensure.includes("if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: \"network\" };"), "ensureFresh");
       [["signIn", signIn], ["resetPassword", reset]].forEach(([n, body]) => {
         assert.ok(/try \{[\s\S]*?fetch\(/.test(body) && body.includes("await res.json().catch(() => null)") && body.includes('return { ' + (n === "signIn" ? "user: null, " : "") + 'error: "No connection - try again" };'), n + ": try/catch + res.json().catch");
+        // review of Do first 7 (10/2): a 5xx / 408 says try again before GoTrue's words are read
+        const down = body.indexOf("if (authServerDown(res.status)) return { " + (n === "signIn" ? "user: null, " : "") + "error: `Couldn't reach the server (HTTP ${res.status}) - try again` };");
+        assert.ok(down > 0 && down < body.indexOf("data.msg || data.error_description"), n + ": the server-down wording comes first");
       });
+      const sdSrc = fnOf("function authServerDown(status) {", "\n}\n") + "\n}";
+      const serverDown = new Function(sdSrc + "\nreturn authServerDown;")();
+      assert.deepStrictEqual([500, 502, 503, 408, 429, 400, 404, 200].map(serverDown), [true, true, true, true, false, false, false, false], "authServerDown: 5xx and 408 only");
     });
   })();
 
@@ -7889,9 +7970,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const st = { copied: [], warns: 0, appended: 0, removed: 0 };
       const doc = { createElement: () => ({ style: {}, select() {} }), body: { appendChild: () => { st.appended++; }, removeChild: () => { st.removed++; } }, execCommand: () => { if (exec === "throw") throw new Error("no copy"); return exec; } };
       const nav = clip === null ? {} : { clipboard: { writeText: async (t) => { if (clip === "reject") throw new Error("denied"); st.clip = t; } } };
-      const fn = new Function("navigator", "window", "document", "console", "setErrorCopied", "setTimeout", copyBlock + "\n  };\nreturn copyErrorEntry;")(
-        nav, { isSecureContext: true }, doc, { warn: () => { st.warns++; } }, (v) => st.copied.push(v), () => 0);
+      // review of Do first 8 (10/2) - harness moved deliberately: the label's 2.5 s reset timer lives in errorCopiedTimerRef
+      st.timers = []; st.cleared = [];
+      const fn = new Function("navigator", "window", "document", "console", "setErrorCopied", "setTimeout", "clearTimeout", "errorCopiedTimerRef", copyBlock + "\n  };\nreturn copyErrorEntry;")(
+        nav, { isSecureContext: true }, doc, { warn: () => { st.warns++; } }, (v) => st.copied.push(v), (f, ms) => { st.timers.push(ms); return "t" + st.timers.length; }, (t) => st.cleared.push(t), st.timerRef = { current: null });
       await fn("MSG");
+      st.again = () => fn("MSG2");
       return st;
     };
     await acheck8("DF8 Recent errors Copy (lifted copyErrorEntry): the clipboard first; refused -> the hidden-textarea copy; both failing -> 'Blocked' (\"!\" + text) - never a prompt(), never a toast that would push another error onto the stack", async () => {
@@ -7903,6 +7987,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(st.copied[0], "!MSG");
       st = await runCopy("reject", "throw");
       assert.deepStrictEqual([st.copied[0], st.warns], ["!MSG", 2]);
+      // review of Do first 8 (10/2): a second Copy within 2.5 s clears the first label timer (B's "Copied" no longer resets early)
+      st = await runCopy("ok", false);
+      assert.deepStrictEqual([st.timers, st.cleared, st.timerRef.current], [[2500], [], "t1"]);
+      await st.again();
+      assert.deepStrictEqual([st.copied, st.timers, st.cleared, st.timerRef.current], [["MSG", "MSG2"], [2500, 2500], ["t1"], "t2"], "the first timer cleared, the second owns the label");
     });
 
     check("DF8 pins: data-testid 'toast' is the message span ALONE (the smoke's ~17 reads and clicks); the box (toast-box) dismisses on tap and carries the repeat count and, for an error or over a painter sheet, a close control; only dismissToast / showToast set the slot (no 4.5 s for every tone left)", () => {
@@ -7920,9 +8009,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('if (t.tone === "error") setErrorLog(p => toastErrorLogPush(p, t.msg, now));'), "every error goes on the stack");
     });
     check("DF8 pins: the header's 'N errors' button is the ONLY opener of Recent errors (it never opens by itself); the dialog lists the stack newest first with each entry's Copy, Clear and Close; sign-out empties the stack", () => {
-      assert.ok(src.includes('{errorLog.length > 0 && <button type="button" data-testid="hdr-errors" onClick={()=>setShowErrorLog(true)}'), "the header button");
+      // review of Do first 8 (10/2) - pin moved deliberately: the button opens through openErrorLog (it remembers the opener)
+      assert.ok(src.includes('{errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog}'), "the header button");
       assert.ok(src.includes('{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}'), "its label");
-      assert.strictEqual(count("setShowErrorLog(true)"), 1, "opened from the header only");
+      assert.strictEqual(count("setShowErrorLog(true)"), 1, "opened from one place");
+      assert.ok(src.includes("const openErrorLog = () => { errorLogOpenerRef.current = document.activeElement; setShowErrorLog(true); };"), "... openErrorLog");
+      assert.strictEqual(count("onClick={openErrorLog}"), 1, "opened from the header only");
       const hdr = liftOrNull('<div data-testid="app-header"', "{!isPublicMode && <div style={css.nav}>");
       assert.ok(hdr !== null && hdr.includes('data-testid="hdr-errors"'), "the button lives in the header's status line (every role, ?public=1 too)");
       assert.ok(!/synced|saved|not saving|connecting|schedule not loaded/i.test("1 error 2 errors"), "the label carries none of the words the smoke reads off the header");
@@ -7943,7 +8035,61 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const line = smoke.split("\n").find(l => l.includes("window." + n + " = [];")) || "";
         assert.ok(line.includes('const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.' + n + ".push(txt); last = key;"), n + " keys on the count: " + line.slice(0, 160));
       });
-      assert.strictEqual((smoke.match(/data-testid=toast-box/g) || []).length, 0, "no smoke read of the box (its text carries the count and the close control)");
+      // review of Do first 8 (10/2) - pin moved deliberately: the toast-390 step reads the box's GEOMETRY (width, where Save's
+      // centre lands); no other smoke step reads the box (its text carries the count and the close control)
+      const t390 = smoke.slice(smoke.indexOf("// ====================== Review of Do first 8 (10/2): an error toast at 390 px"), smoke.indexOf("toast390Forced500Lines = 0; // a forced answer"));
+      assert.ok(t390.length > 500, "the toast-390 step");
+      assert.strictEqual((smoke.match(/data-testid=toast-box/g) || []).length, (t390.match(/data-testid=toast-box/g) || []).length, "no smoke read of the box outside the toast-390 geometry step");
+      assert.ok(!/toast-box[^\n]{0,80}textContent/.test(t390), "and that step reads no text off the box");
+    });
+
+    // ---- review of Do first 8 (10/2) ----
+    check("DF8 review pins: the toast box is max-content wide up to min(90vw, 640px) (with left 50% and no width it shrank to the right half - 195 px on a 390 px phone); the lift over the day editor / claim sheet is a spread AFTER the A5 position (bottom: toastLift px); the close control is a 36 x 36 tap target", () => {
+      const line = src.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
+      assert.ok(line.includes('width:"max-content",maxWidth:"min(90vw, 640px)"') && !line.includes('maxWidth:"90vw"'), "the width: " + line.slice(0, 200));
+      const pos = line.indexOf("...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), lift = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      assert.ok(pos > 0 && lift > pos, "the lift overrides the bottom inset, after it");
+      assert.ok(line.includes('left:"50%"') && line.includes('transform:"translateX(-50%)"'), "still centred");
+      const box = liftOrNull('<div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast}', "\n        </div>\n      )}") || "";
+      assert.ok(box.includes('margin:"-10px -12px -10px 0",minWidth:36,minHeight:36'), "toast-close 36 x 36 (was 32, under the app's 36 px rule)");
+    });
+    check("DF8 review pins: toastLift is measured in a layout effect - only while a toast AND the day editor or the claim sheet are up (never over a painter sheet, where the toast sits at the top); it lifts the box to 8 px above the dialog's action row (editor-footer / claim-actions) when the box overlaps it, and stays lifted while the dialog is open", () => {
+      assert.ok(src.includes("const { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } = React;"), "useLayoutEffect in scope");
+      const eff = liftOrNull("  const [toastLift, setToastLift] = useState(0);", "\n  });\n") || "";
+      assert.ok(eff.includes("useLayoutEffect(() => {"), "a layout effect (no flash at the old place)");
+      assert.ok(eff.includes('const box = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? document.querySelector("[data-testid=toast-box]") : null;'), "when");
+      assert.ok(eff.includes('document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")'), "the action rows");
+      assert.ok(eff.includes("if (toastLift || (b.bottom > r.top && b.top < r.bottom)) lift = Math.max(0, Math.ceil(window.innerHeight - r.top + 8));"), "the overlap test and the lift");
+      assert.ok(eff.includes("if (lift !== toastLift) setToastLift(lift);"), "set only on a change (no render loop)");
+      assert.strictEqual(count('<div data-testid="claim-actions" style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>'), 1, "the claim sheet's action row is findable");
+      assert.strictEqual(count('data-testid="editor-footer"'), 1, "the day editor's action row");
+    });
+    check("DF8 review pins: 'N errors' (class hdr-errors) - no inline minHeight (it beat the phone button rule: 24 px); 24 px (-7 px vertical margins) outside every @media, BEFORE the first phone block, which makes it 36 x 36 with -13 px vertical margins (the status line - and the header - keep their height: measured 67 / 191 px with or without the chip); its words follow the line's case", () => {
+      const line = src.split("\n").find(l => l.includes('data-testid="hdr-errors"')) || "";
+      assert.ok(!line.includes("minHeight") && line.includes('textTransform:"inherit"'), "no inline min-height: " + line.slice(0, 260));
+      const style = src.slice(src.indexOf("<style>"), src.indexOf("</style>"));
+      const wide = style.indexOf(".hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }"), phone0 = style.indexOf("@media (max-width: 600px)"), ph = style.indexOf(".hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }");
+      assert.ok(wide > 0 && wide < phone0 && ph > phone0 && ph < style.indexOf("@media", phone0 + 10), "the wide rule before the first phone block, the 36 px rule inside it: " + JSON.stringify({ wide, phone0, ph }));
+    });
+    check("DF8 review pins: Recent errors keeps the focus - the dialog (tabIndex -1) traps Tab with helpers.focusTrapNext and closes on Escape itself (a click on its text no longer breaks Escape); every close hands the focus back to the opener (closeErrorLog); Copy restarts one label timer", () => {
+      const dlg = liftOrNull("{showErrorLog && (", "{/* Publish dialog") || "";
+      assert.ok(dlg.includes('role="dialog" aria-modal="true" aria-label="Recent errors" tabIndex={-1} onKeyDown={errorLogKeyDown}'), "the dialog element handles the keys");
+      assert.ok(dlg.includes('<div data-testid="error-log" onClick={closeErrorLog}') && dlg.includes('data-testid="error-log-close" autoFocus aria-label="Close recent errors" onClick={closeErrorLog}'), "backdrop and Close return the focus");
+      const kd = liftOrNull("  const errorLogKeyDown = (e) => {", "\n  };\n") || "";
+      assert.ok(kd.includes('if (e.key === "Escape") { e.stopPropagation(); closeErrorLog(); return; }') && kd.includes("const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);") && kd.includes("e.preventDefault();"), "Escape + the Tab trap");
+      const cl = liftOrNull("  const closeErrorLog = () => {", "\n  };\n") || "";
+      assert.ok(cl.includes("setShowErrorLog(false);") && cl.includes("const back = errorLogOpenerRef.current;") && cl.includes("document.contains(back)") && cl.includes("back.focus();"), "focus back to the opener");
+      assert.ok(src.includes("if (errorCopiedTimerRef.current) clearTimeout(errorCopiedTimerRef.current);"), "one label timer");
+    });
+    check("DF8 review pins: the previous account's Recent errors never reach the next one - the in-place account switch (adoptSignedInUser's switch branch) and 'Sign out and continue' (signOutForLink) empty the stack like Sign out; Sign out also takes the toast down", () => {
+      const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
+      const sw = adopt.slice(adopt.indexOf("if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), adopt.indexOf("if (user) lastAuthUidRef.current = user.id;"));
+      assert.ok(sw.includes("setErrorLog([]); setShowErrorLog(false);"), "the switch branch: " + sw.slice(0, 200));
+      const sfl = liftOrNull("  const signOutForLink = async () => {", "\n  };\n") || "";
+      assert.ok(sfl.includes("setErrorLog([]); setShowErrorLog(false);") && sfl.indexOf("setErrorLog([])") < sfl.indexOf("await auth.signOut();"), "signOutForLink");
+      const so = liftOrNull("  const handleSignOut = async () => {", "\n  };\n") || "";
+      assert.ok(so.includes("dismissToast();"), "sign-out takes the toast down");
+      assert.strictEqual(count("setErrorLog([]); setShowErrorLog(false);"), 4, "Sign out, the switch, signOutForLink, Clear");
     });
   })();
 
@@ -8005,14 +8151,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(ds.width === 92 && ds.flexShrink === 0 && ds.display === "inline-flex" && ds.alignItems === "center" && ds.whiteSpace === "nowrap" && ds.gap === 4, "the date span keeps its 92 px, does not shrink, and lays the padlock beside the date on its line: " + JSON.stringify(ds));
       assert.strictEqual(lk.props.style.flexWrap, "wrap", "the row still wraps (the own view's actions take the second line on a phone)");
     });
-    check("DF9 rows: the holder (mine-holder) takes what is left of the line - flex 1 1 0, minWidth 0, overflow hidden, an ellipsis, nowrap (no minWidth 120 any more) - and carries the full words on its title; an OPEN slot reads OPEN", () => {
+    // review of Do first 9 (10/2) - pin moved deliberately: the holder's flex is its class's (mine-holder: text width on a
+    // wide screen, 1 1 0 in the phone block - see the CSS check); minWidth 0 / ellipsis / nowrap stay inline
+    check("DF9 rows: the holder (mine-holder, class mine-holder) - minWidth 0, overflow hidden, an ellipsis, nowrap, NO inline flex (the class decides: the rest of the line on a phone) and no minWidth 120 - carries the full words on its title; an OPEN slot reads OPEN", () => {
       const { daysBlock, box } = liftDaysBlock();
       box.DAYS = [DAY("2026-10-15", "primary", "s1", true), DAY("2026-10-16", "backup", null, false)];
       const rows = byId(daysBlock("s2", true), "mine-day");
       const h = byId(rows[0], "mine-holder");
       assert.strictEqual(h.length, 1, "one holder span per row");
       const s = h[0].props.style;
-      assert.ok(s.flex === "1 1 0" && s.minWidth === 0 && s.overflow === "hidden" && s.textOverflow === "ellipsis" && s.whiteSpace === "nowrap", "flex 1 1 0 / minWidth 0 / ellipsis: " + JSON.stringify(s));
+      assert.strictEqual(h[0].props.className, "mine-holder", "the class carries the flex");
+      assert.ok(!("flex" in s) && s.minWidth === 0 && s.overflow === "hidden" && s.textOverflow === "ellipsis" && s.whiteSpace === "nowrap", "no inline flex / minWidth 0 / ellipsis: " + JSON.stringify(s));
       assert.ok(s.fontSize === 12 && s.color === "#5B6B82", "the muted words, as before");
       assert.strictEqual(text(h[0]), "backup: Khan");
       assert.strictEqual(h[0].props.title, "backup: Khan", "the title spells the clipped words out");
@@ -8043,6 +8192,23 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const fol = byId(daysBlock("s2", false), "mine-day")[0];
       assert.strictEqual(byId(fol, "mine-acts").length + all(fol, x => x.type === "button").length + byId(fol, "mine-offer-tag").length, 0, "the Following row: no mine-acts, no button, no offer tag");
     });
+    // review of Do first 9 (10/2): at 390 px the badges and the offer tag beside the date and role left the holder 11-64 px
+    // ("bac...", the colleague's name lost - the title is unreachable on a touch screen)
+    check("DF9 own view (review 10/2): the badges and the offer tag sit INSIDE mine-acts, ahead of Trade and Give away (on a phone they share its second line; the date / role / holder keep line one with the name readable); the row's line-one items are the date, the role and the holder only; mine-acts wraps; the Following view keeps its badges in the row right after the holder", () => {
+      const { daysBlock, box } = liftDaysBlock();
+      box.DAYS = [DAY("2026-12-24", "backup", "s3", true)];
+      box.badgesFor = () => [{ k: "H", text: "Christmas", title: "Christmas (major holiday unit)", bg: "#a", fg: "#b" }, { k: "F", text: "F", title: "East forecast", bg: "#c", fg: "#d" }];
+      box.offerTagOf = () => ({ kind: "other-role", text: "offered B only", title: "t", bg: "#e", fg: "#f" });
+      const row = byId(daysBlock("s2", true), "mine-day")[0];
+      const acts = byId(row, "mine-acts")[0];
+      const ids = kids(acts).map(c => (c.props && (c.props["data-testid"] || (c.props["data-badge"] ? "badge-" + c.props["data-badge"] : null))) || null);
+      assert.deepStrictEqual(ids, ["badge-H", "badge-F", "mine-offer-tag", "mine-trade", "mine-give"], "mine-acts: the badges, the offer tag, Trade, Give away - in that order");
+      assert.deepStrictEqual(kids(row).map(c => c.props["data-testid"] || "?"), ["mine-date", "mine-role", "mine-holder", "mine-acts"], "the row's items: the date, the role, the holder, mine-acts");
+      assert.strictEqual(all(row, x => x.props && x.props["data-badge"]).length, 2, "each badge once");
+      assert.strictEqual(acts.props.style.flexWrap, "wrap", "mine-acts wraps (H + F + EV + a tag on a 360 px phone never push the page sideways)");
+      const fol = byId(daysBlock("s2", false), "mine-day")[0];
+      assert.deepStrictEqual(kids(fol).map(c => c.props["data-testid"] || (c.props["data-badge"] ? "badge-" + c.props["data-badge"] : "?")), ["mine-date", "mine-role", "mine-holder", "badge-H", "badge-F"], "the Following row: the badges right after the holder");
+    });
     check("DF9 list: mine-upcoming carries the class mine-upcoming and NO inline maxHeight / overflowY (an inline one would beat the phone rule); every upcoming day is a row - 60 days, 60 rows (no cap: the smoke compares the count with the served rows)", () => {
       const { daysBlock, box } = liftDaysBlock();
       box.DAYS = Array.from({ length: 60 }, (_, i) => DAY(isoPlus("2026-10-02", i), i % 2 ? "backup" : "primary", "s1", i % 3 === 0));
@@ -8066,12 +8232,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       const where = (pos) => media.find(x => pos > x.a && pos < x.b) || null;
       const rules = (sel) => { const out = []; let k = -1; while ((k = style.indexOf(sel + " {", k + 1)) >= 0) out.push({ at: where(k), body: style.slice(style.indexOf("{", k) + 1, style.indexOf("}", k)).trim() }); return out; };
-      const ul = rules(".mine-upcoming"), acts = rules(".mine-acts");
-      assert.strictEqual(ul.length, 2, ".mine-upcoming: one wide rule, one phone rule");
+      const ul = rules(".mine-upcoming"), acts = rules(".mine-acts"), holder = rules(".mine-holder");
+      // review of Do first 9 (10/2) - pin moved deliberately: + a short-screen rule (a landscape phone, wider than 600 px)
+      assert.strictEqual(ul.length, 3, ".mine-upcoming: one wide rule, one short-screen rule, one phone rule");
       assert.ok(ul[0].at === null && ul[0].body === "max-height: 420px; overflow-y: auto;", "the wide-screen scroller is outside every @media: " + JSON.stringify(ul[0]));
+      assert.ok(ul[1].at && ul[1].at.q === "@media (max-height: 500px)" && ul[1].body === "max-height: none; overflow-y: visible;", "no 420 px box inside a window under 500 px tall (a phone in landscape): " + JSON.stringify(ul[1]));
       const phoneBlocks = media.filter(m => m.q === "@media (max-width: 600px)");
       assert.strictEqual(phoneBlocks.length, 2, "two phone blocks (the general one, then the grid's)");
-      assert.ok(ul[1].at === phoneBlocks[1] && ul[1].body === "max-height: none; overflow-y: visible;", "the phone rule drops the scroller: " + JSON.stringify(ul[1]));
+      assert.ok(ul[2].at === phoneBlocks[1] && ul[2].body === "max-height: none; overflow-y: visible;", "the phone rule drops the scroller: " + JSON.stringify(ul[2]));
+      assert.ok(holder.length === 2 && holder[0].at === null && holder[0].body === "flex: 0 1 auto;" && holder[1].at === phoneBlocks[1] && holder[1].body === "flex: 1 1 0;", "the holder: its text width on a wide screen (the Following view's badges follow the name), the rest of the line on a phone: " + JSON.stringify(holder));
       assert.ok(phoneBlocks[1].a > style.indexOf(".cal-grid {"), "the second phone block is the one after .cal-grid");
       assert.ok(acts.length === 1 && acts[0].at === phoneBlocks[1] && acts[0].body === "flex-basis: 100%; justify-content: flex-end;", "mine-acts takes a line of its own on a phone: " + JSON.stringify(acts));
       const btn = style.indexOf("button { min-height: 36px; }");

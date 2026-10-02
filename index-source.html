@@ -37,6 +37,10 @@
       div[style*="maxWidth"] { max-width: 100% !important; padding: 0 !important; }
       @page { margin: 0.5cm; size: landscape; }
     }
+    /* The header's "N errors" (Do first 8): 24 px tall on a wide screen; the phone block below makes it a 36 x 36 tap target.
+       Both keep the status line's height (negative vertical margins; measured 10/2: the header 67 px at 1180, 191 px at
+       390, with the chip or without). */
+    .hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }
     /* Mobile improvements */
     @media (max-width: 600px) {
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
@@ -46,6 +50,8 @@
       /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
          from stretching the sentence's line box. */
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
+      /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
+      .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -83,6 +89,14 @@
     /* My schedule / Following's 90-day list (review 9/27 Do first 9, 10/1): a 420 px scroller on a wide screen; the phone
        block below drops it (the page scrolls) and gives a row's Trade + Give away (mine-acts) a line of their own. */
     .mine-upcoming { max-height: 420px; overflow-y: auto; }
+    /* ... and none on a short screen either (review of Do first 9, 10/2): a phone in landscape (wider than 600 px, about
+       375-430 px tall) would get a 420 px box inside a shorter window */
+    @media (max-height: 500px) {
+      .mine-upcoming { max-height: none; overflow-y: visible; }
+    }
+    /* A row's holder ("backup: Burchett"): its text width on a wide screen, so the Following view's badges follow the
+       name; the phone block gives it the rest of the line (flex 1 1 0, the inline ellipsis clips a long one). */
+    .mine-holder { flex: 0 1 auto; }
     /* A row's holiday-unit badge: the unit's name on a wide screen; on a phone the letter H (the legend above the list),
        as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
     .mine-hol-letter { display: none; }
@@ -128,10 +142,11 @@
       .rules-sum-line { flex-direction: column; gap: 0; }
       .rules-sum-line > .rules-sum-family { flex: none; }
       /* Do first 9: no nested scroller on a phone - the whole 90-day list is part of the page (no cap on the rows); on the
-         own view Trade + Give away take the row's second line, right-aligned, so the date (padlock inside), role and
-         holder keep one line */
+         own view mine-acts (the badges, the offer tag, Trade + Give away) takes the row's second line, right-aligned, so
+         the date (padlock inside), role and holder keep one line and the holder's name is not clipped */
       .mine-upcoming { max-height: none; overflow-y: visible; }
       .mine-acts { flex-basis: 100%; justify-content: flex-end; }
+      .mine-holder { flex: 1 1 0; }
       .mine-hol-name { display: none; }
       .mine-hol-letter { display: inline; }
     }
@@ -262,7 +277,7 @@
           stub any more. If a future feature needs a placeholder, mark it
           "TODO(<name>)" and replace it wholesale, do not grow it.
        =================================================================== */
-    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+    const { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } = React;
 
 function CallSchedule() {
   // --- Public mode detection ---
@@ -644,6 +659,11 @@ function CallSchedule() {
   // checked at mount - GoTrue unreachable or answering 5xx / 429 / 408, the pair kept by config.js - instead of a bare card
   const [sessionUnreached, setSessionUnreached] = useState("");
   const resetReqRef = useRef(0);                           // Do first 7: the reset request in flight - "Back to sign in" drops a late answer
+  // Review of Do first 7 (10/2): the notice's Retry has its own busy flag (a hung check no longer disables Sign in - the
+  // notice itself says "or sign in with your password below") and its own request number: any sign-in (adoptSignedInUser)
+  // or a password Sign in press bumps it, so a late Retry answer never lands over the account that signed in meanwhile.
+  const [retryBusy, setRetryBusy] = useState(false);
+  const sessionCheckReqRef = useRef(0);
   const [linkSetup, setLinkSetup] = useState(null);       // Prompt 16 B7: { email, unverified } - the account a recovery / invite link sets a password for
   const [linkConflict, setLinkConflict] = useState(null); // Prompt 16 B7: { signedIn: { id, email }, linkEmail, unverified } - another account is signed in on this device
   const pendingLinkRef = useRef(null);                     // Prompt 16 B7: the link pair waiting on that account's sign-out - memory only, never storage
@@ -917,6 +937,7 @@ function CallSchedule() {
   // trigger creates the row when the Auth user is invited, so a missing row is
   // treated as an unlinked viewer), re-run the data load with the session JWT.
   const adoptSignedInUser = async (user) => {
+    sessionCheckReqRef.current++; // review of Do first 7 (10/2): a Retry still in flight is dropped - this sign-in wins
     setAuthUser(user);
     setSessionUnreached(""); // Do first 7: any sign-in (Retry, the password, Face ID) ends the "Couldn't reach the server" notice
     setProfileLoadFailed(false);
@@ -935,6 +956,9 @@ function CallSchedule() {
       blobLoadedRef.current = false;
       blobTsRef.current = null;
       setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
+      // review of Do first 8 (10/2): the previous account's Recent errors go too (names, override reasons, HTTP bodies) -
+      // the in-place card is a sign-in without a sign-out
+      setErrorLog([]); setShowErrorLog(false);
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -1048,16 +1072,20 @@ function CallSchedule() {
   // Review 9/27 Do first 7: Retry on the sign-in card's "Couldn't reach the server" notice - the same check the mount
   // ran. A live session signs in (adoptSignedInUser clears the notice); a rejected one (getUser cleared the pair)
   // leaves the ordinary card with the biometric path's "Session expired" line; still unreachable keeps the notice
-  // with its "Still couldn't reach" wording. Never a stuck "Checking" button.
+  // with its "Still couldn't reach" wording. Never a stuck "Checking" button. Review of Do first 7 (10/2): retryBusy, not
+  // the card's shared authBusy (Sign in stays usable while a check hangs), and sessionCheckReqRef numbers the check -
+  // a sign-in meanwhile (adoptSignedInUser, a Sign in press) drops its late answer; the button always comes back.
   const retrySessionCheck = async () => {
-    setAuthError(""); setAuthBusy(true);
+    const req = ++sessionCheckReqRef.current;
+    setAuthError(""); setRetryBusy(true);
     try {
       const { user, error } = await auth.getUser();
+      if (req !== sessionCheckReqRef.current) return; // overtaken by a sign-in - never adopt the stored account over it
       if (user) await adoptSignedInUser(user);
       else if (error === "network") setSessionUnreached(SESSION_STILL_UNREACHED_MESSAGE);
       else { setSessionUnreached(""); setAuthError("Session expired. Please sign in with your password to refresh."); }
-    } catch (e) { console.warn("Session re-check failed:", e); setAuthError((e && e.message) || "Session check failed"); }
-    setAuthBusy(false);
+    } catch (e) { if (req === sessionCheckReqRef.current) { console.warn("Session re-check failed:", e); setAuthError((e && e.message) || "Session check failed"); } }
+    finally { setRetryBusy(false); }
   };
 
   const handleBiometricEnroll = async () => {
@@ -1088,6 +1116,7 @@ function CallSchedule() {
   // creates the profile row as an unlinked viewer when the user is invited and Setup -> Users links
   // it later (the RLS self-insert policy pins person_id null and role viewer anyway).
   const handleAuthSubmit = async () => {
+    sessionCheckReqRef.current++; // review of Do first 7 (10/2): a Retry in flight answers too late to matter
     setAuthError(""); setAuthBusy(true);
     try {
       const { user, error } = await auth.signIn(authEmail, authPassword);
@@ -1106,6 +1135,8 @@ function CallSchedule() {
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
     setErrorLog([]); setShowErrorLog(false); // review 9/27 Do first 8: the next person on this device never reads this one's errors
+    dismissToast(); // review of Do first 8 (10/2): an error toast (up to 22 s now) does not stay over the sign-in card
+    setSessionUnreached(""); // review of Do first 7 (10/2): a stale "Still couldn't reach" notice does not greet the next sign-in
   };
 
   // Prompt 16 B7: the pair from a recovery / invite hash. config.js auth.adoptLinkSession stores it only for this
@@ -1135,6 +1166,7 @@ function CallSchedule() {
     const pair = pendingLinkRef.current;
     if (!pair) { setAuthMode("login"); return; }
     setAuthBusy(true); setAuthError("");
+    setErrorLog([]); setShowErrorLog(false); // review of Do first 8 (10/2): a sign-out - the signed-in account's Recent errors go with it
     try { await auth.signOut(); biometric.unenroll(); await adoptLinkSession(pair); }
     catch (e) { console.warn("sign out for the link failed:", e); setAuthError(e.message || "Sign out failed"); }
     setAuthBusy(false);
@@ -1416,6 +1448,7 @@ function CallSchedule() {
   const [errorLog, setErrorLog] = useState([]); // [{ msg, at, first, count }], newest first
   const [showErrorLog, setShowErrorLog] = useState(false);
   const [errorCopied, setErrorCopied] = useState(""); // the copied entry's text ("!" + text: the copy was blocked)
+  const errorCopiedTimerRef = useRef(null);
   const dismissToast = () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = null;
@@ -1446,8 +1479,42 @@ function CallSchedule() {
       } catch (e) { console.warn("Recent errors: the fallback copy failed:", e); }
     }
     setErrorCopied(copied ? text : "!" + text);
-    setTimeout(() => setErrorCopied(""), 2500);
+    if (errorCopiedTimerRef.current) clearTimeout(errorCopiedTimerRef.current); // a second Copy restarts the label's 2.5 s
+    errorCopiedTimerRef.current = setTimeout(() => setErrorCopied(""), 2500);
   };
+  // Recent errors opens from the header's "N errors" only; closing hands the focus back to the opener (Prompt 16 B9's
+  // dialogs do the same) and the dialog keeps Tab inside it (helpers.focusTrapNext) - review of Do first 8 (10/2).
+  const errorLogOpenerRef = useRef(null);
+  const openErrorLog = () => { errorLogOpenerRef.current = document.activeElement; setShowErrorLog(true); };
+  const closeErrorLog = () => {
+    setShowErrorLog(false);
+    const back = errorLogOpenerRef.current;
+    errorLogOpenerRef.current = null;
+    if (back && typeof back.focus === "function" && document.contains(back)) { try { back.focus(); } catch (e) { console.warn("Recent errors: could not return focus", e); } }
+  };
+  const errorLogKeyDown = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); closeErrorLog(); return; }
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) { e.preventDefault(); try { next.focus(); } catch (err) { console.warn("Recent errors: focus trap could not move focus", err); } }
+  };
+  // Review of Do first 8 (10/2): over the day editor or the claim sheet the bottom toast must not sit on the dialog's
+  // action row (Cancel / Save, Confirm) - at 390 px a long error (now up 8-22 s) covered Save, and the next tap there
+  // only dismissed the toast. When the box overlaps that row it is lifted to 8 px above it (toastLift: px from the
+  // viewport's bottom; 0 = the ordinary bottom inset) and stays lifted while the dialog is open. Measured after a render
+  // while a toast and one of those dialogs are up (claimSheet / paintSheet are declared further down - read at effect time).
+  const [toastLift, setToastLift] = useState(0);
+  useLayoutEffect(() => {
+    let lift = 0;
+    const box = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? document.querySelector("[data-testid=toast-box]") : null;
+    const row = box ? (document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")) : null;
+    if (row) {
+      const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+      if (toastLift || (b.bottom > r.top && b.top < r.bottom)) lift = Math.max(0, Math.ceil(window.innerHeight - r.top + 8));
+    }
+    if (lift !== toastLift) setToastLift(lift);
+  });
 
   // ====================================================================
   // TIME OFF = VACATIONS ONLY. Source: the time_off table. One row per range;
@@ -2001,7 +2068,10 @@ function CallSchedule() {
       // "sign in again" only when the session is known dead; a 401 whose refresh hit a network error is re-sent
       // by the next granted refresh (resyncPendingRef) - no sign-in needed (the 9/23 review of A3).
       setDaySyncFail(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
-      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+      // Review of Do first 7 (10/2): a 401 without the banner (the refresh got a 5xx / 429 / 408 or no answer - not a
+      // sign-out since Do first 7) says what the header says, in the blob leg's words - never "your session expired.
+      // Sign in again." when no sign-in is needed
+      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(authFail === 401 ? "Couldn't save the schedule - your session couldn't be refreshed; the change goes out once it is." : failMsg, "error");
     } else if (failed) {
       // Any other failure - an HTTP error or a rejected fetch (status 0: offline, DNS, a timeout) - retries on the
       // backoff (5 -> 15 -> 60 s).
@@ -6307,12 +6377,15 @@ function CallSchedule() {
       )}
       {/* Non-blocking toast. Review 9/27 Do first 8: data-testid "toast" is the message alone (the smoke reads its text
           and clicks it to dismiss); the box around it carries the position, the repeat count (toast-count) and, for an
-          error or over a painter sheet (where the toast sits on the sheet's header and its Close), a close control. */}
+          error or over a painter sheet (where the toast sits on the sheet's header and its Close), a close control.
+          Review of Do first 8 (10/2): width max-content up to min(90vw, 640px) - with left 50% and no width the box
+          shrank to the right half of the screen (195 px on a 390 px phone, a 160-character error 10 lines tall); over
+          the day editor / claim sheet it lifts above their action row (toastLift). */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
           {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
-          {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-8px -12px -8px 0",minWidth:32,minHeight:32,lineHeight:1,fontFamily:font}}>x</button>}
+          {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}
         </div>
       )}
       {/* Review 9/27 Do first 8: Recent errors - the header's stack of the last TOAST_ERROR_LOG_MAX error toasts, newest
@@ -6320,13 +6393,13 @@ function CallSchedule() {
           when both audit rows were refused) is read and copied here. Opened from the header's "N errors" only - never
           by itself, so it can never cover a flow that is still running. Every role, ?public=1 too. */}
       {showErrorLog && (
-        <div data-testid="error-log" onClick={()=>setShowErrorLog(false)} onKeyDown={(e)=>{ if (e.key === "Escape") setShowErrorLog(false); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9550,padding:16}}>
-          <div role="dialog" aria-modal="true" aria-label="Recent errors" onClick={e=>e.stopPropagation()} style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:12,padding:16,maxWidth:520,width:"100%",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+        <div data-testid="error-log" onClick={closeErrorLog} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9550,padding:16}}>
+          <div role="dialog" aria-modal="true" aria-label="Recent errors" tabIndex={-1} onKeyDown={errorLogKeyDown} onClick={e=>e.stopPropagation()} style={{outline:"none",background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:12,padding:16,maxWidth:520,width:"100%",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
               <h3 style={{margin:0,fontSize:15,color:T.text}}>Recent errors</h3>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 {errorLog.length > 0 && <button type="button" data-testid="error-log-clear" onClick={()=>{ setErrorLog([]); setShowErrorLog(false); }} style={{background:"none",border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:font,minHeight:32}}>Clear</button>}
-                <button type="button" data-testid="error-log-close" autoFocus aria-label="Close recent errors" onClick={()=>setShowErrorLog(false)} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",fontFamily:font,minWidth:36,minHeight:36}}>x</button>
+                <button type="button" data-testid="error-log-close" autoFocus aria-label="Close recent errors" onClick={closeErrorLog} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",fontFamily:font,minWidth:36,minHeight:36}}>x</button>
               </div>
             </div>
             <p style={{margin:"0 0 8px",fontSize:12,color:T.muted,lineHeight:1.5}}>The last {TOAST_ERROR_LOG_MAX} error messages on this device, newest first - kept until you clear them, sign out or reload.</p>
@@ -6539,7 +6612,7 @@ function CallSchedule() {
               {sessionUnreached && (
                 <div data-testid="auth-unreached" role="alert" style={{fontSize:12,color:"#c04040",padding:"8px 10px",background:"#fce8e8",borderRadius:6,border:"1px solid #e8c0c0",lineHeight:1.5}}>
                   {sessionUnreached}
-                  <button data-testid="auth-retry" onClick={retrySessionCheck} disabled={authBusy} style={{...css.cta,display:"block",width:"100%",marginTop:8,padding:"9px 14px",fontSize:13,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Please wait" : "Retry"}</button>
+                  <button data-testid="auth-retry" onClick={retrySessionCheck} disabled={retryBusy} style={{...css.cta,display:"block",width:"100%",marginTop:8,padding:"9px 14px",fontSize:13,fontWeight:700,opacity:retryBusy?0.6:1}}>{retryBusy ? "Checking" : "Retry"}</button>
                 </div>
               )}
               <input type="email" placeholder="Email address" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
@@ -6588,7 +6661,9 @@ function CallSchedule() {
                 </>
               )}
               {/* Review 9/27 Do first 8: the stack of the last errors (newest first) - opens Recent errors */}
-              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" onClick={()=>setShowErrorLog(true)} title="The last error messages, newest first - read or copy them again" style={{marginLeft:8,background:"none",border:"1px solid #FF8A8A",color:"#FF8A8A",borderRadius:9,padding:"2px 8px",fontSize:10,fontWeight:700,letterSpacing:0.8,cursor:"pointer",fontFamily:font,minHeight:24,verticalAlign:"middle"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}
+              {/* review of Do first 8 (10/2): class hdr-errors - 24 px on a wide screen; on a phone a 36 x 36 tap target; negative
+                  vertical margins keep the status line's height (the inline minHeight:24 beat the phone button rule) */}
+              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog} title="The last error messages, newest first - read or copy them again" style={{marginLeft:8,background:"none",border:"1px solid #FF8A8A",color:"#FF8A8A",borderRadius:9,padding:"2px 8px",fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"inherit",cursor:"pointer",fontFamily:font,verticalAlign:"middle"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}
             </p>
           </div>
         </div>
@@ -7231,7 +7306,7 @@ function CallSchedule() {
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
                       : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
                     <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
-                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
+                    <div data-testid="claim-actions" style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
                     </div>
@@ -7312,6 +7387,9 @@ function CallSchedule() {
           const daysBlock = (who, own) => {
             const upcoming = upcomingDaysOf(who, 90);
             const next = upcomingDaysOf(who, null)[0] || null;
+            // a row's H / E / F / EV badges (the holiday unit's name gives way to its legend letter H on a phone - the phone
+            // block's .mine-hol-name / .mine-hol-letter)
+            const badgeEls = (x) => badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.k === "H" ? <><span className="mine-hol-name">{b.text}</span><span className="mine-hol-letter">H</span></> : b.text}</span>);
             return <>
               <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)") : T.raised,color:next ? "#fff" : dkText}}>
                 {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !daysReadOk ? <span data-testid="next-call-unread" style={{fontStyle:"italic"}}>Schedule not loaded - the next call is not known until it loads.</span> : !next ? <span>No upcoming call on file for {nameOf(who)}.</span> : (
@@ -7332,17 +7410,22 @@ function CallSchedule() {
                 // cap on the rows. A row: the padlock sits INSIDE the date span (it used to wrap onto a line of its own at
                 // 390 px), the holder takes what is left of the line (flex 1 1 0, ellipsis), and on the own view Trade + Give
                 // away sit together in mine-acts - on a phone a line of their own, right-aligned (each >= 36 px by the
-                // phone button rule). The inner own guards keep the pinned button lines.
+                // phone button rule). The inner own guards keep the pinned button lines. Review of Do first 9 (10/2): on
+                // the own view the badges and the offer tag sit in mine-acts too, ahead of Trade - beside the date and
+                // role they left the holder 11-64 px at 390 px ("bac...", the colleague's name lost; the title is
+                // unreachable on a touch screen); on a wide screen they still sit at the row's end, next to Trade. The
+                // holder's flex is the class mine-holder's: its text width on a wide screen (the Following view's badges
+                // follow the name again), the rest of the line on a phone (1 1 0).
                 <div data-testid="mine-upcoming" className="mine-upcoming">
                   {upcoming.map(x => (
                     <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:"6px 10px",alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
                       <span data-testid="mine-date" style={{fontFamily:mono,fontSize:12,color:dkText,width:92,flexShrink:0,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{dowShort(x.day)} {fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>
                       <span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>{roleWord(x.role)}</span>
-                      <span data-testid="mine-holder" title={(x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf)} style={{...muted,flex:"1 1 0",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
-                      {/* the holiday unit's name gives way to its legend letter H on a phone (the phone block's .mine-hol-name / .mine-hol-letter) */}
-                      {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.k === "H" ? <><span className="mine-hol-name">{b.text}</span><span className="mine-hol-letter">H</span></> : b.text}</span>)}
-                      {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
-                      {own && <span data-testid="mine-acts" className="mine-acts" style={{display:"flex",gap:8,alignItems:"center",marginLeft:"auto"}}>
+                      <span data-testid="mine-holder" className="mine-holder" title={(x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf)} style={{...muted,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
+                      {!own && badgeEls(x)}
+                      {own && <span data-testid="mine-acts" className="mine-acts" style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginLeft:"auto"}}>
+                        {badgeEls(x)}
+                        {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
                         {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} title="Propose a trade for this day" style={{...css.mini(false),color:"#6030a0",borderColor:"#c0a8e0"}}>Trade</button>}
                         {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
                       </span>}

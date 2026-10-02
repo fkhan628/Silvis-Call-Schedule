@@ -137,6 +137,14 @@ function authAnswerKind(status) {
   if (s >= 500 || s === 429 || s === 408) return "network";
   return "unexpected";
 }
+// The server itself failing (a 5xx, or 408 timed out): signIn / resetPassword then say "Couldn't reach the server (HTTP n)
+// - try again" whatever the body says - a JSON 503 "Service Unavailable" or 500 "Database error querying schema" gave the
+// person no hint that trying again later works. A 429 is "network" too but keeps GoTrue's words ("only request this
+// after 37 seconds"). Review of Do first 7 (10/2).
+function authServerDown(status) {
+  const s = Number(status);
+  return s >= 500 || s === 408;
+}
 // The session headers of the moment plus the caller's extras (Prefer, ...).
 // Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
 // refresh that happened a moment ago is what goes out.
@@ -967,6 +975,9 @@ const auth = {
       });
       const data = (await res.json().catch(() => null)) || {};
       if (!res.ok) {
+        // review of Do first 7 (10/2): a 5xx / 408 is the server failing whatever its body says - the card says try again;
+        // GoTrue's own words stay for a 4xx and a 429 ("Invalid login credentials", "Request rate limit reached")
+        if (authServerDown(res.status)) return { user: null, error: `Couldn't reach the server (HTTP ${res.status}) - try again` };
         const why = data.msg || data.error_description || data.message;
         if (why) return { user: null, error: why };
         return { user: null, error: authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Sign in failed (HTTP ${res.status})` };
@@ -1112,6 +1123,7 @@ const auth = {
         }),
       });
       if (!res.ok) {
+        if (authServerDown(res.status)) return { error: `Couldn't reach the server (HTTP ${res.status}) - try again` }; // a 5xx / 408, whatever the body (review of Do first 7, 10/2)
         const data = (await res.json().catch(() => null)) || {};
         return { error: data.msg || data.error_description || data.message || (authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Reset failed (HTTP ${res.status})`) };
       }

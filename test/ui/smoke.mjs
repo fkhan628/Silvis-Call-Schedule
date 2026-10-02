@@ -518,6 +518,7 @@ let followerPrefs400Lines = 0;
 // Item E4 (review, Faraz 9/26): the browser's own "status of 500" line for each east_feed / east_vacation_reviews read
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
+let toast390Forced500Lines = 0; // review of Do first 8 (10/2): the browser's "status of 500" line per availability read the toast-390 page answered 500 (cleared after it)
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
@@ -951,6 +952,7 @@ const watchPage = (pg, tag) => {
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
+      else if (toast390Forced500Lines > 0 && tag === "toast-390" && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); toast390Forced500Lines--; } // review of Do first 8 (10/2): the toast-390 page's forced availability 500s
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
       else consoleErrors.push(msg.text());
@@ -1244,7 +1246,11 @@ const DF9_ROWS_PROBE = (scope) => {
     const dm = date ? mid(date) : null;
     const db = date ? date.getBoundingClientRect() : null, ab = acts ? acts.getBoundingClientRect() : null;
     const btns = Array.from(r.querySelectorAll("button")).map(b => { const bb = b.getBoundingClientRect(); return { id: b.getAttribute("data-testid"), text: b.textContent.trim(), h: r1(bb.height), top: Math.round(bb.top), inActs: !!(acts && acts.contains(b)) }; });
-    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length,
+    // review of Do first 9 (10/2): the holder's words clipped by its ellipsis (scrollWidth past clientWidth) - the colleague's name
+    const hd = r.querySelector("[data-testid=mine-holder]");
+    const holder = hd ? { text: hd.textContent, sw: hd.scrollWidth, cw: hd.clientWidth, clipped: hd.scrollWidth > hd.clientWidth + 1 } : null;
+    const chipsOutside = Array.from(r.querySelectorAll("[data-badge], [data-testid=mine-offer-tag]")).filter(c => acts && !acts.contains(c)).length;
+    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length, holder, chipsOutside,
       spread: dm === null ? null : r1(Math.max(...items.map(k => Math.abs(mid(k) - dm)))), actsSpread: dm === null || !acts ? null : r1(Math.abs(mid(acts) - dm)),
       rowH: r1(r.getBoundingClientRect().height), dateH: db ? r1(db.height) : null, dateBottom: db ? r1(db.bottom) : null, actsTop: ab ? r1(ab.top) : null, btns };
   });
@@ -3153,12 +3159,12 @@ try {
               if (!board || ed2) fail(`${DS}: the coverage strip's open-primary count should show the Open shifts board (board ${board}, a day editor open ${ed2})`);
               else ok(`${DS}: the coverage strip's open-primary count (${cov.n}) leads to the Open shifts board, no day editor`);
             }
-            // My schedule: Give away beside every Propose a trade
+            // My schedule: Give away beside every Trade (mine-trade; the row button reads 'Trade' since Do first 9)
             await rp.click('button[data-tab="myschedule"]');
             await rp.waitForTimeout(400);
             const mt = await rp.$$eval("[data-testid=mine-trade]", els => els.length), mg = await rp.$$eval("[data-testid=mine-give]", els => els.length);
-            if (mt !== mg) fail(`${DS}: My schedule rows carry ${mt} 'Propose a trade' but ${mg} 'Give away'`);
-            else ok(`${DS}: My schedule - 'Give away' beside each of the ${mt} 'Propose a trade' row button(s)${mt ? "" : " (no upcoming day this run - not exercised)"}`);
+            if (mt !== mg) fail(`${DS}: My schedule rows carry ${mt} 'Trade' but ${mg} 'Give away'`);
+            else ok(`${DS}: My schedule - 'Give away' beside each of the ${mt} 'Trade' row button(s)${mt ? "" : " (no upcoming day this run - not exercised)"}`);
           } catch (e) { fail(`${DS}: ` + errLine(e)); if (await rp.$("[data-testid=day-editor]")) { await rp.keyboard.press("Escape").catch(() => {}); } }
           await rp.click('button[data-tab="calendar"]').catch(() => {});
         }
@@ -5198,12 +5204,12 @@ try {
     const expectedCount = recountRows.filter(r => r.day >= todayIso && r.day <= horizon && (r.primary_id === "s1" || r.backup_id === "s1")).length;
     if (mineDays.length !== expectedCount) fail(`My schedule: upcoming list has ${mineDays.length} day(s), the live rows have ${expectedCount} for s1 in the next 90 days (${todayIso}..${horizon})`);
     else ok(`My schedule: upcoming list = ${mineDays.length} day(s) in the next 90 days${mineDays.length ? ", first " + mineDays[0] : ""}`);
-    if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Propose a trade' shortcut on the upcoming rows");
-    // Day-click summary (9/27): 'Give away' beside every 'Propose a trade' on the own rows
+    if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Trade' shortcut (mine-trade) on the upcoming rows");
+    // Day-click summary (9/27): 'Give away' beside every 'Trade' (mine-trade) on the own rows
     try {
       const mtN = await page.$$eval("[data-testid=mine-trade]", els => els.length), mgN = await page.$$eval("[data-testid=mine-give]", els => els.length);
-      if (mtN !== mgN) fail(`My schedule: ${mtN} 'Propose a trade' row button(s) but ${mgN} 'Give away'`);
-      else if (mtN) ok(`My schedule: 'Give away' beside each of the ${mtN} 'Propose a trade' row button(s)`);
+      if (mtN !== mgN) fail(`My schedule: ${mtN} 'Trade' row button(s) but ${mgN} 'Give away'`);
+      else if (mtN) ok(`My schedule: 'Give away' beside each of the ${mtN} 'Trade' row button(s)`);
       else console.log("     (My schedule: no upcoming own row - 'Give away' is not exercised)");
     } catch (e) { fail("My schedule Give away: " + errLine(e)); }
     if (!(await page.$("[data-testid=copy-sync-url]")) || !(await page.$("[data-testid=download-my-calendar]"))) fail("My schedule: the calendar buttons (download / copy sync URL) are missing"); else ok("My schedule: Download my calendar + Copy my calendar-sync URL buttons present");
@@ -6136,10 +6142,14 @@ try {
           else if (!t || !gv || t.text !== "Trade" || !t.inActs || !gv.inActs) bad.push(`${p.day}: 'Trade' + 'Give away' not together in mine-acts ${JSON.stringify(p.btns)}`);
           else if (t.h < 36 || gv.h < 36) bad.push(`${p.day}: a row button under 36 px (Trade ${t.h}, Give away ${gv.h})`);
           else if (Math.abs(t.top - gv.top) > 2 || p.actsTop < p.dateBottom) bad.push(`${p.day}: 'Trade' + 'Give away' are not one line under the date (tops ${t.top} / ${gv.top}, mine-acts ${p.actsTop}, date bottom ${p.dateBottom})`);
+          // review of Do first 9 (10/2): the badges / offer tag sit in mine-acts (line two), so the holder's name is never clipped
+          else if (p.chipsOutside) bad.push(`${p.day}: ${p.chipsOutside} badge / offer tag(s) outside mine-acts (beside the holder on line one)`);
+          else if (!p.holder || p.holder.clipped) bad.push(`${p.day}: the holder is clipped - '${p.holder ? p.holder.text : "?"}' needs ${p.holder ? p.holder.sw : "?"} px, has ${p.holder ? p.holder.cw : "?"}`);
         }
         const locked = g.per.filter(p => p.locked);
+        const withChips = await page.$$eval("[data-testid=mine-card] [data-testid=mine-acts]", els => els.filter(a => a.querySelector("[data-badge], [data-testid=mine-offer-tag]")).length).catch(() => 0);
         if (bad.length) fail(`DF9 390px own rows (Acton, ${g.rows} row(s)): ${bad.slice(0, 4).join(" | ")}`);
-        else ok(`DF9 390px own rows (Acton): ${g.rows} row(s), ${locked.length} locked - the padlock inside the date span, date / role / holder one line, 'Trade' + 'Give away' one line under it (>= ${Math.min(...g.per.map(p => Math.min(...p.btns.map(b => b.h))))} px), rows ${Math.min(...g.per.map(p => p.rowH))}-${Math.max(...g.per.map(p => p.rowH))} px; the list is part of the page (max-height none)${locked.length ? "" : " (no locked row this run - the padlock placement is not exercised here; the follower step reads it)"}`);
+        else ok(`DF9 390px own rows (Acton): ${g.rows} row(s), ${locked.length} locked - the padlock inside the date span, date / role / holder one line with the holder never clipped (e.g. '${g.per[0].holder.text}'), the badges / offer tag (${withChips} row(s) carry one) + 'Trade' + 'Give away' together in mine-acts on the line under it (>= ${Math.min(...g.per.map(p => Math.min(...p.btns.map(b => b.h))))} px), rows ${Math.min(...g.per.map(p => p.rowH))}-${Math.max(...g.per.map(p => p.rowH))} px; the list is part of the page (max-height none)${locked.length ? "" : " (no locked row this run - the padlock placement is not exercised here; the follower step reads it)"}`);
       }
     } catch (e) { fail("DF9 390px own rows: " + errLine(e)); }
     await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
@@ -10740,6 +10750,69 @@ try {
     failDaysFor = null;
     daysFail500Lines = 0; daysFailAppLines = 0;
     await pdf.close();
+  }
+
+  // ====================== Review of Do first 8 (10/2): an error toast at 390 px - wide, and never over the day editor's Save / Cancel ======================
+  // A page whose availability GETs answer 500: the mount read toasts "Couldn't load availability statements - data shown
+  // may be incomplete." (an error - up at least 8 s). At 390 x 844 the day editor opens while it is up. The box must be at
+  // least 300 px wide (with left 50% and no width it was the 195 px right of centre - a 160-character error 10 lines tall)
+  // and the centres of Save and Cancel must not land in it (it lifts above the editor's action row when it would overlap).
+  // The header's "N errors" and the toast's close control are >= 36 px tap targets on a phone.
+  {
+    const pt = await context.newPage();
+    watchPage(pt, "toast-390");
+    await pt.setViewportSize({ width: 390, height: 844 });
+    await pt.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: no Realtime re-read
+    await pt.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+    await pt.route((url) => url.hostname === SUPABASE_HOST && url.pathname.startsWith("/rest/v1/availability"), (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      toast390Forced500Lines++;
+      return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ message: "harness: availability read forced to fail (toast-390)" }) });
+    });
+    const T8 = "Do first 8 toast 390px";
+    try {
+      await loadWithRetry(pt, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "toast-390 page");
+      const up = await pt.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Couldn't load availability statements/.test(t.textContent || ""); }, undefined, { timeout: 30000 }).then(() => true).catch(() => false);
+      const tUp = Date.now();
+      if (!up) fail(`${T8}: the forced availability 500 raised no "Couldn't load availability statements" toast`);
+      else {
+        // dispatched clicks: a pointer click on a cell the toast happens to cover would wait out the toast itself
+        await pt.$eval('button[data-tab="calendar"]', el => el.click()).catch(() => {});
+        await pt.waitForSelector(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, { timeout: 8000 });
+        await pt.$eval(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, el => el.click());
+        await pt.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+        await pt.waitForTimeout(150);
+        const m = await pt.evaluate(() => {
+          const box = document.querySelector("[data-testid=toast-box]"), msg = document.querySelector("[data-testid=toast]");
+          if (!box || !msg) return null;
+          const b = box.getBoundingClientRect();
+          const rect = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), w: Math.round(r.width), h: Math.round(r.height) }; };
+          const hit = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { covered: !!(at && box.contains(at)), at: at ? (at.getAttribute("data-testid") || at.tagName + ":" + (at.textContent || "").trim().slice(0, 20)) : null }; };
+          const foot = document.querySelector("[data-testid=editor-footer]");
+          const save = document.querySelector("[data-testid=editor-save]");
+          const cancel = foot ? Array.from(foot.querySelectorAll("button")).find(x => /^(Cancel|Close)$/.test((x.textContent || "").trim())) : null;
+          const close = document.querySelector("[data-testid=toast-close]"), chip = document.querySelector("[data-testid=hdr-errors]");
+          return { text: msg.textContent, box: { w: Math.round(b.width), top: Math.round(b.top), bottom: Math.round(b.bottom), fromBottom: Math.round(window.innerHeight - b.bottom) },
+            foot: foot ? rect(foot) : null, save: hit(save), cancel: hit(cancel), close: close ? rect(close) : null, chip: chip ? rect(chip) : null, vh: window.innerHeight };
+        });
+        const tOpen = Date.now() - tUp;
+        if (!m) fail(`${T8}: the toast was gone ${tOpen} ms after it showed, before the day editor opened (an error stays >= 8 s) - not exercised`);
+        else {
+          const bad = [];
+          if (m.text.length >= 60 && m.box.w < 300) bad.push(`the ${m.text.length}-character toast is ${m.box.w} px wide (< 300 - the half-screen box)`);
+          if (!m.save || m.save.covered) bad.push(`Save's centre lands in the toast (${JSON.stringify(m.save)})`);
+          if (!m.cancel || m.cancel.covered) bad.push(`Cancel's centre lands in the toast (${JSON.stringify(m.cancel)})`);
+          if (!m.close || m.close.w < 36 || m.close.h < 36) bad.push(`the toast's close control is under 36 x 36 (${JSON.stringify(m.close)})`);
+          if (!m.chip || m.chip.h < 36 || m.chip.w < 36) bad.push(`the header's 'N errors' is under 36 x 36 (${JSON.stringify(m.chip)})`);
+          if (bad.length) fail(`${T8}: ${bad.join(" | ")} - ${JSON.stringify(m)}`);
+          else ok(`${T8}: the ${m.text.length}-character error toast is ${m.box.w} px wide at 390 px; with the day editor open (Save's row at ${m.foot.top}-${m.foot.bottom}) the box sits ${m.box.fromBottom} px above the bottom (${m.box.top}-${m.box.bottom}${m.box.bottom <= m.foot.top ? ", lifted above the action row" : ", clear of the action row"}) - Save and Cancel are not covered; toast close ${m.close.w}x${m.close.h}, 'N errors' ${m.chip.w}x${m.chip.h}`);
+          await pt.screenshot({ path: path.join(OUT, "toast-390-editor.png"), fullPage: false });
+        }
+        await pt.keyboard.press("Escape").catch(() => {});
+      }
+    } catch (e) { fail(`${T8}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-390.png"), fullPage: false }); } catch (e2) {} }
+    await pt.close();
+    toast390Forced500Lines = 0; // a forced answer whose console line never came must not absorb a later page's real 500
   }
 
   // ====================== Prompt 11: data management end to end (recorded writes) ======================
