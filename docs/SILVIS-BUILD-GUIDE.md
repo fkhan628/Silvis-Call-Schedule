@@ -2125,5 +2125,5 @@ is A.1 of the Prompt 29 spec, kept with the build documents outside the repo; th
   `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` -> the record step -> the client push on Faraz's go (after Prompt
   28's client) -> Faraz switches the APP accounts. *As run: everything up to the record step on 2026-10-02 (applied 19:19:27
   UTC; the record step made section 18 strict and dropped `SILVIS_APP_DAYS_APPLIED`); the client push and the account switch
-  wait for Faraz's go.* A rollback after the client push only empties the APP features (the client
+  follow, on Faraz's go.* A rollback after the client push only empties the APP features (the client
   reads a missing table / function as "unavailable").
