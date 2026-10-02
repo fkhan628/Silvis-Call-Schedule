@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-Rg+glO5md/iuV1ZxVqBK0c8tqSjRREMMIqALe0XCclQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-AMnvZij2oIlqi0+8S35imxhclhfBdg6z3AXHvlZRyL0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-hCefoiWtb78PzIWImYbwQ3UVLTGnweiXkuB6iPMPMuQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Mx4tFZelcprFoy487FQ3BsDD7thIPZ6xnH9ucvnKXiU=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -37,6 +37,12 @@
       div[style*="maxWidth"] { max-width: 100% !important; padding: 0 !important; }
       @page { margin: 0.5cm; size: landscape; }
     }
+    /* The header's "N errors" (Do first 8): 24 px tall on a wide screen; the phone block below makes it a 36 x 36 tap target.
+       Both keep the status line's height (negative vertical margins; measured 10/2: the header 67 px at 1180, 191 px at
+       390, with the chip or without). Second review fixes (10/2): the box is transparent - the outlined pill inside it is
+       what shows, so where the status words wrap the chip onto a line of its own (360 px) nothing overlaps the line above;
+       that wrap adds the one line (+12 px) and is the only height change. */
+    .hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }
     /* Mobile improvements */
     @media (max-width: 600px) {
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
@@ -46,6 +52,8 @@
       /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
          from stretching the sentence's line box. */
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
+      /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
+      .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -80,6 +88,22 @@
     .rules-field > .rules-field-remove { flex-shrink: 0; margin-top: 2px; }
     .rules-sum-line { display: flex; gap: 8px; }
     .rules-sum-line > .rules-sum-family { flex: 0 0 112px; }
+    /* My schedule / Following's 90-day list (review 9/27 Do first 9, 10/1): a 420 px scroller on a wide screen; the phone
+       block below drops it (the page scrolls) and gives a row's Trade + Give away (mine-acts) a line of their own. */
+    .mine-upcoming { max-height: 420px; overflow-y: auto; }
+    /* ... and none on a short screen either (review of Do first 9, 10/2): a phone in landscape (wider than 600 px, about
+       375-430 px tall) would get a 420 px box inside a shorter window */
+    @media (max-height: 500px) {
+      .mine-upcoming { max-height: none; overflow-y: visible; }
+    }
+    /* A row's holder ("backup: Burchett"): its text width on a wide screen, so the Following view's badges follow the
+       name; the phone block lets it grow into the rest of the line but never shrink below its words (flex 1 0 auto,
+       max-width 100%) - when they do not fit beside the date and role the holder takes a line of its own, and badges
+       that do not fit after it wrap under it. The inline ellipsis is left only for words longer than a whole row. */
+    .mine-holder { flex: 0 1 auto; }
+    /* A row's holiday-unit badge: the unit's name on a wide screen; on a phone the letter H (the legend above the list),
+       as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
+    .mine-hol-letter { display: none; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
        role letter, holiday name, weekend label and NOTE tag give way (line
        order = role, the cell title still spells everything out), the pill
@@ -121,6 +145,18 @@
       .rules-field > .rules-field-remove { align-self: flex-end; margin-top: 0; }
       .rules-sum-line { flex-direction: column; gap: 0; }
       .rules-sum-line > .rules-sum-family { flex: none; }
+      /* Do first 9: no nested scroller on a phone - the whole 90-day list is part of the page (no cap on the rows); on the
+         own view mine-acts (the badges, the offer tag, Trade + Give away) takes the row's second line, right-aligned, so
+         the date (padlock inside), role and holder keep one line and the holder's name is not clipped. Second review
+         fixes (10/2): the holder never shrinks below its words (1 0 auto; it was 1 1 0 with an ellipsis) - on the
+         Following view the badges sat right after it and left it 11-68 px at 360-390 px ("bac...", the colleague's
+         name lost), and at 320 px every row clipped; now badges that do not fit wrap under the name, and a name that
+         does not fit beside the date and role takes a line of its own (max-width 100%: a whole row at most). */
+      .mine-upcoming { max-height: none; overflow-y: visible; }
+      .mine-acts { flex-basis: 100%; justify-content: flex-end; }
+      .mine-holder { flex: 1 0 auto; max-width: 100%; }
+      .mine-hol-name { display: none; }
+      .mine-hol-letter { display: inline; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -131,7 +167,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.02a";
+    var APP_VERSION = "2026.10.02b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -197,7 +233,8 @@ const {
   useMemo,
   useCallback,
   useRef,
-  useEffect
+  useEffect,
+  useLayoutEffect
 } = React;
 function CallSchedule() {
   const isPublicMode = useMemo(() => {
@@ -485,6 +522,10 @@ function CallSchedule() {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [sessionUnreached, setSessionUnreached] = useState("");
+  const resetReqRef = useRef(0);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const sessionCheckReqRef = useRef(0);
   const [linkSetup, setLinkSetup] = useState(null);
   const [linkConflict, setLinkConflict] = useState(null);
   const pendingLinkRef = useRef(null);
@@ -647,7 +688,7 @@ function CallSchedule() {
   const followerSaveTimerRef = useRef(null);
   const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
-  const lastNotifCountRef = useRef(null);
+  const notifSeenRef = useRef(null);
   const mySurgeon = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || "";
   useEffect(() => {
     if (!authUser || isPublicMode || !mySurgeon) return;
@@ -724,7 +765,9 @@ function CallSchedule() {
     };
   };
   const adoptSignedInUser = async user => {
+    sessionCheckReqRef.current++;
     setAuthUser(user);
+    setSessionUnreached("");
     setProfileLoadFailed(false);
     if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {
       switchedUserRef.current = true;
@@ -744,6 +787,8 @@ function CallSchedule() {
         }));
       }
       setNotifsRead("unread");
+      setErrorLog([]);
+      setShowErrorLog(false);
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -817,12 +862,14 @@ function CallSchedule() {
         }
         if (session && !bioEnrolled) {
           const {
-            user
+            user,
+            error
           } = await auth.getUser();
           if (user) {
             if (linkErr) showToast(linkErr.message, "error");
             await adoptSignedInUser(user);
           } else if (linkErr) setAuthError(linkErr.message);
+          if (!user && error === "network") setSessionUnreached(SESSION_UNREACHED_MESSAGE);
         }
       } catch (e) {
         console.error("Auth check error:", e);
@@ -846,7 +893,7 @@ function CallSchedule() {
         return;
       } else if (error === "network") {
         console.warn("Biometric unlock: the session check hit a network error - session kept, try again");
-        setAuthError("Couldn't reach the server to confirm your session - check your connection and try again.");
+        setAuthError(SESSION_UNREACHED_MESSAGE);
       } else {
         setBiometricPending(false);
         setAuthError("Session expired. Please sign in with your password to refresh.");
@@ -855,6 +902,29 @@ function CallSchedule() {
       setAuthError(result.error || "Biometric failed");
     }
     setAuthBusy(false);
+  };
+  const retrySessionCheck = async () => {
+    const req = ++sessionCheckReqRef.current;
+    setAuthError("");
+    setRetryBusy(true);
+    try {
+      const {
+        user,
+        error
+      } = await auth.getUser();
+      if (req !== sessionCheckReqRef.current) return;
+      if (user) await adoptSignedInUser(user);else if (error === "network") setSessionUnreached(SESSION_STILL_UNREACHED_MESSAGE);else {
+        setSessionUnreached("");
+        setAuthError("Session expired. Please sign in with your password to refresh.");
+      }
+    } catch (e) {
+      if (req === sessionCheckReqRef.current) {
+        console.warn("Session re-check failed:", e);
+        setAuthError(e && e.message || "Session check failed");
+      }
+    } finally {
+      setRetryBusy(false);
+    }
   };
   const handleBiometricEnroll = async () => {
     if (!authUser) return;
@@ -880,6 +950,7 @@ function CallSchedule() {
     setBiometricEnrolled(false);
   };
   const handleAuthSubmit = async () => {
+    sessionCheckReqRef.current++;
     setAuthError("");
     setAuthBusy(true);
     try {
@@ -911,6 +982,10 @@ function CallSchedule() {
     setBiometricEnrolled(false);
     setBiometricPending(false);
     setIsScheduler(false);
+    setErrorLog([]);
+    setShowErrorLog(false);
+    dismissToast();
+    setSessionUnreached("");
   };
   const adoptLinkSession = async pair => {
     setAuthError("");
@@ -959,6 +1034,8 @@ function CallSchedule() {
     }
     setAuthBusy(true);
     setAuthError("");
+    setErrorLog([]);
+    setShowErrorLog(false);
     try {
       await auth.signOut();
       biometric.unenroll();
@@ -1351,15 +1428,107 @@ function CallSchedule() {
     if (view === "settings" && isCoordinator) loadAudit();
   }, [view, isCoordinator]);
   const [toast, setToast] = useState(null);
+  const toastRef = useRef(null);
   const toastTimerRef = useRef(null);
-  const showToast = (msg, tone) => {
-    setToast({
-      msg: msg,
-      tone: tone || "info"
-    });
+  const [errorLog, setErrorLog] = useState([]);
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [errorCopied, setErrorCopied] = useState("");
+  const errorCopiedTimerRef = useRef(null);
+  const dismissToast = () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+    toastTimerRef.current = null;
+    toastRef.current = null;
+    setToast(null);
   };
+  const showToast = (msg, tone) => {
+    const now = Date.now();
+    const t = toastNext(toastRef.current, msg, tone, now);
+    toastRef.current = t;
+    setToast(t);
+    if (t.tone === "error") setErrorLog(p => toastErrorLogPush(p, t.msg, now));
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(dismissToast, toastDurationMs(t.msg, t.tone));
+  };
+  const copyErrorEntry = async text => {
+    let copied = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch (e) {
+      console.warn("Recent errors: the clipboard refused the copy:", e);
+    }
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        copied = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (e) {
+        console.warn("Recent errors: the fallback copy failed:", e);
+      }
+    }
+    setErrorCopied(copied ? text : "!" + text);
+    if (errorCopiedTimerRef.current) clearTimeout(errorCopiedTimerRef.current);
+    errorCopiedTimerRef.current = setTimeout(() => setErrorCopied(""), 2500);
+  };
+  const errorLogOpenerRef = useRef(null);
+  const openErrorLog = () => {
+    errorLogOpenerRef.current = document.activeElement;
+    setShowErrorLog(true);
+  };
+  const closeErrorLog = () => {
+    setShowErrorLog(false);
+    const back = errorLogOpenerRef.current;
+    errorLogOpenerRef.current = null;
+    if (back && typeof back.focus === "function" && document.contains(back)) {
+      try {
+        back.focus();
+      } catch (e) {
+        console.warn("Recent errors: could not return focus", e);
+      }
+    }
+  };
+  const errorLogKeyDown = e => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closeErrorLog();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) {
+      e.preventDefault();
+      try {
+        next.focus();
+      } catch (err) {
+        console.warn("Recent errors: focus trap could not move focus", err);
+      }
+    }
+  };
+  const [toastLift, setToastLift] = useState(0);
+  const toastLiftRef = useRef(0);
+  const toastLiftNow = prev => {
+    const box = document.querySelector("[data-testid=toast-box]");
+    const row = box ? document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]") : null;
+    if (!row) return 0;
+    const b = box.getBoundingClientRect(),
+      r = row.getBoundingClientRect();
+    if (!(prev || b.bottom > r.top && b.top < r.bottom)) return 0;
+    if (r.top - 8 - b.height < 8) return 0;
+    return Math.max(0, Math.ceil(window.innerHeight - r.top + 8));
+  };
+  useLayoutEffect(() => {
+    const lift = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? toastLiftNow(toastLift) : 0;
+    toastLiftRef.current = lift;
+    if (lift !== toastLift) setToastLift(lift);
+  });
   const adoptTimeOffRows = rows => {
     setTimeOffRows(rows);
     setVacations(buildTimeOffMaps(rows));
@@ -2138,7 +2307,7 @@ function CallSchedule() {
       setSaveError(false);
       setSaveStatus("");
       setDaySyncFail(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
-      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(authFail === 401 ? "Couldn't save the schedule - your session couldn't be refreshed; the change goes out once it is." : failMsg, "error");
     } else if (failed) {
       setSaveError(false);
       setSaveStatus("");
@@ -4743,7 +4912,10 @@ function CallSchedule() {
         console.warn("Notification insert failed:", insertErr);
         if (!auth.sessionExpired) showToast("Couldn't save that notification.", "error");
       }
-      if (inserted) setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      if (inserted) {
+        notifSeenRef.current = notifSeenAdd(notifSeenRef.current, inserted);
+        setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      }
     } catch (e) {
       console.warn("Notification error:", e);
       showToast("Couldn't send the notification - check your connection.", "error");
@@ -5741,16 +5913,20 @@ function CallSchedule() {
   };
   useEffect(() => {
     if (!loaded) return;
-    if (lastNotifCountRef.current === null) {
-      lastNotifCountRef.current = notifications.length;
-      return;
-    }
-    if (notifications.length > lastNotifCountRef.current) {
-      const newOnes = notifications.slice(0, notifications.length - lastNotifCountRef.current);
-      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
-    }
-    lastNotifCountRef.current = notifications.length;
-  }, [loaded, notifications, sendBrowserNotif]);
+    const uid = authUser ? authUser.id : null;
+    const profileRole = userProfile ? userProfile.role : null;
+    const ready = !!uid && !!userProfile && userProfile.id === uid && isScheduler === (profileRole === "scheduler" || profileRole === "admin");
+    const step = notifPopupStep(notifSeenRef.current, {
+      uid,
+      readOk: notifsRead === "ok",
+      ready,
+      notifications,
+      visible: myNotifications
+    });
+    notifSeenRef.current = step.state;
+    const newOnes = step.pop;
+    newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
+  }, [loaded, authUser, userProfile, isScheduler, notifsRead, notifications, myNotifications, sendBrowserNotif]);
   const sendTestNotification = useCallback(async () => {
     const shown = sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
     setNotifTestSent(notifTestMessage(shown, browserNotifPermission));
@@ -7171,6 +7347,34 @@ function CallSchedule() {
   const obEmailBtnRef = useRef(null);
   const claimCancelRef = useRef(null);
   const claimReturnRef = useRef(null);
+  const toastWatch = !!(toast && (editorDay || claimSheet) && !(paintSheet || offerSheet));
+  useEffect(() => {
+    if (!toastWatch) return undefined;
+    const row = document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]");
+    if (!row) return undefined;
+    const dlg = row.closest("[role=dialog]");
+    const again = () => {
+      const lift = toastLiftNow(toastLiftRef.current);
+      if (lift !== toastLiftRef.current) {
+        toastLiftRef.current = lift;
+        setToastLift(lift);
+      }
+    };
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(again) : null;
+    if (ro) {
+      ro.observe(row);
+      if (dlg) ro.observe(dlg);
+    }
+    if (dlg) dlg.addEventListener("scroll", again, {
+      passive: true
+    });
+    window.addEventListener("resize", again);
+    return () => {
+      if (ro) ro.disconnect();
+      if (dlg) dlg.removeEventListener("scroll", again);
+      window.removeEventListener("resize", again);
+    };
+  }, [toastWatch, editorDay, claimSheet]);
   const [boardNotices, setBoardNotices] = useState([]);
   useEffect(() => {
     if (view !== "openshifts" || isPublicMode) return undefined;
@@ -8518,16 +8722,30 @@ function CallSchedule() {
       setAuthError("Please enter your email");
       return;
     }
+    const req = ++resetReqRef.current;
     setAuthBusy(true);
     setAuthError("");
     auth.resetPassword(resetEmail).then(r => {
+      if (req !== resetReqRef.current) return;
       setAuthBusy(false);
       if (r.error) {
         setAuthError(r.error);
       } else {
         setResetSent(true);
       }
+    }).catch(e => {
+      if (req !== resetReqRef.current) return;
+      setAuthBusy(false);
+      setAuthError(e && e.message || "Reset failed - try again");
     });
+  };
+  const backToSignIn = () => {
+    resetReqRef.current++;
+    setAuthBusy(false);
+    setAuthMode("login");
+    setResetSent(false);
+    setResetEmail("");
+    setAuthError("");
   };
   return React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.root), {}, {
@@ -8568,19 +8786,25 @@ function CallSchedule() {
   }), toast && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
-    "data-testid": "toast",
-    onClick: () => setToast(null),
-    style: _objectSpread(_objectSpread({
+    "data-testid": "toast-box",
+    onClick: dismissToast,
+    style: _objectSpread(_objectSpread(_objectSpread({
       position: "fixed",
       left: "50%"
     }, paintSheet || offerSheet ? {
       top: `calc(12px + ${SAFE_AREA.top})`
     } : {
       bottom: `calc(24px + ${SAFE_AREA.bottom})`
-    }), {}, {
+    }), toastLift ? {
+      bottom: toastLift
+    } : {}), {}, {
       transform: "translateX(-50%)",
       zIndex: 9999,
-      maxWidth: "90vw",
+      width: "max-content",
+      maxWidth: "min(90vw, 640px)",
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
       background: toast.tone === "success" ? "#1a7a4a" : toast.tone === "error" ? "#a83232" : "#1F2A3A",
       color: "#fff",
       borderRadius: 9,
@@ -8592,7 +8816,202 @@ function CallSchedule() {
       cursor: "pointer",
       letterSpacing: 0.2
     })
-  }, toast.msg), showPublishDialog && !isPublicMode && React.createElement("div", {
+  }, React.createElement("span", {
+    "data-testid": "toast",
+    style: {
+      minWidth: 0,
+      overflowWrap: "anywhere"
+    }
+  }, toast.msg), toast.count > 1 && React.createElement("span", {
+    "data-testid": "toast-count",
+    title: "Shown " + toast.count + " times",
+    style: {
+      flexShrink: 0,
+      background: "rgba(255,255,255,0.22)",
+      borderRadius: 8,
+      padding: "1px 7px",
+      fontSize: 11,
+      fontWeight: 700
+    }
+  }, "x" + toast.count), (toast.tone === "error" || paintSheet || offerSheet) && React.createElement("button", {
+    type: "button",
+    "data-testid": "toast-close",
+    "aria-label": "Dismiss the message",
+    onClick: e => {
+      e.stopPropagation();
+      dismissToast();
+    },
+    style: {
+      flexShrink: 0,
+      background: "none",
+      border: "none",
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: 700,
+      cursor: "pointer",
+      padding: 0,
+      margin: "-10px -12px -10px 0",
+      minWidth: 36,
+      minHeight: 36,
+      lineHeight: 1,
+      fontFamily: font
+    }
+  }, "x")), showErrorLog && React.createElement("div", {
+    "data-testid": "error-log",
+    onClick: closeErrorLog,
+    style: {
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9550,
+      padding: 16
+    }
+  }, React.createElement("div", {
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Recent errors",
+    tabIndex: -1,
+    onKeyDown: errorLogKeyDown,
+    onClick: e => e.stopPropagation(),
+    style: {
+      outline: "none",
+      background: T.surface,
+      color: T.text,
+      border: `1px solid ${T.border}`,
+      borderRadius: 12,
+      padding: 16,
+      maxWidth: 520,
+      width: "100%",
+      maxHeight: "80vh",
+      overflowY: "auto",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+      fontFamily: font
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      marginBottom: 6
+    }
+  }, React.createElement("h3", {
+    style: {
+      margin: 0,
+      fontSize: 15,
+      color: T.text
+    }
+  }, "Recent errors"), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center"
+    }
+  }, errorLog.length > 0 && React.createElement("button", {
+    type: "button",
+    "data-testid": "error-log-clear",
+    onClick: () => {
+      setErrorLog([]);
+      setShowErrorLog(false);
+    },
+    style: {
+      background: "none",
+      border: `1px solid ${T.border}`,
+      color: T.text,
+      borderRadius: 6,
+      padding: "4px 10px",
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: "pointer",
+      fontFamily: font,
+      minHeight: 32
+    }
+  }, "Clear"), React.createElement("button", {
+    type: "button",
+    "data-testid": "error-log-close",
+    autoFocus: true,
+    "aria-label": "Close recent errors",
+    onClick: closeErrorLog,
+    style: {
+      background: "none",
+      border: "none",
+      color: T.muted,
+      fontSize: 20,
+      cursor: "pointer",
+      fontFamily: font,
+      minWidth: 36,
+      minHeight: 36
+    }
+  }, "x"))), React.createElement("p", {
+    style: {
+      margin: "0 0 8px",
+      fontSize: 12,
+      color: T.muted,
+      lineHeight: 1.5
+    }
+  }, "The last ", TOAST_ERROR_LOG_MAX, " error messages on this device, newest first - kept until you clear them, sign out or reload."), errorLog.length === 0 ? React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: T.muted,
+      margin: "8px 0"
+    }
+  }, "No errors.") : errorLog.map(e => React.createElement("div", {
+    key: e.msg,
+    "data-testid": "error-log-row",
+    style: {
+      borderTop: `1px solid ${T.border}`,
+      padding: "8px 0",
+      display: "flex",
+      gap: 8,
+      alignItems: "flex-start"
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: "1 1 auto",
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: T.muted
+    }
+  }, new Date(e.at).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  }), e.count > 1 ? " - " + e.count + " times since " + new Date(e.first).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  }) : ""), React.createElement("div", {
+    "data-testid": "error-log-msg",
+    style: {
+      fontSize: 13,
+      lineHeight: 1.45,
+      color: T.text,
+      userSelect: "text",
+      overflowWrap: "anywhere"
+    }
+  }, e.msg)), React.createElement("button", {
+    type: "button",
+    "data-testid": "error-log-copy",
+    onClick: () => copyErrorEntry(e.msg),
+    style: {
+      flexShrink: 0,
+      background: "none",
+      border: `1px solid ${T.border}`,
+      color: T.text,
+      borderRadius: 6,
+      padding: "4px 10px",
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: "pointer",
+      fontFamily: font,
+      minHeight: 32
+    }
+  }, errorCopied === e.msg ? "Copied" : errorCopied === "!" + e.msg ? "Blocked" : "Copy"))))), showPublishDialog && !isPublicMode && React.createElement("div", {
     "data-testid": "publish-dialog",
     onClick: closePublishDialog,
     style: {
@@ -9110,12 +9529,7 @@ function CallSchedule() {
       lineHeight: 1.5
     }
   }, "Password reset email sent. Check your inbox for a link to reset your password."), React.createElement("button", {
-    onClick: () => {
-      setAuthMode("login");
-      setResetSent(false);
-      setResetEmail("");
-      setAuthError("");
-    },
+    onClick: backToSignIn,
     style: {
       background: "none",
       border: "none",
@@ -9161,11 +9575,7 @@ function CallSchedule() {
       marginTop: 4
     }
   }, React.createElement("button", {
-    onClick: () => {
-      setAuthMode("login");
-      setAuthError("");
-      setResetEmail("");
-    },
+    onClick: backToSignIn,
     style: {
       background: "none",
       border: "none",
@@ -9181,7 +9591,32 @@ function CallSchedule() {
       flexDirection: "column",
       gap: 10
     }
-  }, React.createElement("input", {
+  }, sessionUnreached && React.createElement("div", {
+    "data-testid": "auth-unreached",
+    role: "alert",
+    style: {
+      fontSize: 12,
+      color: "#c04040",
+      padding: "8px 10px",
+      background: "#fce8e8",
+      borderRadius: 6,
+      border: "1px solid #e8c0c0",
+      lineHeight: 1.5
+    }
+  }, sessionUnreached, React.createElement("button", {
+    "data-testid": "auth-retry",
+    onClick: retrySessionCheck,
+    disabled: retryBusy,
+    style: _objectSpread(_objectSpread({}, css.cta), {}, {
+      display: "block",
+      width: "100%",
+      marginTop: 8,
+      padding: "9px 14px",
+      fontSize: 13,
+      fontWeight: 700,
+      opacity: retryBusy ? 0.6 : 1
+    })
+  }, retryBusy ? "Checking" : "Retry")), React.createElement("input", {
     type: "email",
     placeholder: "Email address",
     value: authEmail,
@@ -9328,7 +9763,38 @@ function CallSchedule() {
       color: T.navyMuted,
       fontSize: 10
     }
-  }, "Connecting"))))), !isPublicMode && React.createElement("div", {
+  }, "Connecting")), errorLog.length > 0 && React.createElement("button", {
+    type: "button",
+    "data-testid": "hdr-errors",
+    className: "hdr-errors",
+    onClick: openErrorLog,
+    title: "The last error messages, newest first - read or copy them again",
+    style: {
+      marginLeft: 4,
+      background: "none",
+      border: "none",
+      color: "#FF8A8A",
+      padding: "0 4px",
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: 0.8,
+      textTransform: "inherit",
+      cursor: "pointer",
+      fontFamily: font,
+      verticalAlign: "middle",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, React.createElement("span", {
+    "data-testid": "hdr-errors-pill",
+    style: {
+      border: "1px solid #FF8A8A",
+      borderRadius: 9,
+      padding: "2px 8px",
+      lineHeight: "12px"
+    }
+  }, errorLog.length === 1 ? "1 error" : errorLog.length + " errors"))))), !isPublicMode && React.createElement("div", {
     style: css.nav
   }, (() => {
     const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", isFollowing ? "Following" : "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
@@ -11607,6 +12073,7 @@ function CallSchedule() {
         lineHeight: 1.5
       }
     }, "Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away."), React.createElement("div", {
+      "data-testid": "claim-actions",
       style: {
         display: "flex",
         justifyContent: "flex-end",
@@ -11835,6 +12302,23 @@ function CallSchedule() {
     const daysBlock = (who, own) => {
       const upcoming = upcomingDaysOf(who, 90);
       const next = upcomingDaysOf(who, null)[0] || null;
+      const badgeEls = x => badgesFor(x.day, who).map(b => React.createElement("span", {
+        key: b.k,
+        title: b.title,
+        "data-badge": b.k,
+        style: {
+          fontSize: 9,
+          fontWeight: 800,
+          padding: "0 5px",
+          borderRadius: 4,
+          background: b.bg,
+          color: b.fg
+        }
+      }, b.k === "H" ? React.createElement(React.Fragment, null, React.createElement("span", {
+        className: "mine-hol-name"
+      }, b.text), React.createElement("span", {
+        className: "mine-hol-letter"
+      }, "H")) : b.text));
       return React.createElement(React.Fragment, null, React.createElement("div", {
         "data-testid": "next-call",
         "data-next-day": next ? next.day : "",
@@ -11896,10 +12380,7 @@ function CallSchedule() {
         })
       }, "No call in the next 90 days.") : React.createElement("div", {
         "data-testid": "mine-upcoming",
-        style: {
-          maxHeight: 420,
-          overflowY: "auto"
-        }
+        className: "mine-upcoming"
       }, upcoming.map(x => React.createElement("div", {
         key: x.day,
         "data-testid": "mine-day",
@@ -11907,20 +12388,29 @@ function CallSchedule() {
         "data-role": x.role,
         style: {
           display: "flex",
-          gap: 10,
+          gap: "6px 10px",
           alignItems: "center",
           padding: "5px 8px",
           borderBottom: `1px solid ${dkCardBorder}`,
           flexWrap: "wrap"
         }
       }, React.createElement("span", {
+        "data-testid": "mine-date",
         style: {
           fontFamily: mono,
           fontSize: 12,
           color: dkText,
-          width: 92
+          width: 92,
+          flexShrink: 0,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          whiteSpace: "nowrap"
         }
-      }, dowShort(x.day), " ", fmtMD(x.day)), React.createElement("span", {
+      }, dowShort(x.day), " ", fmtMD(x.day), x.locked && React.createElement(Padlock, {
+        title: "locked",
+        size: 9
+      })), React.createElement("span", {
         "data-testid": "mine-role",
         style: {
           fontSize: 11,
@@ -11929,25 +12419,26 @@ function CallSchedule() {
           color: x.role === "primary" ? T.title : T.backupText
         }
       }, roleWord(x.role)), React.createElement("span", {
+        "data-testid": "mine-holder",
+        className: "mine-holder",
+        title: (x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf),
         style: _objectSpread(_objectSpread({}, muted), {}, {
-          minWidth: 120
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
         })
-      }, x.role === "primary" ? "backup" : "primary", ": ", holderLabel(x.other, nameOf)), x.locked && React.createElement(Padlock, {
-        title: "locked",
-        size: 9
-      }), badgesFor(x.day, who).map(b => React.createElement("span", {
-        key: b.k,
-        title: b.title,
-        "data-badge": b.k,
+      }, x.role === "primary" ? "backup" : "primary", ": ", holderLabel(x.other, nameOf)), !own && badgeEls(x), own && React.createElement("span", {
+        "data-testid": "mine-acts",
+        className: "mine-acts",
         style: {
-          fontSize: 9,
-          fontWeight: 800,
-          padding: "0 5px",
-          borderRadius: 4,
-          background: b.bg,
-          color: b.fg
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          alignItems: "center",
+          marginLeft: "auto"
         }
-      }, b.text)), own && (() => {
+      }, badgeEls(x), own && (() => {
         const t = offerTagOf(x.day, x.role);
         return t ? React.createElement("span", {
           "data-testid": "mine-offer-tag",
@@ -11966,19 +12457,19 @@ function CallSchedule() {
       })(), own && React.createElement("button", {
         "data-testid": "mine-trade",
         onClick: () => proposeTradeForDay(x.day, x.role),
+        title: "Propose a trade for this day",
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
-          marginLeft: "auto",
           color: "#6030a0",
           borderColor: "#c0a8e0"
         })
-      }, "Propose a trade"), own && React.createElement("button", {
+      }, "Trade"), own && React.createElement("button", {
         "data-testid": "mine-give",
         onClick: () => proposeGiveForDay(x.day, x.role, who),
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           color: T.text,
           borderColor: T.border
         })
-      }, "Give away")))));
+      }, "Give away"))))));
     };
     if (following.length) return React.createElement(React.Fragment, null, following.map(fid => React.createElement("div", {
       key: fid,
