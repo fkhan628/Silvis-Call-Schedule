@@ -8497,12 +8497,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appDaysErrorWords(pg("42501", "permission denied for function x"), 403), "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST301", "JWT expired"), 401), "Your session expired - sign in again. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords("", 401), "Your session expired - sign in again. Nothing was saved.");
-      assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), "Couldn't reach the server - check your connection and try again. Nothing was saved.");
-      assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), "Couldn't reach the server - check your connection and try again. Nothing was saved.", "an Error-like object");
+      assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
+      assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).", "an Error-like object");
       assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP days: " + "x".repeat(160));
       // review 10/2: an HTTP error whose body is no PostgREST JSON (a gateway's HTML page) shows the status, never the page
-      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), "Couldn't save the APP days (HTTP 502) - nothing was saved. Try again.");
-      assert.strictEqual(H.appDaysErrorWords("", 503), "Couldn't save the APP days (HTTP 503) - nothing was saved. Try again.");
+      // pin moved deliberately 10/2 (re-check): a 5xx gateway page leaves the outcome unknown; a 4xx page still means nothing was saved
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), "Couldn't confirm the save (HTTP 502) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Too large</body></html>", 413), "Couldn't save the APP days (HTTP 413) - nothing was saved. Try again.");
+      assert.strictEqual(H.appDaysErrorWords("", 503), "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.");
       assert.strictEqual(H.appDaysErrorWords("unexpected response from save_app_days: {}", 200), "Couldn't save the APP days: unexpected response from save_app_days: {}", "a 2xx with an unexpected body keeps its words");
       assert.strictEqual(H.appDaysErrorCode(pg("AP005", "APP_DAY_TAKEN: ...")), "AP005");
       assert.strictEqual(H.appDaysErrorCode("APP_DAY_STALE: 12/2 is Lee's day - reload the calendar (nothing was saved)"), "AP007", "from the token");

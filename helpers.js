@@ -5694,9 +5694,12 @@ function appDaysErrorWords(body, status) {
   if (/PGRST202|PGRST205|42P01/.test(all)) return APP_DAYS_UNAVAILABLE_TEXT;
   if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
   if (/JWT|PGRST301/.test(all) || Number(status) === 401) return "Your session expired - sign in again. Nothing was saved.";
-  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - check your connection and try again. Nothing was saved.";
+  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
   // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
-  if (Number(status) >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP days (HTTP " + Number(status) + ") - nothing was saved. Try again.";
+  // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was saved"
+  if (Number(status) >= 400 && !appDayErrorIsJson(body)) return Number(status) >= 500
+    ? "Couldn't confirm the save (HTTP " + Number(status) + ") - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing."
+    : "Couldn't save the APP days (HTTP " + Number(status) + ") - nothing was saved. Try again.";
   return "Couldn't save the APP days: " + msg.slice(0, 160);
 }
 // true when a save's error body is a PostgREST error (an object, or JSON text, with a message)
