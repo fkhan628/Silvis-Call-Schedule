@@ -4939,13 +4939,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // review of Do first 7 (10/2) - expectation moved deliberately: a JSON 5xx / 408 says "Couldn't reach the server (HTTP n) -
     // try again" too (GoTrue's "Service Unavailable" / "Database error querying schema" gave no hint to try again later);
     // a 429 and a 4xx keep GoTrue's own words
-    await acheck("DF7 signIn: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 (body not JSON), a JSON 503 / 500 and a 408 -> 'Couldn't reach the server (HTTP n) - try again' whatever the body; a JSON 429 / 400 -> GoTrue's own words; a 2xx that is not a session (an HTML page) -> an error; nothing is stored on any failure", async () => {
+    await acheck("DF7 signIn: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 (body not JSON), a JSON 503 / 500 and a 408 -> 'Couldn't reach the server (HTTP n) - try again' whatever the body (GoTrue's words inside the brackets when it sent some); a JSON 429 / 400 -> GoTrue's own words; a 2xx that is not a session (an HTML page) -> an error; nothing is stored on any failure", async () => {
       const cases = [
         ["thrown", () => { throw new TypeError("Failed to fetch"); }, (e) => e === "No connection - try again"],
         ["HTML 502", () => df7Html(502, "<html>502 Bad Gateway</html>"), (e) => /^Couldn't reach the server \(HTTP 502\)/.test(e)],
-        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), (e) => e === "Couldn't reach the server (HTTP 503) - try again"],
-        ["500 JSON", () => resp(500, { code: 500, msg: "Database error querying schema" }), (e) => e === "Couldn't reach the server (HTTP 500) - try again"],
-        ["408 JSON", () => resp(408, { msg: "Request Timeout" }), (e) => e === "Couldn't reach the server (HTTP 408) - try again"],
+        // second review fixes (10/2) - expectations moved deliberately: GoTrue's words ride along in the try-again wording
+        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), (e) => e === "Couldn't reach the server (HTTP 503: Service Unavailable) - try again"],
+        ["500 JSON", () => resp(500, { code: 500, msg: "Database error querying schema" }), (e) => e === "Couldn't reach the server (HTTP 500: Database error querying schema) - try again"],
+        ["408 JSON", () => resp(408, { msg: "Request Timeout" }), (e) => e === "Couldn't reach the server (HTTP 408: Request Timeout) - try again"],
+        ["500 JSON, no message", () => resp(500, { code: 500 }), (e) => e === "Couldn't reach the server (HTTP 500) - try again"],
+        ["502 JSON, a long message", () => resp(502, { message: "x".repeat(300) }), (e) => e === "Couldn't reach the server (HTTP 502: " + "x".repeat(140) + ") - try again"],
         ["429", () => resp(429, { msg: "Request rate limit reached" }), (e) => e === "Request rate limit reached"],
         ["400 bad password", () => resp(400, { error: "invalid_grant", error_description: "Invalid login credentials" }), (e) => e === "Invalid login credentials"],
         ["400 empty body", () => df7Html(400, ""), (e) => e === "Sign in failed (HTTP 400)"],
@@ -4961,11 +4964,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       df7Reset();
     });
-    await acheck("DF7 resetPassword: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 or a JSON 503 -> 'Couldn't reach the server (HTTP n) - try again' (whatever the body); a JSON 429 -> GoTrue's words; a 4xx with an empty body -> 'Reset failed (HTTP n)'; 200 -> { error: null }", async () => {
+    await acheck("DF7 resetPassword: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 or a JSON 503 / 500 -> 'Couldn't reach the server (HTTP n) - try again' (whatever the body; GoTrue's words inside the brackets when it sent some - 'Error sending recovery email'); a JSON 429 -> GoTrue's words; a 4xx with an empty body -> 'Reset failed (HTTP n)'; 200 -> { error: null }", async () => {
       const cases = [
         ["thrown", () => { throw new TypeError("Failed to fetch"); }, "No connection - try again"],
         ["HTML 502", () => df7Html(502, "<html>502</html>"), "Couldn't reach the server (HTTP 502) - try again"],
-        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), "Couldn't reach the server (HTTP 503) - try again"],
+        // second review fixes (10/2) - expectation moved deliberately, and the re-check's SMTP case: GoTrue's words ride along
+        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), "Couldn't reach the server (HTTP 503: Service Unavailable) - try again"],
+        ["500 SMTP", () => resp(500, { code: 500, error_code: "unexpected_failure", msg: "Error sending recovery email" }), "Couldn't reach the server (HTTP 500: Error sending recovery email) - try again"],
+        ["500 empty JSON", () => resp(500, {}), "Couldn't reach the server (HTTP 500) - try again"],
         ["429", () => resp(429, { msg: "For security purposes, you can only request this after 37 seconds." }), "For security purposes, you can only request this after 37 seconds."],
         ["422 empty", () => df7Html(422, ""), "Reset failed (HTTP 422)"],
         ["400 empty", () => df7Html(400, ""), "Reset failed (HTTP 400)"],
@@ -4979,6 +4985,104 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.strictEqual(r && r.error, want, label + ": " + JSON.stringify(r));
         assert.strictEqual(a3calls.length, 1, label + ": one request");
       }
+      df7Reset();
+    });
+    // ---- Second review fixes of Do first 7 (10/2): the stored pair changed while a request was out (the re-check's
+    //      repro-retry-storage.js: the Retry's getUser hanging while account B signs in). The late answer about the OLD
+    //      pair never refreshes over the newer pair, never clears it, never raises the banner over it. ----
+    const df7Hold = () => { let release; const p = new Promise(r => { release = r; }); return { p, release }; };
+    const df7Tick = () => new Promise(r => setTimeout(r, 5));
+    const df7Pair = () => [store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh")];
+    await acheck("DF7 stale pair (review 2): getUser's /auth/v1/user answers 401 AFTER another account signed in -> NO refresh with the old pair, nothing cleared, B's pair stays stored (it used to store A's refreshed pair over B's - or clear B's when A's refresh was rejected); the answer is about the pair stored now", async () => {
+      const A = jwt(-3600, "stA"), B = jwt(3600, "stB"), A2 = jwt(3600, "stA2");
+      for (const refreshOk of [true, false]) {
+        const label = refreshOk ? "A's refresh would succeed" : "A's refresh would be rejected";
+        df7Reset(); setSession(A, "rA"); a3calls.length = 0;
+        const h = df7Hold();
+        answer = (c) => {
+          if (c.url.includes("/auth/v1/user")) return c.bearer === A ? h.p : c.bearer === B ? resp(200, { id: "uB" }) : resp(401, {});
+          if (c.url.includes("grant_type=password")) return resp(200, { ...tokenBody(B, "rB"), user: { id: "uB" } });
+          if (isRefresh(c)) return refreshOk ? resp(200, tokenBody(A2, "rA2")) : resp(400, { error: "invalid_grant" });
+          return resp(500, "unexpected");
+        };
+        const late = A3.auth.getUser();
+        await df7Tick();
+        const si = await A3.auth.signIn("b@example.invalid", "placeholder-pw");
+        assert.strictEqual(si.error, null, label + ": B signed in");
+        h.release(resp(401, { msg: "JWT expired" }));
+        const g = await late;
+        assert.strictEqual(a3calls.filter(isRefresh).length, 0, label + ": no refresh with the old pair: " + JSON.stringify(a3calls.map(c => c.method + " " + c.url.split("/auth/v1/")[1])));
+        assert.deepStrictEqual(df7Pair(), [B, "rB"], label + ": B's pair stays stored");
+        assert.ok(g && g.user && g.user.id === "uB", label + ": the answer is about the pair stored now (the Retry drops it - sessionCheckReqRef): " + JSON.stringify(g));
+        assert.strictEqual(A3.auth.sessionExpired, false, label + ": no banner");
+      }
+      df7Reset();
+    });
+    await acheck("DF7 stale pair (review 2): a sign-out while getUser's request is out -> the late 401 clears nothing more, refreshes nothing, and nothing is stored back ({ user: null }); the SAME account refreshed meanwhile by ensureFresh -> getUser answers with the user on the new pair after ONE refresh in all (it used to POST the rotated refresh token a second time)", async () => {
+      const A = jwt(-3600, "soA"), A2 = jwt(3600, "soA2");
+      df7Reset(); setSession(A, "rA"); a3calls.length = 0;
+      let h = df7Hold();
+      answer = (c) => c.url.includes("/auth/v1/user") ? h.p : isRefresh(c) ? resp(200, tokenBody(A2, "rA2")) : resp(500, "unexpected");
+      let late = A3.auth.getUser();
+      await df7Tick();
+      A3.auth._clearSession();
+      h.release(resp(401, {}));
+      let g = await late;
+      assert.ok(g && g.user === null && !g.error, "signed out meanwhile: no user, no network error: " + JSON.stringify(g));
+      assert.strictEqual(a3calls.filter(isRefresh).length, 0, "no refresh after the sign-out");
+      assert.deepStrictEqual(df7Pair(), [null, null], "nothing stored back");
+      // the same account: ensureFresh rotates A -> A2 while getUser's /user (bearer A) is out
+      setSession(A, "rA"); a3calls.length = 0; h = df7Hold();
+      answer = (c) => {
+        if (c.url.includes("/auth/v1/user")) return c.bearer === A ? h.p : c.bearer === A2 ? resp(200, { id: "u1" }) : resp(401, {});
+        if (isRefresh(c)) return c.body && c.body.refresh_token === "rA" ? resp(200, tokenBody(A2, "rA2")) : resp(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Already Used" });
+        return resp(500, "unexpected");
+      };
+      late = A3.auth.getUser();
+      await df7Tick();
+      const ef = await A3.auth.ensureFresh();
+      assert.ok(ef.ok && ef.refreshed, "ensureFresh rotated the pair: " + JSON.stringify(ef));
+      h.release(resp(401, { msg: "JWT expired" }));
+      g = await late;
+      assert.ok(g && g.user && g.user.id === "u1", "getUser answers with the user on the new pair: " + JSON.stringify(g));
+      assert.strictEqual(a3calls.filter(isRefresh).length, 1, "one refresh in all (the rotated rA is not POSTed again)");
+      assert.deepStrictEqual(df7Pair(), [A2, "rA2"], "the rotated pair stays");
+      df7Reset();
+    });
+    await acheck("DF7 stale pair (review 2): a refresh still out when account B signs in (or the person signs out) -> its success is dropped (never stored over B's pair, never signing a signed-out device back in) and its rejection clears nothing and raises no banner over B - for getUser and for ensureFresh", async () => {
+      const A = jwt(-3600, "rfA"), B = jwt(3600, "rfB"), A2 = jwt(3600, "rfA2");
+      for (const [who, refreshOk] of [["getUser", true], ["getUser", false], ["ensureFresh", true], ["ensureFresh", false]]) {
+        const label = who + ", A's refresh " + (refreshOk ? "succeeds" : "rejected");
+        df7Reset(); setSession(A, "rA"); a3calls.length = 0; events.length = 0;
+        const h = df7Hold();
+        answer = (c) => {
+          if (c.url.includes("/auth/v1/user")) return c.bearer === B ? resp(200, { id: "uB" }) : resp(401, { msg: "JWT expired" });
+          if (c.url.includes("grant_type=password")) return resp(200, { ...tokenBody(B, "rB"), user: { id: "uB" } });
+          if (isRefresh(c)) return h.p;
+          return resp(500, "unexpected");
+        };
+        const call = who === "getUser" ? A3.auth.getUser() : A3.auth.ensureFresh();
+        await df7Tick();
+        assert.strictEqual(a3calls.filter(isRefresh).length, 1, label + ": A's refresh is out");
+        await A3.auth.signIn("b@example.invalid", "placeholder-pw");
+        h.release(refreshOk ? resp(200, tokenBody(A2, "rA2")) : resp(400, { error: "invalid_grant" }));
+        const r = await call;
+        assert.deepStrictEqual(df7Pair(), [B, "rB"], label + ": B's pair stays stored: " + JSON.stringify(r));
+        assert.strictEqual(A3.auth.sessionExpired, false, label + ": no banner over B");
+        if (who === "ensureFresh") assert.deepStrictEqual({ ok: r.ok, expired: r.expired, reason: r.reason }, { ok: false, expired: false, reason: "network" }, label);
+        else assert.ok(r && r.user && r.user.id === "uB", label + ": getUser answers about B: " + JSON.stringify(r));
+      }
+      // a sign-out while the refresh is out: its success is not stored back
+      df7Reset(); setSession(A, "rA"); a3calls.length = 0;
+      const h2 = df7Hold();
+      answer = (c) => isRefresh(c) ? h2.p : resp(500, "unexpected");
+      const ef = A3.auth.ensureFresh();
+      await df7Tick();
+      A3.auth._clearSession();
+      h2.release(resp(200, tokenBody(A2, "rA2")));
+      const r2 = await ef;
+      assert.deepStrictEqual(df7Pair(), [null, null], "signed out meanwhile: nothing stored back: " + JSON.stringify(r2));
+      assert.strictEqual(r2.ok, false, "not a refresh");
       df7Reset();
     });
     // syncScheduleDaysNow lifted out of the component (the app-safety-2 harness): a 401 / 403 must NOT arm the
@@ -7844,25 +7948,32 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("DF7 pins (config.js): authAnswerKind decides every Auth answer - getUser, _refresh and _probeLinkPair (both requests) treat only 'rejected' as dead; ensureFresh and getUser read only an explicit `rejected` from the shared refresh; signIn and resetPassword wrap the fetch in try/catch with res.json().catch (updatePassword's shape)", () => {
       const fnOf = (head, next) => { const i = cfg.indexOf(head); const j = cfg.indexOf(next, i + head.length); assert.ok(i > 0 && j > i, head); return cfg.slice(i, j); };
-      const getUser = fnOf("  async getUser() {", "  async _refresh(refreshToken, opts) {");
+      // second review fixes (10/2) - pins moved deliberately: getUser(opts) (opts.again: the one re-ask about a changed pair);
+      // a non-rejected refresh answers "network" only while the pair is unchanged; the 5xx wording is authServerDownMessage
+      const getUser = fnOf("  async getUser(opts) {", "  async _refresh(refreshToken, opts) {");
       const refresh = fnOf("  async _refresh(refreshToken, opts) {", "  async signOut() {");
       const probe = fnOf("  async _probeLinkPair(accessToken, refreshToken) {", "  getAuthHeaders() {");
       const ensure = fnOf("  async ensureFresh(opts) {", "  _clearSession() {");
-      const signIn = fnOf("  async signIn(email, password) {", "  async getUser() {");
+      const signIn = fnOf("  async signIn(email, password) {", "  async getUser(opts) {");
       const reset = fnOf("  async resetPassword(email) {", "  async updatePassword(newPassword) {");
-      assert.ok(getUser.includes('if (authAnswerKind(res.status) !== "rejected") {') && getUser.includes("if (!refreshed?.rejected) return { user: null, error: \"network\" };"), "getUser");
+      assert.ok(getUser.includes('if (authAnswerKind(res.status) !== "rejected") {') && getUser.includes('if (!refreshed?.rejected) return samePair() ? { user: null, error: "network" } : askAgain();'), "getUser");
       assert.ok(refresh.includes('if (authAnswerKind(res.status) !== "rejected") {'), "_refresh");
       assert.ok(probe.includes('if (authAnswerKind(res.status) !== "rejected") return { error: "network", status: res.status };') && probe.includes('authAnswerKind(r2.status) === "rejected" ? { dead: true, status: r2.status } : { error: "network", status: r2.status }'), "_probeLinkPair (both requests)");
       assert.ok(ensure.includes("if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: \"network\" };"), "ensureFresh");
       [["signIn", signIn], ["resetPassword", reset]].forEach(([n, body]) => {
         assert.ok(/try \{[\s\S]*?fetch\(/.test(body) && body.includes("await res.json().catch(() => null)") && body.includes('return { ' + (n === "signIn" ? "user: null, " : "") + 'error: "No connection - try again" };'), n + ": try/catch + res.json().catch");
         // review of Do first 7 (10/2): a 5xx / 408 says try again before GoTrue's words are read
-        const down = body.indexOf("if (authServerDown(res.status)) return { " + (n === "signIn" ? "user: null, " : "") + "error: `Couldn't reach the server (HTTP ${res.status}) - try again` };");
-        assert.ok(down > 0 && down < body.indexOf("data.msg || data.error_description"), n + ": the server-down wording comes first");
+        const down = body.indexOf("if (authServerDown(res.status)) return { " + (n === "signIn" ? "user: null, " : "") + "error: authServerDownMessage(res.status, data) };");
+        assert.ok(down > 0 && down < body.indexOf("data.msg || data.error_description") && body.indexOf("const data = (await res.json().catch(() => null)) || {};") < down, n + ": the body is read, then the server-down wording comes first");
       });
       const sdSrc = fnOf("function authServerDown(status) {", "\n}\n") + "\n}";
       const serverDown = new Function(sdSrc + "\nreturn authServerDown;")();
       assert.deepStrictEqual([500, 502, 503, 408, 429, 400, 404, 200].map(serverDown), [true, true, true, true, false, false, false, false], "authServerDown: 5xx and 408 only");
+      const smSrc = fnOf("function authServerDownMessage(status, data) {", "\n}\n") + "\n}";
+      const msgOf = new Function(smSrc + "\nreturn authServerDownMessage;")();
+      assert.strictEqual(msgOf(500, { msg: "Error sending recovery email" }), "Couldn't reach the server (HTTP 500: Error sending recovery email) - try again");
+      assert.strictEqual(msgOf(503, { error_description: "  upstream\n down " }), "Couldn't reach the server (HTTP 503: upstream down) - try again", "one line, trimmed");
+      assert.deepStrictEqual([msgOf(502, {}), msgOf(502, null), msgOf(500, { msg: 42 }), msgOf(500, { msg: "" })], ["Couldn't reach the server (HTTP 502) - try again", "Couldn't reach the server (HTTP 502) - try again", "Couldn't reach the server (HTTP 500) - try again", "Couldn't reach the server (HTTP 500) - try again"], "no words (an HTML page, no message, a non-string) - the bare wording");
     });
   })();
 
@@ -8011,7 +8122,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("DF8 pins: the header's 'N errors' button is the ONLY opener of Recent errors (it never opens by itself); the dialog lists the stack newest first with each entry's Copy, Clear and Close; sign-out empties the stack", () => {
       // review of Do first 8 (10/2) - pin moved deliberately: the button opens through openErrorLog (it remembers the opener)
       assert.ok(src.includes('{errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog}'), "the header button");
-      assert.ok(src.includes('{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}'), "its label");
+      // second review fixes (10/2) - pin moved deliberately: the label sits in the visible pill inside the (transparent) button
+      assert.ok(src.includes('<span data-testid="hdr-errors-pill" style={{border:"1px solid #FF8A8A",borderRadius:9,padding:"2px 8px",lineHeight:"12px"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</span></button>}'), "its label");
       assert.strictEqual(count("setShowErrorLog(true)"), 1, "opened from one place");
       assert.ok(src.includes("const openErrorLog = () => { errorLogOpenerRef.current = document.activeElement; setShowErrorLog(true); };"), "... openErrorLog");
       assert.strictEqual(count("onClick={openErrorLog}"), 1, "opened from the header only");
@@ -8041,6 +8153,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(t390.length > 500, "the toast-390 step");
       assert.strictEqual((smoke.match(/data-testid=toast-box/g) || []).length, (t390.match(/data-testid=toast-box/g) || []).length, "no smoke read of the box outside the toast-390 geometry step");
       assert.ok(!/toast-box[^\n]{0,80}textContent/.test(t390), "and that step reads no text off the box");
+      // second review fixes (10/2): the same page at 1180 x 800 - a pick inside the day editor (or a spacer) grows the dialog
+      // with no render of the app; Save and Cancel must stay clear (the ResizeObserver re-measure)
+      assert.ok(t390.includes('const T8b = "Do first 8 toast 1180x800 editor resize";') && t390.includes("await pt.setViewportSize({ width: 1180, height: 800 });") && t390.includes('x.getAttribute("data-eligible") === "false"') && t390.includes('sp.style.height = "600px"') && t390.includes("Save's centre lands in the toast after the dialog grew"), "the 1180 x 800 editor-resize check");
     });
 
     // ---- review of Do first 8 (10/2) ----
@@ -8053,20 +8168,114 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const box = liftOrNull('<div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast}', "\n        </div>\n      )}") || "";
       assert.ok(box.includes('margin:"-10px -12px -10px 0",minWidth:36,minHeight:36'), "toast-close 36 x 36 (was 32, under the app's 36 px rule)");
     });
-    check("DF8 review pins: toastLift is measured in a layout effect - only while a toast AND the day editor or the claim sheet are up (never over a painter sheet, where the toast sits at the top); it lifts the box to 8 px above the dialog's action row (editor-footer / claim-actions) when the box overlaps it, and stays lifted while the dialog is open", () => {
+    // second review fixes (10/2) - pins moved deliberately: the measurement is toastLiftNow(prev), shared by the layout
+    // effect and the observer below; the toastLiftRef mirror; no lift off the top of the screen
+    check("DF8 review pins: toastLift is measured in a layout effect - only while a toast AND the day editor or the claim sheet are up (never over a painter sheet, where the toast sits at the top); toastLiftNow lifts the box to 8 px above the dialog's action row (editor-footer / claim-actions) when the box overlaps it, keeps following the row once lifted, and never lifts it off the top of the screen", () => {
       assert.ok(src.includes("const { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } = React;"), "useLayoutEffect in scope");
       const eff = liftOrNull("  const [toastLift, setToastLift] = useState(0);", "\n  });\n") || "";
+      assert.ok(eff.includes("const toastLiftRef = useRef(0);"), "the mirror the observer compares with");
       assert.ok(eff.includes("useLayoutEffect(() => {"), "a layout effect (no flash at the old place)");
-      assert.ok(eff.includes('const box = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? document.querySelector("[data-testid=toast-box]") : null;'), "when");
-      assert.ok(eff.includes('document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")'), "the action rows");
-      assert.ok(eff.includes("if (toastLift || (b.bottom > r.top && b.top < r.bottom)) lift = Math.max(0, Math.ceil(window.innerHeight - r.top + 8));"), "the overlap test and the lift");
-      assert.ok(eff.includes("if (lift !== toastLift) setToastLift(lift);"), "set only on a change (no render loop)");
+      assert.ok(eff.includes("const lift = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? toastLiftNow(toastLift) : 0;"), "when");
+      assert.ok(eff.includes("toastLiftRef.current = lift;") && eff.includes("if (lift !== toastLift) setToastLift(lift);"), "the mirror, and set only on a change (no render loop)");
+      const now = liftOrNull("  const toastLiftNow = (prev) => {", "\n  };\n") || "";
+      assert.ok(now.includes('document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")'), "the action rows");
+      assert.ok(now.includes("if (!(prev || (b.bottom > r.top && b.top < r.bottom))) return 0;") && now.includes("if (r.top - 8 - b.height < 8) return 0;") && now.includes("return Math.max(0, Math.ceil(window.innerHeight - r.top + 8));"), "the overlap test, the top guard and the lift");
       assert.strictEqual(count('<div data-testid="claim-actions" style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>'), 1, "the claim sheet's action row is findable");
       assert.strictEqual(count('data-testid="editor-footer"'), 1, "the day editor's action row");
+    });
+    // A DOM stand-in for the toast-lift code: rects by testid, the dialog the row sits in, window listeners, ResizeObserver
+    const df8Dom = (rowId) => {
+      const rowSel = "[data-testid=" + (rowId || "editor-footer") + "]";
+      const rects = { box: null, row: null };
+      const listeners = { win: [], dlg: [] };
+      const dlg = { addEventListener: (t, f) => listeners.dlg.push([t, f]), removeEventListener: (t, f) => { listeners.dlg = listeners.dlg.filter(x => x[1] !== f); } };
+      const row = { getBoundingClientRect: () => rects.row, closest: (sel) => sel === "[role=dialog]" ? dlg : null };
+      const box = { getBoundingClientRect: () => rects.box };
+      const document = { querySelector: (sel) => sel === "[data-testid=toast-box]" ? (rects.box ? box : null) : sel === rowSel ? (rects.row ? row : null) : null };
+      const window = { innerHeight: 800, addEventListener: (t, f) => listeners.win.push([t, f]), removeEventListener: (t, f) => { listeners.win = listeners.win.filter(x => x[1] !== f); } };
+      const ros = [];
+      class ResizeObserver { constructor(cb) { this.cb = cb; this.els = []; this.off = false; ros.push(this); } observe(el) { this.els.push(el); } disconnect() { this.off = true; this.els = []; } }
+      const R = (top, h) => ({ top, bottom: top + h, height: h });
+      return { rects, listeners, dlg, row, box, document, window, ResizeObserver, ros, R };
+    };
+    const df8LiftNow = (d) => new Function("document", "window", lifted(liftOrNull("  const toastLiftNow = (prev) => {", "\n  };\n"), "toastLiftNow") + "\n  };\nreturn toastLiftNow;")(d.document, d.window);
+    check("DF8 toastLiftNow (lifted and run): no row / no box -> 0; a box clear of the action row -> 0; overlapping -> 8 px above the row (innerHeight - row top + 8); once lifted it follows the row when the row moves (prev); no room above the row (a claim sheet scrolled up) -> back down (0)", () => {
+      const d = df8Dom();
+      const now = df8LiftNow(d);
+      assert.strictEqual(now(0), 0, "no toast box");
+      d.rects.box = d.R(711, 65);
+      assert.strictEqual(now(0), 0, "no action row");
+      d.rects.row = d.R(593, 89);
+      assert.strictEqual(now(0), 0, "1180 x 800 at open: the row (593-682) is clear of the box (711-776)");
+      d.rects.row = d.R(671, 89);
+      assert.strictEqual(now(0), 800 - 671 + 8, "the row moved under the box (671-760): lifted to 8 px above it");
+      d.rects.row = d.R(690, 89); d.rects.box = d.R(800 - 137 - 65, 65);
+      assert.strictEqual(now(137), 800 - 690 + 8, "lifted: it follows the row (prev), whether or not the box still overlaps it");
+      d.rects.row = d.R(60, 40);
+      assert.strictEqual(now(118), 0, "no room for the 65 px box above a row at 60 px: back to the bottom, never off the top");
+    });
+    check("DF8 review 2 (lifted and run): while a toast and the day editor / claim sheet are up, a ResizeObserver watches the action row AND its dialog, the dialog's scroll and the window's resize re-measure (toastLiftNow with the mirror) and set the lift only when it changes; the cleanup disconnects the observer and removes both listeners; nothing is set up without a toast, without a dialog or over a painter sheet", () => {
+      const block = lifted(liftOrNull("  const toastWatch = !!(toast && (editorDay || claimSheet) && !(paintSheet || offerSheet));", "}, [toastWatch, editorDay, claimSheet]);"), "the toast-lift observer") + "}, [toastWatch, editorDay, claimSheet]);";
+      const placed = src.indexOf("  const toastWatch = !!(toast && (editorDay || claimSheet) && !(paintSheet || offerSheet));");
+      assert.ok(placed > src.indexOf("  const [claimSheet, setClaimSheet] = useState(null);") && placed > src.indexOf("  const [paintSheet, setPaintSheet] = useState(false);"), "after claimSheet / paintSheet are declared (their values are read at render time for the deps)");
+      const run = (state) => {
+        const d = df8Dom(state.claimSheet ? "claim-actions" : "editor-footer");
+        const effects = [];
+        const sets = [];
+        const ref = { current: state.lift || 0 };
+        new Function("toast", "editorDay", "claimSheet", "paintSheet", "offerSheet", "useEffect", "toastLiftNow", "toastLiftRef", "setToastLift", "document", "window", "ResizeObserver", block)(
+          state.toast, state.editorDay, state.claimSheet || null, !!state.paintSheet, state.offerSheet || null, (fn, deps) => effects.push({ fn, deps }), df8LiftNow(d), ref, (v) => sets.push(v), d.document, d.window, d.ResizeObserver);
+        return { d, effects, sets, ref };
+      };
+      const t = { toast: { msg: "x", tone: "error" }, editorDay: "2026-10-02" };
+      let x = run(t);
+      assert.strictEqual(x.effects.length, 1, "one effect");
+      assert.deepStrictEqual(x.effects[0].deps, [true, "2026-10-02", null], "deps: toastWatch, editorDay, claimSheet");
+      x.d.rects.box = x.d.R(711, 65); x.d.rects.row = x.d.R(593, 89);
+      const clean = x.effects[0].fn();
+      assert.strictEqual(typeof clean, "function", "a cleanup");
+      assert.strictEqual(x.d.ros.length, 1, "one ResizeObserver");
+      assert.deepStrictEqual(x.d.ros[0].els, [x.d.row, x.d.dlg], "it watches the action row and its dialog");
+      assert.deepStrictEqual(x.d.listeners.dlg.map(l => l[0]), ["scroll"], "the dialog's scroll");
+      assert.deepStrictEqual(x.d.listeners.win.map(l => l[0]), ["resize"], "the window's resize");
+      x.d.ros[0].cb([]);
+      assert.deepStrictEqual(x.sets, [], "a resize that leaves the row clear sets nothing");
+      x.d.rects.row = x.d.R(671, 89); // the override box: DayEditor grew, its footer moved under the toast - no render here
+      x.d.ros[0].cb([]);
+      assert.deepStrictEqual(x.sets, [137], "the observer lifts the box 8 px above the moved row");
+      assert.strictEqual(x.ref.current, 137, "and updates the mirror");
+      x.d.ros[0].cb([]);
+      assert.deepStrictEqual(x.sets, [137], "the same lift again sets nothing (no render loop)");
+      x.d.rects.row = x.d.R(700, 89);
+      x.d.listeners.dlg[0][1]();
+      assert.deepStrictEqual(x.sets, [137, 108], "a scroll that moves the row re-measures (it follows the row once lifted)");
+      x.d.listeners.win[0][1]();
+      assert.deepStrictEqual(x.sets, [137, 108], "a resize with nothing moved: no set");
+      clean();
+      assert.ok(x.d.ros[0].off, "the cleanup disconnects the observer");
+      assert.deepStrictEqual([x.d.listeners.dlg.length, x.d.listeners.win.length], [0, 0], "and removes both listeners");
+      for (const [label, st] of [["no toast", { editorDay: "2026-10-02" }], ["no dialog", { toast: t.toast }], ["a painter sheet", { ...t, paintSheet: true }], ["the offer sheet", { ...t, offerSheet: { personId: "s1" } }]]) {
+        const y = run(st);
+        y.d.rects.box = y.d.R(711, 65); y.d.rects.row = y.d.R(593, 89);
+        const c = y.effects[0].fn();
+        assert.ok(c === undefined && y.d.ros.length === 0 && y.d.listeners.win.length === 0, label + ": nothing set up");
+      }
+      const y = run(t); // a toast and the editor, but its action row is not in the page
+      y.d.rects.box = y.d.R(711, 65);
+      assert.ok(y.effects[0].fn() === undefined && y.d.ros.length === 0, "no action row: nothing set up");
+      const ce = run({ toast: t.toast, editorDay: null, claimSheet: { day: "2026-10-05", role: "primary" } });
+      ce.d.rects.box = ce.d.R(711, 65); ce.d.rects.row = ce.d.R(593, 89);
+      ce.effects[0].fn();
+      assert.ok(ce.d.ros.length === 1 && ce.d.ros[0].els[0] === ce.d.row && ce.d.listeners.dlg.length === 1, "the claim sheet's action row (claim-actions) and its dialog are watched too");
     });
     check("DF8 review pins: 'N errors' (class hdr-errors) - no inline minHeight (it beat the phone button rule: 24 px); 24 px (-7 px vertical margins) outside every @media, BEFORE the first phone block, which makes it 36 x 36 with -13 px vertical margins (the status line - and the header - keep their height: measured 67 / 191 px with or without the chip); its words follow the line's case", () => {
       const line = src.split("\n").find(l => l.includes('data-testid="hdr-errors"')) || "";
       assert.ok(!line.includes("minHeight") && line.includes('textTransform:"inherit"'), "no inline min-height: " + line.slice(0, 260));
+      // second review fixes (10/2): the 36 px box is transparent (no border, no background) - the outlined pill inside it is
+      // what shows, so where the chip wraps onto a line of its own (360 px) nothing overlaps the line above
+      const btnStyle = line.slice(line.indexOf('data-testid="hdr-errors"'), line.indexOf('<span data-testid="hdr-errors-pill"'));
+      assert.ok(btnStyle.includes('background:"none",border:"none"') && !btnStyle.includes("borderRadius") && btnStyle.includes('display:"inline-flex",alignItems:"center",justifyContent:"center"'), "the button: transparent, the pill centred in it: " + btnStyle.slice(0, 400));
+      assert.ok(line.includes('<span data-testid="hdr-errors-pill" style={{border:"1px solid #FF8A8A",borderRadius:9,padding:"2px 8px",lineHeight:"12px"}}>'), "the pill carries the outline");
       const style = src.slice(src.indexOf("<style>"), src.indexOf("</style>"));
       const wide = style.indexOf(".hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }"), phone0 = style.indexOf("@media (max-width: 600px)"), ph = style.indexOf(".hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }");
       assert.ok(wide > 0 && wide < phone0 && ph > phone0 && ph < style.indexOf("@media", phone0 + 10), "the wide rule before the first phone block, the 36 px rule inside it: " + JSON.stringify({ wide, phone0, ph }));
@@ -8094,7 +8303,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   })();
 
   /* ---------------- DF9. Review 9/27 Do first 9: My schedule / Following rows on a phone ---------------- */
-  console.log("\n[DF9] review 9/27 Do first 9 (the padlock inside the date span; the holder flex 1 1 0 with an ellipsis; Trade + Give away together in mine-acts, a line of their own at <= 600px; the list a 420 px scroller on a wide screen only - no nested scroller and no cap on a phone)");
+  console.log("\n[DF9] review 9/27 Do first 9 (the padlock inside the date span; the holder never clipped on a phone - flex 1 0 auto since the second review fixes; Trade + Give away together in mine-acts, a line of their own at <= 600px; the list a 420 px scroller on a wide screen only - no nested scroller and no cap on a phone)");
   (() => {
     const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
     const babel = require("@babel/core");
@@ -8240,7 +8449,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const phoneBlocks = media.filter(m => m.q === "@media (max-width: 600px)");
       assert.strictEqual(phoneBlocks.length, 2, "two phone blocks (the general one, then the grid's)");
       assert.ok(ul[2].at === phoneBlocks[1] && ul[2].body === "max-height: none; overflow-y: visible;", "the phone rule drops the scroller: " + JSON.stringify(ul[2]));
-      assert.ok(holder.length === 2 && holder[0].at === null && holder[0].body === "flex: 0 1 auto;" && holder[1].at === phoneBlocks[1] && holder[1].body === "flex: 1 1 0;", "the holder: its text width on a wide screen (the Following view's badges follow the name), the rest of the line on a phone: " + JSON.stringify(holder));
+      // second review fixes (10/2) - pin moved deliberately: on a phone the holder never shrinks below its words (1 0 auto,
+      // max-width 100%) - with 1 1 0 the Following view's badges right after it clipped the colleague's name at 360-390 px
+      assert.ok(holder.length === 2 && holder[0].at === null && holder[0].body === "flex: 0 1 auto;" && holder[1].at === phoneBlocks[1] && holder[1].body === "flex: 1 0 auto; max-width: 100%;", "the holder: its text width on a wide screen (the Following view's badges follow the name); on a phone the rest of the line but never less than its words, a whole row at most: " + JSON.stringify(holder));
       assert.ok(phoneBlocks[1].a > style.indexOf(".cal-grid {"), "the second phone block is the one after .cal-grid");
       assert.ok(acts.length === 1 && acts[0].at === phoneBlocks[1] && acts[0].body === "flex-basis: 100%; justify-content: flex-end;", "mine-acts takes a line of its own on a phone: " + JSON.stringify(acts));
       const btn = style.indexOf("button { min-height: 36px; }");
@@ -8293,8 +8504,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
       assert.ok(smoke.includes("const DF9_ROWS_PROBE = (scope) => {"), "the probe");
       assert.ok(smoke.includes('await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]")') && smoke.includes("DF9 390px own rows"), "the own-rows check");
-      assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every locked row is one line"), "the follower's one-line check");
+      // second review fixes (10/2) - pin moved deliberately: the follower's check reads the date / role / holder line (badges
+      // may wrap under the name), and a names check measures every Following holder at 390 / 360 / 320 px
+      assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every locked row's date / role / holder is one line") && smoke.includes("p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));"), "the follower's one-line check (a second line only for badges wrapped under the name)");
       assert.ok(smoke.includes("DF9 1180px"), "the wide-screen scroller check");
+      const names = smoke.slice(smoke.indexOf("const T9 = `DF9 follower (${theme}) names`;"), smoke.indexOf("} catch (e) { fail(`DF9 follower (${theme}) names: `"));
+      assert.ok(names.length > 500 && names.includes("for (const w of [390, 360, 320])") && names.includes('for (const t of ["H", "E", "F", "EV"])') && names.includes("clipped: h.scrollWidth > h.clientWidth + 1") && names.includes("added.forEach(s => s.remove());"), "the follower names check (real rows at 390; H + E + F + EV injected after every holder at 390 / 360 / 320, removed again)");
+      const probe = smoke.slice(smoke.indexOf("const DF9_ROWS_PROBE = (scope) => {"), smoke.indexOf("// Prompt 16 A7: the same route for ANOTHER session"));
+      assert.ok(probe.includes('const items = Array.from(r.children).filter(k => k !== acts && !k.hasAttribute("data-badge"));') && probe.includes("chipsWrapped"), "line one = the date, the role and the holder; chipsWrapped");
     });
   })();
 

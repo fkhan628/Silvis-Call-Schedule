@@ -145,6 +145,15 @@ function authServerDown(status) {
   const s = Number(status);
   return s >= 500 || s === 408;
 }
+// ... and its words: GoTrue's own message rides along when the body is a JSON error (second review fixes, 10/2) - a
+// persistent "Error sending recovery email" (an SMTP failure) or "Database error querying schema" keeps its diagnosis:
+// "Couldn't reach the server (HTTP 500: Error sending recovery email) - try again". A body that is not JSON (an HTML 502
+// page) or has no message gives the bare wording. One line, at most 140 characters of the server's text.
+function authServerDownMessage(status, data) {
+  const why = data && typeof data === "object" ? (data.msg || data.error_description || data.message) : null;
+  const words = typeof why === "string" ? why.replace(/\s+/g, " ").trim().slice(0, 140) : "";
+  return `Couldn't reach the server (HTTP ${status}${words ? ": " + words : ""}) - try again`;
+}
 // The session headers of the moment plus the caller's extras (Prefer, ...).
 // Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
 // refresh that happened a moment ago is what goes out.
@@ -943,6 +952,10 @@ const auth = {
       // authAnswerKind) marks the pair dead and raises the banner - a 5xx / 429 / 408, a thrown fetch or any other
       // answer is a network error: the pair is kept and the next poll / write tries again.
       if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: "network" };
+      // second review fixes (10/2): a newer pair (a sign-in) or a sign-out landed while the refresh was out - the rejection
+      // is about a pair no longer stored: no banner over the new session
+      const now = auth.getSession();
+      if (!now || now.refresh_token !== session.refresh_token) return { ok: false, expired: false, refreshed: false, reason: "network" };
       auth._deadRefresh = session.refresh_token;
       auth._setExpired(true);
       return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
@@ -976,8 +989,9 @@ const auth = {
       const data = (await res.json().catch(() => null)) || {};
       if (!res.ok) {
         // review of Do first 7 (10/2): a 5xx / 408 is the server failing whatever its body says - the card says try again;
-        // GoTrue's own words stay for a 4xx and a 429 ("Invalid login credentials", "Request rate limit reached")
-        if (authServerDown(res.status)) return { user: null, error: `Couldn't reach the server (HTTP ${res.status}) - try again` };
+        // GoTrue's own words stay for a 4xx and a 429 ("Invalid login credentials", "Request rate limit reached"), and ride
+        // along in the try-again wording of a 5xx (second review fixes, 10/2 - authServerDownMessage)
+        if (authServerDown(res.status)) return { user: null, error: authServerDownMessage(res.status, data) };
         const why = data.msg || data.error_description || data.message;
         if (why) return { user: null, error: why };
         return { user: null, error: authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Sign in failed (HTTP ${res.status})` };
@@ -992,9 +1006,16 @@ const auth = {
   },
 
   // Get current user from token
-  async getUser() {
+  // Second review fixes of Do first 7 (10/2): the stored pair can change while a request is out (a Retry's check hanging
+  // while another account signs in, ensureFresh refreshing the same account, a sign-out). A rejection then speaks about a
+  // pair that is no longer stored: it is never refreshed (the old account's new pair was stored over the newer sign-in -
+  // the card showed B while every write carried A's JWT) and never cleared (that removed B's pair). getUser asks once more
+  // about the pair stored now ({ again: true }; a second change answers "network", nothing touched; nothing stored -> no user).
+  async getUser(opts) {
     const session = auth.getSession();
     if (!session) return { user: null };
+    const samePair = () => { const cur = auth.getSession(); return !!cur && cur.access_token === session.access_token && cur.refresh_token === session.refresh_token; };
+    const askAgain = () => (opts && opts.again) ? { user: null, error: "network" } : auth.getUser({ again: true });
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
         headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
@@ -1010,6 +1031,7 @@ const auth = {
         console.warn(`auth.getUser: HTTP ${res.status} from /auth/v1/user is not a rejection - session kept, try again`);
         return { user: null, error: "network", status: res.status };
       }
+      if (!samePair()) return askAgain(); // the pair changed while the request was out (see above)
       // Token rejected. GoTrue may answer 401 OR 403 depending on version/
       // config — attempt a refresh on ANY auth failure when we hold a refresh
       // token, not only on 401. (This project returns 403, which the old
@@ -1024,7 +1046,8 @@ const auth = {
         // The refresh could not be attempted (network, or - Do first 7 - a 5xx / 429 / 408 from the token
         // endpoint): the session is kept and the caller sees error:"network", exactly like the first call.
         // Only an explicit rejection (400 / 401 / 403) falls through to the clear below.
-        if (!refreshed?.rejected) return { user: null, error: "network" };
+        if (!refreshed?.rejected) return samePair() ? { user: null, error: "network" } : askAgain();
+        if (!samePair()) return askAgain(); // a newer pair arrived while the refresh was out - never cleared
       }
       // Refresh wasn't possible or genuinely failed — token is dead.
       auth._clearSession();
@@ -1068,6 +1091,14 @@ const auth = {
       if (!data || typeof data.access_token !== "string") {
         console.warn(`auth._refresh: HTTP ${res.status} without an access token - session kept, refresh will be retried`);
         return { user: null, error: "network", status: res.status };
+      }
+      // Second review fixes (10/2): a sign-in, a link's pair or a sign-out landed while this request was out - its answer
+      // belongs to a pair that is no longer stored and is dropped (never stored over the newer pair, never signing a
+      // signed-out device back in); "network" to every caller, so nothing else is touched either
+      const cur = auth.getSession();
+      if (!cur || cur.refresh_token !== refreshToken) {
+        console.warn("auth._refresh: the stored session changed while the refresh was out - its answer is dropped, the stored one kept");
+        return { user: null, error: "network", stale: true };
       }
       auth._saveSession(data);
       return { user: data.user, session: data };
@@ -1123,8 +1154,10 @@ const auth = {
         }),
       });
       if (!res.ok) {
-        if (authServerDown(res.status)) return { error: `Couldn't reach the server (HTTP ${res.status}) - try again` }; // a 5xx / 408, whatever the body (review of Do first 7, 10/2)
         const data = (await res.json().catch(() => null)) || {};
+        // a 5xx / 408 says try again whatever the body (review of Do first 7, 10/2), with GoTrue's words when it sent some
+        // ("Error sending recovery email" - second review fixes, 10/2)
+        if (authServerDown(res.status)) return { error: authServerDownMessage(res.status, data) };
         return { error: data.msg || data.error_description || data.message || (authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Reset failed (HTTP ${res.status})`) };
       }
       return { error: null };

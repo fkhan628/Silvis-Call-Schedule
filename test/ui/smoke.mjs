@@ -1230,7 +1230,7 @@ const offerModeRpc = (b, json) => {
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
 };
 // Review 9/27 Do first 9 (10/1): the geometry of My schedule / Following's 90-day rows, read in the page (`scope` = a card
-// selector, or null for the whole page). A row's items other than the actions (mine-acts) are on ONE line when every
+// selector, or null for the whole page). A row's items other than the actions (mine-acts) and the badges are on ONE line when every
 // one's vertical centre lies within 6 px of the date span's (font metrics move a top by a pixel or two); `lockOutside`
 // counts padlocks that are not inside the date span; `lists` = each mine-upcoming's computed scroller.
 const DF9_ROWS_PROBE = (scope) => {
@@ -1242,7 +1242,10 @@ const DF9_ROWS_PROBE = (scope) => {
   const per = Array.from(root.querySelectorAll("[data-testid=mine-day]")).map(r => {
     const date = r.querySelector("[data-testid=mine-date]"), acts = r.querySelector("[data-testid=mine-acts]");
     const locks = Array.from(r.querySelectorAll("svg"));
-    const items = Array.from(r.children).filter(k => k !== acts);
+    // second review fixes of Do first 9 (10/2): line one is the date, the role and the holder - a Following row's badges
+    // (row items right after the holder) may wrap under the name on a phone; chipsWrapped says they did
+    const items = Array.from(r.children).filter(k => k !== acts && !k.hasAttribute("data-badge"));
+    const rowChips = Array.from(r.children).filter(k => k.hasAttribute("data-badge"));
     const dm = date ? mid(date) : null;
     const db = date ? date.getBoundingClientRect() : null, ab = acts ? acts.getBoundingClientRect() : null;
     const btns = Array.from(r.querySelectorAll("button")).map(b => { const bb = b.getBoundingClientRect(); return { id: b.getAttribute("data-testid"), text: b.textContent.trim(), h: r1(bb.height), top: Math.round(bb.top), inActs: !!(acts && acts.contains(b)) }; });
@@ -1250,7 +1253,8 @@ const DF9_ROWS_PROBE = (scope) => {
     const hd = r.querySelector("[data-testid=mine-holder]");
     const holder = hd ? { text: hd.textContent, sw: hd.scrollWidth, cw: hd.clientWidth, clipped: hd.scrollWidth > hd.clientWidth + 1 } : null;
     const chipsOutside = Array.from(r.querySelectorAll("[data-badge], [data-testid=mine-offer-tag]")).filter(c => acts && !acts.contains(c)).length;
-    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length, holder, chipsOutside,
+    const chipsWrapped = !!db && rowChips.some(c => c.getBoundingClientRect().top >= db.bottom - 1);
+    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length, holder, chipsOutside, chipsWrapped,
       spread: dm === null ? null : r1(Math.max(...items.map(k => Math.abs(mid(k) - dm)))), actsSpread: dm === null || !acts ? null : r1(Math.abs(mid(acts) - dm)),
       rowH: r1(r.getBoundingClientRect().height), dateH: db ? r1(db.height) : null, dateBottom: db ? r1(db.bottom) : null, actsTop: ab ? r1(ab.top) : null, btns };
   });
@@ -10811,6 +10815,68 @@ try {
         await pt.keyboard.press("Escape").catch(() => {});
       }
     } catch (e) { fail(`${T8}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-390.png"), fullPage: false }); } catch (e2) {} }
+    // Second review fixes of Do first 8 (10/2), 1180 x 800: a choice INSIDE the day editor (an ineligible pick brings up the
+    // override box) grows the centred dialog and moves its action row down without a render of the app - the toast, clear
+    // of the row at open, ended up over Save. The lift now re-measures on the dialog's resize (a ResizeObserver). A fresh
+    // load gives a fresh error toast; the pick only raises the override box (no draft change unless the role was locked and
+    // had to be unlocked first - a draft change, never saved: the page closes with the editor open). When the pick does not
+    // move the row under the toast (the day's data), a 600 px spacer put into the dialog does (it reaches its 92vh cap and
+    // the sticky row sits over the toast's band) - the observer does not care what resized the dialog.
+    const T8b = "Do first 8 toast 1180x800 editor resize";
+    try {
+      await pt.setViewportSize({ width: 1180, height: 800 });
+      await loadWithRetry(pt, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "toast-1180 page");
+      const up2 = await pt.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Couldn't load availability statements/.test(t.textContent || ""); }, undefined, { timeout: 30000 }).then(() => true).catch(() => false);
+      if (!up2) fail(`${T8b}: the forced availability 500 raised no "Couldn't load availability statements" toast at 1180 px`);
+      else {
+        await pt.$eval('button[data-tab="calendar"]', el => el.click()).catch(() => {});
+        await pt.waitForSelector(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, { timeout: 8000 });
+        await pt.$eval(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, el => el.click());
+        await pt.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+        await pt.waitForTimeout(150);
+        const geo = () => pt.evaluate(() => {
+          const box = document.querySelector("[data-testid=toast-box]"), foot = document.querySelector("[data-testid=editor-footer]");
+          if (!box || !foot) return null;
+          const b = box.getBoundingClientRect(), f = foot.getBoundingClientRect();
+          const hit = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { covered: !!(at && box.contains(at)), at: at ? (at.getAttribute("data-testid") || at.tagName) : null }; };
+          const cancel = Array.from(foot.querySelectorAll("button")).find(x => /^(Cancel|Close)$/.test((x.textContent || "").trim())) || null;
+          return { box: { top: Math.round(b.top), bottom: Math.round(b.bottom), lifted: box.style.bottom !== "" && !/calc/.test(box.style.bottom) }, foot: { top: Math.round(f.top), bottom: Math.round(f.bottom) }, save: hit(document.querySelector("[data-testid=editor-save]")), cancel: hit(cancel), override: !!document.querySelector("[data-testid=override-confirm]") };
+        });
+        const g0 = await geo();
+        // the pick: an option marked ineligible in the primary select, else the backup select (a locked role is unlocked first)
+        let how = null;
+        for (const role of ["primary", "backup"]) {
+          const st = await pt.evaluate((role) => { const s = document.querySelector(`[data-testid=editor-${role}]`); if (!s) return null; const o = Array.from(s.options).find(x => x.getAttribute("data-eligible") === "false" && x.value && x.value !== s.value); return { disabled: s.disabled, value: o ? o.value : null, label: o ? o.textContent : null }; }, role);
+          if (!st || !st.value) continue;
+          if (st.disabled) { await pt.click(`[data-testid=editor-lock-${role}]`); await pt.waitForTimeout(100); }
+          await pt.selectOption(`[data-testid=editor-${role}]`, st.value);
+          how = `${role} -> '${(st.label || st.value).trim().slice(0, 40)}' (ineligible${st.disabled ? ", the role unlocked first" : ""})`;
+          break;
+        }
+        await pt.waitForTimeout(300);
+        let g1 = await geo();
+        const moved = (g) => !!g && !!g0 && g.foot.top > g0.foot.top && g.foot.top < g0.box.bottom && g.foot.bottom > g0.box.top;
+        let via = how ? `the pick ${how}${g1 && g1.override ? " raised the override box" : ""}` : "no ineligible option to pick";
+        // the case under test needs a toast NOT lifted at open (lifted, it already follows the row); when the pick did not
+        // move the row under it, the spacer does
+        if (g0 && !g0.box.lifted && !moved(g1)) {
+          await pt.evaluate(() => { const foot = document.querySelector("[data-testid=editor-footer]"); const sp = document.createElement("div"); sp.setAttribute("data-df8-probe", "1"); sp.style.height = "600px"; foot.parentNode.insertBefore(sp, foot); });
+          await pt.waitForTimeout(300);
+          g1 = await geo();
+          via += ", then a 600 px spacer in the dialog";
+        }
+        const bad = [];
+        if (!g0 || !g1) bad.push(`no geometry (${JSON.stringify({ g0, g1 })})`);
+        else {
+          if (!g0.box.lifted && !moved(g1)) bad.push(`the action row never moved into the toast's band at open (${g0.box.top}-${g0.box.bottom}) - the resize path is not exercised (${JSON.stringify(g1.foot)})`);
+          if (!g1.save || g1.save.covered) bad.push(`Save's centre lands in the toast after the dialog grew (${JSON.stringify(g1.save)})`);
+          if (!g1.cancel || g1.cancel.covered) bad.push(`Cancel's centre lands in the toast after the dialog grew (${JSON.stringify(g1.cancel)})`);
+        }
+        if (g0 && g0.box.lifted) console.log(`     (${T8b}: the toast was already lifted when the editor opened (today's dialog reaches the toast's band) - the not-lifted case is not exercised this run; Save / Cancel still checked after the change)`);
+        if (bad.length) { fail(`${T8b}: ${bad.join(" | ")} - ${via}; at open ${JSON.stringify(g0)}, after ${JSON.stringify(g1)}`); await pt.screenshot({ path: path.join(OUT, "failure-toast-1180-editor.png"), fullPage: false }).catch(() => {}); }
+        else ok(`${T8b}: at open the row sat at ${g0.foot.top}-${g0.foot.bottom} and the toast at ${g0.box.top}-${g0.box.bottom}${g0.box.lifted ? " (lifted)" : ""}; ${via} moved the row to ${g1.foot.top}-${g1.foot.bottom} with no render of the app - the toast followed to ${g1.box.top}-${g1.box.bottom}, Save and Cancel are not covered`);
+      }
+    } catch (e) { fail(`${T8b}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-1180.png"), fullPage: false }); } catch (e2) {} }
     await pt.close();
     toast390Forced500Lines = 0; // a forced answer whose console line never came must not absorb a later page's real 500
   }
@@ -11394,11 +11460,44 @@ try {
           else if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) fail(`DF9 follower (${theme}) 390px: a list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
           else if (!locked.length) console.log(`     (DF9 follower (${theme}) 390px: no locked row in the followed lists this run - the one-line check is not exercised)`);
           else {
-            const bad = locked.filter(p => p.lockOutside || p.spread === null || p.spread > 6 || p.btns.length || p.rowH > p.dateH + 16);
+            // second review fixes (10/2): badges that do not fit after the name wrap under it (chipsWrapped) - the date / role /
+            // holder line stays one line, the row may then be two
+            const bad = locked.filter(p => p.lockOutside || p.spread === null || p.spread > 6 || p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));
+            const wrapped = locked.filter(p => p.chipsWrapped).length;
             if (bad.length) fail(`DF9 follower (${theme}) 390px: ${bad.length} of ${locked.length} locked row(s) take more than one line: ${JSON.stringify(bad.slice(0, 2))}`);
-            else ok(`DF9 follower (${theme}) 390px: every locked row is one line (${locked.length} of ${g.rows} row(s); ${Math.max(...locked.map(p => p.rowH))} px tall at most, the padlock inside the date span); the lists are part of the page (no nested scroller)`);
+            else ok(`DF9 follower (${theme}) 390px: every locked row's date / role / holder is one line (${locked.length} of ${g.rows} row(s); ${Math.max(...locked.map(p => p.rowH))} px tall at most, the padlock inside the date span${wrapped ? `; ${wrapped} row(s) with badges wrapped under the name` : ""}); the lists are part of the page (no nested scroller)`);
           }
         } catch (e) { fail(`DF9 follower (${theme}) 390px: ` + errLine(e)); }
+        // Second review fixes of Do first 9 (10/2): a colleague's name on a Following row is never clipped on a phone (with
+        // the holder at flex 1 1 0 the badges right after it left it 11-68 px - "bac..."). The real rows at 390 px; then the
+        // worst case, H + E + F + EV injected right after every row's holder (where the Following view puts its badges),
+        // measured at 390, 360 and 320 px and removed in the same evaluate. A row never scrolls sideways either.
+        try {
+          const T9 = `DF9 follower (${theme}) names`;
+          const real = await pf.evaluate(DF9_ROWS_PROBE, null);
+          const realBad = real ? real.per.filter(p => !p.holder || p.holder.clipped) : [];
+          const worst = [];
+          for (const w of [390, 360, 320]) {
+            await pf.setViewportSize({ width: w, height: 844 });
+            await pf.waitForTimeout(150);
+            worst.push(await pf.evaluate((w) => {
+              const rows = Array.from(document.querySelectorAll("[data-testid=following-card] [data-testid=mine-day]"));
+              const mk = (t) => { const s = document.createElement("span"); s.setAttribute("data-df9-probe", "1"); s.textContent = t; s.style.cssText = "font-size:9px;font-weight:800;padding:0 5px;border-radius:4px;background:#e8ecf0;color:#1F2A3A"; return s; };
+              const added = [];
+              for (const r of rows) { let at = r.querySelector("[data-testid=mine-holder]"); if (!at) continue; for (const t of ["H", "E", "F", "EV"]) { const s = mk(t); at.after(s); at = s; added.push(s); } }
+              const per = rows.map(r => { const h = r.querySelector("[data-testid=mine-holder]"); return h ? { day: r.getAttribute("data-day"), text: h.textContent, sw: h.scrollWidth, cw: h.clientWidth, clipped: h.scrollWidth > h.clientWidth + 1, rowOver: r.scrollWidth > r.clientWidth + 1 } : { day: r.getAttribute("data-day"), missing: true }; });
+              added.forEach(s => s.remove());
+              return { w, rows: per.length, bad: per.filter(p => p.missing || p.clipped || p.rowOver), left: document.querySelectorAll("[data-df9-probe]").length };
+            }, w));
+          }
+          await pf.setViewportSize({ width: 390, height: 844 });
+          await pf.waitForTimeout(150);
+          const wb = worst.filter(x => x.bad.length || x.left || !x.rows);
+          if (!real || !real.rows) fail(`${T9}: no Following row to measure`);
+          else if (realBad.length) fail(`${T9}: ${realBad.length} of ${real.rows} real row(s) clip the colleague's name at 390 px: ${JSON.stringify(realBad.slice(0, 3).map(p => p.holder))}`);
+          else if (wb.length) fail(`${T9}: with H + E + F + EV after the holder - ${wb.map(x => `${x.w} px: ${x.bad.length} of ${x.rows} row(s) clipped / overflowing ${JSON.stringify(x.bad.slice(0, 2))}${x.left ? `, ${x.left} probe span(s) left` : ""}`).join(" | ")}`);
+          else ok(`${T9}: no Following row clips the colleague's name - ${real.rows} real row(s) at 390 px (e.g. '${real.per[0].holder.text}'), and with H + E + F + EV injected after every holder at ${worst.map(x => x.w).join(" / ")} px (badges wrap under the name, a long name takes its own line; no row scrolls sideways)`);
+        } catch (e) { fail(`DF9 follower (${theme}) names: ` + errLine(e)); }
         // (c) Settings -> Live calendar sync
         await pf.click('button[data-tab="settings"]');
         await pf.waitForSelector("[data-testid=follow-sync]", { timeout: 8000 });

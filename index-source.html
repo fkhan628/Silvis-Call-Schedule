@@ -39,7 +39,9 @@
     }
     /* The header's "N errors" (Do first 8): 24 px tall on a wide screen; the phone block below makes it a 36 x 36 tap target.
        Both keep the status line's height (negative vertical margins; measured 10/2: the header 67 px at 1180, 191 px at
-       390, with the chip or without). */
+       390, with the chip or without). Second review fixes (10/2): the box is transparent - the outlined pill inside it is
+       what shows, so where the status words wrap the chip onto a line of its own (360 px) nothing overlaps the line above;
+       that wrap adds the one line (+12 px) and is the only height change. */
     .hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }
     /* Mobile improvements */
     @media (max-width: 600px) {
@@ -95,7 +97,9 @@
       .mine-upcoming { max-height: none; overflow-y: visible; }
     }
     /* A row's holder ("backup: Burchett"): its text width on a wide screen, so the Following view's badges follow the
-       name; the phone block gives it the rest of the line (flex 1 1 0, the inline ellipsis clips a long one). */
+       name; the phone block lets it grow into the rest of the line but never shrink below its words (flex 1 0 auto,
+       max-width 100%) - when they do not fit beside the date and role the holder takes a line of its own, and badges
+       that do not fit after it wrap under it. The inline ellipsis is left only for words longer than a whole row. */
     .mine-holder { flex: 0 1 auto; }
     /* A row's holiday-unit badge: the unit's name on a wide screen; on a phone the letter H (the legend above the list),
        as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
@@ -143,10 +147,14 @@
       .rules-sum-line > .rules-sum-family { flex: none; }
       /* Do first 9: no nested scroller on a phone - the whole 90-day list is part of the page (no cap on the rows); on the
          own view mine-acts (the badges, the offer tag, Trade + Give away) takes the row's second line, right-aligned, so
-         the date (padlock inside), role and holder keep one line and the holder's name is not clipped */
+         the date (padlock inside), role and holder keep one line and the holder's name is not clipped. Second review
+         fixes (10/2): the holder never shrinks below its words (1 0 auto; it was 1 1 0 with an ellipsis) - on the
+         Following view the badges sat right after it and left it 11-68 px at 360-390 px ("bac...", the colleague's
+         name lost), and at 320 px every row clipped; now badges that do not fit wrap under the name, and a name that
+         does not fit beside the date and role takes a line of its own (max-width 100%: a whole row at most). */
       .mine-upcoming { max-height: none; overflow-y: visible; }
       .mine-acts { flex-basis: 100%; justify-content: flex-end; }
-      .mine-holder { flex: 1 1 0; }
+      .mine-holder { flex: 1 0 auto; max-width: 100%; }
       .mine-hol-name { display: none; }
       .mine-hol-letter { display: inline; }
     }
@@ -1503,16 +1511,24 @@ function CallSchedule() {
   // action row (Cancel / Save, Confirm) - at 390 px a long error (now up 8-22 s) covered Save, and the next tap there
   // only dismissed the toast. When the box overlaps that row it is lifted to 8 px above it (toastLift: px from the
   // viewport's bottom; 0 = the ordinary bottom inset) and stays lifted while the dialog is open. Measured after a render
-  // while a toast and one of those dialogs are up (claimSheet / paintSheet are declared further down - read at effect time).
+  // while a toast and one of those dialogs are up (claimSheet / paintSheet are declared further down - read at effect time),
+  // and again when the dialog changes size or scrolls without a render here (the observer after claimSheet's declaration).
   const [toastLift, setToastLift] = useState(0);
-  useLayoutEffect(() => {
-    let lift = 0;
-    const box = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? document.querySelector("[data-testid=toast-box]") : null;
+  const toastLiftRef = useRef(0); // the lift last measured - the observer compares with it, never with a stale render's
+  // The lift the box needs now (prev = the current lift: once lifted it follows the row). Second review fixes (10/2): never
+  // lifted off the top of the screen - when there is no room above the row (a claim sheet scrolled up) it goes back down.
+  const toastLiftNow = (prev) => {
+    const box = document.querySelector("[data-testid=toast-box]");
     const row = box ? (document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")) : null;
-    if (row) {
-      const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
-      if (toastLift || (b.bottom > r.top && b.top < r.bottom)) lift = Math.max(0, Math.ceil(window.innerHeight - r.top + 8));
-    }
+    if (!row) return 0;
+    const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+    if (!(prev || (b.bottom > r.top && b.top < r.bottom))) return 0;
+    if (r.top - 8 - b.height < 8) return 0;
+    return Math.max(0, Math.ceil(window.innerHeight - r.top + 8));
+  };
+  useLayoutEffect(() => {
+    const lift = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? toastLiftNow(toastLift) : 0;
+    toastLiftRef.current = lift;
     if (lift !== toastLift) setToastLift(lift);
   });
 
@@ -5665,6 +5681,25 @@ function CallSchedule() {
   const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
   const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens
   const claimReturnRef = useRef(null);                 // the element that opened the sheet - focus goes back to it on close
+  // Second review fixes of Do first 8 (10/2): toastLift (with the toast state, far above) is measured after a render
+  // here, but a choice inside the day editor (a pick that brings up the override box, a warning) re-renders DayEditor
+  // alone - the centred dialog grows and its action row moves down under a toast that was clear of it (1180 x 800: Save
+  // covered). While a toast and the day editor / claim sheet are up, a ResizeObserver on the dialog and its action row,
+  // the dialog's scroll (the claim sheet's row is not sticky) and the window's resize measure again (toastLiftNow) and
+  // set the lift when it changes. All of it is removed when the toast or the dialog goes.
+  const toastWatch = !!(toast && (editorDay || claimSheet) && !(paintSheet || offerSheet));
+  useEffect(() => {
+    if (!toastWatch) return undefined;
+    const row = document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]");
+    if (!row) return undefined;
+    const dlg = row.closest("[role=dialog]");
+    const again = () => { const lift = toastLiftNow(toastLiftRef.current); if (lift !== toastLiftRef.current) { toastLiftRef.current = lift; setToastLift(lift); } };
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(again) : null;
+    if (ro) { ro.observe(row); if (dlg) ro.observe(dlg); }
+    if (dlg) dlg.addEventListener("scroll", again, { passive: true });
+    window.addEventListener("resize", again);
+    return () => { if (ro) ro.disconnect(); if (dlg) dlg.removeEventListener("scroll", again); window.removeEventListener("resize", again); };
+  }, [toastWatch, editorDay, claimSheet]);
   // 'Last announced' must not depend on the feed's 50-row window: the newest
   // open_shifts rows are fetched on their own when the board opens (auth-only
   // table: readAuthOnlyTable returns null without a fresh token - kept as is).
@@ -6663,7 +6698,10 @@ function CallSchedule() {
               {/* Review 9/27 Do first 8: the stack of the last errors (newest first) - opens Recent errors */}
               {/* review of Do first 8 (10/2): class hdr-errors - 24 px on a wide screen; on a phone a 36 x 36 tap target; negative
                   vertical margins keep the status line's height (the inline minHeight:24 beat the phone button rule) */}
-              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog} title="The last error messages, newest first - read or copy them again" style={{marginLeft:8,background:"none",border:"1px solid #FF8A8A",color:"#FF8A8A",borderRadius:9,padding:"2px 8px",fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"inherit",cursor:"pointer",fontFamily:font,verticalAlign:"middle"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</button>}
+              {/* second review fixes (10/2): the button is the tap target only (transparent, no border); the pill inside it
+                  (hdr-errors-pill) is what shows - at 360 px, where the chip wraps onto a line of its own, the 36 px
+                  outlined box overlapped "Silvis Surgical Care" above by 11 px; the pill (17 px) stays on its line */}
+              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog} title="The last error messages, newest first - read or copy them again" style={{marginLeft:4,background:"none",border:"none",color:"#FF8A8A",padding:"0 4px",fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"inherit",cursor:"pointer",fontFamily:font,verticalAlign:"middle",display:"inline-flex",alignItems:"center",justifyContent:"center"}}><span data-testid="hdr-errors-pill" style={{border:"1px solid #FF8A8A",borderRadius:9,padding:"2px 8px",lineHeight:"12px"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</span></button>}
             </p>
           </div>
         </div>
@@ -7408,14 +7446,17 @@ function CallSchedule() {
                 // Review 9/27 Do first 9 (10/1): the list is a 420 px scroller on a wide screen only - the class's phone rule
                 // (<= 600px, the <style> block) drops max-height / overflow-y, so the page scrolls, never a box inside it; no
                 // cap on the rows. A row: the padlock sits INSIDE the date span (it used to wrap onto a line of its own at
-                // 390 px), the holder takes what is left of the line (flex 1 1 0, ellipsis), and on the own view Trade + Give
+                // 390 px), the holder takes what is left of the line (see below), and on the own view Trade + Give
                 // away sit together in mine-acts - on a phone a line of their own, right-aligned (each >= 36 px by the
                 // phone button rule). The inner own guards keep the pinned button lines. Review of Do first 9 (10/2): on
                 // the own view the badges and the offer tag sit in mine-acts too, ahead of Trade - beside the date and
                 // role they left the holder 11-64 px at 390 px ("bac...", the colleague's name lost; the title is
-                // unreachable on a touch screen); on a wide screen they still sit at the row's end, next to Trade. The
+                // unreachable on a touch screen); on a wide screen they still sit at the row's end, next to Trade (they
+                // used to follow the name - accepted at the second review, 10/2: the row is one line either way). The
                 // holder's flex is the class mine-holder's: its text width on a wide screen (the Following view's badges
-                // follow the name again), the rest of the line on a phone (1 1 0).
+                // follow the name again); on a phone the rest of the line but never less than its words (1 0 auto,
+                // second review fixes 10/2) - the Following view's badges, still right after it, wrap under the name
+                // instead of clipping it, and a name that does not fit beside the date and role takes a line of its own.
                 <div data-testid="mine-upcoming" className="mine-upcoming">
                   {upcoming.map(x => (
                     <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:"6px 10px",alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
