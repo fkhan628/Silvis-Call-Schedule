@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-sgX9xw8MqIZDxJECF5EBKRDABhB8SEbGVvM/YWhKoZ8=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-EUwiAZPBP8y7h6U+rkeX+MCJhAErG/m9yfIsj5uOqOQ=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-Rg+glO5md/iuV1ZxVqBK0c8tqSjRREMMIqALe0XCclQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-AMnvZij2oIlqi0+8S35imxhclhfBdg6z3AXHvlZRyL0=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -131,7 +131,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.01f";
+    var APP_VERSION = "2026.10.02a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -221,6 +221,7 @@ function CallSchedule() {
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]);
   const [availabilityRows, setAvailabilityRows] = useState([]);
+  const [availabilityReadOk, setAvailabilityReadOk] = useState(false);
   const [offerRows, setOfferRows] = useState([]);
   const [periodRows, setPeriodRows] = useState([]);
   const [offerSheet, setOfferSheet] = useState(null);
@@ -355,6 +356,9 @@ function CallSchedule() {
     showToast(DAYS_UNREAD_DAY_MSG, "error");
     return true;
   };
+  const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded, so this run would treat every day as open and ignore the locks on file. Retry the load (the banner above), then generate. Nothing was run.";
+  const GEN_DAYS_LOADING_MSG = "Not run: the schedule is still loading - wait for it, then generate. Nothing was run.";
+  const GEN_TA_UNREAD_MSG = "Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day. Reload, then generate. Nothing was run.";
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveError, setSaveError] = useState(false);
@@ -511,8 +515,11 @@ function CallSchedule() {
     return [...ids];
   }, [allProfiles]);
   const [isScheduler, setIsScheduler] = useState(false);
+  const isSchedulerRef = useRef(false);
   useEffect(() => {
-    setIsScheduler((userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "scheduler" || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin");
+    const sched = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "scheduler" || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
+    isSchedulerRef.current = sched;
+    setIsScheduler(sched);
   }, [userProfile]);
   const isAdmin = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
   const isCoordinator = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "coordinator";
@@ -725,6 +732,17 @@ function CallSchedule() {
       resetWriteRetryState();
       blobLoadedRef.current = false;
       blobTsRef.current = null;
+      if (lastSyncRef.current) {
+        const persisted = JSON.parse(JSON.stringify(lastSyncRef.current));
+        scheduleRef.current = persisted;
+        setSchedule(persisted);
+        if (daySyncBusyRef.current > 0) daySyncChainRef.current.then(() => setSchedule(cur => {
+          if (cur !== persisted || !lastSyncRef.current) return cur;
+          const landed = JSON.parse(JSON.stringify(lastSyncRef.current));
+          scheduleRef.current = landed;
+          return landed;
+        }));
+      }
       setNotifsRead("unread");
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
@@ -1347,31 +1365,48 @@ function CallSchedule() {
     setVacations(buildTimeOffMaps(rows));
     if (rows.length > 0) everHadRealDataRef.current = true;
   };
+  const timeOffReadSeqRef = useRef({
+    started: 0,
+    adopted: 0
+  });
+  const availabilityReadSeqRef = useRef({
+    started: 0,
+    adopted: 0
+  });
   const loadTimeOff = async quiet => {
+    const seq = ++timeOffReadSeqRef.current.started;
     try {
-      const rows = await db.query("time_off", {
-        order: "start_date.asc"
+      const rows = await db.queryAll("time_off", {
+        order: "start_date.asc,id.asc"
       });
+      if (seq < timeOffReadSeqRef.current.adopted) return true;
+      timeOffReadSeqRef.current.adopted = seq;
       adoptTimeOffRows(Array.isArray(rows) ? rows : []);
       return true;
     } catch (e) {
       console.warn("time_off load failed", e);
-      if (!quiet) showToast("Couldn't load vacations - data shown may be incomplete.", "error");
+      const msg = "Couldn't load vacations - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
   const loadAvailability = async quiet => {
+    const seq = ++availabilityReadSeqRef.current.started;
     try {
-      const rows = await db.query("availability", {
-        order: "start_date.asc"
+      const rows = await db.queryAll("availability", {
+        order: "start_date.asc,id.asc"
       });
+      if (seq < availabilityReadSeqRef.current.adopted) return true;
+      availabilityReadSeqRef.current.adopted = seq;
       const list = Array.isArray(rows) ? rows : [];
       setAvailabilityRows(list);
+      setAvailabilityReadOk(true);
       if (list.length > 0) everHadRealDataRef.current = true;
       return true;
     } catch (e) {
       console.warn("availability load failed", e);
-      if (!quiet) showToast("Couldn't load availability statements - data shown may be incomplete.", "error");
+      const msg = "Couldn't load availability statements - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
@@ -1405,7 +1440,7 @@ function CallSchedule() {
       return false;
     }
   };
-  const loadEastTables = async quiet => {
+  const loadEastTables = async (quiet, overridesOnly) => {
     const one = async (table, order, set, key) => {
       try {
         const rows = await db.query(table, {
@@ -1425,11 +1460,14 @@ function CallSchedule() {
         return null;
       }
     };
-    const r = await Promise.all([one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
-    if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    const r = await Promise.all(overridesOnly ? [one("east_overrides", "day.asc", setEastOverrideRows, "overrides")] : [one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
+    if (r.some(x => x === null) && eastDetailsVisibleRef.current) {
+      const msg = "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
+    }
     return {
       ok: r.every(x => x !== null),
-      feedRows: r[0]
+      feedRows: overridesOnly ? null : r[0]
     };
   };
   const loadEastVacationReviews = async quiet => {
@@ -1449,7 +1487,10 @@ function CallSchedule() {
       const missing = /HTTP 404\b/.test(String(e && e.message || e));
       console.warn("east_vacation_reviews load failed" + (missing ? " - the table is not on the database yet (migration 2026-09-23 not applied)" : ""), e);
       setEastVacReviewState(missing ? "missing" : "failed");
-      if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      if (!missing && eastDetailsVisibleRef.current) {
+        const msg = "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.";
+        if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
+      }
       return false;
     }
   };
@@ -1478,7 +1519,7 @@ function CallSchedule() {
   const vacationConflicts = (personId, start, end) => vacationConflictItems(personId, start, end).map(c => `${fmtMD(c.day)} (${c.role})`);
   const describeDbError = err => {
     const s = typeof err === "string" ? err : JSON.stringify(err || {});
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+/;
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+/;
     if (OWN.test(s)) {
       let verbatim = "";
       try {
@@ -1489,7 +1530,7 @@ function CallSchedule() {
         verbatim = "";
       }
       if (!OWN.test(verbatim)) {
-        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+)[^"}\\]*/.exec(s);
+        const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+)[^"}\\]*/.exec(s);
         verbatim = m ? m[0] : s.slice(0, 240);
       }
       return verbatim;
@@ -1875,12 +1916,13 @@ function CallSchedule() {
     markDaysRead();
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
-  const mergeLoadedDays = fresh => {
+  const mergeLoadedDays = (fresh, sink) => {
     if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
       console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
       if (!daysTripwireWarnedRef.current) {
         daysTripwireWarnedRef.current = true;
-        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+        const msg = `The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`;
+        if (typeof sink === "function") sink(msg);else showToast(msg, "error");
       }
       return false;
     }
@@ -2185,34 +2227,50 @@ function CallSchedule() {
     (async () => {
       loadFailedRef.current = false;
       let daysReadThisRun = false;
-      try {
-        const {
-          data: row
-        } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single();
-        blobLoadedRef.current = true;
-        if (row !== null && row !== void 0 && row.data) {
-          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          const rerun = !!loadedAtRef.current && !switchedUserRef.current;
-          if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
-            if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
-          } else {
-            if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
-            if (row.updated_at) blobTsRef.current = row.updated_at;
-            adoptBlob(d);
+      const loadFails = {};
+      const sayLoadFail = key => msg => {
+        loadFails[key] = msg;
+      };
+      const setupOwedAtStart = !!(pendingSaveRef.current || blobDirtyRef.current);
+      const legA = async () => {
+        try {
+          const {
+            data: row
+          } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single();
+          blobLoadedRef.current = true;
+          if (row !== null && row !== void 0 && row.data) {
+            const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            const rerun = !!loadedAtRef.current && !switchedUserRef.current;
+            if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
+              if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
+            } else {
+              if (rerun && isSchedulerRef.current && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
+              if (row.updated_at) blobTsRef.current = row.updated_at;
+              adoptBlob(d);
+            }
           }
+        } catch (e) {
+          console.error("Supabase load error (call_schedule_data):", e);
+          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isSchedulerRef.current ? " Setup changes won't save until it loads." : ""));
         }
-      } catch (e) {
-        console.error("Supabase load error (call_schedule_data):", e);
-        showToast("Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.", "error");
-      }
-      try {
-        const loadedDays = await loadScheduleDays();
-        if (loadedAtRef.current && !switchedUserRef.current) {
-          mergeLoadedDays(loadedDays);
-          syncScheduleDays(scheduleRef.current);
-        } else adoptLoadedDays(loadedDays);
-        daysReadThisRun = true;
-        markDaysRead();
+      };
+      const legB = async () => {
+        try {
+          const loadedDays = await loadScheduleDays();
+          if (loadedAtRef.current && !switchedUserRef.current) {
+            mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty"));
+            syncScheduleDays(scheduleRef.current);
+          } else adoptLoadedDays(loadedDays);
+          daysReadThisRun = true;
+          markDaysRead();
+        } catch (e) {
+          console.error("Supabase load error (schedule_days):", e);
+          loadFailedRef.current = true;
+          if (!daysReadThisRun) setDaysLoadFailed(true);
+          sayLoadFail("days")("Couldn't load the latest data - check your connection and reload.");
+        }
+      };
+      const loadTrades = async () => {
         try {
           const trades = await readAuthOnlyTable("shift_trade_requests", {
             order: "submitted_at.desc",
@@ -2222,6 +2280,8 @@ function CallSchedule() {
         } catch (e) {
           console.warn("Trade requests load failed:", e);
         }
+      };
+      const loadNotifs = async () => {
         try {
           const notifs = await readAuthOnlyTable("notifications", {
             order: "created_at.desc",
@@ -2235,8 +2295,8 @@ function CallSchedule() {
           console.warn("Notifications load failed:", e);
           setNotifsRead("failed");
         }
-        await loadOffers(true);
-        await loadPeriods(true);
+      };
+      const loadMinVersion = async () => {
         try {
           const mainRows = await db.query("client_versions", {
             eq: {
@@ -2252,19 +2312,18 @@ function CallSchedule() {
         } catch (e) {
           console.warn("client_versions min-version check failed:", e);
         }
-      } catch (e) {
-        console.error("Supabase load error (schedule_days):", e);
-        loadFailedRef.current = true;
-        if (!daysReadThisRun) setDaysLoadFailed(true);
-        showToast("Couldn't load the latest data - check your connection and reload.", "error");
-      }
-      await loadTimeOff();
-      await loadAvailability();
-      await loadEastTables();
-      await loadEastVacationReviews();
+      };
+      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews"))]);
+      const loadFailToast = combinedLoadToast(loadFails, {
+        retry: !daysReadOkRef.current,
+        isScheduler: isSchedulerRef.current
+      });
+      if (loadFailToast) showToast(loadFailToast, "error");
       setLoaded(true);
+      const switchEnds = switchedUserRef.current;
       if (!loadedAtRef.current) loadedAtRef.current = Date.now();
       switchedUserRef.current = false;
+      if (switchEnds) resyncPendingRef.current("switch");
     })();
     const refreshBlobRow = async () => {
       try {
@@ -2334,10 +2393,20 @@ function CallSchedule() {
         console.warn("Background min-version refresh failed:", e);
       }
     };
+    let lastFullPollAt = Date.now();
+    let lastEastPollAt = 0;
+    const refreshEastTables = async () => {
+      const now = Date.now();
+      const all = eastPollDue(lastEastPollAt, now);
+      if (all) lastEastPollAt = now;
+      const r = await loadEastTables(true, !all);
+      if (all && !(r && r.ok)) lastEastPollAt = 0;
+    };
     const refreshAll = async () => {
+      lastFullPollAt = Date.now();
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
-      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
+      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
       if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
     };
     refreshDaysRef.current = refreshDays;
@@ -2451,9 +2520,31 @@ function CallSchedule() {
         if (!rtChannel) setupRealtime();
       }, 5000);
     }
-    const pollInterval = setInterval(refreshAll, 60000);
+    const pollTick = async () => {
+      const mode = pollTickMode({
+        signedIn: !!authUserRef.current,
+        publicMode: isPublicMode,
+        hidden: document.hidden
+      });
+      if (mode === "skip") return;
+      if (mode === "full" && pollFullRecent(lastFullPollAt, Date.now())) return;
+      if (mode === "full") {
+        await refreshAll();
+        return;
+      }
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
+      await refreshNotifs();
+      if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
+    };
+    const onPollVisibility = () => {
+      if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick();
+    };
+    document.addEventListener("visibilitychange", onPollVisibility);
+    const pollInterval = setInterval(pollTick, POLL_MS);
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener("visibilitychange", onPollVisibility);
       if (rtChannel && rtClient) {
         try {
           rtClient.removeChannel(rtChannel);
@@ -2604,10 +2695,12 @@ function CallSchedule() {
       }
       return;
     }
+    if (switchedUserRef.current) return;
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
     const timer = setTimeout(() => {
+      if (loadFailedRef.current || switchedUserRef.current) return;
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
         setSaveError(true);
@@ -3866,6 +3959,14 @@ function CallSchedule() {
       showToast("Rules are not imported yet - import the seed first.", "error");
       return;
     }
+    if (!daysReadOkRef.current) {
+      showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error");
+      return;
+    }
+    if (timeOffReadSeqRef.current.adopted === 0 || availabilityReadSeqRef.current.adopted === 0) {
+      showToast(loaded ? GEN_TA_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error");
+      return;
+    }
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? 1 + Math.floor(Math.random() * 2147483646) : /^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn;
@@ -4272,8 +4373,12 @@ function CallSchedule() {
       blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null,
       blobUpdatedBy: blobRows[0] ? blobRows[0].updated_by || null : null,
       schedule_days: days,
-      time_off: await get("time_off?select=*", "time_off"),
-      availability: await get("availability?select=*", "availability"),
+      time_off: await db.queryAll("time_off", {
+        order: "start_date.asc,id.asc"
+      }),
+      availability: await db.queryAll("availability", {
+        order: "start_date.asc,id.asc"
+      }),
       call_offers: null,
       call_periods: null
     };
@@ -6036,10 +6141,14 @@ function CallSchedule() {
   const commitOffersPaint = async ({
     personId,
     diff,
+    np,
     mode,
     period
   }) => {
     const withMode = !!(mode && period && period.id);
+    const npAdd = np && Array.isArray(np.add) ? np.add : [],
+      npClear = np && Array.isArray(np.clear) ? np.clear : [];
+    const npCount = npAdd.length + npClear.length;
     const summary = {
       person_id: personId,
       inserted: diff.insert.length,
@@ -6048,27 +6157,34 @@ function CallSchedule() {
       count: diff.count,
       period_id: period ? period.id : null,
       period: period ? period.label : null,
-      mode: withMode ? mode : null
+      mode: withMode ? mode : null,
+      np_add: npAdd,
+      np_clear: npClear
     };
     try {
-      if (diff.count === 0 && !withMode) return {
+      if (diff.count === 0 && npCount === 0 && !withMode) return {
         ok: true,
         nothing: true
       };
-      if (diff.count > 0) {
+      if (diff.count > 0 || npCount > 0) {
         const rows = diff.insert.concat(diff.update).map(r => ({
           day: r.day,
           role_pref: r.role_pref
         }));
+        const payload = {
+          p_person: personId,
+          p_rows: rows,
+          p_clear: diff.delete,
+          p_period: withMode ? period.id : null,
+          p_mode: withMode ? mode : null
+        };
+        if (npCount > 0) {
+          payload.p_np_add = npAdd;
+          payload.p_np_clear = npClear;
+        }
         const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, {
           method: "POST",
-          body: JSON.stringify({
-            p_person: personId,
-            p_rows: rows,
-            p_clear: diff.delete,
-            p_period: withMode ? period.id : null,
-            p_mode: withMode ? mode : null
-          })
+          body: JSON.stringify(payload)
         });
         if (!res.ok) {
           const t = await res.text().catch(() => "");
@@ -6096,9 +6212,23 @@ function CallSchedule() {
           };
         }
       }
-      logAudit("offers.save", `${nameOf(personId)}: ${diff.count} offer change(s)${withMode ? ", mode " + mode : ""}${period ? " (" + period.label + ")" : ""}`, summary);
+      const perStart = period && period.start_day ? String(period.start_day).slice(0, 10) : "",
+        perEnd = period && period.end_day ? String(period.end_day).slice(0, 10) : "";
+      const inPer = d => !!perStart && !!perEnd && String(d) >= perStart && String(d) <= perEnd;
+      const auditLabel = period && (withMode || diff.insert.concat(diff.update).some(r => inPer(r.day)) || diff.delete.concat(npAdd, npClear).some(inPer)) ? period.label : null;
+      logAudit("offers.save", offersAuditSummary(nameOf(personId), diff.count, {
+        add: npAdd,
+        clear: npClear
+      }, withMode ? mode : null, auditLabel), summary);
       loadOffers(true);
       loadPeriods(true);
+      if (npCount > 0) {
+        let npTimer = null;
+        await Promise.race([loadAvailability(true), new Promise(res => {
+          npTimer = setTimeout(res, 8000);
+        })]);
+        clearTimeout(npTimer);
+      }
       return {
         ok: true
       };
@@ -8424,6 +8554,8 @@ function CallSchedule() {
     offers: offerRows,
     periods: periodRows,
     schedule: schedule,
+    availability: availabilityRows,
+    availabilityRead: availabilityReadOk,
     ctx: rulesCtx,
     ctxError: rulesCtxState.error,
     surgeonRules: surgeonRules,
@@ -14224,6 +14356,8 @@ function OfferPainterSheet({
   offers,
   periods,
   schedule,
+  availability,
+  availabilityRead,
   ctx,
   ctxError,
   surgeonRules,
@@ -14250,6 +14384,7 @@ function OfferPainterSheet({
   const [rangeMode, setRangeMode] = React.useState(false);
   const [pendingStart, setPendingStart] = React.useState(null);
   const [draft, setDraft] = React.useState({});
+  const [npDraft, setNpDraft] = React.useState({});
   const [modeDraft, setModeDraft] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [commitError, setCommitError] = React.useState(null);
@@ -14282,7 +14417,9 @@ function OfferPainterSheet({
     return m;
   }, [offers, pid]);
   const effective = ds => ds in draft ? draft[ds] : savedByDay[ds] || null;
-  const dirtyDays = Object.keys(draft);
+  const np = React.useMemo(() => noPrimaryDays(availability, pid), [availability, pid]);
+  const effNp = ds => !np.range[ds] && (ds in npDraft ? !!npDraft[ds] : !!np.own[ds]);
+  const dirtyDays = Array.from(new Set(Object.keys(draft).concat(Object.keys(npDraft))));
   const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);
   const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
   const periodStatus = period ? offerStatus(period, offers, pid) : null;
@@ -14292,6 +14429,12 @@ function OfferPainterSheet({
   const periodLabel = period ? String(period.label || period.start_day + " - " + period.end_day) : "";
   const periodClose = period && period.offers_close_at ? String(period.offers_close_at).slice(0, 10) : null;
   const inPeriod = ds => !!period && ds >= String(period.start_day).slice(0, 10) && ds <= String(period.end_day).slice(0, 10);
+  const exhDay = ds => {
+    const per = periodFor(ds, periods || []);
+    if (!per) return false;
+    const m = period && per.id === period.id ? shownMode : (per.offer_modes && typeof per.offer_modes === "object" ? per.offer_modes[pid] : null) || "preferred";
+    return m === "exhaustive";
+  };
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
   const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
@@ -14329,22 +14472,26 @@ function OfferPainterSheet({
           } catch (e) {
             console.warn("Paint offers: eligibility threw for " + ds + " " + role, e);
           }
-          const why = offerDayWhy(elig ? elig.hard : []);
+          const hard = elig ? elig.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [];
+          const why = offerDayWhy(hard);
           row.block[role] = why.block;
           row.confirm[role] = why.confirm;
         });
       }
+      row.npRange = !!np.range[ds];
+      if (row.npRange && !row.block.primary) row.block.primary = NO_PRIMARY_RANGE_WORDS;
       if (row.past) row.grey = "past";else if (row.frozen) row.grey = row.frozen;else if (row.block.primary && row.block.backup) row.grey = row.block.primary === row.block.backup ? row.block.primary : row.block.primary + " / " + row.block.backup;
       const a = schedule ? schedule[ds] : null;
       row.holders = {
         primary: a ? dayHolder(a, "primary") : null,
         backup: a ? dayHolder(a, "backup") : null
       };
+      row.holdsPrimary = !!pid && row.holders.primary === pid;
       row.others = othersByDay[ds] || 0;
       out.push(row);
     }
     return out;
-  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay]);
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np]);
   const rowByDay = React.useMemo(() => {
     const m = {};
     days.forEach(r => {
@@ -14352,18 +14499,21 @@ function OfferPainterSheet({
     });
     return m;
   }, [days]);
+  const npExh = days.some(r => exhDay(r.ds));
   const monthCounts = React.useMemo(() => {
     const c = {
       primary: 0,
       backup: 0,
-      either: 0
+      either: 0,
+      noprimary: 0
     };
     days.forEach(r => {
       const e = effective(r.ds);
       if (e && c[e] !== undefined) c[e] += 1;
+      if (r.npRange || effNp(r.ds)) c.noprimary += 1;
     });
     return c;
-  }, [days, draft, savedByDay]);
+  }, [days, draft, savedByDay, npDraft, np]);
   const periodCount = React.useMemo(() => {
     if (!period) return 0;
     const set = new Set();
@@ -14384,53 +14534,65 @@ function OfferPainterSheet({
     const saved = savedByDay[ds] || null;
     if (want === saved || !want && !saved) delete n[ds];else n[ds] = want;
   };
-  const clearable = r => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];
+  const setNpDraftDay = (n, ds, want) => {
+    if (np.range[ds] || !!want === !!np.own[ds]) delete n[ds];else n[ds] = !!want;
+  };
+  const clearable = r => !!r && !r.past && !r.frozen && (!!savedByDay[r.ds] || !!np.own[r.ds]);
+  const cellOf = r => ({
+    offer: effective(r.ds),
+    np: effNp(r.ds),
+    savedOffer: !!savedByDay[r.ds],
+    savedNp: !!np.own[r.ds],
+    range: !!r.npRange,
+    past: !!r.past,
+    frozen: r.frozen || null,
+    grey: r.grey || null,
+    blockPrimary: r.block.primary || null,
+    blockBackup: r.block.backup || null,
+    holdsPrimary: !!r.holdsPrimary
+  });
+  const npWhyOf = r => offerPaintCell(cellOf(r), "noprimary", {
+    single: true
+  }).skip || "";
+  const canTap = r => armed === "noprimary" ? !r.past && !r.frozen && !r.npRange && (effNp(r.ds) || !r.grey && !r.holdsPrimary) : !r.grey || armed === "clear" && clearable(r);
   const paintDays = (list, brush, opts) => {
     setCommitError(null);
     const single = !!(opts && opts.single);
     const skipped = [],
       asks = [],
-      go = [];
+      lifts = [],
+      go = [],
+      outs = {},
+      notes = [];
     list.forEach(ds => {
       const r = rowByDay[ds];
-      if (brush === "clear") {
-        if (!effective(ds)) return;
-        if (!r) {
-          skipped.push(dayText(ds) + ": outside the shown month");
-          return;
-        }
-        if (r.grey && !clearable(r)) {
-          skipped.push(dayText(ds) + ": " + r.grey);
-          return;
-        }
-        go.push(ds);
-        return;
-      }
+      if (brush === "clear" && !effective(ds) && !effNp(ds)) return;
       if (!r) {
         skipped.push(dayText(ds) + ": outside the shown month");
         return;
       }
-      if (r.grey) {
-        skipped.push(dayText(ds) + ": " + r.grey);
-        return;
-      }
-      const need = rolesOf(brush);
-      const blocked = need.filter(role => r.block[role]);
-      if (blocked.length) {
-        skipped.push(dayText(ds) + ": " + blocked.map(role => role + " - " + r.block[role]).join(", "));
-        return;
-      }
       const cur = effective(ds);
-      if (single && cur === brush) {
-        go.push(ds);
+      const out = offerPaintCell(cellOf(r), brush, {
+        single
+      });
+      if (out.skip) {
+        skipped.push(dayText(ds) + ": " + out.skip);
         return;
       }
-      const asking = need.map(role => r.confirm[role]).filter(Boolean);
-      if (asking.length && cur !== brush) asks.push({
+      if (out.offer === cur && out.np === effNp(ds)) return;
+      if (brush !== "clear" && brush !== "noprimary" && out.offer === brush && cur !== brush) {
+        const asking = rolesOf(brush).map(role => r.confirm[role]).filter(Boolean);
+        if (asking.length) asks.push({
+          ds,
+          why: asking[0],
+          dow: DAY_HDR[r.dow]
+        });
+      }
+      if (out.lift) lifts.push({
         ds,
-        why: asking[0],
         dow: DAY_HDR[r.dow]
       });
+      outs[ds] = out;
       go.push(ds);
     });
     let ok = go.slice();
@@ -14452,19 +14614,49 @@ function OfferPainterSheet({
         skipped.push(asks.length + " pattern day(s) left out");
       }
     }
-    if (ok.length) setDraft(p => {
-      const n = _objectSpread({}, p);
-      ok.forEach(ds => {
-        const cur = effective(ds);
-        setDraftDay(n, ds, brush === "clear" ? null : single && cur === brush ? null : brush);
+    const liftsLeft = lifts.filter(l => ok.indexOf(l.ds) >= 0);
+    if (liftsLeft.length) {
+      const l0 = liftsLeft[0],
+        nl = liftsLeft.length;
+      const long0 = {
+        Sun: "Sunday",
+        Mon: "Monday",
+        Tue: "Tuesday",
+        Wed: "Wednesday",
+        Thu: "Thursday",
+        Fri: "Friday",
+        Sat: "Saturday"
+      }[l0.dow] || l0.dow;
+      const liftMsg = nl === 1 ? `${long0} ${fmtMD(l0.ds)} is marked No primary - offer ${roleWord(brush)} there and lift it?` : `${nl} of these days are marked No primary (${liftsLeft.slice(0, 6).map(l => l.dow + " " + fmtMD(l.ds)).join(", ")}${nl > 6 ? ", ..." : ""}) - offer ${roleWord(brush)} there and lift the block?`;
+      if (!confirm(liftMsg)) {
+        const dropL = new Set(liftsLeft.map(l => l.ds));
+        ok = ok.filter(ds => !dropL.has(ds));
+        notes.push(nl + " No primary day(s) left out");
+      }
+    }
+    const replaced = ok.filter(ds => outs[ds] && outs[ds].replaced).length;
+    const replacedExh = ok.filter(ds => outs[ds] && outs[ds].replaced && exhDay(ds)).length;
+    if (ok.length) {
+      setDraft(p => {
+        const n = _objectSpread({}, p);
+        ok.forEach(ds => setDraftDay(n, ds, outs[ds].offer));
+        return n;
       });
-      return n;
-    });
-    setHint(skipped.length ? "Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : "") : "");
+      setNpDraft(p => {
+        const n = _objectSpread({}, p);
+        ok.forEach(ds => setNpDraftDay(n, ds, outs[ds].np));
+        return n;
+      });
+    }
+    const hintParts = [];
+    if (skipped.length) hintParts.push("Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : ""));
+    notes.forEach(t => hintParts.push(t));
+    if (replaced) hintParts.push("No primary replaced the offer on " + replaced + " day(s)" + (replacedExh ? " - with \"Only these days\" on, a day with no offer is off backup too: paint Backup to keep it" : ""));
+    setHint(hintParts.join(" - "));
   };
   const tapDay = ds => {
     const r = rowByDay[ds];
-    if (!r || r.grey && !(armed === "clear" && clearable(r))) return;
+    if (!r || !canTap(r)) return;
     if (!rangeMode) {
       paintDays([ds], armed, {
         single: true
@@ -14516,7 +14708,7 @@ function OfferPainterSheet({
       setHint("Showing " + MO[f.getMonth()] + " " + f.getFullYear() + " - press Add again for the " + rest.length + " pasted day(s) in it.");
     } else setPasteText("");
   };
-  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (draft[ds] ? brushWord(draft[ds]) : "clear")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
+  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (ds in draft ? [draft[ds] ? brushWord(draft[ds]) : "clear"] : []).concat(ds in npDraft ? [npDraft[ds] ? "no primary" : "lift no primary"] : []).join(", ")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
   const doSave = async () => {
     if (!dirtyCount || busy) return;
     setBusy(true);
@@ -14524,19 +14716,26 @@ function OfferPainterSheet({
     setSavedNote("");
     const items = describeDraft();
     const diff = offersDraftDiff(savedByDay, draft);
-    if (diff.bad.length) {
+    const npLive = {};
+    Object.keys(npDraft).forEach(d => {
+      if (!np.range[d]) npLive[d] = npDraft[d];
+    });
+    const npDiff = noPrimaryDraftDiff(np.own, npLive);
+    if (diff.bad.length || npDiff.bad.length) {
       setBusy(false);
       setCommitError({
-        msg: "a drafted day is malformed (" + diff.bad.join(", ") + ") - discard it",
+        msg: "a drafted day is malformed (" + diff.bad.concat(npDiff.bad).join(", ") + ") - discard it",
         items
       });
       return;
     }
     const addsInPeriod = diff.insert.concat(diff.update).some(r => inPeriod(r.day));
     const mode = !periodOpen ? null : modeDirty ? modeDraft : periodStatus === "rules_only" && addsInPeriod ? shownMode : null;
-    if (diff.count === 0 && !mode) {
+    const changeDays = new Set(diff.insert.map(r => r.day).concat(diff.update.map(r => r.day), diff.delete, npDiff.add, npDiff.clear));
+    if (diff.count === 0 && npDiff.add.length + npDiff.clear.length === 0 && !mode) {
       setBusy(false);
       setDraft({});
+      setNpDraft({});
       setModeDraft(null);
       setPendingStart(null);
       setSavedNote("Already saved - nothing to write");
@@ -14549,6 +14748,10 @@ function OfferPainterSheet({
       r = await onCommit({
         personId: pid,
         diff,
+        np: {
+          add: npDiff.add,
+          clear: npDiff.clear
+        },
         mode,
         period: period || null,
         items
@@ -14564,10 +14767,11 @@ function OfferPainterSheet({
     }
     if (r && r.ok) {
       setDraft({});
+      setNpDraft({});
       setModeDraft(null);
       setPendingStart(null);
       setPeriodOpenBox(false);
-      setSavedNote(`Saved ${diff.count} change${diff.count === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
+      setSavedNote(`Saved ${changeDays.size} change${changeDays.size === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
     } else {
@@ -14626,6 +14830,7 @@ function OfferPainterSheet({
     if (!dirtyCount) return;
     if (!confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}?`)) return;
     setDraft({});
+    setNpDraft({});
     setModeDraft(null);
     setPendingStart(null);
     setCommitError(null);
@@ -14664,6 +14869,9 @@ function OfferPainterSheet({
   const periodJump = period ? offerPeriodJump(period, today, ym) : null;
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty);
   const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.` : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
+  const npWho = asScheduler && person ? person.name : "yourself";
+  const npHint = npExh ? `Tap a day to mark ${npWho} No primary ("Only these days" is on: paint Backup too for backup); tap again to take it back.` : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`;
+  const npLegend = npExh ? "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change." : "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
   if (!person) {
     return React.createElement("div", {
       "data-testid": "ofp-sheet",
@@ -14835,6 +15043,7 @@ function OfferPainterSheet({
     "data-month-primary": monthCounts.primary,
     "data-month-backup": monthCounts.backup,
     "data-month-either": monthCounts.either,
+    "data-month-noprimary": monthCounts.noprimary,
     "data-period-count": periodCount,
     style: {
       fontSize: 11,
@@ -14855,7 +15064,11 @@ function OfferPainterSheet({
     style: {
       color: text
     }
-  }, monthCounts.either), " either offered", period && React.createElement(React.Fragment, null, " - ", periodLabel, ": ", React.createElement("b", {
+  }, monthCounts.either), " either offered", monthCounts.noprimary > 0 && React.createElement(React.Fragment, null, ", ", React.createElement("b", {
+    style: {
+      color: text
+    }
+  }, monthCounts.noprimary), " no primary"), period && React.createElement(React.Fragment, null, " - ", periodLabel, ": ", React.createElement("b", {
     style: {
       color: text
     }
@@ -14867,17 +15080,25 @@ function OfferPainterSheet({
       marginTop: 6,
       alignItems: "center"
     }
-  }, ["primary", "backup", "either", "clear"].map(k => React.createElement("button", {
-    key: k,
-    "data-testid": "ofp-brush-" + k,
-    "data-armed": armed === k ? "1" : "0",
-    onClick: () => {
-      setArmed(k);
-      setPendingStart(null);
-      setHint("");
-    },
-    style: css.brush(armed === k, k)
-  }, OFFER_BRUSH[k].label)), React.createElement("button", {
+  }, ["primary", "backup", "either", "noprimary", "clear"].map(k => {
+    const npOff = k === "noprimary" && !availabilityRead;
+    return React.createElement("button", {
+      key: k,
+      "data-testid": "ofp-brush-" + k,
+      "data-armed": armed === k ? "1" : "0",
+      disabled: npOff,
+      title: npOff ? "The No primary days have not loaded - reload first" : undefined,
+      onClick: () => {
+        setArmed(k);
+        setPendingStart(null);
+        setHint("");
+      },
+      style: _objectSpread(_objectSpread({}, css.brush(armed === k, k)), npOff ? {
+        opacity: 0.5,
+        cursor: "not-allowed"
+      } : {})
+    }, OFFER_BRUSH[k].label);
+  }), React.createElement("button", {
     "data-testid": "ofp-range",
     "data-on": rangeMode ? "1" : "0",
     onClick: () => {
@@ -14923,7 +15144,23 @@ function OfferPainterSheet({
       color: "#c04040",
       border: "1px solid #c05050"
     }
-  }, "x cancel start")) : React.createElement("span", null, rangeHint)), !ctx && React.createElement("div", {
+  }, "x cancel start")) : React.createElement("span", null, armed === "noprimary" && !rangeMode ? npHint : rangeHint)), armed === "noprimary" && React.createElement("div", {
+    "data-testid": "ofp-legend",
+    "data-exh": npExh ? "1" : "0",
+    style: {
+      fontSize: 11,
+      color: muted,
+      marginTop: 4,
+      lineHeight: 1.35
+    }
+  }, npLegend), !availabilityRead && React.createElement("div", {
+    role: "alert",
+    "data-testid": "ofp-np-unread",
+    style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
+      marginTop: 6,
+      fontSize: 11
+    })
+  }, "Couldn't load ", asScheduler && person ? person.name + "'s" : "your", " No primary days - reload before marking or lifting one."), !ctx && React.createElement("div", {
     role: "alert",
     "data-testid": "ofp-rules-unavailable",
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
@@ -14941,14 +15178,22 @@ function OfferPainterSheet({
   }, days.map(r => {
     const ds = r.ds;
     const eff = effective(ds);
-    const drafted = ds in draft;
+    const offerDrafted = ds in draft;
+    const npDrafted = ds in npDraft;
+    const drafted = offerDrafted || npDrafted;
+    const effN = effNp(ds);
+    const npLift = npDrafted && !npDraft[ds] && !!np.own[ds];
     const isPending = pendingStart === ds;
     const grey = !!r.grey;
-    const tappable = !grey || armed === "clear" && clearable(r);
+    const tappable = canTap(r);
+    const npWhy = npWhyOf(r);
     const partial = !grey && (r.block.primary || r.block.backup) ? r.block.primary ? "backup only - " + r.block.primary : "primary only - " + r.block.backup : null;
+    const partialShown = partial && !(r.npRange && r.block.primary === NO_PRIMARY_RANGE_WORDS && !r.block.backup);
     const rowBg = grey ? dk ? "#0F1B33" : "#F1F3F6" : isPending ? dk ? "#1a3a5e" : "#dcecf8" : drafted ? dk ? "#1c3050" : "#eaf3fb" : r.weekend ? T.weekend : panelBg;
     const holderP = holderText(r.holders.primary, ds),
       holderB = holderText(r.holders.backup, ds);
+    const npPill = OFFER_BRUSH.noprimary;
+    const clearWhat = clearable(r) ? savedByDay[ds] && np.own[ds] ? " - saved offer and No primary: Clear can take them back" : savedByDay[ds] ? " - saved offer: Clear can take it back" : " - saved No primary: Clear can take it back" : "";
     return React.createElement("button", {
       key: ds,
       "data-testid": "ofp-day",
@@ -14957,6 +15202,9 @@ function OfferPainterSheet({
       "data-offer": eff || "",
       "data-why": r.grey || partial || "",
       "data-clearable": grey && clearable(r) ? "1" : "0",
+      "data-noprimary": effN ? "own" : r.npRange ? "range" : "",
+      "data-np-draft": npDrafted ? npDraft[ds] ? "add" : "clear" : "",
+      "data-np-why": npWhy,
       disabled: !tappable,
       onClick: () => tapDay(ds),
       style: {
@@ -15012,10 +15260,28 @@ function OfferPainterSheet({
     }, OFFER_BRUSH[eff].label) : React.createElement("span", {
       style: {
         fontSize: 11.5,
-        color: drafted ? "#a05010" : muted,
-        fontWeight: drafted ? 700 : 400
+        color: offerDrafted ? "#a05010" : muted,
+        fontWeight: offerDrafted ? 700 : 400
       }
-    }, drafted ? "will clear" : grey ? "" : "not offered"), drafted && React.createElement("span", {
+    }, offerDrafted ? "will clear" : grey || effN || r.npRange || npLift ? "" : "not offered"), effN && React.createElement("span", {
+      "data-testid": "ofp-np-pill",
+      "data-np": "own",
+      style: pillFor("noprimary")
+    }, "No primary"), r.npRange && React.createElement("span", {
+      "data-testid": "ofp-np-pill",
+      "data-np": "range",
+      style: _objectSpread(_objectSpread({}, pillFor("noprimary")), {}, {
+        border: `1px dashed ${npPill.border}`
+      })
+    }, NO_PRIMARY_RANGE_WORDS), npLift && React.createElement("span", {
+      "data-testid": "ofp-np-pill",
+      "data-np": "lift",
+      style: {
+        fontSize: 11.5,
+        color: "#a05010",
+        fontWeight: 700
+      }
+    }, "will lift No primary"), drafted && React.createElement("span", {
       style: {
         fontSize: 9.5,
         fontWeight: 800,
@@ -15034,14 +15300,22 @@ function OfferPainterSheet({
         fontWeight: 700,
         color: muted
       }
-    }, r.grey, clearable(r) ? " - saved offer: Clear can take it back" : ""), !grey && partial && React.createElement("span", {
+    }, r.grey, clearWhat), !grey && partialShown && React.createElement("span", {
       "data-testid": "ofp-why",
       style: {
         fontSize: 10.5,
         fontWeight: 700,
         color: "#a05010"
       }
-    }, partial)), React.createElement("div", {
+    }, partial), !grey && armed === "noprimary" && npWhy && React.createElement("span", {
+      "data-testid": "ofp-why",
+      "data-np-reason": "1",
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: "#a05010"
+      }
+    }, npWhy)), React.createElement("div", {
       style: {
         display: "flex",
         flexWrap: "wrap",
@@ -15302,7 +15576,7 @@ function OfferPainterSheet({
       color: muted,
       marginTop: 3
     }
-  }, "(", commitError.msg, ") - your taps are kept; fix the issue and Save again.")), React.createElement("div", {
+  }, "(", noPrimaryErrorWords(commitError.msg), ") - your taps are kept; fix the issue and Save again.")), React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",

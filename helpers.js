@@ -944,6 +944,75 @@ function syncFailLine(dayFail, blobFail) {
   return [d && "Schedule: " + d, b && "Setup: " + b].filter(Boolean).join(" | ");
 }
 
+// ---- The startup load (review 9/27, Do first 4) ----
+// The mount load runs all its reads at once (one Promise.allSettled), so a read that fails cannot toast on its own:
+// parallel toasts replace each other and only the last one would be seen. Each failure is collected under its key and
+// the load shows ONE toast once everything has settled, in this order: the schedule (schedule_days), the shared setup
+// (the blob read, then its "changed elsewhere" notice on a sign-in re-run), then the secondary reads. Each part is the
+// reader's own sentence, unchanged; the two East parts reach the collector for the scheduler only (the loaders' Item E4
+// gate). A key outside the order goes last, in the order it was collected. "" when nothing failed.
+// Review of Do first 4 (10/1): one failed read keeps its reader's own sentence; TWO OR MORE are said in ONE compact
+// sentence that names each by its short name (LOAD_FAIL_SHORT) with one piece of advice - the joined sentences ran to
+// 300-500 characters (half a phone screen for 4.5 s), repeated "check your connection and reload" and told viewers a
+// Setup warning they cannot act on. opts.retry (the "Schedule not loaded" banner with its Retry is up) says "then Retry
+// or reload"; opts.isScheduler adds the Setup clause when the shared setup failed. The two notices - daysEmpty (the
+// empty-read tripwire of mergeLoadedDays) and blobMoved - are not failed reads: they keep their own sentence, in order.
+const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"];
+const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews" };
+function combinedLoadToast(fails, opts) {
+  const f = fails && typeof fails === "object" ? fails : {};
+  const o = opts || {};
+  const keys = LOAD_FAIL_ORDER.concat(Object.keys(f).filter(k => LOAD_FAIL_ORDER.indexOf(k) < 0));
+  const parts = keys.map(k => [k, typeof f[k] === "string" ? f[k].trim() : ""]).filter(p => p[1]);
+  const failed = parts.filter(p => LOAD_FAIL_SHORT[p[0]]);
+  if (failed.length < 2) return parts.map(p => p[1]).join(" ");
+  const names = failed.map(p => LOAD_FAIL_SHORT[p[0]]);
+  const list = names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  const head = "Couldn't load " + list + " - check your connection" + (o.retry ? ", then Retry or reload" : " and reload") + ". What is shown may be incomplete."
+    + (o.isScheduler && failed.some(p => p[0] === "blob") ? " Setup changes won't save until the shared setup loads." : "");
+  const out = [];
+  parts.forEach(p => { if (!LOAD_FAIL_SHORT[p[0]]) out.push(p[1]); else if (p === failed[0]) out.push(head); });
+  return out.join(" ");
+}
+
+// ---- The 60-second poll (review 9/27, Do first 5) ----
+// The safety-net poll ran refreshAll every 60 s whatever the tab's state - 14 GETs a run, all of schedule_days and the
+// East jsonb among them (about 840 requests an hour per desktop tab) - and at the sign-in card too, where every
+// authenticated read is skipped with a console warning. pollTickMode says what one tick does:
+//   "skip" - nobody is signed in and the page is not ?public=1 (the sign-in card), or a hidden ?public=1 page (no
+//            session to keep alive, no pop-ups): no read at all;
+//   "head" - a hidden tab of a signed-in person: the session upkeep only (ensureFresh and the re-send after a granted
+//            refresh - Prompt 16 A3 needs the 60 s cadence) plus the notifications read (background pop-ups:
+//            sendBrowserNotif fires only while the page lacks focus);
+//   "full" - refreshAll.
+// pollCatchUpDue: on becoming visible, a full refresh runs at once when the last one started more than POLL_MS ago (or
+// never). eastPollDue: refreshAll reads east_feed / east_forecast every EAST_POLL_MS (0 = never read yet, or the last
+// read failed); east_overrides and the reviews stay on every run (the client-side East claim gate needs fresh overrides).
+// pollFullRecent (review of Do first 5, 10/1): a full refresh started less than POLL_MS / 2 ago - the interval's tick
+// then skips its own (an iOS PWA brought back fires the overdue interval right after the visible-again catch-up).
+// A clock set backwards (now before last) counts as due / not recent in all three: the poll must not stall until the
+// device clock passes the old stamp again.
+const POLL_MS = 60000;
+const EAST_POLL_MS = 10 * 60000;
+function pollTickMode(o) {
+  const p = o || {};
+  if (!p.signedIn && !p.publicMode) return "skip";
+  if (p.hidden) return p.signedIn ? "head" : "skip";
+  return "full";
+}
+function pollCatchUpDue(lastFullAt, now) {
+  const last = Number(lastFullAt), n = Number(now);
+  return !(last > 0) || n < last || n - last > POLL_MS;
+}
+function eastPollDue(lastEastAt, now) {
+  const last = Number(lastEastAt), n = Number(now);
+  return !(last > 0) || n < last || n - last >= EAST_POLL_MS;
+}
+function pollFullRecent(lastFullAt, now) {
+  const last = Number(lastFullAt), n = Number(now);
+  return last > 0 && n >= last && n - last < POLL_MS / 2;
+}
+
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
 // The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
 // (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
@@ -4138,6 +4207,147 @@ function offerNextPeriod(periods, today) {
   return open || any;
 }
 
+/* === No-primary days (Prompt 28, 10/1 - Faraz: "I do want them to be able to do that"; Burchett: "I need to be blocked
+ * out as unavailable for primary call. I can cover backup call these days") ===
+ * The painter's fifth brush "No primary": not on primary that day, backup is fine. Stored as ONE availability row per day,
+ * kind 'backup_only', role 'any' (rules.js already reads it: primary blocked, backup available), written only through
+ * rpc/save_offers -> save_no_primary (security definer; sql/migrations/2026-10-01-no-primary-days.sql). The person's own
+ * SINGLE-day backup_only rows (any source - the app's, Setup's, the seed's) are the No primary state, his to change; a
+ * multi-day backup_only row (a range the scheduler entered in Setup) shows on each of its days as NO_PRIMARY_RANGE_WORDS
+ * and stays read-only in the painter (the database refuses to split it, NP007). Pure: no clock, no DOM, no network;
+ * test/offers.test.js section F runs them. */
+const NO_PRIMARY_RANGE_WORDS = "No primary (set by the scheduler)";
+const NO_PRIMARY_HELD_WORDS = "you hold primary that day - trade it first";
+const NP_RANGE_MAX_DAYS = 3660; // a range is expanded day by day for the painter; a junk end date (9999-12-31) never loops for ever
+// noPrimaryDays(rows, personId) -> { own: { day: true }, range: { day: true } } from availability rows: kind 'backup_only' of
+// that person, any role, any source; ISO start / end (a missing end = the start day), end >= start. start === end -> own[day];
+// a longer row -> range[d] for each of its days (at most NP_RANGE_MAX_DAYS of them). A day covered by a range is NOT in own
+// (a range wins: read-only). Other kinds, other persons and junk rows are ignored.
+function noPrimaryDays(rows, personId) {
+  const out = { own: {}, range: {} };
+  if (!Array.isArray(rows) || !personId) return out;
+  const singles = [], ranges = [];
+  rows.forEach(r => {
+    if (!r || typeof r !== "object" || r.kind !== "backup_only" || r.person_id !== personId) return;
+    const s = r.start_date === undefined || r.start_date === null ? "" : String(r.start_date).slice(0, 10);
+    const e = r.end_date === undefined || r.end_date === null || r.end_date === "" ? s : String(r.end_date).slice(0, 10);
+    if (!suIsIso(s) || !suIsIso(e) || e < s) return;
+    if (s === e) { singles.push(s); return; }
+    ranges.push([s, e]);
+    let d = s;
+    for (let n = 0; d <= e && n < NP_RANGE_MAX_DAYS; n++, d = suAddDays(d, 1)) out.range[d] = true;
+  });
+  singles.forEach(d => { if (!ranges.some(([s, e]) => d >= s && d <= e)) out.own[d] = true; });
+  return out;
+}
+// offerPaintCell(cell, brush, opts) -> { offer, np, skip, lift, replaced } - what ONE brush does to ONE day of the painter.
+//   cell  = { offer: 'primary'|'backup'|'either'|null (the effective offer), np: bool (the effective OWN no-primary), savedOffer,
+//             savedNp: bool (the saved state), range: bool (a scheduler's range covers the day), past: bool, frozen: words|null,
+//             grey: words|null (past / frozen / both roles blocked - the row's grey), blockPrimary / blockBackup: words|null
+//             (a one-role block; a range day's blockPrimary is NO_PRIMARY_RANGE_WORDS), holdsPrimary: bool (published primary) }
+//   brush = 'primary'|'backup'|'either'|'noprimary'|'clear'; opts = { single: bool } (a single tap, not a Range / Paste batch)
+//   offer / np = the state after the brush; skip = the words the sheet lists in "Skipped N day(s): ..." (null = not listed;
+//   unchanged + null = a silent no-op); lift = a primary / either brush lifts a no-primary day (the sheet asks ONCE per batch);
+//   replaced = No primary removed a primary / either offer. First matching rule wins, per brush (guide section 17, Prompt 28):
+//   noprimary: past -> skip 'past'; frozen -> skip its words; range -> silent; own N -> a single tap takes it back (Range /
+//              Paste: silent); greyed -> skip; holds primary -> skip NO_PRIMARY_HELD_WORDS; a primary / either offer -> replaced
+//              (offer none, N); otherwise N (a Backup offer stays: backup preferred that day).
+//   primary / either: greyed -> skip; range -> skip 'primary - <words>'; a one-role block on a needed role -> skip '<role> - <words>';
+//              a single tap on the same brush -> offer none; own N -> offer, N lifted (lift); otherwise -> offer.
+//   backup:    greyed -> skip; backup blocked -> skip 'backup - <words>'; a single tap on Backup -> offer none; otherwise Backup
+//              (N and the range unchanged).
+//   clear:     nothing to clear -> silent (before any grey is named); past -> skip 'past'; frozen -> skip; greyed with neither a
+//              saved offer nor a saved N -> skip; otherwise offer none and N lifted (a range stays: read-only).
+// The weekday-pattern confirm stays in the sheet (it reads the row's confirm words).
+function offerPaintCell(cell, brush, opts) {
+  const c = cell && typeof cell === "object" ? cell : {};
+  const E = OFFER_ROLES[c.offer] ? c.offer : null;
+  const N = !!c.np && !c.range;
+  const single = !!(opts && opts.single);
+  const frozen = c.frozen ? String(c.frozen) : null;
+  const grey = c.grey ? String(c.grey) : c.past ? "past" : frozen;
+  const keep = (skip) => ({ offer: E, np: N, skip: skip || null, lift: false, replaced: false });
+  const to = (offer, np, extra) => Object.assign({ offer, np: !!np, skip: null, lift: false, replaced: false }, extra || {});
+  if (brush === "noprimary") {
+    if (c.past) return keep("past");
+    if (frozen) return keep(frozen);
+    if (c.range) return keep(null);
+    if (N) return single ? to(E, false) : keep(null);
+    if (grey) return keep(grey);
+    if (c.holdsPrimary) return keep(NO_PRIMARY_HELD_WORDS);
+    if (E === "primary" || E === "either") return to(null, true, { replaced: true });
+    return to(E, true);
+  }
+  if (brush === "primary" || brush === "either") {
+    if (grey) return keep(grey);
+    if (c.range) return keep("primary - " + (c.blockPrimary || NO_PRIMARY_RANGE_WORDS));
+    const need = brush === "either" ? ["primary", "backup"] : ["primary"];
+    const words = { primary: c.blockPrimary || null, backup: c.blockBackup || null };
+    const blocked = need.filter(role => words[role]);
+    if (blocked.length) return keep(blocked.map(role => role + " - " + words[role]).join(", "));
+    if (single && E === brush) return to(null, N);
+    if (N) return to(brush, false, { lift: true });
+    return to(brush, false);
+  }
+  if (brush === "backup") {
+    if (grey) return keep(grey);
+    if (c.blockBackup) return keep("backup - " + c.blockBackup);
+    if (single && E === "backup") return to(null, N);
+    return to("backup", N);
+  }
+  if (brush === "clear") {
+    if (!E && !N) return keep(null);
+    if (c.past) return keep("past");
+    if (frozen) return keep(frozen);
+    if (grey && !c.savedOffer && !c.savedNp) return keep(grey);
+    return to(null, false);
+  }
+  return keep(null); // an unknown brush changes nothing
+}
+// noPrimaryDraftDiff(savedOwn, npDraft) -> { add: [day], clear: [day], bad: [day] } in day order. savedOwn = noPrimaryDays(...).own
+// (a { day: true } map; an array of days is accepted too), npDraft = { day: true (mark) | false (lift) }. true on a day not saved
+// -> add; false on a saved day -> clear; equal to the saved state -> dropped; a day that is not 'YYYY-MM-DD' -> bad (fail closed,
+// nothing is written).
+function noPrimaryDraftDiff(savedOwn, npDraft) {
+  const saved = {};
+  if (Array.isArray(savedOwn)) savedOwn.forEach(d => { saved[String(d)] = true; });
+  else if (savedOwn && typeof savedOwn === "object") Object.keys(savedOwn).forEach(d => { if (savedOwn[d]) saved[d] = true; });
+  const out = { add: [], clear: [], bad: [] };
+  const dr = npDraft && typeof npDraft === "object" ? npDraft : {};
+  Object.keys(dr).sort().forEach(day => {
+    if (!suIsIso(day)) { out.bad.push(day); return; }
+    const want = !!dr[day], have = !!saved[day];
+    if (want && !have) out.add.push(day);
+    else if (!want && have) out.clear.push(day);
+  });
+  return out;
+}
+// offersAuditSummary(name, offerCount, np, mode, periodLabel) -> the summary of the painter's ONE audit row 'offers.save'
+// (the Activity log shows it through auditEntryText). np = { add: [day], clear: [day] } (null / missing = empty). With np empty
+// it is byte-for-byte the text the app wrote before Prompt 28: "<Name>: N offer change(s)[, mode m][ (label)]". Days as M/D,
+// ", "-joined, in day order: "Burchett: no primary on 1/6, 1/15"; "Burchett: 2 offer change(s); no primary on 1/6; no primary
+// lifted on 2/3 (Jan 2027 - Jun 2027)". Days and counts only - no amount, no contact, no reason.
+function offersAuditSummary(name, offerCount, np, mode, periodLabel) {
+  const days = (v) => (Array.isArray(v) ? v.map(String).filter(suIsIso) : []).sort();
+  const adds = days(np && np.add), clears = days(np && np.clear);
+  const n = Number(offerCount) || 0;
+  const parts = [];
+  if (n > 0 || adds.length + clears.length === 0) parts.push(n + " offer change(s)");
+  if (adds.length) parts.push("no primary on " + adds.map(fmtMD).join(", "));
+  if (clears.length) parts.push("no primary lifted on " + clears.map(fmtMD).join(", "));
+  return String(name) + ": " + parts.join("; ") + (mode ? ", mode " + mode : "") + (periodLabel ? " (" + periodLabel + ")" : "");
+}
+// noPrimaryErrorWords(msg) -> a message starting "NO_PRIMARY_<X>: " (save_no_primary's NP001-NP009, shown verbatim by
+// describeDbError) loses the token and gets a capital first letter ("NO_PRIMARY_ON_CALL: Burchett holds primary on 1/6 - ..." ->
+// "Burchett holds primary on 1/6 - ..."); any other message comes back unchanged.
+function noPrimaryErrorWords(msg) {
+  const s = msg === undefined || msg === null ? "" : String(msg);
+  const m = /^NO_PRIMARY_[A-Z_]+:\s*/.exec(s);
+  if (!m) return s;
+  const rest = s.slice(m[0].length);
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : s;
+}
+
 /* ═══ Offer deadline notices (Faraz 9/27: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ═══
  * The reading implemented (docs/SILVIS-CALL-RULES.md section 4, build guide section 17): a period's choices FREEZE
  * closeWeeksBeforeStart (6) weeks before it starts and its schedule is due publishWeeksBeforeStart (4) weeks before it
@@ -6118,6 +6328,8 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     SYNC_RETRY_MS, syncRetryDelay, syncFailLine,
+    LOAD_FAIL_ORDER, LOAD_FAIL_SHORT, combinedLoadToast,
+    POLL_MS, EAST_POLL_MS, pollTickMode, pollCatchUpDue, eastPollDue, pollFullRecent,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
@@ -6134,6 +6346,7 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    NO_PRIMARY_RANGE_WORDS, NO_PRIMARY_HELD_WORDS, noPrimaryDays, offerPaintCell, noPrimaryDraftDiff, offersAuditSummary, noPrimaryErrorWords,
     suRulesSummary, suRulesUnknownKeys, suHnOtherDayRules, suSumGoverned, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,
     suRuleFieldHeld, suRuleRemoveConfirm, SU_RULE_VALUE_WORDS,
