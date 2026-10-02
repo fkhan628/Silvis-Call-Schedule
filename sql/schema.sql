@@ -93,6 +93,17 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
+-- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql, report-first, NOT yet applied): Faraz 10/1 (Prompt 29) - the
+-- APPs put themselves on call days; any day, ONE APP per day, everyone signed in sees it (never anon / the ?public=1 page), no e-mails
+-- (the Activity log only). user_profiles.is_app boolean not null default false - a FLAG, not a role (an APP stays role 'viewer': the
+-- follower e-mails pick followers by role, Setup's followsPatch clears follows on a role change) - with the check user_profiles_app_viewer
+-- (an APP is an unlinked viewer row) and the is_app pin added to user_profiles_self_insert / _self_update (re-created in place); one NEW
+-- helper silvis_is_app() and one NEW table app_call_days (day date PRIMARY KEY - one APP per day; profile_id -> user_profiles on delete
+-- cascade; source 'app' / 'scheduler'; authenticated read through app_call_days_read, never anon - not in the read_all loop, anon's table
+-- privileges revoked; authenticated keeps SELECT only); app_call_names() (security definer, stable: the display names of the APP days)
+-- and save_app_days(p_profile, p_add, p_clear, p_replace) (security definer, volatile; the ONLY write path; AP001-AP007 APP_DAY_* refuse
+-- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letters t and
+-- u are taken by prepared, unmerged work (independent of this one - either apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -107,6 +118,7 @@ create table if not exists public.user_profiles (
   email         text,
   display_name  text,
   follows       jsonb not null default '[]'::jsonb,   -- Prompt 20 F1: roster ids this account follows (admin-set)
+  is_app        boolean not null default false,       -- Prompt 29: an APP account (an unlinked viewer row; admin-set)
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -125,6 +137,13 @@ alter table public.user_profiles add column if not exists follows jsonb not null
 alter table public.user_profiles drop constraint if exists user_profiles_follows_shape;
 alter table public.user_profiles add constraint user_profiles_follows_shape
   check (case when jsonb_typeof(follows) = 'array' then not jsonb_path_exists(follows, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
+-- Prompt 29 (APP call days, sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT yet applied): the APP flag on an EXISTING
+-- table and its rule - an APP is a viewer account, never a roster entry. Only the admin writes it (user_profiles_admin;
+-- user_profiles_self_update and _self_insert below pin it).
+alter table public.user_profiles add column if not exists is_app boolean not null default false;
+alter table public.user_profiles drop constraint if exists user_profiles_app_viewer;
+alter table public.user_profiles add constraint user_profiles_app_viewer
+  check (not is_app or (role = 'viewer' and person_id is null));
 
 -- Profile rows are created by the database when an auth user is created/invited (and the
 -- email is kept in sync), so Setup -> Users can link a person who has never opened the app.
@@ -164,6 +183,18 @@ create or replace function public.silvis_is_coord() returns boolean
 language sql stable security definer set search_path = public as $$
   select public.silvis_role() = 'coordinator';
 $$;
+
+-- Prompt 29 (APP call days, revision v - report-first, NOT yet applied): the APP flag of the caller (save_app_days asks it; no
+-- policy uses it). The constraint makes the role / person_id terms redundant; they stay as defence in depth.
+create or replace function public.silvis_is_app() returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select coalesce((select p.is_app and p.role = 'viewer' and p.person_id is null from public.user_profiles p where p.id = auth.uid()), false);
+$$;
+revoke all on function public.silvis_is_app() from public;
+revoke all on function public.silvis_is_app() from anon;
+grant execute on function public.silvis_is_app() to authenticated;
+grant execute on function public.silvis_is_app() to service_role;
+comment on function public.silvis_is_app() is 'Prompt 29 (APP call days): true when the signed-in account is an APP - an unlinked viewer row with is_app set by the admin in Setup > Users. Security definer (reads user_profiles past its RLS); EXECUTE for authenticated / service_role only; no policy uses it.';
 
 -- ---------- roster + rules + settings blob (single row id='main')
 create table if not exists public.call_schedule_data (
@@ -1445,6 +1476,171 @@ revoke truncate, references, trigger on table public.call_pay_logs from authenti
 grant select, insert, update, delete on table public.call_pay_settings to authenticated;
 grant select, insert, update, delete on table public.call_pay_logs to authenticated;
 
+-- ---------- APP call days (Prompt 29, revision v; sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT yet applied)
+-- Faraz 10/1: the APPs put themselves on call days - any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page;
+-- no e-mails, the Activity log only. One row per day (day is the primary key - the database enforces one APP per day). Read by every
+-- signed-in role (app_call_days_read below), never anon: not in the read_all loop and anon's table privileges revoked, so an anon
+-- request is refused (401 / 403) instead of answered 200 + []. authenticated keeps SELECT only - save_app_days() (security definer,
+-- the table owner) is the only write path, so a direct INSERT / UPDATE / DELETE is 42501. Deleting the account removes its days
+-- (on delete cascade); the audit_log keeps the history. Not part of the blob, snapshots, the data export or a factory reset.
+-- save_app_days refusals (all before any write; custom SQLSTATEs, HTTP 400 through PostgREST):
+--   AP001 APP_DAY_NOT_ALLOWED   no signed-in user / neither an APP nor the scheduler; the scheduler named no APP
+--   AP002 APP_DAY_NOT_YOURS     an APP names another profile / sends p_replace / removes a day another APP holds
+--   AP003 APP_DAY_NOT_APP       an add for a profile that is not a current APP (the scheduler too; clears stay allowed)
+--   AP004 APP_DAY_BAD_DAY       an empty day, more than 400 days in one save, a day both added and removed
+--   AP005 APP_DAY_TAKEN         an add on a day another APP holds (without p_replace)
+--   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
+--   AP007 APP_DAY_STALE         the scheduler removes a day another profile holds (a stale picture)
+create table if not exists public.app_call_days (
+  day         date primary key,                                                        -- one APP per day: the database enforces it
+  profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
+  source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP
+  created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)
+  created_at  timestamptz not null default now()
+);
+create index if not exists app_call_days_profile_idx on public.app_call_days (profile_id, day);
+revoke all on table public.app_call_days from anon;
+revoke all on table public.app_call_days from authenticated;
+grant select on table public.app_call_days to authenticated;
+comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on call per day - ONE APP per day (day is the primary key). Read by every signed-in role, never anon (no anon policy, anon privileges revoked); written only through save_app_days() (authenticated holds SELECT only). Deleting the account removes its days (on delete cascade); the audit_log keeps the history.';
+
+create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)
+    from public.user_profiles p
+   where auth.uid() is not null
+     and (exists (select 1 from public.app_call_days a where a.profile_id = p.id)
+          or (p.is_app and p.role = 'viewer' and p.person_id is null and (p.id = auth.uid() or public.silvis_is_sched())))
+   order by p.id;
+$$;
+revoke all on function public.app_call_names() from public;
+revoke all on function public.app_call_names() from anon;
+grant execute on function public.app_call_names() to authenticated;
+comment on function public.app_call_names() is 'Prompt 29: the display names of the APP days - every profile that holds a day (any signed-in caller), the caller''s own APP profile and, for the scheduler, every APP profile (the day editor''s pick list). Display name and the APP flag only - never an email, never a role. Stable: the client calls it with GET.';
+
+create or replace function public.save_app_days(p_profile uuid, p_add date[], p_clear date[], p_replace boolean default false) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me        uuid := auth.uid();
+  sched     boolean := public.silvis_is_sched();
+  c_app     boolean := public.silvis_is_app();
+  who       uuid := p_profile;
+  repl      boolean := coalesce(p_replace, false);
+  today_c   date := (now() at time zone 'America/Chicago')::date;
+  adds      date[];
+  clears    date[];
+  t_app     boolean;
+  t_name    text;
+  v_src     text;
+  bad       text;
+  ins_days  date[] := '{}';
+  del_days  date[] := '{}';
+  replaced  jsonb := '[]'::jsonb;
+  v_sum     text;
+begin
+  if me is null or (not sched and not c_app) then
+    raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day' using errcode = 'AP001';
+  end if;
+  if who is null and c_app then who := me; end if;
+  if who is null then
+    raise exception 'APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)' using errcode = 'AP001';
+  end if;
+  if not sched and who <> me then
+    raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler' using errcode = 'AP002';
+  end if;
+  if repl and not sched then
+    raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day' using errcode = 'AP002';
+  end if;
+  if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';
+  end if;
+  if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then
+    raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';
+  end if;
+  select coalesce(array_agg(distinct d order by d), '{}') into adds from unnest(coalesce(p_add, '{}'::date[])) d;
+  select coalesce(array_agg(distinct d order by d), '{}') into clears from unnest(coalesce(p_clear, '{}'::date[])) d;
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds) d where d = any(clears);
+  if bad is not null then
+    raise exception 'APP_DAY_BAD_DAY: % is both added and removed in one save - nothing was saved', bad using errcode = 'AP004';
+  end if;
+  select (p.is_app and p.role = 'viewer' and p.person_id is null), nullif(btrim(p.display_name), '')
+    into t_app, t_name from public.user_profiles p where p.id = who;
+  if cardinality(adds) > 0 and not coalesce(t_app, false) then
+    raise exception 'APP_DAY_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AP003';
+  end if;
+  -- One APP-day write at a time, across every profile (a conflict is cross-profile): every read below sees the other's commit.
+  perform pg_advisory_xact_lock(hashtext('app_call_days:save'));
+  if not sched then
+    select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds || clears) d where d < today_c;
+    if bad is not null then
+      raise exception 'APP_DAY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AP006';
+    end if;
+  end if;
+  select string_agg(to_char(a.day, 'FMMM/FMDD') || ' is ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP') || '''s day', ', ' order by a.day)
+    into bad
+    from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+   where a.day = any(clears) and a.profile_id <> who;
+  if bad is not null then
+    if sched then
+      raise exception 'APP_DAY_STALE: % - reload the calendar (nothing was saved)', bad using errcode = 'AP007';
+    end if;
+    raise exception 'APP_DAY_NOT_YOURS: % - only that APP or the scheduler can remove it (nothing was saved)', bad using errcode = 'AP002';
+  end if;
+  if not repl then
+    select string_agg(to_char(a.day, 'FMMM/FMDD') || ' already has ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP'), '; ' order by a.day)
+      into bad
+      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+     where a.day = any(adds) and a.profile_id <> who;
+    if bad is not null then
+      raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';
+    end if;
+  end if;
+
+  v_src := case when who = me then 'app' else 'scheduler' end;
+  if repl then
+    select coalesce(jsonb_agg(jsonb_build_object('day', a.day, 'profile_id', a.profile_id, 'name', coalesce(nullif(btrim(p.display_name), ''), 'another APP')) order by a.day), '[]'::jsonb)
+      into replaced
+      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+     where a.day = any(adds) and a.profile_id <> who;
+    delete from public.app_call_days a where a.day = any(adds) and a.profile_id <> who;
+  end if;
+  with del as (
+    delete from public.app_call_days a where a.profile_id = who and a.day = any(clears) returning a.day
+  ) select coalesce(array_agg(del.day order by del.day), '{}') into del_days from del;
+  with ins as (
+    insert into public.app_call_days (day, profile_id, source, created_by)
+    select d, who, v_src, me from unnest(adds) d
+    on conflict (day) do nothing
+    returning day
+  ) select coalesce(array_agg(ins.day order by ins.day), '{}') into ins_days from ins;
+  if exists (select 1 from public.app_call_days a where a.day = any(adds) and a.profile_id <> who) then
+    raise exception 'APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)' using errcode = 'AP005';
+  end if;
+
+  if cardinality(ins_days) + cardinality(del_days) > 0 then
+    v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',
+      case when cardinality(ins_days) > 0 then 'on call ' || (select string_agg(to_char(d, 'FMMM/FMDD')
+             || coalesce(' (was ' || (select x ->> 'name' from jsonb_array_elements(replaced) x where (x ->> 'day')::date = d limit 1) || ')', ''),
+             ', ' order by d) from unnest(ins_days) d) end,
+      case when cardinality(del_days) > 0 then 'removed ' || (select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) from unnest(del_days) d) end);
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (coalesce(public.silvis_person_id(), me::text),
+            coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                     (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                       where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                     'Unknown'),
+            'appdays.save',
+            jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', to_jsonb(ins_days), 'removed', to_jsonb(del_days), 'replaced', replaced, 'source', v_src));
+  end if;
+  return jsonb_build_object('ok', true, 'profile_id', who, 'added', cardinality(ins_days), 'removed', cardinality(del_days),
+                            'kept', cardinality(adds) - cardinality(ins_days), 'absent', cardinality(clears) - cardinality(del_days),
+                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', cardinality(ins_days) + cardinality(del_days) > 0);
+end $$;
+revoke all on function public.save_app_days(uuid, date[], date[], boolean) from public;
+revoke all on function public.save_app_days(uuid, date[], date[], boolean) from anon;
+grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;
+comment on function public.save_app_days(uuid, date[], date[], boolean) is 'Prompt 29: the only write path into app_call_days - an APP for its own profile, the scheduler (admin / scheduler) for any APP profile (adds) or any holder (clears; p_replace takes a day over). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
+
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
@@ -1469,6 +1665,7 @@ alter table public.call_offers             enable row level security;
 alter table public.call_periods            enable row level security;
 alter table public.call_pay_settings       enable row level security;
 alter table public.call_pay_logs           enable row level security;
+alter table public.app_call_days           enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
@@ -1538,12 +1735,15 @@ create policy east_vacation_reviews_self_delete on public.east_vacation_reviews 
 -- only: role, person_id AND email are pinned against self-service (the Resend sender must never be re-pointed by its
 -- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
 -- Prompt 20 F1: follows (whom an account follows) is pinned the same way, and a self-insert follows nobody - the admin sets it.
+-- Prompt 29 (APP call days, revision v - report-first, NOT yet applied): is_app (an APP account) is pinned the same way - a
+-- self-insert is never an APP and self-service never flips the flag; the admin sets it in Setup > Users. Both texts are the
+-- followers texts plus that one clause.
 drop policy if exists user_profiles_read on public.user_profiles;
 create policy user_profiles_read on public.user_profiles for select to authenticated
   using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));
 drop policy if exists user_profiles_self_insert on public.user_profiles;
 create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
-  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);   -- signup lands as viewer, unlinked, following nobody; admin links + promotes
+  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb and not is_app);   -- signup lands as viewer, unlinked, following nobody, not an APP; admin links + promotes
 drop policy if exists user_profiles_self_update on public.user_profiles;
 create policy user_profiles_self_update on public.user_profiles for update to authenticated
   using (id = auth.uid())
@@ -1551,7 +1751,8 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and role = (select role from public.user_profiles p where p.id = auth.uid())
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
     and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
-    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email, nor choose whom it follows
+    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())
+    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email, nor choose whom it follows or flip the APP flag
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');
@@ -1671,6 +1872,11 @@ drop policy if exists call_pay_logs_delete on public.call_pay_logs;
 create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
   using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 
+-- app_call_days (Prompt 29, revision v - report-first, NOT yet applied): every signed-in role reads (surgeon, coordinator, viewer,
+-- APP, follower, scheduler - the calendar's third line); never anon (not in the read_all loop; anon's privileges revoked). No write
+-- policy and no write privilege for authenticated: save_app_days() is the door (an APP for its own days, the scheduler for any APP).
+drop policy if exists app_call_days_read on public.app_call_days;
+create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
 
 -- ============================================================================
 -- Seed rows

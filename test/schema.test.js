@@ -1183,7 +1183,9 @@ Object.keys(PRELAUNCH_POLICIES).filter((p) => !PRELAUNCH_SUPERSEDED.includes(p))
 ok(schema.indexOf(OFFER_STATUS_GRANTS) >= 0, "schema.sql must carry the offer_status grants right after its definition");
 ok(schema.indexOf(OFFER_STATUS_GRANTS) > schema.indexOf("create or replace function public.offer_status(") && schema.indexOf(OFFER_STATUS_GRANTS) < schema.indexOf("create or replace function public.call_offers_guard("), "the offer_status grants sit between offer_status() and call_offers_guard()");
 ok(schema.indexOf("create policy user_profiles_admin on public.user_profiles for all to authenticated\n  using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');") > 0, "schema.sql: user_profiles_admin must stay admin-only (Setup -> Users is isAdmin-gated in the client; a scheduler-role account corrects nothing there)");
-ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);") > 0, "schema.sql: user_profiles_self_insert lands as viewer, unlinked and (Prompt 20 F1) following nobody");
+// pin moved deliberately (Prompt 29): schema.sql's self-insert carries the APP clause `and not is_app` since revision v
+// (sql/migrations/2026-10-02-app-call-days.sql); kept intent: a self-insert lands as viewer, unlinked, following nobody.
+ok(schema.indexOf("create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb and not is_app);") > 0, "schema.sql: user_profiles_self_insert lands as viewer, unlinked, (Prompt 20 F1) following nobody and (Prompt 29) not an APP");
 ok(/-- Revision 2026-09-24 j \(Prompt 16 A1, sql\/migrations\/2026-09-24-prelaunch-rls\.sql, applied 2026-09-23[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 j (the pre-launch RLS migration, applied 2026-09-23)");
 ok(!/create policy notif_delete/.test(offersMig) && !/notif_delete_sched/.test(claimMigration), "notif_delete_sched belongs to the prelaunch migration only");
 
@@ -1979,7 +1981,10 @@ const FOLLOW_ERR = {   // [SQLSTATE, the substring the grader looks for]
   A2: ["23514", "user_profiles_follows_shape"], A3: ["23514", "user_profiles_follows_shape"], A4: ["23514", "user_profiles_follows_shape"],
   S2: ["23505", "notification_preferences_person_id_key"],
 };
-function checkFollowers(n, s) {
+// `superseded` (Prompt 29): policies a later migration re-creates - their verbatim text is pinned there (the APP call days block
+// below re-creates user_profiles_self_insert / _self_update with the is_app clause); the drop-if-exists and created-once counts stay.
+const FOLLOW_SUPERSEDED_BY_P29 = ["user_profiles_self_insert", "user_profiles_self_update"];
+function checkFollowers(n, s, superseded) {
   let at = -1;
   FOLLOW_DDL.forEach((d) => {
     const i = s.indexOf(d);
@@ -1989,7 +1994,7 @@ function checkFollowers(n, s) {
   });
   Object.keys(FOLLOW_POLICIES).forEach((p) => {
     ok(s.indexOf("drop policy if exists " + p + " on public." + FOLLOW_TABLE_OF[p] + ";") >= 0, n + ": `drop policy if exists " + p + " on public." + FOLLOW_TABLE_OF[p] + ";` missing (idempotency)");
-    ok(s.indexOf(FOLLOW_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + FOLLOW_POLICIES[p]);
+    if (!(superseded || []).includes(p)) ok(s.indexOf(FOLLOW_POLICIES[p]) >= 0, n + ": policy " + p + " must read exactly:\n" + FOLLOW_POLICIES[p]);
     eq((s.match(new RegExp("create policy " + p + " on public\\.", "g")) || []).length, 1, n + ": policy " + p + " must be created exactly once;");
   });
 }
@@ -2012,8 +2017,11 @@ ok(/send-notification/.test(followMig) && /daily-reminder/.test(followMig), "the
 ok(/user_profiles_admin/.test(followMig) && /isAdmin/.test(followMig) && /not widened to schedulers/.test(followMig), "the followers migration header must name the admin write path (user_profiles_admin; Setup > Users is isAdmin-gated) and say it is not widened to schedulers");
 
 step("P20 F1: schema.sql mirrors the followers migration byte for byte, the from-scratch tables carry the new shape, the header records revision o");
-checkFollowers("schema.sql", schema);
-Object.keys(FOLLOW_POLICIES).forEach((p) => ok(policyText(schema, p) === policyText(followMig, p), "policy " + p + ": schema.sql differs from the followers migration"));
+// pins moved deliberately (Prompt 29): schema.sql mirrors sql/migrations/2026-10-02-app-call-days.sql for user_profiles_self_insert /
+// _self_update (the followers texts plus the is_app clause - pinned verbatim in the APP call days block below); prefs_own is still
+// compared with the followers migration, and the followers file keeps its own texts and pins.
+checkFollowers("schema.sql", schema, FOLLOW_SUPERSEDED_BY_P29);
+Object.keys(FOLLOW_POLICIES).filter((p) => !FOLLOW_SUPERSEDED_BY_P29.includes(p)).forEach((p) => ok(policyText(schema, p) === policyText(followMig, p), "policy " + p + ": schema.sql differs from the followers migration"));
 ok(/\n  follows       jsonb not null default '\[\]'::jsonb,/.test(schema.slice(schema.indexOf("create table if not exists public.user_profiles ("), schema.indexOf("create or replace function public.handle_new_auth_user()"))), "schema.sql's user_profiles create table must carry `follows jsonb not null default '[]'::jsonb` (a from-scratch schema)");
 ok(schema.indexOf(FOLLOW_DDL[0]) > schema.indexOf("alter table public.user_profiles add constraint user_profiles_coordinator_unlinked") && schema.indexOf(FOLLOW_DDL[2]) < schema.indexOf("create or replace function public.handle_new_auth_user()"), "the follows DDL sits right after the user_profiles constraints, before handle_new_auth_user()");
 const prefsTable = sliceBetween(schema, "create table if not exists public.notification_preferences (", "\n);");
@@ -2606,7 +2614,11 @@ ok(payLoop && !/call_pay/.test(payLoop[0]), "neither call pay table may be in th
 eq(payStmts.filter((st) => /^insert into/.test(st)), ["insert into public.call_pay_settings (id) values ('main') on conflict (id) do nothing;"], "the migration's only insert is the 'main' settings row with the id alone (every rate null);");
 ok(schema.indexOf("insert into public.call_pay_settings (id) values ('main') on conflict (id) do nothing;") > schema.indexOf("-- Seed rows"), "schema.sql seeds the settings row under Seed rows");
 const PAY_ALLOWED_NUMBERS = ["0", "1", "2", "4", "5", "10", "24", "200", "99999"];   // check bounds, column precisions and `select 1` only
-const payBlock = schema.slice(schema.indexOf("-- ---------- call pay (2026-09-27"), schema.indexOf("-- Row Level Security"));
+// moved deliberately (Prompt 29): the call pay block ends at the next `-- ---------- ` section header (the APP call days block follows
+// the call pay grants since revision v), else at the Row Level Security header; kept intent: no rate figure in the call pay block.
+const payBlockAt = schema.indexOf("-- ---------- call pay (2026-09-27");
+const payBlockNext = schema.indexOf("\n-- ---------- ", payBlockAt + 5);
+const payBlock = schema.slice(payBlockAt, payBlockNext > 0 && payBlockNext < schema.indexOf("-- Row Level Security") ? payBlockNext : schema.indexOf("-- Row Level Security"));
 [["the migration", payStmts.join("\n")], ["schema.sql's call pay block", payBlock.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n")]].forEach(([n, txt]) => {
   const stripped = txt.replace("'[0-9]{3}[^0-9]?[0-9]{3}[^0-9]?[0-9]{4}'", "''").replace(/'[0-9]{4}-[0-9]{2}-[0-9]{2}'/g, "''").replace(/[a-z_]+[0-9]+[a-z_0-9]*/gi, "");
   const nums = Array.from(stripped.matchAll(/\b[0-9]+(\.[0-9]+)?\b/g)).map((m) => m[0]);
@@ -2945,8 +2957,12 @@ Object.entries({ P1: "active=6 min=2", P2: "east=yes", P3: VG_AFTER_EQ.P3, P4: "
 
 step("vacation guard: verify-rls.sh section 15 - the graded probe, leftovers, strict since the record step (PROBE_SETUP FAILs, no flag); the CLI's agent mode set by the script; no REST write; graded against a faked CLI");
 ok(/^echo "== 15\. vacation guard \(2026-09-30, Prompt 27\): at least minSurgeonsAround surgeons around - the time_off trigger, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 15 (vacation guard)");
-const s15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('echo "RESULT: '));
-ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, right before the RESULT line)");
+// moved deliberately (Prompt 29): section 15 ends at the NEXT section header (the first `\necho "== ` after its own), else at the
+// RESULT line - section 18 (APP call days) follows it on this branch, and Prompt 28's 16 / the pair claim's 17 will after their
+// merges; without the bound their curl calls would land in this "no REST call" count and run inside run15 below.
+const vrSectionEnd = (hdr) => { const at = vr.indexOf(hdr); const nx = vr.indexOf('\necho "== ', at + 5); const res = vr.indexOf('\necho\necho "RESULT: '); return nx > 0 && nx < res ? nx : res; };
+const s15 = vr.slice(vr.indexOf('echo "== 15. '), vrSectionEnd('echo "== 15. '));
+ok(s15.length > 0 && s15.length < vr.length && vr.indexOf('echo "== 15. ') > vr.indexOf('echo "== 14. '), "verify-rls.sh section 15 could not be sliced out (after section 14, up to the next section header or the RESULT line)");
 const s15code = s15.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 eq((s15code.match(/-X (POST|PATCH|DELETE|PUT)|curl /g) || []).length, 0, "section 15 goes over no REST call (the probe runs through the linked CLI);");
 // pins moved deliberately 10/1 (the record step): PROBE_SETUP is a FAIL with no flag - the trigger exists since the apply - and
@@ -2972,9 +2988,13 @@ ok(/p4_15=\$\(case_val15 P4\)/.test(s15code) && s15code.includes('"inactive=rost
 ok(/expect_err15 K1 P0001 "ON_CALL_CONFLICT"/.test(s15code) && /expect_err15 K2 P0001 "ON_CALL_CONFLICT"/.test(s15code), "section 15 grades K1 / K2 as the on-call refusal");
 ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.includes("note like 'probe-vacguard%'") && s15code.includes("source = 'probe-vacguard'") && s15code.includes("data->>'probe' = 'vacguard'") && s15code.includes("decided_by = 'probe-vacguard'") && /LEFT ROWS BEHIND/.test(s15code), "section 15 counts leftovers over auth.users / time_off / schedule_days / east_feed / east_vacation_reviews and fails on non-zero");
 // pin moved deliberately 10/1 (the record step): the header still names section 15; the header and --help no longer name the flag
-ok(/vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))) && /SILVIS_PREFS_ROWS_BEFORE - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header must name section 15 and --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_VACATION_GUARD_APPLIED dropped)");
+// moved deliberately (Prompt 29): --help's env-var list may continue after SILVIS_PREFS_ROWS_BEFORE with ` / SILVIS_<NAME>_APPLIED`
+// flags (Prompt 29's SILVIS_APP_DAYS_APPLIED here; Prompt 28's SILVIS_NO_PRIMARY_APPLIED joins it at that merge with no further change);
+// kept intent: the vacation guard's flag is not listed anywhere in the script (the pin above).
+ok(/vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))) && /SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header must name section 15 and --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE, then only the SILVIS_*_APPLIED flags (SILVIS_VACATION_GUARD_APPLIED dropped)");
 {
-  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vr.indexOf('\necho\necho "RESULT: '));
+  // moved deliberately (Prompt 29): the faked run ends at the next section header (section 18 follows), else at the RESULT line
+  const code15 = vr.slice(vr.indexOf('echo "== 15. '), vrSectionEnd('echo "== 15. '));
   // pin moved deliberately 10/1 (the record step): no strict parameter - section 15 reads no flag (under set -u, with the variable
   // unset); `pre` adds a line before the section, e.g. a SILVIS_VACATION_GUARD_APPLIED left in the environment (the apply script
   // still sets it), which must change nothing
@@ -3113,5 +3133,497 @@ ok(/^\| `time_off` \|[^\n]*prepared 2026-09-30 - report-first, \*\*applied live 
   ok(guideAll.includes("Database: `time_off_vacation_guard` (applied 2026-10-01 16:53 UTC - section 4.3;") && !/time_off_vacation_guard` \(report-first, NOT applied/.test(guideAll), "guide section 8's vacation guard bullet says the trigger is applied 2026-10-01");
 }
 console.log("- vacation guard: one trigger function + one trigger on time_off (report-first, applied 2026-10-01 16:53:33Z; the file kept as it ran, sha256-pinned), mirrored (revision s), SQL text = helpers.vacationGuardMessage, probe + verify-rls section 15 (strict) graded against a faked CLI, docs pinned");
+
+// ---- Prompt 29 - APP call days (2026-10-02, Faraz 10/1 6:33 PM: "I want the APPs to be able to add themselves to call days") ----
+// sql/migrations/2026-10-02-app-call-days.sql (REPORT-FIRST, NOT APPLIED; revision v): user_profiles.is_app (a FLAG on an unlinked
+// viewer row, not a role - the follower e-mails pick followers by role) + the check user_profiles_app_viewer + the is_app pin in the
+// two self policies; silvis_is_app(); the table app_call_days (one APP per day - day is the primary key; authenticated read, never
+// anon; authenticated keeps SELECT only); app_call_names() (definer, stable: the display names); save_app_days() (definer, volatile:
+// the ONLY write path, AP001-AP007, the appdays.save audit row). schema.sql mirrors it; sql/probes/app-call-days-probe.sql proves it
+// (rolled back, 66 cases), sql/probes/app-call-days-precheck.sql reads the gate and the facts (read-only), verify-rls.sh section 18
+// grades both (section 18: 16 and 17 are taken by Prompt 28 and the weekend pair claim on other branches). Faraz's one-command apply
+// script apply-app-call-days.sh lives OUTSIDE the repo. These pins read DB-lane files only (no client file, no app-lane doc).
+// local helpers under their own names (Prompt 28's block defines reEsc / topStatements - the merge must not redeclare a const)
+const apEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// the top-level statements of a SQL file (comment lines dropped; a ';' inside a $$ body or a '...' literal does not end one)
+function apTopStatements(sql) {
+  const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const out = []; let cur = ""; let body = false; let str = false;
+  for (let i = 0; i < code.length; i++) {
+    if (!str && code.startsWith("$$", i)) { body = !body; cur += "$$"; i++; continue; }
+    if (!body && code[i] === "'") str = !str;
+    cur += code[i];
+    if (code[i] === ";" && !body && !str) { if (cur.trim()) out.push(cur.trim()); cur = ""; }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+const AP_FILE = "2026-10-02-app-call-days.sql";
+const AP_MIGRATION = path.join(ROOT, "sql", "migrations", AP_FILE);
+const AP_PROBE = path.join(ROOT, "sql", "probes", "app-call-days-probe.sql");
+const AP_PRECHECK = path.join(ROOT, "sql", "probes", "app-call-days-precheck.sql");
+const AP_COLUMN_LINES = [
+  "alter table public.user_profiles add column if not exists is_app boolean not null default false;",
+  "alter table public.user_profiles drop constraint if exists user_profiles_app_viewer;",
+  "alter table public.user_profiles add constraint user_profiles_app_viewer\n  check (not is_app or (role = 'viewer' and person_id is null));",
+];
+// the two self policies: the followers texts plus ONE clause each (derived from FOLLOW_POLICIES, so "byte for byte otherwise" is pinned)
+const AP_SELF_INSERT = "create policy user_profiles_self_insert on public.user_profiles for insert to authenticated\n  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb and not is_app);";
+const AP_SELF_UPDATE = "create policy user_profiles_self_update on public.user_profiles for update to authenticated\n  using (id = auth.uid())\n  with check (id = auth.uid()\n    and role = (select role from public.user_profiles p where p.id = auth.uid())\n    and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())\n    and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())\n    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())\n    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));";
+const AP_READ_POLICY = "create policy app_call_days_read on public.app_call_days for select to authenticated using (true);";
+const AP_TABLE = "create table if not exists public.app_call_days (\n" +
+  "  day         date primary key,                                                        -- one APP per day: the database enforces it\n" +
+  "  profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days\n" +
+  "  source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP\n" +
+  "  created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)\n" +
+  "  created_at  timestamptz not null default now()\n);";
+const AP_INDEX = "create index if not exists app_call_days_profile_idx on public.app_call_days (profile_id, day);";
+const AP_ENABLE = "alter table public.app_call_days enable row level security;";
+const AP_PRIVS = "revoke all on table public.app_call_days from anon;\nrevoke all on table public.app_call_days from authenticated;\ngrant select on table public.app_call_days to authenticated;";
+const AP_GRANTS = {
+  silvis_is_app: "revoke all on function public.silvis_is_app() from public;\nrevoke all on function public.silvis_is_app() from anon;\ngrant execute on function public.silvis_is_app() to authenticated;\ngrant execute on function public.silvis_is_app() to service_role;",
+  app_call_names: "revoke all on function public.app_call_names() from public;\nrevoke all on function public.app_call_names() from anon;\ngrant execute on function public.app_call_names() to authenticated;",
+  save_app_days: "revoke all on function public.save_app_days(uuid, date[], date[], boolean) from public;\nrevoke all on function public.save_app_days(uuid, date[], date[], boolean) from anon;\ngrant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;",
+};
+const AP_IS_APP_FN = "create or replace function public.silvis_is_app() returns boolean\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n  select coalesce((select p.is_app and p.role = 'viewer' and p.person_id is null from public.user_profiles p where p.id = auth.uid()), false);\n$$;";
+const AP_NAMES_SIG = "create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n";
+const AP_SAVE_SIG = "create or replace function public.save_app_days(p_profile uuid, p_add date[], p_clear date[], p_replace boolean default false) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n";
+// the shared contract with the app lane: every refusal's exact text, in check order, all before the first write
+const AP_RAISES = [
+  "raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day' using errcode = 'AP001';",
+  "raise exception 'APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)' using errcode = 'AP001';",
+  "raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler' using errcode = 'AP002';",
+  "raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day' using errcode = 'AP002';",
+  "raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: % is both added and removed in one save - nothing was saved', bad using errcode = 'AP004';",
+  "raise exception 'APP_DAY_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AP003';",
+  "raise exception 'APP_DAY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AP006';",
+  "raise exception 'APP_DAY_STALE: % - reload the calendar (nothing was saved)', bad using errcode = 'AP007';",
+  "raise exception 'APP_DAY_NOT_YOURS: % - only that APP or the scheduler can remove it (nothing was saved)', bad using errcode = 'AP002';",
+  "raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';",
+  "raise exception 'APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)' using errcode = 'AP005';",
+];
+const AP_CODES = [["AP001", "APP_DAY_NOT_ALLOWED"], ["AP002", "APP_DAY_NOT_YOURS"], ["AP003", "APP_DAY_NOT_APP"], ["AP004", "APP_DAY_BAD_DAY"], ["AP005", "APP_DAY_TAKEN"], ["AP006", "APP_DAY_PAST"], ["AP007", "APP_DAY_STALE"]];
+const AP_LOCK = "  perform pg_advisory_xact_lock(hashtext('app_call_days:save'));";
+const AP_RETURN = "  return jsonb_build_object('ok', true, 'profile_id', who, 'added', cardinality(ins_days), 'removed', cardinality(del_days),\n                            'kept', cardinality(adds) - cardinality(ins_days), 'absent', cardinality(clears) - cardinality(del_days),\n                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', cardinality(ins_days) + cardinality(del_days) > 0);";
+// the probe's 66 cases and what section 18 grades for each: eq = the exact AFTER string; err = ERR <code> ... <substring>; ap = ERR
+// <code> <token>: <prefix> (A9 / A10 carry the Central date of the run). These strings are the probe header's, verify-rls 18's,
+// SCHEMA-REVIEW's and the faked run's below.
+const AP_ALLOW = "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day";
+const AP_NOTAPP = " is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)";
+const AP_PROBE_CASES = {
+  P1: ["eq", "table=yes rls=yes pk=day fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no"],
+  P2: ["eq", "save_definer=yes names_definer=yes isapp_definer=yes paths=3 names_stable=yes save_volatile=yes save_anon=no save_auth=yes names_anon=no names_auth=yes isapp_anon=no isapp_auth=yes"],
+  P3: ["eq", "is_app=boolean not_null=yes default=false check=user_profiles_app_viewer self_pins=2"],
+  A1: ["eq", "ok added=3 removed=0 kept=0 source=app 12/2=one/app 12/3=one/app 12/11=one/app by=self"],
+  A2: ["eq", "audit=1 actor=self name=probe app one sums=probe app one: on call 12/2, 12/3, 12/11"],
+  A3: ["eq", "ok added=0 kept=2 audit=false audit_rows=1"],
+  A4: ["eq", "ok removed=1 12/3=none sums=probe app one: on call 12/2, 12/3, 12/11 | probe app one: removed 12/3"],
+  A5: ["eq", "ok removed=0 absent=1 audit=false"],
+  A6: ["eq", "ERR AP004 APP_DAY_BAD_DAY: 12/4 is both added and removed in one save - nothing was saved"],
+  A7: ["eq", "ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved"],
+  A8: ["eq", "ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved"],
+  A9: ["ap", "AP006", "APP_DAY_PAST", "5/4 is before today ("],
+  A10: ["ap", "AP006", "APP_DAY_PAST", "5/4 is before today ("],
+  A10s: ["eq", "12/5=none"],
+  A11: ["eq", "ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler"],
+  A12: ["eq", "ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day"],
+  A13: ["err", "42501", "permission denied for table app_call_days"],
+  A14: ["err", "42501", "permission denied for table app_call_days"],
+  A15: ["eq", "rows=2"],
+  A16: ["eq", "names=1 self=yes"],
+  B1: ["eq", "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved"],
+  B1s: ["eq", "12/2=one/app"],
+  B2: ["eq", "ok added=2 source=app 12/7=two/app 12/8=two/app"],
+  B3: ["eq", "ERR AP002 APP_DAY_NOT_YOURS: 12/2 is probe app one's day - only that APP or the scheduler can remove it (nothing was saved)"],
+  B4: ["eq", "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one, 12/11 already has probe app one - nothing was saved"],
+  B4s: ["eq", "12/9=none"],
+  B5: ["eq", "names=2"],
+  S1: ["eq", AP_ALLOW], S2: ["eq", AP_ALLOW], S3: ["eq", "rows=4"],
+  S4: ["err", "42501", "permission denied for table app_call_days"],
+  S5: ["eq", "names=2 one=probe app one two=probe app two"],
+  C1: ["eq", AP_ALLOW], C2: ["eq", "rows=4"],
+  V1: ["eq", AP_ALLOW], V2: ["eq", "rows=4"],
+  V3: ["err", "42501", "row-level security policy for table \"user_profiles\""],
+  V4: ["eq", "updated=1"],
+  D1: ["eq", "ok added=1 source=scheduler 12/10=two/scheduler by=admin"],
+  D2: ["eq", "actor=s1 name=probe admin sums=probe app two: on call 12/10"],
+  D3: ["eq", "ok removed=1 12/10=none"],
+  D4: ["eq", "ok added=1 5/4=one/scheduler"],
+  D5: ["eq", "ok removed=1 5/4=none"],
+  D6: ["eq", "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved"],
+  D7: ["eq", "ok added=1 replaced=1 12/2=two/scheduler last=probe app two: on call 12/2 (was probe app one)"],
+  D8: ["eq", "ERR AP007 APP_DAY_STALE: 12/2 is probe app two's day - reload the calendar (nothing was saved)"],
+  D9: ["eq", "ERR AP003 APP_DAY_NOT_APP: probe viewer" + AP_NOTAPP],
+  D10: ["eq", "ERR AP003 APP_DAY_NOT_APP: that account" + AP_NOTAPP],
+  D11: ["eq", "ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)"],
+  D12: ["eq", "names=2 one=app two=app"],
+  D13: ["eq", "updated=1 is_app=false"],
+  F1: ["eq", AP_ALLOW], F2: ["eq", "12/11=one/app"],
+  E1: ["eq", "names=2 one=former two=app"],
+  E2: ["eq", "ok removed=1 12/11=none"],
+  E3: ["eq", "ERR AP003 APP_DAY_NOT_APP: probe app one" + AP_NOTAPP],
+  E4: ["err", "23514", "violates check constraint \"user_profiles_app_viewer\""],
+  E5: ["err", "23514", "violates check constraint \"user_profiles_app_viewer\""],
+  N1: ["err", "42501", "permission denied for table app_call_days"],
+  N2: ["err", "42501", "permission denied for function app_call_names"],
+  N3: ["err", "42501", "permission denied for function save_app_days"],
+  N4: ["eq", AP_ALLOW], N5: ["eq", "names=0"],
+  X1: ["eq", "before=3 after=0 audit_kept=yes"],
+  I1: ["err", "42501", "row-level security policy for table \"user_profiles\""],
+  I2: ["eq", "ok is_app=false"],
+};
+const AP_CASES = Object.keys(AP_PROBE_CASES);
+// the full AFTER string of every case as the probe raises it (err: the PostgreSQL message; ap: <today M/D> = the run's Central date)
+const AP_FULL = {
+  A9: "ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was",
+  A10: "ERR AP006 APP_DAY_PAST: 5/4 is before today (<today M/D>) in Central time - a past day stays as it was",
+  A13: "ERR 42501 permission denied for table app_call_days", A14: "ERR 42501 permission denied for table app_call_days", S4: "ERR 42501 permission denied for table app_call_days",
+  V3: "ERR 42501 new row violates row-level security policy for table \"user_profiles\"", I1: "ERR 42501 new row violates row-level security policy for table \"user_profiles\"",
+  E4: "ERR 23514 new row for relation \"user_profiles\" violates check constraint \"user_profiles_app_viewer\"", E5: "ERR 23514 new row for relation \"user_profiles\" violates check constraint \"user_profiles_app_viewer\"",
+  N1: "ERR 42501 permission denied for table app_call_days", N2: "ERR 42501 permission denied for function app_call_names", N3: "ERR 42501 permission denied for function save_app_days",
+};
+const apFull = (k) => AP_PROBE_CASES[k][0] === "eq" ? AP_PROBE_CASES[k][1] : AP_FULL[k];
+
+step("Prompt 29: the migration - user_profiles.is_app + its check + the two pinned self policies, silvis_is_app, app_call_days (authenticated read, never anon), app_call_names, save_app_days; report-first NOT APPLIED; ends with the schema-cache reload");
+const apMig = read(AP_MIGRATION);
+ok(!/\r/.test(apMig), "the APP call days migration has CRLF line endings");
+ok(/^[\x00-\x7f]*$/.test(apMig), "the APP call days migration is ASCII only");
+ok(migFiles.includes(AP_FILE) && !PREPARED_NOT_MIRRORED.includes(AP_FILE), "sql/migrations/" + AP_FILE + " is a mirrored migration (not exempt)");
+const apHdr = apMig.slice(0, apMig.indexOf("\n-- ============================================================================\n\n"));
+const apHdrFlat = apHdr.replace(/\n-- ?/g, " ");
+ok(apHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(apHdr), "the migration header must say REPORT-FIRST, NOT APPLIED");
+ok(apHdrFlat.includes("\"I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me ... This would also show up on the calendar\"") && apHdrFlat.includes("any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only"), "the header quotes Faraz (10/1 6:33 PM) and the four decisions");
+ok(apHdr.includes("\n--   bash <run folder>/apply-app-call-days.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-02-app-call-days.sql   (what it runs)\n"), "the header carries the two apply lines (the one command - its script kept outside the repo - and what it runs)");
+ok(!/bash scripts\/apply-/.test(apHdr), "the migration header names no in-repo apply script");
+ok(/Blast radius/.test(apHdr) && /Who it binds/.test(apHdr) && /The decision: a FLAG, not a role/.test(apHdr) && apHdrFlat.includes("ONE implicit transaction"), "the header states the decision (a flag, not a role), whom it binds, the blast radius and that the file runs as one transaction");
+ok(apHdrFlat.includes("sql/probes/app-call-days-precheck.sql") && apHdrFlat.includes("table=no is_app=no is_app_fn=no save_fn=no names_fn=no pins=0") && apHdrFlat.includes("PROBE_SETUP: app_call_days is absent") && apHdrFlat.includes("66 cases") && apHdrFlat.includes("SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh") && apHdrFlat.includes("docs/SCHEMA-REVIEW.md \"2026-10-02 - APP call days\""), "the header gives the order: pre-check (its gate), probe BEFORE (PROBE_SETUP), the file, probe AFTER (66), strict verify-rls, the record step");
+AP_CODES.forEach(([c, t]) => ok(apHdrFlat.includes(c + " " + t + ": "), "the header lists " + c + " " + t + " with its message"));
+{
+  // the full rollback, in order, with both followers policy texts written out verbatim (the policies depend on the column)
+  const rbLines = ["drop function if exists public.save_app_days(uuid, date[], date[], boolean);", "drop function if exists public.app_call_names();", "drop table if exists public.app_call_days;",
+    "drop policy if exists user_profiles_self_insert on public.user_profiles;", FOLLOW_POLICIES.user_profiles_self_insert, "drop policy if exists user_profiles_self_update on public.user_profiles;", FOLLOW_POLICIES.user_profiles_self_update,
+    "alter table public.user_profiles drop constraint if exists user_profiles_app_viewer;", "alter table public.user_profiles drop column if exists is_app;", "drop function if exists public.silvis_is_app();", "notify pgrst, 'reload schema';"];
+  const rbText = rbLines.join("\n").split("\n").map((l) => "--   " + l).join("\n");
+  ok(apHdr.includes("\n" + rbText + "\n"), "the header's rollback must read exactly (both followers policy texts in full, the policies before the column):\n" + rbText);
+  ok(apHdrFlat.includes("select * from public.app_call_days order by day;"), "the rollback says to export the APP days first");
+}
+ok(!/^-- supersedes:/m.test(apMig) && !/^-- PREPARED FOLLOW-UP/m.test(apMig), "the APP call days migration has no supersedes line (no function is redefined) and is not a NOT-MIRRORED follow-up");
+eq((apMig.match(/create or replace function/g) || []).length, 3, "the migration creates exactly three functions (silvis_is_app, app_call_names, save_app_days);");
+const apCode = apMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+eq((apCode.match(/^create table /gm) || []).length, 1, "the migration creates exactly one table;");
+eq((apCode.match(/^create policy [a-z_]+ on public\.user_profiles /gm) || []).length, 2, "two policies on user_profiles (the two self policies);");
+eq((apCode.match(/^create policy [a-z_]+ on public\.app_call_days /gm) || []).length, 1, "one policy on app_call_days (app_call_days_read);");
+eq((apCode.match(/^create policy /gm) || []).length, 3, "three policies in all;");
+ok(!/drop function|drop table|create trigger|drop trigger|user_profiles_admin|user_profiles_read|audit_insert|audit_read|notif_insert|notif_read|read_all/.test(apCode), "the migration drops nothing and touches no trigger, user_profiles_admin / _read, audit_* or notif_* policy, nor the anon read_all loop");
+ok(apMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST must learn the new table and functions before the client push)");
+const apStmts = apTopStatements(apMig);
+ok(!apStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row (no insert / update / delete outside function bodies)");
+eq(apStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
+  "alter table public.user_profiles add column if not exists is_app boolean not null default false;",
+  "alter table public.user_profiles drop constraint if exists user_profiles_app_viewer;",
+  "alter table public.user_profiles add constraint user_profiles_app_viewer",
+  "create or replace function public.silvis_is_app() returns boolean",
+  "revoke all on function public.silvis_is_app() from public;",
+  "revoke all on function public.silvis_is_app() from anon;",
+  "grant execute on function public.silvis_is_app() to authenticated;",
+  "grant execute on function public.silvis_is_app() to service_role;",
+  "comment on function public.silvis_is_app() is ...",
+  "drop policy if exists user_profiles_self_insert on public.user_profiles;",
+  "create policy user_profiles_self_insert on public.user_profiles for insert to authenticated",
+  "drop policy if exists user_profiles_self_update on public.user_profiles;",
+  "create policy user_profiles_self_update on public.user_profiles for update to authenticated",
+  "create table if not exists public.app_call_days (",
+  "create index if not exists app_call_days_profile_idx on public.app_call_days (profile_id, day);",
+  "alter table public.app_call_days enable row level security;",
+  "revoke all on table public.app_call_days from anon;",
+  "revoke all on table public.app_call_days from authenticated;",
+  "grant select on table public.app_call_days to authenticated;",
+  "drop policy if exists app_call_days_read on public.app_call_days;",
+  "create policy app_call_days_read on public.app_call_days for select to authenticated using (true);",
+  "comment on table public.app_call_days is ...",
+  "create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)",
+  "revoke all on function public.app_call_names() from public;",
+  "revoke all on function public.app_call_names() from anon;",
+  "grant execute on function public.app_call_names() to authenticated;",
+  "comment on function public.app_call_names() is ...",
+  "create or replace function public.save_app_days(p_profile uuid, p_add date[], p_clear date[], p_replace boolean default false) returns jsonb",
+  "revoke all on function public.save_app_days(uuid, date[], date[], boolean) from public;",
+  "revoke all on function public.save_app_days(uuid, date[], date[], boolean) from anon;",
+  "grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;",
+  "comment on function public.save_app_days(uuid, date[], date[], boolean) is ...",
+  "notify pgrst, 'reload schema';",
+], "the migration is exactly: the column + check, silvis_is_app + grants + comment, the two self policies, the table + index + RLS + privileges + policy + comment, app_call_names + grants + comment, save_app_days + grants + comment, the reload (in this order);");
+function checkAppDays(n, s) {
+  AP_COLUMN_LINES.forEach((l) => ok(s.indexOf(l) >= 0, n + ": missing the is_app line:\n" + l));
+  ok(s.indexOf(AP_SELF_INSERT) >= 0, n + ": user_profiles_self_insert must read exactly:\n" + AP_SELF_INSERT);
+  ok(s.indexOf(AP_SELF_UPDATE) >= 0, n + ": user_profiles_self_update must read exactly:\n" + AP_SELF_UPDATE);
+  ok(s.indexOf(AP_TABLE) >= 0, n + ": the app_call_days table must read exactly:\n" + AP_TABLE);
+  ok(s.indexOf(AP_INDEX) >= 0 && s.indexOf(AP_PRIVS) >= 0 && s.indexOf(AP_READ_POLICY) >= 0 && s.indexOf("drop policy if exists app_call_days_read on public.app_call_days;\n" + AP_READ_POLICY) >= 0, n + ": the index, the three privilege lines (anon and authenticated revoked, SELECT granted back) and app_call_days_read (drop if exists first)");
+  ok(s.indexOf(AP_IS_APP_FN) >= 0, n + ": silvis_is_app() must read exactly:\n" + AP_IS_APP_FN);
+  Object.keys(AP_GRANTS).forEach((f) => ok(s.indexOf(AP_GRANTS[f]) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "() grants must read exactly (after the function):\n" + AP_GRANTS[f]));
+  ["silvis_is_app()", "app_call_names()", "save_app_days(uuid, date[], date[], boolean)"].forEach((f) => ok(new RegExp("^comment on function public\\." + apEsc(f) + " is 'Prompt 29[^\\n]*';$", "m").test(s), n + ": " + f + " carries a Prompt 29 comment"));
+  ok(/^comment on table public\.app_call_days is 'Prompt 29[^\n]*never anon[^\n]*save_app_days\(\)[^\n]*';$/m.test(s), n + ": the table comment says never anon and names the write path");
+  ok(/AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST \(not the scheduler\), AP007 APP_DAY_STALE/.test(s), n + ": save_app_days' comment names the seven codes");
+  const names = sqlFunctionText(s, "app_call_names");
+  ok(names && names.startsWith(AP_NAMES_SIG) && /\n\$\$;$/.test(names), n + ": app_call_names() must read `" + AP_NAMES_SIG.trim() + "` and end at `$$;`");
+  if (names) {
+    ok(names.includes("   where auth.uid() is not null\n") && names.includes("(exists (select 1 from public.app_call_days a where a.profile_id = p.id)\n          or (p.is_app and p.role = 'viewer' and p.person_id is null and (p.id = auth.uid() or public.silvis_is_sched())))"), n + ": app_call_names returns the days' holders to any signed-in caller, the caller's own APP profile, every APP profile to the scheduler only - nothing without a signed-in user");
+    ok(!/email|\brole\b,|person_id,/.test(names.split("\n").filter((l) => /select p\.id/.test(l)).join("")) && names.includes("  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)\n"), n + ": app_call_names selects the id, the trimmed display name and the APP flag only - never an email or a role");
+  }
+  const fn = functionText(s, "save_app_days");
+  ok(fn && fn.startsWith(AP_SAVE_SIG), n + ": save_app_days must read `" + AP_SAVE_SIG.trim() + "` (security definer, search_path public, pg_temp; VOLATILE - never stable)");
+  if (!fn) return;
+  ok(!/\b(stable|immutable)\b/.test(fn.slice(0, fn.indexOf("$$"))), n + ": save_app_days is volatile (each statement sees the rows committed before the lock was granted)");
+  const firstWrite = fn.indexOf("delete from public.app_call_days");
+  ok(firstWrite > 0 && firstWrite < fn.indexOf("insert into public.app_call_days"), n + ": the first write is a delete (p_replace), before the insert");
+  let last = -1;
+  AP_RAISES.forEach((r, i) => {
+    const at = fn.indexOf(r);
+    ok(at > last, n + ": the refusal is missing or out of order (AP001 x2, AP002 x2, AP004 x3, AP003, AP006, AP007, AP002, AP005):\n" + r);
+    if (i < AP_RAISES.length - 1) ok(at < firstWrite, n + ": every refusal comes BEFORE the first write (fail closed):\n" + r);
+    if (at > last) last = at;
+  });
+  eq((fn.match(/using errcode = 'AP0/g) || []).length, AP_RAISES.length, n + ": exactly the thirteen AP raises;");
+  ok(fn.includes("  if me is null or (not sched and not c_app) then\n    raise exception 'APP_DAY_NOT_ALLOWED: only an APP"), n + ": AP001 fires for no signed-in user and for a caller who is neither an APP nor the scheduler");
+  ok(fn.includes("  if who is null and c_app then who := me; end if;") && fn.includes("  if not sched and who <> me then\n    raise exception 'APP_DAY_NOT_YOURS: an APP adds") && fn.includes("  if repl and not sched then\n    raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace"), n + ": an APP's null profile is itself; another profile or p_replace from an APP is AP002");
+  ok(fn.includes("  if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then"), n + ": the 400-day cap counts both raw lists");
+  ok(fn.includes("  if cardinality(adds) > 0 and not coalesce(t_app, false) then\n    raise exception 'APP_DAY_NOT_APP"), n + ": AP003 binds adds only (a former APP's days can still be cleared) - for the scheduler too");
+  const lock = fn.indexOf(AP_LOCK);
+  ok(lock > fn.indexOf(AP_RAISES[7]) && lock < fn.indexOf(AP_RAISES[8]) && lock < fn.indexOf("from public.app_call_days"), n + ": the advisory lock app_call_days:save comes after AP003, before AP006 and before the first read of app_call_days");
+  eq((fn.match(/pg_advisory_xact_lock/g) || []).length, 1, n + ": one advisory lock;");
+  const gate = fn.indexOf("  if not sched then\n"), gateEnd = fn.indexOf("\n  end if;\n", fn.indexOf("\n    end if;\n", gate));
+  eq((fn.match(/  if not sched then\n/g) || []).length, 1, n + ": one scheduler exemption;");
+  eq(fn.slice(gate, gateEnd).match(/errcode = 'AP0\d\d'/g), ["errcode = 'AP006'"], n + ": `not sched` exempts the scheduler from AP006 (the past day) only;");
+  ok(fn.includes("  today_c   date := (now() at time zone 'America/Chicago')::date;") && fn.includes("from unnest(adds || clears) d where d < today_c;"), n + ": AP006 reads the Central date, for adds and removals");
+  ok(fn.includes("   where a.day = any(clears) and a.profile_id <> who;\n  if bad is not null then\n    if sched then\n      raise exception 'APP_DAY_STALE"), n + ": a removal of a day another profile holds: AP007 for the scheduler (a stale picture), AP002 for an APP");
+  ok(fn.includes("  if not repl then\n") && fn.includes("     where a.day = any(adds) and a.profile_id <> who;\n    if bad is not null then\n      raise exception 'APP_DAY_TAKEN: % - nothing was saved'"), n + ": an add on another profile's day is AP005 unless p_replace (the scheduler's change)");
+  ok(fn.includes("  v_src := case when who = me then 'app' else 'scheduler' end;") && fn.includes("    select d, who, v_src, me from unnest(adds) d\n    on conflict (day) do nothing"), n + ": source app / scheduler from the caller, created_by = auth.uid(), on conflict (day) do nothing (kept)");
+  ok(fn.includes("    insert into public.audit_log (actor_id, actor_name, action, detail)\n    values (coalesce(public.silvis_person_id(), me::text),") && fn.includes("            'appdays.save',\n") && fn.includes("jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', to_jsonb(ins_days), 'removed', to_jsonb(del_days), 'replaced', replaced, 'source', v_src)"), n + ": the function writes the appdays.save audit row (actor = roster id, else auth uid; detail summary / profile_id / added / removed / replaced / source)");
+  ok(fn.includes("  if cardinality(ins_days) + cardinality(del_days) > 0 then\n    v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',") && fn.includes("' (was ' ||") && fn.includes("'removed ' ||"), n + ": one audit row only when something changed; summary '<name>: on call <days> (was <name>); removed <days>'");
+  ok(!/insert into public\.notifications|notifications/.test(fn), n + ": save_app_days writes no notification row (the Activity log only)");
+  ok(fn.includes(AP_RETURN), n + ": the return shape {ok, profile_id, added, removed, kept, absent, replaced, source, audit} (binding for the client)");
+  eq((fn.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).map((x) => x.replace(/\s+/g, " ")).sort(), ["delete from public.app_call_days", "delete from public.app_call_days", "insert into public.app_call_days", "insert into public.audit_log"], n + ": save_app_days writes app_call_days (two deletes, one insert) and audit_log only;");
+}
+checkAppDays("APP call days migration", apMig);
+
+step("Prompt 29: schema.sql mirrors the migration (every statement byte for byte, the three functions, revision v after s), the new column in the from-scratch table, app_call_days not anon-readable, the self policies replaced in place");
+checkAppDays("schema.sql", schema);
+["silvis_is_app", "app_call_names"].forEach((name) => ok(sqlFunctionText(schema, name) === sqlFunctionText(apMig, name), name + "(): schema.sql differs from sql/migrations/" + AP_FILE));
+ok(functionText(schema, "save_app_days") === functionText(apMig, "save_app_days"), "save_app_days(): schema.sql differs from sql/migrations/" + AP_FILE);
+apStmts.filter((st) => !/^notify pgrst/.test(st) && st !== AP_ENABLE).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this APP call days statement byte for byte:\n" + st.slice(0, 300)));
+ok(/^alter table public\.app_call_days +enable row level security;$/m.test(schema), "schema.sql enables RLS on app_call_days (in the RLS list)");
+{
+  const at = (t) => schema.indexOf(t);
+  const rls = at("-- Row Level Security");
+  ok(at(AP_COLUMN_LINES[0]) > at("alter table public.user_profiles add constraint user_profiles_follows_shape") && at(AP_COLUMN_LINES[2]) < at("create or replace function public.handle_new_auth_user()"), "the is_app lines sit right after the follows lines, before handle_new_auth_user()");
+  ok(/\n  follows       jsonb not null default '\[\]'::jsonb,   -- [^\n]*\n  is_app        boolean not null default false,/.test(sliceBetween(schema, "create table if not exists public.user_profiles (", "\n);") || ""), "schema.sql's user_profiles create table carries `is_app boolean not null default false` right after follows (a from-scratch schema)");
+  ok(at(AP_IS_APP_FN) > at(COORD_HELPER) && at(AP_IS_APP_FN) < at("create table if not exists public.call_schedule_data ("), "silvis_is_app() sits after silvis_is_coord(), before call_schedule_data");
+  ok(at(AP_TABLE) > at("grant select, insert, update, delete on table public.call_pay_logs to authenticated;") && at("create or replace function public.app_call_names(") > at(AP_TABLE) && at("create or replace function public.save_app_days(") > at("create or replace function public.app_call_names(") && at(AP_GRANTS.save_app_days) < rls, "the table block (table, index, privileges, comment), app_call_names and save_app_days sit after the call pay grants, before Row Level Security");
+  ok(at(AP_ENABLE) < 0 && at("alter table public.app_call_days           enable row level security;") > rls, "the enable line sits in the RLS list (not in the table block)");
+  ok(at(AP_READ_POLICY) > at("create policy call_pay_logs_delete on public.call_pay_logs") && at(AP_READ_POLICY) < at("-- Seed rows"), "app_call_days_read sits after the call pay policies");
+  const upRead = at("create policy user_profiles_read on public.user_profiles"), upAdmin = at("create policy user_profiles_admin on public.user_profiles");
+  ok(upRead < at(AP_SELF_INSERT) && at(AP_SELF_INSERT) < at(AP_SELF_UPDATE) && at(AP_SELF_UPDATE) < upAdmin, "the two self policies are replaced in place (between user_profiles_read and user_profiles_admin)");
+  ok(AP_SELF_INSERT === FOLLOW_POLICIES.user_profiles_self_insert.replace("follows = '[]'::jsonb);", "follows = '[]'::jsonb and not is_app);") && AP_SELF_UPDATE === FOLLOW_POLICIES.user_profiles_self_update.replace("p.id = auth.uid()));", "p.id = auth.uid())\n    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid()));"), "the two self policies are the followers texts plus the is_app clause, byte for byte otherwise");
+  const loop = schema.slice(schema.indexOf("-- Anon-readable tables"), schema.indexOf("end $$;", schema.indexOf("-- Anon-readable tables")));
+  ok(loop.length > 0 && /foreach t in array array\['call_schedule_data','schedule_days','availability','east_feed','east_forecast','client_versions'\] loop/.test(loop) && !/app_call_days/.test(loop), "app_call_days is NOT in the anon read_all loop");
+  ok(!/create policy [a-z_]+ on public\.app_call_days for [a-z]+ (using|with)/.test(schema) && (schema.match(/create policy [a-z_]+ on public\.app_call_days /g) || []).length === 1, "app_call_days carries exactly one policy, and it names `to authenticated` (never a role-less / anon policy)");
+  const vAt = header.search(/^-- Revision 2026-10-02 v \(APP call days, sql\/migrations\/2026-10-02-app-call-days\.sql, report-first, NOT yet applied\): /m);
+  const sAt = header.search(/^-- Revision 2026-09-30 s /m);
+  ok(sAt > 0 && vAt > sAt, "schema.sql's header must record revision 2026-10-02 v (APP call days; 'report-first, NOT yet applied' until the record step) after revision s (index order - Prompt 28's t and the pair claim's u sit between them after their merges)");
+  const revV = header.slice(vAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(/a FLAG, not a role/.test(revV) && /user_profiles_app_viewer/.test(revV) && /app_call_days \(day date PRIMARY KEY - one APP per day/.test(revV) && /AP001-AP007/.test(revV) && /never anon/.test(revV) && /Letters t and u are taken by prepared, unmerged work/.test(revV), "revision v names the flag decision, the check, the table, the codes, never anon and the taken letters t / u");
+}
+
+step("Prompt 29: the probe - self-rolling-back, PROBE_SETUP (absent) first, the is_app check second, the collision guard third, six throwaway users, 66 cases each stating its AFTER string in the header, readbacks filtered to the probe's own users");
+const apProbe = read(AP_PROBE);
+ok(!/\r/.test(apProbe) && /^[\x00-\x7f]*$/.test(apProbe), "the APP days probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(apProbe), "the APP days probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(apProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ngrant insert, select on probe_results to anon;"), "the probe collects into probe_results, granted to authenticated and anon (N1-N3 run as anon)");
+{
+  const lastDo = apProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(apProbe.slice(lastDo)), "the probe's last DO block raises 'PROBE_RESULTS %;END'");
+  const absentAt = apProbe.indexOf("raise exception 'PROBE_SETUP: app_call_days is absent - sql/migrations/2026-10-02-app-call-days.sql is not applied';");
+  const partAt = apProbe.indexOf("raise exception 'PROBE_SETUP: user_profiles.is_app is absent - sql/migrations/2026-10-02-app-call-days.sql is partly applied';");
+  const guardAt = apProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2030-12 or on 2020-05-04) - the probe fixtures would collide';");
+  const usersAt = apProbe.indexOf("insert into auth.users");
+  ok(absentAt > 0 && partAt > absentAt && guardAt > partAt && usersAt > guardAt, "the setup raises PROBE_SETUP absent first, then the partly-applied check, then the collision guard (it reads the table), before any fixture (" + [absentAt, partAt, guardAt, usersAt] + ")");
+  const code = apProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ok(code.includes("if to_regclass('public.app_call_days') is null then") && code.includes("if exists (select 1 from public.app_call_days d where d.day between '2030-12-01' and '2030-12-31' or d.day = '2020-05-04') then"), "the absent check is to_regclass; the guard looks at app_call_days in 2030-12 and on 2020-05-04");
+  ok(code.includes("'probe-appdays-' || u || '@example.test'") && !/'probe-appdays-[^'|]*@/.test(code), "the throwaway users are probe-appdays-<uuid>@example.test, the email built with || (no literal email in the file)");
+  ok(code.includes("update public.user_profiles set display_name = 'probe app one', is_app = true where id = u1;") && code.includes("update public.user_profiles set display_name = 'probe app two', is_app = true where id = u2;") && code.includes("update public.user_profiles set person_id = 's3', role = 'surgeon', display_name = 'probe surgeon' where id = us;") && code.includes("update public.user_profiles set role = 'coordinator', display_name = 'probe office' where id = uc;") && code.includes("update public.user_profiles set display_name = 'probe viewer' where id = uv;") && code.includes("update public.user_profiles set person_id = 's1', role = 'admin', display_name = 'probe admin' where id = ua;"), "the six users: U1 / U2 viewers marked APP, US surgeon s3, UC coordinator, UV a plain viewer, UA admin s1 - display names 'probe ...' only");
+  ok((code.match(/insert into public\.app_call_days/g) || []).length === 2 && code.indexOf("insert into public.app_call_days") > code.indexOf("values ('A12', "), "no app_call_days fixture row: the only direct inserts are the two refused cases (A13, S4)");
+  const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]).concat(Array.from(code.matchAll(/[{,](20[0-9]{2}-[0-9]{2}-[0-9]{2})/g)).map((m) => m[1]));
+  ok(days.length > 30 && days.every((d) => d.slice(0, 7) === "2030-12" || d === "2020-05-04" || d === "2031-01-01" || d === "2032-02-05"), "every day the probe touches is in 2030-12, the past day 2020-05-04 or the refused 401-day range 2031-01-01 .. 2032-02-05: " + days.filter((d) => !(d.slice(0, 7) === "2030-12" || ["2020-05-04", "2031-01-01", "2032-02-05"].includes(d))).join(", "));
+  ok(!/(update|insert into|delete from)\s+public\.(call_schedule_data|schedule_days|time_off|availability|call_offers|notifications)\b/.test(code), "the probe never writes the blob, the schedule, vacations, availability, offers or the feed");
+  AP_CASES.forEach((k) => ok(code.includes("values ('" + k + "', "), "the probe lacks case " + k));
+  // readbacks stable against live data: names / sums / last / audit counts filtered to the probe's own users
+  ok(code.includes("     where x.profile_id::text in (select c.v from probe_ctx c)\n") && (code.match(/l\.detail ->> 'profile_id' in \(select c\.v from probe_ctx c\)/g) || []).length === 3 && code.includes("order by l.detail ->> 'summary' collate \"C\""), "names= / audit= / sums= / last= read only the probe's own users (later runs with real APPs read the same); sums in text order (collate C)");
+  ok(code.includes("select 'rows=' || count(*) from public.app_call_days a where a.day between '2030-12-01' and '2030-12-31';"), "rows= counts the window only (the guard keeps live rows out of it)");
+  ok((code.match(/execute 'reset role';\n    insert into probe_results values \('(A2|A3|A4|D2|D7)'/g) || []).length === 5, "the audit readbacks (A2, A3, A4, D2, D7) reset the role first - read as postgres");
+  ok(code.includes("execute 'set local role anon';\n  perform set_config('request.jwt.claims', '', true);") && code.includes("  execute 'reset role';\n  perform set_config('request.jwt.claims', '{}', true);\n  begin\n    r := public.save_app_days(u2::uuid, '{2030-12-13}', null);\n    insert into probe_results values ('N4', "), "N1-N3 run as anon, N4-N5 as postgres with no signed-in user");
+  ok(code.includes("delete from auth.users where id = u2::uuid;") && code.includes("  delete from public.user_profiles where id = u::uuid;\n  execute 'set local role authenticated';"), "X1 deletes U2's auth user (its days cascade); I1 / I2 start from UV's deleted profile row (the self-insert door), the delete outside the cases' subtransactions");
+}
+const apProbeHdr = apProbe.slice(0, apProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(apProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(apProbeHdr) && /\n-- 66 cases\.\n/.test(apProbeHdr), "the probe header: report-first / not applied, nothing persisted, 66 cases");
+const AP_AFTER = {};
+apProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+s?)\s+.* -> (.*)$/); if (m) AP_AFTER[m[1]] = m[2]; });
+eq(Object.keys(AP_AFTER).sort(), AP_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
+AP_CASES.forEach((k) => ok(AP_AFTER[k] === apFull(k), "the probe header's AFTER for " + k + " (" + AP_AFTER[k] + ") must be " + apFull(k)));
+eq(AP_CASES.length, 66, "66 probe cases;");
+
+step("Prompt 29: the pre-check - ONE read-only SELECT (the objects gate, profiles per role - counts only, the appdays.save audit rows, the realtime publication facts)");
+const apPre = read(AP_PRECHECK);
+ok(!/\r/.test(apPre) && /^[\x00-\x7f]*$/.test(apPre), "the pre-check is LF and ASCII");
+{
+  const hdr = apPre.slice(0, apPre.indexOf("with objects as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
+  ok(hdr.includes("table=no is_app=no is_app_fn=no save_fn=no names_fn=no pins=0") && hdr.includes("table=yes is_app=yes is_app_fn=yes save_fn=yes names_fn=yes pins=2"), "the header states the gate before and after the apply");
+  const code = apPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code), "the pre-check writes, locks and changes nothing");
+  ok(code.includes("'table=' || case when to_regclass('public.app_call_days') is null then 'no' else 'yes' end") && code.includes("a.attname = 'is_app'") && code.includes("to_regprocedure('public.silvis_is_app()')") && code.includes("to_regprocedure('public.save_app_days(uuid, date[], date[], boolean)')") && code.includes("to_regprocedure('public.app_call_names()')") && code.includes("coalesce(p.with_check, '') like '%is_app%'"), "row 1 (the gate): the table, the column, the three functions, the two pinned policies - through catalog lookups only");
+  ok(!/\bu\.is_app\b|public\.app_call_days\b(?![')])/.test(code), "the pre-check never reads the new column or table directly (it runs before the apply)");
+  ["'objects'::text", "'profiles'::text", "'audit'::text", "'realtime'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  const NAMED_COUNT = "' named=' || count(*) filter (where nullif(btrim(coalesce(u.display_name, '')), '') is not null)";
+  ok(code.includes(NAMED_COUNT) && !/\bdisplay_name\b/.test(code.split(NAMED_COUNT).join("")) && !/email/.test(code), "profiles: counts only - the display name is COUNTED in one place and never printed, no email is read");
+  ok(code.includes("b.pubname = 'supabase_realtime' and b.puballtables") && code.includes("t.tablename = 'app_call_days'"), "row 4: the realtime publication facts (all tables? app_call_days published?)");
+}
+
+step("Prompt 29: verify-rls.sh section 18 - anon REST (18a the table, 18b app_call_names, 18c save_app_days, 18d a direct write), 18e as a surgeon, the graded probe, leftovers; PROBE_SETUP / 404 pass as not applied unless SILVIS_APP_DAYS_APPLIED=1; graded against a faked CLI and curl");
+ok(/^echo "== 18\. APP call days \(2026-10-02, Prompt 29\): app_call_days \+ save_app_days \/ app_call_names \+ user_profiles\.is_app - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 18 (APP call days)");
+const s18 = vr.slice(vr.indexOf('echo "== 18. '), vrSectionEnd('echo "== 18. '));
+ok(s18.length > 0 && vr.indexOf('echo "== 18. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 18 could not be sliced out (after section 15, up to the next section header or the RESULT line)");
+ok(/^# Section 18 \(16 = Prompt 28's no-primary days and 17 = the weekend pair claim are taken on other branches\)\.$/m.test(s18), "section 18's comment says why it is 18 (16 and 17 are taken on other branches)");
+const s18code = s18.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(s18code.includes('APSTRICT18="${SILVIS_APP_DAYS_APPLIED:-}"'), "section 18 reads SILVIS_APP_DAYS_APPLIED");
+eq((s18code.match(/curl /g) || []).length, 6, "section 18 makes exactly six REST calls (18a-18d anon, 18e two as a surgeon);");
+ok(s18code.includes("\"$URL/rest/v1/app_call_days?select=day&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Prefer: count=exact\")"), "18a: anon GET app_call_days with Prefer: count=exact");
+ok(s18code.includes("\"$URL/rest/v1/rpc/app_call_names\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\")") && !/-X POST "\$URL\/rest\/v1\/rpc\/app_call_names"/.test(s18code), "18b: anon GET rpc/app_call_names (stable: GET, never POST)");
+ok(s18code.includes("-X POST \"$URL/rest/v1/rpc/save_app_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_profile\":null,\"p_add\":[],\"p_clear\":[],\"p_replace\":false}'"), "18c: anon POST rpc/save_app_days with the four keys and empty lists (the schema-cache gate before the client push)");
+ok(s18code.includes("-X POST \"$URL/rest/v1/app_call_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"day\":\"2030-12-31\",\"profile_id\":\"00000000-0000-0000-0000-000000000000\",\"source\":\"app\"}'"), "18d: anon POST app_call_days (the zero uuid names no profile)");
+{
+  const posts = s18code.match(/curl [^\n]*-X POST[^\n]*/g) || [];
+  ok(posts.length === 3 && posts.every((p) => /Bearer \$ANON|Bearer \$SILVIS_SURGEON_JWT/.test(p)) && posts.filter((p) => /rpc\/save_app_days/.test(p)).every((p) => p.includes("\"p_add\":[],\"p_clear\":[]")), "every POST in section 18 is an anon or surgeon call; the save_app_days calls send empty lists (nothing could be written)");
+  ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s18code), "section 18 never sends the scheduler's token");
+}
+ok((s18code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s18code.match(/"HTTP 404"\) if \[ "\$APSTRICT18" = "1" \]; then bad /g) || []).length === 6 && /"HTTP 200"\) bad "anon read of app_call_days: HTTP 200/.test(s18code), "18a-18d: 401/403 PASS; 404 PASS unless strict (then FAIL; 18e too); an anon 200 on the table FAILs always");
+ok(/if \[ -n "\$\{SILVIS_SURGEON_JWT:-\}" \]; then/.test(s18code) && s18code.includes('echo "   SKIP 18e (set SILVIS_SURGEON_JWT=') && /"HTTP 400"\) if grep -q 'AP001'/.test(s18code), "18e runs only with SILVIS_SURGEON_JWT (a SKIP line otherwise): the surgeon's read 200, the surgeon's empty save 400 with AP001");
+ok(/PROBE18="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/app-call-days-probe\.sql"/.test(s18code), "18f runs sql/probes/app-call-days-probe.sql through the linked CLI");
+ok(/if \[ "\$APSTRICT18" = "1" \]; then bad "APP days probe: PROBE_SETUP - app_call_days is absent with SILVIS_APP_DAYS_APPLIED=1/.test(s18code) && /else ok "APP days probe: app_call_days is absent \(before the migration: PROBE_SETUP\)"/.test(s18code) && /bad "APP days probe: PROBE_SETUP - user_profiles\.is_app is absent/.test(s18code) && /bad "APP days probe: PROBE_SETUP - live app_call_days rows sit in the probe window/.test(s18code), "18f: PROBE_SETUP absent is the not-applied picture (a PASS) unless strict; the partly-applied raise and the collision guard FAIL always");
+ok(s18code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'"), "section 18's case reader decodes the CLI's \\u003e / \\u003c / \\u0026 and drops the JSON backslashes before grading");
+ok(s18code.includes('lines18=$(echo "$results18" | tr \';\' \'\\n\' | sed ') && s18code.includes('case_val18()   { CV18=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV18="${l#"$1="}"; return 0;; esac; done <<< "$lines18"; }'), "section 18 decodes the results ONCE and reads each case in plain bash (no process per case)");
+AP_CASES.forEach((k) => {
+  const [kind, a, b, c] = AP_PROBE_CASES[k];
+  const viaVar = (v) => v === AP_ALLOW ? "\"\\$ALLOW18\"" : null;
+  let re;
+  if (kind === "eq") {
+    const lit = a.startsWith("ERR AP003 APP_DAY_NOT_APP: ") ? "\"" + apEsc(a.slice(0, a.indexOf(AP_NOTAPP))) + "\\$NOTAPP18\"" : (viaVar(a) || "\"" + apEsc(a) + "\"");
+    re = new RegExp("\\n    expect_eq18\\s+" + apEsc(k) + "\\s+" + lit + "\\s");
+  } else if (kind === "ap") re = new RegExp("\\n    expect_ap18\\s+" + apEsc(k) + "\\s+" + a + "\\s+" + b + "\\s+\"" + apEsc(c) + "\"\\s");
+  else re = new RegExp("\\n    expect_err18\\s+" + apEsc(k) + "\\s+" + a + "\\s+[\"']" + apEsc(b) + "[\"']\\s");
+  ok(re.test(s18code), "section 18 must grade " + k + " as " + AP_PROBE_CASES[k].join(" | "));
+});
+ok(s18code.includes('ALLOW18="' + AP_ALLOW + '"') && s18code.includes('NOTAPP18="' + AP_NOTAPP + '"'), "section 18's two shared strings are the probe's");
+eq((s18code.match(/\n    expect_(eq|err|ap)18 /g) || []).length, AP_CASES.length, "section 18 grades exactly the 66 cases;");
+ok(s18code.includes("LEFTOVER18_SQL=\"select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window\"") && /LEFT ROWS BEHIND/.test(s18code), "18g counts leftovers by the probe's identity (tagged: its auth users and its audit rows; in_window: app_call_days in its window, guarded by to_regclass) and fails on non-zero");
+ok(s18code.includes("echo \"      delete from auth.users where email like 'probe-appdays-%@example.test';   -- profiles and their app_call_days rows cascade\"") && !/delete from public\.app_call_days/.test(s18code), "18g prints DELETEs for tagged rows only - never for an app_call_days row (a probe row and a real APP day look alike)");
+ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 18f / 18g skip (18a-18e still run)");
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(head.includes("#   SILVIS_APP_DAYS_APPLIED=1   grade section 18 strictly (the probe's PROBE_SETUP and the anon 404s = FAIL): only on the run right after sql/migrations/2026-10-02-app-call-days.sql is applied; the record step makes strict the default and drops this variable") && /APP call days anon checks and probe \(18\)/.test(head) && /anon checks \([^)]*18a-18d\)/.test(head), "verify-rls.sh's header names section 18 and SILVIS_APP_DAYS_APPLIED");
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* \/ SILVIS_APP_DAYS_APPLIED( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_APP_DAYS_APPLIED among the flags after SILVIS_PREFS_ROWS_BEFORE");
+}
+{
+  const code18 = vr.slice(vr.indexOf('echo "== 18. '), vrSectionEnd('echo "== 18. '));
+  const run18 = (cliOut, opts) => {
+    const o = Object.assign({ strict: false, tagged: 0, win: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", surgeon: false }, opts || {});
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  {\\n    \"tagged\": " + o.tagged + ",\\n    \"in_window\": " + o.win + "\\n  }\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"tagged\": " + o.tagged + ",\\n      \"in_window\": " + o.win + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_APP_DAYS_APPLIED='" + (o.strict ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      "q() { " + qBody + "; }\n" +
+      "curl() { local of='' prev='' code='' post='' sur='' u='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$a\" = POST ] && post=1; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; [ -n \"$of\" ] && : > \"$of\"; " +
+      "if [ -n \"$sur\" ]; then if [ -n \"$post\" ]; then code=400; [ -n \"$of\" ] && echo '{\"code\":\"AP001\",\"message\":\"APP_DAY_NOT_ALLOWED: ...\"}' > \"$of\"; else code=200; fi; " +
+      "else case \"$u\" in *rpc/save_app_days*) code=" + o.c + ";; *rpc/app_call_names*) code=" + o.b + ";; *rest/v1/app_call_days*) if [ -n \"$post\" ]; then code=" + o.d + "; else code=" + o.a + "; fi;; esac; fi; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code18 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 18: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = {};
+  AP_CASES.forEach((k) => { after[k] = apFull(k).replace(/<today M\/D>/g, "10/1"); });
+  // the CLI's error body as the live apply logs show it (a JSON message, a double quote escaped; CONTEXT after the sentinel)
+  const msgOf = (pic, esc) => { let m = Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";"); m = m.replace(/"/g, '\\"'); if (esc) m = m.replace(/>/g, "\\u003e"); return 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + m + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}'; };
+  const ra = run18(msgOf(after));
+  eq(ra.result, [AP_CASES.length + 5, 0], "section 18 against the AFTER picture (18a-18d 401, every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  const re = run18(msgOf(after, true), { surgeon: true });
+  eq(re.result, [AP_CASES.length + 7, 0], "section 18 decodes the CLI's \\u003e for '>'; with SILVIS_SURGEON_JWT 18e adds two PASSes (the surgeon's read 200, the empty save 400 AP001) (" + fails(re) + ");");
+  const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: app_call_days is absent - sql/migrations/2026-10-02-app-call-days.sql is not applied\\nCONTEXT:  ..."}';
+  const rb = run18(setup, { a: "404", b: "404", c: "404", d: "404" });
+  eq(rb.result, [6, 0], "section 18 before the apply (four 404s, PROBE_SETUP): passes as not applied, the leftover check too (" + fails(rb) + ");");
+  eq(run18(setup, { a: "404", b: "404", c: "404", d: "404", strict: true }).result, [1, 5], "section 18 with SILVIS_APP_DAYS_APPLIED=1: the four 404s and PROBE_SETUP are FAILs;");
+  eq(run18(setup, { a: "404", b: "404", c: "404", d: "404", strict: true, surgeon: true }).result[1], 5, "... (18e's two calls answered as after the apply do not hide them);");
+  const rl = run18(msgOf(Object.assign({}, after, { B1: "ok added=1", S1: "ok added=1 source=scheduler" })), { a: "200" });
+  eq(rl.result, [AP_CASES.length + 2, 3], "section 18 must fail a second APP let onto a taken day, a surgeon let through and an anon 200 - exactly those three (" + fails(rl) + ");");
+  eq(run18(setup, { a: "200", b: "404", c: "404", d: "404" }).result, [5, 1], "an anon 200 on the table FAILs, before the apply too (even with Content-Range */0 - the revoke did not take);");
+  const rq = run18(msgOf(after), { tagged: 3, shape: "bare" });
+  eq(rq.result, [AP_CASES.length + 4, 1], "section 18 fails a non-zero tagged leftover count (read from a plain terminal's bare-array -o json the same as the agent envelope);");
+  ok(/LEFT ROWS BEHIND \(tagged=3/.test(rq.out) && rq.out.includes("delete from auth.users where email like 'probe-appdays-%@example.test';") && rq.out.includes("delete from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %';"), "section 18 names the tagged leftovers and prints their DELETEs");
+  const rw = run18(msgOf(after), { win: 2 });
+  eq(rw.result, [AP_CASES.length + 4, 1], "section 18 fails app_call_days rows left in the window after a run that passed the collision guard;");
+  ok(/LEFT ROWS BEHIND \(in_window=2/.test(rw.out) && rw.out.includes("select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';") && !/delete from public\.app_call_days/.test(rw.out), "... and prints a SELECT to review, never a DELETE of an untagged row");
+  eq(run18(setup, { a: "404", b: "404", c: "404", d: "404", shape: "bare" }).result, [6, 0], "18g reads the bare-array shape before the apply too;");
+  eq(run18(setup, { a: "404", b: "404", c: "404", d: "404", shape: "error" }).result, [5, 1], "18g fails a leftover count it cannot read;");
+  eq(run18('{"message": "connection refused"}').result, [5, 1], "section 18 fails a run with no sentinel-terminated PROBE_RESULTS (18a-18d and the leftover check still run);");
+  const collide = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2030-12 or on 2020-05-04) - the probe fixtures would collide\\nCONTEXT:  ..."}';
+  eq(run18(collide).result, [5, 1], "the probe's collision guard is a FAIL, never 'not applied';");
+  const rc = run18(collide, { win: 2 });
+  eq(rc.result, [4, 1], "a collision with live rows in the window: 18f FAILs, 18g neither passes nor fails them (the probe wrote nothing) - " + fails(rc));
+  ok(!/LEFT ROWS BEHIND/.test(rc.out) && /they are live rows, not leftovers/.test(rc.out) && !/delete from public\.app_call_days/.test(rc.out), "... and lists them for review only, never as leftovers and never with a DELETE");
+  const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: user_profiles.is_app is absent - sql/migrations/2026-10-02-app-call-days.sql is partly applied\\nCONTEXT:  ..."}';
+  eq(run18(part).result, [5, 1], "the partly-applied raise is a FAIL even before the apply's flag;");
+}
+
+step("Prompt 29: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - none under scripts/, no tracked SQL / SCHEMA-REVIEW line runs one from scripts/");
+{
+  ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-app-call-days.sh")), "scripts/apply-app-call-days.sh must not be in the repo (it lives outside it; test/ci.test.js keeps verify-rls.sh the only shell script)");
+  [AP_MIGRATION, AP_PROBE, AP_PRECHECK, path.join(ROOT, "sql", "schema.sql"), path.join(ROOT, "scripts", "verify-rls.sh"), path.join(ROOT, "docs", "SCHEMA-REVIEW.md")].forEach((p) =>
+    ok(!/bash scripts\/apply-|scripts\/apply-app-call-days\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
+}
+
+step("Prompt 29: docs - SCHEMA-REVIEW.md section (PREPARED, the flag decision, the table + RLS and the three policies verbatim, the refusal table, the pre-check verbatim, the probe table, apply order, one command, rollback, observed placeholder), tables (a) / (b), the helper line");
+ok(/^## 2026-10-02 - APP call days: app_call_days \+ save_app_days \/ app_call_names \+ user_profiles\.is_app \(Faraz 10\/1, Prompt 29; `sql\/migrations\/2026-10-02-app-call-days\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-02 - APP call days: ...' section");
+{
+  const at = review.indexOf("## 2026-10-02 - APP call days:"), end = review.indexOf("\n## ", at + 1);
+  const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const flat = sec.replace(/\s+/g, " ");
+  ok(/^\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*$/m.test(sec), "the section's status line reads `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+  ok(flat.includes("\"I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me ... This would also show up on the calendar\"") && flat.includes("**any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only.**"), "the section quotes Faraz and the four decisions");
+  ok(flat.includes("**The decision: a flag, not a role.**") && /daily-reminder/.test(sec) && /send-notification/.test(sec) && /followsPatch/.test(sec), "the section states the flag decision with the edge-function and followsPatch reasons");
+  ok(sec.includes("```sql\n" + [AP_TABLE, AP_INDEX, AP_ENABLE, AP_PRIVS, "drop policy if exists app_call_days_read on public.app_call_days;", AP_READ_POLICY].join("\n") + "\n```"), "the section carries the table and its RLS verbatim");
+  ok(sec.includes("```sql\n" + AP_COLUMN_LINES.join("\n") + "\n```"), "the section carries the column and its check verbatim");
+  ok(sec.includes(FOLLOW_POLICIES.user_profiles_self_insert) && sec.includes(FOLLOW_POLICIES.user_profiles_self_update) && sec.includes(AP_SELF_INSERT) && sec.includes(AP_SELF_UPDATE) && sec.includes(AP_READ_POLICY), "the section carries the three policy texts verbatim (and the two self policies before -> after)");
+  AP_CODES.forEach(([c, t]) => ok(new RegExp("^\\| [0-9]+ \\| `" + c + "` \\|[^\\n]*`" + t + ": ", "m").test(sec), "the refusal table lists " + c + " with its " + t + " message"));
+  ok(flat.includes("`pg_advisory_xact_lock(hashtext('app_call_days:save'))`") && flat.includes("**Idempotent:**") && flat.includes("**All or nothing:**") && flat.includes("**The audit row**") && flat.includes("`appdays.save`") && flat.includes("No notification row, no e-mail"), "the section states the lock, idempotency, all-or-nothing and the audit row");
+  ok(flat.includes("**A profile that stops being an APP**") && flat.includes("**Account deletion**") && flat.includes("**Realtime.**") && flat.includes("**Blast radius.**") && flat.includes("**What could break.**") && flat.includes("observed OFFLINE only"), "the section covers a former APP, account deletion, realtime, the blast radius and what could break (offline only)");
+  ok(sec.includes("```sql\n" + apPre.slice(apPre.indexOf("with objects as (")).replace(/\n+$/, "") + "\n```"), "the section carries the pre-check verbatim (= sql/probes/app-call-days-precheck.sql)");
+  AP_CASES.forEach((k) => ok(new RegExp("^\\| " + apEsc(k) + " \\| [^\\n]* \\| `" + apEsc(AP_AFTER[k].replace(/\|/g, "\\|")) + "` \\|$", "m").test(sec), "the section's probe table lists case " + k + " with its AFTER string"));
+  ok(flat.includes("4. Probe AFTER: every case as the table lists (66 cases).") && flat.includes("5. `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh`") && flat.includes("6. The record step, ONE commit:") && flat.includes("`supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-02-app-call-days.sql`") && flat.includes("7. The client push, on Faraz's go, after Prompt 28's client.") && flat.includes("8. Faraz (or Cowork on his go) sets Role = `app`"), "the apply order: pre-check, probe BEFORE, the file, probe AFTER (66), strict verify-rls, the record step, the client push, the account switch");
+  ok(flat.includes("**One command (Faraz):** his apply script `apply-app-call-days.sh`, kept OUTSIDE the repo") && flat.includes("sha256") && flat.includes("--dry-run") && flat.includes("AI_AGENT=1") && flat.includes("PASTE THIS BACK TO CLAUDE CODE"), "the section names the one command (its script outside the repo), the sha256 stop, its dry run, the agent mode and the paste-back block");
+  const rbBlock = "```sql\n" + apHdr.slice(apHdr.indexOf("-- Rolling back")).split("\n").filter((l) => /^--   /.test(l)).map((l) => l.replace(/^--   /, "")).join("\n") + "\n```";
+  ok(sec.includes(rbBlock), "the section gives the rollback verbatim (= the migration header's)");
+  ok(/^observed: _to be filled from Faraz's apply log_$/m.test(sec), "the section keeps the observed placeholder until the record step");
+  ok(sec.includes("`<APP name>: on call 12/2, 12/3`"), "the section's audit examples use the placeholder <APP name>, never an APP's real name");
+}
+ok(/^\| `app_call_days` \|[^\n]*prepared 2026-10-02 - report-first, NOT APPLIED[^\n]*never anon[^\n]*save_app_days/m.test(tblA), "SCHEMA-REVIEW table (a) needs an app_call_days row (prepared, NOT APPLIED; authenticated read, never anon; write = save_app_days only)");
+ok(/^\| `user_profiles` \|[^\n]*Prompt 29 \(prepared 2026-10-02, NOT APPLIED[^\n]*`is_app`/m.test(tblA) && /^\| `user_profiles` \|[^\n]*Prompt 29 \(prepared 2026-10-02, NOT APPLIED[^\n]*`is_app`/m.test(tblB), "SCHEMA-REVIEW tables (a) / (b): the user_profiles rows note is_app (admin-set, pinned in self-insert / self-update)");
+ok(/^\| `app_call_days` - prepared 2026-10-02, NOT APPLIED \| every signed-in role[^\n]*never anon[^\n]*\| none directly[^\n]*save_app_days/m.test(tblB), "SCHEMA-REVIEW table (b) needs an app_call_days row (read: every signed-in role, never anon; write: none directly - save_app_days)");
+ok(/^Helper functions: `silvis_role\(\)`, `silvis_person_id\(\)`, `silvis_is_sched\(\)`[^\n]*`silvis_is_app\(\)`/m.test(review), "SCHEMA-REVIEW's helper line adds silvis_is_app()");
+console.log("- Prompt 29: user_profiles.is_app + app_call_days + silvis_is_app / app_call_names / save_app_days (report-first, NOT applied), mirrored (revision v), probe + pre-check + verify-rls section 18 graded against a faked CLI, apply script kept outside the repo, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");
