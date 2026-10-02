@@ -5437,6 +5437,9 @@ function profilePollMerge(prev, row) {
   const recovered = !!prev._loadFailed;
   const moved = PROFILE_POLL_KEYS.filter(k => norm(prev[k]) !== norm(row[k]));
   if (JSON.stringify(followsOf(prev)) !== JSON.stringify(followsOf(row))) moved.push("follows");
+  // Prompt 29: the APP flag counts too - a missing key (before the migration) and false are one value (the generic norm would
+  // read them as different), so only false -> true or true -> false moves it.
+  if ((prev.is_app === true) !== (row.is_app === true)) moved.push("is_app");
   if (!moved.length && !recovered) return { next: prev, changed: false, reason: "unchanged" };
   const next = { ...row, id: row.id || prev.id };
   delete next._loadFailed;
@@ -5553,6 +5556,182 @@ function notifPrefSaveRequest(owner, cur, nowIso) {
 function notifPrefReadFailureState(status, bodyText) {
   const t = String(bodyText || "");
   return Number(status) === 400 && /profile_id/.test(t) && /42703|does not exist/.test(t) ? "unavailable" : "failed";
+}
+
+/* === APP call days (Prompt 29, Faraz 10/1) === */
+// Faraz 10/1: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me
+// ... This would also show up on the calendar". Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not
+// the ?public=1 page; no e-mails, the Activity log only. An APP account is a VIEWER account (no roster link) the admin
+// marks APP in Setup > Users (user_profiles.is_app - a flag, not a role, so an APP keeps everything a viewer has: follows,
+// the follower e-mails, the preferences, the calendar). One row per day in the APP table (its day is the primary key: the
+// database holds one APP per day); the only write path is the save function, which also writes the audit row. config.js
+// appDaysDb is the only client file that names the table or its two functions. These are the pure pieces the client is
+// built on; none of them throws.
+const APP_DAYS_UNAVAILABLE_TEXT = "APP days are available after the next database update.";
+// The refusal codes the save function raises (custom SQLSTATEs; PostgREST answers 400 with the code + "<TOKEN>: <text>").
+const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" };
+const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004); the client refuses a bigger save before any request
+const appDayIsIso = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+// appShortName(displayName) -> the grid's name: the part before the first comma (drops ", PA-C"), trimmed, its last word.
+// "Pat Appleton" -> "Appleton"; a nameless APP reads "APP".
+function appShortName(displayName) {
+  const head = String(displayName === null || displayName === undefined ? "" : displayName).split(",")[0].trim();
+  const words = head.split(/\s+/).filter(Boolean);
+  return words.length ? words[words.length - 1] : "APP";
+}
+// appDaysByDay(rows, names) -> { "YYYY-MM-DD": { day, profileId, name, short, isApp, source } } from the APP table's rows
+// ({ day, profile_id, source, created_at }) and the names function's rows ({ profile_id, display_name, is_app }). A row
+// whose day is not ISO or that has no profile_id is skipped; name = the holder's display name, else "APP"; isApp is false
+// only for a holder whose names row says so (a former APP: his days stay until the scheduler clears them).
+function appDaysByDay(rows, names) {
+  const byId = {};
+  (Array.isArray(names) ? names : []).forEach(n => { if (n && typeof n === "object" && typeof n.profile_id === "string" && n.profile_id) byId[n.profile_id] = n; });
+  const out = {};
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== "object" || !appDayIsIso(r.day) || typeof r.profile_id !== "string" || !r.profile_id) return;
+    const n = byId[r.profile_id];
+    const name = n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP";
+    out[r.day] = { day: r.day, profileId: r.profile_id, name, short: appShortName(name), isApp: !(n && n.is_app === false), source: typeof r.source === "string" ? r.source : null };
+  });
+  return out;
+}
+// appDaysReadFailureState(status, bodyText) - a non-2xx answer to the APP reads: "unavailable" when the table or the
+// function does not exist yet (the migration not applied, or rolled back): 404 PGRST205 (table) / PGRST202 (function), a
+// 42P01 - payReadFailureState's reading plus PGRST202; anything else is "failed" (never an empty list).
+function appDaysReadFailureState(status, bodyText) {
+  const st = Number(status), t = String(bodyText || "");
+  let code = null;
+  try { const j = JSON.parse(t); code = j && typeof j.code === "string" ? j.code : null; } catch (e) { code = null; }
+  if (st === 404 && (code === "PGRST202" || (code === null && /PGRST202/.test(t)))) return "unavailable";
+  return payReadFailureState(st, t);
+}
+// appDaysCellState(day, { byDay, me, draft, today }) -> what the My APP days month cell is:
+//   "past" / "past-mine" (before today, Central - never tappable), "taken" (another profile holds it), "mine" (saved as
+//   mine), "add" (free, drafted to add), "remove" (mine, drafted to remove), "free".
+function appDaysCellState(day, ctx) {
+  const c = ctx || {};
+  const byDay = c.byDay || {}, draft = c.draft || {};
+  const today = todayOrCentral(c.today);
+  const e = byDay[day] || null;
+  const mine = !!(e && c.me && e.profileId === c.me);
+  if (day < today) return mine ? "past-mine" : "past";
+  if (e && !mine) return "taken";
+  if (mine) return draft[day] === false ? "remove" : "mine";
+  return draft[day] === true ? "add" : "free";
+}
+// appDaysToggle(draft, day, ctx) -> the draft after a tap: free -> add, add -> free, mine -> remove, remove -> mine; a past
+// or taken day leaves the draft as it was (the SAME object).
+function appDaysToggle(draft, day, ctx) {
+  const d = draft && typeof draft === "object" ? draft : {};
+  const st = appDaysCellState(day, { ...(ctx || {}), draft: d });
+  if (st !== "free" && st !== "mine" && st !== "add" && st !== "remove") return d;
+  const next = { ...d };
+  if (st === "free") next[day] = true;
+  else if (st === "mine") next[day] = false;
+  else delete next[day];
+  return next;
+}
+// appDaysPlan(days, ctx) - for Range / Paste: { go: [the free days, sorted], skipped: [{ day, why }] }; why =
+// "<M/D> already has <name>", "<M/D> is past", "<M/D> is already yours" (read from the saved picture, not the draft).
+function appDaysPlan(days, ctx) {
+  const c = ctx || {};
+  const byDay = c.byDay || {};
+  const list = Array.from(new Set((Array.isArray(days) ? days : []).filter(appDayIsIso))).sort();
+  const go = [], skipped = [];
+  list.forEach(d => {
+    const st = appDaysCellState(d, { byDay, me: c.me, today: c.today });
+    if (st === "past" || st === "past-mine") skipped.push({ day: d, why: fmtMD(d) + " is past" });
+    else if (st === "taken") skipped.push({ day: d, why: fmtMD(d) + " already has " + byDay[d].name });
+    else if (st === "mine") skipped.push({ day: d, why: fmtMD(d) + " is already yours" });
+    else go.push(d);
+  });
+  return { go, skipped };
+}
+// appDaysDraftDiff(draft, byDay, me) -> { add: [drafted-true days not held by me, sorted], clear: [drafted-false days held
+// by me, sorted], count } - what one Save sends.
+function appDaysDraftDiff(draft, byDay, me) {
+  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
+  const held = (day) => !!(b[day] && me && b[day].profileId === me);
+  const add = Object.keys(d).filter(day => appDayIsIso(day) && d[day] === true && !held(day)).sort();
+  const clear = Object.keys(d).filter(day => appDayIsIso(day) && d[day] === false && held(day)).sort();
+  return { add, clear, count: add.length + clear.length };
+}
+// appDaysDraftPrune(draft, byDay, me) -> the draft without the entries a reload made impossible (an add on a day somebody
+// now holds, a removal of a day that is no longer mine); the SAME object when nothing goes.
+function appDaysDraftPrune(draft, byDay, me) {
+  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
+  const drop = Object.keys(d).filter(day => d[day] === true ? !!b[day] : !(b[day] && me && b[day].profileId === me));
+  if (!drop.length) return d;
+  const next = { ...d };
+  drop.forEach(day => { delete next[day]; });
+  return next;
+}
+// The message of a PostgREST error body (its JSON text, or an object with a message), else the text itself.
+function appDayErrorMessage(body) {
+  if (body && typeof body === "object") return typeof body.message === "string" ? body.message : String(body);
+  const t = body === null || body === undefined ? "" : String(body);
+  try { const j = JSON.parse(t); if (j && typeof j.message === "string") return j.message; } catch (e) { /* not JSON */ }
+  return t;
+}
+// appDaysErrorWords(body, status) -> plain words for a refused / failed save: the function's own sentence (the text after
+// "APP_DAY_<TOKEN>: "); a missing table / function -> APP_DAYS_UNAVAILABLE_TEXT; a permission refusal; an expired session;
+// no connection (a re-save is safe: the save is idempotent); else "Couldn't save the APP days: " + the first 160 characters.
+function appDaysErrorWords(body, status) {
+  const msg = appDayErrorMessage(body);
+  const raw = body && typeof body === "object" ? msg : String(body === null || body === undefined ? "" : body);
+  const m = /APP_DAY_[A-Z_]+: ([\s\S]*)$/.exec(msg);
+  if (m && m[1].trim()) return m[1].trim();
+  const all = msg + " " + raw;
+  if (/PGRST202|PGRST205|42P01/.test(all)) return APP_DAYS_UNAVAILABLE_TEXT;
+  if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
+  if (/JWT|PGRST301/.test(all) || Number(status) === 401) return "Your session expired - sign in again. Nothing was saved.";
+  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - check your connection and try again. Nothing was saved.";
+  return "Couldn't save the APP days: " + msg.slice(0, 160);
+}
+// appDaysErrorCode(body) -> the AP00n code of a PostgREST error body (its code, else the token in its message), else null -
+// the client reloads the picture after AP002 / AP005 / AP006 / AP007 (it was stale).
+function appDaysErrorCode(body) {
+  const raw = body === null || body === undefined ? "" : String(body);
+  try { const j = JSON.parse(raw); if (j && typeof j.code === "string" && APP_DAY_CODES[j.code]) return j.code; } catch (e) { /* not JSON */ }
+  const msg = appDayErrorMessage(body);
+  return Object.keys(APP_DAY_CODES).find(k => msg.indexOf(APP_DAY_CODES[k] + ":") >= 0) || null;
+}
+// appSavedNote(add, clear) -> "Saved: on call 12/2, 12/3; removed 12/11" (the parts that apply).
+function appSavedNote(add, clear) {
+  const md = (l) => (Array.isArray(l) ? l : []).filter(appDayIsIso).slice().sort().map(fmtMD).join(", ");
+  const parts = [];
+  if (md(add)) parts.push("on call " + md(add));
+  if (md(clear)) parts.push("removed " + md(clear));
+  return parts.length ? "Saved: " + parts.join("; ") : "Saved: nothing changed";
+}
+// appPickList(names) -> the scheduler's pick list [{ profileId, name }] of the current APP accounts, sorted by name.
+function appPickList(names) {
+  return (Array.isArray(names) ? names : [])
+    .filter(n => n && typeof n === "object" && n.is_app === true && typeof n.profile_id === "string" && n.profile_id)
+    .map(n => ({ profileId: n.profile_id, name: typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP" }))
+    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.profileId < b.profileId ? -1 : a.profileId > b.profileId ? 1 : 0);
+}
+// appColumnState(rows) - "present" when a loaded user_profiles row carries an is_app key (the column is NOT NULL with a
+// default, so after the migration every row has it), "absent" when rows came back without one, "unknown" for none.
+function appColumnState(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "unknown";
+  return rows.some(r => r && typeof r === "object" && Object.prototype.hasOwnProperty.call(r, "is_app")) ? "present" : "absent";
+}
+// userRoleValue(profile) -> the Setup > Users role select's value: "app" for an APP account, else the role (viewer default).
+function userRoleValue(p) {
+  const r = p && typeof p === "object" ? p : {};
+  return r.is_app === true ? "app" : (r.role || "viewer");
+}
+// userRolePatch(profile, value) -> only the keys that change, or null when the value is the row's own (no save):
+//   viewer row -> app = { is_app: true }; any other row -> app = { role: "viewer", is_app: true };
+//   APP row -> viewer = { is_app: false }; APP row -> another role = { role, is_app: false }; any other change = { role }.
+function userRolePatch(p, value) {
+  const r = p && typeof p === "object" ? p : {};
+  if (typeof value !== "string" || !value || value === userRoleValue(r)) return null;
+  const role = r.role || "viewer";
+  if (value === "app") return role === "viewer" ? { is_app: true } : { role: "viewer", is_app: true };
+  if (r.is_app === true) return value === role ? { is_app: false } : { role: value, is_app: false };
+  return { role: value };
 }
 
 // ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
@@ -6000,6 +6179,7 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,

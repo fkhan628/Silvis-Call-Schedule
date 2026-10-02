@@ -489,6 +489,14 @@ const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD
 const VIEWER_UID = "00000000-0000-4000-8000-0000000000e1";
 const VIEWER_PROFILE = { id: VIEWER_UID, person_id: null, role: "viewer", display_name: null, email: null, created_at: "2026-09-24T00:00:00Z", authEmail: "viewer@example.com" };
 const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// Prompt 29: two APP accounts - viewers marked APP (user_profiles.is_app), fictional names. Each APP page runs in its OWN
+// BrowserContext: the client reads silvis-auth-token from localStorage at send time, so an APP page in the main context would
+// make the main page (and any other APP page) send its JWT.
+const APP_A_UID = "00000000-0000-4000-8000-0000000a0001", APP_B_UID = "00000000-0000-4000-8000-0000000a0002";
+const APP_A_PROFILE = { id: APP_A_UID, person_id: null, role: "viewer", is_app: true, display_name: "Pat Appleton", email: null, created_at: "2026-10-01T00:00:00Z", authEmail: "app-a@example.com" };
+const APP_B_PROFILE = { id: APP_B_UID, person_id: null, role: "viewer", is_app: true, display_name: "Lee Bramble", email: null, created_at: "2026-10-01T00:00:00Z", authEmail: "app-b@example.com" };
+const APP_A_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_A_UID, role: "authenticated", email: "app-a@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const APP_B_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_B_UID, role: "authenticated", email: "app-b@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
 const VIEWER_FEED = [
   { id: "vf-4", type: "vacation_logged", title: "Vacation logged (harness)", message: "a vacation was logged", data: { surgeon_id: "s3" }, created_at: "2026-09-23T12:00:00Z" },
   { id: "vf-3", type: "trade_proposed", title: "Trade proposed (harness)", message: "a trade was proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" },
@@ -544,6 +552,33 @@ const payForcedLine = (msg) => {
 // how many pay reads of `pg` the harness answered with its forced 404 (the missing-table guard) - the 'unavailable' checks
 // require > 0, so that state is never assumed from the live project (whose tables exist since the 2026-09-28 apply)
 const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status === 404).length;
+// Prompt 29 (APP call days): the APP table and its two functions are answered by the harness ITSELF (appRoute below), never
+// by the live project (the migration is report-first, not applied). Defaults keep every existing step's picture unchanged:
+// mode "ok", no APP day, and NO APP account (appProfiles empty), so app_call_names answers the scheduler no APP and the day
+// editor shows no APP block. The main page is always served the empty picture (its later steps read the grid); the P29
+// steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
+let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
+let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
+let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202)
+let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
+const appServed = [];   // { path, method, status, sub }
+const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
+let appColumnFixture = false; // the users fixture rows carry is_app (Setup > Users offers "app")
+const appForcedLines = [];
+let appForcedConsumed = 0;
+const APP_PATH_RE = /^\/rest\/v1\/(app_call_days|rpc\/app_call_names|rpc\/save_app_days)$/;
+const appForcedLine = (msg) => {
+  const m = /^Failed to load resource: the server responded with a status of (\d{3})\b/.exec(msg.text());
+  if (!m) return false;
+  let p = "";
+  try { const u = new URL((msg.location() || {}).url || ""); if (u.hostname !== SUPABASE_HOST) return false; p = u.pathname; } catch (e) { return false; }
+  if (!APP_PATH_RE.test(p)) return false;
+  const i = appForcedLines.findIndex(x => x.path === p && x.status === Number(m[1]));
+  if (i < 0) return false;
+  appForcedLines.splice(i, 1);
+  appForcedConsumed++;
+  return true;
+};
 const FOLLOW_FEED = [
   { id: "ff-7", type: "trade_proposed", title: "Day offered (harness)", message: "s3 offers s2 a day - nothing in return", data: { kind: "give", trade_id: FOLLOW_GIVE_ID, from_surgeon_id: "s3", to_surgeon_id: "s2" }, created_at: "2026-09-23T15:00:00Z" },
   { id: "ff-6", type: "vacation_logged", title: "Vacation logged (harness)", message: "s3 logged a vacation", data: { surgeon_id: "s3" }, created_at: "2026-09-23T14:00:00Z" },
@@ -932,6 +967,7 @@ const page = await context.newPage();
 
 const pageErrors = [];
 const consoleErrors = [];
+const consoleErrorWhere = []; // Prompt 29: { text, where: "<page tag> @ <url>" } for every unexpected-candidate line (diagnostics only)
 const consoleWarns = [];
 const writes = [];
 const tradeStore = []; // Slice G: shift_trade_requests rows the app wrote this run (see the Supabase route)
@@ -943,6 +979,7 @@ const watchPage = (pg, tag) => {
   pg.on("console", (msg) => {
     if (msg.type() === "error") {
       if (payForcedLine(msg)) forcedConsoleErrors.push(msg.text()); // 9/29: a pay read the harness answered 404 / 500 (path + status matched, one line each)
+      else if (appForcedLine(msg)) forcedConsoleErrors.push(msg.text()); // Prompt 29: an APP-days answer the harness forced (the refused save 400, the 'absent' 404s), one line each
       else if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
@@ -953,7 +990,7 @@ const watchPage = (pg, tag) => {
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
-      else consoleErrors.push(msg.text());
+      else { consoleErrors.push(msg.text()); consoleErrorWhere.push({ text: msg.text(), where: tag + " @ " + (((msg.location() || {}).url) || "?") }); } // Prompt 29: where each line came from (printed with the unexpected ones)
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
   });
@@ -1029,7 +1066,9 @@ const followsFixtureRows = () => {
   const rows = [FAKE_PROFILE, COORD_PROFILE,
     { id: FOLLOWER_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, created_at: "2026-09-24T00:00:00Z" },
     { id: F2_SURGEON_UID, person_id: "s3", role: "surgeon", display_name: "Surgeon (harness)", email: null, created_at: "2026-09-24T00:00:00Z" }];
-  return followsFixture === "present" ? rows.map(r => ({ ...r, follows: followsStore[r.id] || [] })) : rows;
+  const out = followsFixture === "present" ? rows.map(r => ({ ...r, follows: followsStore[r.id] || [] })) : rows;
+  // Prompt 29: with appColumnFixture the rows carry user_profiles.is_app (false - the migration's default) so Setup > Users offers "app"
+  return appColumnFixture ? out.map(r => ({ ...r, is_app: false })) : out;
 };
 let emptyDaysFor = null, emptyDaysServed = 0; // Prompt 16 B9 (h): the page whose NEXT schedule_days GET answers 200 + [] (an RLS-filtered / dead-token read)
 let failDaysSideReadAt = []; // review 9/30: when the failDaysFor page read availability / time_off (the forced autosave pass of the 9/29 check re-reads them)
@@ -1227,6 +1266,104 @@ const offerModeRpc = (b, json) => {
   if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
 };
+// Prompt 29: save_app_days() as the migration writes it - the same order of refusals and the same strings (AP001 for every
+// caller that is neither an APP the mock knows nor the scheduler FAKE_UID, AP002, AP004, AP003, AP006 by the harness's
+// Central today, AP002 / AP007 on a held clear, AP005), the all-or-nothing writes and the one audit row it would write.
+const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
+const appNameOfP = (pid) => { const p = appProfiles.find(x => x.id === pid); return p && p.display_name && p.display_name.trim() ? p.display_name.trim() : "another APP"; };
+const appDaysRpc = (b, sub) => {
+  const err = (code, token, text) => ({ status: 400, body: { code, details: null, hint: null, message: token + ": " + text } });
+  const sched = sub === FAKE_UID;
+  const caller = appProfiles.find(p => p.id === sub);
+  const cApp = !!(caller && caller.is_app === true && caller.role === "viewer" && !caller.person_id);
+  if (!sub || (!sched && !cApp)) return err("AP001", "APP_DAY_NOT_ALLOWED", "only an APP account or the scheduler can put an APP on a call day");
+  let who = b.p_profile || null;
+  if (!who && cApp) who = sub;
+  if (!who) return err("AP001", "APP_DAY_NOT_ALLOWED", "name the APP (pick one in the day editor)");
+  if (!sched && who !== sub) return err("AP002", "APP_DAY_NOT_YOURS", "an APP adds or removes only their own days - ask the scheduler");
+  const repl = !!b.p_replace;
+  if (repl && !sched) return err("AP002", "APP_DAY_NOT_YOURS", "only the scheduler can replace another APP on a day");
+  const addRaw = Array.isArray(b.p_add) ? b.p_add : [], clrRaw = Array.isArray(b.p_clear) ? b.p_clear : [];
+  if (addRaw.some(d => d === null) || clrRaw.some(d => d === null)) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is empty - nothing was saved");
+  if (addRaw.length + clrRaw.length > 400) return err("AP004", "APP_DAY_BAD_DAY", "at most 400 days in one save - nothing was saved");
+  const adds = [...new Set(addRaw)].sort(), clears = [...new Set(clrRaw)].sort();
+  const both = adds.filter(d => clears.includes(d));
+  if (both.length) return err("AP004", "APP_DAY_BAD_DAY", both.map(appMd).join(", ") + " is both added and removed in one save - nothing was saved");
+  const target = appProfiles.find(p => p.id === who);
+  const tName = target && target.display_name && target.display_name.trim() ? target.display_name.trim() : null;
+  if (adds.length && !(target && target.is_app === true)) return err("AP003", "APP_DAY_NOT_APP", (tName || "that account") + " is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)");
+  if (!sched) {
+    const past = adds.concat(clears).filter(d => d < todayCentral).sort();
+    if (past.length) return err("AP006", "APP_DAY_PAST", past.map(appMd).join(", ") + " is before today (" + appMd(todayCentral) + ") in Central time - a past day stays as it was");
+  }
+  const heldOther = clears.map(d => appDayStore.find(r => r.day === d)).filter(r => r && r.profile_id !== who);
+  if (heldOther.length) {
+    const txt = heldOther.map(r => appMd(r.day) + " is " + appNameOfP(r.profile_id) + "'s day").join(", ");
+    return sched ? err("AP007", "APP_DAY_STALE", txt + " - reload the calendar (nothing was saved)") : err("AP002", "APP_DAY_NOT_YOURS", txt + " - only that APP or the scheduler can remove it (nothing was saved)");
+  }
+  if (!repl) {
+    const taken = adds.map(d => appDayStore.find(r => r.day === d)).filter(r => r && r.profile_id !== who);
+    if (taken.length) return err("AP005", "APP_DAY_TAKEN", taken.map(r => appMd(r.day) + " already has " + appNameOfP(r.profile_id)).join("; ") + " - nothing was saved");
+  }
+  const src = who === sub ? "app" : "scheduler";
+  let replaced = [];
+  if (repl) {
+    replaced = appDayStore.filter(r => adds.includes(r.day) && r.profile_id !== who).map(r => ({ day: r.day, profile_id: r.profile_id, name: appNameOfP(r.profile_id) }));
+    appDayStore = appDayStore.filter(r => !(adds.includes(r.day) && r.profile_id !== who));
+  }
+  const removed = appDayStore.filter(r => r.profile_id === who && clears.includes(r.day)).map(r => r.day).sort();
+  appDayStore = appDayStore.filter(r => !(r.profile_id === who && clears.includes(r.day)));
+  const added = adds.filter(d => !appDayStore.some(r => r.day === d));
+  added.forEach(d => appDayStore.push({ day: d, profile_id: who, source: src, created_by: sub, created_at: new Date().toISOString() }));
+  if (added.length + removed.length) {
+    const was = (d) => { const x = replaced.find(r => r.day === d); return x ? " (was " + x.name + ")" : ""; };
+    const parts = [];
+    if (added.length) parts.push("on call " + added.map(d => appMd(d) + was(d)).join(", "));
+    if (removed.length) parts.push("removed " + removed.map(appMd).join(", "));
+    appAudit.push({ summary: (tName || "APP") + ": " + parts.join("; "), actor: sub, profile_id: who, added, removed, replaced, source: src });
+  }
+  return { status: 200, body: { ok: true, profile_id: who, added: added.length, removed: removed.length, kept: adds.length - added.length, absent: clears.length - removed.length, replaced: replaced.length, source: src, audit: added.length + removed.length > 0 } };
+};
+// app_call_names() for a caller: the holders, the caller's own APP entry, and - for the scheduler - every APP account.
+const appNamesFor = (sub) => {
+  const holders = new Set(appDayStore.map(r => r.profile_id));
+  return appProfiles.filter(p => holders.has(p.id) || p.id === sub || sub === FAKE_UID)
+    .map(p => ({ profile_id: p.id, display_name: p.display_name, is_app: p.is_app === true }))
+    .sort((a, b) => a.profile_id < b.profile_id ? -1 : 1);
+};
+const appRoute = (route, req, url, method, json) => {
+  const sub = jwtSub(req);
+  let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
+  const mainPage = pg === page; // the main page's later steps read the grid: it is always served the empty picture
+  const answer = (status, body) => {
+    appServed.push({ path: url.pathname, method, status, sub });
+    if (status >= 400) appForcedLines.push({ path: url.pathname, status });
+    return json(status, body);
+  };
+  if (url.pathname === "/rest/v1/rpc/save_app_days") {
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", sub, at: Date.now() });
+    if (method !== "POST") return answer(405, { code: "PGRST117", message: "Unsupported HTTP method", details: null, hint: null });
+    if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.save_app_days(p_add, p_clear, p_profile, p_replace) in the schema cache" });
+    if (appStale && appStale.sub === sub) appStale = null; // released on that caller's first save: its post-refusal reload reads the real store
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    const r = appDaysRpc(b, sub);
+    return answer(r.status, r.body);
+  }
+  // a direct write of the table (the client never sends one - the save function is the only door): recorded, refused like the
+  // revoked privilege, and NOT armed - its console line stays an unexpected error
+  if (method !== "GET") { writes.push({ method, path: url.pathname + url.search, body: req.postData() || "", prefer: req.headers()["prefer"] || "", sub, at: Date.now() }); return json(403, { code: "42501", message: "permission denied for table app_call_days", details: null, hint: null }); }
+  if (mainPage) return answer(200, []); // whatever the mode: the main page's later steps read an unchanged grid
+  if (url.pathname === "/rest/v1/rpc/app_call_names") {
+    if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.app_call_names without parameters in the schema cache" });
+    return answer(200, appNamesFor(sub));
+  }
+  if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
+  const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
+  const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0).map(r => ({ day: r.day, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
+  const off = Number(url.searchParams.get("offset") || 0), lim = Number(url.searchParams.get("limit") || rows.length);
+  return answer(200, rows.slice(off, off + lim));
+};
 // Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
 // other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
 // B3: an optional `extra({ route, req, url, json })` runs before the shared route and answers `true` when it fulfilled
@@ -1297,6 +1434,8 @@ const routeSupabase = async (route, scope) => {
     if (method === "PATCH") { let patch = {}; try { patch = JSON.parse(body); } catch (e) {} return json(200, [{ ...FAKE_PROFILE, ...patch }]); }
     return json(method === "POST" ? 201 : 200, []);
   }
+  // Prompt 29: the APP table and its two functions - answered here, never passed through to the live project (appRoute)
+  if (APP_PATH_RE.test(url.pathname)) return appRoute(route, req, url, method, json);
   // Slice G: shift_trade_requests is readable by AUTHENTICATED users only, so the
   // anon passthrough would answer 200 + [] and wipe the list on every refresh.
   // The harness keeps the rows the app writes (POST -> row with id, PATCH ->
@@ -10343,6 +10482,443 @@ try {
   }
   try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
 
+  // ====================== Prompt 29: APP call days (Faraz 10/1) ======================
+  // Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log
+  // only. The APP table and its two functions are MOCKED here (appRoute: the migration is report-first, not applied - nothing
+  // reaches the live project). M = next month (Central); D10 / D11 / D12 = its 10th / 11th / 12th. Each APP page runs in its
+  // own BrowserContext at 390 x 844 (the token is read from localStorage at send time).
+  //  1. APP A adds D10 + D11 on My APP days: ONE save POST with exactly { p_profile: A, p_add: [D10, D11], p_clear: [],
+  //     p_replace: false }; the cells read mine; the grid shows "A ..." on both (no line overflows, the appText colour, the
+  //     legend line); the contrast measure over the card and the grid lines passes in light and in dark;
+  //  2. APP B, holding the picture from before A's Save (a frozen copy the mock releases on B's first save), is refused on D10
+  //     (400 AP005, the function's own words); the reload shows D10 taken by Appleton (aria-disabled); a further tap sends nothing;
+  //  3. A removes D11 (one POST p_clear [D11]); the grid keeps D10 only;
+  //  4. a surgeon, the coordinator and a plain viewer (main context) see the grid line and the day summary's APP line, get no
+  //     APP controls and no My APP days (the plain viewer no Mine tab) and send no save;
+  //  5. the scheduler (a fresh page of the main context: the main page is always served the empty picture) sets Bramble on
+  //     D12, changes D10 to Bramble (p_replace), clears D12 - never the day's own Save, no schedule_days write;
+  //  6. Setup > Users: "app" on the follower row = ONE PATCH { is_app: true } (no role key) + the audit "APP on"; "app" on a
+  //     linked row is refused with no PATCH; rows without the column offer no "app";
+  //  7. ?public=1 shows nothing and requests none of the three paths; the share page carries no APP name;
+  //  8. "absent" (the migration not applied): My APP days says the sentence, no toast, no grid line; every forced 404 consumed;
+  //  9. the stores reset; the client posted no audit row and no notification for any APP save (the function writes the audit).
+  {
+    const P = "P29 APP days";
+    const cy = Number(todayCentral.slice(0, 4)), cm = Number(todayCentral.slice(5, 7));
+    const NM = cm === 12 ? { y: cy + 1, m: 1 } : { y: cy, m: cm + 1 };
+    const isoM = (d) => NM.y + "-" + String(NM.m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+    const D10 = isoM(10), D11 = isoM(11), D12 = isoM(12);
+    const MLABEL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][NM.m - 1] + " " + NM.y;
+    const { authEmail: _appAe, ...appARow } = APP_A_PROFILE;
+    const { authEmail: _appBe, ...appBRow } = APP_B_PROFILE;
+    const appSaves = () => writes.filter(w => w.path === "/rest/v1/rpc/save_app_days");
+    const saveBody = (w) => { try { return JSON.parse(w.body || "{}"); } catch (e) { return null; } };
+    const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const w0all = writes.length, audit0 = appAudit.length;
+    const p29Measure = (pg, rootSel) => pg.evaluate((rootSel) => {
+      const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+      const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      const ratio = (a, b) => { const la = lum(a), lb = lum(b); return Math.round(((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)) * 100) / 100; };
+      const bgOf = (el) => {
+        for (let e = el; e; e = e.parentElement) {
+          const cs = getComputedStyle(e);
+          const c = parseRgb(cs.backgroundColor); if (c) return c;
+          if (/gradient/.test(cs.backgroundImage)) { const g = parseRgb(cs.backgroundImage); if (g) return g; }
+        }
+        return parseRgb(getComputedStyle(document.body).backgroundColor) || [255, 255, 255];
+      };
+      const roots = Array.from(document.querySelectorAll(rootSel));
+      const els = roots.flatMap(r => [r].concat(Array.from(r.querySelectorAll("*"))));
+      const rows = [];
+      for (const el of els) {
+        if (/^(OPTION|SELECT|INPUT|SCRIPT|STYLE|PRE|TEXTAREA)$/.test(el.tagName)) continue;
+        const own = Array.from(el.childNodes).filter(n => n.nodeType === 3 && n.textContent.trim()).map(n => n.textContent.trim()).join(" ");
+        if (!own) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display === "none" || cs.visibility === "hidden" || !el.getClientRects().length) continue;
+        const fg = parseRgb(cs.color); if (!fg) continue;
+        const size = parseFloat(cs.fontSize), weight = parseInt(cs.fontWeight, 10) || 400;
+        const bg = bgOf(el);
+        rows.push({ text: own.slice(0, 40), tag: el.tagName.toLowerCase(), color: cs.color, bg: "rgb(" + bg.join(", ") + ")", ratio: ratio(fg, bg), min: size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5 });
+      }
+      return rows;
+    }, rootSel);
+    const p29Judge = (label, rows) => {
+      const bad = rows.filter(r => r.ratio < r.min);
+      if (!rows.length) fail(`${P} ${label}: nothing measured (the region did not render)`);
+      else if (bad.length) fail(`${P} ${label}: ${bad.length} of ${rows.length} text element(s) below their minimum: ` + bad.slice(0, 6).map(r => `<${r.tag}> '${r.text}' ${r.color} on ${r.bg} ${r.ratio}:1 (min ${r.min})`).join("; "));
+      else ok(`${P} ${label}: ${rows.length} text element(s) at their minimum or better (worst ${Math.min(...rows.map(r => r.ratio))}:1)`);
+    };
+    const showM = async (pg) => {
+      const calTab = await pg.$('button[data-tab="calendar"]'); // ?public=1 has no nav
+      if (calTab) await calTab.click();
+      await pg.selectOption("[data-testid=cal-month-select]", String(NM.m - 1));
+      if ((await pg.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(NM.y)) await pg.fill("[data-testid=cal-year-input]", String(NM.y));
+      await pg.waitForFunction((lab) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === lab; }, MLABEL, { timeout: 8000 });
+      await pg.waitForTimeout(300);
+    };
+    const toMineM = async (pg) => {
+      await pg.click('button[data-tab="myschedule"]');
+      await pg.waitForSelector("[data-testid=appdays-card][data-state=ok]", { timeout: 10000 });
+      for (let i = 0; i < 3 && (await pg.$eval("[data-testid=appdays-month]", el => el.textContent.trim())) !== MLABEL; i++) { await pg.click("[data-testid=appdays-next]"); await pg.waitForTimeout(150); }
+      const lab = await pg.$eval("[data-testid=appdays-month]", el => el.textContent.trim());
+      if (lab !== MLABEL) throw new Error("My APP days did not reach " + MLABEL + " (it shows " + lab + ")");
+    };
+    const cellOf = (pg, d) => pg.$eval(`[data-testid=appdays-cell][data-day="${d}"]`, el => ({ state: el.getAttribute("data-state"), holder: el.getAttribute("data-holder"), dis: el.getAttribute("aria-disabled") }));
+    const waitCell = (pg, d, st) => pg.waitForFunction(([d, st]) => { const el = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return !!el && el.getAttribute("data-state") === st; }, [d, st], { timeout: 10000 });
+    const gridApp = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); return a ? { day: e.getAttribute("data-day"), text: a.textContent.trim(), profile: a.getAttribute("data-app-profile"), color: getComputedStyle(a).color } : null; }).filter(Boolean));
+    const lineOverflowOf = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + " " + e.scrollWidth + ">" + e.clientWidth; }));
+    const mkAppCtx = async (profile, jwt, tag) => {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: jwt, version: APP_VERSION });
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const pg = await ctx.newPage();
+      watchPage(pg, tag);
+      const settle = restReadsSettled(pg);
+      await pg.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(profile));
+      await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      return { ctx, pg, settle };
+    };
+    const loadApp = async (pg, label) => { await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, label); await pg.waitForSelector("text=Synced", { timeout: 30000 }); await pg.waitForTimeout(500); };
+    appProfiles = [appARow, appBRow]; appDayStore = []; appDaysMode = "ok"; appStale = null;
+    let A = null, B = null, sc = null, settleSc = null;
+    // ---- 1. APP A adds two days and sees them ----
+    try {
+      A = await mkAppCtx(APP_A_PROFILE, APP_A_JWT, "p29-app-a");
+      await loadApp(A.pg, "P29 APP A page");
+      const tabs = await A.pg.$$eval("button[data-tab]", els => els.map(e => [e.getAttribute("data-tab"), e.textContent.trim()]));
+      const mineTab = tabs.find(t => t[0] === "myschedule");
+      if (!mineTab || mineTab[1] !== "Mine" || tabs.some(t => t[0] === "setup")) fail(`${P} 1: the APP's tabs should include Mine (labelled "Mine") and no Setup: ${JSON.stringify(tabs)}`);
+      else ok(`${P} 1: the APP keeps the Mine tab ("Mine"), no Setup: ${tabs.map(t => t[0]).join(", ")}`);
+      await toMineM(A.pg);
+      const s0 = appSaves().length;
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D11}"]`);
+      const drafted = [await cellOf(A.pg, D10), await cellOf(A.pg, D11)].map(c => c.state);
+      if (drafted.join(",") !== "add,add") fail(`${P} 1: two taps should draft D10 / D11 as 'add', got ${drafted.join(",")}`);
+      if (appSaves().length !== s0) fail(`${P} 1: a tap wrote something (${appSaves().length - s0} save(s)) - taps only draft`);
+      await A.pg.click("[data-testid=appdays-save]");
+      await A.pg.waitForSelector("[data-testid=appdays-saved]", { timeout: 10000 });
+      await waitCell(A.pg, D10, "mine"); await waitCell(A.pg, D11, "mine");
+      const sv = appSaves().slice(s0);
+      const savedText = await A.pg.$eval("[data-testid=appdays-saved]", el => el.textContent.trim());
+      const want = { p_profile: APP_A_UID, p_add: [D10, D11], p_clear: [], p_replace: false };
+      if (sv.length !== 1) fail(`${P} 1: one Save should send exactly ONE save POST, got ${sv.length}`);
+      else if (!sameJson(saveBody(sv[0]), want)) fail(`${P} 1: the save body should be ${JSON.stringify(want)}, got ${sv[0].body}`);
+      else if (savedText !== `Saved: on call ${appMd(D10)}, ${appMd(D11)}`) fail(`${P} 1: the saved note should name both days, got '${savedText}'`);
+      else ok(`${P} 1: APP A's Save = ONE POST ${JSON.stringify(want)}; the cells read mine; '${savedText}'`);
+      const au = appAudit.slice(audit0);
+      if (au.length !== 1 || au[0].summary !== `Pat Appleton: on call ${appMd(D10)}, ${appMd(D11)}`) fail(`${P} 1: the function's one audit row should read 'Pat Appleton: on call ${appMd(D10)}, ${appMd(D11)}', got ${JSON.stringify(au)}`);
+      else ok(`${P} 1: one audit row per Save (written by the function): '${au[0].summary}'`);
+      const sw1 = await A.pg.evaluate(() => document.documentElement.scrollWidth);
+      if (sw1 > 392) fail(`${P} 1: My APP days scrolls sideways at 390 px (scrollWidth ${sw1})`); else ok(`${P} 1: My APP days fits 390 px (scrollWidth ${sw1})`);
+      const tapSmall = await A.pg.$$eval("[data-testid=appdays-card] button", els => els.filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map(e => ({ h: Math.round(e.getBoundingClientRect().height), t: (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 16) })).filter(x => x.h < 36));
+      if (tapSmall.length) fail(`${P} 1: My APP days has ${tapSmall.length} button(s) under 36 px: ${JSON.stringify(tapSmall.slice(0, 5))}`); else ok(`${P} 1: every My APP days button is at least 36 px tall`);
+      await A.pg.screenshot({ path: path.join(OUT, "p29-appdays-light-390.png"), fullPage: true });
+      p29Judge("1 contrast: My APP days (light)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
+      for (const theme of ["light", "dark"]) {
+        if (theme === "dark") {
+          await A.settle();
+          await A.pg.evaluate(() => { try { localStorage.setItem("silvis-dark-mode", "true"); } catch (e) {} });
+          await A.pg.reload({ waitUntil: "domcontentloaded" });
+          await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
+          await A.pg.waitForTimeout(500);
+          await toMineM(A.pg);
+          p29Judge("1 contrast: My APP days (dark)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
+          await A.pg.screenshot({ path: path.join(OUT, "p29-appdays-dark-390.png"), fullPage: true });
+        }
+        await showM(A.pg);
+        const g = await gridApp(A.pg);
+        const g10 = g.find(x => x.day === D10), g11 = g.find(x => x.day === D11);
+        const wantColor = rgbOf(themeMod.THEME[theme].appText);
+        const over = await lineOverflowOf(A.pg);
+        const legend = await A.pg.$("[data-testid=legend-app]");
+        if (!g10 || !g11 || !/^A/.test(g10.text) || !/^A/.test(g11.text)) fail(`${P} 1 (${theme}): D10 / D11 should carry the 'A ...' line on the grid: ${JSON.stringify(g)}`);
+        else if (g10.color !== wantColor || g11.color !== wantColor) fail(`${P} 1 (${theme}): the APP line's colour should be THEME.${theme}.appText ${wantColor}, got ${g10.color} / ${g11.color}`);
+        else if (over.length) fail(`${P} 1 (${theme}): ${over.length} grid line(s) overflow their cell at 390 px: ${over.slice(0, 4).join(", ")}`);
+        else if (!legend) fail(`${P} 1 (${theme}): the legend has no APP line although the month has APP days`);
+        else ok(`${P} 1 (${theme}): the grid shows '${g10.text}' on ${D10} and ${D11} in ${wantColor}, no line overflows at 390 px, the legend explains it`);
+        p29Judge(`1 contrast: the grid's APP lines (${theme})`, await p29Measure(A.pg, "[data-testid=cal-app]"));
+        await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });
+      }
+      await A.settle();
+      await A.pg.evaluate(() => { try { localStorage.setItem("silvis-dark-mode", "false"); } catch (e) {} });
+      await A.pg.reload({ waitUntil: "domcontentloaded" });
+      await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await A.pg.waitForTimeout(500);
+    } catch (e) { fail(`${P} 1 (APP A adds two days): ` + errLine(e)); try { if (A) await A.pg.screenshot({ path: path.join(OUT, "failure-p29-1.png"), fullPage: true }); } catch (e2) {} }
+    // ---- 2. A second APP is refused on one of them ----
+    try {
+      appStale = { sub: APP_B_UID, rows: [] }; // B holds the picture from before A's Save
+      B = await mkAppCtx(APP_B_PROFILE, APP_B_JWT, "p29-app-b");
+      await loadApp(B.pg, "P29 APP B page");
+      await toMineM(B.pg);
+      const before = await cellOf(B.pg, D10);
+      if (before.state !== "free") fail(`${P} 2: B's stale picture should show ${D10} free, got ${before.state}`);
+      const s0 = appSaves().length;
+      await B.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);
+      await B.pg.click("[data-testid=appdays-save]");
+      await B.pg.waitForSelector("[data-testid=appdays-error]", { timeout: 10000 });
+      const errTxt = await B.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
+      const sv = appSaves().slice(s0);
+      const wantErr = `${appMd(D10)} already has Pat Appleton - nothing was saved`;
+      if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_B_UID, p_add: [D10], p_clear: [], p_replace: false })) fail(`${P} 2: B's Save should send ONE POST { p_profile: B, p_add: [D10] }, got ${JSON.stringify(sv.map(w => w.body))}`);
+      else if (errTxt !== wantErr) fail(`${P} 2: the refusal should read '${wantErr}', got '${errTxt}'`);
+      else ok(`${P} 2: APP B refused on ${D10} (400 AP005): '${errTxt}'`);
+      await waitCell(B.pg, D10, "taken");
+      const after = await cellOf(B.pg, D10);
+      if (after.holder !== "Appleton" || after.dis !== "true") fail(`${P} 2: after the reload ${D10} should read taken by Appleton, aria-disabled: ${JSON.stringify(after)}`);
+      else ok(`${P} 2: after the client's reload ${D10} reads taken - data-holder 'Appleton', aria-disabled`);
+      const s1 = appSaves().length;
+      // force: Playwright's actionability check reads aria-disabled="true" as disabled - a phone tap still reaches the button
+      await B.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`, { force: true });
+      await B.pg.waitForTimeout(300);
+      const hintTxt = await B.pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
+      const saveDisabled = await B.pg.$eval("[data-testid=appdays-save]", el => el.disabled);
+      if (appSaves().length !== s1) fail(`${P} 2: a tap on the taken day sent a save`);
+      else if (hintTxt !== `${appMd(D10)} already has Pat Appleton` || !saveDisabled) fail(`${P} 2: a tap on the taken day should only say '${appMd(D10)} already has Pat Appleton' (Save disabled): hint '${hintTxt}', disabled ${saveDisabled}`);
+      else ok(`${P} 2: a further tap sends nothing - '${hintTxt}'`);
+      await B.pg.screenshot({ path: path.join(OUT, "p29-app-b-refused-390.png"), fullPage: true });
+    } catch (e) { fail(`${P} 2 (a second APP is refused): ` + errLine(e)); try { if (B) await B.pg.screenshot({ path: path.join(OUT, "failure-p29-2.png"), fullPage: true }); } catch (e2) {} }
+    appStale = null;
+    if (B) { try { await B.settle(); await B.ctx.close(); } catch (e) {} B = null; }
+    // ---- 3. The first APP removes one ----
+    try {
+      if (!A) throw new Error("the APP A page did not open");
+      await toMineM(A.pg);
+      const s0 = appSaves().length;
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D11}"]`);
+      const st = await cellOf(A.pg, D11);
+      await A.pg.click("[data-testid=appdays-save]");
+      await A.pg.waitForSelector("[data-testid=appdays-saved]", { timeout: 10000 });
+      await waitCell(A.pg, D11, "free");
+      const sv = appSaves().slice(s0);
+      if (st.state !== "remove") fail(`${P} 3: a tap on his own ${D11} should draft 'remove', got ${st.state}`);
+      else if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_A_UID, p_add: [], p_clear: [D11], p_replace: false })) fail(`${P} 3: one POST { p_clear: [D11] } expected, got ${JSON.stringify(sv.map(w => w.body))}`);
+      else ok(`${P} 3: APP A removes ${D11} - ONE POST { p_add: [], p_clear: [${D11}] }`);
+      await showM(A.pg);
+      const g = await gridApp(A.pg);
+      if (!g.some(x => x.day === D10) || g.some(x => x.day === D11)) fail(`${P} 3: the grid should keep the APP line on ${D10} only: ${JSON.stringify(g)}`);
+      else ok(`${P} 3: the grid keeps 'A ...' on ${D10}, none on ${D11}`);
+      if (appAudit.slice(audit0).map(a => a.summary).pop() !== `Pat Appleton: removed ${appMd(D11)}`) fail(`${P} 3: the audit row should read 'Pat Appleton: removed ${appMd(D11)}': ${JSON.stringify(appAudit.slice(audit0))}`);
+    } catch (e) { fail(`${P} 3 (the first APP removes one): ` + errLine(e)); }
+    if (A) { try { await A.settle(); await A.pg.close(); } catch (e) {} }
+    // ---- 4. A surgeon, the coordinator and a plain viewer see the APP line but get no add / remove ----
+    {
+      const SURG29_UID = "00000000-0000-4000-8000-0000000a00e2";
+      const SURG29_PROFILE = { id: SURG29_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z", authEmail: "surgeon-p29@example.com" };
+      const SURG29_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: SURG29_UID, role: "authenticated", email: "surgeon-p29@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+      for (const [label, prof, jwt] of [["surgeon", SURG29_PROFILE, SURG29_JWT], ["coordinator", COORD_PROFILE, COORD_JWT], ["viewer", VIEWER_PROFILE, VIEWER_JWT]]) {
+        const rp = await context.newPage();
+        watchPage(rp, "p29-" + label);
+        const settleR = restReadsSettled(rp);
+        try {
+          await rp.setViewportSize({ width: 390, height: 844 });
+          await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, jwt);
+          await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+          await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(prof));
+          rp.on("dialog", (d) => d.accept());
+          const s0 = appSaves().length;
+          await loadApp(rp, "P29 " + label + " page");
+          const tabs = await rp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
+          if (tabs.includes("setup")) throw new Error("the " + label + " page shows Setup - it is treated as the scheduler: " + tabs.join(","));
+          await showM(rp);
+          const g = await gridApp(rp);
+          const g10 = g.find(x => x.day === D10);
+          await rp.click(`[data-day="${D10}"]`);
+          await rp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+          await rp.waitForTimeout(200);
+          const ed = await rp.evaluate(() => ({ line: ((document.querySelector("[data-testid=editor-app-line]") || {}).textContent || "").trim(), you: !!document.querySelector("[data-testid=editor-app-you]"), ctrl: ["editor-app", "editor-app-set", "editor-app-clear", "editor-app-block"].filter(t => document.querySelector(`[data-testid=${t}]`)) }));
+          await rp.keyboard.press("Escape");
+          await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+          let mineCard = false;
+          if (tabs.includes("myschedule")) { await rp.click('button[data-tab="myschedule"]'); await rp.waitForTimeout(400); mineCard = !!(await rp.$("[data-testid=appdays-card]")); }
+          if (!g10 || !/^A/.test(g10.text)) fail(`${P} 4 (${label}): ${D10} should show the APP line on the grid: ${JSON.stringify(g)}`);
+          else if (!/^APP\s*Pat Appleton$/.test(ed.line) || ed.you) fail(`${P} 4 (${label}): the day summary should show 'APP Pat Appleton' (no You chip), got '${ed.line}' you=${ed.you}`);
+          else if (ed.ctrl.length) fail(`${P} 4 (${label}): the day summary carries APP controls: ${ed.ctrl.join(", ")}`);
+          else if (mineCard || (label === "viewer" && tabs.includes("myschedule"))) fail(`${P} 4 (${label}): My APP days / the Mine tab should not be there (tabs ${tabs.join(",")}, card ${mineCard})`);
+          else if (appSaves().length !== s0) fail(`${P} 4 (${label}): the page sent a save`);
+          else ok(`${P} 4 (${label}): sees '${g10.text}' on ${D10} and '${ed.line}' in the day summary - no controls, no My APP days${label === "viewer" ? ", no Mine tab" : ""}, no save`);
+        } catch (e) { fail(`${P} 4 (${label}): ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, `failure-p29-4-${label}.png`), fullPage: true }); } catch (e2) {} }
+        try { await settleR(); await rp.close(); } catch (e) {}
+      }
+      // the main page's own session token back (each role page above stored its own in the shared origin storage)
+      await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+    }
+    // ---- 5. The scheduler sets / changes / clears (a fresh scheduler page of the main context) ----
+    try {
+      sc = await context.newPage();
+      watchPage(sc, "p29-scheduler");
+      settleSc = restReadsSettled(sc);
+      await sc.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await sc.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+      sc.on("dialog", (d) => d.dismiss().catch(() => {}));
+      await loadApp(sc, "P29 scheduler page");
+      await showM(sc);
+      const days0 = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
+      const openEd = async (d) => { await sc.click(`[data-day="${d}"]`); await sc.waitForSelector("[data-testid=editor-app-block]", { timeout: 8000 }); await sc.waitForTimeout(200); };
+      const closeEd = async () => { await sc.keyboard.press("Escape"); await sc.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }); };
+      const runApp = async (pick, btn) => {
+        const s0 = appSaves().length;
+        if (pick) await sc.selectOption("[data-testid=editor-app]", pick);
+        await sc.click(`[data-testid=${btn}]`);
+        await sc.waitForFunction(() => !!document.querySelector("[data-testid=editor-app-status], [data-testid=editor-app-error]"), null, { timeout: 10000 });
+        const err = await sc.$eval("[data-testid=editor-app-error]", el => el.textContent.trim()).catch(() => "");
+        const status = await sc.$eval("[data-testid=editor-app-status]", el => el.textContent.trim()).catch(() => "");
+        return { sv: appSaves().slice(s0), err, status };
+      };
+      await openEd(D12);
+      const optVals = await sc.$$eval("[data-testid=editor-app] option", els => els.map(o => o.value));
+      if (!optVals.includes(APP_A_UID) || !optVals.includes(APP_B_UID) || optVals[0] !== "") fail(`${P} 5: the scheduler's pick list should be 'none' + both APPs: ${JSON.stringify(optVals)}`);
+      else ok(`${P} 5: the day editor's APP line lists none + both APP accounts`);
+      let r = await runApp(APP_B_UID, "editor-app-set");
+      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [D12], p_clear: [], p_replace: false })) fail(`${P} 5: Set APP on ${D12} should send ONE POST { p_profile: B, p_add: [D12], p_replace: false }: ${JSON.stringify(r)}`);
+      else ok(`${P} 5: Set APP on ${D12} = ONE POST { p_profile: B, p_add: [${D12}], p_replace: false } - '${r.status}'`);
+      await closeEd();
+      await openEd(D10);
+      const holder10 = await sc.$eval("[data-testid=editor-app-holder]", el => el.textContent.trim()).catch(() => "");
+      r = await runApp(APP_B_UID, "editor-app-set");
+      if (holder10 !== "Pat Appleton") fail(`${P} 5: ${D10}'s APP line should name Pat Appleton before the change, got '${holder10}'`);
+      else if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [D10], p_clear: [], p_replace: true })) fail(`${P} 5: changing ${D10} should send ONE POST with p_replace true: ${JSON.stringify(r)}`);
+      else ok(`${P} 5: change ${D10} Appleton -> Bramble = ONE POST with p_replace: true`);
+      await closeEd();
+      await sc.waitForFunction((d) => { const c = document.querySelector(`[data-day="${d}"] [data-testid=cal-app]`); return !!c && /Bramble/.test(c.textContent); }, D10, { timeout: 10000 }).then(() => ok(`${P} 5: the grid shows 'A Bramble' on ${D10}`)).catch(() => fail(`${P} 5: the grid does not show 'A Bramble' on ${D10} after the change`));
+      await openEd(D12);
+      r = await runApp(null, "editor-app-clear");
+      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [], p_clear: [D12], p_replace: false })) fail(`${P} 5: Clear APP on ${D12} should send ONE POST { p_profile: B, p_clear: [D12] }: ${JSON.stringify(r)}`);
+      else ok(`${P} 5: Clear APP on ${D12} = ONE POST { p_profile: B, p_add: [], p_clear: [${D12}] } - '${r.status}'`);
+      await closeEd();
+      const days1 = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
+      if (days1 !== days0) fail(`${P} 5: the APP line wrote ${days1 - days0} schedule_days row(s) - it must never touch the day`); else ok(`${P} 5: no schedule_days write (the day's own Save was never pressed)`);
+      const sums = appAudit.slice(audit0).map(a => a.summary);
+      const wantSums = [`Lee Bramble: on call ${appMd(D12)}`, `Lee Bramble: on call ${appMd(D10)} (was Pat Appleton)`, `Lee Bramble: removed ${appMd(D12)}`];
+      if (!sameJson(sums.slice(-3), wantSums)) fail(`${P} 5: the audit rows should read ${JSON.stringify(wantSums)}, got ${JSON.stringify(sums)}`); else ok(`${P} 5: the audit rows: ${wantSums.join(" | ")}`);
+    } catch (e) { fail(`${P} 5 (the scheduler's APP line): ` + errLine(e)); try { if (sc) await sc.screenshot({ path: path.join(OUT, "failure-p29-5.png"), fullPage: true }); } catch (e2) {} }
+    // ---- 6. Setup > Users: the pseudo-role "app" ----
+    try {
+      if (!sc) throw new Error("the scheduler page did not open");
+      followsFixture = "present"; appColumnFixture = true;
+      await sc.click('button[data-tab="calendar"]');
+      await sc.click('button[data-tab="setup"]');
+      const card = sc.locator("[data-testid=card-setup_users]");
+      if ((await card.getAttribute("data-open")) !== "1") { await sc.click("[data-testid=card-toggle-setup_users]"); await sc.waitForTimeout(200); }
+      await sc.waitForFunction((id) => { const s = document.querySelector(`[data-testid=user-role-${id}]`); return !!s && Array.from(s.options).some(o => o.value === "app"); }, FOLLOWER_UID, { timeout: 10000 });
+      const w1 = writes.length;
+      await sc.selectOption(`[data-testid=user-role-${FOLLOWER_UID}]`, "app");
+      await sc.waitForTimeout(800);
+      const patches = writes.slice(w1).filter(w => w.method === "PATCH" && w.path === `/rest/v1/user_profiles?id=eq.${FOLLOWER_UID}`);
+      const pb = patches[0] ? saveBody(patches[0]) : null;
+      const au = writes.slice(w1).map(saveBody).find(b => b && b.action === "users.link");
+      if (patches.length !== 1 || !pb || Object.keys(pb).sort().join(",") !== "is_app,updated_at" || pb.is_app !== true || !/return=representation/.test(patches[0].prefer || "")) fail(`${P} 6: 'app' on the follower row should send ONE PATCH { is_app: true, updated_at } with return=representation: ${JSON.stringify(patches)}`);
+      else if (!au || !/: APP on$/.test(au.detail && au.detail.summary || "")) fail(`${P} 6: the users.link audit summary should end 'APP on': ${JSON.stringify(au)}`);
+      else ok(`${P} 6: Setup > Users 'app' on a viewer row = ONE PATCH { is_app: true } (no role key) - audit '${au.detail.summary}'`);
+      const w2 = writes.length;
+      await sc.selectOption(`[data-testid=user-role-${F2_SURGEON_UID}]`, "app");
+      await sc.waitForTimeout(600);
+      const p2 = writes.slice(w2).filter(w => w.path.startsWith("/rest/v1/user_profiles"));
+      const refusedTxt = await sc.evaluate(() => document.body.innerText || "");
+      if (p2.length || !/an APP account is never linked to a roster id/.test(refusedTxt)) fail(`${P} 6: 'app' on the linked row should be refused with the toast and no PATCH: ${p2.length} write(s)`);
+      else ok(`${P} 6: 'app' on a linked row is refused client-side (toast, no PATCH)`);
+      appColumnFixture = false;
+      await sc.click('button[data-tab="calendar"]');
+      await sc.click('button[data-tab="setup"]');
+      await sc.waitForSelector(`[data-testid=user-role-${FOLLOWER_UID}]`, { timeout: 10000 });
+      await sc.waitForTimeout(600);
+      const optsOff = await sc.$$eval(`[data-testid=user-role-${FOLLOWER_UID}] option`, els => els.map(o => o.value));
+      if (optsOff.includes("app")) fail(`${P} 6: rows without the is_app column must offer no 'app': ${optsOff.join(",")}`); else ok(`${P} 6: before the migration (rows without is_app) no 'app' option: ${optsOff.join(", ")}`);
+    } catch (e) { fail(`${P} 6 (Setup > Users): ` + errLine(e)); try { if (sc) await sc.screenshot({ path: path.join(OUT, "failure-p29-6.png"), fullPage: true }); } catch (e2) {} }
+    followsFixture = null; appColumnFixture = false;
+    // ---- 7. ?public=1 and the share page show nothing of it ----
+    {
+      const pp = await context.newPage();
+      const ppErrors = [], ppApp = [];
+      pp.on("pageerror", (e) => ppErrors.push(String(e && e.message || e)));
+      await pp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+        const req = route.request();
+        const u = new URL(req.url());
+        if (APP_PATH_RE.test(u.pathname)) { ppApp.push(req.method() + " " + u.pathname); return route.fulfill({ status: 403, contentType: "application/json", body: '{"code":"42501","message":"permission denied"}' }); }
+        if (req.method() !== "GET") { writes.push({ method: req.method(), path: u.pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+        const fx = fixtureAnswer(u);
+        if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+        const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+        return route.continue({ headers });
+      });
+      await pp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      try {
+        const pubW0 = writes.filter(w => w.public).length;
+        await loadWithRetry(pp, BASE + "?public=1", "[data-testid=cal-month]", 20000, "P29 public page");
+        await pp.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell"), null, { timeout: 20000 });
+        await showM(pp);
+        await pp.waitForTimeout(800);
+        const pv = await pp.evaluate(() => ({ app: document.querySelectorAll("[data-testid=cal-app]").length, legend: !!document.querySelector("[data-testid=legend-app]"), text: document.body.innerText || "" }));
+        if (pv.app || pv.legend) fail(`${P} 7: ?public=1 shows APP information: ${pv.app} grid line(s), legend ${pv.legend}`);
+        else if (/Appleton|Bramble/.test(pv.text)) fail(`${P} 7: ?public=1 page text names an APP`);
+        else if (ppApp.length) fail(`${P} 7: ?public=1 requested the APP paths: ${ppApp.join(", ")}`);
+        else if (writes.filter(w => w.public).length !== pubW0) fail(`${P} 7: ?public=1 attempted a write`);
+        else ok(`${P} 7: ?public=1 on ${MLABEL} (a day with an APP in the store) - no APP line, no legend line, no APP name, ZERO requests to the three APP paths, no write`);
+        if (ppErrors.length) fail(`${P} 7: public page errors: ${ppErrors.join(" | ")}`);
+      } catch (e) { fail(`${P} 7 (?public=1): ` + errLine(e)); }
+      try { await pp.close(); } catch (e) {}
+      try {
+        if (!sc) throw new Error("the scheduler page did not open");
+        await showM(sc);
+        if (!(await sc.$("[data-testid=calendar-tools]"))) { await sc.click("text=Calendar tools (exports)"); await sc.waitForSelector("[data-testid=calendar-tools]", { timeout: 3000 }); }
+        const [dl] = await Promise.all([sc.waitForEvent("download", { timeout: 8000 }), sc.click("[data-testid=share-download]")]);
+        const target = path.join(OUT, "p29-" + dl.suggestedFilename());
+        await dl.saveAs(target);
+        const html = fs.readFileSync(target, "utf8");
+        const g = await gridApp(sc);
+        if (!g.length) fail(`${P} 7: the scheduler's grid shows no APP line - the share check would prove nothing`);
+        else if (/Appleton|Bramble|cal-app|legend-app/.test(html)) fail(`${P} 7: the share page (${path.basename(target)}) carries APP information`);
+        else ok(`${P} 7: the scheduler's share page (${path.basename(target)}, ${html.length} bytes) names no APP while his grid shows ${g.length} APP line(s)`);
+      } catch (e) { fail(`${P} 7 (share page): ` + errLine(e)); }
+      // the scheduler page goes before the 'absent' step (its 60 s poll would read the forced 404s)
+      if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} sc = null; }
+    }
+    // ---- 8. Absent: the migration not applied ----
+    try {
+      if (!A) throw new Error("the APP A context did not open");
+      appDaysMode = "absent";
+      const served0 = appServed.length;
+      const a2 = await A.ctx.newPage();
+      watchPage(a2, "p29-app-a-absent");
+      const settleA2 = restReadsSettled(a2);
+      await a2.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(APP_A_PROFILE));
+      await a2.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await loadApp(a2, "P29 APP A page (absent)");
+      await a2.click('button[data-tab="myschedule"]');
+      await a2.waitForSelector("[data-testid=appdays-card][data-state=unavailable]", { timeout: 10000 });
+      const stTxt = await a2.$eval("[data-testid=appdays-state]", el => el.textContent.trim());
+      const toast = await a2.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      await showM(a2);
+      const g = await gridApp(a2);
+      await a2.waitForTimeout(500);
+      const forced404 = appServed.slice(served0).filter(x => x.status === 404 && x.sub === APP_A_UID).length;
+      if (stTxt !== "APP days are available after the next database update.") fail(`${P} 8: My APP days should say the unavailable sentence, got '${stTxt}'`);
+      else if (/APP days/.test(toast)) fail(`${P} 8: a toast about the APP days showed: '${toast}'`);
+      else if (g.length) fail(`${P} 8: the grid shows APP lines while the table is absent`);
+      else if (!forced404) fail(`${P} 8: the state was not forced by the harness's 404`);
+      else ok(`${P} 8: absent (404 PGRST205) - '${stTxt}', no toast, no grid line (${forced404} forced 404 served)`);
+      await a2.screenshot({ path: path.join(OUT, "p29-absent-390.png"), fullPage: true });
+      try { await settleA2(); await a2.close(); } catch (e) {}
+    } catch (e) { fail(`${P} 8 (absent): ` + errLine(e)); }
+    appDaysMode = "ok";
+    // ---- 9. Reset ----
+    await new Promise(r => setTimeout(r, 600));
+    if (appForcedLines.length) fail(`${P} 9: ${appForcedLines.length} forced APP answer(s) never produced their console line: ${JSON.stringify(appForcedLines)}`); else ok(`${P} 9: every forced APP answer's console line was consumed (${appForcedConsumed} so far)`);
+    const p29Writes = writes.slice(w0all);
+    const clientAudit = p29Writes.map(saveBody).filter(b => b && typeof b.action === "string" && /^appdays/.test(b.action));
+    const notifPosts = p29Writes.filter(w => /^\/rest\/v1\/notifications/.test(w.path));
+    const emailPosts = p29Writes.filter(w => /^\/functions\/v1\//.test(w.path));
+    if (clientAudit.length || notifPosts.length || emailPosts.length) fail(`${P} 9: the client wrote an audit row (${clientAudit.length}), a notification (${notifPosts.length}) or an e-mail call (${emailPosts.length}) during the APP steps`);
+    else ok(`${P} 9: no client audit row, no notification row, no e-mail call during the APP steps (the save function writes the audit row: ${appAudit.length - audit0} recorded)`);
+    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appColumnFixture = false;
+    if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} }
+    if (A) { try { await A.ctx.close(); } catch (e) {} }
+    await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+  }
+
   // Public read-only mode renders without auth.
   const pub = await context.newPage();
   const pubErrors = [];
@@ -11464,7 +12040,11 @@ const unexpected = consoleErrors.filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => 
 const expected = consoleErrors.filter(t => EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
 if (expected.length) console.log(`     (${expected.length} expected console error(s) ignored: ${[...new Set(expected)].slice(0, 3).join(" | ")})`);
 if (forcedConsoleErrors.length) console.log(`     (${forcedConsoleErrors.length} console error(s) came from responses the harness forced - the snapshot insert 500, the aborted east_feed POST, the offer painter's OF002 400, the session scenario's 401s / rejected refresh, the days-fail 500, the East 500s, ${payForcedConsumed} pay read(s) answered 404 / 500 by the pay mock - expected)`);
-if (unexpected.length) fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     ")); else ok("no unexpected console errors");
+if (unexpected.length) {
+  fail("unexpected console errors:\n     " + [...new Set(unexpected)].join("\n     "));
+  // Prompt 29 (diagnostics): which page and resource each unexpected line came from
+  console.log("     from: " + consoleErrorWhere.filter(e => unexpected.includes(e.text)).map(e => e.where + " - " + e.text.slice(0, 120)).join("\n           "));
+} else ok("no unexpected console errors");
 // Prompt 16 B9 (a): the worker fallback is quiet by design (console.warn + genWorkerBroken) - the whole-run sweep is
 // where a device that silently dropped to the inline run would show.
 const genWorkerWarns = consoleWarns.filter(t => /Generate worker failed/.test(t));

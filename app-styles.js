@@ -53,6 +53,11 @@ const THEME = {
     // Offer deadline notice (9/27, My schedule / Calendar): amber text on its own amber tint, the css.warnBox look in
     // light mode and a dark amber box in dark mode (the dark sheet repaints neither) - 5.64:1 light, 10.1:1 dark.
     noticeText: "#7A5A20", noticeBg: "#FBF1D8", noticeBorder: "#E8D090",
+    // APP call days (Prompt 29): the grid's third line "A <name>" and the My APP days "You" cells - a muted rose no surgeon
+    // pill uses, italic on the grid (no pill), so it reads apart from the P / B pills. Light appText 6.23:1 on the card, 5.54
+    // on the weekend tint / raised box, 5.76 on the holiday tint, 5.86 on the page, 5.33 on appTint; dark 7.59 / 8.37 / 6.52 /
+    // 9.08 / 7.55 (test/ui/contrast.mjs measures every pair).
+    appText: "#86506A", appTint: "#F6EAF0",
   },
   dark: {
     bg: "#0B1A33", surface: "#13294B", raised: "#0F2140", text: "#E6ECF5", muted: "#9FB0C8", border: "#24406B",
@@ -65,6 +70,7 @@ const THEME = {
     backupText: "#D4A84A", warnText: "#D4A84A",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
+    appText: "#DDAFC2", appTint: "#3A2232",
   },
 };
 const LIGHT = THEME.light;
