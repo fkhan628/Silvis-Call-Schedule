@@ -37,7 +37,7 @@
 -- detail shape (summary "<Name> took <M/D> <role>", day, role, person, version, offer) plus 'pair' = the other day; one
 -- notifications row 'shift_claimed' per day with claim_open_slot's title / message / data plus 'pair'. Every per-day reader
 -- (the Activity log's detail.summary, audit_read_own, the feed's data.day) reads the two rows as two claims. Returns
--- { ok, days: [sat, sun], role, person_id, versions: [v_sat, v_sun] }.
+-- { ok, days: [sat, sun], role, person_id, versions: [v_sat, v_sun], offers: [offer_sat, offer_sun] }.
 --
 -- Locks. `lock table public.time_off in share mode` after the row-less refusals (CL001-CL004, CL010) and before the first day
 -- row lock and the vacation check - the reasoning of claim_open_slot's header (Prompt 16 B6): a vacation of the caller written
@@ -53,7 +53,8 @@
 -- covered, inside the published range, distinct roles, no vacation conflict. The JS rules (lone-weekend-day itself, caps,
 -- patterns, runs) are enforced in the client before the "Take Sat + Sun" button is offered (rules.js eligibility with the
 -- partner day assumed), not here - the accepted boundary for a six-surgeon group; everything the function does is logged.
--- security definer, set search_path = public (members cannot write schedule_days or another person's call_offers under RLS).
+-- security definer, set search_path = public, pg_temp (members cannot write schedule_days or another person's call_offers under
+-- RLS; pg_temp last, like the newer definers - every relation here is schema-qualified anyway).
 -- EXECUTE: revoked from public and anon, granted to authenticated (the claim_open_slot grants).
 --
 -- Blast radius: nothing changes for anyone until a client calls the function - one new RPC, POST rest/v1/rpc/
@@ -77,7 +78,7 @@
 -- ============================================================================
 
 create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   me          text := public.silvis_person_id();
   today_c     date := (now() at time zone 'America/Chicago')::date;

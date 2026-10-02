@@ -1505,7 +1505,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("To hand it back later, propose a trade or give it away.</p>"), "claim sheet wording");
       const reg = src.slice(src.indexOf('data-testid="openshifts-card"'), src.indexOf("{claimSheet && ("));
       assert.ok(reg.includes('{mySurgeon && !isScheduler && !(me && me.ok && !locked) && <span data-testid="ob-take-why" style={{fontSize:10.5,color:T.muted,'), "the reason as visible text, surgeons only, T token");
-      assert.ok(reg.includes('{locked ? "slot locked - ask the scheduler" : takeTitle(me)}</span>'), "the same reason the title carries (takeTitle - eastMaskedReasons)");
+      // pin moved deliberately 10/2 (the weekend pair review): + pairWhy(me), the pair's own reason when the pair is refused too
+      assert.ok(reg.includes('{locked ? "slot locked - ask the scheduler" : takeTitle(me) + pairWhy(me)}</span>') && reg.includes('disabled title={locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me) + pairWhy(me)}'), "the same reason the title carries (takeTitle + pairWhy - eastMaskedReasons)");
       assert.ok(src.includes('<button data-testid="ofp-goto-period" data-start={periodJump.start} onClick={() => { setPendingStart(null); setYm({ y: periodJump.y, m: periodJump.m }); }}') && src.includes("const periodJump = period ? offerPeriodJump(period, today, ym) : null;"), "the painter's jump button");
       const gj = src.slice(src.indexOf('<button data-testid="ofp-goto-period"'), src.indexOf("</button>", src.indexOf('<button data-testid="ofp-goto-period"')));
       assert.ok(gj.includes('minHeight: 36, height: 36, padding: "0 12px"') && gj.includes('whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"') && gj.includes("title={periodJump.text}"), "one 36 px line, never wrapping (the smoke's day-list >= 45% floor), full text in the title");
@@ -2601,8 +2602,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(appCode.includes('showToast("Not eligible any more: " + (pg ? reasonLabel(eastMaskedReasons(pg.hard, eastDetailsVisible, pg.eastVacation)[0], nameOf) : "the Saturday and the Sunday are no longer both open to you"), "error");'), "the pair's claim-gate toast reads its reason through eastMaskedReasons");
     assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
     assert.ok(appCode.includes("const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];") && appCode.includes("Allowed with a note: {toNotes.map(softTag).join(\", \")}."), "the trade card's 'Allowed with a note'");
-    // pin moved deliberately 10/1 (the weekend pair claim): + the pair's sheet and the pair's claim gate (7 -> 9)
-    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 9, "nine call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note, the pair's sheet, the pair's gate) - a new one needs its pin here");
+    // review 10/2 (the weekend pair): the row's pairWhy - the pair's own reason beside the lone-day one when the pair is refused too
+    assert.ok(appCode.includes('const pairWhy = (me) => rulesCtx && me && !me.ok && me.pair && !me.pair.ok && (me.pair.hard || []).length ? " - Sat + Sun together: " + reasonLabel(eastMaskedReasons(me.pair.hard, eastDetailsVisible, me.pair.eastVacation)[0], nameOf) : "";'), "pairWhy reads the pair's reason through eastMaskedReasons");
+    // pin moved deliberately 10/1 (the weekend pair claim): + the pair's sheet and the pair's claim gate (7 -> 9); 10/2: + pairWhy (10)
+    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 10, "ten call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note, the pair's sheet, the pair's gate, the pair's why) - a new one needs its pin here");
     // nothing on those surfaces reads a reason around the helper: no hard[0] left in the App, every reasonLabel( there takes
     // the helper's answer, a constant or x.reason of a masked list (the chip's soft, the sheet's claimSheet.soft), every softTag the notes
     assert.strictEqual((appCode.match(/hard\[0\]/g) || []).length, 0, "a raw hard[0] read in the App (outside the helper)");
@@ -2619,10 +2622,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // o.soft the chip; claimSheet.soft x2 the sheet (already masked); toElig.soft x2 toNotes; e.hard the greyed option. A
     // new read of a reason list goes through eastMaskedReasons and is added here, or this fails.
     // 10/1 (the weekend pair claim): entry.hard in the boardElig row is read by obLoneOnly only (a gate, never rendered);
-    // pp.soft is the pair's sheet (masked at open), pg.hard the pair's claim gate (masked).
+    // pp.soft is the pair's sheet (masked at open), pg.hard the pair's claim gate (masked). 10/2: me.pair.hard x2 in pairWhy
+    // (a length gate, then the masked read).
     const reasonReads = {};
     (appCode.match(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*\.(?:hard|soft)\b/g) || []).forEach(k => { reasonReads[k] = (reasonReads[k] || 0) + 1; });
-    assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1, "entry.hard": 1, "pp.soft": 1, "pg.hard": 1 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
+    assert.deepStrictEqual(reasonReads, { "r.hard": 6, "r.soft": 2, "gate.hard": 1, "me.hard": 1, "me.soft": 1, "o.soft": 1, "claimSheet.soft": 2, "toElig.soft": 2, "e.hard": 1, "entry.hard": 1, "pp.soft": 1, "pg.hard": 1, "me.pair.hard": 2 }, "the App's .hard / .soft reads changed - a new one must read through eastMaskedReasons (then list it here): " + JSON.stringify(reasonReads));
     // the flag is declared before every reader (a const read before its line is a TDZ crash), the ref mirrors it
     const flagAt = src.indexOf("const eastDetailsVisible = isScheduler && !isPublicMode;");
     assert.ok(flagAt > 0 && flagAt < src.indexOf("  const loadEastTables = async (quiet, overridesOnly) => {") /* Do first 5: pin moved deliberately (overridesOnly) */ && flagAt < src.indexOf("const tradeReasonText = ") && src.indexOf("const isScheduler") < flagAt, "eastDetailsVisible declared with the role flags, before the loaders and tradeReasonText");
@@ -4912,10 +4916,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.strictEqual(e500.state.retries, 1); assert.deepStrictEqual(e500.state.toasts, ["write failed 500"]); assert.ok(e500.state.statuses.includes("Save failed - retrying"));
       });
     })();
-    check("A3 pins: every listed write path goes through authFetch - postDayRow / patchDayRow, the four RPCs (claim_open_slot, apply_trade, save_offers, set_offer_mode), the send-notification and office-notifications POSTs; no bare fetch of rest/v1/rpc or of an edge-function POST remains; db.insert / update / upsert in config.js use it", () => {
+    check("A3 pins: every listed write path goes through authFetch - postDayRow / patchDayRow, the five RPCs (claim_open_slot, apply_trade, save_offers, set_offer_mode, claim_open_weekend_pair), the send-notification and office-notifications POSTs; no bare fetch of rest/v1/rpc or of an edge-function POST remains; db.insert / update / upsert in config.js use it", () => {
       assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/schedule_days`, {"), 1, "postDayRow");
       assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/schedule_days?day=eq.${row.day}&version=eq.${ver}`, {"), 1, "patchDayRow");
-      ["claim_open_slot", "apply_trade", "save_offers", "set_offer_mode"].forEach(fn => assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/rpc/" + fn + "`"), 1, fn));
+      // review 10/2: + claim_open_weekend_pair (the weekend pair claim's RPC - the user JWT, never a bare fetch)
+      ["claim_open_slot", "apply_trade", "save_offers", "set_offer_mode", "claim_open_weekend_pair"].forEach(fn => assert.strictEqual(count("authFetch(`${SUPABASE_URL}/rest/v1/rpc/" + fn + "`"), 1, fn));
       assert.strictEqual(count("fetch(`${SUPABASE_URL}/rest/v1/rpc/"), 0, "a bare fetch of an RPC remains");
       assert.strictEqual(count("authFetch(`${EDGE_FN_BASE}/send-notification`"), 1, "send-notification");
       assert.strictEqual(count("authFetch(`${EDGE_FN_BASE}/office-notifications`"), 2, "office-notifications (publish + digest)");

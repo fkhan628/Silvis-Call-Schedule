@@ -2977,6 +2977,8 @@ ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.inc
 // pin moved deliberately 10/1 (the record step): the header still names section 15; the header and --help no longer name the flag.
 // Merge of the weekend pair claim (10/1): --help lists SILVIS_WEEKEND_PAIR_CLAIM_APPLIED after SILVIS_PREFS_ROWS_BEFORE (section 17,
 // until its own record step), so later flags may follow it before "- see"; kept intent: no SILVIS_VACATION_GUARD_APPLIED there.
+// Deliberately loose (review 10/2): any SILVIS_* flag may sit between the two, so the Prompt 28 / 29 merges (their own flags)
+// need no edit here; the weekend pair step below pins that the list ends in SILVIS_WEEKEND_PAIR_CLAIM_APPLIED.
 ok(/vacation guard probe \(15\)/.test(vr.slice(0, vr.indexOf("set -u"))) && /SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_VACATION_GUARD_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh's header must name section 15 and --help must list SILVIS_PREFS_ROWS_BEFORE (then only later sections' flags) without SILVIS_VACATION_GUARD_APPLIED (dropped)");
 {
   const code15 = vr.slice(vr.indexOf('echo "== 15. '), s15Next > 0 ? s15Next : vr.indexOf('\necho\necho "RESULT: ')); // section 17 follows on this branch
@@ -3172,7 +3174,7 @@ ok(/^-- Rolling back = `drop function if exists public\.claim_open_weekend_pair\
   ok(!/\b(alter|drop|create)\s+(table|policy|trigger|index)\b/i.test(code), "no table, policy, trigger or index changes");
 }
 const wpFn = functionText(wpMig, "claim_open_weekend_pair");
-ok(wpFn && wpFn.startsWith("create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb\nlanguage plpgsql security definer set search_path = public as $$\n"), "claim_open_weekend_pair must be security definer with search_path public (members cannot write schedule_days under RLS)");
+ok(wpFn && wpFn.startsWith("create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n"), "claim_open_weekend_pair must be security definer with search_path public, pg_temp (members cannot write schedule_days under RLS; pg_temp last - review 10/2)");
 ok(functionText(schema, "claim_open_weekend_pair") === wpFn, "claim_open_weekend_pair(): schema.sql differs from the migration");
 ok(functionText(schema, "claim_open_slot") === functionText(read(AUDIT_MIGRATION), "claim_open_slot"), "claim_open_slot in schema.sql is still the item 5b body (untouched by the weekend pair claim)");
 
@@ -3242,7 +3244,12 @@ ok(wpProbe.includes("update public.user_profiles set person_id = 's3', role = 's
   const code = wpProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
   const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]);
   ok(days.length > 30 && days.every((d) => /^2030-1[12]-/.test(d) || d === "2020-01-04"), "every fixture day is in 2030-11 / 2030-12 (or the 2020-01-04 lower bound): " + days.filter((d) => !(/^2030-1[12]-/.test(d) || d === "2020-01-04")).join(", "));
-  ok(/raise exception 'PROBE_SETUP: live rows already sit in 2030-11 \/ 2030-12 or on 2020-01-04/.test(code) && /raise exception 'PROBE_SETUP: max\(day\) is not 2030-12-28/.test(code), "the setup refuses to run over live rows and checks the range's upper bound (case J)");
+  ok(/raise exception 'PROBE_SETUP: live rows already sit in 2030-11 \/ 2030-12, on 2020-01-04 or after 2030-12-28/.test(code) && /raise exception 'PROBE_SETUP: max\(day\) is not 2030-12-28/.test(code), "the setup refuses to run over live rows and checks the range's upper bound (case J)");
+  // review 10/2 (the Prompt 28 probe's order): the collision guard runs BEFORE the absent check, so the dry run before the apply
+  // sees a collision - and it reads a real row after 2030-12-28 (case J's upper bound) without writing anything first
+  const colAt = code.indexOf("PROBE_SETUP: live rows already sit"), absAt = code.indexOf("PROBE_SETUP: claim_open_weekend_pair is absent");
+  ok(colAt > 0 && absAt > colAt && absAt < code.indexOf("insert into auth.users"), "the collision guard raises before the absent check (and both before any fixture)");
+  ok(/if exists \(select 1 from public\.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04' or day > '2030-12-28'\)/.test(code.slice(0, colAt)), "the collision guard refuses a real schedule_days row after 2030-12-28 before any fixture");
   ok((code.match(/'probe-pair', 1\)/g) || []).length === 16 && code.includes("values ('s3', '2030-12-09', '2030-12-09', 'probe-pair', 'probe-pair');") && code.includes("values ('probe-pair', '2030-11-18', '2030-11-23', '2030-11-04', '2030-11-11', 'upcoming', '[\"s3\"]'::jsonb, 'probe-pair');"), "every fixture carries the 'probe-pair' key the leftover count reads (16 schedule_days rows, the time_off row, the call_periods row)");
   ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(code), "the probe never writes the blob");
 }
@@ -3301,6 +3308,13 @@ ok(/SILVIS_WEEKEND_PAIR_CLAIM_APPLIED=1 +grade section 17 strictly/.test(vr.slic
   const rl = run17(msgOf(WP_AFTER), true, "401", 4);
   eq(rl.result, [WP_CASES.length + 1, 1], "section 17 fails a non-zero leftover count;");
   ok(/LEFT ROWS BEHIND/.test(rl.out), "section 17 names the leftovers");
+  // review 10/2 (the 16d rule): the clean-up DELETEs key on the probe's identity - its tags, or s3's claim rows on its fixture
+  // days - never on a bare date window; call_offers (untagged; the 16 probe writes s3 offers in 2030-11 too) are listed for review
+  const dels = rl.out.split("\n").filter((l) => /^\s+delete from /.test(l));
+  ok(dels.length === 6 && dels.every((l) => /'probe-pair|'s3'/.test(l)) && !dels.some((l) => /call_offers/.test(l)) && /select \* from public\.call_offers where day between '2030-11-01' and '2030-12-31';/.test(rl.out), "section 17's clean-up lines: six identity-keyed DELETEs, call_offers for review only: " + dels.join(" | "));
+  const rc = run17('{"message": "ERROR: P0001: PROBE_SETUP: live rows already sit in 2030-11 / 2030-12, on 2020-01-04 or after 2030-12-28 (schedule_days / time_off / call_offers / call_periods) - the probe fixtures would collide"}', true, "401", 2);
+  eq(rc.result, [1, 2], "section 17 after a collision-guard stop: 17a passes, no sentinel and the window's rows FAIL;");
+  ok(/collision guard before writing anything/.test(rc.out) && !/delete from/.test(rc.out), "a collision-guard stop lists the live rows for review and prints no DELETE");
 }
 
 step("weekend pair claim: docs - SCHEMA-REVIEW.md section (PREPARED, the contract, locks + deadlock note, blast radius, what could break, the probe table, apply order, rollback, observed placeholder)");

@@ -13,12 +13,13 @@
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/weekend-pair-claim-probe.sql
 --   (scripts/verify-rls.sh section 17 runs it, grades each case and checks nothing persisted)
 --
--- BEFORE the migration the first block raises 'PROBE_SETUP: claim_open_weekend_pair is absent ...' (nothing else runs). AFTER
--- it every case below must read as listed.
+-- The setup's first check is the collision guard (it raises 'PROBE_SETUP: live rows already sit ...' before or after the
+-- migration, so the dry run sees it); then, BEFORE the migration, the block raises 'PROBE_SETUP: claim_open_weekend_pair is
+-- absent ...' (nothing else runs). AFTER it every case below must read as listed.
 --
 -- Fixtures are FAR-FUTURE weekends in 2030-11 / 2030-12 (no other probe uses them; the setup refuses to run when schedule_days,
--- time_off, call_offers or call_periods already hold anything there) plus ONE row on 2020-01-04 (a Saturday in the past, inside
--- the range it opens - case I). Every schedule_days fixture carries source 'probe-pair', the time_off row the note 'probe-pair',
+-- time_off, call_offers or call_periods already hold anything there, or schedule_days a row after 2030-12-28) plus ONE row on
+-- 2020-01-04 (a Saturday in the past, inside the range it opens - case I). Every schedule_days fixture carries source 'probe-pair', the time_off row the note 'probe-pair',
 -- the call_periods row the label 'probe-pair' (the leftover count keys on them). Live roster ids used: s3 (the claimer - its
 -- roster name, Acton, is what the audit summary and the feed title show) and s2 (holds two fixture slots). The acting users
 -- are throwaway auth.users rows (email probe-pair-<uuid>@example.test) whose user_profiles rows the handle_new_auth_user
@@ -76,14 +77,17 @@ declare
   viewer  uuid := gen_random_uuid();
   u       uuid;
 begin
-  if to_regprocedure('public.claim_open_weekend_pair(date,text)') is null then
-    raise exception 'PROBE_SETUP: claim_open_weekend_pair is absent - sql/migrations/2026-10-01-weekend-pair-claim.sql is not applied';
-  end if;
-  if exists (select 1 from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04')
+  -- The collision guard runs BEFORE the absent check (review 10/2, the Prompt 28 probe's order): the dry run before the apply
+  -- must see a collision, or it only surfaces after the apply, with the function live and ungraded. It also refuses a real
+  -- row after 2030-12-28 (case J needs 12/28 to be max(day)) - read-only, before any fixture.
+  if exists (select 1 from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04' or day > '2030-12-28')
      or exists (select 1 from public.time_off where start_date <= '2030-12-31' and end_date >= '2030-11-01')
      or exists (select 1 from public.call_offers where day between '2030-11-01' and '2030-12-31')
      or exists (select 1 from public.call_periods where start_day <= '2030-12-31' and end_day >= '2030-11-01') then
-    raise exception 'PROBE_SETUP: live rows already sit in 2030-11 / 2030-12 or on 2020-01-04 (schedule_days / time_off / call_offers / call_periods) - the probe fixtures would collide';
+    raise exception 'PROBE_SETUP: live rows already sit in 2030-11 / 2030-12, on 2020-01-04 or after 2030-12-28 (schedule_days / time_off / call_offers / call_periods) - the probe fixtures would collide';
+  end if;
+  if to_regprocedure('public.claim_open_weekend_pair(date,text)') is null then
+    raise exception 'PROBE_SETUP: claim_open_weekend_pair is absent - sql/migrations/2026-10-01-weekend-pair-claim.sql is not applied';
   end if;
   foreach u in array array[surgeon, viewer] loop
     insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,

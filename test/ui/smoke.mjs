@@ -5517,7 +5517,8 @@ try {
   //   POST rpc/claim_open_weekend_pair (not live - the function waits for Faraz's apply) = the function's answers: armed
   //                            once with 404 PGRST202 (not applied yet), once with CL005 CLAIM_HELD (someone took the Sunday
   //                            in between), then the success JSON; CL010 for a non-Saturday, CL005 for a held day.
-  // Checks: both rows listed with the one-day Take disabled and its reason in words ("a Saturday on its own - ..."), the
+  // Checks: both rows listed with the one-day Take disabled and its reason in words ("a Saturday alone as primary, without
+  // its Sunday" - reasonLabel's words since the 10/1 follow-ups), the
   // pair chip and "Take Sat + Sun" on both rows; the sheet names both days; the 404 reads "not switched on yet", the CL005
   // refusal is shown verbatim, each refusal logs ONE audit row naming both days and changes nothing; the confirm makes ONE
   // POST { p_saturday, p_role } with the Saturday (never the Sunday, never rpc/claim_open_slot, never a schedule_days write);

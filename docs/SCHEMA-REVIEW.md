@@ -2072,7 +2072,7 @@ function.
 
 | object | before | after |
 |---|---|---|
-| `claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb` | - | new: `language plpgsql security definer set search_path = public`; EXECUTE revoked from `public` / `anon`, granted to `authenticated` (the `claim_open_slot` grants) |
+| `claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb` | - | new: `language plpgsql security definer set search_path = public, pg_temp` (pg_temp last, like the newer definers - review 10/2; every relation is schema-qualified); EXECUTE revoked from `public` / `anon`, granted to `authenticated` (the `claim_open_slot` grants) |
 | `claim_open_slot(date, text)` | the one-day claim | **unchanged** - not re-created (it has been re-created by four migrations with sha-checked bases; a new function leaves it alone and rolls back with one drop) |
 | tables, columns, policies, triggers, other functions, rows | - | **unchanged**; the file ends with `notify pgrst, 'reload schema'` so PostgREST exposes the new RPC |
 
@@ -2137,15 +2137,31 @@ leftover check PASS; `test/schema.test.js` does the same with the expected pictu
 origin/main `0b3a3e0` (the vacation guard applied and recorded, revision s): main's `schema.sql` -> `PROBE_SETUP`, then the
 same 20 cases (byte-identical to the 10/1 run but for today's date in case I), leftover 0, the re-run idempotent, the rollback
 -> `PROBE_SETUP`; the merged branch's `schema.sql` gives byte-identical output; section 17 on it: 22 PASS, 0 FAIL. A live
-difference (a roster name, a grant default) shows by case in section 17. (2) Prompt 28 (`feat/no-primary-days`) edits `schema.sql`, this file, `verify-rls.sh` and `schema.test.js` too: textual
-conflicts at the merge; the letter u and section 17 assume Prompt 28 takes t and 16 - whichever lands second re-letters and
-renumbers. If Prompt 28 changes `claim_open_slot`'s offer upsert, this function's upsert should follow it.
+difference (a roster name, a grant default) shows by case in section 17. Re-run 2026-10-02 after the review fixes (the
+probe's collision guard moved before the absent check, `search_path = public, pg_temp`): main's `schema.sql` (`0b3a3e0`) -> `PROBE_SETUP` (absent), then the same 20 cases
+byte-identical to the 10/2 merge run, leftover 0, a second run identical, the re-run idempotent, the rollback -> `PROBE_SETUP`;
+the branch's `schema.sql` gives byte-identical output; section 17 on it: 22 PASS, 0 FAIL. A seeded collision (a `time_off`
+row in 2030-11, or a `schedule_days` row on 2031-01-05) now stops the probe BEFORE the apply with the collision guard's
+`PROBE_SETUP` (the control without one: absent, then the 20 cases). (2) Prompt 28
+(`feat/no-primary-days`) is LIVE since 2026-10-02 12:05:22Z (its apply log: APPLIED AND VERIFIED, verify-rls 338 passed,
+0 failed; recorded on its branch). Revision t changes only `save_offers` and `save_no_primary`, neither of which this function
+calls or reads, and the PGlite runs above (over main `0b3a3e0`) omit it for that reason; this branch's verify-rls sections 1-15
+are byte-identical to `feat/no-primary-days`'s, which passed live after that apply, so step 6 below should not trip on it.
+Prompt 28 still edits `schema.sql`, this file, `verify-rls.sh` and `schema.test.js`: textual conflicts at the merge; the
+letter u and section 17 keep assuming it takes t and 16. At that merge, add `claim_open_weekend_pair` to Prompt 28's residual 6
+(`claim_open_slot`'s offer upsert skips NP009): this function is a second such path - it writes primary offers and takes
+primary on a backup-only day without a DB check, the same `rules.js` boundary as `claim_open_slot`. If main's section 16
+record step lands before this apply, re-pin the apply script's `VERIFY_SHA_EXPECTED`.
 
 **The probe** (`sql/probes/weekend-pair-claim-probe.sql`; one batch, a temp results table, the last statement raises
 `PROBE_RESULTS ...;END`, so everything rolls back; `PROBE_SETUP: claim_open_weekend_pair is absent` before the migration).
 Throwaway auth users `probe-pair-<uuid>@example.test` (s3 as a surgeon, an unlinked viewer); fixtures on far-future weekends
 in 2030-11 / 2030-12 plus a 2020-01-04 lower bound (the setup refuses to run when `schedule_days`, `time_off`, `call_offers` or
-`call_periods` already hold anything there); a `call_periods` row `probe-pair` 11/18-11/23 with `rules_only_ids ["s3"]`.
+`call_periods` already hold anything there, or `schedule_days` a row after 2030-12-28 - a collision guard that runs FIRST,
+before the absent check, so the dry run before the apply sees it: review 10/2, the Prompt 28 probe's order); a `call_periods`
+row `probe-pair` 11/18-11/23 with `rules_only_ids ["s3"]`. Section 17 counts leftovers over the whole window but prints
+clean-up DELETEs by the probe's identity only (its tags, or s3's claim rows on its fixture days); `call_offers` rows and a
+collision-guard stop are listed for review, never given a DELETE (the 16d rule).
 
 | case | what | AFTER |
 |---|---|---|
@@ -2172,9 +2188,9 @@ in 2030-11 / 2030-12 plus a 2020-01-04 lower bound (the setup refuses to run whe
 **Apply order** (one command does steps 2-6 and stops at the first failure:
 `apply-weekend-pair-claim.sh` in the private gate folder `run-2026-10-01` (outside the repo), run from the repo on `feat/weekend-pair-claim`).
 
-1. Deploy daily-reminder v8 first - the branch carries it (`edge-functions/README.md` section 3, "Deploy record - 10/1
-   follow-up: daily-reminder v7 -> v8"), so main's edge source stays equal to what is deployed when the branch merges. It is
-   independent of steps 2-6 (they touch the database only).
+1. daily-reminder v8 is NOT deployed first (review 10/2): the branch carries it (`edge-functions/README.md` section 3, "Deploy
+   record - 10/1 follow-up: daily-reminder v7 -> v8"); it is deployed right after step 7's record step, and the branch merges in
+   the same session, so main's edge source never differs from what is deployed. Steps 2-6 touch the database only.
 2. Pre-check: `select to_regprocedure('public.claim_open_weekend_pair(date,text)');` -> null.
 3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/weekend-pair-claim-probe.sql` -> `PROBE_SETUP: claim_open_weekend_pair is absent ...`.
 4. The migration, one session: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-01-weekend-pair-claim.sql`.
@@ -2183,7 +2199,8 @@ in 2030-11 / 2030-12 plus a 2020-01-04 lower bound (the setup refuses to run whe
    404 a FAIL; section 17 counts the leftovers either way).
 7. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed line; `sql/schema.sql` revision u ->
    "applied <timestamp>"; the migration's and the probe's headers -> APPLIED; `SILVIS_WEEKEND_PAIR_CLAIM_APPLIED` dropped from
-   verify-rls (strict becomes the default); the test pins with them. Then merge the branch - the client ships.
+   verify-rls (strict becomes the default); the test pins with them. Then deploy daily-reminder v8 (step 1) and merge the
+   branch in the same session - the client ships.
 
 **Rolling back** = `drop function if exists public.claim_open_weekend_pair(date, text);` (nothing else refers to it; the
 client's button then answers 404 and says the two-day claim is not switched on).

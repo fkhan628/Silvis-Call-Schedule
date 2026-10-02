@@ -195,7 +195,11 @@ reads the words with the slot's role); `test/open-shifts.test.js` pins mirror ==
 (the explicit checks, the `fridayPattern` / `fridayWeekend` fixture cases and the 200 seeded schedules). Nothing else in the function changes: the cron secret gate, the reminder,
 the offers mode, the reads and the recipients are byte-for-byte v7.
 
-**Order: deploy v8 BEFORE `feat/weekend-pair-claim` merges** (main's `edge-functions/` must stay equal to what is deployed).
+**Order: deploy v8 BEFORE `feat/weekend-pair-claim` merges, but only right after the record step of the branch's database
+apply** (docs/SCHEMA-REVIEW.md "2026-10-01 - weekend pair claim"), **and merge the branch in the same session** - main's
+`edge-functions/` must stay equal to what is deployed. Review 10/2: deployed any earlier, the live function would differ from
+main's v7 for as long as the merge waits on the report-first apply; if the pair claim is put off or rejected, move this v8
+commit onto its own branch off main instead (it does not depend on the pair claim) and deploy + merge that.
 Faraz runs, from Git Bash (the workdir is the directory linked with `supabase link --project-ref bzhsroegtagqhutbnsrp`):
 
 ```bash

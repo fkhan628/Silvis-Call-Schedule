@@ -1123,14 +1123,24 @@ if linked; then
   elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
     ok "weekend pair probe persisted nothing (leftover count 0: schedule_days 2030-11 / 2030-12 + 2020-01-04 / time_off probe-pair / auth.users probe-pair-* / audit_log + notifications + call_offers in 2030-11 / 2030-12 / call_periods probe-pair)"
   else
-    bad "weekend pair probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
-    echo "      delete from public.notifications where type = 'shift_claimed' and data ->> 'day' between '2030-11-01' and '2030-12-31';"
-    echo "      delete from public.audit_log where action = 'schedule.claim' and detail ->> 'day' between '2030-11-01' and '2030-12-31';"
-    echo "      delete from public.call_offers where day between '2030-11-01' and '2030-12-31';"
-    echo "      delete from public.call_periods where label = 'probe-pair';"
-    echo "      delete from public.time_off where note = 'probe-pair';"
-    echo "      delete from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04';"
-    echo "      delete from auth.users where email like 'probe-pair-%@example.test';   -- user_profiles rows cascade"
+    # The count above is detection over the whole window; the clean-up lines are by the probe's identity only (review 10/2, the
+    # 16d rule): its tags, or s3's claim rows on its fixture days. Untagged rows (s3's call_offers - the 16 probe writes s3 offers
+    # in 2030-11 too - or anything else in the window) are listed for review, never given a DELETE.
+    DAYS17="'2030-11-02','2030-11-03','2030-11-09','2030-11-10','2030-11-16','2030-11-17','2030-11-23','2030-11-24','2030-11-30','2030-12-01','2030-12-07','2030-12-08','2030-12-14','2030-12-15','2030-12-21','2030-12-22','2030-12-28'"
+    if echo "$out" | grep -q 'PROBE_SETUP: live rows already sit'; then
+      bad "weekend pair probe: $(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+') row(s) in its window, but the probe stopped at its collision guard before writing anything - they are live rows, not leftovers. Review them (never delete them from here):"
+    else
+      bad "weekend pair probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW (these lines remove only rows the probe writes), then report:"
+      echo "      delete from public.notifications where type = 'shift_claimed' and data ->> 'person_id' = 's3' and data ->> 'day' in ($DAYS17);"
+      echo "      delete from public.audit_log where actor_id = 's3' and action = 'schedule.claim' and detail ->> 'day' in ($DAYS17);"
+      echo "      delete from public.call_periods where label = 'probe-pair';"
+      echo "      delete from public.time_off where note = 'probe-pair';"
+      echo "      delete from public.schedule_days where source = 'probe-pair' or (source = 'claim' and updated_by = 's3' and day in ($DAYS17));"
+      echo "      delete from auth.users where email like 'probe-pair-%@example.test';   -- user_profiles rows cascade"
+      echo "    and review (an untagged probe offer and a real entry of s3 look alike - remove by id only after checking):"
+    fi
+    echo "      select * from public.call_offers where day between '2030-11-01' and '2030-12-31';"
+    echo "      select day, primary_id, backup_id, source, updated_by from public.schedule_days where day between '2030-11-01' and '2030-12-31' or day = '2020-01-04';"
   fi
 else
   echo "   SKIP 17b (supabase CLI not linked at $WORKDIR)"

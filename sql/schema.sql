@@ -94,7 +94,7 @@
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
 -- Revision 2026-10-01 u (weekend pair claim, sql/migrations/2026-10-01-weekend-pair-claim.sql, report-first, NOT yet applied): the 10/1
--- follow-up 3 - one NEW function claim_open_weekend_pair(p_saturday date, p_role text) (security definer, search_path public;
+-- follow-up 3 - one NEW function claim_open_weekend_pair(p_saturday date, p_role text) (security definer, search_path public, pg_temp;
 -- EXECUTE revoked from public / anon, granted to authenticated): a linked surgeon takes an open Saturday and the Sunday after it
 -- in one transaction - claim_open_slot's nine refusals per day (CL009 once over both days) plus CL010 CLAIM_NOT_SATURDAY, every
 -- refusal before the first write; per day the slot, the offer row, a 'schedule.claim' audit row and a 'shift_claimed' feed row
@@ -939,7 +939,7 @@ grant execute on function public.claim_open_slot(date, text) to authenticated;
 -- audit row and one 'shift_claimed' feed row in claim_open_slot's shapes plus 'pair' = the other day. See the migration's header.
 -- ============================================================================
 create or replace function public.claim_open_weekend_pair(p_saturday date, p_role text) returns jsonb
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   me          text := public.silvis_person_id();
   today_c     date := (now() at time zone 'America/Chicago')::date;

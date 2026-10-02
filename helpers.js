@@ -741,6 +741,9 @@ function obPairEligibility(eligibility, ctx, sat, role, id, opts) {
     const k = x && typeof x === "object" ? String(x.reason) + "|" + String(x.weight) : null;
     if (k && !seen[k]) { seen[k] = true; soft.push(x); }
   }));
+  // One eastVacation for the pair (review 10/2, deliberate): eastMaskedReasons(hard, visible, eastVacation) then masks every
+  // time-off / day-before-vacation code of BOTH days when either day's is East-derived - it only ever hides more (a Silvis
+  // vacation on the other day reads "not available" to a non-scheduler), never less, so nothing East-derived leaks.
   return { sat: sat, sun: sun, ok: !!a.ok && !!b.ok, hard: hard, soft: soft, eastVacation: a.eastVacation || b.eastVacation || null };
 }
 

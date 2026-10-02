@@ -1023,7 +1023,7 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     const at = s3.indexOf("### Deploy record - 10/1 follow-up: daily-reminder v7 -> v8");
     const rec = at >= 0 ? s3.slice(at, s3.indexOf("\n### ", at + 10)) : "";
     assert.ok(at >= 0 && /v8 PREPARED, nothing deployed/.test(rec.split("\n")[0]), "README section 3 carries the v8 record, headed 'v8 PREPARED, nothing deployed'");
-    assert.ok(rec.includes("supabase functions deploy daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api") && rec.includes("supabase functions download daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp") && /BEFORE `feat\/weekend-pair-claim` merges/.test(rec), "the record carries the backup, the deploy command and the order");
+    assert.ok(rec.includes("supabase functions deploy daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api") && rec.includes("supabase functions download daily-reminder --workdir <cli-workdir> --project-ref bzhsroegtagqhutbnsrp") && /BEFORE `feat\/weekend-pair-claim` merges, but only right after the record step of the branch's database\napply\*\*/.test(rec) && /merge the branch in the same session/.test(rec), "the record carries the backup, the deploy command and the order (review 10/2: right after the database apply's record step, the merge in the same session)");
   });
   check("Follow-ups 10/1 (2), daily-reminder v8: the fridayPattern fixture - helpers.openSlots and the mirror both give open-slots.json fridayPattern.expected, openSlotsLine its expectedLines, and both composers give open-shifts-email.json fridayWeekend", () => {
     const m = loadMirror();
@@ -1427,6 +1427,12 @@ check("10/1 follow-up 3: obPairEligibility over rules.js - Khan (seed noLoneWeek
   const pv = H.obPairEligibility(R.eligibility, vac, "2026-11-07", "primary", "s1");
   assert.strictEqual(pv.ok, false, "a Sunday vacation keeps the pair refused: " + JSON.stringify(pv));
   assert.ok(pv.hard.length > 0 && !pv.hard.every(h => /^lone-weekend-day:/.test(h)), "a real reason, not the lone rule: " + JSON.stringify(pv.hard));
+  // review 10/2: his vacation on the MONDAY - the Saturday alone is still refused by the lone rule only (so the board asks the
+  // pair), the pair is refused by day-before-vacation (the Sunday's shift ends Monday 07:00): the row says both (pairWhy)
+  const mon = mk({ timeOffRows: SA.seedToTimeOffRows(seed).concat([{ person_id: "s1", start_date: "2026-11-09", end_date: "2026-11-09" }]) });
+  assert.deepStrictEqual(R.eligibility(mon, "2026-11-07", "primary", "s1", { claim: true }).hard, ["lone-weekend-day:Sat"], "the Saturday alone: the lone rule only");
+  const pm = H.obPairEligibility(R.eligibility, mon, "2026-11-07", "primary", "s1");
+  assert.deepStrictEqual([pm.ok, pm.hard], [false, ["day-before-vacation"]], "the pair before a Monday vacation: " + JSON.stringify(pm));
   // without the key the one-day answer is ok (no pair is needed); a Friday is no Saturday
   const srNo = SA.seedToSurgeonRules(seed); srNo.s1 = Object.assign({}, srNo.s1); delete srNo.s1.noLoneWeekendDay;
   assert.strictEqual(R.eligibility(mk({ surgeonRules: srNo }), "2026-11-07", "primary", "s1", { claim: true }).ok, true, "without noLoneWeekendDay the Saturday alone is fine");
