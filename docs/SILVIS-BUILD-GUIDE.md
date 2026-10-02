@@ -923,7 +923,8 @@ operational wording from `opts.reasons`, trimmed, or `null` (a lock flag never h
 parentheses, `- open`, and ` - <reason>` appended when the slot has one). Pinned by `test/open-shifts.test.js` against
 `test/fixtures/open-slots.json` (which also states the `schedule_days` column mapping); part 5 mirrors the function in
 TypeScript in `edge-functions/daily-reminder/index.ts` against the same fixture (except the 'friday' pattern words until
-daily-reminder v8 is deployed - 10/1 follow-ups, item 2: the deployed v7 reads that kind as unknown, plain "weekend") —
+daily-reminder v8 is deployed - 10/1 follow-ups, item 2: the deployed v7 reads that kind as unknown, plain "weekend"; the
+prepared v8 on `feat/weekend-pair-claim` carries the same role-aware table, `edge-functions/README.md` section 3) —
 this one function feeds everything:
 the coverage strip (`suCoverageGlance` computes its open lists through it), the "only OPEN" filter (a memoized Set of
 `openSlotKey`s over the grid's span, a generator preview overlaid per day exactly as the cells draw it; `slotIsOpen`

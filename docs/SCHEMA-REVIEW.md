@@ -2133,7 +2133,10 @@ transaction.
 AFTER -> the 20 cases below exactly, a second run identical, leftover 0, the re-run idempotent, the rollback line ->
 `PROBE_SETUP` again; this branch's `schema.sql` (with the mirror) gives the same 20; the existing claim probe gives section 7's
 expected picture in the same harness. Section 17's grading ran on that PGlite output through a faked CLI (20 cases + the
-leftover check PASS; `test/schema.test.js` does the same with the expected picture). A live
+leftover check PASS; `test/schema.test.js` does the same with the expected picture). Re-run 2026-10-02 after the merge of
+origin/main `0b3a3e0` (the vacation guard applied and recorded, revision s): main's `schema.sql` -> `PROBE_SETUP`, then the
+same 20 cases (byte-identical to the 10/1 run but for today's date in case I), leftover 0, the re-run idempotent, the rollback
+-> `PROBE_SETUP`; the merged branch's `schema.sql` gives byte-identical output; section 17 on it: 22 PASS, 0 FAIL. A live
 difference (a roster name, a grant default) shows by case in section 17. (2) Prompt 28 (`feat/no-primary-days`) edits `schema.sql`, this file, `verify-rls.sh` and `schema.test.js` too: textual
 conflicts at the merge; the letter u and section 17 assume Prompt 28 takes t and 16 - whichever lands second re-letters and
 renumbers. If Prompt 28 changes `claim_open_slot`'s offer upsert, this function's upsert should follow it.

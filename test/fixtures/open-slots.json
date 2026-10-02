@@ -137,7 +137,7 @@
     ]
   },
   "fridayPattern": {
-    "note": "The generator's 'friday' weekend pattern (Prompt 23 B2: one surgeon on the Friday alone, the Saturday + Sunday a unit of their own) - the 10/1 follow-ups, item 2; daily-reminder v8 mirrors it. openSlots keeps the kind on the Friday, Saturday and Sunday of its weekend (unit.pattern 'friday'), openSlotsLine words it 'weekend, Friday separate'; an unknown kind (12/11 'weird') reads null - plain 'weekend'. December 2026: today (12/2) is a Wednesday; Fri 12/4 primary is held (the separate Friday) and its backup open, Sat 12/5 is open in both roles, Sun 12/6 primary is open; Mon-Thu are held. Roster ids only.",
+    "note": "The generator's 'friday' weekend pattern (Prompt 23 B2: one surgeon on the Friday alone, the Saturday + Sunday a unit of their own) - the 10/1 follow-ups, item 2; daily-reminder v8 mirrors it. openSlots keeps the kind on the Friday, Saturday and Sunday of its weekend (unit.pattern 'friday'), openSlotsLine words it 'weekend, Friday on its own' on a primary slot and plain 'weekend' on a backup slot (a primary-only shape; the role-aware words of the 10/1 follow-ups review); an unknown kind (12/11 'weird') reads null - plain 'weekend'. December 2026: today (12/2) is a Wednesday; Fri 12/4 primary is held (the separate Friday) and its backup open, Sat 12/5 is open in both roles, Sun 12/6 primary is open; Mon-Thu are held. Roster ids only.",
     "today": "2026-12-02",
     "from": "2026-12-04",
     "to": "2026-12-11",
@@ -160,10 +160,10 @@
       { "day": "2026-12-11", "role": "primary", "unit": { "kind": "weekend", "pattern": null, "friday": "2026-12-11" }, "reason": null }
     ],
     "expectedLines": [
-      "Fri 12/04 - backup (weekend, Friday separate) - open",
-      "Sat 12/05 - primary (weekend, Friday separate) - open",
-      "Sat 12/05 - backup (weekend, Friday separate) - open",
-      "Sun 12/06 - primary (weekend, Friday separate) - open",
+      "Fri 12/04 - backup (weekend) - open",
+      "Sat 12/05 - primary (weekend, Friday on its own) - open",
+      "Sat 12/05 - backup (weekend) - open",
+      "Sun 12/06 - primary (weekend, Friday on its own) - open",
       "Fri 12/11 - primary (weekend) - open"
     ]
   }

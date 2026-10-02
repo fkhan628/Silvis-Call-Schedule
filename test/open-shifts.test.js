@@ -992,7 +992,10 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
   // Follow-ups 10/1 item 2 - the pin flipped by daily-reminder v8 (PREPARED on feat/weekend-pair-claim, deployed by Faraz
   // BEFORE the branch merges - edge-functions/README.md section 3): the mirror words the 'friday' kind exactly as helpers does.
   // Before v8 this pin documented the v7 gap (pattern null, plain 'weekend' in the Monday e-mail - its text before 10/1).
-  check("Follow-ups 10/1 (2), daily-reminder v8: the mirror keeps the 'friday' kind and words it 'weekend, Friday separate' - openSlots, openSlotsLine and openShiftsEmail equal helpers", () => {
+  // Re-aligned 10/2 at the merge of main's follow-ups (2026.10.01e): helpers' words are role-aware since the follow-ups review -
+  // 'friday' reads "weekend, Friday on its own" on a primary slot and plain "weekend" on a backup slot (a primary-only shape) -
+  // and the mirror carries the same rule (OSM_PRIMARY_ONLY_PATTERNS), so the equality holds for both roles.
+  check("Follow-ups 10/1 (2), daily-reminder v8: the mirror keeps the 'friday' kind and words it 'weekend, Friday on its own' on a primary slot, plain 'weekend' on a backup slot - openSlots, openSlotsLine and openShiftsEmail equal helpers for both roles", () => {
     const m = loadMirror();
     const opts = { weekendKinds: { "2026-11-06": "friday", "2026-11-13": "block", "2026-11-20": "weird" } };
     const b = m.openSlots({}, "2026-11-06", "2026-11-22", "2026-11-04", opts);
@@ -1000,11 +1003,19 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(b.filter(s => s.day <= "2026-11-08").every(s => s.unit && s.unit.pattern === "friday") && b.filter(s => s.day >= "2026-11-20" && s.unit).every(s => s.unit.pattern === null), JSON.stringify(b.slice(0, 2)));
     const em = m.openShiftsEmail(b, EM.appUrl);
     assert.deepStrictEqual(em, H.openShiftsEmail(b, EM.appUrl), "mirror openShiftsEmail == helpers");
-    assert.ok(em.message.indexOf("  Fri 11/06 - primary (weekend, Friday separate) - open") > 0 && em.message.indexOf("  Sun 11/08 - backup (weekend, Friday separate) - open") > 0 && em.message.indexOf("  Sat 11/14 - primary (weekend block) - open") > 0 && em.message.indexOf("  Fri 11/20 - primary (weekend) - open") > 0, em.message);
-    ["block", "split", "daily", "friday", null, "weird", "toString"].forEach(p => {
-      const sl = { day: "2026-11-07", role: "backup", unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: "why" };
+    assert.ok(em.message.indexOf("  Fri 11/06 - primary (weekend, Friday on its own) - open") > 0 && em.message.indexOf("  Sun 11/08 - primary (weekend, Friday on its own) - open") > 0 && em.message.indexOf("  Sun 11/08 - backup (weekend) - open") > 0 && em.message.indexOf("  Sat 11/14 - backup (weekend block) - open") > 0 && em.message.indexOf("  Sat 11/14 - primary (weekend block) - open") > 0 && em.message.indexOf("  Fri 11/20 - primary (weekend) - open") > 0, em.message);
+    assert.ok(!/backup \(weekend, Friday/.test(em.message), "no backup line carries the Friday-alone words: " + em.message);
+    ["block", "split", "daily", "friday", null, "weird", "toString"].forEach(p => ["primary", "backup", "observer", undefined].forEach(role => {
+      const sl = { day: "2026-11-07", role, unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: "why" };
       assert.strictEqual(m.openSlots({}, "2026-11-07", "2026-11-07", "2026-11-04", { weekendKinds: { "2026-11-06": p } })[0].unit.pattern, H.openSlots({}, "2026-11-07", "2026-11-07", "2026-11-04", { weekendKinds: { "2026-11-06": p } })[0].unit.pattern, String(p));
-      assert.strictEqual(m.openShiftsEmail([sl], EM.appUrl).message, H.openShiftsEmail([sl], EM.appUrl).message, "the line for pattern " + String(p));
+      assert.strictEqual(m.openShiftsEmail([sl], EM.appUrl).message, H.openShiftsEmail([sl], EM.appUrl).message, "the line for pattern " + String(p) + " / role " + String(role));
+    }));
+    // the line itself, both roles (the mirror's openSlotsLineMirror, lifted from the same block)
+    const mLine = new Function(mirrorBlock() + "\nreturn openSlotsLineMirror;")();
+    [["primary", "weekend, Friday on its own"], ["backup", "weekend"]].forEach(([role, w]) => {
+      const sl = { day: "2026-11-07", role, unit: { kind: "weekend", pattern: "friday", friday: "2026-11-06" }, reason: null };
+      assert.strictEqual(mLine(sl), "Sat 11/07 - " + role + " (" + w + ") - open");
+      assert.strictEqual(mLine(sl), H.openSlotsLine(sl));
     });
     const drHead = drSrc.slice(0, drSrc.indexOf("// Retargeted from the Davenport"));
     assert.ok(/v8 - PREPARED 2026-10-01, NOT deployed/.test(drHead), "the file header names v8 as prepared (the record step after Faraz's deploy changes it to 'deployed <time>')");

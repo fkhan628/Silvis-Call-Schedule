@@ -183,12 +183,15 @@ the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
 ### Deploy record - 10/1 follow-up: daily-reminder v7 -> v8 (the 'friday' weekend pattern words) - v8 PREPARED, nothing deployed
 
-Prepared 2026-10-01 on branch `feat/weekend-pair-claim` (the 10/1 follow-ups, item 2). The client half is the main-bound `feat/followups-10-01`
-(helpers.js `OPEN_SLOT_PATTERN_WORDS`: the board, the Copy list and the publish / "Email the group now" e-mails word the
-generator's `friday` weekend pattern "weekend, Friday separate"). The deployed v7's `@openSlots-mirror` knows block / split /
+Prepared 2026-10-01 on branch `feat/weekend-pair-claim` (the 10/1 follow-ups, item 2); re-aligned 2026-10-02 at the merge
+of main's follow-ups 2026.10.01e. The client half is live on main (helpers.js `OPEN_SLOT_PATTERN_WORDS` /
+`openSlotPatternWords(pattern, role)`: the board, the Copy list and the publish / "Email the group now" e-mails word the
+generator's `friday` weekend pattern "weekend, Friday on its own" on a primary slot and plain "weekend" on a backup slot -
+`friday` is a primary-only shape, `OPEN_SLOT_PRIMARY_ONLY_PATTERNS`). The deployed v7's `@openSlots-mirror` knows block / split /
 daily only and reads `friday` as unknown, so the Monday open-shifts e-mail says plain "weekend" for such a weekend - its
-text before 10/1, a safe gap. v8 changes the mirror block only (`OSM_PATTERN_WORDS` = helpers' table; `osmUnit` keeps
-`friday`, `openSlotsLineMirror` reads the words); `test/open-shifts.test.js` pins mirror == helpers with the `friday` kind
+text before 10/1, a safe gap (already the right words on its backup lines). v8 changes the mirror block only
+(`OSM_PATTERN_WORDS` / `OSM_PRIMARY_ONLY_PATTERNS` = helpers' tables; `osmUnit` keeps `friday`, `openSlotsLineMirror`
+reads the words with the slot's role); `test/open-shifts.test.js` pins mirror == helpers with the `friday` kind
 (the explicit checks, the `fridayPattern` / `fridayWeekend` fixture cases and the 200 seeded schedules). Nothing else in the function changes: the cron secret gate, the reminder,
 the offers mode, the reads and the recipients are byte-for-byte v7.
 
@@ -212,7 +215,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://bzhsroegtagqhutbnsrp.su
 
 | when (UTC) | function | version | what changes | what to observe |
 |---|---|---|---|---|
-| _to be filled at the deploy_ | `daily-reminder` | v7 -> v8 (back up the live v7 first; re-download and `cmp` after) | mode `open-shifts` only: a weekend whose `lastGenerate.weekendKinds` kind is `friday` reads "weekend, Friday separate" in the Monday e-mail (v7: plain "weekend"); every other line, the subject, the recipients and the feed row unchanged | `supabase functions list` shows the new version ACTIVE; the re-download is byte-identical to the branch's file (CRLF-normalised `cmp`); an unauthenticated POST -> 401 (`{"error":"unauthorized"}`); the next Monday 12:00 UTC run's response as before (a weekend with the `friday` kind, if one is open, reads the new words) |
+| _to be filled at the deploy_ | `daily-reminder` | v7 -> v8 (back up the live v7 first; re-download and `cmp` after) | mode `open-shifts` only: a weekend whose `lastGenerate.weekendKinds` kind is `friday` reads "weekend, Friday on its own" on its primary lines of the Monday e-mail and plain "weekend" on its backup lines (v7: plain "weekend" on both); every other line, the subject, the recipients and the feed row unchanged | `supabase functions list` shows the new version ACTIVE; the re-download is byte-identical to the branch's file (CRLF-normalised `cmp`); an unauthenticated POST -> 401 (`{"error":"unauthorized"}`); the next Monday 12:00 UTC run's response as before (a weekend with the `friday` kind, if one is open, reads the new words) |
 
 Rollback: copy the v7 backup back and deploy it the same way (`--no-verify-jwt --use-api`).
 
