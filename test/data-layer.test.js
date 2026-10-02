@@ -8809,6 +8809,100 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         if (fs.existsSync(p)) assert.ok(!/app_call_days|save_app_days|app_call_names/.test(fs.readFileSync(p, "utf8")), dir + " reads the APP table");
       }
     });
+
+    // Prompt 29 integration (spec H.2): the two halves were built apart (p29/db, p29/app); these pins make them meet. They read
+    // the migration (the DB lane's file) and pin the client (config.js, helpers.js, index-source.html), the smoke mock and the
+    // build guide's 4.3 bullet against it - a rename on either side fails here, not on the live database.
+    const MIGP = fs.readFileSync(path.join(ROOT, "sql", "migrations", "2026-10-02-app-call-days.sql"), "utf8").replace(/\r\n/g, "\n");
+    const MIGS = MIGP.split("\n").filter(l => !/^\s*--/.test(l)).join("\n"); // the statements (the header's rollback text left out)
+    const SMOKEP = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8").replace(/\r\n/g, "\n");
+    const GUIDEP = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8").replace(/\r\n/g, "\n");
+    // every raise of save_app_days: { token, text (the format string, '' unescaped), code }
+    const RAISES = [];
+    { const rx = /raise exception '(APP_DAY_[A-Z_]+): ((?:[^']|'')*)'(?:, [^;]*?)? using errcode = '(AP\d{3})'/g; let m; while ((m = rx.exec(MIGS))) RAISES.push({ token: m[1], text: m[2].replace(/''/g, "'"), code: m[3] }); }
+    check("P29 cross pins (integration): save_app_days's parameters = the four keys config.js sends, in a POST; the types; the 400-day cap = APP_DAYS_MAX_SAVE and the client's local words", () => {
+      const sig = /create or replace function public\.save_app_days\(([^)]*)\) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as \$\$/.exec(MIGS);
+      assert.ok(sig, "the save function's signature line");
+      const parts = sig[1].split(",").map(s => s.trim().split(/\s+/));
+      assert.deepStrictEqual(parts.map(p => p[0]), ["p_profile", "p_add", "p_clear", "p_replace"], "the parameter names");
+      assert.deepStrictEqual(parts.map(p => p.slice(1).join(" ")), ["uuid", "date[]", "date[]", "boolean default false"], "the parameter types (the client sends a uuid / ISO day arrays / a boolean)");
+      const save = between(CFG, "  async save(profileId, add, clear, replace) {", "\n  },\n");
+      const bodyLine = /const body = \{ ([^\n]*) \};/.exec(save);
+      assert.ok(bodyLine, "appDaysDb.save builds one body object");
+      assert.deepStrictEqual((bodyLine[1].match(/\bp_[a-z]+(?=:)/g) || []), parts.map(p => p[0]), "config.js sends exactly the function's parameter names, in order");
+      assert.ok(save.includes('await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: "POST", body: JSON.stringify(body) })'), "one POST to rpc/save_app_days");
+      assert.strictEqual(cnt(CFG, "/rest/v1/rpc/save_app_days"), 1, "config.js requests the save RPC in one place (the one request)");
+      assert.ok(MIGS.includes("if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > " + H.APP_DAYS_MAX_SAVE + " then"), "the server's cap = APP_DAYS_MAX_SAVE (" + H.APP_DAYS_MAX_SAVE + ")");
+      assert.ok(RAISES.some(r => r.code === "AP004" && r.text === "at most " + H.APP_DAYS_MAX_SAVE + " days in one save - nothing was saved"), "the server's AP004 cap words");
+      assert.ok(SRC.includes('return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " days in one save - nothing was saved" };'), "the client's local refusal says the server's words");
+    });
+    check("P29 cross pins (integration): APP_DAY_CODES = the codes and tokens the migration raises (13 raises, AP001-AP007), every message 'APP_DAY_<TOKEN>: <text>' (what appDaysErrorWords / appDaysErrorCode parse); the stale-picture reload codes exist", () => {
+      assert.strictEqual(RAISES.length, 13, "13 raises: " + RAISES.map(r => r.code).join(","));
+      assert.strictEqual(rxCount(MIGS, /errcode = 'AP\d{3}'/g), RAISES.length, "every AP errcode sits on a parsed raise");
+      const seen = {};
+      RAISES.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token (" + seen[r.code] + " / " + r.token + ")"); seen[r.code] = r.token; });
+      assert.deepStrictEqual(seen, plain(H.APP_DAY_CODES), "the client's code table = the migration's code -> token pairs");
+      assert.deepStrictEqual(RAISES.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP003", "AP006", "AP007", "AP002", "AP005", "AP005"], "the check order (spec B.5)");
+      ["AP002", "AP005", "AP006", "AP007"].forEach(c => { assert.ok(seen[c], c + " is raised"); assert.ok(SRC.includes('code === "' + c + '"'), "saveMyAppDays reloads on " + c); });
+      // the probe's B1 answer, as PostgREST relays it, read by the client's parsers
+      const b1 = JSON.stringify({ code: "AP005", details: null, hint: null, message: "APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" });
+      assert.strictEqual(H.appDaysErrorWords(b1, 400), "12/2 already has probe app one - nothing was saved");
+      assert.strictEqual(H.appDaysErrorCode(b1), "AP005");
+      RAISES.forEach(r => { const msg = JSON.stringify({ code: r.code, message: r.token + ": " + r.text.replace(/%/g, "12/2") }); assert.strictEqual(H.appDaysErrorCode(msg), r.code, r.code + " read back"); assert.strictEqual(H.appDaysErrorWords(msg, 400), r.text.replace(/%/g, "12/2"), r.code + " words = the function's own sentence"); });
+    });
+    check("P29 cross pins (integration): the return keys of save_app_days (the client reads ok === true); config.js documents the same keys", () => {
+      const ret = between(MIGS, "  return jsonb_build_object(", ");\nend $$;");
+      const keys = (ret.match(/'([a-z_]+)'/g) || []).map(s => s.slice(1, -1));
+      assert.deepStrictEqual(keys, ["ok", "profile_id", "added", "removed", "kept", "absent", "replaced", "source", "audit"], "the binding return keys (spec B.5)");
+      assert.ok(ret.includes("'ok', true"), "ok is literally true");
+      assert.ok(CFG.includes("if (!result || result.ok !== true) return { ok: false, status: res.status, error: \"unexpected response from save_app_days: \" + text.slice(0, 160) };"), "the client accepts only ok === true");
+      assert.ok(CFG.includes("(the function's jsonb: " + keys.join(", ") + ")"), "config.js's comment lists the same keys");
+    });
+    check("P29 cross pins (integration): app_call_names is stable (the client GETs it, no body) and its OUT columns = the keys appDaysByDay / appPickList read; the table's columns cover config.js's select and appDaysByDay's reads; is_app is the column the client reads and patches", () => {
+      assert.ok(/create or replace function public\.app_call_names\(\) returns table \(profile_id uuid, display_name text, is_app boolean\)\nlanguage sql stable security definer set search_path = public, pg_temp as \$\$/.test(MIGS), "app_call_names: stable, definer, OUT (profile_id, display_name, is_app)");
+      assert.ok(CFG.includes("const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers: dbAuthHeaders() });"), "a GET (no method, no body)");
+      const OUT = ["profile_id", "display_name", "is_app"];
+      for (const fn of ["function appDaysByDay(", "function appPickList("]) {
+        const f = between(HLP, fn, "\n}\n");
+        const read = Array.from(new Set((f.match(/\bn\.([a-z_]+)/g) || []).map(s => s.slice(2)))).sort();
+        assert.deepStrictEqual(read, OUT.slice().sort(), fn + " reads exactly the OUT columns");
+      }
+      const ddl = between(MIGS, "create table if not exists public.app_call_days (", "\n);");
+      const cols = (ddl.match(/\n  ([a-z_]+)\s+/g) || []).map(s => s.trim().split(/\s+/)[0]);
+      assert.deepStrictEqual(cols, ["day", "profile_id", "source", "created_by", "created_at"], "the table's columns");
+      const sel = /app_call_days\?select=([a-z_,]+)&order=day\.asc&limit=\$\{APP_DAYS_PAGE\}&offset=\$\{offset\}/.exec(CFG);
+      assert.ok(sel, "config.js pages the table ordered by day");
+      sel[1].split(",").forEach(c => assert.ok(cols.includes(c), "selected column " + c + " exists"));
+      const byDay = between(HLP, "function appDaysByDay(", "\n}\n");
+      Array.from(new Set((byDay.match(/\br\.([a-z_]+)/g) || []).map(s => s.slice(2)))).forEach(c => assert.ok(sel[1].split(",").includes(c), "appDaysByDay reads r." + c + ", which config.js selects"));
+      assert.ok(MIGS.includes("alter table public.user_profiles add column if not exists is_app boolean not null default false;"), "user_profiles.is_app");
+      assert.ok(SRC.includes("const isApp = isViewer && userProfile.is_app === true;"), "the client reads is_app");
+      assert.deepStrictEqual(plain(H.userRolePatch({ role: "viewer", person_id: null }, "app")), { is_app: true }, "Setup patches is_app");
+      assert.ok(MIGS.includes("check (not is_app or (role = 'viewer' and person_id is null));") && SRC.includes("if (nextIsApp && nextPerson) {"), "the APP-unlinked rule on both sides");
+    });
+    check("P29 cross pins (integration): the smoke mock's refusals say the migration's words (code, token, every fixed fragment) - the post-insert AP005 invariant excepted (it cannot happen under the lock, the mock has no race)", () => {
+      RAISES.filter(r => !/changed hands during this save/.test(r.text)).forEach(r => {
+        const lines = SMOKEP.split("\n").filter(l => l.includes('err("' + r.code + '", "' + r.token + '", '));
+        assert.ok(lines.length, "the mock raises " + r.code + " " + r.token);
+        r.text.split("%").filter(f => f.trim().length > 2).forEach(f => assert.ok(lines.some(l => l.includes(JSON.stringify(f).slice(1, -1))), r.code + " fragment " + JSON.stringify(f) + " in the mock"));
+      });
+      // the holder pieces the function builds in SQL (string_agg) and its name fallbacks
+      ["' already has '", "'''s day'", "'another APP'", "'that account'", "'FMMM/FMDD'"].forEach(p => assert.ok(MIGS.includes(p), "the migration builds " + p));
+      ['" already has "', "\"'s day\"", '"another APP"', '"that account"'].forEach(p => assert.ok(SMOKEP.includes(p), "the mock builds " + p));
+      assert.ok(SMOKEP.includes('const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));'), "the mock's M/D = to_char FMMM/FMDD");
+    });
+    check("P29 cross pins (integration): the build guide's 4.3 bullet names the migration, revision v, verify-rls section 18 and the probe's 66 cases (= the probe header's count)", () => {
+      const g43 = between(GUIDEP, "### 4.3 RLS posture", "### 4.4 ");
+      const b = between(g43, "- **APP call days (2026-10-02, report-first, NOT applied; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).**", "### 4.4 ");
+      assert.ok(/Proof: `sql\/probes\/app-call-days-probe\.sql` \(rolled back; 66 cases in its header/.test(b), "66 cases");
+      assert.ok(b.includes("`scripts/verify-rls.sh` section 18"), "section 18");
+      const PROBE = fs.readFileSync(path.join(ROOT, "sql", "probes", "app-call-days-probe.sql"), "utf8").replace(/\r\n/g, "\n");
+      assert.ok(/\n-- 66 cases\.\n/.test(PROBE), "the probe header says 66 cases");
+      const VR = fs.readFileSync(path.join(ROOT, "scripts", "verify-rls.sh"), "utf8").replace(/\r\n/g, "\n");
+      assert.ok(VR.includes('echo "== 18. APP call days (2026-10-02, Prompt 29)'), "verify-rls section 18 exists");
+      const SCH = fs.readFileSync(path.join(ROOT, "sql", "schema.sql"), "utf8").replace(/\r\n/g, "\n");
+      assert.ok(SCH.includes("-- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql"), "schema.sql revision v");
+    });
   })();
 
   console.log(`\n${pass} passed, ${fail} failed`);
