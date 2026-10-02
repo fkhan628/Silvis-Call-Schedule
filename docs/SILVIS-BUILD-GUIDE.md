@@ -25,7 +25,7 @@ a feed.
 |---|---|
 | Backend | **New, separate Supabase project from day one**: `https://bzhsroegtagqhutbnsrp.supabase.co` (ref `bzhsroegtagqhutbnsrp`). Anon (publishable) key to be pasted into `config.js` by Faraz. The service-role key never enters the repo or client. |
 | Hosting | New public GitHub repo (suggested name `Silvis-Call-Schedule`) under `fkhan628`, GitHub Pages from `main`, same `build.yml` CI as Davenport (bump version → transpile → commit `index.html` back with `[skip ci]`). |
-| Features | **Keep from Davenport:** generator + calendar views + locks; vacations + holidays; shift trades; stats (shift counts + fairness, running yearly tally); exports (.ics, shareable read-only HTML, printable, the ER-panel author's panel); auth + roles; **office notifications; calendar sync; refresh / client-version check; data management (backup, restore, export, import, snapshots); every safety feature; audit log; in-app notifications + email.** **Drop:** APP roster/shifts/vacations; Fierce's separate backup weeks; no-call days; the vacation approval workflow + deadline reminders; half-day / weighted shift accounting; anything to do with compensation (no $ display, no stipend math); the Davenport holiday A/B convention. OneSignal push is not requested (optional later). |
+| Features | **Keep from Davenport:** generator + calendar views + locks; vacations + holidays; shift trades; stats (shift counts + fairness, running yearly tally); exports (.ics, shareable read-only HTML, printable, the ER-panel author's panel); auth + roles; **office notifications; calendar sync; refresh / client-version check; data management (backup, restore, export, import, snapshots); every safety feature; audit log; in-app notifications + email.** **Drop:** APP roster/shifts/vacations (-> 10/1: APP call days, §21); Fierce's separate backup weeks; no-call days; the vacation approval workflow + deadline reminders; half-day / weighted shift accounting; anything to do with compensation (no $ display, no stipend math); the Davenport holiday A/B convention. OneSignal push is not requested (optional later). |
 | Shift model | Daily 24-h primary + backup, 07:00→07:00 (confirmed). Weekend handled as a unit (block / split / daily). Holidays are units (same six as Davenport) with one primary + one backup sticking through the unit. **One 24-h day = one shift** — no partial or weighted shifts. |
 | Fairness | An **equal share per role** — of the open primary slots and, separately, of the open backup slots — for every pool member, with per-surgeon caps and explicit targets on top (rules §6; Prompt 12 J, 9/22, §15). |
 | Reuse | Clone the Davenport repo as the starting point; copy the shell and data layer; rewrite the generator. |
@@ -183,6 +183,7 @@ Paste `sql/schema.sql` into the Supabase SQL editor once. Summary:
 | `shift_trade_requests` (`from_id`, `to_id`, `day`, `role`, `return_day`, `return_role`, `status`, …) | trades by day+role instead of week+shift | adapted |
 | `notifications`, `notification_preferences`, `audit_log`, `call_schedule_snapshots`, `client_versions`, `office_contacts`, `user_profiles` | same roles as Davenport (`office_contacts` drives office notifications; `client_versions` drives refresh; `call_schedule_snapshots` drives data management) | yes |
 | `call_pay_settings` (`id text pk = 'main'`, four `numeric(10,2)` rates - null until the scheduler enters them, no default, `activation_unit`, `weekend_days`, three flags, `stipend_off_ids` (the roster ids NOT paid by the call stipend, default `[]`), `updated_by`, `updated_at`) + `call_pay_logs` (`id uuid`, `day`, `person_id`, `hours` quarter hours 0-24, `note`, `created_by`, `created_at`, `updated_at`) | Primary call pay (Faraz 9/27; `sql/migrations/2026-09-27-call-pay.sql`, report-first, applied 2026-09-28): the rates + pay-model flags and one row per call-in of the primary. **Authenticated only** (the scheduler; the office coordinator read-only; linked surgeons paid by the call stipend - `silvis_pay_enabled`; anon privileges revoked) - the figures never reach the repo, the seed, the blob or an anon-readable table. | new |
+| `app_call_days` (`day date pk` - one APP per day, `profile_id` -> `user_profiles` on delete cascade, `source` app / scheduler, `created_by`, `created_at`) + `user_profiles.is_app` (Prompt 29, 10/1 - report-first, NOT applied yet; §21) | The days an APP account is on call (an APP = a viewer the admin marks APP). **Authenticated-read only** (every signed-in role; never anon - privileges revoked); written only through the definer function `save_app_days()`, which also writes the audit row; display names through `app_call_names()`. Not in the blob, the snapshots, the exports or any anon-readable table. | new (Davenport's APP shifts are a different, dropped feature) |
 
 Holiday units and their primary/backup assignments live in the config blob (`call_schedule_data.data.holidays`), like
 Davenport's `holidayAssignments`, keyed by year.
@@ -278,6 +279,17 @@ Proof: `sql/probes/call-pay-probe.sql` (rolled back; 52 cases in its header - th
 - **Vacation guard (2026-09-30, report-first, applied 2026-10-01 16:53 UTC; `sql/migrations/2026-09-30-vacation-guard.sql`, revision s).** Faraz 9/30: "need at least 2 surgeons around". One NEW trigger function `time_off_vacation_guard()` (security definer, `search_path = public, pg_temp`, one transaction advisory lock per vacation write) and one NEW `BEFORE INSERT OR UPDATE` trigger `time_off_vacation_guard_trg` on `time_off`, firing after the unchanged on-call trigger: `VG001 VACATION_TOO_FEW_AROUND` (the days and the count) when, on a day the row takes the person off, fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active roster surgeons would stay around - off = a `time_off` row, or an East vacation range cached in the `east_feed` payload on a day no *home* `east_vacation_reviews` row covers (unreviewed counts as away). The scheduler and a session with no signed-in user pass; the office coordinator is refused like a surgeon; an UPDATE checks only its new days. No table, column, policy or grant changes. The client checks the same rule first (section 8) - it shipped before the apply; the trigger backs it since. Known gap (review 10/1): only a `time_off` write is checked - an East review turned *away* or a new Davenport range from the feed refresh can leave a day under the minimum unrefused (a Davenport absence is a fact); the over-limit query lists such days.
 
 Proof: `sql/probes/vacation-guard-probe.sql` (rolled back; 20 cases in its header - P1-P4 the live picture and the triggers, S1-S4 the count / partial range / widening / narrowing, E1-E3 away / home / unreviewed East, I1 an inactive id, K1-K2 the on-call trigger first / also, C1 the office, M1 a bulk insert, A1 the scheduler, N1 no signed-in user, D1 a person already off that day, U1 a row moved to another person; PROBE_SETUP before the apply), `sql/probes/vacation-guard-overlimit.sql` (read-only: the days already under the minimum), `scripts/verify-rls.sh` section 15 (the graded probe + leftovers; strict since the record step - a PROBE_SETUP FAILs), the record in `docs/SCHEMA-REVIEW.md` "2026-09-30 - vacation guard" (pre-apply 2026-10-01: the over-limit query 0 rows at ~05:10 UTC, probe BEFORE `PROBE_SETUP`; the orchestrator's apply was refused by the permission classifier - Faraz applies it; applied: 2026-10-01 16:53:33 UTC by Faraz (`apply-vacation-guard.sh`, Git's bash.exe, `AI_AGENT=1`) - the over-limit query 0 rows again, probe BEFORE `PROBE_SETUP`, AFTER 20 / 20, verify-rls 292 / 0 with section 15 graded strictly, leftovers 0; the migration file kept as it ran, its sha256 pinned).
+
+- **APP call days (2026-10-02, report-first, NOT applied; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).** Faraz 10/1: APPs put themselves on call days; any day, ONE APP per day, everyone signed in sees it (not `?public=1`), no e-mails - the Activity log only. A flag, not a role: `user_profiles.is_app boolean not null default false` with the check `user_profiles_app_viewer` (an APP is an unlinked viewer) and the two self-service policies re-created with an `is_app` pin (no self-promotion); a NEW authenticated-only table `app_call_days` (`day date primary key` - one APP per day -, `profile_id` -> `user_profiles` on delete cascade, `source` app / scheduler, `created_by`, `created_at`; one SELECT policy for `authenticated`, anon's privileges revoked - an anon read is refused, never 200 + []; no write privilege at all); three NEW security definer functions - `silvis_is_app()`, `app_call_names()` (stable: the display names of the holders, of the caller's own APP profile and, for the scheduler, of every APP - never an email or a role) and `save_app_days(p_profile, p_add, p_clear, p_replace)` (the only write path: AP001-AP007 refusals before any write, one advisory lock, all or nothing, idempotent; it writes the one `appdays.save` audit row - an unlinked viewer cannot insert audit rows). No existing function, table or anon surface changes; independent of every other prepared migration (either apply order).
+
+| change | before | after | client path that depends on it |
+|---|---|---|---|
+| `app_call_days` | - | one row per day; read by every signed-in role, never anon; written only through `save_app_days` | `appDaysDb.load` / `save` (config.js) - the grid's third line, the day summary / editor, the legend, My schedule > My APP days |
+| `user_profiles.is_app` | - | the APP flag, set by the admin (Setup > Users Role `app`); pinned in the self insert / update policies | `userRolePatch` (helpers.js) through `saveUserProfile`; `isApp` (index-source.html) |
+| `save_app_days` / `app_call_names` / `silvis_is_app` | - | security definer, `search_path = public, pg_temp`, EXECUTE for authenticated only | `appDaysDb.save` (POST, the four keys), `appDaysDb.load` (GET `app_call_names`) |
+| anon | - | nothing: no policy, privileges revoked on the table, EXECUTE revoked on the three functions | none (`?public=1`, the share page, the exports, the calendar feeds and the e-mails carry no APP day) |
+
+Proof: `sql/probes/app-call-days-probe.sql` (rolled back; 66 cases in its header - the APP's own add / remove, an APP for another APP, a second APP on a taken day, a past day, the surgeon, the coordinator, a plain viewer, the scheduler (set / change / clear, past days exempt), a former APP, account deletion, anon; PROBE_SETUP before the apply), `sql/probes/app-call-days-precheck.sql` (read-only: the objects gate, the profile counts by role), `scripts/verify-rls.sh` section 18 (16 and 17 are taken by prepared work on other branches; `SILVIS_APP_DAYS_APPLIED=1` grades it strictly on the run right after the apply), the client tests (`test/data-layer.test.js` [P29], `test/ui/contrast.mjs` the APP rows, `test/ui/smoke.mjs` "Prompt 29: APP call days" against a mocked table and functions), the record in `docs/SCHEMA-REVIEW.md` "2026-10-02 - APP call days" (status PREPARED; applied: _to be filled by the orchestrator_). The client ships after the apply, after Prompt 28's client, on Faraz's go; then Faraz sets Role = `app` on each APP account.
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
@@ -1999,3 +2011,88 @@ the holiday block of `helpers.js` (beside `defaultHolidayUnits`; no clock, no ne
   the held change notices (N)* (`sendHeldHolidayNotices`: landed days sent, waiting kept, the rest dropped);
   `holidayNoticeHeld` mirrors the ref for the render. The failure toast is worded per mode and shows on a conflict too.
   An external cover's not-in-pool text reads its label. Tests: holiday-plan K4, K5, M2e, O1, O2; data-layer [P25].
+
+## 21. APP call days (Faraz 10/1; Prompt 29)
+
+*Prepared 10/1-10/2 on `feat/app-call-days`; the database part is report-first and NOT applied (Faraz runs
+`apply-app-call-days.sh`, kept outside the repo); the client ships after the apply AND after Prompt 28's client, on Faraz's
+go. Then Faraz sets Role = `app` on each APP account in Setup > Users.*
+
+Faraz 10/1: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me ...
+This would also show up on the calendar". **The four decisions (10/1): any day; ONE APP per day; everyone signed in sees it,
+not the `?public=1` page; no e-mails, the Activity log only.** The rules doc §1 row "APP call days" states them for the group.
+
+### 21.1 A flag, not a role
+
+An APP account is a **viewer** account (no roster link) with `user_profiles.is_app = true` - not a new role `'app'`:
+(1) both hand-deployed mail edge functions pick followers BY ROLE (`daily-reminder`, `send-notification`), so a new role would
+silently stop an APP's follower e-mails until both were changed and redeployed; (2) `followsPatch` clears `follows` on a role
+change away from viewer / coordinator - a flag never changes the role; (3) every viewer branch of the client and the policies
+keeps working unchanged. Setup > Users shows a pseudo-role **`app`** in the Role select ("app (APP: viewer + own call days)",
+offered once the loaded rows carry the column - `helpers.appColumnState` - or on a row that already is one); `userRoleValue`
+/ `userRolePatch` turn it into `{ is_app: true }` on a viewer row (the audit reads "Account <name>: APP on"), `{ role: "viewer",
+is_app: true }` on any other row, `{ is_app: false }` back to viewer. `saveUserProfile` refuses an APP with a roster link both
+ways ("Refused: an APP account is never linked to a roster id - set the roster link to none first."); the database refuses it
+too (`user_profiles_app_viewer`). Only the admin writes `user_profiles`.
+
+### 21.2 The database (`sql/migrations/2026-10-02-app-call-days.sql`, revision v; `docs/SCHEMA-REVIEW.md` "2026-10-02 - APP call days")
+
+- `app_call_days` (`day date primary key` - the one-APP-per-day rule is the key; `profile_id` -> `user_profiles` on delete
+  cascade; `source` app / scheduler; `created_by`; `created_at`): one SELECT policy for `authenticated` (every signed-in role),
+  anon's privileges revoked (an anon read is refused - never a silent 200 + []), no write privilege for anyone.
+- `silvis_is_app()`, `app_call_names()` (stable; display names of the holders, of the caller's own APP profile and - for the
+  scheduler - of every APP; never an email, never a role), `save_app_days(p_profile, p_add, p_clear, p_replace)` - the only
+  write path. Refusals before any write (PostgREST 400, message "<TOKEN>: <text>"): AP001 not an APP or the scheduler / no APP
+  named; AP002 another APP's days, a replace from an APP, a held day removed by an APP; AP003 the profile is not an APP; AP004 an
+  empty day, more than 400 days, a day both added and removed; AP005 a day another APP holds ("<M/D> already has <name> -
+  nothing was saved"); AP006 a past day (Central) for the APP - the scheduler is exempt; AP007 the scheduler's stale picture.
+  One advisory lock per save, all or nothing, idempotent (a re-sent Save is safe). It writes the ONE `appdays.save` audit row
+  ("<APP>: on call 12/2, 12/3" / "removed 12/3" / "on call 12/2 (was <other APP>)") - an unlinked viewer cannot insert audit
+  rows, so the client writes none. No notification row, no e-mail.
+- A profile that stops being an APP keeps its rows (the scheduler clears them); deleting the account removes them (the audit
+  rows stay). Not mirrored into the blob, `client_versions`, the snapshots, the data export or a factory reset.
+
+### 21.3 The client
+
+- **config.js `appDaysDb`** - the only client file that names the table and the two functions. `load()` reads only with a
+  fresh user token (`skipped` otherwise - no request), pages the table by 1000, then GETs `app_call_names`; it answers `ok |
+  unavailable | failed | skipped` and stops at the first non-2xx (`helpers.appDaysReadFailureState`: 404 PGRST205 / PGRST202 /
+  42P01 = `unavailable`, "APP days are available after the next database update."). `save()` = ONE `authFetch` POST with
+  exactly `p_profile`, `p_add`, `p_clear`, `p_replace`.
+- **index-source.html** - `isApp = isViewer && userProfile.is_app === true`; `appDaysAllowed = !isPublicMode && authUser &&
+  userProfile && !profileLoadFailed` (every signed-in role, never `?public=1`); `loadAppDays` (mount / account change, the 60 s
+  `refreshAll`, after every save; no realtime subscription; a failed read keeps the last rows and toasts once); `appByDay`
+  (`helpers.appDaysByDay`, `{}` on `?public=1`).
+  - The month grid: a third line `data-testid="cal-app"` "A <last name>" (italic, no pill, `THEME.appText` - light #86506A,
+    dark #DDAFC2; ellipsized at 390 px, the line never overflows), the hover's "APP <name>", and the legend line `legend-app`
+    only when a day of the grid has an APP.
+  - The day editor: the summary's `editor-app-line` (the full name; a You chip on the APP's own day) for everyone but the
+    scheduler; the scheduler's `editor-app-block` (the holder, a select of every APP, **Set APP** = set / change with
+    `p_replace`, **Clear APP**; "Saved at once - separate from Save below."; past days allowed) - shown only when there is
+    something to show, so nothing changes while no APP account exists.
+  - My schedule > **My APP days** (`AppDaysCard`, module scope): a phone month of day buttons (`appdays-cell`, states past /
+    past-mine / taken / mine / add / remove / free - `helpers.appDaysCellState`); a tap drafts (`appDaysToggle`), Range and
+    Paste dates add every free day and name the skips (`appDaysPlan`), Save sends the draft diff as ONE request
+    (`appDaysDraftDiff` -> `saveMyAppDays`; more than 400 days refused before any request; a stale refusal AP002 / AP005 / AP006
+    / AP007 reloads the picture and drops the drafted days it made impossible - `appDaysDraftPrune`); the words come from
+    `appDaysErrorWords`; "Your next APP days: ...". An APP keeps the Mine tab (labelled "Mine"); its Following cards follow the
+    card when it follows anyone.
+  - Settings > Account reads "(APP)".
+- **Untouched:** the generator, `rules.js` / eligibility, offers, trades and give-away, the open-shifts board, Totals, pay, the
+  calendar feeds and the ICS downloads, the share page / printable / ER panels / week rows / CSVs, the office digest, every
+  e-mail and edge function, `describeDbError`, the blob, snapshots, the data export.
+
+### 21.4 Tests and the apply order
+
+- `test/data-layer.test.js` [P29] - every helper (edges included), `appDaysDb` in the vm sandbox (skipped / two pages / the
+  names GET / unavailable / failed / one POST with exactly the four keys), `loadAppDays` and `saveMyAppDays` lifted verbatim,
+  and the pins (the gates, the one write path, the REST paths named in config.js only, no client audit / notification /
+  e-mail, the day editor's controls only under `canEdit`, `BLOB_KEYS` / `FOLLOWER_ROLES` unchanged); `test/ui/contrast.mjs`
+  the APP rows per theme; `test/ui/smoke.mjs` "Prompt 29: APP call days" with the table and functions mocked (APP A adds two
+  days, APP B is refused on one, A removes one; a surgeon, the coordinator and a plain viewer see it without controls; the
+  scheduler sets / changes / clears; Setup > Users; `?public=1` and the share page show nothing; the "absent" state). The
+  database side: the probe (66 cases), the pre-check, verify-rls section 18, the schema test pins (the DB lane's).
+- Apply order: pre-check -> probe BEFORE (`PROBE_SETUP` absent) -> the migration -> probe AFTER (66 cases) ->
+  `SILVIS_APP_DAYS_APPLIED=1 bash scripts/verify-rls.sh` -> the record step -> the client push on Faraz's go (after Prompt
+  28's client) -> Faraz switches the APP accounts. A rollback after the client push only empties the APP features (the client
+  reads a missing table / function as "unavailable").

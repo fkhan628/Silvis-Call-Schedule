@@ -47,7 +47,8 @@ afterwards; the editor keeps query history).*
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is
    admin): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
-   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish). Setup → Users is the normal path; if the
+   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish, `app` for an APP - no roster link;
+   see "APPs: putting yourself on a call day" below). Setup → Users is the normal path; if the
    app is unreachable, the same thing in SQL:
 
    ```sql
@@ -154,11 +155,52 @@ Roles (`user_profiles.role`, set in Setup → Users by the admin):
 | `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
 | `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
 | `viewer` | read-only — the office viewer | every write |
+| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - prepared, not applied yet) | everything a viewer has, plus putting itself on call days and taking them off (Mine → My APP days; one APP per day; from today on) | every other write; another APP's days; a roster link |
 
 A viewer (the office viewer, and every invited account until you link *and* promote it) sees the schedule read-only with nothing broken on purpose (Prompt 16 B3): no "not linked" banner, no trade card (Time off lists the group's vacations instead), **Settings → Live calendar sync** offers the public full-schedule feed, and **Alerts** carries only the publish and open-shift notices.
 
 A coordinator account is created like any other (invite from the dashboard), then given the role in Setup → Users with
 **no roster link**; the database refuses a linked coordinator (`user_profiles_coordinator_unlinked`).
+
+## APPs: putting yourself on a call day (Prompt 29, 10/1)
+
+*Prepared, not live yet: it works once Faraz has run the database update (`apply-app-call-days.sh`) and the client that
+follows it is pushed. Until then My APP days says "APP days are available after the next database update."*
+
+**What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
+viewer has — the calendar, follows and the follower e-mails, its preferences — and adds one thing: the APP puts itself on
+call days. The decisions (Faraz 10/1): **any day** (no rules, no fairness; a past day is refused for the APP - you can fix
+one); **one APP per day** (the database enforces it); **everyone signed in sees it**, not the `?public=1` page; **no
+e-mails** — the Activity log only.
+
+**How you mark one (Setup → Users).** Invite the APP like a viewer (above). Give the account a **display name** first (a
+nameless APP shows as "APP" on the calendar), leave the **roster link** at *none*, then set **Role** to `app`. The app
+refuses `app` on a linked account (and a roster link on an APP), and the database refuses it too. The switch writes the
+usual `users.link` Activity log row ("Account <APP name>: APP on"). Setting the role back to `viewer` takes the APP
+feature away; that person's days stay on the calendar until you clear them (deleting the account removes them).
+
+**What the APP does.** **Mine → My APP days**: a month of days on the phone. Tap a day to put yourself on call; tap it
+again to take it off. A day with another APP's name on it is taken and cannot be picked. **Range** (tap the first and the
+last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once and say which days they skipped and
+why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, the
+taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"). Past days stay as they are.
+
+**What you do (the day editor).** Every day's editor has an **APP** line: pick any APP and **Set APP** (it replaces the
+APP already on that day), or **Clear APP**. It is saved at once, apart from the day's own Save, and works on past days too.
+
+**Who sees it.** The calendar shows the APP as a third line "A <last name>" in a muted rose (the full name is in the day's
+hover and in the day summary), and the legend explains it - for every signed-in account: surgeons, the office, viewers,
+followers, the APPs and you. The `?public=1` page, its share links, the printable month, the ER Call Panels, the calendar
+feeds, Totals, pay, the office digest and every e-mail show nothing of it. The generator, the rules, trades and the open
+shifts board ignore APP days.
+
+**The record.** No e-mail and no notification; each Save writes one Activity log row naming the days, e.g.
+"<APP name>: on call 10/14, 10/21" (a change you make reads "<APP name>: on call 10/14 (was <other APP>)").
+
+**Three lines to send an APP (phone):**
+1. Open the Silvis call schedule and sign in, then tap **Mine**.
+2. Under **My APP days**, tap each day you will take call (tap it again to take it off) - a day showing someone else's name is taken.
+3. Tap **Save** - your days appear on everyone's calendar as "A <your name>".
 
 ## Removing or changing someone
 

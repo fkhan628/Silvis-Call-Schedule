@@ -92,6 +92,13 @@ export const contrastTable = (mod) => {
     add(theme, "header subline on the navy bar", T.navyMuted, T.navy, "text");
     add(theme, "nav tab label (inactive) on the navy bar", T.navTab, T.navy, "text");
     add(theme, "card title (navy) on card", T.title, T.surface, "text");
+    // Prompt 29: the APP line (the grid's third line "A <name>", italic 600 at 10.5 / 9 px - held to the text class) on every
+    // cell surface and the page, and the My APP days "You" text on its own tint.
+    add(theme, "APP line on card", T.appText, T.surface, "text");
+    add(theme, "APP line on the weekend tint", T.appText, T.weekend, "text");
+    add(theme, "APP line on the holiday tint", T.appText, T.holiday, "text");
+    add(theme, "APP line on page", T.appText, T.bg, "text");
+    add(theme, "APP text on its tint (My APP days)", T.appText, T.appTint, "text");
     // bold labels + glyphs
     add(theme, "primary button label", T.onPrimary, T.primaryEnd, "label");
     add(theme, "primary button label (gradient start)", T.onPrimary, T.primaryStart, "label");

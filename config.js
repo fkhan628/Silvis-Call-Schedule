@@ -438,6 +438,71 @@ const payDb = {
   },
 };
 
+// ---- APP call days (Prompt 29, Faraz 10/1; sql/migrations/2026-10-02-app-call-days.sql - report-first, NOT applied yet) ----
+// The ONLY client file that names the APP table app_call_days and its two functions (index-source.html and helpers.js never
+// do). Decided 10/1: any day; one APP per day (the table's primary key); everyone signed in sees it, never anon / ?public=1;
+// no e-mails - the save function writes the one audit row. The table is authenticated-only (no anon policy, anon's
+// privileges revoked), so a read goes out only with a FRESH user token (dbAuthHeaders) - without one load() answers
+// { state: "skipped" } and nothing is requested. load() answers
+//   { state: "ok", rows, names }   rows = app_call_days (may be [] - no APP day yet), names = app_call_names() (display names
+//                                  of the holders, of the caller's own APP profile and - for the scheduler - of every APP)
+//   { state: "unavailable" }       the table or a function does not exist yet (404 PGRST205 / PGRST202 / 42P01 -
+//                                  helpers.appDaysReadFailureState): "APP days are available after the next database
+//                                  update", no toast. Also what a rollback leaves behind.
+//   { state: "failed", error }     anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
+//   { state: "skipped" }           no fresh token - nothing was read
+// It stops at the first non-2xx: no further page and no names call after a failed table read. The rows are paged by
+// APP_DAYS_PAGE (PostgREST's max-rows; a capped 200 would drop the latest days without a word).
+// save(profileId, add, clear, replace) is ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace
+// (authFetch: the user's JWT; its single refresh-and-retry on a 401 never reached the function). Answers { ok: true, result }
+// (the function's jsonb: ok, profile_id, added, removed, kept, absent, replaced, source, audit) or { ok: false, status,
+// error } (error = the body text, the function's "APP_DAY_<TOKEN>: <text>" message inside - helpers.appDaysErrorWords).
+const APP_DAYS_PAGE = 1000;
+const appDaysDb = {
+  _fresh() {
+    let token = null;
+    try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
+    return !!(token && jwtIsFresh(token));
+  },
+  async load() {
+    if (!appDaysDb._fresh()) return { state: "skipped" };
+    const failed = async (res) => { const body = await res.text().catch(() => ""); return { state: appDaysReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` }; };
+    try {
+      const rows = [];
+      for (let offset = 0; ; offset += APP_DAYS_PAGE) {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/app_call_days?select=day,profile_id,source,created_at&order=day.asc&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers: dbAuthHeaders() });
+        if (!res.ok) return await failed(res);
+        const page = await res.json();
+        if (!Array.isArray(page)) return { state: "failed", error: "unexpected response body (app_call_days)" };
+        for (const r of page) rows.push(r);
+        if (page.length < APP_DAYS_PAGE) break;
+      }
+      // app_call_names() is stable: a GET (PostgREST runs it read-only), no body
+      const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers: dbAuthHeaders() });
+      if (!nres.ok) return await failed(nres);
+      const names = await nres.json();
+      if (!Array.isArray(names)) return { state: "failed", error: "unexpected response body (app_call_names)" };
+      return { state: "ok", rows, names };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+  async save(profileId, add, clear, replace) {
+    const body = { p_profile: profileId || null, p_add: Array.isArray(add) ? add : [], p_clear: Array.isArray(clear) ? clear : [], p_replace: !!replace };
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: "POST", body: JSON.stringify(body) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, status: res.status, error: text || `HTTP ${res.status}` };
+      let result = null;
+      try { result = JSON.parse(text); } catch (e) { result = null; }
+      if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from save_app_days: " + text.slice(0, 160) };
+      return { ok: true, result };
+    } catch (e) {
+      return { ok: false, status: 0, error: String((e && e.message) || e) };
+    }
+  },
+};
+
 function payloadLooksWiped(p) {
   if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
   // helpers.js not loaded (should never happen in the app - the loader order
