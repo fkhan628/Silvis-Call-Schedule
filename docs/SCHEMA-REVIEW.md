@@ -2154,9 +2154,15 @@ work before the apply and after a rollback.
 **Residuals.** (1) `claim_open_slot` does not consult availability on the server (unchanged; its client gate runs
 `eligibility`, which blocks primary on such a day). (2) A direct `save_no_primary` call leaves no audit row (as with
 `save_offers`). (3) A schedule edit and a no-primary mark for the same day are not serialised against each other (the day
-editor's eligibility warning shows the result). (4) The client reads `availability` unpaged (`config.js` `db.query`;
-PostgREST max-rows, Supabase default 1000) and each marked day adds a row - the pre-check prints the total; a paged read (the
-`PAY_PAGE` pattern) is a follow-up before the table nears the cap. (5) closed in review (10/1): `save_offers` now takes
+editor's eligibility warning shows the result). (4) closed in the client ship (Faraz 10/1 evening): the client read
+`availability` unpaged (`config.js` `db.query`; PostgREST max-rows, Supabase default 1000, cuts without a word) and each marked
+day adds a row. It now reads it - and `time_off` beside it - in pages: `config.js` `db.queryAll` (the `PAY_PAGE` pattern:
+limit / offset pages of `DB_PAGE` 1000 until a short page, on a total order ending on `id` - `start_date.asc,id.asc`; any failed
+page throws, so the caller keeps the rows it had, never a shorter list), used by `loadAvailability` / `loadTimeOff` (the
+initial load, the 60-second poll, Realtime, the painter's re-read after a Save) and the seed import's live read; the snapshot
+reader's two orders gained the same `id` tiebreaker (`test/data-layer.test.js` D15). The migration's and the pre-check's
+header sentence "the client reads availability unpaged" predates the fix - both files are kept byte for byte as reviewed
+(sha256-pinned by the apply script). The pre-check still prints the total. (5) closed in review (10/1): `save_offers` now takes
 `save_no_primary`'s per-person advisory lock before its first write (the lock is re-entrant, so the nested call takes it again),
 so its own `NP009` read and a concurrent mark of the same person from another device run one after the other - before, two
 Saves committed at the same instant (one offering primary on a day, the other marking it No primary) could both pass. (6) NP009
@@ -2164,8 +2170,8 @@ binds the two RPCs only: a direct `call_offers` REST write (the `call_offers_ins
 `claim_open_slot`'s offer upsert can still put a primary / either offer on a day the person's own `backup_only` row covers -
 harmless for the schedule (`eligibility` blocks primary on a `backup_only` day) and the pre-check's "offer conflict" section
 lists such a day. (7) No horizon or size cap in `save_no_primary`: a signed-in surgeon can mark days years ahead and thousands in
-one call (each one an anon-readable row), which brings residual 4's unpaged read nearer its cap; the paged read is the fix (a cap
-such as today + 548 days would need the probe's 2030 fixtures moved, and is Faraz's call).
+one call (each one an anon-readable row) - since the paged read (residual 4) no row is cut from the client, however many; kept
+as built (Cowork's review of 10/1; a cap such as today + 548 days would need the probe's 2030 fixtures moved, and is Faraz's call).
 
 **What could break.** The probe and verify-rls section 16 were written against an AFTER picture observed OFFLINE only: on
 2026-10-01 the migration, the probe, the pre-check and the five older probes ran on PGlite (WASM PostgreSQL 18) with stubbed

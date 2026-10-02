@@ -1387,9 +1387,12 @@ function CallSchedule() {
   };
   // quiet=true (the 60s poll) logs failures console-only - a transient outage
   // must not toast once a minute; the initial load and realtime path stay loud.
+  // Prompt 28 residual 4 (Faraz 10/1): time_off and availability are read in pages (db.queryAll - PostgREST caps an answer
+  // at max-rows, 1000, without a word; availability grows by one row per No primary day). A failed page throws: the catch
+  // keeps the rows on screen, never a shorter list.
   const loadTimeOff = async (quiet) => {
     try {
-      const rows = await db.query("time_off", { order: "start_date.asc" });
+      const rows = await db.queryAll("time_off", { order: "start_date.asc,id.asc" });
       adoptTimeOffRows(Array.isArray(rows) ? rows : []);
       return true;
     } catch (e) {
@@ -1400,7 +1403,7 @@ function CallSchedule() {
   };
   const loadAvailability = async (quiet) => {
     try {
-      const rows = await db.query("availability", { order: "start_date.asc" });
+      const rows = await db.queryAll("availability", { order: "start_date.asc,id.asc" });
       const list = Array.isArray(rows) ? rows : [];
       setAvailabilityRows(list);
       if (list.length > 0) everHadRealDataRef.current = true;
@@ -3667,7 +3670,9 @@ function CallSchedule() {
     // Prompt 14 IP (9/23): call_offers / call_periods are authenticated-read - passed as null (unknown) exactly as the
     // CLI's fetchLive passes them, so planDiff counts every planned row as an upsert and the numbers equal the CLI's
     // dry run; an anon read would answer 200 + [] and read as 'every row missing'. The legs are the CLI's to apply.
-    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await get("time_off?select=*", "time_off"), availability: await get("availability?select=*", "availability"), call_offers: null, call_periods: null };
+    // Prompt 28 residual 4: time_off and availability in pages too (db.queryAll, id last) - a capped read would make
+    // planDiff count the rows past max-rows as missing; a failed page throws like every read here.
+    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await db.queryAll("time_off", { order: "start_date.asc,id.asc" }), availability: await db.queryAll("availability", { order: "start_date.asc,id.asc" }), call_offers: null, call_periods: null };
   };
   const pickSeedFile = async (file) => {
     if (!file || !isScheduler) return;

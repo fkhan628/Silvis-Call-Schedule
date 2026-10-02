@@ -7,7 +7,8 @@
  *   C. wipe predicates: payloadLooksWipedDaily, scheduleWipeCheck, countPopulatedPrimary
  *   D. config.js in a browser-like sandbox: payloadLooksWiped delegates to the
  *      daily predicate, buildTimeOffMaps is a single vacations map, snapshots
- *      capture/normalize/restore fail closed
+ *      capture/normalize/restore fail closed, db.queryAll reads availability /
+ *      time_off in pages on a total order and fails whole (D15, Prompt 28 residual 4)
  *   E. SOURCE PINS on index-source.html: guard-ref grant/consume site counts,
  *      gate-before-consume order, autosave leg order, weekly-model identifiers
  *      absent, the schedule_days CAS literals present, the fix-round-1 guards
@@ -554,6 +555,122 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(Array.isArray(bare.data) && bare.data.length, 0);
       assert.ok(bare.error, "error must be truthy for a 401 with no body");
       assert.match(String(bare.error), /HTTP 401/);
+    });
+  })();
+  await (async () => {
+    // D15 (Prompt 28 residual 4, Faraz 10/1): PostgREST answers at most max-rows rows (Supabase default 1000) and says nothing
+    // when it caps; availability grows by one row per No primary day. db.queryAll reads a table in pages of DB_PAGE on a TOTAL
+    // order (id last) until a short page, and a failed page THROWS - a partial list is never returned as the table. The app's
+    // availability / time_off reads go through it, and loadAvailability's catch keeps the rows it had.
+    const acheck = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const Q = vm.runInContext("({ db, DB_PAGE: typeof DB_PAGE === 'number' ? DB_PAGE : null, DB_MAX_PAGES: typeof DB_MAX_PAGES === 'number' ? DB_MAX_PAGES : null })", sandbox);
+    const P = Q.DB_PAGE;
+    const rowsOf = (from, n) => Array.from({ length: n }, (_, i) => ({ id: "a" + String(from + i).padStart(6, "0"), person_id: "s2", kind: "backup_only", role: "any", start_date: "2027-01-06", end_date: "2027-01-06" }));
+    const qs = (u) => { const q = new URL(u).searchParams; return { path: new URL(u).pathname, select: q.get("select"), order: q.get("order"), limit: q.get("limit"), offset: q.get("offset") || "0" }; };
+    const ord = "start_date.asc,id.asc";
+    const pagesOf = (byOffset) => (url) => { const o = Number(qs(url).offset); const a = byOffset(o); return typeof a === "function" ? a() : a; };
+    await acheck("D15 db.queryAll: DB_PAGE is a positive page no larger than Supabase's max-rows default (1000 - a larger page would come back capped and read as the short last one); DB_MAX_PAGES bounds the loop", async () => {
+      assert.ok(Q.db && typeof Q.db.queryAll === "function", "config.js db.queryAll is missing");
+      assert.ok(Number.isInteger(P) && P > 0 && P <= 1000, "DB_PAGE = " + P);
+      assert.ok(Number.isInteger(Q.DB_MAX_PAGES) && Q.DB_MAX_PAGES >= 2, "DB_MAX_PAGES = " + Q.DB_MAX_PAGES);
+    });
+    await acheck("D15 db.queryAll: a full page then a short page - two requests (limit=DB_PAGE, offset 0 then DB_PAGE, the same total order), every row kept in the order served", async () => {
+      calls.length = 0;
+      setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : o === P ? resp(200, rowsOf(P, 7)) : resp(500, "unexpected page " + o)));
+      const all = await Q.db.queryAll("availability", { order: ord });
+      assert.strictEqual(calls.length, 2, "requests: " + calls.map(c => c.url).join(" | "));
+      const [a, b] = calls.map(c => qs(c.url));
+      assert.deepStrictEqual([a.path, a.select, a.order, a.limit, a.offset], ["/rest/v1/availability", "*", ord, String(P), "0"]);
+      assert.deepStrictEqual([b.path, b.select, b.order, b.limit, b.offset], ["/rest/v1/availability", "*", ord, String(P), String(P)]);
+      assert.ok(calls.every(c => c.method === "GET"), "reads only");
+      assert.strictEqual(all.length, P + 7);
+      assert.deepEqual(all.map(r => r.id), rowsOf(0, P + 7).map(r => r.id), "every row, in the served order"); // deepEqual: vm-realm array
+    });
+    await acheck("D15 db.queryAll: exactly DB_PAGE rows then an EMPTY page - the second request is made and all DB_PAGE rows come back (a full last page is not taken as the end)", async () => {
+      calls.length = 0;
+      setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : o === P ? resp(200, []) : resp(500, "unexpected page " + o)));
+      const all = await Q.db.queryAll("availability", { order: ord });
+      assert.strictEqual(calls.length, 2);
+      assert.strictEqual(qs(calls[1].url).offset, String(P));
+      assert.strictEqual(all.length, P);
+      assert.strictEqual(all[P - 1].id, rowsOf(P - 1, 1)[0].id);
+    });
+    await acheck("D15 db.queryAll: a failing SECOND page throws (HTTP 500, a network error, a body that is not an array) - never the first page returned as the whole table", async () => {
+      for (const [label, second, rx] of [
+        ["HTTP 500", () => resp(500, "boom"), /db\.query\(availability\) failed: HTTP 500 boom/],
+        ["network", () => { throw new TypeError("Failed to fetch"); }, /Failed to fetch/],
+        ["not an array", () => resp(200, { message: "proxy" }), /page 2 is not an array/],
+      ]) {
+        calls.length = 0;
+        setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : second));
+        let out = null, err = null;
+        try { out = await Q.db.queryAll("availability", { order: ord }); } catch (e) { err = e; }
+        assert.strictEqual(out, null, label + ": a list was returned (" + (out && out.length) + " rows)");
+        assert.ok(err && rx.test(String(err.message)), label + ": " + (err && err.message));
+        assert.strictEqual(calls.length, 2, label);
+      }
+    });
+    await acheck("D15 db.queryAll: the order must be TOTAL - it must end on id (asc / desc); without it nothing is fetched", async () => {
+      for (const bad of [undefined, "", "start_date.asc", "start_date.asc,person_id.asc", "id.asc,start_date.asc", "start_date.asc,id"]) {
+        calls.length = 0;
+        setFetch(() => resp(200, []));
+        let err = null;
+        try { await Q.db.queryAll("availability", bad === undefined ? {} : { order: bad }); } catch (e) { err = e; }
+        assert.ok(err && /needs a total order ending on id/.test(err.message), JSON.stringify(bad) + ": " + (err && err.message));
+        assert.strictEqual(calls.length, 0, JSON.stringify(bad) + " fetched");
+      }
+      for (const good of ["id.asc", "start_date.asc,id.asc", "day.asc,person_id.asc,id.desc"]) {
+        setFetch(() => resp(200, rowsOf(0, 2)));
+        assert.strictEqual((await Q.db.queryAll("availability", { order: good })).length, 2, good);
+      }
+    });
+    await acheck("D15 db.queryAll: a page longer than DB_PAGE (the limit ignored) throws; a server that ignores offset (the same full page again) throws after DB_MAX_PAGES requests - it never loops and never returns what it has", async () => {
+      setFetch(() => resp(200, rowsOf(0, P + 1)));
+      await assert.rejects(Q.db.queryAll("availability", { order: ord }), /page 1 has \d+ rows \(limit \d+ ignored\)/);
+      calls.length = 0;
+      const full = rowsOf(0, P);
+      setFetch(() => resp(200, full));
+      await assert.rejects(Q.db.queryAll("availability", { order: ord }), /more than \d+ pages/);
+      assert.strictEqual(calls.length, Q.DB_MAX_PAGES);
+    });
+    await acheck("D15 loadAvailability (evaluated from the source): pages adopted whole (DB_PAGE + 3 rows, true); a failing second page adopts NOTHING - the rows on screen stay, false, a toast unless quiet", async () => {
+      const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+      const la = SRC.slice(SRC.indexOf("const loadAvailability = async (quiet) => {"), SRC.indexOf("// Prompt 14 part 3a: offers and periods."));
+      assert.ok(la.length > 100 && la.includes("db.queryAll(\"availability\", { order: \"start_date.asc,id.asc\" })"), "loadAvailability reads through db.queryAll on start_date.asc,id.asc");
+      const mk = () => {
+        const st = { sets: [], toasts: [], ref: { current: false } };
+        st.fn = new Function("db", "setAvailabilityRows", "everHadRealDataRef", "showToast", "console", la + "\nreturn loadAvailability;")(
+          Q.db, (rows) => st.sets.push(rows), st.ref, (m, k) => st.toasts.push([m, k]), { warn: () => {} });
+        return st;
+      };
+      const ok1 = mk();
+      setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : resp(200, rowsOf(P, 3))));
+      assert.strictEqual(await ok1.fn(false), true);
+      assert.strictEqual(ok1.sets.length, 1); assert.strictEqual(ok1.sets[0].length, P + 3); assert.strictEqual(ok1.ref.current, true);
+      for (const quiet of [false, true]) {
+        const st = mk();
+        setFetch(pagesOf((o) => o === 0 ? resp(200, rowsOf(0, P)) : resp(503, "upstream")));
+        assert.strictEqual(await st.fn(quiet), false, "quiet=" + quiet);
+        assert.strictEqual(st.sets.length, 0, "quiet=" + quiet + ": a partial list was adopted (" + (st.sets[0] && st.sets[0].length) + " rows)");
+        assert.strictEqual(st.toasts.length, quiet ? 0 : 1, "quiet=" + quiet + ": toasts " + JSON.stringify(st.toasts));
+        if (!quiet) assert.ok(/Couldn't load availability statements/.test(st.toasts[0][0]) && st.toasts[0][1] === "error");
+      }
+    });
+    await acheck("D15 source pins: every app read of availability / time_off pages through db.queryAll on an order ending in id (initial load, the 60-s poll and Realtime via loadAvailability / loadTimeOff, the painter's re-read, the seed import's live read); the snapshot reader's orders end in id too", async () => {
+      const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+      const CFG = fs.readFileSync(path.join(ROOT, "config.js"), "utf8").replace(/\r\n/g, "\n");
+      assert.strictEqual(/db\.query\("(availability|time_off)"/.test(SRC), false, "a plain (unpaged) db.query of availability / time_off is left");
+      assert.strictEqual(/get\("(availability|time_off)\?/.test(SRC), false, "the seed import still reads availability / time_off unpaged");
+      assert.strictEqual(/rest\/v1\/(availability|time_off)\?select=/.test(SRC), false, "a raw unpaged GET of availability / time_off");
+      const qa = SRC.match(/db\.queryAll\("[a-z_]+", \{[^}]*\}\)/g) || [];
+      assert.strictEqual(qa.filter(s => s.startsWith('db.queryAll("availability"')).length, 2, "loadAvailability + fetchLiveForImport: " + qa.join(" | "));
+      assert.strictEqual(qa.filter(s => s.startsWith('db.queryAll("time_off"')).length, 2, "loadTimeOff + fetchLiveForImport: " + qa.join(" | "));
+      for (const s of qa) assert.ok(/order: "[a-z_.,]*,id\.asc"/.test(s), "not a total order: " + s);
+      const lt = SRC.slice(SRC.indexOf("const loadTimeOff = async (quiet) => {"), SRC.indexOf("const loadAvailability = async (quiet) => {"));
+      assert.ok(lt.includes('db.queryAll("time_off", { order: "start_date.asc,id.asc" })'), "loadTimeOff pages");
+      const fl = SRC.slice(SRC.indexOf("const fetchLiveForImport = async () => {"), SRC.indexOf("const pickSeedFile = async (file) => {"));
+      assert.ok(fl.includes('time_off: await db.queryAll("time_off", { order: "start_date.asc,id.asc" })') && fl.includes('availability: await db.queryAll("availability", { order: "start_date.asc,id.asc" })'), "fetchLiveForImport pages both");
+      assert.ok(CFG.includes('this._readAll("time_off?select=*&order=start_date.asc,person_id.asc,id.asc", "time_off")') && CFG.includes('this._readAll("availability?select=*&order=start_date.asc,person_id.asc,id.asc", "availability")'), "the snapshot reader's time_off / availability pages run on a total order (id last)");
     });
   })();
 

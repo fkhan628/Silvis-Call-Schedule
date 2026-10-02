@@ -218,13 +218,24 @@ var supabase = {
   }),
 };
 
+// db.queryAll pages at this size (Prompt 28 residual 4, Faraz 10/1). PostgREST answers at most max-rows rows per request
+// (Supabase default 1000) and says nothing when it caps, so an unpaged read of a table past that size hands back its first
+// 1000 rows as if they were all of them. availability grows by one row per No primary day (Prompt 28), so the app reads it
+// - and time_off beside it - in pages: limit / offset of DB_PAGE until a short page (the PAY_PAGE pattern below;
+// loadScheduleDays and the snapshot reader page the same way). DB_PAGE must not exceed the server's max-rows: a capped
+// page would read as the short last one. DB_MAX_PAGES (200 000 rows) only stops a server that answers the same page again
+// (an ignored offset) - the read THROWS there, it never loops and never returns what it has.
+const DB_PAGE = 1000;
+const DB_MAX_PAGES = 200;
+
 // Extended DB helpers for new tables
 const db = {
-  async query(table, { eq, order, limit, select } = {}) {
+  async query(table, { eq, order, limit, offset, select } = {}) {
     let url = `${SUPABASE_URL}/rest/v1/${table}?select=${select || "*"}`;
     if (eq) Object.entries(eq).forEach(([k, v]) => { url += `&${k}=eq.${v}`; });
     if (order) url += `&order=${order}`;
     if (limit) url += `&limit=${limit}`;
+    if (offset) url += `&offset=${offset}`;
     // Read path → expiry-aware headers (anon fallback on a dead token).
     const res = await fetch(url, { headers: dbReadHeaders() });
     // HTTP failure THROWS, exactly like a network failure already does — a
@@ -240,6 +251,23 @@ const db = {
       throw new Error(`db.query(${table}) failed: HTTP ${res.status} ${body.slice(0, 200)}`);
     }
     return await res.json();
+  },
+  // queryAll(table, { eq, order, select }): every row, in pages of DB_PAGE (see DB_PAGE above), through db.query - the same
+  // read headers, and a non-2xx THROWS. `order` must be a TOTAL order ending on the table's unique `id` (e.g.
+  // "start_date.asc,id.asc"): offset pages over tied rows may repeat one row and skip another. Every page must be an array
+  // of at most DB_PAGE rows. Any failed page throws, so the caller's catch keeps its prior rows - a partial list is never
+  // returned as the table (CLAUDE.md: a failed read must never look like an empty or a shorter table).
+  async queryAll(table, { eq, order, select } = {}) {
+    if (!/(^|,)id\.(asc|desc)$/.test(String(order || ""))) throw new Error(`db.queryAll(${table}) needs a total order ending on id (e.g. "start_date.asc,id.asc"), got "${order || ""}"`);
+    const all = [];
+    for (let page = 0; page < DB_MAX_PAGES; page++) {
+      const rows = await db.query(table, { eq, order, select, limit: DB_PAGE, offset: page * DB_PAGE });
+      if (!Array.isArray(rows)) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} is not an array`);
+      if (rows.length > DB_PAGE) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} has ${rows.length} rows (limit ${DB_PAGE} ignored)`);
+      for (const r of rows) all.push(r);
+      if (rows.length < DB_PAGE) return all;
+    }
+    throw new Error(`db.queryAll(${table}) failed: more than ${DB_MAX_PAGES} pages of ${DB_PAGE} rows (the server may be ignoring offset)`);
   },
   // opts.returning (Prompt 21 step 2, Faraz 9/26; supabase-js v1's option name, as onConflict is for upsert): "minimal"
   // sends Prefer: return=minimal - PostgREST reads no column of the new row back and answers 201 with an empty body, so
@@ -509,8 +537,9 @@ const snapshots = {
       try {
         cfgRows = await this._readAll("call_schedule_data?id=eq.main&select=data,updated_at", "config");
         dayRows = await this._readAll("schedule_days?select=*&order=day.asc", "schedule_days");
-        toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc", "time_off");
-        avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc", "availability");
+        // id last (Prompt 28 residual 4): a total order, so the offset pages never repeat or skip a tied row
+        toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc,id.asc", "time_off");
+        avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc,id.asc", "availability");
         // Prompt 14 P5 (Faraz 9/22): the offers and their periods are in scope too - captured here so a restore CAN bring
         // them back; the app's table applier does not write them yet (applyPayload reports notApplied; the app says PARTIAL).
         // Both tables are authenticated-read (never anon) - the writer's identity above reads them; a failed read
