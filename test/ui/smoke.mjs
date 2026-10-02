@@ -470,33 +470,38 @@ const eastVacReviewStore = [
 // refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
 let eastVacFeed = EASTVAC_RANGES;
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// The tokens minted here, at the start, live 4 h (review of the merge of main into fix/do-first-6-9, 10/2): with 1 h a run
+// slowed past an hour by memory pressure (72 min on the 8 GB machine) failed late steps on an expired session (the
+// session-expired banner over the page), unrelated to the code. No step depends on the 1 h (bearerExpired only asks
+// whether a bearer had expired); an expired session is EXPIRED_JWT below, and the later steps mint their own tokens.
+const SMOKE_JWT_LIFE_SEC = 4 * 3600;
+const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // The same session, expired an hour ago (datalayer-001: an authenticated-only read must be SKIPPED, not degraded to anon).
 const EXPIRED_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) - 3600 })}.c2ln`;
 // Prompt 16 A3 (session scenario): the pair a password sign-in hands out, and the one a GRANTED refresh hands out
 // (distinct jti so the bearer of each write says which path produced it). The token endpoint mock records every
 // call in authCalls (grant type only - never a password) and rejects a refresh unless authRefreshGrant is armed.
 const mkJwt = (expOffsetSec, tag) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + expOffsetSec, jti: tag })}.c2ln`;
-const NEW_JWT = mkJwt(3600, "a3-signin");
-const NEW2_JWT = mkJwt(3600, "a3-refresh");
+const NEW_JWT = mkJwt(SMOKE_JWT_LIFE_SEC, "a3-signin");
+const NEW2_JWT = mkJwt(SMOKE_JWT_LIFE_SEC, "a3-refresh");
 const bearerExpired = (h) => { try { const t = String(h || "").replace(/^Bearer /, ""); const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); return typeof p.exp === "number" && p.exp * 1000 < Date.now(); } catch (e) { return false; } };
 const authCalls = [];
-const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // Prompt 16 B3: a third mocked session - the VIEWER (read-only account: role viewer, NO person_id, no display name, so
 // the Account line falls back to "a read-only account"). Its page routes through routeSupabaseAs(VIEWER_PROFILE, extra)
 // where `extra` answers the notifications GET with a four-type feed (newest first, as PostgREST orders it), so the
 // role filter is provable: the viewer must see the open_shifts and schedule_published rows and neither of the others.
 const VIEWER_UID = "00000000-0000-4000-8000-0000000000e1";
 const VIEWER_PROFILE = { id: VIEWER_UID, person_id: null, role: "viewer", display_name: null, email: null, created_at: "2026-09-24T00:00:00Z", authEmail: "viewer@example.com" };
-const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // Prompt 29: two APP accounts - viewers marked APP (user_profiles.is_app), fictional names. Each APP page runs in its OWN
 // BrowserContext: the client reads silvis-auth-token from localStorage at send time, so an APP page in the main context would
 // make the main page (and any other APP page) send its JWT.
 const APP_A_UID = "00000000-0000-4000-8000-0000000a0001", APP_B_UID = "00000000-0000-4000-8000-0000000a0002";
 const APP_A_PROFILE = { id: APP_A_UID, person_id: null, role: "viewer", is_app: true, display_name: "Pat Appleton", email: null, created_at: "2026-10-01T00:00:00Z", authEmail: "app-a@example.com" };
 const APP_B_PROFILE = { id: APP_B_UID, person_id: null, role: "viewer", is_app: true, display_name: "Lee Bramble", email: null, created_at: "2026-10-01T00:00:00Z", authEmail: "app-b@example.com" };
-const APP_A_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_A_UID, role: "authenticated", email: "app-a@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
-const APP_B_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_B_UID, role: "authenticated", email: "app-b@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const APP_A_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_A_UID, role: "authenticated", email: "app-a@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
+const APP_B_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: APP_B_UID, role: "authenticated", email: "app-b@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 const VIEWER_FEED = [
   { id: "vf-4", type: "vacation_logged", title: "Vacation logged (harness)", message: "a vacation was logged", data: { surgeon_id: "s3" }, created_at: "2026-09-23T12:00:00Z" },
   { id: "vf-3", type: "trade_proposed", title: "Trade proposed (harness)", message: "a trade was proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" },
@@ -515,7 +520,7 @@ const FOLLOW_GIVE_ID = "00000000-0000-4000-8000-0000000000f7";
 const FOLLOW_GIVE_ROW = { id: FOLLOW_GIVE_ID, submitted_at: "2026-09-23T15:00:00Z", day: "2026-12-02", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, status: "pending", kind: "give" };
 const FOLLOW_UID = "00000000-0000-4000-8000-0000000000f3";
 const FOLLOW_PROFILE = { id: FOLLOW_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, follows: ["s2", "s5"], created_at: "2026-09-24T00:00:00Z", authEmail: "follower@example.com" };
-const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // Prompt 20 R2: the follower's OWN notification_preferences row (keyed by profile_id). followPrefsColumn "present" serves
 // it on GET ?profile_id=eq.<his id> (the row below, or [] once cleared) and keeps what a POST ?on_conflict=profile_id sends;
 // "absent" answers every GET naming profile_id like PostgREST before revision o (HTTP 400 42703 - the live answer seen
@@ -526,7 +531,9 @@ let followerPrefs400Lines = 0;
 // Item E4 (review, Faraz 9/26): the browser's own "status of 500" line for each east_feed / east_vacation_reviews read
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
+let toast390Forced500Lines = 0; // review of Do first 8 (10/2): the browser's "status of 500" line per availability read the toast-390 page answered 500 (cleared after it)
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
+let df4Forced500Lines = 0; // review 9/27 Do first 4: the browser's own "status of 500" line per time_off / availability read the startup page's route forced to fail (armed per forced answer, consumed one line each, cleared after the step)
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
 // and year-switch steps), never by the live project. Each non-2xx answer it forces is pushed here ({ path, status, page }) and
@@ -988,8 +995,10 @@ const watchPage = (pg, tag) => {
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
       else if (followerPrefs400Lines > 0 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); followerPrefs400Lines--; } // Prompt 20 R2: the follower's prefs read before revision o (42703), answered by the follower route
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
+      else if (toast390Forced500Lines > 0 && tag === "toast-390" && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); toast390Forced500Lines--; } // review of Do first 8 (10/2): the toast-390 page's forced availability 500s
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
+      else if (df4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); df4Forced500Lines--; } // review 9/27 Do first 4: a time_off / availability read the startup page's route answered 500
       else { consoleErrors.push(msg.text()); consoleErrorWhere.push({ text: msg.text(), where: tag + " @ " + (((msg.location() || {}).url) || "?") }); } // Prompt 29: where each line came from (printed with the unexpected ones)
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -1220,6 +1229,65 @@ const expOfferNotices = (person, periods, opts) => {
     .map(p => ({ id: p.id, label: p.label, close: p.offers_close_at, start: p.start_day, days: noticeIsoDiff(todayCentral, p.offers_close_at), urgent: noticeIsoDiff(todayCentral, p.offers_close_at) <= urgentDays, status: statusOf(p) }));
 };
 let failSaveOffers = false;
+// Prompt 28 (10/1): the No primary days. save_offers' p_np_add / p_np_clear are answered like save_no_primary would (its
+// NP004-NP009 refusals before any store moves, then the writes); the rows it "wrote" live in npStore and are overlaid on the
+// availability GETs of ONE page (npStore.page - the step's surgeon page): the served rows (fixture or the live anon read) minus
+// the single-day backup_only rows cleared (clearedKeys "<person>|<day>") plus the rows added. npStore.served caches that page's
+// last served list (NP007 reads its ranges). subs maps a page's JWT sub to its roster id (the 'app' stamp). The step resets it.
+// Known limits of the mock (review 10/1; none is exercised by today's assertions): NP008 reads liveEarlyByDay (the live schedule
+// read early in the run), not the schedule rows served to the page; the offers-side NP009 sees backup_only rows only on
+// npStore.page (on any other page it never fires). Re-marking a cleared served day writes a NEW row with the caller's stamp and a
+// null note (as save_no_primary inserts one) - the cleared served row stays hidden.
+const npStore = { page: null, added: [], clearedKeys: new Set(), served: [], subs: {} };
+const npWrites = []; // every save_offers call that carried No primary days and passed: { who, sub, add, clear, result }
+const NP_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+const npIsSingle = (r) => String(r.start_date).slice(0, 10) === String(r.end_date || r.start_date).slice(0, 10);
+const npOverlay = (rows) => (Array.isArray(rows) ? rows : []).filter(r => !(r && r.kind === "backup_only" && npIsSingle(r) && npStore.clearedKeys.has(r.person_id + "|" + String(r.start_date).slice(0, 10)))).concat(npStore.added.map(r => ({ ...r })));
+// npRpc(b, who, sub, offersAfter) -> { code, message } on a refusal (nothing moved), else a commit() that moves the store and
+// answers { np_added, np_cleared, np_kept }. offersAfter = the person's call_offers rows as they stand after this Save's rows.
+const npRpc = (b, who, sub, offersAfter) => {
+  const adds = [...new Set((Array.isArray(b.p_np_add) ? b.p_np_add : []).map(String))].sort();
+  const clears = [...new Set((Array.isArray(b.p_np_clear) ? b.p_np_clear : []).map(String))].sort();
+  const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+  const list = (a) => a.map(md).join(", ");
+  const vis = () => npOverlay(npStore.served).filter(r => r && r.person_id === who && r.kind === "backup_only").map(r => ({ s: String(r.start_date).slice(0, 10), e: String(r.end_date || r.start_date).slice(0, 10) }));
+  const none = { commit: () => ({ np_added: 0, np_cleared: 0, np_kept: 0 }) };
+  if (!adds.length && !clears.length) return none;
+  const both = adds.filter(d => clears.includes(d));
+  if (both.length) return { code: "NP004", message: `NO_PRIMARY_BAD_DAY: ${list(both)} is both marked and cleared in one save - nothing was saved` };
+  const all = adds.concat(clears).sort();
+  const past = all.filter(d => d < todayCentral);
+  if (past.length) return { code: "NP005", message: `NO_PRIMARY_PAST: ${list(past)} is before today (${md(todayCentral)}) in Central time - a past day stays as it was` };
+  if (sub !== FAKE_UID) { // the freeze spares the scheduler only (NP006, as OF003)
+    const fr = periodStore.filter(p => p.status !== "upcoming" || (p.offers_close_at && String(p.offers_close_at).slice(0, 10) <= todayCentral)).sort((x, y) => x.start_day < y.start_day ? -1 : 1).find(p => all.some(d => d >= p.start_day && d <= p.end_day));
+    if (fr) return { code: "NP006", message: `NO_PRIMARY_FROZEN: offers for ${fr.label} closed on ${String(fr.offers_close_at).slice(0, 10)} - ask the scheduler (${list(all.filter(d => d >= fr.start_day && d <= fr.end_day))})` };
+  }
+  const inRange = clears.filter(d => vis().some(r => r.s < r.e && d >= r.s && d <= r.e));
+  if (inRange.length) return { code: "NP007", message: `NO_PRIMARY_RANGE: ${list(inRange)} is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements` };
+  const name = NP_NAMES[who] || who;
+  const held = adds.filter(d => liveEarlyByDay[d] && liveEarlyByDay[d].primary_id === who);
+  if (held.length) return { code: "NP008", message: `NO_PRIMARY_ON_CALL: ${name} holds primary on ${list(held)} - trade those days first, then mark them No primary` };
+  const conflict = adds.filter(d => offersAfter.some(o => o.day === d && (o.role_pref === "primary" || o.role_pref === "either")));
+  if (conflict.length) return { code: "NP009", message: `NO_PRIMARY_OFFER_CONFLICT: ${name} offers primary on ${list(conflict)} and marks it No primary - keep one of the two (nothing was saved)` };
+  return { commit: () => {
+    const subPerson = sub === FAKE_UID ? "s1" : (npStore.subs[sub] || null);
+    const by = sub === COORD_UID ? COORD_UID : subPerson && subPerson === who ? who : "scheduler";
+    const src = sub === COORD_UID ? "office-relay" : subPerson && subPerson === who ? "app" : "email-relay";
+    let cleared = 0, added = 0;
+    clears.forEach(d => {
+      const i = npStore.added.findIndex(r => r.person_id === who && r.start_date === d && r.end_date === d);
+      if (i >= 0) { npStore.added.splice(i, 1); cleared++; }
+      else if (npOverlay(npStore.served).some(r => r && r.person_id === who && r.kind === "backup_only" && npIsSingle(r) && String(r.start_date).slice(0, 10) === d)) { npStore.clearedKeys.add(who + "|" + d); cleared++; }
+    });
+    adds.forEach(d => {
+      if (vis().some(r => d >= r.s && d <= r.e)) return; // covered by a row already (kept)
+      // a cleared served row stays cleared: the function inserts a NEW row (caller's stamp, note null) - never the old one back
+      npStore.added.push({ id: crypto.randomUUID(), person_id: who, kind: "backup_only", role: "any", start_date: d, end_date: d, note: null, source: src, created_by: by, created_at: new Date().toISOString() });
+      added++;
+    });
+    return { np_added: added, np_cleared: cleared, np_kept: adds.length - added };
+  } };
+};
 // applyOfferMode(who, periodId, mode) mirrors set_offer_mode: { code, message } on a refusal, { ok } after the write.
 // save_offers calls it for p_mode inside its "transaction" (the store is mutated only after every check passed, so a
 // refused mode leaves the rows untouched - the SQL's rollback, in miniature).
@@ -1246,9 +1314,25 @@ const offerRpc = (b, json, sub) => {
   const rows = Array.isArray(b.p_rows) ? b.p_rows : [];
   const bad = rows.filter(r => !/^\d{4}-\d{2}-\d{2}$/.test(String(r && r.day)) || !["primary", "backup", "either"].includes(r && r.role_pref));
   if (bad.length) return err("OS003", `OFFERS_BAD_ROW: ${bad.map(r => (r.day || "null") + " " + (r.role_pref || "null")).join(", ")} (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved`);
+  // Prompt 28: the No primary days (save_no_primary inside the same "transaction") - checked against the offers as they stand
+  // AFTER this Save's rows, before ANY store moves (applyOfferMode below writes the period when it passes); then save_offers'
+  // own NP009: a day this Save offers as primary / either must carry no backup_only row afterwards.
+  const clearSet0 = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
+  const offersAfter = offerStore.filter(o => o.person_id === who && !clearSet0.has(o.day) && !rows.some(r => r.day === o.day)).concat(rows.map(r => ({ day: r.day, role_pref: r.role_pref })));
+  const npCheck = npRpc(b, who, sub, offersAfter);
+  if (npCheck.code) return err(npCheck.code, npCheck.message);
+  const hasNp = (Array.isArray(b.p_np_add) && b.p_np_add.length) || (Array.isArray(b.p_np_clear) && b.p_np_clear.length);
+  if (rows.some(r => r.role_pref !== "backup")) {
+    const addSet = new Set(Array.isArray(b.p_np_add) ? b.p_np_add : []), clrSet = new Set(Array.isArray(b.p_np_clear) ? b.p_np_clear : []);
+    const covered = (d) => addSet.has(d) || npOverlay(npStore.page ? npStore.served : []).some(a => a && a.person_id === who && a.kind === "backup_only" && d >= String(a.start_date).slice(0, 10) && d <= String(a.end_date || a.start_date).slice(0, 10) && !(npIsSingle(a) && clrSet.has(d)));
+    const badDays = rows.filter(r => r.role_pref !== "backup" && covered(r.day)).map(r => r.day).sort();
+    if (badDays.length) return err("NP009", `NO_PRIMARY_OFFER_CONFLICT: ${NP_NAMES[who] || who} offers primary on ${badDays.map(d => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`).join(", ")} and marks it No primary - keep one of the two (nothing was saved)`);
+  }
   // the mode's checks run before the store moves (a refused mode = nothing written, like the SQL rollback)
   const modeCheck = b.p_mode !== null && b.p_mode !== undefined ? applyOfferMode(who, b.p_period, b.p_mode) : { ok: true };
   if (modeCheck.code) return err(modeCheck.code, modeCheck.message);
+  const npDone = npCheck.commit();
+  if (hasNp) npWrites.push({ who, sub, add: (b.p_np_add || []).slice(), clear: (b.p_np_clear || []).slice(), result: npDone });
   const clear = new Set(Array.isArray(b.p_clear) ? b.p_clear : []);
   let deleted = 0;
   for (let i = offerStore.length - 1; i >= 0; i--) if (offerStore[i].person_id === who && clear.has(offerStore[i].day)) { offerStore.splice(i, 1); deleted++; }
@@ -1258,7 +1342,7 @@ const offerRpc = (b, json, sub) => {
     if (cur) Object.assign(cur, { role_pref: r.role_pref, note: r.note || cur.note || null, entered_by: by, source: src, updated_at: new Date().toISOString() }); // coalesce(excluded.note, call_offers.note)
     else offerStore.push({ id: crypto.randomUUID(), person_id: who, day: r.day, role_pref: r.role_pref, note: r.note || null, entered_by: by, source: src, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
   });
-  return json(200, { ok: true, person_id: who, upserted: rows.length, deleted, entered_by: by, source: src, mode: b.p_mode === undefined ? null : b.p_mode });
+  return json(200, { ok: true, person_id: who, upserted: rows.length, deleted, entered_by: by, source: src, mode: b.p_mode === undefined ? null : b.p_mode, np_added: npDone.np_added, np_cleared: npDone.np_cleared, np_kept: npDone.np_kept });
 };
 const offerModeRpc = (b, json) => {
   const who = String(b.p_person || "s1");
@@ -1364,6 +1448,37 @@ const appRoute = (route, req, url, method, json) => {
   const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0).map(r => ({ day: r.day, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
   const off = Number(url.searchParams.get("offset") || 0), lim = Number(url.searchParams.get("limit") || rows.length);
   return answer(200, rows.slice(off, off + lim));
+};
+// Review 9/27 Do first 9 (10/1): the geometry of My schedule / Following's 90-day rows, read in the page (`scope` = a card
+// selector, or null for the whole page). A row's items other than the actions (mine-acts) and the badges are on ONE line when every
+// one's vertical centre lies within 6 px of the date span's (font metrics move a top by a pixel or two); `lockOutside`
+// counts padlocks that are not inside the date span; `lists` = each mine-upcoming's computed scroller.
+const DF9_ROWS_PROBE = (scope) => {
+  const root = scope ? document.querySelector(scope) : document;
+  if (!root) return null;
+  const mid = (el) => { const b = el.getBoundingClientRect(); return (b.top + b.bottom) / 2; };
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const lists = Array.from(root.querySelectorAll("[data-testid=mine-upcoming]")).map(ul => { const cs = getComputedStyle(ul); return { maxH: cs.maxHeight, overflowY: cs.overflowY, nested: ul.scrollHeight > ul.clientHeight + 1 }; });
+  const per = Array.from(root.querySelectorAll("[data-testid=mine-day]")).map(r => {
+    const date = r.querySelector("[data-testid=mine-date]"), acts = r.querySelector("[data-testid=mine-acts]");
+    const locks = Array.from(r.querySelectorAll("svg"));
+    // second review fixes of Do first 9 (10/2): line one is the date, the role and the holder - a Following row's badges
+    // (row items right after the holder) may wrap under the name on a phone; chipsWrapped says they did
+    const items = Array.from(r.children).filter(k => k !== acts && !k.hasAttribute("data-badge"));
+    const rowChips = Array.from(r.children).filter(k => k.hasAttribute("data-badge"));
+    const dm = date ? mid(date) : null;
+    const db = date ? date.getBoundingClientRect() : null, ab = acts ? acts.getBoundingClientRect() : null;
+    const btns = Array.from(r.querySelectorAll("button")).map(b => { const bb = b.getBoundingClientRect(); return { id: b.getAttribute("data-testid"), text: b.textContent.trim(), h: r1(bb.height), top: Math.round(bb.top), inActs: !!(acts && acts.contains(b)) }; });
+    // review of Do first 9 (10/2): the holder's words clipped by its ellipsis (scrollWidth past clientWidth) - the colleague's name
+    const hd = r.querySelector("[data-testid=mine-holder]");
+    const holder = hd ? { text: hd.textContent, sw: hd.scrollWidth, cw: hd.clientWidth, clipped: hd.scrollWidth > hd.clientWidth + 1 } : null;
+    const chipsOutside = Array.from(r.querySelectorAll("[data-badge], [data-testid=mine-offer-tag]")).filter(c => acts && !acts.contains(c)).length;
+    const chipsWrapped = !!db && rowChips.some(c => c.getBoundingClientRect().top >= db.bottom - 1);
+    return { day: r.getAttribute("data-day"), locked: locks.length > 0, lockOutside: locks.filter(s => !date || !date.contains(s)).length, holder, chipsOutside, chipsWrapped,
+      spread: dm === null ? null : r1(Math.max(...items.map(k => Math.abs(mid(k) - dm)))), actsSpread: dm === null || !acts ? null : r1(Math.abs(mid(acts) - dm)),
+      rowH: r1(r.getBoundingClientRect().height), dateH: db ? r1(db.height) : null, dateBottom: db ? r1(db.bottom) : null, actsTop: ab ? r1(ab.top) : null, btns };
+  });
+  return { rows: per.length, lists, per, pageW: document.documentElement.scrollWidth, viewW: document.documentElement.clientWidth };
 };
 // Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
 // other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
@@ -1659,6 +1774,17 @@ const routeSupabase = async (route, scope) => {
   // ... and (Prompt 25) the holiday plan's accepted days while the step holds them (planDayStore).
   if ((Object.keys(claimedDays).length || harnessOpen.day || Object.keys(planDayStore).length) && method === "GET" && url.pathname === "/rest/v1/schedule_days") {
     return json(200, await scheduleDayRows(route, req, url));
+  }
+  // Prompt 28: the No primary step's page reads its availability through the npStore overlay (the served rows minus the
+  // single days its Saves cleared, plus the rows they added); every other page is untouched.
+  if (npStore.page && method === "GET" && url.pathname === "/rest/v1/availability") {
+    let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
+    if (pg === npStore.page) {
+      let rows = fixtureAnswer(url);
+      if (!rows) { const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } }); rows = await res.json().catch(() => []); }
+      npStore.served = Array.isArray(rows) ? rows.map(r => ({ ...r })) : [];
+      return json(200, npOverlay(npStore.served));
+    }
   }
   // Prompt 25 (the holiday plan Re-check): the harness's mocked vacation rows, appended to every time_off GET while set
   if (extraTimeOff.length && method === "GET" && url.pathname === "/rest/v1/time_off") {
@@ -3270,12 +3396,12 @@ try {
               if (!board || ed2) fail(`${DS}: the coverage strip's open-primary count should show the Open shifts board (board ${board}, a day editor open ${ed2})`);
               else ok(`${DS}: the coverage strip's open-primary count (${cov.n}) leads to the Open shifts board, no day editor`);
             }
-            // My schedule: Give away beside every Propose a trade
+            // My schedule: Give away beside every Trade (mine-trade; the row button reads 'Trade' since Do first 9)
             await rp.click('button[data-tab="myschedule"]');
             await rp.waitForTimeout(400);
             const mt = await rp.$$eval("[data-testid=mine-trade]", els => els.length), mg = await rp.$$eval("[data-testid=mine-give]", els => els.length);
-            if (mt !== mg) fail(`${DS}: My schedule rows carry ${mt} 'Propose a trade' but ${mg} 'Give away'`);
-            else ok(`${DS}: My schedule - 'Give away' beside each of the ${mt} 'Propose a trade' row button(s)${mt ? "" : " (no upcoming day this run - not exercised)"}`);
+            if (mt !== mg) fail(`${DS}: My schedule rows carry ${mt} 'Trade' but ${mg} 'Give away'`);
+            else ok(`${DS}: My schedule - 'Give away' beside each of the ${mt} 'Trade' row button(s)${mt ? "" : " (no upcoming day this run - not exercised)"}`);
           } catch (e) { fail(`${DS}: ` + errLine(e)); if (await rp.$("[data-testid=day-editor]")) { await rp.keyboard.press("Escape").catch(() => {}); } }
           await rp.click('button[data-tab="calendar"]').catch(() => {});
         }
@@ -3408,21 +3534,25 @@ try {
   //  - the board (every signed-in page): the whole card's text and titles (chip hovers, Take titles, the Why column);
   //    Khan's Take title on E4_BUSY and his claim sheet on E4_SOFT (his two pages), Khan's chip on E4_SOFT (every page);
   //  - the claim gate, driven on Khan's surgeon page: the sheet open on E4_SOFT, that page's east_overrides answer turns
-  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> loadEastTables(true); up to a minute), Confirm ->
+  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> refreshEastTables: east_overrides on every run, the
+  //    cache tables every 10 minutes - Do first 5; up to a minute), Confirm ->
   //    "Not eligible any more: not available" and no claim_open_slot call. The scheduler's wording of the same toast is a
   //    self-test of the page's shipped helper (eastMaskedReasons + reasonLabel), not a driven surface;
   //  - the trade card (the scheduler page with From = Burchett, then Burchett's own page): T_HARD to Khan - the greyed
   //    option, the trade-to-reason box and the "Blocked: ..." toast after Propose (refused in the client: no
   //    shift_trade_requests write) - and T_SOFT to Khan ("Allowed with a note");
   //  - the two toasts: every page reloaded with its east_feed and east_vacation_reviews GETs answering 500, a recorder
-  //    (init script) keeping every toast shown: the scheduler must see both, no other role either - non-vacuous when the
+  //    (init script) keeping every toast shown: the scheduler must see both East reads named in ONE toast (Do first 4: the
+  //    load says every failed read in one combined toast - two or more by their short names), no other role either - non-vacuous when the
   //    page did read the table (counted in the wrapper; ?public=1 never reads the reviews - a no-op there by
   //    construction, its feed-cache toast is the proof). The browser's own "status of 500" line of each forced answer is
   //    expected (watchPage's e4Forced500Lines on the signed-in pages; the public page reports page errors only, as in E3).
   {
     const E4_RE = /\beast\b|davenport|east-(?:busy|forecast|derived|unknown|clear)|derived-lock/i;
     const E4_NA = "not available";
-    const E4_TOAST_RE = /Couldn't load the East/;
+    // review of Do first 4 (10/1, adapted deliberately): a load's two or more failed reads come as ONE compact sentence that
+    // names each by its short name ("Couldn't load the East feed cache and the East vacation reviews - ...")
+    const E4_TOAST_RE = /Couldn't load the East|the East feed cache|the East vacation reviews/;
     const E4_STAMP = "2026-09-26T00:00:00Z";
     const e4Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     // What every E4 page is served on top of its route (the pick fills it): blank = primary blanked, busy = Khan's
@@ -3862,12 +3992,22 @@ try {
         await waitFor(() => st.forced.feed >= wantLoads && (!wantReviews || st.forced.reviews >= wantLoads), 25000);
         await rp.waitForTimeout(1500);
         const shown = (await e4Toasts(rp)).filter(t => E4_TOAST_RE.test(t));
-        const feedT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t)), revT = shown.some(t => /Couldn't load the East vacation reviews/.test(t));
+        // review of Do first 4 (10/1): either the reader's own sentence or the compact form's short name
+        const FEED_RE = /Couldn't load the East \(Davenport\) feed cache|the East feed cache/, REV_RE = /Couldn't load the East vacation reviews|the East vacation reviews/;
+        const feedT = shown.some(t => FEED_RE.test(t)), revT = shown.some(t => REV_RE.test(t));
         const reads = `east_feed read ${st.forced.feed}x, east_vacation_reviews ${st.forced.reviews}x (500)`;
         if (!st.forced.feed || (wantReviews && !st.forced.reviews)) fail(`${T}: the forced failure never reached the page (${reads}) - the toast check proves nothing`);
         else if (R.kind === "scheduler") {
-          if (!feedT || !revT) fail(`${T}: the scheduler must still see both toasts - ${reads}; shown: ${JSON.stringify(shown)}`);
-          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' toasts show`);
+          // Review 9/27 Do first 4 (adapted deliberately): the startup reads run in parallel and the load says every failed
+          // read in ONE toast, so the scheduler's two East sentences arrive together - each in a toast of its own would
+          // replace the other (the flakiness the review named for this check).
+          // Review of Do first 4 (10/1, adapted deliberately): two failed reads are ONE compact sentence naming both
+          const oneT = shown.some(t => FEED_RE.test(t) && REV_RE.test(t));
+          const compact = shown.some(t => t.includes("Couldn't load the East feed cache and the East vacation reviews - check your connection"));
+          if (!feedT || !revT) fail(`${T}: the scheduler must still see both East reads named - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!oneT) fail(`${T}: the two East failures came in separate toasts (Do first 4: one combined toast for the load) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!compact) fail(`${T}: the two East failures are not in the compact sentence (review of Do first 4: two or more failed reads by their short names, one piece of advice) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else ok(`${T}: with ${reads} both East reads are named in one compact toast`);
         } else if (shown.length) fail(`${T}: a 'Couldn't load the East ...' toast shows to a non-scheduler - ${JSON.stringify(shown)} (${reads})`);
         else ok(`${T}: ${reads} - no 'Couldn't load the East ...' toast${wantReviews ? "" : " (public mode never reads the reviews - the feed-cache toast is its proof)"}`);
         st.failEast = false;
@@ -4932,7 +5072,12 @@ try {
         const dayWrites = (from) => writes.slice(from).filter(w => w.path.startsWith("/rest/v1/schedule_days") && (w.path.includes("day=eq." + wd + "&") || parse(w).day === wd));
         const okPatches = (from) => dayWrites(from).filter(w => w.method === "PATCH" && !w.aborted);
         const hdr = () => page.$eval("[data-testid=app-header]", el => ({ text: el.textContent, failLine: (el.querySelector("[data-testid=hdr-sync-failed]") || { textContent: "" }).textContent })); // textContent: the sub line is uppercased by CSS
-        await page.evaluate(() => { if (window.__df2Toasts) return; window.__df2Toasts = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__df2Toasts.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+        // Review 9/27 Do first 8 - adapted deliberately: an error toast now stays at least 8 s (it faded at 4.5 s), so the
+        // streak's second "check your connection" (~6.5 s after the first) arrives while the first is still up, and an
+        // identical repeat is one toast whose count goes up (data-testid toast-count, "x2"), not a new text. The recorder
+        // keys on the text AND that count, so a repeat still counts as one more showing - what the fade-and-reappear of the
+        // 4.5 s toast used to record.
+        await page.evaluate(() => { if (window.__df2Toasts) return; window.__df2Toasts = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.__df2Toasts.push(txt); last = key; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
         const toasts = () => page.evaluate(() => window.__df2Toasts.slice());
         const NET_TOAST = "Couldn't save schedule changes - check your connection.";
         await freshPollWindow("Do first 2 network failure");
@@ -5310,12 +5455,12 @@ try {
     const expectedCount = recountRows.filter(r => r.day >= todayIso && r.day <= horizon && (r.primary_id === "s1" || r.backup_id === "s1")).length;
     if (mineDays.length !== expectedCount) fail(`My schedule: upcoming list has ${mineDays.length} day(s), the live rows have ${expectedCount} for s1 in the next 90 days (${todayIso}..${horizon})`);
     else ok(`My schedule: upcoming list = ${mineDays.length} day(s) in the next 90 days${mineDays.length ? ", first " + mineDays[0] : ""}`);
-    if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Propose a trade' shortcut on the upcoming rows");
-    // Day-click summary (9/27): 'Give away' beside every 'Propose a trade' on the own rows
+    if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Trade' shortcut (mine-trade) on the upcoming rows");
+    // Day-click summary (9/27): 'Give away' beside every 'Trade' (mine-trade) on the own rows
     try {
       const mtN = await page.$$eval("[data-testid=mine-trade]", els => els.length), mgN = await page.$$eval("[data-testid=mine-give]", els => els.length);
-      if (mtN !== mgN) fail(`My schedule: ${mtN} 'Propose a trade' row button(s) but ${mgN} 'Give away'`);
-      else if (mtN) ok(`My schedule: 'Give away' beside each of the ${mtN} 'Propose a trade' row button(s)`);
+      if (mtN !== mgN) fail(`My schedule: ${mtN} 'Trade' row button(s) but ${mgN} 'Give away'`);
+      else if (mtN) ok(`My schedule: 'Give away' beside each of the ${mtN} 'Trade' row button(s)`);
       else console.log("     (My schedule: no upcoming own row - 'Give away' is not exercised)");
     } catch (e) { fail("My schedule Give away: " + errLine(e)); }
     if (!(await page.$("[data-testid=copy-sync-url]")) || !(await page.$("[data-testid=download-my-calendar]"))) fail("My schedule: the calendar buttons (download / copy sync URL) are missing"); else ok("My schedule: Download my calendar + Copy my calendar-sync URL buttons present");
@@ -5771,7 +5916,9 @@ try {
     const mdOfDay = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
     const tap = async (day) => { await page.click(`[data-testid=ofp-day][data-day="${day}"]`); await page.waitForTimeout(120); };
     const stateOf = async (day) => page.$eval(`[data-testid=ofp-day][data-day="${day}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer") }));
-    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), disabled: e.disabled, h: e.getBoundingClientRect().height })));
+    // Prompt 28: np = data-noprimary ("own" / "range" / "") - a live No primary day of the painted person is never picked below,
+    // so his own marks never change this step's picture (a Primary / Either tap there would lift it after a question)
+    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), np: e.getAttribute("data-noprimary") || "", disabled: e.disabled, h: e.getBoundingClientRect().height })));
     try {
       await page.setViewportSize({ width: 390, height: 844 });
       await page.click('button[data-tab="myschedule"]');
@@ -5853,10 +6000,11 @@ try {
         await page.click("[data-testid=ofp-next]"); await page.waitForTimeout(200);
         monthLabel = await page.$eval("[data-testid=ofp-month]", el => el.textContent.trim());
         allRows = await readRows();
-        freeDays = allRows.filter(r => r.state === "free" && !r.why);
+        freeDays = allRows.filter(r => r.state === "free" && !r.why && !r.np);
         if (freeDays.length >= 6) break;
       }
       if (freeDays.length < 6) throw new Error(`no month within four ahead has six paintable rows for s1 (last ${monthLabel}: ${freeDays.length})`);
+      { const npOwn = allRows.filter(r => r.state === "free" && !r.why && r.np).length; console.log(`     (Offer painter: ${npOwn} free row(s) of ${monthLabel} carry s1's own No primary mark and were left out of the picks)`); }
       ok(`Offer painter: ${monthLabel} has ${freeDays.length} paintable rows for s1 (${allRows.filter(r => r.state === "blocked").length} greyed, ${allRows.filter(r => r.state === "free" && r.why).length} one-role)`);
       const oneRole = allRows.find(r => r.state === "free" && r.why);
       if (oneRole) ok(`Offer painter: a one-role row says why (${oneRole.day}: '${oneRole.why}')`);
@@ -5872,7 +6020,14 @@ try {
       else ok(`Offer painter: Primary armed = gradient, white text, ${armedProbe.h}px; Either idle = flat`);
       await page.screenshot({ path: path.join(OUT, "offers-armed-390.png"), fullPage: false });
       ok("screenshot test/ui/out/offers-armed-390.png");
-      const [d1, d2, d3, d4, d5] = freeDays.map(r => r.day);
+      const [d1, d2, d3] = freeDays.map(r => r.day);
+      // Prompt 28: the Either range d4..d5 is two consecutive picks with NO own No primary row of s1 between them (the brush would
+      // lift it after a question and change his picture); when every later pair crosses one, the range is the one day d4.
+      let i4 = 3;
+      while (i4 + 1 < freeDays.length && allRows.some(r => r.day > freeDays[i4].day && r.day < freeDays[i4 + 1].day && r.np === "own")) i4++;
+      const d4 = freeDays[i4].day;
+      const d5 = i4 + 1 < freeDays.length ? freeDays[i4 + 1].day : d4;
+      if (i4 !== 3 || d5 === d4) console.log(`     (Offer painter: the Either range moved to ${d4}..${d5} so it crosses no own No primary day of s1)`);
       // tap, tap again (clears), tap again (paints)
       await tap(d1); const s1a = await stateOf(d1); await tap(d1); const s1b = await stateOf(d1); await tap(d1); const s1c = await stateOf(d1);
       if (!(s1a.state === "draft" && s1a.offer === "primary" && s1b.state === "free" && s1b.offer === "" && s1c.state === "draft" && s1c.offer === "primary")) fail(`Offer painter: tap / tap again / tap on ${d1} read ${JSON.stringify([s1a, s1b, s1c])}, expected draft primary -> free -> draft primary`);
@@ -5887,7 +6042,9 @@ try {
       if (!new RegExp("Start .*" + mdOfDay(d4).replace("/", "\\/") + " - tap the end day").test(hintMid) || !(await page.$("[data-testid=ofp-cancel-start]"))) fail("Offer painter: the range hint does not name the start and offer 'x cancel start': " + hintMid);
       else ok(`Offer painter: range hint '${hintMid.slice(0, 70)}' with 'x cancel start'`);
       await tap(d5);
-      const expectRange = allRows.filter(r => r.day >= d4 && r.day <= d5 && r.state === "free" && !r.why).map(r => r.day);
+      // Prompt 28: the range expectation also requires data-noprimary="" (no own No primary row lies inside it - picked above; a
+      // scheduler's range day carries a why, "backup only - No primary (set by the scheduler)", and is skipped by the brush)
+      const expectRange = allRows.filter(r => r.day >= d4 && r.day <= d5 && r.state === "free" && !r.why && !r.np).map(r => r.day);
       const expected = { [d1]: "primary", [d2]: "primary", [d3]: "backup" }; expectRange.forEach(d => { expected[d] = "either"; });
       const drafts = await page.$$eval("[data-testid=ofp-day][data-state=draft]", els => els.map(e => [e.getAttribute("data-day"), e.getAttribute("data-offer")]));
       const draftMap = Object.fromEntries(drafts);
@@ -6084,6 +6241,197 @@ try {
     }
   } catch (e) { fail("Offer painter: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-offers.png"), fullPage: false }); } catch (e2) {} }
 
+  // ---- Prompt 28 (10/1): No primary days - a surgeon marks his own (Faraz: "I do want them to be able to do that") ----
+  // A second page routed as s2 Burchett (role surgeon, a fake JWT), 390 x 844: Paint offers -> arm No primary (the legend shows)
+  // -> the first month starting after every served period (nothing frozen there) -> his live single-day backup_only rows in
+  // that month read 'own' (Jackson County, when the month holds one; else a logged skip) -> two free rows marked (draft 'add',
+  // pill 'No primary', '2 unsaved') -> Save = exactly ONE rpc/save_offers { p_person s2, p_rows [], p_clear [], p_np_add
+  // [D1, D2], p_np_clear [] }, no set_offer_mode, no direct availability write, ONE audit 'Burchett: no primary on M/D, M/D'
+  // -> reload: both read 'own' (the npStore overlay serves what the mock wrote) -> Either pasted onto D1, D2 asks
+  // ONCE to lift both (dismissed: nothing drafted, '2 No primary day(s) left out') -> Clear D1 -> Save = ONE save_offers
+  // { p_np_add [], p_np_clear [D1] } + audit 'Burchett: no primary lifted on M/D' (the painter's period is named only for a day
+  // inside it - review 10/1) -> reload: D1 '', D2 'own' -> with s2 'Only these days' on the served period, its month's legend and
+  // hint say paint Backup too (review 10/1), the month after every period keeps 'backup still fine'. The smoke
+  // asserts the request bodies and the audit; the database probe (sql/probes/no-primary-probe.sql) proves the server's side.
+  {
+    const NP_UID = "00000000-0000-4000-8000-00000000e2e2";
+    const NP_PROFILE = { id: NP_UID, person_id: "s2", role: "surgeon", display_name: "Burchett", email: null, created_at: "2026-09-24T00:00:00Z" };
+    const NP_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: NP_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const npp = await context.newPage();
+    watchPage(npp, "no-primary");
+    await npp.setViewportSize({ width: 390, height: 844 });
+    await npp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, NP_JWT);
+    await npp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await npp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(NP_PROFILE));
+    const npDialogs = [];
+    let npDismissLift = false;
+    npp.on("dialog", (d) => { const m = d.message(); npDialogs.push(m); if (npDismissLift && /marked No primary/.test(m)) d.dismiss(); else d.accept(); });
+    npStore.page = npp; npStore.added = []; npStore.clearedKeys = new Set(); npStore.served = []; npStore.subs = { [NP_UID]: "s2" };
+    const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+    const rowOf = (d) => npp.$eval(`[data-testid=ofp-day][data-day="${d}"]`, el => ({ state: el.getAttribute("data-state"), np: el.getAttribute("data-noprimary"), draft: el.getAttribute("data-np-draft"), npWhy: el.getAttribute("data-np-why"), pill: ((el.querySelector("[data-testid=ofp-np-pill]") || {}).textContent || "").trim() }));
+    const servedEnds = periodStore.map(p => String(p.end_day || "").slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    const lastEnd = servedEnds.length ? servedEnds[servedEnds.length - 1] : todayCentral;
+    const target = (() => { const y = +lastEnd.slice(0, 4), m = +lastEnd.slice(5, 7); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; })();
+    const openAt = async (ym) => {
+      await npp.click("[data-testid=nav-paint-offers]");
+      await npp.waitForSelector("[data-testid=ofp-sheet][data-person=s2]", { timeout: 8000 });
+      await npp.waitForTimeout(300);
+      for (let k = 0; k < 36; k++) { const m = await npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month")); if (m >= ym) break; await npp.click("[data-testid=ofp-next]"); await npp.waitForTimeout(100); }
+      return npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
+    };
+    const reloadNp = async () => { await npp.reload({ waitUntil: "domcontentloaded" }); await npp.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 }); await npp.waitForSelector("text=Synced", { timeout: 30000 }); await npp.waitForTimeout(800); };
+    // review 10/1: the painter's period names the audit text only when a saved day lies inside it (the days here are after it)
+    const labelSuffix = async (days) => { const id = await npp.$eval("[data-testid=ofp-period]", el => el.getAttribute("data-period-id")).catch(() => null); const p = id ? periodStore.find(x => x.id === id) : null; return p && (days || []).some(d => d >= String(p.start_day).slice(0, 10) && d <= String(p.end_day).slice(0, 10)) ? " (" + p.label + ")" : ""; };
+    try {
+      await loadWithRetry(npp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (No primary)");
+      await npp.waitForSelector("text=Synced", { timeout: 30000 });
+      await npp.waitForTimeout(800);
+      if ((await npp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the No primary page shows a Setup tab - it is being treated as the scheduler");
+      // 1. the painter, the No primary brush armed, the legend; 2. the first month after every served period
+      const month = await openAt(target);
+      if (month !== target) throw new Error(`could not reach ${target} in the painter (at ${month})`);
+      await npp.click("[data-testid=ofp-brush-noprimary]");
+      await npp.waitForTimeout(150);
+      const armedNp = await npp.$eval("[data-testid=ofp-brush-noprimary]", el => ({ armed: el.getAttribute("data-armed"), text: el.textContent.trim(), bg: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color }));
+      const legend = await npp.$eval("[data-testid=ofp-legend]", el => { const r = el.getBoundingClientRect(); return { text: el.innerText.replace(/\s+/g, " ").trim(), h: r.height, visible: r.height > 0 && r.width > 0 }; }).catch(() => null);
+      const hintNp = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+      if (armedNp.armed !== "1" || armedNp.text !== "No primary" || !/linear-gradient/.test(armedNp.bg) || armedNp.color !== "rgb(255, 255, 255)") fail("No primary (s2): the fifth brush should arm as 'No primary' (gradient, white text): " + JSON.stringify(armedNp));
+      else if (!legend || !legend.visible || legend.text !== "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change." || legend.h > 40) fail("No primary (s2): the legend should show (at most two lines at 390) while the brush is armed: " + JSON.stringify(legend));
+      else if (hintNp !== "Tap a day to mark yourself No primary (backup is still fine); tap again to take it back.") fail("No primary (s2): the tap hint reads '" + hintNp + "'");
+      else ok(`No primary (s2): Paint offers -> ${target}; ofp-brush-noprimary armed (gradient, white text), legend shown (${Math.round(legend.h)} px), hint '${hintNp.slice(0, 60)}...'`);
+      const listGeomNp = await npp.evaluate(() => { const l = document.querySelector("[data-testid=ofp-list]"); return { list: l ? l.clientHeight : 0, vh: window.innerHeight, sw: document.querySelector("[data-testid=ofp-sheet]").scrollWidth }; });
+      if (listGeomNp.list < 0.4 * listGeomNp.vh || listGeomNp.sw > 391) fail(`No primary (s2, 390x844): with the legend up the day list is ${listGeomNp.list}px of ${listGeomNp.vh} (sheet ${listGeomNp.sw} wide) - it must keep >= 40% and never scroll sideways`);
+      else ok(`No primary (s2, 390x844): with the legend up the day list keeps ${listGeomNp.list}px of ${listGeomNp.vh} (${Math.round(100 * listGeomNp.list / listGeomNp.vh)}%), no sideways scroll`);
+      // 3. his live single-day backup_only rows in that month (Cowork's Jackson County entries, any source) read 'own'; a range 'range'
+      const mine = npStore.served.filter(r => r && r.person_id === "s2" && r.kind === "backup_only");
+      const rangesS2 = mine.filter(r => !npIsSingle(r)).map(r => [String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)]);
+      const ownIn = mine.filter(r => npIsSingle(r) && String(r.start_date).slice(0, 7) === target).map(r => String(r.start_date).slice(0, 10)).filter(d => !rangesS2.some(([s, e]) => d >= s && d <= e)).sort();
+      if (!ownIn.length) console.log(`     (No primary (s2): the served availability holds no single-day backup_only row of s2 in ${target} - the 'own' read-back of live rows is not exercised this run; ${mine.length} backup_only row(s) of s2 served in all)`);
+      else {
+        const reads = []; for (const d of ownIn) reads.push([d, (await rowOf(d)).np]);
+        const wrong = reads.filter(([, v]) => v !== "own");
+        if (wrong.length) fail(`No primary (s2): his single-day backup_only rows in ${target} should read data-noprimary="own" (editable by him, whatever their source): ${JSON.stringify(wrong)}`);
+        else ok(`No primary (s2): his ${ownIn.length} single-day backup_only row(s) in ${target} (${ownIn.map(md).join(", ")}; sources ${[...new Set(mine.filter(r => ownIn.includes(String(r.start_date).slice(0, 10))).map(r => r.source || "-"))].join("/")}) read 'No primary' - his to clear`);
+      }
+      // 4. two free rows marked
+      const picks = await npp.$$eval("[data-testid=ofp-day][data-state=free]", els => els.filter(e => !e.getAttribute("data-noprimary") && !e.getAttribute("data-np-why") && !e.disabled).map(e => e.getAttribute("data-day")));
+      if (picks.length < 2) throw new Error(`fewer than two free rows to mark in ${target} (${picks.length})`);
+      const [D1, D2] = picks;
+      await npp.click(`[data-testid=ofp-day][data-day="${D1}"]`); await npp.waitForTimeout(120);
+      await npp.click(`[data-testid=ofp-day][data-day="${D2}"]`); await npp.waitForTimeout(150);
+      const r1 = await rowOf(D1), r2 = await rowOf(D2);
+      const status1 = await npp.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      const counts1 = await npp.$eval("[data-testid=ofp-counts]", el => ({ n: +el.getAttribute("data-month-noprimary"), text: el.innerText.replace(/\s+/g, " ") }));
+      const good4 = (r) => r.np === "own" && r.draft === "add" && r.state === "draft" && r.pill === "No primary";
+      if (!good4(r1) || !good4(r2) || status1 !== "2 unsaved") fail(`No primary (s2): ${D1} / ${D2} should read own + draft add + state draft + pill 'No primary', status '2 unsaved': ${JSON.stringify({ r1, r2, status1 })}`);
+      else if (counts1.n < 2 || !/ no primary/.test(counts1.text)) fail("No primary (s2): the header count should carry the marked days: " + JSON.stringify(counts1));
+      else ok(`No primary (s2): ${D1} and ${D2} marked - data-noprimary own, data-np-draft add, pill 'No primary', '2 unsaved'; header '${counts1.text.slice(0, 80)}'`);
+      // 5. Save = ONE save_offers carrying the days; 6. ONE audit naming them
+      const suffix = await labelSuffix([D1, D2]);
+      const b5 = writes.length;
+      await npp.click("[data-testid=ofp-save]");
+      await waitFor(() => writesSince(b5, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await npp.waitForTimeout(500);
+      const saves5 = writesSince(b5, "/rest/v1/rpc/save_offers"), modes5 = writesSince(b5, "/rest/v1/rpc/set_offer_mode");
+      const avail5 = writesSince(b5).filter(w => /\/rest\/v1\/availability/.test(w.path) || /rpc\/save_no_primary/.test(w.path));
+      const sb5 = saves5[0] ? bodyOf(saves5[0]) : null;
+      const audit5 = auditSince(b5, "offers.save");
+      const nAudit5 = writesSince(b5, "/rest/v1/audit_log").filter(w => (bodyOf(w) || {}).action === "offers.save").length;
+      const want5 = `Burchett: no primary on ${md(D1)}, ${md(D2)}${suffix}`;
+      if (saves5.length !== 1 || !sb5 || sb5.p_person !== "s2" || JSON.stringify(sb5.p_rows) !== "[]" || JSON.stringify(sb5.p_clear) !== "[]" || JSON.stringify(sb5.p_np_add) !== JSON.stringify([D1, D2]) || JSON.stringify(sb5.p_np_clear) !== "[]") fail("No primary (s2): Save should be exactly ONE rpc/save_offers { p_person s2, p_rows [], p_clear [], p_np_add [D1, D2], p_np_clear [] }: " + JSON.stringify(saves5.map(w => w.body)).slice(0, 400));
+      else if (modes5.length || avail5.length) fail("No primary (s2): no set_offer_mode and no direct availability / save_no_primary call may go out: " + JSON.stringify(modes5.concat(avail5).map(w => w.method + " " + w.path)));
+      else if (nAudit5 !== 1 || !audit5 || audit5.detail.summary !== want5 || audit5.actor_id !== "s2") fail(`No primary (s2): expected ONE audit offers.save '${want5}' as s2: ` + JSON.stringify(audit5));
+      else ok(`No primary (s2): Save = ONE rpc/save_offers (p_rows [], p_np_add [${D1}, ${D2}]) + ONE audit offers.save "${audit5.detail.summary}"; no set_offer_mode, no direct availability write`);
+      const stored5 = npStore.added.filter(r => r.person_id === "s2" && [D1, D2].includes(r.start_date));
+      console.log(`     (No primary (s2): the mock's rows - ${stored5.map(r => r.start_date + " " + r.source + "/" + r.created_by + " note " + r.note).join("; ")})`);
+      if (!writesSince(b5).every(w => noAddress(w.body))) fail("No primary (s2): a write body carries an email address");
+      const saved5 = await npp.$eval("[data-testid=ofp-saved]", el => el.textContent.trim()).catch(() => null);
+      if (saved5 !== "Saved 2 changes") fail("No primary (s2): the saved note should read 'Saved 2 changes', got " + JSON.stringify(saved5)); else ok("No primary (s2): the saved note reads 'Saved 2 changes'");
+      // 7. reload: both read 'own', no draft
+      await reloadNp();
+      await openAt(target);
+      const r1b = await rowOf(D1), r2b = await rowOf(D2);
+      if (r1b.np !== "own" || r2b.np !== "own" || r1b.draft || r2b.draft || r1b.state === "draft" || r2b.state === "draft") fail("No primary (s2): after the reload both days should read own with no draft: " + JSON.stringify({ r1b, r2b }));
+      else ok(`No primary (s2): after a reload ${D1} and ${D2} read 'No primary' (data-noprimary own, no draft)`);
+      // the lift question: Either pasted onto both days asks ONCE for the batch; dismissed = nothing drafted, the hint says so
+      await npp.click("[data-testid=ofp-brush-either]");
+      await npp.click("[data-testid=ofp-paste-toggle]");
+      await npp.fill("[data-testid=ofp-paste-text]", `${D1}, ${D2}`);
+      npDismissLift = true; const dl0 = npDialogs.length;
+      await npp.click("[data-testid=ofp-paste-add]"); await npp.waitForTimeout(250);
+      npDismissLift = false;
+      const lifts = npDialogs.slice(dl0).filter(m => /marked No primary/.test(m));
+      const statusL = await npp.$eval("[data-testid=ofp-status]", el => el.innerText.trim());
+      const hintL = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+      if (lifts.length !== 1 || !lifts[0].includes(md(D1)) || !lifts[0].includes(md(D2)) || !/2 of these days are marked No primary \(.*\) - offer primary or backup there and lift the block\?/.test(lifts[0])) fail("No primary (s2): Either on two marked days should ask ONCE naming both: " + JSON.stringify(npDialogs.slice(dl0)));
+      else if (statusL !== "No unsaved changes" || !/2 No primary day\(s\) left out/.test(hintL)) fail(`No primary (s2): the declined lift should leave nothing drafted and say '2 No primary day(s) left out' (status '${statusL}', hint '${hintL}')`);
+      else ok(`No primary (s2): Either on both marked days asked once ('${lifts[0].slice(0, 90)}...'); declined -> nothing drafted, hint '${hintL.slice(0, 60)}'`);
+      await npp.click("[data-testid=ofp-paste-toggle]");
+      // 8. Clear D1 -> ONE save_offers lifting it + its audit
+      await npp.click("[data-testid=ofp-brush-clear]");
+      await npp.click(`[data-testid=ofp-day][data-day="${D1}"]`); await npp.waitForTimeout(150);
+      const r1c = await rowOf(D1);
+      if (r1c.draft !== "clear" || r1c.np !== "" || r1c.pill !== "will lift No primary") fail(`No primary (s2): Clear on ${D1} should draft a lift ('will lift No primary', data-np-draft clear): ` + JSON.stringify(r1c));
+      else ok(`No primary (s2): Clear on ${D1} drafts the lift ('will lift No primary')`);
+      const suffix8 = await labelSuffix([D1]);
+      const b8 = writes.length;
+      await npp.click("[data-testid=ofp-save]");
+      await waitFor(() => writesSince(b8, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "offers.save"), 8000);
+      await npp.waitForTimeout(500);
+      const saves8 = writesSince(b8, "/rest/v1/rpc/save_offers");
+      const sb8 = saves8[0] ? bodyOf(saves8[0]) : null;
+      const audit8 = auditSince(b8, "offers.save");
+      const nAudit8 = writesSince(b8, "/rest/v1/audit_log").filter(w => (bodyOf(w) || {}).action === "offers.save").length;
+      const want8 = `Burchett: no primary lifted on ${md(D1)}${suffix8}`;
+      if (saves8.length !== 1 || !sb8 || JSON.stringify(sb8.p_np_add) !== "[]" || JSON.stringify(sb8.p_np_clear) !== JSON.stringify([D1]) || JSON.stringify(sb8.p_rows) !== "[]" || JSON.stringify(sb8.p_clear) !== "[]" || sb8.p_person !== "s2") fail("No primary (s2): the Clear Save should be ONE rpc/save_offers { p_np_add [], p_np_clear [D1], p_rows [], p_clear [] }: " + JSON.stringify(saves8.map(w => w.body)).slice(0, 400));
+      else if (nAudit8 !== 1 || !audit8 || audit8.detail.summary !== want8) fail(`No primary (s2): expected the audit '${want8}': ` + JSON.stringify(audit8));
+      else ok(`No primary (s2): Clear + Save = ONE rpc/save_offers (p_np_clear [${D1}]) + ONE audit "${audit8.detail.summary}"`);
+      // 9. reload: D1 cleared, D2 still marked
+      await reloadNp();
+      await openAt(target);
+      await npp.click("[data-testid=ofp-brush-noprimary]");
+      const r1d = await rowOf(D1), r2d = await rowOf(D2);
+      if (r1d.np !== "" || r2d.np !== "own") fail("No primary (s2): after the second reload D1 should be clear and D2 still marked: " + JSON.stringify({ r1d, r2d }));
+      else ok(`No primary (s2): after a reload ${D1} is clear and ${D2} still reads 'No primary'`);
+      await npp.locator(`[data-testid=ofp-day][data-day="${D2}"]`).scrollIntoViewIfNeeded();
+      await npp.screenshot({ path: path.join(OUT, "no-primary-390.png"), fullPage: false });
+      ok("screenshot test/ui/out/no-primary-390.png");
+      // 10. review 10/1: inside an "Only these days" (exhaustive) period a No primary day is not an offer (backup there needs a
+      // Backup offer), so the legend and the hint say paint Backup too; after every period (the month above) they keep "backup
+      // still fine". s2's saved mode in the served period is set to exhaustive for this check only and restored right after (the
+      // later steps restate the store at run time).
+      const readLegend = () => npp.$eval("[data-testid=ofp-legend]", el => ({ exh: el.getAttribute("data-exh"), text: el.innerText.replace(/\s+/g, " ").trim() })).catch(() => null);
+      const legendOut = await readLegend();
+      await npp.click("[data-testid=ofp-close]");
+      if (!offerPeriod) console.log("     (No primary (s2): no served period - the 'Only these days' legend check is skipped)");
+      else {
+        const hadMode = Object.prototype.hasOwnProperty.call(offerPeriod.offer_modes, "s2"), savedModeS2 = offerPeriod.offer_modes.s2;
+        try {
+          offerPeriod.offer_modes.s2 = "exhaustive";
+          await reloadNp();
+          const exhMonth = await openAt(String(offerPeriod.start_day).slice(0, 7));
+          await npp.click("[data-testid=ofp-brush-noprimary]"); await npp.waitForTimeout(150);
+          const legendExh = await readLegend();
+          const hintExh = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
+          const wantExh = "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
+          if (!legendOut || legendOut.exh !== "0" || !/backup still fine/.test(legendOut.text)) fail(`No primary (s2): after every period (${target}) the legend should keep 'backup still fine' (data-exh 0): ` + JSON.stringify(legendOut));
+          else if (!legendExh || legendExh.exh !== "1" || legendExh.text !== wantExh) fail(`No primary (s2): in ${exhMonth} (${offerPeriod.label}, s2 'Only these days') the legend should say paint Backup too: ` + JSON.stringify(legendExh));
+          else if (hintExh !== "Tap a day to mark yourself No primary (\"Only these days\" is on: paint Backup too for backup); tap again to take it back.") fail(`No primary (s2): in ${exhMonth} the tap hint reads '${hintExh}'`);
+          else ok(`No primary (s2): 'Only these days' on ${offerPeriod.label} -> in ${exhMonth} the legend and the hint say paint Backup too (data-exh 1); after every period (${target}) 'backup still fine'`);
+          await npp.click("[data-testid=ofp-close]");
+        } finally {
+          if (hadMode) offerPeriod.offer_modes.s2 = savedModeS2; else delete offerPeriod.offer_modes.s2;
+        }
+      }
+    } catch (e) {
+      fail("No primary (s2): " + errLine(e));
+      try { await npp.screenshot({ path: path.join(OUT, "failure-no-primary.png"), fullPage: false }); } catch (e2) {}
+    } finally {
+      npStore.page = null; npStore.added = []; npStore.clearedKeys = new Set(); npStore.served = []; npStore.subs = {};
+      await npp.close().catch(() => {});
+    }
+  }
+
   // ---- Prompt 14 part 3c (U3c): the day editor's offer labels + My schedule's offer pills ----
   // Fixture: U3C.day carries s3's offer (his held role) and s4's 'either' inside the seed period (the store above).
   // Every expectation is restated from the harness store AT RUN TIME (s1's standing moved with the painter save
@@ -6214,10 +6562,61 @@ try {
     if (outsidePer.length) fail(`U3c My schedule (Acton): a day outside every period carries an offer chip: ${outsidePer.slice(0, 3).join(", ")}`); else ok("U3c My schedule (Acton): no chip on a day outside the period");
     await page.screenshot({ path: path.join(OUT, "myschedule-offers.png"), fullPage: false });
     ok("screenshot test/ui/out/myschedule-offers.png");
+    // review 9/27 Do first 9 (10/1), 1180 px: the 90-day list is still a 420 px scroller on a wide screen and a row is one
+    // line with its 'Trade' + 'Give away' at the right end
+    try {
+      const w = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!w || !w.rows) console.log("     (DF9 1180px: Acton has no upcoming row - not exercised)");
+      else {
+        const off = w.per.filter(p => p.spread === null || p.spread > 6 || p.actsSpread === null || p.actsSpread > 6 || !p.btns.some(b => b.id === "mine-trade" && b.text === "Trade"));
+        if (w.lists[0].maxH !== "420px" || w.lists[0].overflowY !== "auto") fail(`DF9 1180px: the 90-day list should stay a 420 px scroller on a wide screen, got ${JSON.stringify(w.lists[0])}`);
+        else if (off.length) fail(`DF9 1180px: ${off.length} of ${w.rows} own row(s) are not one line with 'Trade' + 'Give away' on it: ${JSON.stringify(off.slice(0, 2))}`);
+        else ok(`DF9 1180px: the list is a 420 px scroller (overflow-y auto); ${w.rows} own row(s), each one line with 'Trade' + 'Give away' at its end`);
+      }
+    } catch (e) { fail("DF9 1180px: " + errLine(e)); }
+    // review of Do first 9 (10/2), a phone in landscape (844 x 390): wider than the phone block's 600 px, under 500 px tall -
+    // @media (max-height: 500px) drops the 420 px scroller there too, so the list is part of the page (merge review, 10/2:
+    // the rule was pinned in data-layer only)
+    try {
+      await page.setViewportSize({ width: 844, height: 390 });
+      await page.waitForTimeout(250);
+      const l = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!l || !l.lists.length) console.log("     (DF9 844x390: no mine-upcoming list - not exercised)");
+      else if (l.lists.some(x => x.maxH !== "none" || x.overflowY !== "visible" || x.nested)) fail(`DF9 844x390: on a short (landscape) screen the 90-day list must not be a 420 px scroller, got ${JSON.stringify(l.lists)}`);
+      else ok(`DF9 844x390: on a short (landscape) screen the 90-day list is part of the page (max-height none, overflow-y visible; ${l.rows} row(s))`);
+    } catch (e) { fail("DF9 844x390: " + errLine(e)); }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(250);
     const m390 = await page.evaluate(() => { const c = document.querySelector("[data-testid=mine-offers]"); const p = document.querySelector("[data-testid=mine-offer]"); return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, csw: c ? c.scrollWidth : 0, ccw: c ? c.clientWidth : 0, pill: p ? p.scrollWidth <= p.clientWidth + 0.5 : null }; });
     if (m390.sw > m390.cw + 1 || m390.csw > m390.ccw + 1 || m390.pill === false) fail(`U3c 390px My schedule: the offers card / a pill overflows (${JSON.stringify(m390)})`); else ok(`U3c 390px My schedule: no horizontal scroll (page ${m390.sw} in ${m390.cw}, card ${m390.csw} in ${m390.ccw}), pills unclipped`);
+    // review 9/27 Do first 9 (10/1), 390 px: the own rows (the scheduler's picker on Acton) - the padlock inside the date
+    // span, the date / role / holder on ONE line, 'Trade' + 'Give away' together on the line under it (each >= 36 px), and
+    // the list part of the page (no nested 420 px scroller; every row there - the count is checked against the served rows
+    // in the My schedule step)
+    try {
+      const g = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!g || !g.rows) console.log("     (DF9 390px own rows: Acton has no upcoming row - not exercised)");
+      else {
+        const bad = [];
+        if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) bad.push(`the list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
+        if (g.pageW > g.viewW + 1) bad.push(`the page scrolls sideways (${g.pageW} > ${g.viewW})`);
+        for (const p of g.per) {
+          const t = p.btns.find(b => b.id === "mine-trade"), gv = p.btns.find(b => b.id === "mine-give");
+          if (p.lockOutside) bad.push(`${p.day}: a padlock outside the date span`);
+          else if (p.spread === null || p.spread > 6) bad.push(`${p.day}: the date / role / holder are not one line (centre spread ${p.spread} px)`);
+          else if (!t || !gv || t.text !== "Trade" || !t.inActs || !gv.inActs) bad.push(`${p.day}: 'Trade' + 'Give away' not together in mine-acts ${JSON.stringify(p.btns)}`);
+          else if (t.h < 36 || gv.h < 36) bad.push(`${p.day}: a row button under 36 px (Trade ${t.h}, Give away ${gv.h})`);
+          else if (Math.abs(t.top - gv.top) > 2 || p.actsTop < p.dateBottom) bad.push(`${p.day}: 'Trade' + 'Give away' are not one line under the date (tops ${t.top} / ${gv.top}, mine-acts ${p.actsTop}, date bottom ${p.dateBottom})`);
+          // review of Do first 9 (10/2): the badges / offer tag sit in mine-acts (line two), so the holder's name is never clipped
+          else if (p.chipsOutside) bad.push(`${p.day}: ${p.chipsOutside} badge / offer tag(s) outside mine-acts (beside the holder on line one)`);
+          else if (!p.holder || p.holder.clipped) bad.push(`${p.day}: the holder is clipped - '${p.holder ? p.holder.text : "?"}' needs ${p.holder ? p.holder.sw : "?"} px, has ${p.holder ? p.holder.cw : "?"}`);
+        }
+        const locked = g.per.filter(p => p.locked);
+        const withChips = await page.$$eval("[data-testid=mine-card] [data-testid=mine-acts]", els => els.filter(a => a.querySelector("[data-badge], [data-testid=mine-offer-tag]")).length).catch(() => 0);
+        if (bad.length) fail(`DF9 390px own rows (Acton, ${g.rows} row(s)): ${bad.slice(0, 4).join(" | ")}`);
+        else ok(`DF9 390px own rows (Acton): ${g.rows} row(s), ${locked.length} locked - the padlock inside the date span, date / role / holder one line with the holder never clipped (e.g. '${g.per[0].holder.text}'), the badges / offer tag (${withChips} row(s) carry one) + 'Trade' + 'Give away' together in mine-acts on the line under it (>= ${Math.min(...g.per.map(p => Math.min(...p.btns.map(b => b.h))))} px), rows ${Math.min(...g.per.map(p => p.rowH))}-${Math.max(...g.per.map(p => p.rowH))} px; the list is part of the page (max-height none)${locked.length ? "" : " (no locked row this run - the padlock placement is not exercised here; the follower step reads it)"}`);
+      }
+    } catch (e) { fail("DF9 390px own rows: " + errLine(e)); }
     await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(OUT, "myschedule-offers-390.png"), fullPage: false });
     ok("screenshot test/ui/out/myschedule-offers-390.png");
@@ -10268,7 +10667,9 @@ try {
       await sess.goto(BASE, { waitUntil: "domcontentloaded" });
       await sess.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
       await sess.waitForSelector("text=Synced", { timeout: 30000 });
-      await sess.evaluate(() => { window.__toastLog = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt && txt !== last) window.__toastLog.push(txt); last = txt; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
+      // Review 9/27 Do first 8 - adapted deliberately (as __df2Toasts): an identical repeat while the toast is up is a
+      // count (toast-count), not a new text - keyed on both, it still shows up here as another toast.
+      await sess.evaluate(() => { window.__toastLog = []; let last = ""; const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (txt && key !== last) window.__toastLog.push(txt); last = key; }; new MutationObserver(rec).observe(document.body, { childList: true, subtree: true, characterData: true }); });
       await sess.waitForTimeout(3500); // past the autosave hydration window; the heartbeat's refresh attempt has happened
       // (1) the first write path already found the session dead: one refresh attempt, the banner once
       const bannerAtLoad = await banners();
@@ -11286,6 +11687,389 @@ try {
     await pdf.close();
   }
 
+  // ====================== Review of Do first 8 (10/2): an error toast at 390 px - wide, and never over the day editor's Save / Cancel ======================
+  // A page whose availability GETs answer 500: the mount read toasts "Couldn't load availability statements - data shown
+  // may be incomplete." (an error - up at least 8 s). At 390 x 844 the day editor opens while it is up. The box must be at
+  // least 300 px wide (with left 50% and no width it was the 195 px right of centre - a 160-character error 10 lines tall)
+  // and the centres of Save and Cancel must not land in it (it lifts above the editor's action row when it would overlap).
+  // The header's "N errors" and the toast's close control are >= 36 px tap targets on a phone.
+  {
+    const pt = await context.newPage();
+    watchPage(pt, "toast-390");
+    await pt.setViewportSize({ width: 390, height: 844 });
+    await pt.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: no Realtime re-read
+    await pt.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+    await pt.route((url) => url.hostname === SUPABASE_HOST && url.pathname.startsWith("/rest/v1/availability"), (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      toast390Forced500Lines++;
+      return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ message: "harness: availability read forced to fail (toast-390)" }) });
+    });
+    const T8 = "Do first 8 toast 390px";
+    try {
+      await loadWithRetry(pt, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "toast-390 page");
+      const up = await pt.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Couldn't load availability statements/.test(t.textContent || ""); }, undefined, { timeout: 30000 }).then(() => true).catch(() => false);
+      const tUp = Date.now();
+      if (!up) fail(`${T8}: the forced availability 500 raised no "Couldn't load availability statements" toast`);
+      else {
+        // dispatched clicks: a pointer click on a cell the toast happens to cover would wait out the toast itself
+        await pt.$eval('button[data-tab="calendar"]', el => el.click()).catch(() => {});
+        await pt.waitForSelector(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, { timeout: 8000 });
+        await pt.$eval(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, el => el.click());
+        await pt.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+        await pt.waitForTimeout(150);
+        const m = await pt.evaluate(() => {
+          const box = document.querySelector("[data-testid=toast-box]"), msg = document.querySelector("[data-testid=toast]");
+          if (!box || !msg) return null;
+          const b = box.getBoundingClientRect();
+          const rect = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), w: Math.round(r.width), h: Math.round(r.height) }; };
+          const hit = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { covered: !!(at && box.contains(at)), at: at ? (at.getAttribute("data-testid") || at.tagName + ":" + (at.textContent || "").trim().slice(0, 20)) : null }; };
+          const foot = document.querySelector("[data-testid=editor-footer]");
+          const save = document.querySelector("[data-testid=editor-save]");
+          const cancel = foot ? Array.from(foot.querySelectorAll("button")).find(x => /^(Cancel|Close)$/.test((x.textContent || "").trim())) : null;
+          const close = document.querySelector("[data-testid=toast-close]"), chip = document.querySelector("[data-testid=hdr-errors]");
+          return { text: msg.textContent, box: { w: Math.round(b.width), top: Math.round(b.top), bottom: Math.round(b.bottom), fromBottom: Math.round(window.innerHeight - b.bottom) },
+            foot: foot ? rect(foot) : null, save: hit(save), cancel: hit(cancel), close: close ? rect(close) : null, chip: chip ? rect(chip) : null, vh: window.innerHeight };
+        });
+        const tOpen = Date.now() - tUp;
+        if (!m) fail(`${T8}: the toast was gone ${tOpen} ms after it showed, before the day editor opened (an error stays >= 8 s) - not exercised`);
+        else {
+          const bad = [];
+          if (m.text.length >= 60 && m.box.w < 300) bad.push(`the ${m.text.length}-character toast is ${m.box.w} px wide (< 300 - the half-screen box)`);
+          if (!m.save || m.save.covered) bad.push(`Save's centre lands in the toast (${JSON.stringify(m.save)})`);
+          if (!m.cancel || m.cancel.covered) bad.push(`Cancel's centre lands in the toast (${JSON.stringify(m.cancel)})`);
+          if (!m.close || m.close.w < 36 || m.close.h < 36) bad.push(`the toast's close control is under 36 x 36 (${JSON.stringify(m.close)})`);
+          if (!m.chip || m.chip.h < 36 || m.chip.w < 36) bad.push(`the header's 'N errors' is under 36 x 36 (${JSON.stringify(m.chip)})`);
+          if (bad.length) fail(`${T8}: ${bad.join(" | ")} - ${JSON.stringify(m)}`);
+          else ok(`${T8}: the ${m.text.length}-character error toast is ${m.box.w} px wide at 390 px; with the day editor open (Save's row at ${m.foot.top}-${m.foot.bottom}) the box sits ${m.box.fromBottom} px above the bottom (${m.box.top}-${m.box.bottom}${m.box.bottom <= m.foot.top ? ", lifted above the action row" : ", clear of the action row"}) - Save and Cancel are not covered; toast close ${m.close.w}x${m.close.h}, 'N errors' ${m.chip.w}x${m.chip.h}`);
+          await pt.screenshot({ path: path.join(OUT, "toast-390-editor.png"), fullPage: false });
+        }
+        await pt.keyboard.press("Escape").catch(() => {});
+      }
+    } catch (e) { fail(`${T8}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-390.png"), fullPage: false }); } catch (e2) {} }
+    // Second review fixes of Do first 8 (10/2), 1180 x 800: a choice INSIDE the day editor (an ineligible pick brings up the
+    // override box) grows the centred dialog and moves its action row down without a render of the app - the toast, clear
+    // of the row at open, ended up over Save. The lift now re-measures on the dialog's resize (a ResizeObserver). A fresh
+    // load gives a fresh error toast; the pick only raises the override box (no draft change unless the role was locked and
+    // had to be unlocked first - a draft change, never saved: the page closes with the editor open). When the pick does not
+    // move the row under the toast (the day's data), a 600 px spacer put into the dialog does (it reaches its 92vh cap and
+    // the sticky row sits over the toast's band) - the observer does not care what resized the dialog.
+    const T8b = "Do first 8 toast 1180x800 editor resize";
+    try {
+      await pt.setViewportSize({ width: 1180, height: 800 });
+      await loadWithRetry(pt, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "toast-1180 page");
+      const up2 = await pt.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Couldn't load availability statements/.test(t.textContent || ""); }, undefined, { timeout: 30000 }).then(() => true).catch(() => false);
+      if (!up2) fail(`${T8b}: the forced availability 500 raised no "Couldn't load availability statements" toast at 1180 px`);
+      else {
+        await pt.$eval('button[data-tab="calendar"]', el => el.click()).catch(() => {});
+        await pt.waitForSelector(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, { timeout: 8000 });
+        await pt.$eval(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, el => el.click());
+        await pt.waitForSelector("[data-testid=editor-footer]", { timeout: 5000 });
+        await pt.waitForTimeout(150);
+        const geo = () => pt.evaluate(() => {
+          const box = document.querySelector("[data-testid=toast-box]"), foot = document.querySelector("[data-testid=editor-footer]");
+          if (!box || !foot) return null;
+          const b = box.getBoundingClientRect(), f = foot.getBoundingClientRect();
+          const hit = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { covered: !!(at && box.contains(at)), at: at ? (at.getAttribute("data-testid") || at.tagName) : null }; };
+          const cancel = Array.from(foot.querySelectorAll("button")).find(x => /^(Cancel|Close)$/.test((x.textContent || "").trim())) || null;
+          return { box: { top: Math.round(b.top), bottom: Math.round(b.bottom), lifted: box.style.bottom !== "" && !/calc/.test(box.style.bottom) }, foot: { top: Math.round(f.top), bottom: Math.round(f.bottom) }, save: hit(document.querySelector("[data-testid=editor-save]")), cancel: hit(cancel), override: !!document.querySelector("[data-testid=override-confirm]") };
+        });
+        const g0 = await geo();
+        // the pick: an option marked ineligible in the primary select, else the backup select (a locked role is unlocked first)
+        let how = null;
+        for (const role of ["primary", "backup"]) {
+          const st = await pt.evaluate((role) => { const s = document.querySelector(`[data-testid=editor-${role}]`); if (!s) return null; const o = Array.from(s.options).find(x => x.getAttribute("data-eligible") === "false" && x.value && x.value !== s.value); return { disabled: s.disabled, value: o ? o.value : null, label: o ? o.textContent : null }; }, role);
+          if (!st || !st.value) continue;
+          if (st.disabled) { await pt.click(`[data-testid=editor-lock-${role}]`); await pt.waitForTimeout(100); }
+          await pt.selectOption(`[data-testid=editor-${role}]`, st.value);
+          how = `${role} -> '${(st.label || st.value).trim().slice(0, 40)}' (ineligible${st.disabled ? ", the role unlocked first" : ""})`;
+          break;
+        }
+        await pt.waitForTimeout(300);
+        let g1 = await geo();
+        const moved = (g) => !!g && !!g0 && g.foot.top > g0.foot.top && g.foot.top < g0.box.bottom && g.foot.bottom > g0.box.top;
+        let via = how ? `the pick ${how}${g1 && g1.override ? " raised the override box" : ""}` : "no ineligible option to pick";
+        // the case under test needs a toast NOT lifted at open (lifted, it already follows the row); when the pick did not
+        // move the row under it, the spacer does
+        if (g0 && !g0.box.lifted && !moved(g1)) {
+          await pt.evaluate(() => { const foot = document.querySelector("[data-testid=editor-footer]"); const sp = document.createElement("div"); sp.setAttribute("data-df8-probe", "1"); sp.style.height = "600px"; foot.parentNode.insertBefore(sp, foot); });
+          await pt.waitForTimeout(300);
+          g1 = await geo();
+          via += ", then a 600 px spacer in the dialog";
+        }
+        const bad = [];
+        if (!g0 || !g1) bad.push(`no geometry (${JSON.stringify({ g0, g1 })})`);
+        else {
+          if (!g0.box.lifted && !moved(g1)) bad.push(`the action row never moved into the toast's band at open (${g0.box.top}-${g0.box.bottom}) - the resize path is not exercised (${JSON.stringify(g1.foot)})`);
+          if (!g1.save || g1.save.covered) bad.push(`Save's centre lands in the toast after the dialog grew (${JSON.stringify(g1.save)})`);
+          if (!g1.cancel || g1.cancel.covered) bad.push(`Cancel's centre lands in the toast after the dialog grew (${JSON.stringify(g1.cancel)})`);
+        }
+        if (g0 && g0.box.lifted) console.log(`     (${T8b}: the toast was already lifted when the editor opened (today's dialog reaches the toast's band) - the not-lifted case is not exercised this run; Save / Cancel still checked after the change)`);
+        if (bad.length) { fail(`${T8b}: ${bad.join(" | ")} - ${via}; at open ${JSON.stringify(g0)}, after ${JSON.stringify(g1)}`); await pt.screenshot({ path: path.join(OUT, "failure-toast-1180-editor.png"), fullPage: false }).catch(() => {}); }
+        else ok(`${T8b}: at open the row sat at ${g0.foot.top}-${g0.foot.bottom} and the toast at ${g0.box.top}-${g0.box.bottom}${g0.box.lifted ? " (lifted)" : ""}; ${via} moved the row to ${g1.foot.top}-${g1.foot.bottom} with no render of the app - the toast followed to ${g1.box.top}-${g1.box.bottom}, Save and Cancel are not covered`);
+      }
+    } catch (e) { fail(`${T8b}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-1180.png"), fullPage: false }); } catch (e2) {} }
+    await pt.close();
+    toast390Forced500Lines = 0; // a forced answer whose console line never came must not absorb a later page's real 500
+  }
+
+  // ====================== Review 9/27 Do first 4: the startup reads run in parallel; ONE toast for the reads that failed ======================
+  // Its own BrowserContext with a scheduler token minted here (the start-time FAKE_JWT may have expired by now, and an
+  // expired token skips the authenticated-only reads this step counts); Realtime silenced (no SUBSCRIBED refreshAll adds
+  // reads). The page's call_schedule_data GETs are held DF4_HOLD_MS before they are answered; its time_off and availability
+  // GETs answer 500. Expected: every startup read (the anon tables and the authenticated-only ones) is issued before the
+  // FIRST held blob read answers - the chain this replaced issued the schedule_days read only after the blob had answered
+  // and each later read after the one before it, so its first schedule_days GET came DF4_HOLD_MS after the blob's; while
+  // the blob is held the header still says "Connecting" (`loaded` waits for every read) and "Synced" comes only after it
+  // answered; the two failures reach the person in ONE toast that names both (each toasted on its own before, the second
+  // replacing the first) - on both loads of a signed-in open (the mount run, then the stored session's re-run).
+  // Review of Do first 4 (10/1): the recorder logs every time a toast is SHOWN (it resets when the toast goes), and every later
+  // blob GET is held until DF4_GAP_MS after the first one was issued - the re-run's toast then comes after the mount run's has
+  // gone, so each load's toast is seen on its own (same text twice used to collapse into one record). Do first 8 (merge
+  // 10/2): the combined toast is an error, up max(8 s, 60 ms per character) (helpers.toastDurationMs - 8 s for these 109
+  // characters), no longer the old 4.5 s fade - with the old gap the re-run's toast became an "x2" count on the first and
+  // the 375 px measure saw none - and the recorder keys on the text AND the toast-count chip (as __df2Toasts / __toastLog),
+  // measuring the toast-box (the message span sits inside its 10 + 10 px padding); each record carries the chip ("" for a
+  // fresh toast) and a combined-toast record with one fails (review of the merge, 10/2: an "x2" repeat recorded as the
+  // re-run's toast would otherwise pass with the old gap). Both must be the
+  // compact sentence naming both reads; the viewport turns 375 x 812 after the first load and the re-run's toast must stay
+  // under 20% of the screen height there (the joined sentences covered up to half a phone screen).
+  {
+    const DF4_HOLD_MS = 2500;
+    const DF4_TOAST = "Couldn't load vacations and availability - check your connection and reload. What is shown may be incomplete.";
+    const DF4_GAP_MS = DF4_HOLD_MS + HELPERS.toastDurationMs(DF4_TOAST, "error") + 1200; // Do first 8: the error toast's own time (8 s here), not the old 4.5 s
+    const DF4_READS = ["schedule_days", "time_off", "availability", "east_feed", "east_forecast", "east_overrides", "client_versions", "shift_trade_requests", "notifications", "call_offers", "call_periods", "east_vacation_reviews"];
+    const df4Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df4Ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+    await df4Ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: df4Jwt, version: APP_VERSION });
+    await df4Ctx.addInitScript(() => {
+      window.__df4Toasts = [];
+      let last = "";
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key; if (txt) { const box = t.closest("[data-testid=toast-box]") || t; window.__df4Toasts.push({ txt, cnt: (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent, h: Math.round(box.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); } };
+      new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
+    });
+    await df4Ctx.route(cdnMatcher, routeCdn);
+    await df4Ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+    const p4 = await df4Ctx.newPage();
+    watchPage(p4, "do-first-4");
+    const settle4 = restReadsSettled(p4);
+    const reads4 = []; // { path, at, answeredAt } per REST GET, node clock
+    await p4.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: no SUBSCRIBED refreshAll
+    await p4.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET" || !url.pathname.startsWith("/rest/v1/")) return routeSupabase(route);
+      const rec = { path: url.pathname.slice("/rest/v1/".length), at: Date.now(), answeredAt: null };
+      reads4.push(rec);
+      if (rec.path === "time_off" || rec.path === "availability") {
+        df4Forced500Lines++;
+        rec.answeredAt = Date.now();
+        return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: Do first 4 forced read failure", details: null, hint: null }) });
+      }
+      if (rec.path === "call_schedule_data") {
+        const first = reads4.find(r => r.path === "call_schedule_data");
+        await new Promise(r => setTimeout(r, first === rec ? DF4_HOLD_MS : Math.max(DF4_HOLD_MS, first.at + DF4_GAP_MS - Date.now())));
+      }
+      const out = await routeSupabase(route);
+      rec.answeredAt = Date.now();
+      return out;
+    });
+    try {
+      await p4.goto(BASE, { waitUntil: "domcontentloaded" });
+      await p4.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      if (!(await waitFor(() => reads4.some(r => r.path === "call_schedule_data"), 15000))) throw new Error("the page never read call_schedule_data");
+      const blob0 = reads4.find(r => r.path === "call_schedule_data");
+      await p4.waitForTimeout(Math.max(0, blob0.at + DF4_HOLD_MS / 2 - Date.now()));
+      const hdrHeld = await p4.$eval("[data-testid=app-header]", el => el.textContent).catch(() => "");
+      await p4.waitForSelector("text=Synced", { timeout: 30000 });
+      const syncedAt = Date.now();
+      await p4.setViewportSize({ width: 375, height: 812 }); // the re-run's toast is measured at phone width
+      // both loads (the mount run and the sign-in re-run) have read the blob and every read has settled
+      await waitFor(() => reads4.filter(r => r.path === "call_schedule_data" && r.answeredAt).length >= 2, 20000);
+      await settle4();
+      await p4.waitForTimeout(600);
+      const firstAt = {}; reads4.forEach(r => { if (firstAt[r.path] === undefined) firstAt[r.path] = r.at; });
+      const late = DF4_READS.filter(n => firstAt[n] === undefined || firstAt[n] >= blob0.answeredAt);
+      const lag = DF4_READS.filter(n => firstAt[n] !== undefined).map(n => n + " +" + (firstAt[n] - blob0.at) + " ms").join(", ");
+      if (!blob0.answeredAt || blob0.answeredAt - blob0.at < DF4_HOLD_MS - 50) fail(`Do first 4: the harness did not hold the first call_schedule_data read (${blob0.answeredAt ? blob0.answeredAt - blob0.at : "never answered"} ms)`);
+      else if (late.length) fail(`Do first 4: ${late.length} startup read(s) went out only after the held blob read answered (${blob0.answeredAt - blob0.at} ms) - the load is still a chain: ${late.join(", ")} (first GETs after the blob's: ${lag})`);
+      else ok(`Do first 4: all ${DF4_READS.length} startup reads were in flight before the held blob read answered (${blob0.answeredAt - blob0.at} ms): ${lag}`);
+      if (!/Connecting/.test(hdrHeld) || /Synced/.test(hdrHeld)) fail(`Do first 4: with the blob read held the header must still say 'Connecting' (loaded waits for every read) - '${hdrHeld.replace(/\s+/g, " ").slice(0, 120)}'`);
+      else if (syncedAt < blob0.answeredAt) fail(`Do first 4: 'Synced' showed ${blob0.answeredAt - syncedAt} ms before the held blob read answered`);
+      else ok(`Do first 4: 'Connecting' while the blob read was held; 'Synced' ${syncedAt - blob0.answeredAt} ms after it answered`);
+      const toasts = await p4.evaluate(() => (window.__df4Toasts || []).slice());
+      const failT = toasts.filter(t => /Couldn't load (vacations|availability)/.test(t.txt));
+      const forced = reads4.filter(r => r.path === "time_off" || r.path === "availability").length;
+      const phone = failT.filter(t => t.vw === 375);
+      if (forced < 4) fail(`Do first 4: expected both loads to read time_off and availability (4 forced 500s), the route answered ${forced}`);
+      else if (!failT.length) fail("Do first 4: no toast named the failed time_off / availability reads: " + JSON.stringify(toasts));
+      else if (!failT.every(t => t.txt === DF4_TOAST)) fail("Do first 4: expected every load's toast to be ONE compact sentence naming both failed reads ('" + DF4_TOAST + "') - each toast of its own replaces the one before: " + JSON.stringify(failT));
+      // review of the merge (10/2): a record with the count chip is a repeat of the toast still up, not a load's own toast -
+      // DF4_GAP_MS must let the mount run's toast go before the re-run's comes (else the 375 px record measures the x2 box)
+      else if (failT.some(t => t.cnt !== "")) fail("Do first 4: a load's combined toast came as a repeat count (" + failT.map(t => t.cnt || "fresh").join(", ") + ") on the toast still up - each load's toast must be a fresh one (DF4_GAP_MS waits out helpers.toastDurationMs): " + JSON.stringify(failT));
+      else if (failT.length < 2) fail(`Do first 4: ${forced} forced 500s over the two loads but the combined toast was shown ${failT.length} time(s) - one per load expected (the mount run, then the re-run): ${JSON.stringify(toasts)}`);
+      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> the combined toast shown ${failT.length} times (one per load, each a fresh toast - no repeat count), each the compact sentence: '${DF4_TOAST}'`);
+      if (!phone.length) fail("Do first 4: no combined toast was shown at 375 px (the re-run's) - nothing to measure: " + JSON.stringify(failT));
+      else if (phone.some(t => !(t.h > 0) || t.h / t.vh >= 0.2)) fail(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high - over 20% of the screen: ${JSON.stringify(phone)}`);
+      else ok(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high (${Math.round(100 * Math.max(...phone.map(t => t.h)) / 812)}% of the screen)`);
+      await p4.screenshot({ path: path.join(OUT, "do-first-4-startup.png"), fullPage: true }).catch(() => {});
+      // Prompt 28 ship review (10/2): time_off / availability never read this session (every GET answers 500, Realtime silenced,
+      // the poll's re-reads fail too): the painter shows its alert line with the No primary brush disabled (the marks it would
+      // show are unknown), and Generate refuses with its own toast - no preview, nothing written (it ran with both lists empty)
+      await p4.setViewportSize({ width: 1180, height: 900 });
+      await p4.waitForTimeout(300);
+      await p4.click("[data-testid=nav-paint-offers]");
+      await p4.waitForSelector("[data-testid=ofp-sheet][data-person]", { timeout: 8000 });
+      await p4.waitForTimeout(300);
+      const npUnread = await p4.$eval("[data-testid=ofp-np-unread]", el => el.textContent.trim()).catch(() => null);
+      const npBrush = await p4.$eval("[data-testid=ofp-brush-noprimary]", el => ({ disabled: el.disabled, armed: el.getAttribute("data-armed") })).catch(() => null);
+      if (npUnread !== "Couldn't load your No primary days - reload before marking or lifting one.") fail(`Do first 4 + Prompt 28: with availability never read the painter must say so (ofp-np-unread) - got ${JSON.stringify(npUnread)}`);
+      else if (!npBrush || npBrush.disabled !== true || npBrush.armed !== "0") fail(`Do first 4 + Prompt 28: with availability never read the No primary brush must be disabled - ${JSON.stringify(npBrush)}`);
+      else ok(`Do first 4 + Prompt 28: availability never read -> the painter's alert line '${npUnread}' and the No primary brush disabled`);
+      await p4.click("[data-testid=ofp-close]");
+      await p4.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 5000 });
+      await p4.click('button[data-tab="setup"]');
+      if ((await p4.locator("[data-testid=card-setup_generate]").getAttribute("data-open")) !== "1") { await p4.click("[data-testid=card-toggle-setup_generate]"); await p4.waitForTimeout(200); }
+      await p4.waitForSelector("[data-testid=gen-run]", { timeout: 5000 });
+      const df4Writes = [];
+      const onDf4Req = (req) => { if (req.method() !== "GET" && req.method() !== "OPTIONS" && req.method() !== "HEAD" && /\/rest\/v1\/(schedule_days|call_schedule_snapshots|call_schedule_data|availability|time_off)\b/.test(req.url())) df4Writes.push(req.method() + " " + new URL(req.url()).pathname); };
+      p4.on("request", onDf4Req);
+      await p4.click("[data-testid=gen-run]");
+      await p4.waitForTimeout(500);
+      p4.off("request", onDf4Req);
+      const genToast = await p4.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      const genPreview = await p4.$("[data-testid=gen-preview]");
+      const GEN_TA = "Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day. Reload, then generate. Nothing was run.";
+      if (genToast !== GEN_TA) fail(`Do first 4 + Prompt 28: Generate with time_off / availability never read must refuse with '${GEN_TA}' - toast ${JSON.stringify(genToast.slice(0, 200))}`);
+      else if (genPreview) fail("Do first 4 + Prompt 28: Generate refused but a preview was drawn");
+      else if (df4Writes.length) fail(`Do first 4 + Prompt 28: the refused Generate wrote: ${df4Writes.join(", ")}`);
+      else ok(`Do first 4 + Prompt 28: Generate refused with time_off / availability never read ('${genToast.slice(0, 70)}...'), no preview, no write`);
+    } catch (e) { fail("Do first 4: " + errLine(e)); try { await p4.screenshot({ path: path.join(OUT, "failure-do-first-4.png"), fullPage: true }); } catch (e2) {} }
+    await settle4();
+    await df4Ctx.close();
+    df4Forced500Lines = 0;
+  }
+
+  // ====================== Review 9/27 Do first 5: the 60 s poll pauses in hidden tabs, catches up when shown, skips at the sign-in card ======================
+  // Two pages in their own BrowserContexts (a token minted here; Realtime silenced, so every read below is the poll's).
+  // An init script takes over the 60-second interval - the app's callback is kept (window.__df5Poll() runs one tick on
+  // demand) and never fires on its own - makes document.hidden / visibilityState settable (window.__df5SetHidden(h)
+  // flips them and dispatches visibilitychange) and adds window.__df5Skew to Date.now() (the poll's clocks).
+  //  (1) signed in, hidden: a tick reads notifications and nothing else - not schedule_days, the blob, the East tables,
+  //      the offers or the profile (the poll used to run its 14 GETs whatever the tab's state);
+  //  (2) shown again within a minute of the last full refresh: no catch-up read;
+  //  (3) shown again after more than a minute (the clock moved 61 s): refreshAll at once - schedule_days read before the
+  //      next tick - and that first run after the load reads east_feed / east_forecast with east_overrides;
+  //  (4) a visible tick a minute later: schedule_days and east_overrides again, but NOT east_feed / east_forecast (every
+  //      10 minutes); (5) eleven minutes on: east_feed / east_forecast again;
+  //  (6) a page with no session (the sign-in card), visible: a tick reads nothing (it used to run the whole poll, its
+  //      authenticated reads logging "read skipped").
+  {
+    const df5Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df5Init = () => {
+      const si = window.setInterval.bind(window), ci = window.clearInterval.bind(window);
+      const polls = new Map();
+      window.setInterval = function (fn, ms, ...rest) {
+        if (ms === 60000 && typeof fn === "function") { const id = si(() => {}, 2147483647); polls.set(id, fn); return id; }
+        return si(fn, ms, ...rest);
+      };
+      window.clearInterval = function (id) { polls.delete(id); return ci(id); };
+      window.__df5PollCount = () => polls.size;
+      window.__df5Poll = () => { const fns = Array.from(polls.values()); if (!fns.length) return Promise.reject(new Error("no 60 s interval is armed")); return Promise.resolve(fns[fns.length - 1]()); };
+      let hidden = false;
+      Object.defineProperty(Document.prototype, "hidden", { configurable: true, get() { return hidden; } });
+      Object.defineProperty(Document.prototype, "visibilityState", { configurable: true, get() { return hidden ? "hidden" : "visible"; } });
+      window.__df5SetHidden = (h) => { hidden = !!h; document.dispatchEvent(new Event("visibilitychange")); };
+      const dn = Date.now.bind(Date);
+      window.__df5Skew = 0;
+      Date.now = () => dn() + window.__df5Skew;
+    };
+    const DF5_FULL = ["schedule_days", "call_schedule_data", "time_off", "availability", "east_overrides", "east_vacation_reviews", "call_offers", "call_periods", "client_versions", "shift_trade_requests", "user_profiles"];
+    const mkPage5 = async (token, tag) => {
+      const ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+      await ctx.addInitScript(({ token, version }) => { try { if (token) { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); } else { localStorage.removeItem("silvis-auth-token"); localStorage.removeItem("silvis-auth-refresh"); } localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token, version: APP_VERSION });
+      await ctx.addInitScript(df5Init);
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const pg = await ctx.newPage();
+      watchPage(pg, tag);
+      const settle = restReadsSettled(pg);
+      const reads = [];
+      await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await pg.route((url) => url.hostname === SUPABASE_HOST, (route) => {
+        const req = route.request(); const url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname.startsWith("/rest/v1/")) reads.push({ path: url.pathname.slice("/rest/v1/".length), at: Date.now() });
+        return routeSupabase(route);
+      });
+      return { ctx, pg, settle, reads };
+    };
+    const since = (reads, n) => reads.slice(n).map(r => r.path);
+    const tickAndSettle = async (P) => { const n = P.reads.length; await P.pg.evaluate(() => window.__df5Poll()); await P.settle(); return since(P.reads, n); };
+    // (1)-(5): signed in
+    const A = await mkPage5(df5Jwt, "do-first-5");
+    try {
+      await A.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await A.pg.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await A.settle();
+      await A.pg.waitForTimeout(500);
+      const armed = await A.pg.evaluate(() => window.__df5PollCount());
+      if (armed !== 1) throw new Error(`expected one 60 s interval armed after the load, found ${armed}`);
+      // (1) hidden
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      const hid = await tickAndSettle(A);
+      // review of Do first 5 (10/1): exactly notifications - any other table read by a hidden tick fails (not only the full poll's list)
+      const hidFull = hid.filter(p => p !== "notifications");
+      if (!hid.includes("notifications")) fail(`Do first 5 (hidden tab): the tick did not read notifications (background pop-ups depend on it): ${JSON.stringify(hid)}`);
+      else if (hidFull.length) fail(`Do first 5 (hidden tab): the tick read ${hidFull.length} table(s) beyond notifications (${DF5_FULL.some(p => hidFull.includes(p)) ? "the full poll ran" : "a read the hidden head must not make"}): ${JSON.stringify(hid)}`);
+      else ok(`Do first 5 (hidden tab): one tick read ${JSON.stringify(hid)} - notifications only, no schedule_days / blob / East / offers / profile`);
+      // (2) shown again inside the minute
+      let n = A.reads.length;
+      await A.pg.evaluate(() => window.__df5SetHidden(false));
+      await A.pg.waitForTimeout(800); await A.settle();
+      const soon = since(A.reads, n);
+      if (soon.includes("schedule_days")) fail(`Do first 5 (visible again within a minute): a catch-up refresh ran although the load was under a minute ago: ${JSON.stringify(soon)}`);
+      else ok(`Do first 5 (visible again within a minute): no catch-up read (${JSON.stringify(soon)})`);
+      // (3) hidden, the clock moves 61 s, shown -> refreshAll at once
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      n = A.reads.length;
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; window.__df5SetHidden(false); });
+      const caught = await waitFor(() => A.reads.slice(n).some(r => r.path === "schedule_days"), 3000);
+      await A.settle();
+      const cu = since(A.reads, n);
+      if (!caught) fail(`Do first 5 (visible after more than a minute): no refreshAll on becoming visible - reads: ${JSON.stringify(cu)}`);
+      else if (!cu.includes("east_feed") || !cu.includes("east_forecast") || !cu.includes("east_overrides")) fail(`Do first 5 (visible after more than a minute): the first full run after the load must read the three East tables: ${JSON.stringify(cu)}`);
+      else ok(`Do first 5 (visible after more than a minute): refreshAll ran at once (${cu.length} reads, schedule_days and the three East tables among them)`);
+      // (4) a minute later, visible tick: overrides yes, feed / forecast no
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; });
+      const t4 = await tickAndSettle(A);
+      if (!t4.includes("schedule_days") || !t4.includes("east_overrides")) fail(`Do first 5 (visible tick): the full poll did not run (schedule_days / east_overrides missing): ${JSON.stringify(t4)}`);
+      else if (t4.includes("east_feed") || t4.includes("east_forecast")) fail(`Do first 5 (visible tick, a minute after the last East read): east_feed / east_forecast were read again (every 10 minutes): ${JSON.stringify(t4)}`);
+      else ok(`Do first 5 (visible tick): schedule_days and east_overrides read, east_feed / east_forecast not (${t4.length} reads)`);
+      // (5) eleven minutes on
+      await A.pg.evaluate(() => { window.__df5Skew += 11 * 60000; });
+      const t5 = await tickAndSettle(A);
+      if (!t5.includes("east_feed") || !t5.includes("east_forecast")) fail(`Do first 5 (ten-minute East read): eleven minutes after the last East read the tick did not read east_feed / east_forecast: ${JSON.stringify(t5)}`);
+      else ok("Do first 5 (ten-minute East read): eleven minutes on, the tick reads east_feed and east_forecast again");
+    } catch (e) { fail("Do first 5: " + errLine(e)); try { await A.pg.screenshot({ path: path.join(OUT, "failure-do-first-5.png"), fullPage: true }); } catch (e2) {} }
+    await A.settle();
+    await A.ctx.close();
+    // (6) no session: the sign-in card
+    const B = await mkPage5(null, "do-first-5-signed-out");
+    try {
+      await B.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await B.pg.waitForSelector("button:has-text('Sign in')", { timeout: 30000 });
+      await B.settle();
+      await B.pg.waitForTimeout(500);
+      const t6 = await tickAndSettle(B);
+      if (t6.length) fail(`Do first 5 (signed out): a tick at the sign-in card read ${JSON.stringify(t6)} - the poll must skip there`);
+      else ok("Do first 5 (signed out): a tick at the sign-in card reads nothing");
+    } catch (e) { fail("Do first 5 (signed out): " + errLine(e)); try { await B.pg.screenshot({ path: path.join(OUT, "failure-do-first-5-signed-out.png"), fullPage: true }); } catch (e2) {} }
+    await B.settle();
+    await B.ctx.close();
+  }
+
   // ====================== Prompt 11: data management end to end (recorded writes) ======================
   {
     const p3 = await context.newPage();
@@ -11599,7 +12383,8 @@ try {
       else ok("coordinator: the tap hint reads 'Tap a day to offer Acton as ...'");
       let freeDay = null;
       for (let k = 0; k < 6 && !freeDay; k++) {
-        freeDay = await pc.$$eval("[data-testid=ofp-day][data-state=free]", els => { const e = els.find(x => !x.getAttribute("data-why")); return e ? e.getAttribute("data-day") : null; });
+        // Prompt 28: never a day carrying Acton's own No primary mark (data-noprimary="own" - the Either brush would lift it after a question)
+        freeDay = await pc.$$eval("[data-testid=ofp-day][data-state=free]", els => { const e = els.find(x => !x.getAttribute("data-why") && !x.getAttribute("data-noprimary")); return e ? e.getAttribute("data-day") : null; });
         if (!freeDay) { await pc.click("[data-testid=ofp-next]"); await pc.waitForTimeout(200); }
       }
       if (!freeDay) fail("coordinator: no paintable day for s3 within six months");
@@ -11856,6 +12641,53 @@ try {
           if (bad.length) fail(`F3 follower (${theme}): Following does not match the served rows - ${bad.join(" | ")}`);
           else ok(`F3 follower (${theme}): Following = two cards (${counts.join("; ")}), each list equal to the page's own schedule_days rows for that surgeon from ${today} to ${limit}; no trade / offer / painter / vacation / download control`);
         }
+        // review 9/27 Do first 9 (10/1), 390 px: a locked row is ONE line (its padlock sits inside the date span - it used to
+        // wrap onto a line of its own), no row carries a button, and each list is part of the page (no nested scroller)
+        try {
+          const g = await pf.evaluate(DF9_ROWS_PROBE, null);
+          const locked = g ? g.per.filter(p => p.locked) : [];
+          if (!g || !g.lists.length) fail(`DF9 follower (${theme}) 390px: no mine-upcoming list on the Following view`);
+          else if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) fail(`DF9 follower (${theme}) 390px: a list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
+          else if (!locked.length) console.log(`     (DF9 follower (${theme}) 390px: no locked row in the followed lists this run - the one-line check is not exercised)`);
+          else {
+            // second review fixes (10/2): badges that do not fit after the name wrap under it (chipsWrapped) - the date / role /
+            // holder line stays one line, the row may then be two
+            const bad = locked.filter(p => p.lockOutside || p.spread === null || p.spread > 6 || p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));
+            const wrapped = locked.filter(p => p.chipsWrapped).length;
+            if (bad.length) fail(`DF9 follower (${theme}) 390px: ${bad.length} of ${locked.length} locked row(s) take more than one line: ${JSON.stringify(bad.slice(0, 2))}`);
+            else ok(`DF9 follower (${theme}) 390px: every locked row's date / role / holder is one line (${locked.length} of ${g.rows} row(s); ${Math.max(...locked.map(p => p.rowH))} px tall at most, the padlock inside the date span${wrapped ? `; ${wrapped} row(s) with badges wrapped under the name` : ""}); the lists are part of the page (no nested scroller)`);
+          }
+        } catch (e) { fail(`DF9 follower (${theme}) 390px: ` + errLine(e)); }
+        // Second review fixes of Do first 9 (10/2): a colleague's name on a Following row is never clipped on a phone (with
+        // the holder at flex 1 1 0 the badges right after it left it 11-68 px - "bac..."). The real rows at 390 px; then the
+        // worst case, H + E + F + EV injected right after every row's holder (where the Following view puts its badges),
+        // measured at 390, 360 and 320 px and removed in the same evaluate. A row never scrolls sideways either.
+        try {
+          const T9 = `DF9 follower (${theme}) names`;
+          const real = await pf.evaluate(DF9_ROWS_PROBE, null);
+          const realBad = real ? real.per.filter(p => !p.holder || p.holder.clipped) : [];
+          const worst = [];
+          for (const w of [390, 360, 320]) {
+            await pf.setViewportSize({ width: w, height: 844 });
+            await pf.waitForTimeout(150);
+            worst.push(await pf.evaluate((w) => {
+              const rows = Array.from(document.querySelectorAll("[data-testid=following-card] [data-testid=mine-day]"));
+              const mk = (t) => { const s = document.createElement("span"); s.setAttribute("data-df9-probe", "1"); s.textContent = t; s.style.cssText = "font-size:9px;font-weight:800;padding:0 5px;border-radius:4px;background:#e8ecf0;color:#1F2A3A"; return s; };
+              const added = [];
+              for (const r of rows) { let at = r.querySelector("[data-testid=mine-holder]"); if (!at) continue; for (const t of ["H", "E", "F", "EV"]) { const s = mk(t); at.after(s); at = s; added.push(s); } }
+              const per = rows.map(r => { const h = r.querySelector("[data-testid=mine-holder]"); return h ? { day: r.getAttribute("data-day"), text: h.textContent, sw: h.scrollWidth, cw: h.clientWidth, clipped: h.scrollWidth > h.clientWidth + 1, rowOver: r.scrollWidth > r.clientWidth + 1 } : { day: r.getAttribute("data-day"), missing: true }; });
+              added.forEach(s => s.remove());
+              return { w, rows: per.length, bad: per.filter(p => p.missing || p.clipped || p.rowOver), left: document.querySelectorAll("[data-df9-probe]").length };
+            }, w));
+          }
+          await pf.setViewportSize({ width: 390, height: 844 });
+          await pf.waitForTimeout(150);
+          const wb = worst.filter(x => x.bad.length || x.left || !x.rows);
+          if (!real || !real.rows) fail(`${T9}: no Following row to measure`);
+          else if (realBad.length) fail(`${T9}: ${realBad.length} of ${real.rows} real row(s) clip the colleague's name at 390 px: ${JSON.stringify(realBad.slice(0, 3).map(p => p.holder))}`);
+          else if (wb.length) fail(`${T9}: with H + E + F + EV after the holder - ${wb.map(x => `${x.w} px: ${x.bad.length} of ${x.rows} row(s) clipped / overflowing ${JSON.stringify(x.bad.slice(0, 2))}${x.left ? `, ${x.left} probe span(s) left` : ""}`).join(" | ")}`);
+          else ok(`${T9}: no Following row clips the colleague's name - ${real.rows} real row(s) at 390 px (e.g. '${real.per[0].holder.text}'), and with H + E + F + EV injected after every holder at ${worst.map(x => x.w).join(" / ")} px (badges wrap under the name, a long name takes its own line; no row scrolls sideways)`);
+        } catch (e) { fail(`DF9 follower (${theme}) names: ` + errLine(e)); }
         // (c) Settings -> Live calendar sync
         await pf.click('button[data-tab="settings"]');
         await pf.waitForSelector("[data-testid=follow-sync]", { timeout: 8000 });

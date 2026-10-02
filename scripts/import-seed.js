@@ -176,8 +176,8 @@ async function fetchAll(cfg, table, query) {
 async function fetchLive(cfg) {
   const [blobRows, availability, timeOff, scheduleDays] = await Promise.all([
     fetchAll(cfg, "call_schedule_data", "id=eq.main&select=data,updated_at,updated_by"),
-    fetchAll(cfg, "availability", "select=person_id,kind,role,start_date,end_date,note,source&order=person_id,start_date"),
-    fetchAll(cfg, "time_off", "select=person_id,start_date,end_date,note,created_by&order=person_id,start_date"),
+    fetchAll(cfg, "availability", "select=person_id,kind,role,start_date,end_date,note,source&order=person_id,start_date,id"),
+    fetchAll(cfg, "time_off", "select=person_id,start_date,end_date,note,created_by&order=person_id,start_date,id"),
     fetchAll(cfg, "schedule_days", "select=day,primary_id,backup_id,primary_locked,backup_locked,source,external_cover,note,version,updated_by&order=day")
   ]);
   return {

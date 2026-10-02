@@ -37,6 +37,12 @@
       div[style*="maxWidth"] { max-width: 100% !important; padding: 0 !important; }
       @page { margin: 0.5cm; size: landscape; }
     }
+    /* The header's "N errors" (Do first 8): 24 px tall on a wide screen; the phone block below makes it a 36 x 36 tap target.
+       Both keep the status line's height (negative vertical margins; measured 10/2: the header 67 px at 1180, 191 px at
+       390, with the chip or without). Second review fixes (10/2): the box is transparent - the outlined pill inside it is
+       what shows, so where the status words wrap the chip onto a line of its own (360 px) nothing overlaps the line above;
+       that wrap adds the one line (+12 px) and is the only height change. */
+    .hdr-errors { min-height: 24px; margin-top: -7px; margin-bottom: -7px; }
     /* Mobile improvements */
     @media (max-width: 600px) {
       select, input[type="date"], input[type="text"], input[type="password"], input[type="email"] { font-size: 16px !important; min-height: 38px; }
@@ -46,6 +52,8 @@
       /* An inline More / Less / Details toggle: 36 px wide too, and its negative vertical margins keep the 36 px height
          from stretching the sentence's line box. */
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
+      /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
+      .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -85,6 +93,22 @@
     .rules-field > .rules-field-remove { flex-shrink: 0; margin-top: 2px; }
     .rules-sum-line { display: flex; gap: 8px; }
     .rules-sum-line > .rules-sum-family { flex: 0 0 112px; }
+    /* My schedule / Following's 90-day list (review 9/27 Do first 9, 10/1): a 420 px scroller on a wide screen; the phone
+       block below drops it (the page scrolls) and gives a row's Trade + Give away (mine-acts) a line of their own. */
+    .mine-upcoming { max-height: 420px; overflow-y: auto; }
+    /* ... and none on a short screen either (review of Do first 9, 10/2): a phone in landscape (wider than 600 px, about
+       375-430 px tall) would get a 420 px box inside a shorter window */
+    @media (max-height: 500px) {
+      .mine-upcoming { max-height: none; overflow-y: visible; }
+    }
+    /* A row's holder ("backup: Burchett"): its text width on a wide screen, so the Following view's badges follow the
+       name; the phone block lets it grow into the rest of the line but never shrink below its words (flex 1 0 auto,
+       max-width 100%) - when they do not fit beside the date and role the holder takes a line of its own, and badges
+       that do not fit after it wrap under it. The inline ellipsis is left only for words longer than a whole row. */
+    .mine-holder { flex: 0 1 auto; }
+    /* A row's holiday-unit badge: the unit's name on a wide screen; on a phone the letter H (the legend above the list),
+       as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
+    .mine-hol-letter { display: none; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
        role letter, holiday name, weekend label and NOTE tag give way (line
        order = role, the cell title still spells everything out), the pill
@@ -128,6 +152,18 @@
       .rules-field > .rules-field-remove { align-self: flex-end; margin-top: 0; }
       .rules-sum-line { flex-direction: column; gap: 0; }
       .rules-sum-line > .rules-sum-family { flex: none; }
+      /* Do first 9: no nested scroller on a phone - the whole 90-day list is part of the page (no cap on the rows); on the
+         own view mine-acts (the badges, the offer tag, Trade + Give away) takes the row's second line, right-aligned, so
+         the date (padlock inside), role and holder keep one line and the holder's name is not clipped. Second review
+         fixes (10/2): the holder never shrinks below its words (1 0 auto; it was 1 1 0 with an ellipsis) - on the
+         Following view the badges sat right after it and left it 11-68 px at 360-390 px ("bac...", the colleague's
+         name lost), and at 320 px every row clipped; now badges that do not fit wrap under the name, and a name that
+         does not fit beside the date and role takes a line of its own (max-width 100%: a whole row at most). */
+      .mine-upcoming { max-height: none; overflow-y: visible; }
+      .mine-acts { flex-basis: 100%; justify-content: flex-end; }
+      .mine-holder { flex: 1 0 auto; max-width: 100%; }
+      .mine-hol-name { display: none; }
+      .mine-hol-letter { display: inline; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -138,7 +174,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.01f";
+    var APP_VERSION = "2026.10.02b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -256,7 +292,7 @@
           stub any more. If a future feature needs a placeholder, mark it
           "TODO(<name>)" and replace it wholesale, do not grow it.
        =================================================================== */
-    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+    const { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } = React;
 
 function CallSchedule() {
   // --- Public mode detection ---
@@ -297,6 +333,9 @@ function CallSchedule() {
   const [vacations, setVacations] = useState({});
   const [timeOffRows, setTimeOffRows] = useState([]); // raw rows (export / restore)
   const [availabilityRows, setAvailabilityRows] = useState([]); // dated availability statements
+  // Ship review 10/2 (Prompt 28): true once an availability read was adopted this session. A failed read leaves the list
+  // at its initial [] (never a sign of "no rows"), so the painter cannot show the person's No primary days until then.
+  const [availabilityReadOk, setAvailabilityReadOk] = useState(false);
   // Offers (Prompt 14 part 3a): call_offers / call_periods rows, authenticated-only tables read through
   // readAuthOnlyTable (a missing / expired token skips the read; an anon read answers 200 + [] and would wipe
   // the lists). The painter (OfferPainterSheet, module scope) reads them; offerSheet = { personId } while it is open.
@@ -443,6 +482,15 @@ function CallSchedule() {
   // CAS-written over the real row. One message, one predicate.
   const DAYS_UNREAD_DAY_MSG = "The schedule has not loaded - retry first (the banner above); days cannot be opened until it loads.";
   const refuseUnreadDay = () => { if (!loaded || daysReadOkRef.current) return false; showToast(DAYS_UNREAD_DAY_MSG, "error"); return true; };
+  // Review 9/27 Do first 4: runGenerate's own refusal over an unread schedule (see there).
+  const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded, so this run would treat every day as open and ignore the locks on file. Retry the load (the banner above), then generate. Nothing was run.";
+  // Review of Do first 4 (10/1): the same refusal while the load is still running (header "Connecting") - there is no
+  // banner to retry yet.
+  const GEN_DAYS_LOADING_MSG = "Not run: the schedule is still loading - wait for it, then generate. Nothing was run.";
+  // Ship review 10/2 (Prompt 28): the same while time_off or availability has never been read this session (no read
+  // adopted - timeOffReadSeqRef / availabilityReadSeqRef .adopted still 0): a failed read leaves the lists at their initial
+  // [], and the run would ignore every vacation and every No primary day (no schedule_days trigger checks either).
+  const GEN_TA_UNREAD_MSG = "Not run: the vacations or availability statements have not loaded, so this run would ignore every vacation and No primary day. Reload, then generate. Nothing was run.";
   // Bumped after a successful login/biometric-unlock to re-run the data-load
   // effect WITH the now-stored session JWT, without a full page reload (a
   // page reload re-triggers the mount auth-gate and loops on biometric).
@@ -634,6 +682,15 @@ function CallSchedule() {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  // Review 9/27 Do first 7: "" or the notice the sign-in card shows (with Retry) when the stored session could not be
+  // checked at mount - GoTrue unreachable or answering 5xx / 429 / 408, the pair kept by config.js - instead of a bare card
+  const [sessionUnreached, setSessionUnreached] = useState("");
+  const resetReqRef = useRef(0);                           // Do first 7: the reset request in flight - "Back to sign in" drops a late answer
+  // Review of Do first 7 (10/2): the notice's Retry has its own busy flag (a hung check no longer disables Sign in - the
+  // notice itself says "or sign in with your password below") and its own request number: any sign-in (adoptSignedInUser)
+  // or a password Sign in press bumps it, so a late Retry answer never lands over the account that signed in meanwhile.
+  const [retryBusy, setRetryBusy] = useState(false);
+  const sessionCheckReqRef = useRef(0);
   const [linkSetup, setLinkSetup] = useState(null);       // Prompt 16 B7: { email, unverified } - the account a recovery / invite link sets a password for
   const [linkConflict, setLinkConflict] = useState(null); // Prompt 16 B7: { signedIn: { id, email }, linkEmail, unverified } - another account is signed in on this device
   const pendingLinkRef = useRef(null);                     // Prompt 16 B7: the link pair waiting on that account's sign-out - memory only, never storage
@@ -670,8 +727,16 @@ function CallSchedule() {
 
   // --- Scheduler Mode (role-based via user_profiles.role) ---
   const [isScheduler, setIsScheduler] = useState(false);
+  // Review 2 of Do first 4/5 (10/1): the role as a ref for the mount load, whose effect closes over reloadTrigger only - the
+  // isScheduler of its closure is the render's that bumped reloadTrigger, BEFORE this effect moved the state: false on app open,
+  // after a fresh sign-in and after an in-place switch from a member, still true after a switch from the scheduler to a member.
+  // Set HERE with the state (not mirrored one render later), so it moves in the same commit as the profile; this effect is
+  // declared above the load's, so the re-run that commit starts (adoptSignedInUser) already reads the new role.
+  const isSchedulerRef = useRef(false);
   useEffect(() => {
-    setIsScheduler(userProfile?.role === "scheduler" || userProfile?.role === "admin");
+    const sched = userProfile?.role === "scheduler" || userProfile?.role === "admin";
+    isSchedulerRef.current = sched;
+    setIsScheduler(sched);
   }, [userProfile]);
   const isAdmin = userProfile?.role === "admin";
   // Prompt 16 A7: the office role - enters / edits any surgeon's vacations and relays their offered dates into the
@@ -839,7 +904,8 @@ function CallSchedule() {
   const followerSaveTimerRef = useRef(null);
   const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
-  const lastNotifCountRef = useRef(null);
+  // Review 9/27 Do first 6: the Alerts rows this account has seen on this device, { uid, ids } (helpers.notifPopupStep)
+  const notifSeenRef = useRef(null);
 
   // --- My identity (roster id from the profile) ---
   const mySurgeon = userProfile?.person_id || "";
@@ -913,7 +979,9 @@ function CallSchedule() {
   // trigger creates the row when the Auth user is invited, so a missing row is
   // treated as an unlinked viewer), re-run the data load with the session JWT.
   const adoptSignedInUser = async (user) => {
+    sessionCheckReqRef.current++; // review of Do first 7 (10/2): a Retry still in flight is dropped - this sign-in wins
     setAuthUser(user);
+    setSessionUnreached(""); // Do first 7: any sign-in (Retry, the password, Face ID) ends the "Couldn't reach the server" notice
     setProfileLoadFailed(false);
     // Prompt 16 A3 (review): a DIFFERENT account signing in on the in-place card must not inherit the previous
     // account's unsaved edit (it would be written under the new JWT - or 403 on every pass for a viewer): the
@@ -929,7 +997,21 @@ function CallSchedule() {
       resetWriteRetryState();
       blobLoadedRef.current = false;
       blobTsRef.current = null;
+      // Review of Do first 4 (10/1): the previous account's unsaved DAY edits go too - the local map falls back to the map
+      // last known persisted (lastSyncRef). Kept, a re-run whose days read fails would leave them in place, and the next
+      // poll's merge (mergeLoadedDays keeps an unsaved local edit) would hand them to leg 1 / the re-sync under the new JWT.
+      // Review 2 (10/1): a day write of the previous account still in flight lands AFTER this copy - its day moves on in
+      // lastSyncRef while the map keeps the old value, which a later merge would keep as a local edit and write back under the
+      // new JWT. Once the queue it is in drains, the map follows lastSyncRef again - only while nothing has replaced the copy
+      // (the re-run's adoption, a merge and every edit set a new map; the updater sees the latest state, pending ones included).
+      if (lastSyncRef.current) {
+        const persisted = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = persisted; setSchedule(persisted);
+        if (daySyncBusyRef.current > 0) daySyncChainRef.current.then(() => setSchedule(cur => { if (cur !== persisted || !lastSyncRef.current) return cur; const landed = JSON.parse(JSON.stringify(lastSyncRef.current)); scheduleRef.current = landed; return landed; }));
+      }
       setNotifsRead("unread"); // review 9/28: the new account's feed has not been read yet ("No notifications yet" waits for it)
+      // review of Do first 8 (10/2): the previous account's Recent errors go too (names, override reasons, HTTP bodies) -
+      // the in-place card is a sign-in without a sign-out
+      setErrorLog([]); setShowErrorLog(false);
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -1001,9 +1083,11 @@ function CallSchedule() {
         }
 
         if (session && !bioEnrolled) {
-          const { user } = await auth.getUser();
+          const { user, error } = await auth.getUser();
           if (user) { if (linkErr) showToast(linkErr.message, "error"); await adoptSignedInUser(user); }
-          else if (linkErr) setAuthError(linkErr.message); // the stored session was dead: the card follows and carries the message
+          else if (linkErr) setAuthError(linkErr.message); // no user (dead, or unreachable): the card follows and carries it
+          // Do first 7: unreachable (the pair is kept) - the card says so with a Retry, never a bare sign-in form
+          if (!user && error === "network") setSessionUnreached(SESSION_UNREACHED_MESSAGE);
         }
       } catch(e) { console.error("Auth check error:", e); }
       setAuthLoading(false);
@@ -1025,7 +1109,7 @@ function CallSchedule() {
         // The session is intact; the server could not be reached. Say so and
         // keep the unlock screen - never "Session expired" for a bad connection.
         console.warn("Biometric unlock: the session check hit a network error - session kept, try again");
-        setAuthError("Couldn't reach the server to confirm your session - check your connection and try again.");
+        setAuthError(SESSION_UNREACHED_MESSAGE);
       } else {
         // Session invalid or refresh failed. Keep the enrollment - after one
         // password sign-in Face ID works again next time.
@@ -1036,6 +1120,25 @@ function CallSchedule() {
       setAuthError(result.error || "Biometric failed");
     }
     setAuthBusy(false);
+  };
+
+  // Review 9/27 Do first 7: Retry on the sign-in card's "Couldn't reach the server" notice - the same check the mount
+  // ran. A live session signs in (adoptSignedInUser clears the notice); a rejected one (getUser cleared the pair)
+  // leaves the ordinary card with the biometric path's "Session expired" line; still unreachable keeps the notice
+  // with its "Still couldn't reach" wording. Never a stuck "Checking" button. Review of Do first 7 (10/2): retryBusy, not
+  // the card's shared authBusy (Sign in stays usable while a check hangs), and sessionCheckReqRef numbers the check -
+  // a sign-in meanwhile (adoptSignedInUser, a Sign in press) drops its late answer; the button always comes back.
+  const retrySessionCheck = async () => {
+    const req = ++sessionCheckReqRef.current;
+    setAuthError(""); setRetryBusy(true);
+    try {
+      const { user, error } = await auth.getUser();
+      if (req !== sessionCheckReqRef.current) return; // overtaken by a sign-in - never adopt the stored account over it
+      if (user) await adoptSignedInUser(user);
+      else if (error === "network") setSessionUnreached(SESSION_STILL_UNREACHED_MESSAGE);
+      else { setSessionUnreached(""); setAuthError("Session expired. Please sign in with your password to refresh."); }
+    } catch (e) { if (req === sessionCheckReqRef.current) { console.warn("Session re-check failed:", e); setAuthError((e && e.message) || "Session check failed"); } }
+    finally { setRetryBusy(false); }
   };
 
   const handleBiometricEnroll = async () => {
@@ -1066,6 +1169,7 @@ function CallSchedule() {
   // creates the profile row as an unlinked viewer when the user is invited and Setup -> Users links
   // it later (the RLS self-insert policy pins person_id null and role viewer anyway).
   const handleAuthSubmit = async () => {
+    sessionCheckReqRef.current++; // review of Do first 7 (10/2): a Retry in flight answers too late to matter
     setAuthError(""); setAuthBusy(true);
     try {
       const { user, error } = await auth.signIn(authEmail, authPassword);
@@ -1083,6 +1187,9 @@ function CallSchedule() {
     setAuthUser(null); setUserProfile(null); setProfileLoadFailed(false);
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
+    setErrorLog([]); setShowErrorLog(false); // review 9/27 Do first 8: the next person on this device never reads this one's errors
+    dismissToast(); // review of Do first 8 (10/2): an error toast (up to 22 s now) does not stay over the sign-in card
+    setSessionUnreached(""); // review of Do first 7 (10/2): a stale "Still couldn't reach" notice does not greet the next sign-in
   };
 
   // Prompt 16 B7: the pair from a recovery / invite hash. config.js auth.adoptLinkSession stores it only for this
@@ -1112,6 +1219,7 @@ function CallSchedule() {
     const pair = pendingLinkRef.current;
     if (!pair) { setAuthMode("login"); return; }
     setAuthBusy(true); setAuthError("");
+    setErrorLog([]); setShowErrorLog(false); // review of Do first 8 (10/2): a sign-out - the signed-in account's Recent errors go with it
     try { await auth.signOut(); biometric.unenroll(); await adoptLinkSession(pair); }
     catch (e) { console.warn("sign out for the link failed:", e); setAuthError(e.message || "Sign out failed"); }
     setAuthBusy(false);
@@ -1468,13 +1576,92 @@ function CallSchedule() {
   }, [view, isCoordinator]);
 
   // --- Toast (non-blocking notifications) ---
-  const [toast, setToast] = useState(null); // { msg, tone } | null
+  // Review 9/27 Do first 8: ONE visible slot and the newest shows at once (helpers.toastNext - an identical repeat of
+  // the toast on screen counts up instead); success / info fade after 4.5 s, an error stays until tapped or for
+  // max(8 s, 60 ms per character) (helpers.toastDurationMs); every error also goes on the header's stack of the last
+  // TOAST_ERROR_LOG_MAX (helpers.toastErrorLogPush; "N errors" in the header opens it - never by itself). Refs, not
+  // state, decide the repeat and own the timer: showToast is called from closures of older renders.
+  const [toast, setToast] = useState(null); // { msg, tone, count, at } | null
+  const toastRef = useRef(null);
   const toastTimerRef = useRef(null);
-  const showToast = (msg, tone) => {
-    setToast({ msg: msg, tone: tone || "info" });
+  const [errorLog, setErrorLog] = useState([]); // [{ msg, at, first, count }], newest first
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [errorCopied, setErrorCopied] = useState(""); // the copied entry's text ("!" + text: the copy was blocked)
+  const errorCopiedTimerRef = useRef(null);
+  const dismissToast = () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+    toastTimerRef.current = null;
+    toastRef.current = null;
+    setToast(null);
   };
+  const showToast = (msg, tone) => {
+    const now = Date.now();
+    const t = toastNext(toastRef.current, msg, tone, now);
+    toastRef.current = t;
+    setToast(t);
+    if (t.tone === "error") setErrorLog(p => toastErrorLogPush(p, t.msg, now));
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(dismissToast, toastDurationMs(t.msg, t.tone));
+  };
+  // Recent errors > Copy: the clipboard, else the hidden-textarea copy; never a prompt() and never a toast (a blocked
+  // copy would only push another error onto the stack it is read from) - the button says Copied / Blocked.
+  const copyErrorEntry = async (text) => {
+    let copied = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); copied = true; } }
+    catch (e) { console.warn("Recent errors: the clipboard refused the copy:", e); }
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        copied = document.execCommand("copy"); document.body.removeChild(ta);
+      } catch (e) { console.warn("Recent errors: the fallback copy failed:", e); }
+    }
+    setErrorCopied(copied ? text : "!" + text);
+    if (errorCopiedTimerRef.current) clearTimeout(errorCopiedTimerRef.current); // a second Copy restarts the label's 2.5 s
+    errorCopiedTimerRef.current = setTimeout(() => setErrorCopied(""), 2500);
+  };
+  // Recent errors opens from the header's "N errors" only; closing hands the focus back to the opener (Prompt 16 B9's
+  // dialogs do the same) and the dialog keeps Tab inside it (helpers.focusTrapNext) - review of Do first 8 (10/2).
+  const errorLogOpenerRef = useRef(null);
+  const openErrorLog = () => { errorLogOpenerRef.current = document.activeElement; setShowErrorLog(true); };
+  const closeErrorLog = () => {
+    setShowErrorLog(false);
+    const back = errorLogOpenerRef.current;
+    errorLogOpenerRef.current = null;
+    if (back && typeof back.focus === "function" && document.contains(back)) { try { back.focus(); } catch (e) { console.warn("Recent errors: could not return focus", e); } }
+  };
+  const errorLogKeyDown = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); closeErrorLog(); return; }
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) { e.preventDefault(); try { next.focus(); } catch (err) { console.warn("Recent errors: focus trap could not move focus", err); } }
+  };
+  // Review of Do first 8 (10/2): over the day editor or the claim sheet the bottom toast must not sit on the dialog's
+  // action row (Cancel / Save, Confirm) - at 390 px a long error (now up 8-22 s) covered Save, and the next tap there
+  // only dismissed the toast. When the box overlaps that row it is lifted to 8 px above it (toastLift: px from the
+  // viewport's bottom; 0 = the ordinary bottom inset) and stays lifted while the dialog is open. Measured after a render
+  // while a toast and one of those dialogs are up (claimSheet / paintSheet are declared further down - read at effect time),
+  // and again when the dialog changes size or scrolls without a render here (the observer after claimSheet's declaration).
+  const [toastLift, setToastLift] = useState(0);
+  const toastLiftRef = useRef(0); // the lift last measured - the observer compares with it, never with a stale render's
+  // The lift the box needs now (prev = the current lift: once lifted it follows the row). Second review fixes (10/2): never
+  // lifted off the top of the screen - when there is no room above the row (a claim sheet scrolled up) it goes back down.
+  const toastLiftNow = (prev) => {
+    const box = document.querySelector("[data-testid=toast-box]");
+    const row = box ? (document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]")) : null;
+    if (!row) return 0;
+    const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+    if (!(prev || (b.bottom > r.top && b.top < r.bottom))) return 0;
+    if (r.top - 8 - b.height < 8) return 0;
+    return Math.max(0, Math.ceil(window.innerHeight - r.top + 8));
+  };
+  useLayoutEffect(() => {
+    const lift = toast && (editorDay || claimSheet) && !(paintSheet || offerSheet) ? toastLiftNow(toastLift) : 0;
+    toastLiftRef.current = lift;
+    if (lift !== toastLift) setToastLift(lift);
+  });
 
   // ====================================================================
   // TIME OFF = VACATIONS ONLY. Source: the time_off table. One row per range;
@@ -1486,28 +1673,48 @@ function CallSchedule() {
     if (rows.length > 0) everHadRealDataRef.current = true;
   };
   // quiet=true (the 60s poll) logs failures console-only - a transient outage
-  // must not toast once a minute; the initial load and realtime path stay loud.
+  // must not toast once a minute; the other callers stay loud. Review 9/27 Do first 4: quiet may also be a FUNCTION
+  // (the mount load's collector) - the loader hands it the sentence it would have toasted, and the mount load shows
+  // every failed read in ONE toast once all of them have settled (parallel toasts would replace each other).
+  // Prompt 28 residual 4 (Faraz 10/1): time_off and availability are read in pages (db.queryAll - PostgREST caps an answer
+  // at max-rows, 1000, without a word; availability grows by one row per No primary day). A failed page throws: the catch
+  // keeps the rows on screen, never a shorter list.
+  // Newest-started read wins (review 10/1): the poll, one Realtime event per changed row and the painter's re-read run these
+  // loaders at once, and a paged read can finish after a later one. Each read takes a number when it starts; it is adopted
+  // only when no read that started after it has been adopted already (an older answer finishing late is dropped - the newer
+  // one on screen saw at least as much; the drop still returns true).
+  const timeOffReadSeqRef = useRef({ started: 0, adopted: 0 });
+  const availabilityReadSeqRef = useRef({ started: 0, adopted: 0 });
   const loadTimeOff = async (quiet) => {
+    const seq = ++timeOffReadSeqRef.current.started;
     try {
-      const rows = await db.query("time_off", { order: "start_date.asc" });
+      const rows = await db.queryAll("time_off", { order: "start_date.asc,id.asc" });
+      if (seq < timeOffReadSeqRef.current.adopted) return true;
+      timeOffReadSeqRef.current.adopted = seq;
       adoptTimeOffRows(Array.isArray(rows) ? rows : []);
       return true;
     } catch (e) {
       console.warn("time_off load failed", e);
-      if (!quiet) showToast("Couldn't load vacations - data shown may be incomplete.", "error");
+      const msg = "Couldn't load vacations - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
   const loadAvailability = async (quiet) => {
+    const seq = ++availabilityReadSeqRef.current.started;
     try {
-      const rows = await db.query("availability", { order: "start_date.asc" });
+      const rows = await db.queryAll("availability", { order: "start_date.asc,id.asc" });
+      if (seq < availabilityReadSeqRef.current.adopted) return true;
+      availabilityReadSeqRef.current.adopted = seq;
       const list = Array.isArray(rows) ? rows : [];
       setAvailabilityRows(list);
+      setAvailabilityReadOk(true);
       if (list.length > 0) everHadRealDataRef.current = true;
       return true;
     } catch (e) {
       console.warn("availability load failed", e);
-      if (!quiet) showToast("Couldn't load availability statements - data shown may be incomplete.", "error");
+      const msg = "Couldn't load availability statements - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
@@ -1544,7 +1751,9 @@ function CallSchedule() {
   // Returns { ok, feedRows }: feedRows = the east_feed rows just loaded (null when
   // that read failed), so a caller that must act on the RELOADED cache in the same
   // tick (refreshEastFeed's review resets) never reads a stale state closure.
-  const loadEastTables = async (quiet) => {
+  // Review 9/27 Do first 5: overridesOnly (the poll between its 10-minute reads of the cache tables - refreshEastTables
+  // in the load effect) reads east_overrides alone; feedRows is then null (that caller never reads it).
+  const loadEastTables = async (quiet, overridesOnly) => {
     const one = async (table, order, set, key) => {
       try {
         const rows = await db.query(table, { order });
@@ -1558,7 +1767,7 @@ function CallSchedule() {
         return null;
       }
     };
-    const r = await Promise.all([
+    const r = await Promise.all(overridesOnly ? [one("east_overrides", "day.asc", setEastOverrideRows, "overrides")] : [
       one("east_feed", "week_monday.asc", setEastFeedRows, "feed"),
       one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"),
       one("east_overrides", "day.asc", setEastOverrideRows, "overrides"),
@@ -1567,8 +1776,9 @@ function CallSchedule() {
     // one() stays for everyone; the toast is the scheduler's (eastDetailsVisibleRef - the mount load's closure predates
     // the profile). When the MOUNT read fails before the profile has arrived the scheduler gets no toast from it: the
     // sign-in re-run (reloadTrigger) reads again and toasts then, and Setup > East feed shows the failed table either way.
-    if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
-    return { ok: r.every(x => x !== null), feedRows: r[0] };
+    // Review 9/27 Do first 4: a function `quiet` (the mount load's collector) takes the sentence for its ONE combined toast.
+    if (r.some(x => x === null) && eastDetailsVisibleRef.current) { const msg = "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads."; if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error"); }
+    return { ok: r.every(x => x !== null), feedRows: overridesOnly ? null : r[0] };
   };
   // Prompt 15 part 3: the East vacation reviews (authenticated-only table). No
   // fresh token -> not read (readAuthOnlyTable returns null; the current list is
@@ -1593,7 +1803,8 @@ function CallSchedule() {
       // refuses with a toast; only a real read failure toasts here.
       // Item E4 (Faraz 9/26): the scheduler's only, like the feed-cache toast above (the console.warn stays for everyone;
       // the East-vacation list says "Couldn't load the reviews" where it is shown).
-      if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      // Review 9/27 Do first 4: a function `quiet` (the mount load's collector) takes the sentence for its ONE combined toast.
+      if (!missing && eastDetailsVisibleRef.current) { const msg = "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load."; if (typeof quiet === "function") quiet(msg); else if (!quiet) showToast(msg, "error"); }
       return false;
     }
   };
@@ -1623,11 +1834,11 @@ function CallSchedule() {
     // TRADE_IMMUTABLE / TRADE_NOT_ACCEPTED / TRADE_NOT_FOUND from the trade
     // guard and apply_trade) is shown VERBATIM (PostgREST wraps it as
     // { message, code, details, hint }).
-    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2); OFFER_* = the call_offers guards OF001-OF003, OFFERS_* / MODE_* = save_offers / set_offer_mode (Prompt 14 part 3a); VACATION_* = the vacation guard's VG001 VACATION_TOO_FEW_AROUND (Prompt 27, the time_off trigger time_off_vacation_guard) - all shown verbatim
+    const OWN = /ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+/; // CLAIM_* = claim_open_slot's nine refusals (Prompt 13 part 2); OFFER_* = the call_offers guards OF001-OF003, OFFERS_* / MODE_* = save_offers / set_offer_mode (Prompt 14 part 3a); VACATION_* = the vacation guard's VG001 VACATION_TOO_FEW_AROUND (Prompt 27, the time_off trigger time_off_vacation_guard); NO_PRIMARY_* = save_no_primary's NP001-NP009 (Prompt 28; the painter's error box drops the token, helpers.noPrimaryErrorWords) - all shown verbatim
     if (OWN.test(s)) {
       let verbatim = "";
       try { const o = typeof err === "string" ? JSON.parse(err) : err; verbatim = String((o && (o.message || o.details)) || ""); } catch (e) { console.warn("describeDbError: error body is not JSON - extracting the raised message by regex", e); verbatim = ""; }
-      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
+      if (!OWN.test(verbatim)) { const m = /(ON_CALL_CONFLICT|TRADE_[A-Z_]+|CLAIM_[A-Z_]+|OFFERS?_[A-Z_]+|MODE_[A-Z_]+|VACATION_[A-Z_]+|NO_PRIMARY_[A-Z_]+)[^"}\\]*/.exec(s); verbatim = m ? m[0] : s.slice(0, 240); }
       return verbatim;
     }
     if (/23514|check constraint|distinct/i.test(s)) return "The database refused the change (a check constraint failed - e.g. the same person in both roles on one day): " + s.slice(0, 160);
@@ -1829,7 +2040,9 @@ function CallSchedule() {
   // Merge a freshly loaded table into the live map (the background refresh, and - Prompt 16 A3 - every re-run of
   // the data load after a sign-in): adopt only days that differ from what we last persisted AND that we have not
   // edited locally since (an unsaved local edit is the truth; it re-syncs as a CAS write against the fresh version).
-  const mergeLoadedDays = (fresh) => {
+  // Review of Do first 4 (10/1): sink (optional) - the mount load's collector (key daysEmpty): the tripwire's sentence then
+  // joins the load's ONE combined toast instead of toasting on its own and being replaced by it; the poll toasts as before.
+  const mergeLoadedDays = (fresh, sink) => {
     // Prompt 16 B9 (h): zero rows after N > 0 is a failed read, not an empty table (helpers.daysReadTripped) - keep
     // the map and the persisted base exactly as they are, say so once, and report false so the caller does not
     // treat the read as a success. A read with rows (or a first empty read) goes on as before.
@@ -1837,7 +2050,8 @@ function CallSchedule() {
       console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
       if (!daysTripwireWarnedRef.current) {
         daysTripwireWarnedRef.current = true;
-        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+        const msg = `The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`;
+        if (typeof sink === "function") sink(msg); else showToast(msg, "error");
       }
       return false;
     }
@@ -2028,7 +2242,10 @@ function CallSchedule() {
       // "sign in again" only when the session is known dead; a 401 whose refresh hit a network error is re-sent
       // by the next granted refresh (resyncPendingRef) - no sign-in needed (the 9/23 review of A3).
       setDaySyncFail(authFail === 403 ? "Not saved - no permission" : auth.sessionExpired ? "Save failed - sign in again" : "Save failed - will retry");
-      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(failMsg, "error");
+      // Review of Do first 7 (10/2): a 401 without the banner (the refresh got a 5xx / 429 / 408 or no answer - not a
+      // sign-out since Do first 7) says what the header says, in the blob leg's words - never "your session expired.
+      // Sign in again." when no sign-in is needed
+      if (firstOfStreak && !(authFail === 401 && auth.sessionExpired)) showToast(authFail === 401 ? "Couldn't save the schedule - your session couldn't be refreshed; the change goes out once it is." : failMsg, "error");
     } else if (failed) {
       // Any other failure - an HTTP error or a rejected fetch (status 0: offline, DNS, a timeout) - retries on the
       // backoff (5 -> 15 -> 60 s).
@@ -2119,91 +2336,131 @@ function CallSchedule() {
     (async () => {
       loadFailedRef.current = false; // reset each load attempt
       let daysReadThisRun = false;   // review 9/27 Do first 1: did THIS run's schedule_days read land (the banner)
+      // Review 9/27 Do first 4 (parallel startup): every read of the load starts at once and the load waits for all of
+      // them in ONE Promise.allSettled - the chain of ~11 awaits it replaced cost 1.5-3 s on cellular before `loaded`
+      // (twice on a signed-in open: the mount run, then the sign-in re-run). The reads are independent: Leg B reads no
+      // blob state (loadScheduleDays / adoptLoadedDays / mergeLoadedDays / syncScheduleDays touch only the day refs), and
+      // refreshAll has run the same readers in parallel since Prompt 16. Unchanged: `loaded`, loadedAtRef and
+      // switchedUserRef move only after EVERYTHING has settled; only the schedule_days catch arms loadFailedRef (the
+      // secondary reads now run when the days read fails too - runGenerate refuses an unread schedule on its own since).
+      // The reads that fail are collected under a key and said in ONE toast (helpers.js combinedLoadToast: the schedule
+      // first, then the shared setup, then the rest) - parallel toasts would replace each other.
+      const loadFails = {};
+      const sayLoadFail = (key) => (msg) => { loadFails[key] = msg; };
+      // Review of Do first 4 (10/1): whether a Setup write was owed when this run STARTED - read here, before any read is
+      // out. The other reads' state changes re-arm (leg 1) and release pendingSaveRef while the blob read is still in flight,
+      // so the live value at the moment the blob lands no longer says whether something of the session's was pending.
+      const setupOwedAtStart = !!(pendingSaveRef.current || blobDirtyRef.current);
       // Leg A - the config blob. Its OWN try: a failure leaves blobLoadedRef
       // false (the blob leg of autosave stays off) but must not stop the
       // schedule from loading. A missing row (fresh install) is a SUCCESSFUL
       // read: there is nothing to protect, so writing defaults is correct.
-      try {
-        const { data: row } = await supabase
-          .from("call_schedule_data")
-          .select("data,updated_at")
-          .eq("id", "main")
-          .single();
-        blobLoadedRef.current = true;
-        if (row?.data) {
-          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          const rerun = !!loadedAtRef.current && !switchedUserRef.current; // a sign-in of the same account after the session expired (Prompt 16 A3)
-          if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
-            // The row has not moved since our last read (the same rule refreshBlobRow uses): the local state - a
-            // Setup edit made while the session was expired, whose upsert 401ed - stays the truth, and the autosave
-            // re-fires so it lands now (the 9/23 review of A3: adopting here silently dropped that edit, then wrote
-            // the server's values back). Review 9/27 Do first 2: a failed Setup write is owed too (blobDirtyRef) once
-            // leg 1 has released pendingSaveRef.
-            if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
-          } else {
-            if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
-            if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
-            adoptBlob(d);
+      const legA = async () => {
+        try {
+          const { data: row } = await supabase
+            .from("call_schedule_data")
+            .select("data,updated_at")
+            .eq("id", "main")
+            .single();
+          blobLoadedRef.current = true;
+          if (row?.data) {
+            const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            const rerun = !!loadedAtRef.current && !switchedUserRef.current; // a sign-in of the same account after the session expired (Prompt 16 A3)
+            if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
+              // The row has not moved since our last read (the same rule refreshBlobRow uses): the local state - a
+              // Setup edit made while the session was expired, whose upsert 401ed - stays the truth, and the autosave
+              // re-fires so it lands now (the 9/23 review of A3: adopting here silently dropped that edit, then wrote
+              // the server's values back). Review 9/27 Do first 2: a failed Setup write is owed too (blobDirtyRef) once
+              // leg 1 has released pendingSaveRef.
+              if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
+            } else {
+              // Do first 4: said in the load's one toast (a toast of its own would be replaced by it)
+              if (rerun && isSchedulerRef.current && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
+              if (row.updated_at) blobTsRef.current = row.updated_at; // prevent auto-save from re-saving unchanged data
+              adoptBlob(d);
+            }
           }
+        } catch (e) {
+          console.error("Supabase load error (call_schedule_data):", e);
+          // review of Do first 4 (10/1): the Setup clause is the scheduler's (nobody else can change Setup); review 2 (10/1): the
+          // role read NOW through isSchedulerRef - the role state in this effect's closure is stale (see isSchedulerRef)
+          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isSchedulerRef.current ? " Setup changes won't save until it loads." : ""));
         }
-      } catch (e) {
-        console.error("Supabase load error (call_schedule_data):", e);
-        showToast("Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.", "error");
-      }
-      try {
-        // Leg B - the schedule itself: schedule_days (throws on failure -> the
-        // catch arms loadFailedRef, which suppresses autosave until a read
-        // succeeds).
-        const loadedDays = await loadScheduleDays();
-        // First load: adopt the table. A re-run (reloadTrigger - a sign-in of the SAME account after the session
-        // expired, Prompt 16 A3): MERGE like the background refresh so an edit made while expired survives, then
-        // re-sync it (a no-op when nothing is pending). A different account adopts the table wholesale.
-        if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);
-        // Review 9/27 Do first 1: the read was taken in. A merge that tripped (0 rows over N > 0) kept a map an
-        // earlier read of this session already took in (lastDaysCountRef > 0 only after one), so the map is the
-        // table's either way.
-        daysReadThisRun = true;
-        markDaysRead();
-
-        // Independent secondary loads: each in its own try so one failure
-        // cannot abort the others (and cannot arm loadFailedRef).
-        // Both tables are authenticated-read only: readAuthOnlyTable returns
-        // null (not []) when there is no fresh token, so a stale session can
-        // never adopt an RLS-empty answer over the current lists (datalayer-001).
+      };
+      const legB = async () => {
+        try {
+          // Leg B - the schedule itself: schedule_days (throws on failure -> the
+          // catch arms loadFailedRef, which suppresses autosave until a read
+          // succeeds).
+          const loadedDays = await loadScheduleDays();
+          // First load: adopt the table. A re-run (reloadTrigger - a sign-in of the SAME account after the session
+          // expired, Prompt 16 A3): MERGE like the background refresh so an edit made while expired survives, then
+          // re-sync it (a no-op when nothing is pending). A different account adopts the table wholesale.
+          // Review of Do first 4 (10/1): the merge's empty-read tripwire sentence goes to the load's one toast (daysEmpty).
+          if (loadedAtRef.current && !switchedUserRef.current) { mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty")); syncScheduleDays(scheduleRef.current); } else adoptLoadedDays(loadedDays);
+          // Review 9/27 Do first 1: the read was taken in. A merge that tripped (0 rows over N > 0) kept a map an
+          // earlier read of this session already took in (lastDaysCountRef > 0 only after one), so the map is the
+          // table's either way.
+          daysReadThisRun = true;
+          markDaysRead();
+        } catch (e) {
+          console.error("Supabase load error (schedule_days):", e);
+          loadFailedRef.current = true; // read threw - suppress autosave until a read succeeds
+          // Review 9/27 Do first 1: a toast does not stay, so the schedule's own failure also raises the persistent
+          // banner (shown while no read has been taken in).
+          if (!daysReadThisRun) setDaysLoadFailed(true);
+          sayLoadFail("days")("Couldn't load the latest data - check your connection and reload.");
+        }
+      };
+      // Independent secondary loads: each in its own try so one failure
+      // cannot abort the others (and cannot arm loadFailedRef).
+      // Both tables are authenticated-read only: readAuthOnlyTable returns
+      // null (not []) when there is no fresh token, so a stale session can
+      // never adopt an RLS-empty answer over the current lists (datalayer-001).
+      const loadTrades = async () => {
         try {
           const trades = await readAuthOnlyTable("shift_trade_requests", { order: "submitted_at.desc", limit: 100 });
           if (trades) setTradeRequests(trades);
         } catch(e) { console.warn("Trade requests load failed:", e); }
+      };
+      const loadNotifs = async () => {
         try {
           const notifs = await readAuthOnlyTable("notifications", { order: "created_at.desc", limit: 50 });
           if (notifs) { setNotifications(notifs); setNotifsRead("ok"); }
         } catch(e) { console.warn("Notifications load failed:", e); setNotifsRead("failed"); }
-        // Prompt 14 part 3a: offers + periods (authenticated-only, same contract as the two above)
-        await loadOffers(true);
-        await loadPeriods(true);
+      };
+      const loadMinVersion = async () => {
         try {
           const mainRows = await db.query("client_versions", { eq: { id: "main" }, select: "id,min_version,message" });
           const main = Array.isArray(mainRows) ? mainRows[0] : null;
           if (main && main.min_version && versionCmp(APP_VERSION, main.min_version) < 0) setForceUpdate({ min_version: main.min_version, message: main.message || "" });
           else setForceUpdate(null);
         } catch(e) { console.warn("client_versions min-version check failed:", e); }
-      } catch (e) {
-        console.error("Supabase load error (schedule_days):", e);
-        loadFailedRef.current = true; // read threw - suppress autosave until a read succeeds
-        // Review 9/27 Do first 1: the toast is replaced within milliseconds by the later loads' toasts, so the
-        // schedule's own failure also raises the persistent banner (shown while no read has been taken in).
-        if (!daysReadThisRun) setDaysLoadFailed(true);
-        showToast("Couldn't load the latest data - check your connection and reload.", "error");
-      }
-      await loadTimeOff();
-      await loadAvailability();
-      await loadEastTables();
-      await loadEastVacationReviews();
+      };
+      await Promise.allSettled([
+        legA(), legB(),
+        loadTrades(), loadNotifs(),
+        loadOffers(true), loadPeriods(true), // Prompt 14 part 3a: offers + periods (authenticated-only, same contract as the two above)
+        loadMinVersion(),
+        loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")),
+        loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),
+      ]);
+      // Review of Do first 4 (10/1): two or more failed reads in one compact sentence; "Retry" only while the banner with
+      // the Retry button is up (no days read taken in), the Setup clause for the scheduler only (review 2: the role read now,
+      // through isSchedulerRef - never the stale role state of this effect's closure).
+      const loadFailToast = combinedLoadToast(loadFails, { retry: !daysReadOkRef.current, isScheduler: isSchedulerRef.current });
+      if (loadFailToast) showToast(loadFailToast, "error");
       setLoaded(true);
+      // Review 2 of Do first 4/5 (10/1): leg 1 returned while switchedUserRef was up, and dropping the flag changes no state, so
+      // nothing re-fires it - a change made in that window through setSchedule alone (no direct write) would wait for the next
+      // trigger and sit outside pendingSaveRef. The re-sync bridge sends the map now (its own gates: loadFailedRef - a failed
+      // days read sends nothing - the signed-in account, the flag itself); the adopted table alone is an empty diff.
+      const switchEnds = switchedUserRef.current;
       // The hydration window opens once, after the FIRST load; a re-run after a sign-in keeps the state that is
       // already hydrated, and a new edit made right after the card closes must sync like any other (9/23 review).
       if (!loadedAtRef.current) loadedAtRef.current = Date.now();
       switchedUserRef.current = false;
+      if (switchEnds) resyncPendingRef.current("switch");
     })();
 
     // --- Realtime subscriptions (preferred) with safety-net poll ---
@@ -2252,7 +2509,23 @@ function CallSchedule() {
         else setForceUpdate(null);
       } catch(e) { console.warn("Background min-version refresh failed:", e); }
     };
+    // Review 9/27 Do first 5: the poll's clocks. lastFullPollAt - when the last full refresh started (this load, or
+    // refreshAll): the visible-again catch-up runs refreshAll only when that is more than a poll period ago
+    // (helpers.js pollCatchUpDue). lastEastPollAt - when refreshAll last read east_feed / east_forecast: the two cache
+    // tables change with the Davenport feed run, not by the minute, so they are read every 10 minutes (eastPollDue), on
+    // the first run after a load and on the run after a failed read; east_overrides is read on every run (the client-side
+    // East claim gate needs fresh overrides), and so are the reviews.
+    let lastFullPollAt = Date.now();
+    let lastEastPollAt = 0;
+    const refreshEastTables = async () => {
+      const now = Date.now();
+      const all = eastPollDue(lastEastPollAt, now);
+      if (all) lastEastPollAt = now;
+      const r = await loadEastTables(true, !all);
+      if (all && !(r && r.ok)) lastEastPollAt = 0; // a failed read is retried by the next run, not 10 minutes later
+    };
     const refreshAll = async () => {
+      lastFullPollAt = Date.now(); // review 9/27 Do first 5: the visible-again catch-up reads it
       // Prompt 16 A3: the 60-second poll keeps the session alive - a refresh here (only when the token is inside
       // its last five minutes) means the authenticated-only reads below and the next write carry a live token;
       // when it did refresh, anything a 401 left behind is re-sent (no-op when nothing is pending).
@@ -2261,7 +2534,7 @@ function CallSchedule() {
       await Promise.allSettled([
         refreshOwnProfile(fr), // Prompt 16 B4: the own profile row, after the refresh above
         refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(),
-        loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true),
+        loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), // Do first 5: refreshEastTables - overrides every run, the cache tables every 10 min
         loadOffers(true), loadPeriods(true),
         loadAppDaysRef.current(false), // Prompt 29: the APP days (signed-in sessions only - it returns at once on ?public=1)
       ]);
@@ -2336,10 +2609,33 @@ function CallSchedule() {
       window.addEventListener("supabase-sdk-ready", onReady);
       setTimeout(() => { window.removeEventListener("supabase-sdk-ready", onReady); if (!rtChannel) setupRealtime(); }, 5000);
     }
+    // Review 9/27 Do first 5: one tick of the 60-second poll (helpers.js pollTickMode) - nothing at the sign-in card (no
+    // signed-in user, not ?public=1: every authenticated read would be skipped) or in a hidden ?public=1 tab; in a hidden
+    // tab of a signed-in person only the session upkeep (the same ensureFresh / re-send head as refreshAll - A3 needs the
+    // 60 s cadence), the notifications read (background pop-ups: sendBrowserNotif fires only while the page lacks focus)
+    // and the re-send of an owed Setup write (Do first 2); refreshAll otherwise. A tab shown again catches up at once with
+    // refreshAll when the last full refresh is more than a poll period old. The other visibilitychange listeners (the
+    // keepalive flush, A3's ensureFresh, the version check, the shift clock) are untouched.
+    const pollTick = async () => {
+      const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });
+      if (mode === "skip") return;
+      // Review of Do first 5 (10/1): a full refresh that started under half a poll period ago is enough - an iOS PWA
+      // brought back fires the overdue interval right after the visible-again catch-up (helpers.js pollFullRecent). The
+      // catch-up itself runs only when the last full refresh is over a minute old, so this never holds it back.
+      if (mode === "full" && pollFullRecent(lastFullPollAt, Date.now())) return;
+      if (mode === "full") { await refreshAll(); return; }
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
+      await refreshNotifs();
+      if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
+    };
+    const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };
+    document.addEventListener("visibilitychange", onPollVisibility);
     // Safety-net poll: every 60 seconds. If Realtime works nothing changes.
-    const pollInterval = setInterval(refreshAll, 60000);
+    const pollInterval = setInterval(pollTick, POLL_MS);
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener("visibilitychange", onPollVisibility);
       if (rtChannel && rtClient) { try { rtClient.removeChannel(rtChannel); } catch(e) { console.warn("Realtime channel cleanup failed:", e); } }
     };
   }, [reloadTrigger]);
@@ -2466,11 +2762,19 @@ function CallSchedule() {
       if (daysReadOkRef.current) { setSaveError(true); setSaveStatus(LOAD_FAILED_STATUS); }
       return;
     }
+    // Review of Do first 4 (10/1): the startup reads run in parallel, so time_off / availability can land - and re-fire this
+    // leg - before the re-run's schedule_days read. A different account just signed in: the map is still the previous
+    // account's until that read is adopted (switchedUserRef drops when the run ends) - nothing of it is armed or written
+    // under the new JWT (the same gate as resyncPendingRef).
+    if (switchedUserRef.current) return;
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     // Arm the guard as soon as we hold real data locally.
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
     const timer = setTimeout(() => {
+      // Review of Do first 4 (10/1): re-checked when the timer fires - an account switch, or a load whose schedule_days read
+      // failed (loadFailedRef: no autosave until a read succeeds), may have come after the timer was armed.
+      if (loadFailedRef.current || switchedUserRef.current) return;
       // -- Empty-save guard --
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
@@ -3467,6 +3771,12 @@ function CallSchedule() {
     if (!suIsIso(start) || !suIsIso(end) || end < start) { showToast("Pick a valid range (start on or before end).", "error"); return; }
     if (suDaysBetween(start, end) > 400) { showToast("That range is longer than 400 days - generate at most a year at a time.", "error"); return; }
     if (!rulesImported) { showToast("Rules are not imported yet - import the seed first.", "error"); return; }
+    // Review 9/27 Do first 4: an explicit refusal while no schedule_days read has been taken in this session (the days
+    // read failed - the "Schedule not loaded" banner). Generate would read the empty map as every slot open and override
+    // nothing that is locked on file. Before the parallel startup this was refused only indirectly (offers and periods
+    // were read inside the days leg's try, so offersLoadVerdict refused - and only until the first poll read them).
+    if (!daysReadOkRef.current) { showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }
+    if (timeOffReadSeqRef.current.adopted === 0 || availabilityReadSeqRef.current.adopted === 0) { showToast(loaded ? GEN_TA_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error"); return; }
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
     const seedIn = String(o.seed || "").trim();
     const seed = seedIn === "" ? (1 + Math.floor(Math.random() * 2147483646)) : (/^-?\d+$/.test(seedIn) ? Number(seedIn) : seedIn);
@@ -3772,7 +4082,9 @@ function CallSchedule() {
     // Prompt 14 IP (9/23): call_offers / call_periods are authenticated-read - passed as null (unknown) exactly as the
     // CLI's fetchLive passes them, so planDiff counts every planned row as an upsert and the numbers equal the CLI's
     // dry run; an anon read would answer 200 + [] and read as 'every row missing'. The legs are the CLI's to apply.
-    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await get("time_off?select=*", "time_off"), availability: await get("availability?select=*", "availability"), call_offers: null, call_periods: null };
+    // Prompt 28 residual 4: time_off and availability in pages too (db.queryAll, id last) - a capped read would make
+    // planDiff count the rows past max-rows as missing; a failed page throws like every read here.
+    return { blob, blobUpdatedAt: blobRows[0] ? blobRows[0].updated_at : null, blobUpdatedBy: blobRows[0] ? (blobRows[0].updated_by || null) : null, schedule_days: days, time_off: await db.queryAll("time_off", { order: "start_date.asc,id.asc" }), availability: await db.queryAll("availability", { order: "start_date.asc,id.asc" }), call_offers: null, call_periods: null };
   };
   const pickSeedFile = async (file) => {
     if (!file || !isScheduler) return;
@@ -4007,7 +4319,10 @@ function CallSchedule() {
       const notif = { type, title, message, data, created_at: new Date().toISOString() };
       const { data: inserted, error: insertErr } = await db.insert("notifications", notif);
       if (insertErr) { console.warn("Notification insert failed:", insertErr); if (!auth.sessionExpired) showToast("Couldn't save that notification.", "error"); }
-      if (inserted) setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      if (inserted) {
+        notifSeenRef.current = notifSeenAdd(notifSeenRef.current, inserted); // review 9/27 Do first 6: this device's own row never pops back at it
+        setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      }
     } catch(e) { console.warn("Notification error:", e); showToast("Couldn't send the notification - check your connection.", "error"); }
   }, []);
 
@@ -4684,17 +4999,25 @@ function CallSchedule() {
     }, 500);
   };
 
-  // --- Fire browser notifications when polling detects new in-app notifications ---
+  // --- Browser pop-ups for the Alerts rows this device has not seen (review 9/27 Do first 6) ---
+  // By notification ids (helpers.notifPopupStep), never by count: the feed is capped at 50 rows, so a count stopped
+  // changing at 50 and the pop-ups stopped for good. The seen set is the signed-in account's: seeded on its first
+  // AUTHENTICATED read (notifsRead "ok" - not the skipped pass at the sign-in card, after which every row would look
+  // new), it marks every row seen and pops only the unseen rows of myNotifications (notifVisibleTo), never the raw feed
+  // - the office viewer gets no trade / vacation pop-up its feed hides. It waits while the profile is not this account's
+  // or isScheduler (set by its own effect) has not caught up with it. addNotification marks this device's own rows seen.
+  // No created_at watermark: the inserting device stamps created_at.
   useEffect(() => {
     if (!loaded) return;
-    if (lastNotifCountRef.current === null) { lastNotifCountRef.current = notifications.length; return; }
-    if (notifications.length > lastNotifCountRef.current) {
-      const newOnes = notifications.slice(0, notifications.length - lastNotifCountRef.current);
-      // Item E3 (9/25): an open_shifts row stored with a pre-9/25 reason ('East feed busy') reads 'not available' here too
-      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
-    }
-    lastNotifCountRef.current = notifications.length;
-  }, [loaded, notifications, sendBrowserNotif]);
+    const uid = authUser ? authUser.id : null;
+    const profileRole = userProfile ? userProfile.role : null;
+    const ready = !!uid && !!userProfile && userProfile.id === uid && isScheduler === (profileRole === "scheduler" || profileRole === "admin");
+    const step = notifPopupStep(notifSeenRef.current, { uid, readOk: notifsRead === "ok", ready, notifications, visible: myNotifications });
+    notifSeenRef.current = step.state;
+    const newOnes = step.pop;
+    // Item E3 (9/25): an open_shifts row stored with a pre-9/25 reason ('East feed busy') reads 'not available' here too
+    newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
+  }, [loaded, authUser, userProfile, isScheduler, notifsRead, notifications, myNotifications, sendBrowserNotif]);
 
   // --- Test Notification ---
   const sendTestNotification = useCallback(async () => {
@@ -4943,14 +5266,23 @@ function CallSchedule() {
   // the mode. Nothing to write (a draft equalised by a reload) = no request and no audit row. entered_by / source
   // are decided by the function from who is calling (own id / 'app', or 'scheduler' / 'email-relay' when the
   // scheduler paints for someone), never by the client.
-  const commitOffersPaint = async ({ personId, diff, mode, period }) => {
+  // Prompt 28 (10/1): the No primary days ride in the SAME save_offers call - p_np_add / p_np_clear (days), sent ONLY
+  // when non-empty, so an offers-only Save works against the pre-apply function (and after a rollback); the function
+  // writes them through the security-definer save_no_primary inside its transaction (a surgeon cannot write availability
+  // under RLS), so a refusal there (NP001-NP009, NO_PRIMARY_*) rolls the offer rows back too. The audit summary names
+  // the days (helpers.offersAuditSummary: "Burchett: no primary on 1/6, 1/15"); availability is re-read after such a Save.
+  const commitOffersPaint = async ({ personId, diff, np, mode, period }) => {
     const withMode = !!(mode && period && period.id);
-    const summary = { person_id: personId, inserted: diff.insert.length, updated: diff.update.length, deleted: diff.delete.length, count: diff.count, period_id: period ? period.id : null, period: period ? period.label : null, mode: withMode ? mode : null };
+    const npAdd = np && Array.isArray(np.add) ? np.add : [], npClear = np && Array.isArray(np.clear) ? np.clear : [];
+    const npCount = npAdd.length + npClear.length;
+    const summary = { person_id: personId, inserted: diff.insert.length, updated: diff.update.length, deleted: diff.delete.length, count: diff.count, period_id: period ? period.id : null, period: period ? period.label : null, mode: withMode ? mode : null, np_add: npAdd, np_clear: npClear };
     try {
-      if (diff.count === 0 && !withMode) return { ok: true, nothing: true }; // nothing to write: no request, no audit row
-      if (diff.count > 0) {
+      if (diff.count === 0 && npCount === 0 && !withMode) return { ok: true, nothing: true }; // nothing to write: no request, no audit row
+      if (diff.count > 0 || npCount > 0) {
         const rows = diff.insert.concat(diff.update).map(r => ({ day: r.day, role_pref: r.role_pref }));
-        const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: "POST", body: JSON.stringify({ p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null }) });
+        const payload = { p_person: personId, p_rows: rows, p_clear: diff.delete, p_period: withMode ? period.id : null, p_mode: withMode ? mode : null };
+        if (npCount > 0) { payload.p_np_add = npAdd; payload.p_np_clear = npClear; } // only when non-empty (the pre-apply function knows five keys)
+        const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_offers`, { method: "POST", body: JSON.stringify(payload) });
         if (!res.ok) {
           const t = await res.text().catch(() => "");
           console.warn("Paint offers: save_offers failed", res.status, t.slice(0, 300));
@@ -4964,8 +5296,16 @@ function CallSchedule() {
           return { ok: false, error: describeDbError(t2) };
         }
       }
-      logAudit("offers.save", `${nameOf(personId)}: ${diff.count} offer change(s)${withMode ? ", mode " + mode : ""}${period ? " (" + period.label + ")" : ""}`, summary);
+      // Review 10/1: the period's label goes into the Activity log text only when this Save changed its mode or a day inside it -
+      // a No primary mark months after the period (or an offer outside it) no longer reads as a change inside that period.
+      const perStart = period && period.start_day ? String(period.start_day).slice(0, 10) : "", perEnd = period && period.end_day ? String(period.end_day).slice(0, 10) : "";
+      const inPer = (d) => !!perStart && !!perEnd && String(d) >= perStart && String(d) <= perEnd;
+      const auditLabel = period && (withMode || diff.insert.concat(diff.update).some(r => inPer(r.day)) || diff.delete.concat(npAdd, npClear).some(inPer)) ? period.label : null;
+      logAudit("offers.save", offersAuditSummary(nameOf(personId), diff.count, { add: npAdd, clear: npClear }, withMode ? mode : null, auditLabel), summary);
       loadOffers(true); loadPeriods(true); // canonicalize (realtime would also catch it)
+      // the No primary rows the function wrote / removed - awaited (review 10/1: the sheet drops its No primary draft on ok, so a
+      // just-marked day would flash free until the re-read lands); at most 8 s, and loadAvailability never throws
+      if (npCount > 0) { let npTimer = null; await Promise.race([loadAvailability(true), new Promise(res => { npTimer = setTimeout(res, 8000); })]); clearTimeout(npTimer); }
       return { ok: true };
     } catch (e) {
       console.warn("Paint offers: commit threw", e);
@@ -5616,6 +5956,25 @@ function CallSchedule() {
   const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
   const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens
   const claimReturnRef = useRef(null);                 // the element that opened the sheet - focus goes back to it on close
+  // Second review fixes of Do first 8 (10/2): toastLift (with the toast state, far above) is measured after a render
+  // here, but a choice inside the day editor (a pick that brings up the override box, a warning) re-renders DayEditor
+  // alone - the centred dialog grows and its action row moves down under a toast that was clear of it (1180 x 800: Save
+  // covered). While a toast and the day editor / claim sheet are up, a ResizeObserver on the dialog and its action row,
+  // the dialog's scroll (the claim sheet's row is not sticky) and the window's resize measure again (toastLiftNow) and
+  // set the lift when it changes. All of it is removed when the toast or the dialog goes.
+  const toastWatch = !!(toast && (editorDay || claimSheet) && !(paintSheet || offerSheet));
+  useEffect(() => {
+    if (!toastWatch) return undefined;
+    const row = document.querySelector("[data-testid=editor-footer]") || document.querySelector("[data-testid=claim-actions]");
+    if (!row) return undefined;
+    const dlg = row.closest("[role=dialog]");
+    const again = () => { const lift = toastLiftNow(toastLiftRef.current); if (lift !== toastLiftRef.current) { toastLiftRef.current = lift; setToastLift(lift); } };
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(again) : null;
+    if (ro) { ro.observe(row); if (dlg) ro.observe(dlg); }
+    if (dlg) dlg.addEventListener("scroll", again, { passive: true });
+    window.addEventListener("resize", again);
+    return () => { if (ro) ro.disconnect(); if (dlg) dlg.removeEventListener("scroll", again); window.removeEventListener("resize", again); };
+  }, [toastWatch, editorDay, claimSheet]);
   // 'Last announced' must not depend on the feed's 50-row window: the newest
   // open_shifts rows are fetched on their own when the board opens (auth-only
   // table: readAuthOnlyTable returns null without a fresh token - kept as is).
@@ -6281,11 +6640,18 @@ function CallSchedule() {
       else{setAuthMode("login");setLinkSetup(null);setAuthError("");setNewPassword("");setNewPasswordConfirm("");alert("Password updated. Please sign in with your new password.");auth.signOut();}
     }).catch(e=>{setAuthBusy(false);setAuthError((e&&e.message)||"Update failed");}); // never a stuck "Updating" button (the review of B7)
   };
+  // Review 9/27 Do first 7: auth.resetPassword resolves an error object now (a thrown fetch, an HTML 502) and the .catch
+  // is the backstop - the "Sending" button always comes back. resetReqRef numbers the request: "Back to sign in"
+  // (backToSignIn, both buttons) ends the shared busy state at once - a hung request no longer leaves Sign in disabled -
+  // and a late answer of the abandoned request is dropped (it must not end a sign-in's busy state, nor mark a reset sent).
   const submitReset = () => {
     if(!resetEmail){setAuthError("Please enter your email");return;}
+    const req = ++resetReqRef.current;
     setAuthBusy(true);setAuthError("");
-    auth.resetPassword(resetEmail).then(r=>{ setAuthBusy(false); if(r.error){setAuthError(r.error);} else{setResetSent(true);} });
+    auth.resetPassword(resetEmail).then(r=>{ if(req!==resetReqRef.current) return; setAuthBusy(false); if(r.error){setAuthError(r.error);} else{setResetSent(true);} })
+      .catch(e=>{ if(req!==resetReqRef.current) return; setAuthBusy(false); setAuthError((e&&e.message)||"Reset failed - try again"); });
   };
+  const backToSignIn = () => { resetReqRef.current++; setAuthBusy(false); setAuthMode("login"); setResetSent(false); setResetEmail(""); setAuthError(""); };
 
   return (
     <div style={{...css.root,background:dkBg,color:dkText}}>
@@ -6310,7 +6676,7 @@ function CallSchedule() {
           relayWord={isCoordinator ? "the office" : "the scheduler"}
           isScheduler={isScheduler}
           offers={offerRows} periods={periodRows}
-          schedule={schedule}
+          schedule={schedule} availability={availabilityRows} availabilityRead={availabilityReadOk}
           ctx={rulesCtx} ctxError={rulesCtxState.error}
           surgeonRules={surgeonRules} groupRules={groupRules}
           today={todayStr} nameOf={nameOf}
@@ -6319,10 +6685,44 @@ function CallSchedule() {
           onClose={() => setOfferSheet(null)}
         />
       )}
-      {/* Non-blocking toast */}
+      {/* Non-blocking toast. Review 9/27 Do first 8: data-testid "toast" is the message alone (the smoke reads its text
+          and clicks it to dismiss); the box around it carries the position, the repeat count (toast-count) and, for an
+          error or over a painter sheet (where the toast sits on the sheet's header and its Close), a close control.
+          Review of Do first 8 (10/2): width max-content up to min(90vw, 640px) - with left 50% and no width the box
+          shrank to the right half of the screen (195 px on a 390 px phone, a 160-character error 10 lines tall); over
+          the day editor / claim sheet it lifts above their action row (toastLift). */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast" onClick={()=>setToast(null)} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),transform:"translateX(-50%)",zIndex:9999,maxWidth:"90vw",background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
-          {toast.msg}
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+          <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
+          {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
+          {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}
+        </div>
+      )}
+      {/* Review 9/27 Do first 8: Recent errors - the header's stack of the last TOAST_ERROR_LOG_MAX error toasts, newest
+          first, each with its time, its repeat count and Copy: an error a later toast replaced (the override reasons
+          when both audit rows were refused) is read and copied here. Opened from the header's "N errors" only - never
+          by itself, so it can never cover a flow that is still running. Every role, ?public=1 too. */}
+      {showErrorLog && (
+        <div data-testid="error-log" onClick={closeErrorLog} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9550,padding:16}}>
+          <div role="dialog" aria-modal="true" aria-label="Recent errors" tabIndex={-1} onKeyDown={errorLogKeyDown} onClick={e=>e.stopPropagation()} style={{outline:"none",background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:12,padding:16,maxWidth:520,width:"100%",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
+              <h3 style={{margin:0,fontSize:15,color:T.text}}>Recent errors</h3>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {errorLog.length > 0 && <button type="button" data-testid="error-log-clear" onClick={()=>{ setErrorLog([]); setShowErrorLog(false); }} style={{background:"none",border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:font,minHeight:32}}>Clear</button>}
+                <button type="button" data-testid="error-log-close" autoFocus aria-label="Close recent errors" onClick={closeErrorLog} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",fontFamily:font,minWidth:36,minHeight:36}}>x</button>
+              </div>
+            </div>
+            <p style={{margin:"0 0 8px",fontSize:12,color:T.muted,lineHeight:1.5}}>The last {TOAST_ERROR_LOG_MAX} error messages on this device, newest first - kept until you clear them, sign out or reload.</p>
+            {errorLog.length === 0 ? <p style={{fontSize:13,color:T.muted,margin:"8px 0"}}>No errors.</p> : errorLog.map(e => (
+              <div key={e.msg} data-testid="error-log-row" style={{borderTop:`1px solid ${T.border}`,padding:"8px 0",display:"flex",gap:8,alignItems:"flex-start"}}>
+                <div style={{flex:"1 1 auto",minWidth:0}}>
+                  <div style={{fontSize:11,color:T.muted}}>{new Date(e.at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}{e.count > 1 ? " - " + e.count + " times since " + new Date(e.first).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : ""}</div>
+                  <div data-testid="error-log-msg" style={{fontSize:13,lineHeight:1.45,color:T.text,userSelect:"text",overflowWrap:"anywhere"}}>{e.msg}</div>
+                </div>
+                <button type="button" data-testid="error-log-copy" onClick={()=>copyErrorEntry(e.msg)} style={{flexShrink:0,background:"none",border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:font,minHeight:32}}>{errorCopied === e.msg ? "Copied" : errorCopied === "!" + e.msg ? "Blocked" : "Copy"}</button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {/* Publish dialog - rendered at the top level so Setup > Generate (Accept & Publish)
@@ -6502,7 +6902,7 @@ function CallSchedule() {
                   <div style={{fontSize:13,color:"#1a6030",padding:"12px 14px",background:"#e8f8e8",borderRadius:8,border:"1px solid #a0d8a0",lineHeight:1.5}}>
                     Password reset email sent. Check your inbox for a link to reset your password.
                   </div>
-                  <button onClick={()=>{setAuthMode("login");setResetSent(false);setResetEmail("");setAuthError("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
+                  <button onClick={backToSignIn} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
                 </>
               ) : (
                 <>
@@ -6511,13 +6911,20 @@ function CallSchedule() {
                   {errBox(authError)}
                   <button onClick={submitReset} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Sending" : "Send reset link"}</button>
                   <div style={{textAlign:"center",marginTop:4}}>
-                    <button onClick={()=>{setAuthMode("login");setAuthError("");setResetEmail("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
+                    <button onClick={backToSignIn} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
                   </div>
                 </>
               )}
             </div>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {/* Do first 7: the stored session could not be checked (GoTrue unreachable / 5xx / 429 / 408 - the pair is kept) */}
+              {sessionUnreached && (
+                <div data-testid="auth-unreached" role="alert" style={{fontSize:12,color:"#c04040",padding:"8px 10px",background:"#fce8e8",borderRadius:6,border:"1px solid #e8c0c0",lineHeight:1.5}}>
+                  {sessionUnreached}
+                  <button data-testid="auth-retry" onClick={retrySessionCheck} disabled={retryBusy} style={{...css.cta,display:"block",width:"100%",marginTop:8,padding:"9px 14px",fontSize:13,fontWeight:700,opacity:retryBusy?0.6:1}}>{retryBusy ? "Checking" : "Retry"}</button>
+                </div>
+              )}
               <input type="email" placeholder="Email address" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               {authError && <div data-testid="auth-error" role="alert">{errBox(authError)}</div>}
@@ -6563,6 +6970,13 @@ function CallSchedule() {
                   {!loaded && <span style={{marginLeft:8,color:T.navyMuted,fontSize:10}}>Connecting</span>}
                 </>
               )}
+              {/* Review 9/27 Do first 8: the stack of the last errors (newest first) - opens Recent errors */}
+              {/* review of Do first 8 (10/2): class hdr-errors - 24 px on a wide screen; on a phone a 36 x 36 tap target; negative
+                  vertical margins keep the status line's height (the inline minHeight:24 beat the phone button rule) */}
+              {/* second review fixes (10/2): the button is the tap target only (transparent, no border); the pill inside it
+                  (hdr-errors-pill) is what shows - at 360 px, where the chip wraps onto a line of its own, the 36 px
+                  outlined box overlapped "Silvis Surgical Care" above by 11 px; the pill (17 px) stays on its line */}
+              {errorLog.length > 0 && <button type="button" data-testid="hdr-errors" className="hdr-errors" onClick={openErrorLog} title="The last error messages, newest first - read or copy them again" style={{marginLeft:4,background:"none",border:"none",color:"#FF8A8A",padding:"0 4px",fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"inherit",cursor:"pointer",fontFamily:font,verticalAlign:"middle",display:"inline-flex",alignItems:"center",justifyContent:"center"}}><span data-testid="hdr-errors-pill" style={{border:"1px solid #FF8A8A",borderRadius:9,padding:"2px 8px",lineHeight:"12px"}}>{errorLog.length === 1 ? "1 error" : errorLog.length + " errors"}</span></button>}
             </p>
           </div>
         </div>
@@ -7214,7 +7628,7 @@ function CallSchedule() {
                       ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
                       : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
                     <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
-                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
+                    <div data-testid="claim-actions" style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
                     </div>
@@ -7296,6 +7710,9 @@ function CallSchedule() {
           const daysBlock = (who, own) => {
             const upcoming = upcomingDaysOf(who, 90);
             const next = upcomingDaysOf(who, null)[0] || null;
+            // a row's H / E / F / EV badges (the holiday unit's name gives way to its legend letter H on a phone - the phone
+            // block's .mine-hol-name / .mine-hol-letter)
+            const badgeEls = (x) => badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.k === "H" ? <><span className="mine-hol-name">{b.text}</span><span className="mine-hol-letter">H</span></> : b.text}</span>);
             return <>
               <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)") : T.raised,color:next ? "#fff" : dkText}}>
                 {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !daysReadOk ? <span data-testid="next-call-unread" style={{fontStyle:"italic"}}>Schedule not loaded - the next call is not known until it loads.</span> : !next ? <span>No upcoming call on file for {nameOf(who)}.</span> : (
@@ -7311,17 +7728,33 @@ function CallSchedule() {
                 <span style={muted}>H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation</span>
               </div>
               {!daysShown ? <p style={{...muted,fontStyle:"italic"}}>{loaded ? "Schedule not loaded." : "Loading schedule"}</p> : upcoming.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No call in the next 90 days.</p> : (
-                <div data-testid="mine-upcoming" style={{maxHeight:420,overflowY:"auto"}}>
+                // Review 9/27 Do first 9 (10/1): the list is a 420 px scroller on a wide screen only - the class's phone rule
+                // (<= 600px, the <style> block) drops max-height / overflow-y, so the page scrolls, never a box inside it; no
+                // cap on the rows. A row: the padlock sits INSIDE the date span (it used to wrap onto a line of its own at
+                // 390 px), the holder takes what is left of the line (see below), and on the own view Trade + Give
+                // away sit together in mine-acts - on a phone a line of their own, right-aligned (each >= 36 px by the
+                // phone button rule). The inner own guards keep the pinned button lines. Review of Do first 9 (10/2): on
+                // the own view the badges and the offer tag sit in mine-acts too, ahead of Trade - beside the date and
+                // role they left the holder 11-64 px at 390 px ("bac...", the colleague's name lost; the title is
+                // unreachable on a touch screen); on a wide screen they still sit at the row's end, next to Trade (they
+                // used to follow the name - accepted at the second review, 10/2: the row is one line either way). The
+                // holder's flex is the class mine-holder's: its text width on a wide screen (the Following view's badges
+                // follow the name again); on a phone the rest of the line but never less than its words (1 0 auto,
+                // second review fixes 10/2) - the Following view's badges, still right after it, wrap under the name
+                // instead of clipping it, and a name that does not fit beside the date and role takes a line of its own.
+                <div data-testid="mine-upcoming" className="mine-upcoming">
                   {upcoming.map(x => (
-                    <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:10,alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:mono,fontSize:12,color:dkText,width:92}}>{dowShort(x.day)} {fmtMD(x.day)}</span>
+                    <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:"6px 10px",alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
+                      <span data-testid="mine-date" style={{fontFamily:mono,fontSize:12,color:dkText,width:92,flexShrink:0,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{dowShort(x.day)} {fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>
                       <span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>{roleWord(x.role)}</span>
-                      <span style={{...muted,minWidth:120}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
-                      {x.locked && <Padlock title="locked" size={9}/>}
-                      {badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.text}</span>)}
-                      {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
-                      {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} style={{...css.mini(false),marginLeft:"auto",color:"#6030a0",borderColor:"#c0a8e0"}}>Propose a trade</button>}
-                      {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
+                      <span data-testid="mine-holder" className="mine-holder" title={(x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf)} style={{...muted,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
+                      {!own && badgeEls(x)}
+                      {own && <span data-testid="mine-acts" className="mine-acts" style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginLeft:"auto"}}>
+                        {badgeEls(x)}
+                        {own && (() => { const t = offerTagOf(x.day, x.role); return t ? <span data-testid="mine-offer-tag" data-offer={t.kind} title={t.title} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:t.bg,color:t.fg,whiteSpace:"nowrap"}}>{t.text}</span> : null; })()}
+                        {own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)} title="Propose a trade for this day" style={{...css.mini(false),color:"#6030a0",borderColor:"#c0a8e0"}}>Trade</button>}
+                        {own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}
+                      </span>}
                     </div>
                   ))}
                 </div>
@@ -8180,8 +8613,8 @@ function writeCollapseFlag(ck, open) {
 //  - A day the person CANNOT offer is greyed and untappable with its reason: past, frozen (the period's
 //    offers_close_at has passed - ask the scheduler), and every OBLIGATION rules.eligibility reports for BOTH roles
 //    (helpers.offerDayWhy: vacation / day-before-vacation, East busy / forecast busy, derived East-Silvis week,
-//    outside the window, holiday or backup opt-out, inactive, and the person's own dated unavailable / no-backup /
-//    backup-only rows, which an offer never lifts). Blocked in one role only = paintable in the other (the row says
+//    outside the window, holiday or backup opt-out, inactive, and the person's own dated unavailable / no-backup
+//    rows, which an offer never lifts). Blocked in one role only = paintable in the other (the row says
 //    "backup only - East busy"). eligibility is consulted with { claim: true }, so an exhaustive surgeon's own
 //    not-offered never greys a day he is about to offer. The Clear brush is the one exception: a SAVED offer on an
 //    obligation-greyed row (a vacation entered over it later) can still be cleared - the row stays tappable for
@@ -8196,7 +8629,18 @@ function writeCollapseFlag(ck, open) {
 //    ("offers for <label> closed <date> - ask the scheduler", no toggle). The box is one summary line by default
 //    ("Change" expands the mode buttons) so the day list keeps the phone's height. They go through the same
 //    onCommit (mode-only save allowed).
-function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
+//  - No primary (Prompt 28, 10/1 - Faraz: "I do want them to be able to do that"; Burchett: "I can cover backup call
+//    these days"): the fifth brush. The person's own backup_only availability rows ARE the No primary state - no longer
+//    an obligation grey: a SINGLE-day row (any source: the app's, Setup's, the seed's) is his to mark and clear here; a
+//    multi-day row (a range the scheduler entered in Setup) reads "No primary (set by the scheduler)" on each of its days
+//    and stays read-only (only Setup changes it). A second draft (npDraft: day -> true mark / false lift a saved one) sits
+//    beside the offer draft; helpers.offerPaintCell decides what each brush does to a day (No primary replaces a Primary /
+//    Either offer and keeps a Backup one; Primary / Either on a No primary day lifts it after ONE question per batch; Clear
+//    takes back both; a day he holds as primary on the schedule cannot be marked - trade first). Save stays ONE
+//    rpc/save_offers request: the no-primary days ride in p_np_add / p_np_clear (sent only when non-empty) and the
+//    function writes them through save_no_primary in the same transaction - all or nothing. A no-primary day is not an
+//    offer: the period count, the status and "Go by my rules" keep reading offers only.
+function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
   const t0 = parse(today);
@@ -8209,6 +8653,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const [rangeMode, setRangeMode] = React.useState(false);
   const [pendingStart, setPendingStart] = React.useState(null);
   const [draft, setDraft] = React.useState({});           // day -> 'primary' | 'backup' | 'either' | null (null = clear a saved offer)
+  const [npDraft, setNpDraft] = React.useState({});       // day -> true (mark No primary) | false (lift a saved one) - Prompt 28
   const [modeDraft, setModeDraft] = React.useState(null);  // 'exhaustive' | 'preferred' while it differs from the saved mode
   const [busy, setBusy] = React.useState(false);
   const [commitError, setCommitError] = React.useState(null); // { msg, items }
@@ -8226,7 +8671,11 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const savedByDay = React.useMemo(() => { const m = {}; (offers || []).forEach(o => { if (o && o.person_id === pid) m[String(o.day).slice(0, 10)] = o.role_pref; }); return m; }, [offers, pid]);
   const othersByDay = React.useMemo(() => { const m = {}; (offers || []).forEach(o => { if (o && o.person_id !== pid) { const d = String(o.day).slice(0, 10); m[d] = (m[d] || 0) + 1; } }); return m; }, [offers, pid]);
   const effective = (ds) => (ds in draft ? draft[ds] : (savedByDay[ds] || null));
-  const dirtyDays = Object.keys(draft);
+  // Prompt 28: the person's No primary days from the availability rows (own = single days, editable; range = a scheduler's
+  // multi-day row, read-only) and the effective own state with the draft applied (a range day is never own).
+  const np = React.useMemo(() => noPrimaryDays(availability, pid), [availability, pid]);
+  const effNp = (ds) => !np.range[ds] && (ds in npDraft ? !!npDraft[ds] : !!np.own[ds]);
+  const dirtyDays = Array.from(new Set(Object.keys(draft).concat(Object.keys(npDraft))));
 
   // The next period (toggle / go by my rules) and the person's derived status + mode on it. periodOpen = a
   // surgeon may still write to it (offers_close_at ahead, status upcoming); the scheduler is never frozen (OM005).
@@ -8239,6 +8688,10 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const periodLabel = period ? String(period.label || (period.start_day + " - " + period.end_day)) : "";
   const periodClose = period && period.offers_close_at ? String(period.offers_close_at).slice(0, 10) : null;
   const inPeriod = (ds) => !!period && ds >= String(period.start_day).slice(0, 10) && ds <= String(period.end_day).slice(0, 10);
+  // Prompt 28 review (10/1): inside a period the person runs as "Only these days" (exhaustive) a No primary day is NOT an offer -
+  // backup there needs a Backup offer too (rules.js: not-offered), so the legend, the tap hint and the replace note say so for such
+  // a day (the sheet's own period reads the drafted mode); everywhere else the plain words hold.
+  const exhDay = (ds) => { const per = periodFor(ds, periods || []); if (!per) return false; const m = period && per.id === period.id ? shownMode : ((per.offer_modes && typeof per.offer_modes === "object" ? per.offer_modes[pid] : null) || "preferred"); return m === "exhaustive"; };
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
   const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
@@ -8260,28 +8713,35 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
         ["primary", "backup"].forEach(role => {
           let elig = null;
           try { elig = eligibility(ctx, ds, role, person.id, { claim: true }); } catch (e) { console.warn("Paint offers: eligibility threw for " + ds + " " + role, e); }
-          const why = offerDayWhy(elig ? elig.hard : []);
+          // Prompt 28: the person's own backup_only rows are the No primary state the painter models itself (single days
+          // editable, ranges read-only below) - not an obligation grey; OFFER_BLOCK_WORDS stays as it is for other readers.
+          const hard = elig ? elig.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [];
+          const why = offerDayWhy(hard);
           row.block[role] = why.block; row.confirm[role] = why.confirm;
         });
       }
+      row.npRange = !!np.range[ds];
+      if (row.npRange && !row.block.primary) row.block.primary = NO_PRIMARY_RANGE_WORDS;
       if (row.past) row.grey = "past";
       else if (row.frozen) row.grey = row.frozen;
       else if (row.block.primary && row.block.backup) row.grey = row.block.primary === row.block.backup ? row.block.primary : row.block.primary + " / " + row.block.backup;
       const a = schedule ? schedule[ds] : null;
       row.holders = { primary: a ? dayHolder(a, "primary") : null, backup: a ? dayHolder(a, "backup") : null };
+      row.holdsPrimary = !!pid && row.holders.primary === pid; // published / saved primary: No primary is refused (trade first, NP008)
       row.others = othersByDay[ds] || 0;
       out.push(row);
     }
     return out;
-  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay]);
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np]);
   const rowByDay = React.useMemo(() => { const m = {}; days.forEach(r => { m[r.ds] = r; }); return m; }, [days]);
+  const npExh = days.some(r => exhDay(r.ds)); // the shown month holds a day of an "Only these days" period (Prompt 28 review)
 
   // Running counts: the shown month by brush (draft applied) and the next period against the person's cap.
   const monthCounts = React.useMemo(() => {
-    const c = { primary: 0, backup: 0, either: 0 };
-    days.forEach(r => { const e = effective(r.ds); if (e && c[e] !== undefined) c[e] += 1; });
+    const c = { primary: 0, backup: 0, either: 0, noprimary: 0 };
+    days.forEach(r => { const e = effective(r.ds); if (e && c[e] !== undefined) c[e] += 1; if (r.npRange || effNp(r.ds)) c.noprimary += 1; });
     return c;
-  }, [days, draft, savedByDay]);
+  }, [days, draft, savedByDay, npDraft, np]);
   const periodCount = React.useMemo(() => {
     if (!period) return 0;
     const set = new Set();
@@ -8299,33 +8759,37 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     const saved = savedByDay[ds] || null;
     if (want === saved || (!want && !saved)) delete n[ds]; else n[ds] = want; // a no-op against the saved row drops out
   };
-  // Clear may reach a greyed row that still carries a SAVED offer (a vacation entered over it later) - never a
-  // past or frozen one (the delete guard refuses those for a non-scheduler; a range must not fail on them).
-  const clearable = (r) => !!r && !r.past && !r.frozen && !!savedByDay[r.ds];
-  // The one place every paint goes through (a tap, a range, the paste box): greys are skipped and named,
-  // one-role blocks are skipped and named, pattern days ask ONCE for the whole batch, then the draft moves.
+  // Prompt 28: the same for No primary - a draft equal to the saved own state drops out; a range day is never drafted.
+  const setNpDraftDay = (n, ds, want) => { if (np.range[ds] || !!want === !!np.own[ds]) delete n[ds]; else n[ds] = !!want; };
+  // Clear may reach a greyed row that still carries a SAVED offer or a SAVED own No primary (a vacation entered over it
+  // later) - never a past or frozen one (the delete guard refuses those for a non-scheduler; a range must not fail on them).
+  const clearable = (r) => !!r && !r.past && !r.frozen && (!!savedByDay[r.ds] || !!np.own[r.ds]);
+  // Prompt 28: the picture helpers.offerPaintCell reads for one day; the reason the No primary brush cannot take a row
+  // ("" when it can, on a range day and on an own No primary day); whether a row takes a tap with the armed brush.
+  const cellOf = (r) => ({ offer: effective(r.ds), np: effNp(r.ds), savedOffer: !!savedByDay[r.ds], savedNp: !!np.own[r.ds], range: !!r.npRange, past: !!r.past, frozen: r.frozen || null, grey: r.grey || null, blockPrimary: r.block.primary || null, blockBackup: r.block.backup || null, holdsPrimary: !!r.holdsPrimary });
+  const npWhyOf = (r) => offerPaintCell(cellOf(r), "noprimary", { single: true }).skip || "";
+  const canTap = (r) => armed === "noprimary" ? (!r.past && !r.frozen && !r.npRange && (effNp(r.ds) || (!r.grey && !r.holdsPrimary))) : (!r.grey || (armed === "clear" && clearable(r)));
+  // The one place every paint goes through (a tap, a range, the paste box): helpers.offerPaintCell decides each day
+  // (greys and one-role blocks are skipped and named; nothing to clear is silent before any grey is named), pattern days
+  // ask ONCE for the whole batch, No primary days a Primary / Either brush would lift ask ONCE more, then both drafts move.
   const paintDays = (list, brush, opts) => {
     setCommitError(null);
     const single = !!(opts && opts.single);
-    const skipped = [], asks = [], go = [];
+    const skipped = [], asks = [], lifts = [], go = [], outs = {}, notes = [];
     list.forEach(ds => {
       const r = rowByDay[ds];
-      if (brush === "clear") {
-        if (!effective(ds)) return; // nothing to clear
-        if (!r) { skipped.push(dayText(ds) + ": outside the shown month"); return; }
-        if (r.grey && !clearable(r)) { skipped.push(dayText(ds) + ": " + r.grey); return; }
-        go.push(ds); return;
-      }
+      if (brush === "clear" && !effective(ds) && !effNp(ds)) return; // nothing to clear
       if (!r) { skipped.push(dayText(ds) + ": outside the shown month"); return; }
-      if (r.grey) { skipped.push(dayText(ds) + ": " + r.grey); return; }
-      const need = rolesOf(brush);
-      const blocked = need.filter(role => r.block[role]);
-      if (blocked.length) { skipped.push(dayText(ds) + ": " + blocked.map(role => role + " - " + r.block[role]).join(", ")); return; }
       const cur = effective(ds);
-      if (single && cur === brush) { go.push(ds); return; } // tap again with the same brush = clear
-      const asking = need.map(role => r.confirm[role]).filter(Boolean);
-      if (asking.length && cur !== brush) asks.push({ ds, why: asking[0], dow: DAY_HDR[r.dow] });
-      go.push(ds);
+      const out = offerPaintCell(cellOf(r), brush, { single });
+      if (out.skip) { skipped.push(dayText(ds) + ": " + out.skip); return; }
+      if (out.offer === cur && out.np === effNp(ds)) return; // nothing moves (a range day, a repaint, a Range over a marked day)
+      if (brush !== "clear" && brush !== "noprimary" && out.offer === brush && cur !== brush) {
+        const asking = rolesOf(brush).map(role => r.confirm[role]).filter(Boolean);
+        if (asking.length) asks.push({ ds, why: asking[0], dow: DAY_HDR[r.dow] });
+      }
+      if (out.lift) lifts.push({ ds, dow: DAY_HDR[r.dow] });
+      outs[ds] = out; go.push(ds);
     });
     let ok = go.slice();
     if (asks.length) {
@@ -8336,12 +8800,32 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
         : `${asks.length} of these days are normally not one of your ${roleWord(brush)} call days (${asks.slice(0, 6).map(a => a.dow + " " + fmtMD(a.ds)).join(", ")}${asks.length > 6 ? ", ..." : ""} - ${first.why}) - offer them anyway?\n\nThe saved offers lift that pattern for those dates.`;
       if (!confirm(msg)) { const drop = new Set(asks.map(a => a.ds)); ok = ok.filter(ds => !drop.has(ds)); skipped.push(asks.length + " pattern day(s) left out"); }
     }
-    if (ok.length) setDraft(p => { const n = { ...p }; ok.forEach(ds => { const cur = effective(ds); setDraftDay(n, ds, brush === "clear" ? null : (single && cur === brush ? null : brush)); }); return n; });
-    setHint(skipped.length ? "Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : "") : "");
+    // Prompt 28: Primary / Either on a No primary day lifts it - asked ONCE per batch, after the pattern question; the
+    // days declined are left out.
+    const liftsLeft = lifts.filter(l => ok.indexOf(l.ds) >= 0);
+    if (liftsLeft.length) {
+      const l0 = liftsLeft[0], nl = liftsLeft.length;
+      const long0 = { Sun: "Sunday", Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday" }[l0.dow] || l0.dow;
+      const liftMsg = nl === 1
+        ? `${long0} ${fmtMD(l0.ds)} is marked No primary - offer ${roleWord(brush)} there and lift it?`
+        : `${nl} of these days are marked No primary (${liftsLeft.slice(0, 6).map(l => l.dow + " " + fmtMD(l.ds)).join(", ")}${nl > 6 ? ", ..." : ""}) - offer ${roleWord(brush)} there and lift the block?`;
+      if (!confirm(liftMsg)) { const dropL = new Set(liftsLeft.map(l => l.ds)); ok = ok.filter(ds => !dropL.has(ds)); notes.push(nl + " No primary day(s) left out"); }
+    }
+    const replaced = ok.filter(ds => outs[ds] && outs[ds].replaced).length;
+    const replacedExh = ok.filter(ds => outs[ds] && outs[ds].replaced && exhDay(ds)).length; // Prompt 28 review: off backup too there
+    if (ok.length) {
+      setDraft(p => { const n = { ...p }; ok.forEach(ds => setDraftDay(n, ds, outs[ds].offer)); return n; });
+      setNpDraft(p => { const n = { ...p }; ok.forEach(ds => setNpDraftDay(n, ds, outs[ds].np)); return n; });
+    }
+    const hintParts = [];
+    if (skipped.length) hintParts.push("Skipped " + skipped.length + " day(s): " + skipped.slice(0, 4).join("; ") + (skipped.length > 4 ? "; ..." : ""));
+    notes.forEach(t => hintParts.push(t));
+    if (replaced) hintParts.push("No primary replaced the offer on " + replaced + " day(s)" + (replacedExh ? " - with \"Only these days\" on, a day with no offer is off backup too: paint Backup to keep it" : ""));
+    setHint(hintParts.join(" - "));
   };
   const tapDay = (ds) => {
     const r = rowByDay[ds];
-    if (!r || (r.grey && !(armed === "clear" && clearable(r)))) return;
+    if (!r || !canTap(r)) return;
     if (!rangeMode) { paintDays([ds], armed, { single: true }); return; }
     if (!pendingStart) { setPendingStart(ds); setHint(""); return; }
     const [s, e] = pendingStart <= ds ? [pendingStart, ds] : [ds, pendingStart];
@@ -8366,26 +8850,32 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     else setPasteText("");
   };
 
-  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (draft[ds] ? brushWord(draft[ds]) : "clear")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
+  // One line per pending entry (the error box names them all): one line per drafted day - an offer change and a No primary change on
+  // the same day share it ("Tue 1/12: clear, no primary"; review 10/1: the box's count then agrees with "N unsaved" and "Save (N)").
+  const describeDraft = () => dirtyDays.slice().sort().map(ds => dayText(ds) + ": " + (ds in draft ? [draft[ds] ? brushWord(draft[ds]) : "clear"] : []).concat(ds in npDraft ? [npDraft[ds] ? "no primary" : "lift no primary"] : []).join(", ")).concat(modeDirty ? ["mode for " + periodLabel + ": " + modeDraft] : []);
   const doSave = async () => {
     if (!dirtyCount || busy) return;
     setBusy(true); setCommitError(null); setSavedNote("");
     const items = describeDraft();
     const diff = offersDraftDiff(savedByDay, draft);
-    if (diff.bad.length) { setBusy(false); setCommitError({ msg: "a drafted day is malformed (" + diff.bad.join(", ") + ") - discard it", items }); return; }
+    const npLive = {}; Object.keys(npDraft).forEach(d => { if (!np.range[d]) npLive[d] = npDraft[d]; }); // a day a range now covers is the range's
+    const npDiff = noPrimaryDraftDiff(np.own, npLive);
+    if (diff.bad.length || npDiff.bad.length) { setBusy(false); setCommitError({ msg: "a drafted day is malformed (" + diff.bad.concat(npDiff.bad).join(", ") + ") - discard it", items }); return; }
     // A rules-only surgeon who paints days inside the period comes off the rules-only list by that save (the
     // period's list would otherwise contradict the derived 'submitted' status). Only an OPEN period takes a mode.
+    // A No primary day is not an offer: it never takes him off the list.
     const addsInPeriod = diff.insert.concat(diff.update).some(r => inPeriod(r.day));
     const mode = !periodOpen ? null : modeDirty ? modeDraft : (periodStatus === "rules_only" && addsInPeriod ? shownMode : null);
+    const changeDays = new Set(diff.insert.map(r => r.day).concat(diff.update.map(r => r.day), diff.delete, npDiff.add, npDiff.clear));
     // Nothing left to write (the draft was equalised by a reload from another device): drop it, no request, no audit.
-    if (diff.count === 0 && !mode) { setBusy(false); setDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote("Already saved - nothing to write"); if (savedTimerRef.current) clearTimeout(savedTimerRef.current); savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000); return; }
+    if (diff.count === 0 && npDiff.add.length + npDiff.clear.length === 0 && !mode) { setBusy(false); setDraft({}); setNpDraft({}); setModeDraft(null); setPendingStart(null); setSavedNote("Already saved - nothing to write"); if (savedTimerRef.current) clearTimeout(savedTimerRef.current); savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000); return; }
     let r;
-    try { r = await onCommit({ personId: pid, diff, mode, period: period || null, items }); }
+    try { r = await onCommit({ personId: pid, diff, np: { add: npDiff.add, clear: npDiff.clear }, mode, period: period || null, items }); }
     catch (e) { console.warn("Paint offers: commit threw", e); r = { ok: false, error: String(e?.message || e) }; }
     finally { setBusy(false); }
     if (r && r.ok) {
-      setDraft({}); setModeDraft(null); setPendingStart(null); setPeriodOpenBox(false);
-      setSavedNote(`Saved ${diff.count} change${diff.count === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
+      setDraft({}); setNpDraft({}); setModeDraft(null); setPendingStart(null); setPeriodOpenBox(false);
+      setSavedNote(`Saved ${changeDays.size} change${changeDays.size === 1 ? "" : "s"}${mode ? " - " + (mode === "rules_only" ? "going by your rules" : "mode: " + (mode === "exhaustive" ? "only these days" : "preferred days")) : ""}`);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSavedNote(""), 3000);
     } else {
@@ -8407,7 +8897,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const doDiscard = () => {
     if (!dirtyCount) return;
     if (!confirm(`Discard ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}?`)) return;
-    setDraft({}); setModeDraft(null); setPendingStart(null); setCommitError(null); setSavedNote(""); setHint(""); setPeriodOpenBox(false);
+    setDraft({}); setNpDraft({}); setModeDraft(null); setPendingStart(null); setCommitError(null); setSavedNote(""); setHint(""); setPeriodOpenBox(false);
   };
   const doClose = () => {
     if (busy) return; // never close mid-save - the commit would land invisibly
@@ -8425,6 +8915,11 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const periodExpanded = periodOpen && (periodOpenBox || modeDirty); // one line by default; "Change" or a dirty mode opens the box
   const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`
     : pendingStart ? null : "Range: tap the start day, then the end day (same day twice = just that day).";
+  const npWho = asScheduler && person ? person.name : "yourself";
+  const npHint = npExh ? `Tap a day to mark ${npWho} No primary ("Only these days" is on: paint Backup too for backup); tap again to take it back.` // Prompt 28 review: exhaustive
+    : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`; // Prompt 28: the No primary brush armed, Range off
+  const npLegend = npExh ? "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change."
+    : "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
 
   if (!person) {
     return (
@@ -8454,14 +8949,16 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
             <button data-testid="ofp-goto-period" data-start={periodJump.start} onClick={() => { setPendingStart(null); setYm({ y: periodJump.y, m: periodJump.m }); }} title={periodJump.text} style={{ ...css.mini(false), minHeight: 36, height: 36, padding: "0 12px", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{periodJump.text}</button>
           </div>
         )}
-        <div data-testid="ofp-counts" data-month-primary={monthCounts.primary} data-month-backup={monthCounts.backup} data-month-either={monthCounts.either} data-period-count={periodCount} style={{ fontSize: 11, color: muted, textAlign: "center", marginTop: 2, lineHeight: 1.5 }}>
-          {monthLabel}: <b style={{ color: text }}>{monthCounts.primary}</b> primary, <b style={{ color: text }}>{monthCounts.backup}</b> backup, <b style={{ color: text }}>{monthCounts.either}</b> either offered
+        <div data-testid="ofp-counts" data-month-primary={monthCounts.primary} data-month-backup={monthCounts.backup} data-month-either={monthCounts.either} data-month-noprimary={monthCounts.noprimary} data-period-count={periodCount} style={{ fontSize: 11, color: muted, textAlign: "center", marginTop: 2, lineHeight: 1.5 }}>
+          {monthLabel}: <b style={{ color: text }}>{monthCounts.primary}</b> primary, <b style={{ color: text }}>{monthCounts.backup}</b> backup, <b style={{ color: text }}>{monthCounts.either}</b> either offered{monthCounts.noprimary > 0 && <>, <b style={{ color: text }}>{monthCounts.noprimary}</b> no primary</>}
           {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : ""}</>}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
-          {["primary", "backup", "either", "clear"].map(k => (
-            <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={css.brush(armed === k, k)}>{OFFER_BRUSH[k].label}</button>
-          ))}
+          {["primary", "backup", "either", "noprimary", "clear"].map(k => {
+            // Ship review 10/2: the No primary brush waits for the first availability read (the marks it would show are unknown)
+            const npOff = k === "noprimary" && !availabilityRead;
+            return <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} disabled={npOff} title={npOff ? "The No primary days have not loaded - reload first" : undefined} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={{ ...css.brush(armed === k, k), ...(npOff ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}>{OFFER_BRUSH[k].label}</button>;
+          })}
           <button data-testid="ofp-range" data-on={rangeMode ? "1" : "0"} onClick={() => { setRangeMode(v => !v); setPendingStart(null); setHint(""); }} title="Paint a run of days: tap the start day, then the end day" style={{ ...css.btn(false), minHeight: 44, padding: "8px 12px", fontSize: 12, marginLeft: "auto", ...(rangeMode ? { background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`, color: "#fff", borderColor: T.navy } : {}) }}>{rangeMode ? "Range: on" : "Range"}</button>
         </div>
         <div data-testid="ofp-hint" style={{ fontSize: 11, color: hint ? "#a05010" : muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", lineHeight: 1.4 }}>
@@ -8470,8 +8967,12 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
                 <span>Start {dayText(pendingStart)} - tap the end day (same day = just that day).</span>
                 <button data-testid="ofp-cancel-start" onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: "#c04040", border: "1px solid #c05050" }}>x cancel start</button>
               </>
-            : <span>{rangeHint}</span>}
+            : <span>{armed === "noprimary" && !rangeMode ? npHint : rangeHint}</span>}
         </div>
+        {/* Prompt 28: the No primary legend - only while that brush is armed (the day list keeps the phone's height) */}
+        {armed === "noprimary" && <div data-testid="ofp-legend" data-exh={npExh ? "1" : "0"} style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.35 }}>{npLegend}</div>}
+        {/* Ship review 10/2: no availability read adopted yet (a failed read) - the No primary days shown would be none */}
+        {!availabilityRead && <div role="alert" data-testid="ofp-np-unread" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Couldn't load {asScheduler && person ? person.name + "'s" : "your"} No primary days - reload before marking or lifting one.</div>}
         {!ctx && <div role="alert" data-testid="ofp-rules-unavailable" style={{ ...css.warnBox, marginTop: 6, fontSize: 11 }}>Rules unavailable{ctxError ? " (" + String(ctxError).slice(0, 120) + ")" : ""} - only past and frozen days are greyed; the database still refuses a vacation day.</div>}
       </div>
 
@@ -8480,15 +8981,23 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
         {days.map(r => {
           const ds = r.ds;
           const eff = effective(ds);
-          const drafted = ds in draft;
+          const offerDrafted = ds in draft;
+          const npDrafted = ds in npDraft;
+          const drafted = offerDrafted || npDrafted; // data-state "draft" = either draft holds the day; "saved" keeps meaning a saved OFFER
+          const effN = effNp(ds);
+          const npLift = npDrafted && !npDraft[ds] && !!np.own[ds]; // a drafted lift of a saved No primary
           const isPending = pendingStart === ds;
           const grey = !!r.grey;
-          const tappable = !grey || (armed === "clear" && clearable(r)); // a saved offer under a new obligation can still be cleared
+          const tappable = canTap(r); // Clear on a saved offer / No primary under a new obligation; No primary by its own rule
+          const npWhy = npWhyOf(r);
           const partial = !grey && (r.block.primary || r.block.backup) ? (r.block.primary ? "backup only - " + r.block.primary : "primary only - " + r.block.backup) : null;
+          const partialShown = partial && !(r.npRange && r.block.primary === NO_PRIMARY_RANGE_WORDS && !r.block.backup); // the range pill says it
           const rowBg = grey ? (dk ? "#0F1B33" : "#F1F3F6") : isPending ? (dk ? "#1a3a5e" : "#dcecf8") : drafted ? (dk ? "#1c3050" : "#eaf3fb") : r.weekend ? T.weekend : panelBg;
           const holderP = holderText(r.holders.primary, ds), holderB = holderText(r.holders.backup, ds);
+          const npPill = OFFER_BRUSH.noprimary;
+          const clearWhat = clearable(r) ? (savedByDay[ds] && np.own[ds] ? " - saved offer and No primary: Clear can take them back" : savedByDay[ds] ? " - saved offer: Clear can take it back" : " - saved No primary: Clear can take it back") : "";
           return (
-            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} disabled={!tappable} onClick={() => tapDay(ds)}
+            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} data-noprimary={effN ? "own" : r.npRange ? "range" : ""} data-np-draft={npDrafted ? (npDraft[ds] ? "add" : "clear") : ""} data-np-why={npWhy} disabled={!tappable} onClick={() => tapDay(ds)}
               style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: tappable ? "pointer" : "not-allowed", fontFamily: font, background: rowBg, opacity: grey ? 0.6 : 1, border: `1px solid ${isPending ? T.accent : drafted ? T.accent : border}` }}>
               <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
                 <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{r.d}</div>
@@ -8496,11 +9005,15 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  {eff ? <span style={pillFor(eff)}>{OFFER_BRUSH[eff].label}</span> : <span style={{ fontSize: 11.5, color: drafted ? "#a05010" : muted, fontWeight: drafted ? 700 : 400 }}>{drafted ? "will clear" : grey ? "" : "not offered"}</span>}
+                  {eff ? <span style={pillFor(eff)}>{OFFER_BRUSH[eff].label}</span> : <span style={{ fontSize: 11.5, color: offerDrafted ? "#a05010" : muted, fontWeight: offerDrafted ? 700 : 400 }}>{offerDrafted ? "will clear" : grey || effN || r.npRange || npLift ? "" : "not offered"}</span>}
+                  {effN && <span data-testid="ofp-np-pill" data-np="own" style={pillFor("noprimary")}>No primary</span>}
+                  {r.npRange && <span data-testid="ofp-np-pill" data-np="range" style={{ ...pillFor("noprimary"), border: `1px dashed ${npPill.border}` }}>{NO_PRIMARY_RANGE_WORDS}</span>}
+                  {npLift && <span data-testid="ofp-np-pill" data-np="lift" style={{ fontSize: 11.5, color: "#a05010", fontWeight: 700 }}>will lift No primary</span>}
                   {drafted && <span style={{ fontSize: 9.5, fontWeight: 800, color: "#a05010" }}>unsaved</span>}
                   {isPending && <span style={{ fontSize: 11, fontWeight: 700, color: T.accentText }}>range starts here</span>}
-                  {grey && <span data-testid="ofp-why" style={{ fontSize: 11, fontWeight: 700, color: muted }}>{r.grey}{clearable(r) ? " - saved offer: Clear can take it back" : ""}</span>}
-                  {!grey && partial && <span data-testid="ofp-why" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{partial}</span>}
+                  {grey && <span data-testid="ofp-why" style={{ fontSize: 11, fontWeight: 700, color: muted }}>{r.grey}{clearWhat}</span>}
+                  {!grey && partialShown && <span data-testid="ofp-why" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{partial}</span>}
+                  {!grey && armed === "noprimary" && npWhy && <span data-testid="ofp-why" data-np-reason="1" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{npWhy}</span>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10.5, color: muted, marginTop: 2 }}>
                   <span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>
@@ -8580,7 +9093,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           <div role="alert" data-testid="ofp-error" style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: dk ? "#3a1a1a" : "#fdeaea", border: "1px solid #c05050", maxHeight: 130, overflowY: "auto" }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "#c04040" }}>{`Nothing was saved - ${commitError.items.length} entr${commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:`}</div>
             {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: dk ? "#e0b0b0" : "#8a3030", fontFamily: mono }}>- {it}</div>)}
-            <div style={{ fontSize: 10.5, color: muted, marginTop: 3 }}>({commitError.msg}) - your taps are kept; fix the issue and Save again.</div>
+            <div style={{ fontSize: 10.5, color: muted, marginTop: 3 }}>({noPrimaryErrorWords(commitError.msg)}) - your taps are kept; fix the issue and Save again.</div>
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

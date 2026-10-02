@@ -151,12 +151,15 @@ const css = {
 };
 
 // Offer painter brushes (Prompt 14 part 3a): primary = the navy, backup = an amber (the My-schedule backup gradient's
-// family), either = a teal, clear = grey. tint / text carry the drafted pill in both themes (a pill keeps its own
-// background); gradient is the armed chip. Primary / backup stay distinguishable by word as well (P / B / P+B).
+// family), either = a teal, noprimary = a purple (Prompt 28, 10/1: "No primary" - not on primary that day, backup is fine;
+// white on #7A4BB0 about 6.1:1, #5B2E8C on #F1EAFA about 8:1), clear = grey. tint / text carry the drafted pill in both
+// themes (a pill keeps its own background); gradient is the armed chip. Primary / backup stay distinguishable by word as
+// well (P / B / P+B / NP).
 const OFFER_BRUSH = {
   primary: { gradient: "linear-gradient(135deg,#13294B,#1F3A6B)", border: "#13294B", text: "#13294B", tint: "#E8EEF8", label: "Primary", short: "P" },
   backup:  { gradient: "linear-gradient(135deg,#8A6A20,#B08A30)", border: "#8A6A20", text: "#7A5A20", tint: "#FBF1D8", label: "Backup", short: "B" },
   either:  { gradient: "linear-gradient(135deg,#0F766E,#149C90)", border: "#0F766E", text: "#0F766E", tint: "#E3F4F1", label: "Either", short: "P+B" },
+  noprimary: { gradient: "linear-gradient(135deg,#5B2E8C,#7A4BB0)", border: "#5B2E8C", text: "#5B2E8C", tint: "#F1EAFA", label: "No primary", short: "NP" },
   clear:   { gradient: "linear-gradient(135deg,#5B6B82,#7A8A98)", border: "#7A8A98", text: "#5B6B82", tint: "#EEF2F7", label: "Clear", short: "-" },
 };
 
