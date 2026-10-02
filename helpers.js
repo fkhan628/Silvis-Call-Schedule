@@ -5412,6 +5412,58 @@ function notifVisibleTo(rows, who) {
   return base.filter(n => (n.created_at || "") > cleared);
 }
 
+/* === Browser pop-ups by seen ids (review 9/27 Do first 6) === */
+// Which Alerts rows raise a browser pop-up (sendBrowserNotif), decided here in one place. One step per change of the
+// feed. state is the seen set of ONE signed-in account, { uid, ids: Set of notification ids }, or null. input:
+//   uid            the signed-in account's id (null: signed out, the sign-in card, ?public=1)
+//   readOk         the feed was read with a session token (notifsRead "ok") - not the skipped / anon pass of the sign-in card
+//   ready          the profile the visible feed is filtered by is this account's and settled
+//   notifications  the raw feed (newest first; the read and the insert cap it at 50 rows)
+//   visible        myNotifications - notifVisibleTo of the same feed
+// - no account: nothing pops and the state is kept (the same account signing back in carries on from it);
+// - a state of another account (or none) is dropped and seeded at this account's first authenticated read with every
+//   row's id - nothing pops then (an anon / skipped first pass never seeds: else every row would look new after the
+//   sign-in);
+// - until ready the step waits (nothing marked, nothing popped): the rows are judged once the audience is known;
+// - then every unseen row is marked seen and only the unseen rows of the VISIBLE feed pop: the office viewer never gets
+//   the trade / vacation pop-ups its feed hides, and a row hidden now never pops later when a follow, a roster link or a
+//   promotion widens the feed.
+// Ids, never a count (the feed is capped at 50 rows: a count stopped changing at 50, and the pop-ups stopped for good)
+// and never a created_at watermark (the inserting device stamps created_at). Pure: the input state is never mutated.
+function notifPopupStep(state, input) {
+  const inp = input || {};
+  const uid = inp.uid || null;
+  if (!uid) return { state: state || null, pop: [] };
+  const idOf = (n) => (n && typeof n === "object" && n.id != null && n.id !== "") ? n.id : null;
+  const all = (Array.isArray(inp.notifications) ? inp.notifications : []).map(idOf).filter(id => id !== null);
+  const own = !!state && state.uid === uid && !!state.ids && typeof state.ids.has === "function";
+  if (!own) {
+    if (!inp.readOk) return { state: null, pop: [] };
+    return { state: { uid, ids: new Set(all) }, pop: [] };
+  }
+  if (!inp.ready) return { state, pop: [] };
+  const pop = [];
+  const fresh = new Set();
+  (Array.isArray(inp.visible) ? inp.visible : []).forEach(n => {
+    const id = idOf(n);
+    if (id !== null && !state.ids.has(id) && !fresh.has(id)) { fresh.add(id); pop.push(n); }
+  });
+  all.forEach(id => { if (!state.ids.has(id)) fresh.add(id); });
+  if (!fresh.size) return { state, pop };
+  const ids = new Set(state.ids);
+  fresh.forEach(id => ids.add(id));
+  return { state: { uid, ids }, pop };
+}
+// This device's own inserted row (addNotification) is seen at once - it never pops back at the device that wrote it.
+// No state yet: nothing to add (the seed reads the row with the rest of the feed). Pure.
+function notifSeenAdd(state, row) {
+  const id = row && typeof row === "object" ? row.id : null;
+  if (!state || !state.ids || typeof state.ids.has !== "function" || id == null || id === "" || state.ids.has(id)) return state || null;
+  const ids = new Set(state.ids);
+  ids.add(id);
+  return { uid: state.uid, ids };
+}
+
 /* === Own profile on the poll (Prompt 16 B4) === */
 // The 60-second poll re-reads the signed-in account's own user_profiles row so a surgeon whose account the admin
 // links or promotes while the app is open sees Mine, the painter and the role gates follow it without a reload.
@@ -6003,7 +6055,7 @@ if (typeof module !== "undefined" && module.exports) {
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE,
-    notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
+    notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES, notifPopupStep, notifSeenAdd,
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,

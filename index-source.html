@@ -825,7 +825,8 @@ function CallSchedule() {
   const followerSaveTimerRef = useRef(null);
   const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
-  const lastNotifCountRef = useRef(null);
+  // Review 9/27 Do first 6: the Alerts rows this account has seen on this device, { uid, ids } (helpers.notifPopupStep)
+  const notifSeenRef = useRef(null);
 
   // --- My identity (roster id from the profile) ---
   const mySurgeon = userProfile?.person_id || "";
@@ -3902,7 +3903,10 @@ function CallSchedule() {
       const notif = { type, title, message, data, created_at: new Date().toISOString() };
       const { data: inserted, error: insertErr } = await db.insert("notifications", notif);
       if (insertErr) { console.warn("Notification insert failed:", insertErr); if (!auth.sessionExpired) showToast("Couldn't save that notification.", "error"); }
-      if (inserted) setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      if (inserted) {
+        notifSeenRef.current = notifSeenAdd(notifSeenRef.current, inserted); // review 9/27 Do first 6: this device's own row never pops back at it
+        setNotifications(prev => [inserted, ...prev].slice(0, 50));
+      }
     } catch(e) { console.warn("Notification error:", e); showToast("Couldn't send the notification - check your connection.", "error"); }
   }, []);
 
@@ -4579,17 +4583,25 @@ function CallSchedule() {
     }, 500);
   };
 
-  // --- Fire browser notifications when polling detects new in-app notifications ---
+  // --- Browser pop-ups for the Alerts rows this device has not seen (review 9/27 Do first 6) ---
+  // By notification ids (helpers.notifPopupStep), never by count: the feed is capped at 50 rows, so a count stopped
+  // changing at 50 and the pop-ups stopped for good. The seen set is the signed-in account's: seeded on its first
+  // AUTHENTICATED read (notifsRead "ok" - not the skipped pass at the sign-in card, after which every row would look
+  // new), it marks every row seen and pops only the unseen rows of myNotifications (notifVisibleTo), never the raw feed
+  // - the office viewer gets no trade / vacation pop-up its feed hides. It waits while the profile is not this account's
+  // or isScheduler (set by its own effect) has not caught up with it. addNotification marks this device's own rows seen.
+  // No created_at watermark: the inserting device stamps created_at.
   useEffect(() => {
     if (!loaded) return;
-    if (lastNotifCountRef.current === null) { lastNotifCountRef.current = notifications.length; return; }
-    if (notifications.length > lastNotifCountRef.current) {
-      const newOnes = notifications.slice(0, notifications.length - lastNotifCountRef.current);
-      // Item E3 (9/25): an open_shifts row stored with a pre-9/25 reason ('East feed busy') reads 'not available' here too
-      newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
-    }
-    lastNotifCountRef.current = notifications.length;
-  }, [loaded, notifications, sendBrowserNotif]);
+    const uid = authUser ? authUser.id : null;
+    const profileRole = userProfile ? userProfile.role : null;
+    const ready = !!uid && !!userProfile && userProfile.id === uid && isScheduler === (profileRole === "scheduler" || profileRole === "admin");
+    const step = notifPopupStep(notifSeenRef.current, { uid, readOk: notifsRead === "ok", ready, notifications, visible: myNotifications });
+    notifSeenRef.current = step.state;
+    const newOnes = step.pop;
+    // Item E3 (9/25): an open_shifts row stored with a pre-9/25 reason ('East feed busy') reads 'not available' here too
+    newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));
+  }, [loaded, authUser, userProfile, isScheduler, notifsRead, notifications, myNotifications, sendBrowserNotif]);
 
   // --- Test Notification ---
   const sendTestNotification = useCallback(async () => {

@@ -7242,6 +7242,213 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
+  /* ---------------- DF6. Review 9/27 Do first 6: browser pop-ups by seen ids, from myNotifications ---------------- */
+  console.log("\n[DF6] review 9/27 Do first 6 (pop-ups by seen notification ids, seeded on the first authenticated read; only the visible feed pops; this device's own rows are seen; no count, no stop at 50 rows, no created_at watermark)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle) => src.split(needle).length - 1;
+    const between = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return src.slice(i, j); };
+    const acheck6 = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const row = (i, type, data, message) => ({ id: "n" + i, type: type || "schedule_changed", title: "T" + i, message: message || ("m" + i), data: data || {}, created_at: "2026-10-01T10:" + String(Math.floor(i / 60) % 60).padStart(2, "0") + ":" + String(i % 60).padStart(2, "0") + ".000Z" });
+    const full = (from, to) => { const out = []; for (let i = to; i >= from; i--) out.push(row(i)); return out; }; // newest first, like the read
+    const ids = (rows) => rows.map(n => n.id);
+    const step = H.notifPopupStep;
+
+    check("DF6 helper: no account (signed out / the sign-in card / ?public=1) pops nothing and keeps the state; the skipped / anon first pass (readOk false) never seeds; the first authenticated read seeds every id and pops nothing - 50 rows after a sign-in are not 50 pop-ups", () => {
+      assert.strictEqual(typeof step, "function", "helpers.js exports notifPopupStep");
+      assert.deepStrictEqual(step(null, { uid: null, readOk: false, ready: false, notifications: [], visible: [] }), { state: null, pop: [] });
+      const anon = step(null, { uid: "u1", readOk: false, ready: true, notifications: [], visible: [] });
+      assert.deepStrictEqual(anon, { state: null, pop: [] }, "an empty, unread feed seeds nothing");
+      const feed = full(1, 50);
+      const seeded = step(anon.state, { uid: "u1", readOk: true, ready: true, notifications: feed, visible: feed });
+      assert.deepStrictEqual(seeded.pop, [], "the seed pops nothing");
+      assert.strictEqual(seeded.state.uid, "u1");
+      assert.strictEqual(seeded.state.ids.size, 50, "every row's id is seen");
+      const kept = step(seeded.state, { uid: null, readOk: true, ready: false, notifications: [row(99)].concat(feed), visible: [row(99)] });
+      assert.strictEqual(kept.state, seeded.state, "signed out: the state is kept as is (the same object)");
+      assert.deepStrictEqual(kept.pop, [], "and nothing pops");
+    });
+    check("DF6 helper: at the 50-row cap a new row still pops (the feed stays 50 long - the count-based check never fired again); a re-read pops nothing; two new rows pop newest first; a row back in the window is not new", () => {
+      const feed = full(1, 50);
+      let st = step(null, { uid: "u1", readOk: true, ready: true, notifications: feed, visible: feed }).state;
+      const next = full(2, 51); // n51 in, n1 out of the 50-row window
+      assert.strictEqual(next.length, feed.length, "the count did not change");
+      let r = step(st, { uid: "u1", readOk: true, ready: true, notifications: next, visible: next });
+      assert.deepStrictEqual(ids(r.pop), ["n51"]);
+      st = r.state;
+      r = step(st, { uid: "u1", readOk: true, ready: true, notifications: next, visible: next });
+      assert.deepStrictEqual(r.pop, [], "the same feed again: nothing");
+      assert.strictEqual(r.state, st, "nothing new: the same state object");
+      const two = full(4, 53);
+      r = step(st, { uid: "u1", readOk: true, ready: true, notifications: two, visible: two });
+      assert.deepStrictEqual(ids(r.pop), ["n53", "n52"]);
+      r = step(r.state, { uid: "u1", readOk: true, ready: true, notifications: full(3, 52), visible: full(3, 52) });
+      assert.deepStrictEqual(r.pop, [], "n3 came back into the window (a newer row deleted) - seen at the seed, no pop");
+    });
+    check("DF6 helper: only the VISIBLE feed pops - the office viewer gets the publish pop-up, not the trade / vacation rows its Alerts feed hides; a hidden row is still marked seen, so a later follow never pops it; a linked surgeon gets the rows that name him", () => {
+      const base = full(1, 50);
+      const st = step(null, { uid: "v1", readOk: true, ready: true, notifications: base, visible: H.notifVisibleTo(base, { isViewer: true }) }).state;
+      const trade = row(51, "trade_proposed", { from_surgeon_id: "s2", to_surgeon_id: "s3" });
+      const vac = row(52, "vacation_logged", { surgeon_id: "s3" });
+      const pub = row(53, "schedule_published");
+      const feed = [pub, vac, trade].concat(base.slice(0, 47));
+      const r = step(st, { uid: "v1", readOk: true, ready: true, notifications: feed, visible: H.notifVisibleTo(feed, { isViewer: true }) });
+      assert.deepStrictEqual(ids(r.pop), ["n53"], "the viewer: the publish notice only");
+      assert.ok(r.state.ids.has("n51") && r.state.ids.has("n52"), "the hidden rows are seen");
+      const later = step(r.state, { uid: "v1", readOk: true, ready: true, notifications: feed, visible: H.notifVisibleTo(feed, { isViewer: true, follows: ["s3"] }) });
+      assert.deepStrictEqual(later.pop, [], "following s3 later does not pop the old trade / vacation rows");
+      const st3 = step(null, { uid: "u3", readOk: true, ready: true, notifications: base, visible: base }).state;
+      const r3 = step(st3, { uid: "u3", readOk: true, ready: true, notifications: feed, visible: H.notifVisibleTo(feed, { mySurgeon: "s3" }) });
+      assert.deepStrictEqual(ids(r3.pop), ["n53", "n52", "n51"], "s3: the publish, his vacation, the trade that names him");
+      const r4 = step(st3, { uid: "u3", readOk: true, ready: true, notifications: feed, visible: H.notifVisibleTo(feed, { mySurgeon: "s4" }) });
+      assert.deepStrictEqual(ids(r4.pop), ["n53"], "s4: the publish only");
+    });
+    check("DF6 helper: not ready (the profile not this account's yet, or isScheduler lagging) waits - nothing marked, nothing popped - and the rows are judged once ready; a different account drops the old set and seeds at its own first authenticated read (never compared against the old one)", () => {
+      const base = full(1, 50);
+      const st = step(null, { uid: "u1", readOk: true, ready: false, notifications: base, visible: base }).state;
+      assert.strictEqual(st.ids.size, 50, "the seed does not wait for the profile (it pops nothing)");
+      const feed = full(2, 51);
+      const wait = step(st, { uid: "u1", readOk: true, ready: false, notifications: feed, visible: feed });
+      assert.deepStrictEqual(wait.pop, []);
+      assert.strictEqual(wait.state, st, "nothing marked while waiting");
+      const go = step(wait.state, { uid: "u1", readOk: true, ready: true, notifications: feed, visible: feed });
+      assert.deepStrictEqual(ids(go.pop), ["n51"], "judged once ready");
+      const bFeed = full(100, 149);
+      const b0 = step(go.state, { uid: "u2", readOk: false, ready: true, notifications: feed, visible: feed });
+      assert.deepStrictEqual(b0, { state: null, pop: [] }, "another account (its feed unread - adoptSignedInUser sets notifsRead 'unread'): the old set is dropped, nothing pops");
+      const b1 = step(b0.state, { uid: "u2", readOk: true, ready: true, notifications: bFeed, visible: bFeed });
+      assert.deepStrictEqual(b1.pop, [], "B's first read seeds - no pop storm");
+      assert.strictEqual(b1.state.uid, "u2");
+      const bDirect = step(go.state, { uid: "u2", readOk: true, ready: true, notifications: bFeed, visible: bFeed });
+      assert.deepStrictEqual(bDirect.pop, [], "even with readOk true at once, another account's set is never compared against");
+      assert.strictEqual(bDirect.state.uid, "u2");
+    });
+    check("DF6 helper: notifSeenAdd marks this device's own inserted row seen (it never pops back at the device that wrote it); a null state stays null; inputs are never mutated; rows without an id are ignored; a duplicated id pops once", () => {
+      assert.strictEqual(typeof H.notifSeenAdd, "function", "helpers.js exports notifSeenAdd");
+      const base = full(1, 50);
+      const st = step(null, { uid: "u1", readOk: true, ready: true, notifications: base, visible: base }).state;
+      const own = row(51);
+      const st2 = H.notifSeenAdd(st, own);
+      assert.ok(st2.ids.has("n51") && !st.ids.has("n51"), "a new set; the input set is not mutated");
+      assert.strictEqual(st2.uid, "u1");
+      const feed = [own].concat(base.slice(0, 49));
+      assert.deepStrictEqual(step(st2, { uid: "u1", readOk: true, ready: true, notifications: feed, visible: feed }).pop, [], "the own row does not pop");
+      assert.deepStrictEqual(ids(step(st, { uid: "u1", readOk: true, ready: true, notifications: feed, visible: feed }).pop), ["n51"], "without the add it would");
+      assert.strictEqual(H.notifSeenAdd(null, own), null, "no state yet: the seed reads the row with the rest");
+      assert.strictEqual(H.notifSeenAdd(st2, own), st2, "already seen: the same object");
+      assert.strictEqual(H.notifSeenAdd(st, null), st);
+      assert.strictEqual(H.notifSeenAdd(st, { title: "no id" }), st);
+      const before = [...st.ids].join(",");
+      const dup = row(60);
+      const r = step(st, { uid: "u1", readOk: true, ready: true, notifications: [dup, { title: "no id" }, null].concat(base), visible: [dup, dup, { title: "no id" }, null] });
+      assert.deepStrictEqual(ids(r.pop), ["n60"], "once");
+      assert.strictEqual([...st.ids].join(","), before, "the input state is never mutated");
+      assert.strictEqual(r.state.ids.size, 51, "no undefined / null id in the set");
+    });
+
+    // The effect lifted verbatim and run against a fake useEffect: each call is one commit's effect run, with the values
+    // that commit's render saw. myNotifications is computed the way the app computes it (notifVisibleTo).
+    // (lifted lazily, inside the checks: a missing anchor is a FAIL line, not a crash of the whole suite)
+    const effLift = () => between("  // --- Browser pop-ups for the Alerts rows this device has not seen (review 9/27 Do first 6) ---", "\n  // --- Test Notification ---");
+    const effCodeOf = () => effLift().split("\n").filter(l => !l.trim().startsWith("//")).join("\n");
+    let effFnMemo = null;
+    const effFnOf = () => effFnMemo || (effFnMemo = new Function("useEffect", "loaded", "authUser", "userProfile", "isScheduler", "notifsRead", "notifications", "myNotifications", "notifSeenRef", "notifPopupStep", "sendBrowserNotif", "openSlotsMessageCurrent", effLift()));
+    const device = () => ({ ref: { current: null }, shown: [], deps: null });
+    const commit = (dev, c) => {
+      const effFn = effFnOf();
+      const who = c.userProfile ? { isScheduler: !!c.isScheduler, isViewer: c.userProfile.role === "viewer" && !c.userProfile.person_id, mySurgeon: c.userProfile.person_id || "" } : {};
+      const visible = H.notifVisibleTo(c.notifications || [], who);
+      dev.visible = visible;
+      effFn((cb, deps) => { dev.deps = deps; cb(); }, c.loaded !== false, c.authUser || null, c.userProfile || null, !!c.isScheduler, c.notifsRead || "unread", c.notifications || [], visible, dev.ref, H.notifPopupStep,
+        (t, b, tag) => { dev.shown.push([t, b, tag]); return true; }, H.openSlotsMessageCurrent);
+      return dev;
+    };
+    check("DF6 effect (lifted): the office viewer - the skipped pass at the sign-in card seeds nothing; the first authenticated read of 50 rows pops nothing; at the cap a publish and an open-shifts row pop (the open-shifts text read through openSlotsMessageCurrent, tag silvis-<id>), the trade between two surgeons does not", () => {
+      const dev = device();
+      commit(dev, { authUser: null, notifsRead: "unread", notifications: [] });
+      assert.strictEqual(dev.ref.current, null, "the sign-in card's pass seeds nothing");
+      const office = { id: "u-office", role: "viewer", person_id: null };
+      const base = full(1, 50).map(n => ({ ...n, type: "schedule_published" })); // rows the viewer's feed shows
+      commit(dev, { authUser: { id: "u-office" }, userProfile: office, notifsRead: "unread", notifications: [] });
+      assert.strictEqual(dev.ref.current, null, "signed in, but the read was skipped (a stale token before its refresh): still nothing seeded");
+      commit(dev, { authUser: { id: "u-office" }, userProfile: office, notifsRead: "ok", notifications: base });
+      assert.deepStrictEqual(dev.shown, [], "the first authenticated read after the sign-in: no pop storm");
+      assert.strictEqual(dev.ref.current.ids.size, 50);
+      const oldMsg = "Thu 10/15 primary - open - no eligible surgeon - East feed busy";
+      assert.notStrictEqual(H.openSlotsMessageCurrent(oldMsg), oldMsg, "fixture: a pre-9/25 reason the reader rewrites");
+      const open = row(53, "open_shifts", {}, oldMsg);
+      const trade = row(52, "trade_proposed", { from_surgeon_id: "s2", to_surgeon_id: "s3" });
+      const pub = row(51, "schedule_published");
+      const feed = [open, trade, pub].concat(base.slice(0, 47));
+      commit(dev, { authUser: { id: "u-office" }, userProfile: office, notifsRead: "ok", notifications: feed });
+      assert.deepStrictEqual(dev.shown, [["T53", H.openSlotsMessageCurrent(oldMsg), "silvis-n53"], ["T51", "m51", "silvis-n51"]], "the viewer's two types pop; the trade does not: " + JSON.stringify(dev.shown));
+      commit(dev, { authUser: { id: "u-office" }, userProfile: office, notifsRead: "ok", notifications: feed });
+      assert.strictEqual(dev.shown.length, 2, "the next poll of the same feed pops nothing");
+      assert.ok(dev.deps.includes(feed) && dev.deps.includes(dev.visible) && dev.visible !== feed, "the deps carry the raw feed AND myNotifications");
+    });
+    check("DF6 effect (lifted): the scheduler - the profile is read but isScheduler (its own effect) still false: a trade between two others waits instead of being marked seen under the linked-surgeon filter; the next commit (isScheduler true) pops it; signed out nothing pops; not loaded nothing runs", () => {
+      const dev = device();
+      const prof = { id: "u1", role: "scheduler", person_id: "s1" };
+      const base = full(1, 50);
+      commit(dev, { authUser: { id: "u1" }, userProfile: null, notifsRead: "ok", notifications: base });
+      assert.strictEqual(dev.ref.current.ids.size, 50, "seeded before the profile (pops nothing)");
+      const trade = row(51, "trade_proposed", { from_surgeon_id: "s2", to_surgeon_id: "s3" });
+      const feed = [trade].concat(base.slice(0, 49));
+      commit(dev, { authUser: { id: "u1" }, userProfile: prof, isScheduler: false, notifsRead: "ok", notifications: feed });
+      assert.deepStrictEqual(dev.shown, [], "isScheduler lags the profile: wait");
+      assert.ok(!dev.ref.current.ids.has("n51"), "not marked seen while waiting");
+      commit(dev, { authUser: { id: "u1" }, userProfile: prof, isScheduler: true, notifsRead: "ok", notifications: feed });
+      assert.deepStrictEqual(dev.shown.map(s => s[2]), ["silvis-n51"], "the scheduler reads everything: it pops now");
+      const later = [row(52)].concat(feed.slice(0, 49));
+      commit(dev, { authUser: null, userProfile: null, notifsRead: "ok", notifications: later });
+      assert.strictEqual(dev.shown.length, 1, "signed out: nothing pops");
+      commit(dev, { loaded: false, authUser: { id: "u1" }, userProfile: prof, isScheduler: true, notifsRead: "ok", notifications: later });
+      assert.strictEqual(dev.shown.length, 1, "not loaded: the effect returns at once");
+      commit(dev, { authUser: { id: "u1" }, userProfile: prof, isScheduler: true, notifsRead: "ok", notifications: later });
+      assert.deepStrictEqual(dev.shown.map(s => s[2]), ["silvis-n51", "silvis-n52"], "signed back in (same account): the row that came meanwhile pops");
+      const other = { id: "u2", role: "surgeon", person_id: "s2" };
+      commit(dev, { authUser: { id: "u2" }, userProfile: other, notifsRead: "unread", notifications: later });
+      commit(dev, { authUser: { id: "u2" }, userProfile: other, notifsRead: "ok", notifications: full(200, 249) });
+      assert.strictEqual(dev.shown.length, 2, "a different account on the device: seeded at its own read, no pop storm");
+      assert.strictEqual(dev.ref.current.uid, "u2");
+    });
+    await acheck6("DF6 addNotification (lifted): this device's own inserted row is marked seen BEFORE it enters the feed (so the effect never pops it back), the feed keeps its 50-row cap; a failed insert adds nothing", async () => {
+      const an = between("  const addNotification = useCallback(async (type, title, message, data = {}) => {", "\n  }, []);") + "\n  }, []);";
+      const base = full(1, 50);
+      const run = async (answer) => {
+        const env = { list: base.slice(), toasts: [], ref: { current: H.notifPopupStep(null, { uid: "u1", readOk: true, ready: true, notifications: base, visible: base }).state }, seenAtSet: null };
+        const fn = new Function("useCallback", "db", "auth", "showToast", "setNotifications", "notifSeenRef", "notifSeenAdd", "console", an + "\nreturn addNotification;")(
+          (f) => f, { insert: async () => answer }, { sessionExpired: false }, (m, t) => env.toasts.push([m, t]),
+          (u) => { env.seenAtSet = env.ref.current && env.ref.current.ids.has("n77"); env.list = typeof u === "function" ? u(env.list) : u; }, env.ref, H.notifSeenAdd, { warn: () => {} });
+        await fn("schedule_changed", "Changed", "m");
+        return env;
+      };
+      const ok = await run({ data: row(77), error: null });
+      assert.ok(ok.ref.current.ids.has("n77"), "the own row is seen");
+      assert.strictEqual(ok.seenAtSet, true, "seen before setNotifications runs");
+      assert.strictEqual(ok.list[0].id, "n77");
+      assert.strictEqual(ok.list.length, 50, "the feed keeps its 50-row cap");
+      assert.deepStrictEqual(H.notifPopupStep(ok.ref.current, { uid: "u1", readOk: true, ready: true, notifications: ok.list, visible: ok.list }).pop, [], "the effect pops nothing for it");
+      const bad = await run({ data: null, error: { message: "HTTP 403" } });
+      assert.ok(!bad.ref.current.ids.has("n77") && bad.ref.current.ids.size === 50, "a failed insert adds nothing");
+      assert.deepStrictEqual(bad.toasts, [["Couldn't save that notification.", "error"]]);
+    });
+    check("DF6 pins: the count-based check is gone (no lastNotifCountRef, no length arithmetic, no slice of the raw feed, no created_at in the effect); the seed waits on notifsRead 'ok'; the effect pops from myNotifications and lists it (and what decides the audience) in its deps; the read keeps its 50-row cap (harmless by ids); the E3 newOnes line kept verbatim (test/open-shifts.test.js)", () => {
+      assert.strictEqual(count("lastNotifCountRef"), 0, "the count ref is gone");
+      assert.strictEqual(count("const notifSeenRef = useRef(null);"), 1, "the seen-set ref");
+      const effCode = effCodeOf();
+      assert.ok(!effCode.includes(".length"), "no length arithmetic in the effect");
+      assert.ok(!effCode.includes("notifications.slice("), "no slice of the raw feed");
+      assert.ok(!effCode.includes("created_at"), "no created_at watermark");
+      assert.ok(effCode.includes('readOk: notifsRead === "ok"'), "seeded on an authenticated read only");
+      assert.ok(effCode.includes("visible: myNotifications"), "pops from myNotifications");
+      assert.ok(effCode.includes("const step = notifPopupStep(notifSeenRef.current, {"), "one decision, in helpers.js");
+      assert.strictEqual(count("  }, [loaded, authUser, userProfile, isScheduler, notifsRead, notifications, myNotifications, sendBrowserNotif]);"), 1, "the deps");
+      assert.ok(count('readAuthOnlyTable("notifications", { order: "created_at.desc", limit: 50 })') >= 1, "the read keeps its 50-row cap");
+      assert.strictEqual(count('newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));'), 1, "the E3 line (pinned in test/open-shifts.test.js) kept verbatim");
+    });
+  })();
+
   /* ---------------- Prompt 25 steps 3-5: the holiday plan card (Setup > Holidays > Plan / Accept / Re-check) ---------------- */
   console.log("\n[P25] holiday plan: scheduler-only, Accept = confirm -> snapshot -> CAS sync -> one audit row -> notices; no write without Accept");
   (() => {
