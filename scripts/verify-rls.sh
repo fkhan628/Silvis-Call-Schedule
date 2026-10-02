@@ -1226,9 +1226,9 @@ if linked; then
   # appdays.save audit rows (summaries 'probe app ...'); in_window = app_call_days rows in 2030-12 or on 2020-05-04 (read through
   # query_to_xml, guarded by to_regclass: before the apply - or after a rollback - the table does not exist). The collision guard
   # refuses to start while an in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent raise - a FAIL
-  # itself since the record step) such rows can only be
-  # the probe's; after a run that stopped at the guard (or at the partly-applied raise) they are live rows it never wrote - listed for
-  # review, never counted as a leftover and never given a DELETE (a probe row and a real APP day look alike).
+  # itself since the record step) such rows can only be the probe's; after a run that stopped at the guard (or at the
+  # partly-applied raise) they are live rows it never wrote - listed for review, never counted as a leftover and never given a
+  # DELETE (a probe row and a real APP day look alike).
   LEFTOVER18_SQL="select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window"
   r=$(q "$LEFTOVER18_SQL")
   rflat18=$(echo "$r" | tr -d ' \n')

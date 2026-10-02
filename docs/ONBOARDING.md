@@ -155,7 +155,7 @@ Roles (`user_profiles.role`, set in Setup → Users by the admin):
 | `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
 | `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
 | `viewer` | read-only — the office viewer | every write |
-| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02, the app part not pushed yet) | everything a viewer has, plus putting itself on call days and taking them off (Mine → My APP days; one APP per day; from today on) | every other write; another APP's days; a roster link |
+| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02) | everything a viewer has, plus putting itself on call days and taking them off (Mine → My APP days; one APP per day; from today on) | every other write; another APP's days; a roster link |
 
 A viewer (the office viewer, and every invited account until you link *and* promote it) sees the schedule read-only with nothing broken on purpose (Prompt 16 B3): no "not linked" banner, no trade card (Time off lists the group's vacations instead), **Settings → Live calendar sync** offers the public full-schedule feed, and **Alerts** carries only the publish and open-shift notices.
 
@@ -164,9 +164,9 @@ A coordinator account is created like any other (invite from the dashboard), the
 
 ## APPs: putting yourself on a call day (Prompt 29, 10/1)
 
-*Not live yet: the database update ran on 2026-10-02 (`apply-app-call-days.sh`); it works once the client that follows it is
-pushed (on Faraz's go). Until then the live app has no APP line and Setup → Users offers no `app` role. (Should the database
-part ever be rolled back, the pushed client's APP line reads "APP days are available after the next database update.")*
+*The database part ran on 2026-10-02 (`apply-app-call-days.sh`); APP accounts work from the build that ships Prompt 29's
+client, then Faraz marks them in Setup → Users. (Should the database part ever be rolled back, the APP line reads "APP days
+are available after the next database update.")*
 
 **What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
 viewer has — the calendar, follows and the follower e-mails, its preferences — and adds one thing: the APP puts itself on
