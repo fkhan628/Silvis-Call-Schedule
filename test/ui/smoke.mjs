@@ -566,7 +566,7 @@ const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status 
 // steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
 let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
 let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
-let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202)
+let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500)
 let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
 const appServed = [];   // { path, method, status, sub }
 const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
@@ -584,6 +584,21 @@ const appForcedLine = (msg) => {
   if (i < 0) return false;
   appForcedLines.splice(i, 1);
   appForcedConsumed++;
+  return true;
+};
+// The merge with main (10/2): the browser lines of answers a P29 interplay step forces through its OWN page route (the token
+// endpoint's 503, the save's 503 / 401) - armed per answer { path, status }, consumed one line each (path + status) like appForcedLine.
+const p29xLines = [];
+let p29xConsumed = 0;
+const p29xLine = (msg) => {
+  const m = /^Failed to load resource: the server responded with a status of (\d{3})\b/.exec(msg.text());
+  if (!m || !p29xLines.length) return false;
+  let p = "";
+  try { const u = new URL((msg.location() || {}).url || ""); if (u.hostname !== SUPABASE_HOST) return false; p = u.pathname; } catch (e) { return false; }
+  const i = p29xLines.findIndex(x => x.path === p && x.status === Number(m[1]));
+  if (i < 0) return false;
+  p29xLines.splice(i, 1);
+  p29xConsumed++;
   return true;
 };
 const FOLLOW_FEED = [
@@ -987,6 +1002,7 @@ const watchPage = (pg, tag) => {
     if (msg.type() === "error") {
       if (payForcedLine(msg)) forcedConsoleErrors.push(msg.text()); // 9/29: a pay read the harness answered 404 / 500 (path + status matched, one line each)
       else if (appForcedLine(msg)) forcedConsoleErrors.push(msg.text()); // Prompt 29: an APP-days answer the harness forced (the refused save 400, the 'absent' 404s), one line each
+      else if (p29xLine(msg)) forcedConsoleErrors.push(msg.text()); // the merge with main (10/2): an answer a P29 interplay step forced through its own route, one line each
       else if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
       else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
@@ -1440,9 +1456,11 @@ const appRoute = (route, req, url, method, json) => {
   if (method !== "GET") { writes.push({ method, path: url.pathname + url.search, body: req.postData() || "", prefer: req.headers()["prefer"] || "", sub, at: Date.now() }); return json(403, { code: "42501", message: "permission denied for table app_call_days", details: null, hint: null }); }
   if (mainPage) return answer(200, []); // whatever the mode: the main page's later steps read an unchanged grid
   if (url.pathname === "/rest/v1/rpc/app_call_names") {
+    if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
     if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.app_call_names without parameters in the schema cache" });
     return answer(200, appNamesFor(sub));
   }
+  if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
   if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
   const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
   const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0).map(r => ({ day: r.day, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
@@ -11082,6 +11100,25 @@ try {
       else if (hintTxt !== `${appMd(D10)} already has Pat Appleton` || !saveDisabled) fail(`${P} 2: a tap on the taken day should only say '${appMd(D10)} already has Pat Appleton' (Save disabled): hint '${hintTxt}', disabled ${saveDisabled}`);
       else ok(`${P} 2: a further tap sends nothing - '${hintTxt}'`);
       await B.pg.screenshot({ path: path.join(OUT, "p29-app-b-refused-390.png"), fullPage: true });
+      // ---- 2b. The merge with main (10/2, Do first 9's phone rules): My APP days at 360 / 320 px and in phone landscape - no
+      //      sideways scroll, every card button 36 px or taller and inside the screen, the seven day columns inside the card ----
+      for (const [w, h] of [[360, 780], [320, 640], [844, 390]]) {
+        await B.pg.setViewportSize({ width: w, height: h });
+        await B.pg.waitForTimeout(300);
+        const m = await B.pg.evaluate(() => {
+          const card = document.querySelector("[data-testid=appdays-card]");
+          const cb = card.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+          const btns = Array.from(card.querySelectorAll("button")).filter(b => b.getBoundingClientRect().width > 0).map(b => { const r = b.getBoundingClientRect(); return { t: b.getAttribute("data-testid"), h: Math.round(r.height), l: Math.round(r.left), r: Math.round(r.right) }; });
+          const cells = Array.from(card.querySelectorAll("[data-testid=appdays-cell]")).map(c => c.getBoundingClientRect());
+          return { sw: document.documentElement.scrollWidth, vw, small: btns.filter(b => b.h < 36 && b.t !== "appdays-cell"), out: btns.filter(b => b.l < 0 || b.r > vw), cellsOut: cells.filter(r => r.left < cb.left - 0.5 || r.right > cb.right + 0.5).length, cells: cells.length };
+        });
+        if (m.sw > m.vw + 2) fail(`${P} 2b (${w}x${h}): My APP days scrolls sideways (scrollWidth ${m.sw} > ${m.vw})`);
+        else if (m.small.length || m.out.length) fail(`${P} 2b (${w}x${h}): card buttons under 36 px ${JSON.stringify(m.small)} / outside the screen ${JSON.stringify(m.out)}`);
+        else if (m.cellsOut || m.cells < 28) fail(`${P} 2b (${w}x${h}): ${m.cellsOut} of ${m.cells} day cells outside the card`);
+        else ok(`${P} 2b (${w}x${h}): My APP days fits (scrollWidth ${m.sw}), every button 36 px+ inside the screen, ${m.cells} day cells inside the card`);
+        await B.pg.screenshot({ path: path.join(OUT, `p29-appdays-${w}x${h}.png`), fullPage: true });
+      }
+      await B.pg.setViewportSize({ width: 390, height: 844 });
     } catch (e) { fail(`${P} 2 (a second APP is refused): ` + errLine(e)); try { if (B) await B.pg.screenshot({ path: path.join(OUT, "failure-p29-2.png"), fullPage: true }); } catch (e2) {} }
     appStale = null;
     if (B) { try { await B.settle(); await B.ctx.close(); } catch (e) {} B = null; }
@@ -11138,6 +11175,61 @@ try {
       else if (back !== "free,free,free,free" || (await countOf()) !== "No changes") fail(`${P} 3b: Discard should drop every drafted day: ${back}, '${await countOf()}'`);
       else ok(`${P} 3b: Discard drops the drafted days; nothing was sent`);
     } catch (e) { fail(`${P} 3b (Range / Paste dates): ` + errLine(e)); }
+    // ---- 3c. The merge with main (10/2): My APP days' save errors stay in the card (role=alert until the next tap / Save), not in a
+    //      toast (Do first 8's model is for toasts); a 503 gateway page says the outcome is unknown and reloads nothing; a 401 whose
+    //      forced refresh meets an auth 503 (Do first 7: "couldn't reach", never a sign-out) says the session couldn't be refreshed -
+    //      the page stays signed in, no banner, no sign-in card ----
+    try {
+      if (!A) throw new Error("the APP A page did not open");
+      await toMineM(A.pg);
+      const D14 = isoM(14);
+      let saveMode = "503";
+      const forced = { save: 0, token: 0 };
+      const xRoute = async (route) => {
+        const req = route.request(); const u = new URL(req.url());
+        if (u.pathname === "/rest/v1/rpc/save_app_days" && req.method() === "POST") {
+          forced.save++;
+          writes.push({ method: "POST", path: u.pathname, body: req.postData() || "", sub: APP_A_UID, at: Date.now(), p29x: saveMode });
+          if (saveMode === "503") { p29xLines.push({ path: u.pathname, status: 503 }); return route.fulfill({ status: 503, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html><body>503 Service Unavailable</body></html>" }); }
+          p29xLines.push({ path: u.pathname, status: 401 });
+          return route.fulfill({ status: 401, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "PGRST301", message: "JWT expired", details: null, hint: null }) });
+        }
+        if (u.pathname === "/auth/v1/token" && req.method() === "POST") {
+          forced.token++;
+          p29xLines.push({ path: u.pathname, status: 503 });
+          return route.fulfill({ status: 503, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html><body>503 Service Unavailable</body></html>" });
+        }
+        return route.fallback();
+      };
+      await A.pg.route((url) => url.hostname === SUPABASE_HOST && (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/auth/v1/token"), xRoute);
+      const gets0 = appServed.filter(x => x.sub === APP_A_UID && x.method === "GET").length;
+      const toastNow = () => A.pg.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+      await A.pg.click(`[data-testid=appdays-cell][data-day="${D14}"]`);
+      await A.pg.click("[data-testid=appdays-save]");
+      await A.pg.waitForSelector("[data-testid=appdays-error]", { timeout: 10000 });
+      const e503 = await A.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
+      const t503 = await toastNow();
+      const want503 = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.";
+      if (e503 !== want503) fail(`${P} 3c: a 503 gateway page should say '${want503}', got '${e503}'`);
+      else if (/may or may not/.test(t503)) fail(`${P} 3c: the save error also showed as a toast: '${t503}'`);
+      else if (appServed.filter(x => x.sub === APP_A_UID && x.method === "GET").length !== gets0) fail(`${P} 3c: the 503 reloaded the APP days (the outcome is unknown - the card says reload; the client does not guess)`);
+      else ok(`${P} 3c: a 503 on save_app_days - '${e503}' in the card (role=alert), no toast, no reload`);
+      saveMode = "401";
+      const st0 = forced.token;
+      await A.pg.click("[data-testid=appdays-save]");
+      await A.pg.waitForFunction((prev) => { const el = document.querySelector("[data-testid=appdays-error]"); return !!el && el.textContent.trim() !== prev; }, e503, { timeout: 10000 });
+      const e401 = await A.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
+      const signedOut = await A.pg.evaluate(() => ({ pw: document.querySelectorAll("input[type=password]").length, unreached: !!document.querySelector("[data-testid=auth-unreached]"), card: !!document.querySelector("[data-testid=appdays-card]") }));
+      const want401 = "Your session couldn't be refreshed - nothing was saved. Try again in a moment.";
+      if (forced.token - st0 < 1) fail(`${P} 3c: the 401 should have made the client try ONE forced refresh (the token endpoint got ${forced.token - st0})`);
+      else if (e401 !== want401) fail(`${P} 3c: a 401 with the refresh answered 503 should say '${want401}', got '${e401}'`);
+      else if (signedOut.pw || !signedOut.card) fail(`${P} 3c: an auth 503 signed the APP out (password field ${signedOut.pw}, card ${signedOut.card}) - Do first 7: never a sign-out`);
+      else ok(`${P} 3c: a 401 + the refresh's 503 - '${e401}'; still signed in (no password field, My APP days on screen)`);
+      await A.pg.unroute((url) => url.hostname === SUPABASE_HOST && (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/auth/v1/token"), xRoute).catch(() => {});
+      await A.pg.click("[data-testid=appdays-discard]");
+      if (appDayStore.some(r => r.day === D14)) fail(`${P} 3c: ${D14} landed in the store although every save was refused by the harness`);
+      await A.pg.waitForTimeout(300);
+    } catch (e) { fail(`${P} 3c (save errors x Do first 7 / 8): ` + errLine(e)); }
     if (A) { try { await A.settle(); await A.pg.close(); } catch (e) {} }
     // ---- 4. A surgeon, the coordinator and a plain viewer see the APP line but get no add / remove ----
     {
@@ -11210,6 +11302,19 @@ try {
       let r = await runApp(APP_B_UID, "editor-app-set");
       if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [D12], p_clear: [], p_replace: false })) fail(`${P} 5: Set APP on ${D12} should send ONE POST { p_profile: B, p_add: [D12], p_replace: false }: ${JSON.stringify(r)}`);
       else ok(`${P} 5: Set APP on ${D12} = ONE POST { p_profile: B, p_add: [${D12}], p_replace: false } - '${r.status}'`);
+      // the merge with main (10/2, Do first 8): the editor's APP toast never sits on the day editor's action row (Cancel / Save) - P29 LIFT CHECK
+      // (the text from the message span, only the geometry from the box - Do first 8's smoke pin)
+      {
+        const lift = await sc.evaluate(() => {
+          const t = document.querySelector("[data-testid=toast]"), row = document.querySelector("[data-testid=editor-footer]");
+          if (!t || !row) return { box: !!t, row: !!row };
+          const b = (t.closest("[data-testid=toast-box]") || t).getBoundingClientRect(), f = row.getBoundingClientRect();
+          return { box: true, row: true, text: t.textContent.trim().slice(0, 80), overlap: b.bottom > f.top && b.top < f.bottom && b.right > f.left && b.left < f.right };
+        });
+        if (!lift.box || !lift.row) fail(`${P} 5: the Set APP toast or the editor's action row is missing (${JSON.stringify(lift)})`);
+        else if (lift.overlap) fail(`${P} 5: the toast '${lift.text}' covers the day editor's action row (Do first 8's lift)`);
+        else ok(`${P} 5: the toast '${lift.text}' sits clear of the day editor's Cancel / Save row`);
+      } // P29 LIFT CHECK END
       await closeEd();
       await openEd(D10);
       const holder10 = await sc.$eval("[data-testid=editor-app-holder]", el => el.textContent.trim()).catch(() => "");
@@ -11339,8 +11444,51 @@ try {
       try { await settleA2(); await a2.close(); } catch (e) {}
     } catch (e) { fail(`${P} 8 (absent): ` + errLine(e)); }
     appDaysMode = "ok";
+    // ---- 8b. The merge with main (10/2, Do first 4): the APP-day read of a signed-in load fails (500) - it is said in the load's
+    //      ONE toast (and so on Recent errors), on the grid's legend and in the day summary, never as "no APP days"; ONE read for the
+    //      sign-in (the reset effect's owed read was paid by the load's batch) ----
+    {
+      appDaysMode = "fail500";
+      const served0 = appServed.length;
+      const rp = await context.newPage();
+      watchPage(rp, "p29-viewer-appfail");
+      const settleR = restReadsSettled(rp);
+      try {
+        await rp.setViewportSize({ width: 390, height: 844 });
+        await rp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VIEWER_JWT);
+        await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+        await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
+        await loadApp(rp, "P29 viewer page (APP read 500)");
+        await rp.waitForSelector("[data-testid=toast]", { timeout: 8000 }).catch(() => {});
+        const toastTxt = await rp.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+        const errPill = await rp.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
+        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
+        await showM(rp);
+        const legend = await rp.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
+        const gl = await gridApp(rp);
+        await rp.click(`[data-day="${D10}"]`);
+        await rp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+        await rp.waitForTimeout(200);
+        const sum = await rp.$eval("[data-testid=editor-app-summary-failed]", el => el.textContent.trim()).catch(() => "");
+        await rp.keyboard.press("Escape");
+        await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        if (!toastTxt.includes(want)) fail(`${P} 8b: the load's toast should say '${want}', got '${toastTxt}'`);
+        else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8b: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
+        else if (reads !== 1) fail(`${P} 8b: the sign-in should read the APP days ONCE (the load's batch pays the reset effect's owed read), got ${reads}`);
+        else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8b: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
+        else if (gl.length) fail(`${P} 8b: the grid shows APP lines from a failed read: ${JSON.stringify(gl)}`);
+        else if (!/^APP\s*APP days could not be loaded$/.test(sum)) fail(`${P} 8b: the day summary should say 'APP days could not be loaded', got '${sum}'`);
+        else ok(`${P} 8b: a failed APP-day read on a viewer's sign-in - ONE read, '${want}' in the load's one toast and on Recent errors ('${errPill}'), the legend and the day summary say it in place`);
+        await rp.screenshot({ path: path.join(OUT, "p29-appfail-viewer-390.png"), fullPage: true });
+      } catch (e) { fail(`${P} 8b (a failed APP-day read): ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-p29-8b.png"), fullPage: true }); } catch (e2) {} }
+      try { await settleR(); await rp.close(); } catch (e) {}
+      appDaysMode = "ok";
+      await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+    }
     // ---- 9. Reset ----
     await new Promise(r => setTimeout(r, 600));
+    if (p29xLines.length) fail(`${P} 9: ${p29xLines.length} answer(s) forced by the interplay steps never produced their console line: ${JSON.stringify(p29xLines)}`); else ok(`${P} 9: every answer the interplay steps forced produced its console line (${p29xConsumed})`);
     if (appForcedLines.length) fail(`${P} 9: ${appForcedLines.length} forced APP answer(s) never produced their console line: ${JSON.stringify(appForcedLines)}`); else ok(`${P} 9: every forced APP answer's console line was consumed (${appForcedConsumed} so far)`);
     const p29Writes = writes.slice(w0all);
     const clientAudit = p29Writes.map(saveBody).filter(b => b && typeof b.action === "string" && /^appdays/.test(b.action));

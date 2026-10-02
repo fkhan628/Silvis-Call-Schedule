@@ -1426,9 +1426,11 @@ function CallSchedule() {
   // snapshot. The generator, the rules, offers, trades, the open-shifts board, Totals, pay, the calendar feeds, the exports
   // and the office digest never read these rows. No realtime subscription: the 60 s poll (refreshAll) and the reload after
   // every save keep the picture fresh. appDaysState: "unread" | "ok" | "unavailable" (not applied yet, or rolled back: the
-  // sentence, no toast) | "failed" (the last loaded rows are kept; no toast on a passive read - the mount, the poll - only on an
-  // explicit reload: the APP's Retry / Save, the scheduler's editor save, a Users APP switch; review 10/2) | "skipped" (no fresh
-  // token: nothing read - shown only while nothing was read yet).
+  // sentence, no toast) | "failed" (the last loaded rows are kept; the poll's read stays quiet - every role shares it -, the read
+  // of a signed-in load says it in the load's ONE combined toast (Do first 4's collector, key appDays - the merge with main, 10/2)
+  // and an explicit reload toasts on its own: the APP's Retry / Save, the scheduler's editor save, a Users APP switch; review
+  // 10/2; while it lasts the grid's legend and the day summary say it in place - a failed read never looks like "no APP days") |
+  // "skipped" (no fresh token: nothing read - shown only while nothing was read yet).
   // ====================================================================
   const [appDayRows, setAppDayRows] = useState([]);
   const [appNameRows, setAppNameRows] = useState([]);
@@ -1436,11 +1438,13 @@ function CallSchedule() {
   const [appDaysBusy, setAppDaysBusy] = useState(false);
   const appGenRef = useRef(0);   // bumped when the account changes: a read that started for the previous one is dropped
   const appSeqRef = useRef(0);   // bumped by every loadAppDays: only the LATEST request's answer lands
+  const appReadOwedRef = useRef(0); // the merge with main (10/2): the account's first read, owed by the reset effect until a read runs
   // mirrored every render (the poll's refreshAll closes over the mount effect's closure): the loader reads the flag of now
   const appDaysAllowedRef = useRef(false);
   appDaysAllowedRef.current = appDaysAllowed;
   const loadAppDays = async (explicit) => {
     if (!appDaysAllowedRef.current) return;   // ?public=1, signed out, a failed profile read: no request at all
+    appReadOwedRef.current = 0;               // any read pays the read the reset effect owes (synchronously - see the effect)
     const gen = appGenRef.current;
     const seq = ++appSeqRef.current;
     const r = await appDaysDb.load();
@@ -1450,7 +1454,10 @@ function CallSchedule() {
     if (r.state === "failed") {
       console.warn("APP days read failed", r.error || "");
       setAppDaysState("failed");
-      if (explicit) showToast("Couldn't load the APP days - the last loaded days are kept.", "error");
+      // Do first 4 (the merge with main, 10/2): `explicit` is the mount load's collector (a function) on a signed-in load - the
+      // sentence goes into its ONE combined toast; the poll's read (false) stays quiet; an explicit reload (true) toasts alone
+      if (typeof explicit === "function") explicit(APP_DAYS_LOAD_FAIL_TEXT);
+      else if (explicit) showToast("Couldn't load the APP days - the last loaded days are kept.", "error");
       return;
     }
     // "skipped" (no fresh token): the rows stay; the first read of this account says so (My APP days' sign-in line) - the next poll reads again
@@ -1459,10 +1466,19 @@ function CallSchedule() {
   const loadAppDaysRef = useRef(null);
   loadAppDaysRef.current = loadAppDays;
   // Another account on this page (sign-out / sign-in) or the public page: drop what the previous one read before anything shows.
+  // Do first 4 (the merge with main, 10/2): the account's first read belongs to the mount load - a sign-in bumps reloadTrigger
+  // right after the profile read (adoptSignedInUser), so the load re-runs in this same commit, after this effect, and its
+  // parallel batch calls loadAppDays with its collector (which pays the owed read synchronously, before its first await). Only
+  // when no load run takes it - a profile read the poll recovered, an account switch whose profile read has not landed - does
+  // the owed read run here, quietly, a tick later. Never two reads for one sign-in.
   useEffect(() => {
     appGenRef.current++;
     setAppDayRows([]); setAppNameRows([]); setAppDaysState("unread");
-    if (appDaysAllowed) loadAppDays(false);
+    if (!appDaysAllowed) { appReadOwedRef.current = 0; return; }
+    const gen = appGenRef.current;
+    appReadOwedRef.current = gen;
+    const t = setTimeout(() => { if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false); }, 0);
+    return () => clearTimeout(t);
   }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line
   const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);
   // The name the names function gave a profile ("APP" when it gave none).
@@ -1482,7 +1498,7 @@ function CallSchedule() {
       console.warn("APP days save refused", r.status, r.error);
       const code = appDaysErrorCode(r.error);
       if (code === "AP002" || code === "AP005" || code === "AP006" || code === "AP007") await loadAppDays(true);
-      return { ok: false, words: appDaysErrorWords(r.error, r.status) };
+      return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired }) };
     } finally { setAppDaysBusy(false); }
   };
   // saveAppDayFromEditor(day, mode, profileId, holderId) - the scheduler's APP line in the day editor, saved at once (apart
@@ -1494,7 +1510,7 @@ function CallSchedule() {
     try {
       const r = mode === "clear" ? await appDaysDb.save(holderId, [], [day], false) : await appDaysDb.save(profileId, [day], [], mode === "change");
       await loadAppDays(true);
-      if (!r.ok) { console.warn("APP day save refused", r.status, r.error); return { ok: false, words: appDaysErrorWords(r.error, r.status) }; }
+      if (!r.ok) { console.warn("APP day save refused", r.status, r.error); return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired }) }; }
       const words = mode === "clear" ? "APP cleared for " + fmtMD(day) : "APP for " + fmtMD(day) + ": " + appNameOf(profileId);
       showToast(words, "success");
       return { ok: true, words };
@@ -2444,6 +2460,7 @@ function CallSchedule() {
         loadMinVersion(),
         loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")),
         loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")),
+        loadAppDaysRef.current(sayLoadFail("appDays")), // Prompt 29 (the merge with main, 10/2): signed-in only - it returns at once before the profile read / on ?public=1
       ]);
       // Review of Do first 4 (10/1): two or more failed reads in one compact sentence; "Retry" only while the banner with
       // the Retry button is up (no days read taken in), the Setup clause for the scheduler only (review 2: the role read now,
@@ -7436,6 +7453,8 @@ function CallSchedule() {
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
               {/* Prompt 29: the APP line's legend - only when a day of this grid has an APP (signed-in sessions; nothing on ?public=1) */}
+              {/* the merge with main (10/2): a failed APP-day read is said in place while it lasts (the load's toast goes; the poll stays quiet) */}
+              {!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn't be loaded - the A lines may be missing</span>}
               {!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}
               {/* Item E3 (9/25): the East-vacation legend line follows the diamonds - the scheduler's only */}
               {eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><span style={eastVacMarkStyle("unreviewed", dk)}/> unreviewed <span style={eastVacMarkStyle("away", dk, dkSubtext)}/> away <span style={eastVacMarkStyle("home", dk)}/> home = East vacation</span>}
@@ -9982,6 +10001,12 @@ function DayEditor(props) {
       <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
       <span data-testid="editor-app-name" style={{color:T.appText,fontStyle:"italic",fontWeight:700,fontSize:12.5}}>{appEntry.name}</span>
       {myProfileId && appEntry.profileId === myProfileId && <span data-testid="editor-app-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
+    </div>
+  ) : (!canEdit && !isPublicMode && appState === "failed") ? (
+    // the merge with main (10/2): a failed read (no entry to show) never reads as "no APP that day"
+    <div data-testid="editor-app-summary-failed" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"8px 0",borderBottom:"1px solid " + border}}>
+      <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
+      <span style={{fontSize:12,color:sub}}>APP days could not be loaded</span>
     </div>
   ) : null;
   const appEditorBlock = () => {

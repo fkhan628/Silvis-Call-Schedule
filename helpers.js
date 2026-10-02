@@ -957,8 +957,9 @@ function syncFailLine(dayFail, blobFail) {
 // Setup warning they cannot act on. opts.retry (the "Schedule not loaded" banner with its Retry is up) says "then Retry
 // or reload"; opts.isScheduler adds the Setup clause when the shared setup failed. The two notices - daysEmpty (the
 // empty-read tripwire of mergeLoadedDays) and blobMoved - are not failed reads: they keep their own sentence, in order.
-const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"];
-const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews" };
+// Prompt 29 (the merge with main, 10/2): appDays - the APP-day read of a signed-in load (APP_DAYS_LOAD_FAIL_TEXT) - goes last.
+const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews", "appDays"];
+const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews", appDays: "the APP days" };
 function combinedLoadToast(fails, opts) {
   const f = fails && typeof fails === "object" ? fails : {};
   const o = opts || {};
@@ -5836,6 +5837,9 @@ function notifPrefReadFailureState(status, bodyText) {
 // appDaysDb is the only client file that names the table or its two functions. These are the pure pieces the client is
 // built on; none of them throws.
 const APP_DAYS_UNAVAILABLE_TEXT = "APP days are available after the next database update.";
+// The mount load's sentence for a failed APP-day read (Do first 4's collector, key appDays - the merge with main, 10/2): every
+// signed-in role sees the A lines, so one wording serves the viewer, the APP and the scheduler (?public=1 never reads them).
+const APP_DAYS_LOAD_FAIL_TEXT = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
 // The refusal codes the save function raises (custom SQLSTATEs; PostgREST answers 400 with the code + "<TOKEN>: <text>").
 const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" };
 const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004); the client refuses a bigger save before any request
@@ -5950,10 +5954,13 @@ function appDayErrorMessage(body) {
   try { const j = JSON.parse(t); if (j && typeof j.message === "string") return j.message; } catch (e) { /* not JSON */ }
   return t;
 }
-// appDaysErrorWords(body, status) -> plain words for a refused / failed save: the function's own sentence (the text after
+// appDaysErrorWords(body, status, opts) -> plain words for a refused / failed save: the function's own sentence (the text after
 // "APP_DAY_<TOKEN>: "); a missing table / function -> APP_DAYS_UNAVAILABLE_TEXT; a permission refusal; an expired session;
 // no connection (a re-save is safe: the save is idempotent); else "Couldn't save the APP days: " + the first 160 characters.
-function appDaysErrorWords(body, status) {
+// opts.sessionExpired (the merge with main, 10/2 - Do first 7): false = the session is not known dead (auth.sessionExpired: a
+// refresh the auth server answered 5xx / 429 / 408 or never answered is "couldn't reach", never a sign-out), so a 401 says the
+// session couldn't be refreshed instead of "sign in again"; true or absent keeps the expired words.
+function appDaysErrorWords(body, status, opts) {
   const msg = appDayErrorMessage(body);
   const raw = body && typeof body === "object" ? msg : String(body === null || body === undefined ? "" : body);
   const m = /APP_DAY_[A-Z_]+: ([\s\S]*)$/.exec(msg);
@@ -5961,7 +5968,9 @@ function appDaysErrorWords(body, status) {
   const all = msg + " " + raw;
   if (/PGRST202|PGRST205|42P01/.test(all)) return APP_DAYS_UNAVAILABLE_TEXT;
   if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
-  if (/JWT|PGRST301/.test(all) || Number(status) === 401) return "Your session expired - sign in again. Nothing was saved.";
+  if (/JWT|PGRST301/.test(all) || Number(status) === 401) return opts && opts.sessionExpired === false
+    ? "Your session couldn't be refreshed - nothing was saved. Try again in a moment."
+    : "Your session expired - sign in again. Nothing was saved.";
   if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
   // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
   // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was saved"
@@ -6500,7 +6509,7 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    APP_DAYS_UNAVAILABLE_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,

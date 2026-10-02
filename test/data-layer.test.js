@@ -8703,8 +8703,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // record that is a repeat ("x2" on the mount run's toast still up) fails the step
       assert.ok(df4.includes('window.__df4Toasts.push({ txt, cnt: (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent,'), "__df4Toasts records the count chip: " + df4.slice(0, 200));
       assert.ok(smoke.includes('else if (failT.some(t => t.cnt !== "")) fail("Do first 4: a load\'s combined toast came as a repeat count'), "the DF4 verdict fails a combined toast recorded with a count");
-      const boxReads = (smoke.match(/data-testid=toast-box/g) || []).length - (t390.match(/data-testid=toast-box/g) || []).length - (df4.match(/data-testid=toast-box/g) || []).length;
-      assert.strictEqual(boxReads, 0, "no smoke read of the box outside the toast-390 geometry step and the DF4 height");
+      // Prompt 29's merge with main (10/2) - pin moved deliberately: the P29 step 5 check measures the box's geometry over the day
+      // editor (the Set APP toast clear of Cancel / Save) and reads the text off the message span
+      const p29lift = smoke.slice(smoke.indexOf("- P29 LIFT CHECK"), smoke.indexOf("// P29 LIFT CHECK END"));
+      assert.ok(p29lift.length > 200 && (p29lift.match(/data-testid=toast-box/g) || []).length === 1 && p29lift.includes('const t = document.querySelector("[data-testid=toast]")') && !/toast-box[^\n]{0,80}textContent/.test(p29lift), "the P29 lift check measures the box only and reads the message span");
+      const boxReads = (smoke.match(/data-testid=toast-box/g) || []).length - (t390.match(/data-testid=toast-box/g) || []).length - (df4.match(/data-testid=toast-box/g) || []).length - (p29lift.match(/data-testid=toast-box/g) || []).length;
+      assert.strictEqual(boxReads, 0, "no smoke read of the box outside the toast-390 geometry step, the DF4 height and the P29 lift check");
       assert.ok(!/toast-box[^\n]{0,80}textContent/.test(t390), "and that step reads no text off the box");
       // second review fixes (10/2): the same page at 1180 x 800 - a pick inside the day editor (or a spacer) grows the dialog
       // with no render of the app; Save and Cancel must stay clear (the ResizeObserver re-measure)
@@ -9095,9 +9099,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // review 2 of Do first 4/5 (10/1): the role read through isSchedulerRef when a sentence is built; the re-sync bridge called
       // when a switched run ends. `isScheduler` stays in the list as the closure's STALE value - the opposite of the role unless
       // a case sets it (opt.closureScheduler) - so a read of it fails every toast check below instead of passing unseen.
-      "isSchedulerRef", "resyncPendingRef"];
-    const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews"];
-    const LOUD = ["time_off", "availability", "east", "east_vacation_reviews"]; // the loaders that toasted on their own before
+      "isSchedulerRef", "resyncPendingRef",
+      // Prompt 29 (the merge with main, 10/2): the APP-day read joins the batch through its ref, with the collector (key appDays)
+      "loadAppDaysRef"];
+    const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews", "app_call_days"];
+    const LOUD = ["time_off", "availability", "east", "east_vacation_reviews", "app_call_days"]; // the loaders that hand a sentence to the collector (the APP-day read since the merge with main, 10/2)
     const FAILMSG = {
       days: "Couldn't load the latest data - check your connection and reload.",
       blob: "Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.",
@@ -9106,6 +9112,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       availability: "Couldn't load availability statements - data shown may be incomplete.",
       east: "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.",
       east_vacation_reviews: "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.",
+      app_call_days: H.APP_DAYS_LOAD_FAIL_TEXT,
     };
     const mk = (o) => {
       if (liftErr) throw liftErr;
@@ -9138,7 +9145,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         loader("time_off"), loader("availability"), loader("east"), loader("east_vacation_reviews"),
         H.combinedLoadToast, (m, tone) => st.toasts.push(tone + " " + m),
         (v) => st.loaded.push({ v, pending: READS.filter(n => !st.settled.includes(n)) }),
-        refs.daysReadOkRef, refs.isSchedulerRef, refs.resyncPendingRef);
+        refs.daysReadOkRef, refs.isSchedulerRef, refs.resyncPendingRef, ref(loader("app_call_days")));
       const OK = { blob: { data: { data: { roster: [] }, updated_at: opt.rowTs || "t-blob" } }, days: { sched: {}, vers: {}, count: 0 }, shift_trade_requests: [], notifications: [], call_offers: true, call_periods: true, client_versions: [] };
       st.ok = (name) => st.d[name].res(OK[name] !== undefined ? OK[name] : {});
       st.failRead = (name) => (LOUD.includes(name) ? st.d[name].res({ fail: true }) : st.d[name].rej(new Error("HTTP 500 harness")));
@@ -9149,7 +9156,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("DF4 helpers: combinedLoadToast says every collected failure in ONE toast - one failed read keeps its own sentence; two or more are ONE compact sentence naming each read once by its short name (the schedule, the shared setup, vacations, availability, the East feed cache, the East vacation reviews) with one piece of advice ('Retry' only while the banner is up) and the Setup clause for the scheduler only; the notices (daysEmpty, blobMoved) and unknown keys keep their sentence, in order; '' when nothing failed", () => {
       // review of Do first 4 (10/1, pins moved deliberately): daysEmpty joins the order right after days; the six-part join became
       // the compact sentence (the joined sentences ran to 300-500 characters on a phone for 4.5 s)
-      assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"]);
+      // pin moved deliberately 10/2 (Prompt 29's merge with main): appDays - the APP-day read of a signed-in load - goes last
+      assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews", "appDays"]);
+      assert.strictEqual(H.LOAD_FAIL_SHORT.appDays, "the APP days");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT }), "Couldn't load the APP days - the A lines on the calendar may be missing until they load.", "the APP-day read alone keeps its own sentence (every signed-in role sees the A lines)");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, timeOff: "T." }), "Couldn't load vacations and the APP days - check your connection and reload. What is shown may be incomplete.", "with another failure: one compact sentence, the APP days named last");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, blob: "B." }, { isScheduler: false }), "Couldn't load the shared setup and the APP days - check your connection and reload. What is shown may be incomplete.", "a viewer / APP: no Setup clause");
       assert.strictEqual(H.combinedLoadToast({}), "");
       assert.strictEqual(H.combinedLoadToast(null), "");
       assert.strictEqual(H.combinedLoadToast({ timeOff: FAILMSG.time_off }), FAILMSG.time_off, "one failure reads exactly as the loader's own toast did");
@@ -9203,7 +9215,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       st.failRead("east_vacation_reviews"); st.failRead("east"); st.failRead("time_off"); await tick();
       st.failRead("blob"); await tick();
       assert.deepStrictEqual(st.toasts, [], "no toast while reads are still out (each failure used to toast at once, replacing the one before)");
-      ["shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "availability"].forEach(n => st.ok(n));
+      // the APP-day read (in the batch since Prompt 29's merge with main, 10/2) lands like the others here
+      ["shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "availability", "app_call_days"].forEach(n => st.ok(n));
       await tick();
       assert.strictEqual(st.loaded.length, 0, "the days read is still out");
       st.failRead("days");
@@ -10987,6 +11000,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appDaysErrorWords(pg("42501", "permission denied for function x"), 403), "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST301", "JWT expired"), 401), "Your session expired - sign in again. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords("", 401), "Your session expired - sign in again. Nothing was saved.");
+      // the merge with main (10/2, Do first 7): opts.sessionExpired false - the session is not known dead
+      assert.strictEqual(H.appDaysErrorWords(pg("PGRST301", "JWT expired"), 401, { sessionExpired: false }), "Your session couldn't be refreshed - nothing was saved. Try again in a moment.");
+      assert.strictEqual(H.appDaysErrorWords("", 401, { sessionExpired: false }), "Your session couldn't be refreshed - nothing was saved. Try again in a moment.");
+      assert.strictEqual(H.appDaysErrorWords("", 401, { sessionExpired: true }), "Your session expired - sign in again. Nothing was saved.");
+      assert.strictEqual(H.appDaysErrorWords(pg("AP005", "APP_DAY_TAKEN: 12/10 already has Pat Appleton - nothing was saved"), 400, { sessionExpired: false }), "12/10 already has Pat Appleton - nothing was saved", "the flag changes the 401 words only");
       assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
       assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).", "an Error-like object");
       assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP days: " + "x".repeat(160));
@@ -11166,7 +11184,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const st = { rows: ["old"], names: ["oldn"], state: "ok", toasts: [], loads: 0 };
         const ctx = {
           console: { warn() {}, log() {} },
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 },
+          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 7 }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
           appDaysDb: { load: async () => { st.loads++; return typeof answer === "function" ? answer(ctx) : answer; } },
           setAppDayRows: (v) => { st.rows = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
           showToast: (m, k) => { st.toasts.push(m + "|" + k); },
@@ -11176,6 +11194,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       let t = mk({ state: "ok", rows: [1], names: [2] }, false);
       await t.fn(false);
       assert.strictEqual(t.st.loads, 0, "?public=1 / signed out: no request at all");
+      assert.strictEqual(t.ctx.appReadOwedRef.current, 7, "a call that reads nothing pays no owed read (the merge with main, 10/2)");
+      t = mk({ state: "ok", rows: [1], names: [2] }, true);
+      const pr = t.fn(false);
+      assert.strictEqual(t.ctx.appReadOwedRef.current, 0, "a read pays the owed read synchronously, before its first await - the reset effect's timer then reads nothing (one read per sign-in)");
+      await pr;
+      // Do first 4 (the merge with main, 10/2): the mount load's collector takes the sentence - no toast of its own
+      t = mk({ state: "failed", error: "HTTP 500" }, true);
+      const said = [];
+      await t.fn((m) => said.push(m));
+      assert.deepStrictEqual([said, t.st.toasts, t.st.state, t.st.rows], [[H.APP_DAYS_LOAD_FAIL_TEXT], [], "failed", ["old"]], "a signed-in load's failed read: the sentence to the collector, no toast, the rows kept");
+      t = mk({ state: "ok", rows: [3], names: [] }, true);
+      const said2 = [];
+      await t.fn((m) => said2.push(m));
+      assert.deepStrictEqual([said2, t.st.rows], [[], [3]], "a read that lands says nothing");
       t = mk({ state: "ok", rows: [1], names: [2] }, true);
       await t.fn(false);
       assert.deepStrictEqual([t.st.loads, t.st.rows, t.st.names, t.st.state], [1, [1], [2], "ok"]);
@@ -11204,11 +11236,55 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       await t.fn(false);
       assert.deepStrictEqual(t.st.rows, ["old"], "an answer for the previous account (appGenRef moved) is dropped");
     });
+    await acheckP("P29 x Do first 4 (the merge with main, 10/2): the reset effect and loadAppDays (both lifted verbatim) - a sign-in's load re-run pays the owed read synchronously, so its timer reads nothing (one read per sign-in, said in the load's toast); with no load run the owed read runs a tick later, quietly; not allowed / a cleanup before the tick reads nothing", async () => {
+      const fxSrc = between(SRC, "  useEffect(() => {\n    appGenRef.current++;", "  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line");
+      const fxFn = fxSrc.replace(/^  useEffect\(/, "").replace(/, \[appDaysAllowed, authUser && authUser\.id\]\); \/\/ eslint-disable-line$/, "");
+      const mk = (allowed, answer) => {
+        const st = { loads: 0, toasts: [], timers: [], state: "ok" };
+        const ctx = {
+          console: { warn() {}, log() {} }, appDaysAllowed: allowed,
+          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 3 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
+          appDaysDb: { load: async () => { st.loads++; return answer || { state: "ok", rows: [], names: [] }; } },
+          setAppDayRows() {}, setAppNameRows() {}, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
+          showToast: (m, k) => { st.toasts.push(m + "|" + k); },
+          setTimeout: (f) => { st.timers.push(f); return st.timers.length; }, clearTimeout: (i) => { st.timers[i - 1] = null; },
+        };
+        ctx.loadAppDays = lift(loadSrc, "loadAppDays", ctx);
+        const effect = vm.runInNewContext("(" + fxFn + ")", ctx);
+        const runTimers = async () => { const ts = st.timers.slice(); st.timers.length = 0; for (const f of ts) if (f) await f(); await new Promise(r => setImmediate(r)); };
+        return { st, ctx, effect, runTimers };
+      };
+      assert.ok(fxFn.startsWith("() => {\n    appGenRef.current++;") && fxFn.endsWith("\n  }"), "the effect's callback was lifted whole");
+      // a sign-in: the effect, then (same commit) the mount load's batch calls the loader with its collector, then the tick
+      let t = mk(true, { state: "failed", error: "HTTP 500" });
+      t.effect();
+      assert.strictEqual(t.ctx.appReadOwedRef.current, t.ctx.appGenRef.current, "the effect owes the first read of the account");
+      const said = [];
+      const pr = t.ctx.loadAppDays((m) => said.push(m));
+      await t.runTimers(); await pr;
+      assert.deepStrictEqual([t.st.loads, said, t.st.toasts], [1, [H.APP_DAYS_LOAD_FAIL_TEXT], []], "ONE read; its failure went to the load's collector, no toast of its own");
+      // no load run takes it (a profile read the poll recovered): the owed read runs a tick later, quietly
+      t = mk(true, { state: "failed", error: "HTTP 500" });
+      t.effect();
+      await t.runTimers();
+      assert.deepStrictEqual([t.st.loads, t.st.toasts, t.st.state], [1, [], "failed"], "the owed read ran once, quietly (the legend / summary say it in place)");
+      // not allowed (?public=1, signed out, a failed profile read): nothing owed, nothing read
+      t = mk(false);
+      t.effect();
+      await t.runTimers();
+      assert.deepStrictEqual([t.st.loads, t.ctx.appReadOwedRef.current, t.st.timers.length], [0, 0, 0]);
+      // the account changed again before the tick: the cleanup cancels the owed read
+      t = mk(true);
+      const cleanup = t.effect();
+      cleanup();
+      await t.runTimers();
+      assert.strictEqual(t.st.loads, 0, "a cleanup before the tick reads nothing (the next run owes its own read)");
+    });
     await acheckP("P29 behaviour: saveMyAppDays (lifted verbatim) - only an APP; > 400 days refused with no request; ONE save for its own profile (p_replace false); ok reloads and answers the note; AP002 / AP005 / AP006 / AP007 reload, AP003 / AP004 do not; no audit, no notification", async () => {
       const mk = (answer, isApp) => {
         const st = { saves: [], loads: 0, busy: [] };
         const ctx = {
-          console: { warn() {}, log() {} }, isApp, authUser: { id: PA }, APP_DAYS_MAX_SAVE: H.APP_DAYS_MAX_SAVE,
+          console: { warn() {}, log() {} }, isApp, authUser: { id: PA }, APP_DAYS_MAX_SAVE: H.APP_DAYS_MAX_SAVE, auth: { sessionExpired: !!mk.expired },
           appSavedNote: H.appSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords,
           appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
           loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; },
@@ -11220,6 +11296,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       let t = mk({ ok: true, result: { ok: true } }, false);
       let r = await t.fn(["2026-12-10"], []);
       assert.strictEqual(r.ok, false); assert.strictEqual(t.st.saves.length, 0, "not an APP: nothing is sent");
+      // Do first 7 (the merge with main, 10/2): a 401 while the session is not known dead (the refresh hit an auth 5xx - never a
+      // sign-out) says it couldn't be refreshed; once the session IS dead (the banner) it says sign in again
+      t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.deepStrictEqual(plain(r), { ok: false, words: "Your session couldn't be refreshed - nothing was saved. Try again in a moment." }, "a 401, the session not known dead");
+      mk.expired = true;
+      t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
+      r = await t.fn(["2026-12-10"], []);
+      mk.expired = false;
+      assert.deepStrictEqual(plain(r), { ok: false, words: "Your session expired - sign in again. Nothing was saved." }, "a 401 with the session dead");
+      t = mk({ ok: false, status: 503, error: "<html>Service Unavailable</html>" }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.ok(/may or may not have gone through/.test(r.words) && t.st.loads === 0, "a 5xx gateway page: the outcome is unknown, no reload (and no sign-out - nothing here touches the session)");
       t = mk({ ok: true, result: { ok: true } }, true);
       r = await t.fn(Array.from({ length: 401 }, (_, i) => "2027-01-01"), []);
       assert.deepStrictEqual(plain(r), { ok: false, words: "at most 400 days in one save - nothing was saved" });
@@ -11258,8 +11347,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(rxCount(SRC, /appDaysDb\.save\(/g), 3, "saveMyAppDays (1) + saveAppDayFromEditor (2: clear / set-change)");
       assert.strictEqual(rxCount(SRC, /appDaysDb\.load\(/g), 1, "loadAppDays only");
     });
-    check("P29 pins: refreshAll reads the APP days through the ref (quiet); the account-change effect resets and reloads; no realtime subscription for the APP table", () => {
+    check("P29 pins: refreshAll reads the APP days through the ref (quiet); the mount load's batch reads them with its collector (the merge with main, 10/2); the account-change effect resets and owes the first read; no realtime subscription for the APP table", () => {
       assert.strictEqual(cnt(SRC, "        loadAppDaysRef.current(false), // Prompt 29"), 1, "inside refreshAll's allSettled list");
+      const mountBatch = between(SRC, "      await Promise.allSettled([\n        legA(), legB(),", "\n      ]);");
+      assert.ok(mountBatch.includes("        loadAppDaysRef.current(sayLoadFail(\"appDays\")), // Prompt 29"), "the mount load's batch reads the APP days with the collector (key appDays)");
+      const fx = between(SRC, "  useEffect(() => {\n    appGenRef.current++;", "  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line");
+      assert.ok(!/loadAppDays\((true|false)?\);\n/.test(fx.split("setTimeout(")[0]), "the reset effect never reads at once (the mount load's re-run takes the account's first read)");
+      assert.ok(fx.includes("const t = setTimeout(() => { if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false); }, 0);") && fx.includes("return () => clearTimeout(t);"), "the owed read runs a tick later, quietly, only when no read paid it");
+      assert.ok(SRC.indexOf("  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line") < SRC.indexOf("  // --- Supabase: Load on mount + real-time sync ---"), "the reset effect is declared before the mount load (its effect runs first in a commit)");
       const ra = between(SRC, "    const refreshAll = async () => {", "\n    };\n");
       assert.ok(ra.includes("loadAppDaysRef.current(false)"), "the poll");
       assert.ok(SRC.includes("  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line"), "the reset effect's deps");
@@ -11273,6 +11368,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(cnt(SRC, '{appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span></div>}'), 1);
       const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>'), cellA = SRC.indexOf('data-testid="cal-app"');
       assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 400, "the APP line is the third line, right after B");
+      // the merge with main (10/2): a failed read is said in place - the legend for every signed-in role, the summary for all but the scheduler
+      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn\'t be loaded - the A lines may be missing</span>}'), 1, "the legend's failed line");
+      assert.ok(edSrc.includes("  ) : (!canEdit && !isPublicMode && appState === \"failed\") ? (") && edSrc.includes('<div data-testid="editor-app-summary-failed"') && edSrc.includes("APP days could not be loaded</span>"), "the day summary's failed line");
       assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}'));
       assert.ok(SRC.includes('<span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>'), "the phone legend line is unchanged");
       for (const css of [".cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }", ".cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }", ".cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", ".cal-app { font-size: 9px; }"]) assert.strictEqual(cnt(SRC, css), 1, css);
