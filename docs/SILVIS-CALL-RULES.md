@@ -917,7 +917,8 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     with the rates. New: (i) the office coordinator reads pay read-only (Totals → Pay + CSV); (j) a per-surgeon "Paid by the
     call stipend" switch, default on (Faraz sets who is off).
 23. **Khan's 9/30 preferences (Prompt 23) — the readings taken; each is data in `surgeonRules.s1` / `groupRules.weights`,
-    none a code branch (§3 Khan).** (a) **A standalone Friday is a weekday** — it earns the weekday bonus and does **not**
+    none a code branch (§3 Khan).** ⟶ **ACCEPTED as built (Faraz, 10/1 3:30 PM)** - every reading below stands as it is.
+    (a) **A standalone Friday is a weekday** — it earns the weekday bonus and does **not**
     count toward the 2-weekend cap (Cowork's reading of "M-F", 9/30); if a Friday should count, `weekendCap.days` takes
     `["Fri", "Sat", "Sun"]` (data, default `["Sat", "Sun"]`). (b) **DSG backup days count** toward the cap: in the weeks the
     Davenport group is backup, his own shifts are East-busy days while `eastFeed.eastBackupCountsAsBusy` is true (his seed
@@ -1019,7 +1020,9 @@ regenerated (the water-fill report - history, `docs/HISTORY.md`).
     the tier × this year's days (the rearrangement reading; a surgeon with no unit last year adds 0 either way). It gives
     the 2027 majors Thanksgiving Sarkar / Khan and New Year's Fierce / Acton; a pairwise reading that leaves the
     no-unit surgeon out ("of two surgeons who both had a unit, the one with fewer days gets the longer one") gives
-    Cowork's order instead (Thanksgiving Fierce, New Year's Sarkar). (d) **Should the rules engine read an accepted
+    Cowork's order instead (Thanksgiving Fierce, New Year's Sarkar). ⟶ **Decided 10/1 3:30 PM (Faraz): keep the planner's
+    answer** - Sarkar Thanksgiving, Fierce New Year's 2027 (the sum reading stays the code's). (b) is waiting for the office's
+    answer (the 2026 minor holders); (d) and Accept Plan 2027 stay open. (d) **Should the rules engine read an accepted
     holiday-plan row as the holder's own availability** (so Generate stops listing the waived ones and a trade of a plan
     unit is judged like the plan)? Default taken: **no** — kept as locks, listed as lock violations (§5 *After Accept*);
     changing it is an engine change (`rules.js`), not data. Known gap (review G), narrowed 10/1 (second review S1): the

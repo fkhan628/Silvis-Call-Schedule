@@ -944,6 +944,75 @@ function syncFailLine(dayFail, blobFail) {
   return [d && "Schedule: " + d, b && "Setup: " + b].filter(Boolean).join(" | ");
 }
 
+// ---- The startup load (review 9/27, Do first 4) ----
+// The mount load runs all its reads at once (one Promise.allSettled), so a read that fails cannot toast on its own:
+// parallel toasts replace each other and only the last one would be seen. Each failure is collected under its key and
+// the load shows ONE toast once everything has settled, in this order: the schedule (schedule_days), the shared setup
+// (the blob read, then its "changed elsewhere" notice on a sign-in re-run), then the secondary reads. Each part is the
+// reader's own sentence, unchanged; the two East parts reach the collector for the scheduler only (the loaders' Item E4
+// gate). A key outside the order goes last, in the order it was collected. "" when nothing failed.
+// Review of Do first 4 (10/1): one failed read keeps its reader's own sentence; TWO OR MORE are said in ONE compact
+// sentence that names each by its short name (LOAD_FAIL_SHORT) with one piece of advice - the joined sentences ran to
+// 300-500 characters (half a phone screen for 4.5 s), repeated "check your connection and reload" and told viewers a
+// Setup warning they cannot act on. opts.retry (the "Schedule not loaded" banner with its Retry is up) says "then Retry
+// or reload"; opts.isScheduler adds the Setup clause when the shared setup failed. The two notices - daysEmpty (the
+// empty-read tripwire of mergeLoadedDays) and blobMoved - are not failed reads: they keep their own sentence, in order.
+const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"];
+const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews" };
+function combinedLoadToast(fails, opts) {
+  const f = fails && typeof fails === "object" ? fails : {};
+  const o = opts || {};
+  const keys = LOAD_FAIL_ORDER.concat(Object.keys(f).filter(k => LOAD_FAIL_ORDER.indexOf(k) < 0));
+  const parts = keys.map(k => [k, typeof f[k] === "string" ? f[k].trim() : ""]).filter(p => p[1]);
+  const failed = parts.filter(p => LOAD_FAIL_SHORT[p[0]]);
+  if (failed.length < 2) return parts.map(p => p[1]).join(" ");
+  const names = failed.map(p => LOAD_FAIL_SHORT[p[0]]);
+  const list = names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  const head = "Couldn't load " + list + " - check your connection" + (o.retry ? ", then Retry or reload" : " and reload") + ". What is shown may be incomplete."
+    + (o.isScheduler && failed.some(p => p[0] === "blob") ? " Setup changes won't save until the shared setup loads." : "");
+  const out = [];
+  parts.forEach(p => { if (!LOAD_FAIL_SHORT[p[0]]) out.push(p[1]); else if (p === failed[0]) out.push(head); });
+  return out.join(" ");
+}
+
+// ---- The 60-second poll (review 9/27, Do first 5) ----
+// The safety-net poll ran refreshAll every 60 s whatever the tab's state - 14 GETs a run, all of schedule_days and the
+// East jsonb among them (about 840 requests an hour per desktop tab) - and at the sign-in card too, where every
+// authenticated read is skipped with a console warning. pollTickMode says what one tick does:
+//   "skip" - nobody is signed in and the page is not ?public=1 (the sign-in card), or a hidden ?public=1 page (no
+//            session to keep alive, no pop-ups): no read at all;
+//   "head" - a hidden tab of a signed-in person: the session upkeep only (ensureFresh and the re-send after a granted
+//            refresh - Prompt 16 A3 needs the 60 s cadence) plus the notifications read (background pop-ups:
+//            sendBrowserNotif fires only while the page lacks focus);
+//   "full" - refreshAll.
+// pollCatchUpDue: on becoming visible, a full refresh runs at once when the last one started more than POLL_MS ago (or
+// never). eastPollDue: refreshAll reads east_feed / east_forecast every EAST_POLL_MS (0 = never read yet, or the last
+// read failed); east_overrides and the reviews stay on every run (the client-side East claim gate needs fresh overrides).
+// pollFullRecent (review of Do first 5, 10/1): a full refresh started less than POLL_MS / 2 ago - the interval's tick
+// then skips its own (an iOS PWA brought back fires the overdue interval right after the visible-again catch-up).
+// A clock set backwards (now before last) counts as due / not recent in all three: the poll must not stall until the
+// device clock passes the old stamp again.
+const POLL_MS = 60000;
+const EAST_POLL_MS = 10 * 60000;
+function pollTickMode(o) {
+  const p = o || {};
+  if (!p.signedIn && !p.publicMode) return "skip";
+  if (p.hidden) return p.signedIn ? "head" : "skip";
+  return "full";
+}
+function pollCatchUpDue(lastFullAt, now) {
+  const last = Number(lastFullAt), n = Number(now);
+  return !(last > 0) || n < last || n - last > POLL_MS;
+}
+function eastPollDue(lastEastAt, now) {
+  const last = Number(lastEastAt), n = Number(now);
+  return !(last > 0) || n < last || n - last >= EAST_POLL_MS;
+}
+function pollFullRecent(lastFullAt, now) {
+  const last = Number(lastFullAt), n = Number(now);
+  return last > 0 && n >= last && n - last < POLL_MS / 2;
+}
+
 // ---- The config blob (call_schedule_data 'main') - Prompt 16 A4 ----
 // The seven keys the app persists in the blob, in the state bundle's order. Everything else the row may carry
 // (a retired key, an importer stamp outside settings) is neither compared nor written by the autosave.
@@ -6166,6 +6235,8 @@ if (typeof module !== "undefined" && module.exports) {
     diffScheduleDays, holderLabel, formatDayChange, describePublishDiff,
     countPopulatedPrimary, scheduleWipeCheck, payloadLooksWipedDaily,
     SYNC_RETRY_MS, syncRetryDelay, syncFailLine,
+    LOAD_FAIL_ORDER, LOAD_FAIL_SHORT, combinedLoadToast,
+    POLL_MS, EAST_POLL_MS, pollTickMode, pollCatchUpDue, eastPollDue, pollFullRecent,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,

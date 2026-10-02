@@ -519,6 +519,7 @@ let followerPrefs400Lines = 0;
 // the E4 route forced to fail on a watched page - armed per forced answer, consumed one line each, cleared after E4.
 let e4Forced500Lines = 0;
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
+let df4Forced500Lines = 0; // review 9/27 Do first 4: the browser's own "status of 500" line per time_off / availability read the startup page's route forced to fail (armed per forced answer, consumed one line each, cleared after the step)
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
 // and year-switch steps), never by the live project. Each non-2xx answer it forces is pushed here ({ path, status, page }) and
@@ -953,6 +954,7 @@ const watchPage = (pg, tag) => {
       else if (e4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); e4Forced500Lines--; } // Item E4 (9/26): the East reads the E4 route answered 500 (the toast pass)
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
+      else if (df4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); df4Forced500Lines--; } // review 9/27 Do first 4: a time_off / availability read the startup page's route answered 500
       else consoleErrors.push(msg.text());
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -3354,21 +3356,25 @@ try {
   //  - the board (every signed-in page): the whole card's text and titles (chip hovers, Take titles, the Why column);
   //    Khan's Take title on E4_BUSY and his claim sheet on E4_SOFT (his two pages), Khan's chip on E4_SOFT (every page);
   //  - the claim gate, driven on Khan's surgeon page: the sheet open on E4_SOFT, that page's east_overrides answer turns
-  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> loadEastTables(true); up to a minute), Confirm ->
+  //    busy for him there, the app's 60 s poll re-reads it (refreshAll -> refreshEastTables: east_overrides on every run, the
+  //    cache tables every 10 minutes - Do first 5; up to a minute), Confirm ->
   //    "Not eligible any more: not available" and no claim_open_slot call. The scheduler's wording of the same toast is a
   //    self-test of the page's shipped helper (eastMaskedReasons + reasonLabel), not a driven surface;
   //  - the trade card (the scheduler page with From = Burchett, then Burchett's own page): T_HARD to Khan - the greyed
   //    option, the trade-to-reason box and the "Blocked: ..." toast after Propose (refused in the client: no
   //    shift_trade_requests write) - and T_SOFT to Khan ("Allowed with a note");
   //  - the two toasts: every page reloaded with its east_feed and east_vacation_reviews GETs answering 500, a recorder
-  //    (init script) keeping every toast shown: the scheduler must see both, no other role either - non-vacuous when the
+  //    (init script) keeping every toast shown: the scheduler must see both East reads named in ONE toast (Do first 4: the
+  //    load says every failed read in one combined toast - two or more by their short names), no other role either - non-vacuous when the
   //    page did read the table (counted in the wrapper; ?public=1 never reads the reviews - a no-op there by
   //    construction, its feed-cache toast is the proof). The browser's own "status of 500" line of each forced answer is
   //    expected (watchPage's e4Forced500Lines on the signed-in pages; the public page reports page errors only, as in E3).
   {
     const E4_RE = /\beast\b|davenport|east-(?:busy|forecast|derived|unknown|clear)|derived-lock/i;
     const E4_NA = "not available";
-    const E4_TOAST_RE = /Couldn't load the East/;
+    // review of Do first 4 (10/1, adapted deliberately): a load's two or more failed reads come as ONE compact sentence that
+    // names each by its short name ("Couldn't load the East feed cache and the East vacation reviews - ...")
+    const E4_TOAST_RE = /Couldn't load the East|the East feed cache|the East vacation reviews/;
     const E4_STAMP = "2026-09-26T00:00:00Z";
     const e4Jwt = (uid, email) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: uid, role: "authenticated", email, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     // What every E4 page is served on top of its route (the pick fills it): blank = primary blanked, busy = Khan's
@@ -3808,12 +3814,22 @@ try {
         await waitFor(() => st.forced.feed >= wantLoads && (!wantReviews || st.forced.reviews >= wantLoads), 25000);
         await rp.waitForTimeout(1500);
         const shown = (await e4Toasts(rp)).filter(t => E4_TOAST_RE.test(t));
-        const feedT = shown.some(t => /Couldn't load the East \(Davenport\) feed cache/.test(t)), revT = shown.some(t => /Couldn't load the East vacation reviews/.test(t));
+        // review of Do first 4 (10/1): either the reader's own sentence or the compact form's short name
+        const FEED_RE = /Couldn't load the East \(Davenport\) feed cache|the East feed cache/, REV_RE = /Couldn't load the East vacation reviews|the East vacation reviews/;
+        const feedT = shown.some(t => FEED_RE.test(t)), revT = shown.some(t => REV_RE.test(t));
         const reads = `east_feed read ${st.forced.feed}x, east_vacation_reviews ${st.forced.reviews}x (500)`;
         if (!st.forced.feed || (wantReviews && !st.forced.reviews)) fail(`${T}: the forced failure never reached the page (${reads}) - the toast check proves nothing`);
         else if (R.kind === "scheduler") {
-          if (!feedT || !revT) fail(`${T}: the scheduler must still see both toasts - ${reads}; shown: ${JSON.stringify(shown)}`);
-          else ok(`${T}: with ${reads} both 'Couldn't load the East ...' toasts show`);
+          // Review 9/27 Do first 4 (adapted deliberately): the startup reads run in parallel and the load says every failed
+          // read in ONE toast, so the scheduler's two East sentences arrive together - each in a toast of its own would
+          // replace the other (the flakiness the review named for this check).
+          // Review of Do first 4 (10/1, adapted deliberately): two failed reads are ONE compact sentence naming both
+          const oneT = shown.some(t => FEED_RE.test(t) && REV_RE.test(t));
+          const compact = shown.some(t => t.includes("Couldn't load the East feed cache and the East vacation reviews - check your connection"));
+          if (!feedT || !revT) fail(`${T}: the scheduler must still see both East reads named - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!oneT) fail(`${T}: the two East failures came in separate toasts (Do first 4: one combined toast for the load) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else if (!compact) fail(`${T}: the two East failures are not in the compact sentence (review of Do first 4: two or more failed reads by their short names, one piece of advice) - ${reads}; shown: ${JSON.stringify(shown)}`);
+          else ok(`${T}: with ${reads} both East reads are named in one compact toast`);
         } else if (shown.length) fail(`${T}: a 'Couldn't load the East ...' toast shows to a non-scheduler - ${JSON.stringify(shown)} (${reads})`);
         else ok(`${T}: ${reads} - no 'Couldn't load the East ...' toast${wantReviews ? "" : " (public mode never reads the reviews - the feed-cache toast is its proof)"}`);
         st.failEast = false;
@@ -10963,6 +10979,224 @@ try {
     failDaysFor = null;
     daysFail500Lines = 0; daysFailAppLines = 0;
     await pdf.close();
+  }
+
+  // ====================== Review 9/27 Do first 4: the startup reads run in parallel; ONE toast for the reads that failed ======================
+  // Its own BrowserContext with a scheduler token minted here (the start-time FAKE_JWT may have expired by now, and an
+  // expired token skips the authenticated-only reads this step counts); Realtime silenced (no SUBSCRIBED refreshAll adds
+  // reads). The page's call_schedule_data GETs are held DF4_HOLD_MS before they are answered; its time_off and availability
+  // GETs answer 500. Expected: every startup read (the anon tables and the authenticated-only ones) is issued before the
+  // FIRST held blob read answers - the chain this replaced issued the schedule_days read only after the blob had answered
+  // and each later read after the one before it, so its first schedule_days GET came DF4_HOLD_MS after the blob's; while
+  // the blob is held the header still says "Connecting" (`loaded` waits for every read) and "Synced" comes only after it
+  // answered; the two failures reach the person in ONE toast that names both (each toasted on its own before, the second
+  // replacing the first) - on both loads of a signed-in open (the mount run, then the stored session's re-run).
+  // Review of Do first 4 (10/1): the recorder logs every time a toast is SHOWN (it resets when the toast goes), and every later
+  // blob GET is held until DF4_GAP_MS after the first one was issued - the re-run's toast then comes after the mount run's has
+  // gone (4.5 s), so each load's toast is seen on its own (same text twice used to collapse into one record). Both must be the
+  // compact sentence naming both reads; the viewport turns 375 x 812 after the first load and the re-run's toast must stay
+  // under 20% of the screen height there (the joined sentences covered up to half a phone screen).
+  {
+    const DF4_HOLD_MS = 2500;
+    const DF4_GAP_MS = DF4_HOLD_MS + 4500 + 1200;
+    const DF4_TOAST = "Couldn't load vacations and availability - check your connection and reload. What is shown may be incomplete.";
+    const DF4_READS = ["schedule_days", "time_off", "availability", "east_feed", "east_forecast", "east_overrides", "client_versions", "shift_trade_requests", "notifications", "call_offers", "call_periods", "east_vacation_reviews"];
+    const df4Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df4Ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+    await df4Ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: df4Jwt, version: APP_VERSION });
+    await df4Ctx.addInitScript(() => {
+      window.__df4Toasts = [];
+      let last = "";
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; if (txt === last) return; last = txt; if (txt) window.__df4Toasts.push({ txt, h: Math.round(t.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); };
+      new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
+    });
+    await df4Ctx.route(cdnMatcher, routeCdn);
+    await df4Ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+    const p4 = await df4Ctx.newPage();
+    watchPage(p4, "do-first-4");
+    const settle4 = restReadsSettled(p4);
+    const reads4 = []; // { path, at, answeredAt } per REST GET, node clock
+    await p4.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {}); // silenced: no SUBSCRIBED refreshAll
+    await p4.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET" || !url.pathname.startsWith("/rest/v1/")) return routeSupabase(route);
+      const rec = { path: url.pathname.slice("/rest/v1/".length), at: Date.now(), answeredAt: null };
+      reads4.push(rec);
+      if (rec.path === "time_off" || rec.path === "availability") {
+        df4Forced500Lines++;
+        rec.answeredAt = Date.now();
+        return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: Do first 4 forced read failure", details: null, hint: null }) });
+      }
+      if (rec.path === "call_schedule_data") {
+        const first = reads4.find(r => r.path === "call_schedule_data");
+        await new Promise(r => setTimeout(r, first === rec ? DF4_HOLD_MS : Math.max(DF4_HOLD_MS, first.at + DF4_GAP_MS - Date.now())));
+      }
+      const out = await routeSupabase(route);
+      rec.answeredAt = Date.now();
+      return out;
+    });
+    try {
+      await p4.goto(BASE, { waitUntil: "domcontentloaded" });
+      await p4.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      if (!(await waitFor(() => reads4.some(r => r.path === "call_schedule_data"), 15000))) throw new Error("the page never read call_schedule_data");
+      const blob0 = reads4.find(r => r.path === "call_schedule_data");
+      await p4.waitForTimeout(Math.max(0, blob0.at + DF4_HOLD_MS / 2 - Date.now()));
+      const hdrHeld = await p4.$eval("[data-testid=app-header]", el => el.textContent).catch(() => "");
+      await p4.waitForSelector("text=Synced", { timeout: 30000 });
+      const syncedAt = Date.now();
+      await p4.setViewportSize({ width: 375, height: 812 }); // the re-run's toast is measured at phone width
+      // both loads (the mount run and the sign-in re-run) have read the blob and every read has settled
+      await waitFor(() => reads4.filter(r => r.path === "call_schedule_data" && r.answeredAt).length >= 2, 20000);
+      await settle4();
+      await p4.waitForTimeout(600);
+      const firstAt = {}; reads4.forEach(r => { if (firstAt[r.path] === undefined) firstAt[r.path] = r.at; });
+      const late = DF4_READS.filter(n => firstAt[n] === undefined || firstAt[n] >= blob0.answeredAt);
+      const lag = DF4_READS.filter(n => firstAt[n] !== undefined).map(n => n + " +" + (firstAt[n] - blob0.at) + " ms").join(", ");
+      if (!blob0.answeredAt || blob0.answeredAt - blob0.at < DF4_HOLD_MS - 50) fail(`Do first 4: the harness did not hold the first call_schedule_data read (${blob0.answeredAt ? blob0.answeredAt - blob0.at : "never answered"} ms)`);
+      else if (late.length) fail(`Do first 4: ${late.length} startup read(s) went out only after the held blob read answered (${blob0.answeredAt - blob0.at} ms) - the load is still a chain: ${late.join(", ")} (first GETs after the blob's: ${lag})`);
+      else ok(`Do first 4: all ${DF4_READS.length} startup reads were in flight before the held blob read answered (${blob0.answeredAt - blob0.at} ms): ${lag}`);
+      if (!/Connecting/.test(hdrHeld) || /Synced/.test(hdrHeld)) fail(`Do first 4: with the blob read held the header must still say 'Connecting' (loaded waits for every read) - '${hdrHeld.replace(/\s+/g, " ").slice(0, 120)}'`);
+      else if (syncedAt < blob0.answeredAt) fail(`Do first 4: 'Synced' showed ${blob0.answeredAt - syncedAt} ms before the held blob read answered`);
+      else ok(`Do first 4: 'Connecting' while the blob read was held; 'Synced' ${syncedAt - blob0.answeredAt} ms after it answered`);
+      const toasts = await p4.evaluate(() => (window.__df4Toasts || []).slice());
+      const failT = toasts.filter(t => /Couldn't load (vacations|availability)/.test(t.txt));
+      const forced = reads4.filter(r => r.path === "time_off" || r.path === "availability").length;
+      const phone = failT.filter(t => t.vw === 375);
+      if (forced < 4) fail(`Do first 4: expected both loads to read time_off and availability (4 forced 500s), the route answered ${forced}`);
+      else if (!failT.length) fail("Do first 4: no toast named the failed time_off / availability reads: " + JSON.stringify(toasts));
+      else if (!failT.every(t => t.txt === DF4_TOAST)) fail("Do first 4: expected every load's toast to be ONE compact sentence naming both failed reads ('" + DF4_TOAST + "') - each toast of its own replaces the one before: " + JSON.stringify(failT));
+      else if (failT.length < 2) fail(`Do first 4: ${forced} forced 500s over the two loads but the combined toast was shown ${failT.length} time(s) - one per load expected (the mount run, then the re-run): ${JSON.stringify(toasts)}`);
+      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> the combined toast shown ${failT.length} times (one per load), each the compact sentence: '${DF4_TOAST}'`);
+      if (!phone.length) fail("Do first 4: no combined toast was shown at 375 px (the re-run's) - nothing to measure: " + JSON.stringify(failT));
+      else if (phone.some(t => !(t.h > 0) || t.h / t.vh >= 0.2)) fail(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high - over 20% of the screen: ${JSON.stringify(phone)}`);
+      else ok(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high (${Math.round(100 * Math.max(...phone.map(t => t.h)) / 812)}% of the screen)`);
+      await p4.screenshot({ path: path.join(OUT, "do-first-4-startup.png"), fullPage: true }).catch(() => {});
+    } catch (e) { fail("Do first 4: " + errLine(e)); try { await p4.screenshot({ path: path.join(OUT, "failure-do-first-4.png"), fullPage: true }); } catch (e2) {} }
+    await settle4();
+    await df4Ctx.close();
+    df4Forced500Lines = 0;
+  }
+
+  // ====================== Review 9/27 Do first 5: the 60 s poll pauses in hidden tabs, catches up when shown, skips at the sign-in card ======================
+  // Two pages in their own BrowserContexts (a token minted here; Realtime silenced, so every read below is the poll's).
+  // An init script takes over the 60-second interval - the app's callback is kept (window.__df5Poll() runs one tick on
+  // demand) and never fires on its own - makes document.hidden / visibilityState settable (window.__df5SetHidden(h)
+  // flips them and dispatches visibilitychange) and adds window.__df5Skew to Date.now() (the poll's clocks).
+  //  (1) signed in, hidden: a tick reads notifications and nothing else - not schedule_days, the blob, the East tables,
+  //      the offers or the profile (the poll used to run its 14 GETs whatever the tab's state);
+  //  (2) shown again within a minute of the last full refresh: no catch-up read;
+  //  (3) shown again after more than a minute (the clock moved 61 s): refreshAll at once - schedule_days read before the
+  //      next tick - and that first run after the load reads east_feed / east_forecast with east_overrides;
+  //  (4) a visible tick a minute later: schedule_days and east_overrides again, but NOT east_feed / east_forecast (every
+  //      10 minutes); (5) eleven minutes on: east_feed / east_forecast again;
+  //  (6) a page with no session (the sign-in card), visible: a tick reads nothing (it used to run the whole poll, its
+  //      authenticated reads logging "read skipped").
+  {
+    const df5Jwt = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+    const df5Init = () => {
+      const si = window.setInterval.bind(window), ci = window.clearInterval.bind(window);
+      const polls = new Map();
+      window.setInterval = function (fn, ms, ...rest) {
+        if (ms === 60000 && typeof fn === "function") { const id = si(() => {}, 2147483647); polls.set(id, fn); return id; }
+        return si(fn, ms, ...rest);
+      };
+      window.clearInterval = function (id) { polls.delete(id); return ci(id); };
+      window.__df5PollCount = () => polls.size;
+      window.__df5Poll = () => { const fns = Array.from(polls.values()); if (!fns.length) return Promise.reject(new Error("no 60 s interval is armed")); return Promise.resolve(fns[fns.length - 1]()); };
+      let hidden = false;
+      Object.defineProperty(Document.prototype, "hidden", { configurable: true, get() { return hidden; } });
+      Object.defineProperty(Document.prototype, "visibilityState", { configurable: true, get() { return hidden ? "hidden" : "visible"; } });
+      window.__df5SetHidden = (h) => { hidden = !!h; document.dispatchEvent(new Event("visibilitychange")); };
+      const dn = Date.now.bind(Date);
+      window.__df5Skew = 0;
+      Date.now = () => dn() + window.__df5Skew;
+    };
+    const DF5_FULL = ["schedule_days", "call_schedule_data", "time_off", "availability", "east_overrides", "east_vacation_reviews", "call_offers", "call_periods", "client_versions", "shift_trade_requests", "user_profiles"];
+    const mkPage5 = async (token, tag) => {
+      const ctx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+      await ctx.addInitScript(({ token, version }) => { try { if (token) { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); } else { localStorage.removeItem("silvis-auth-token"); localStorage.removeItem("silvis-auth-refresh"); } localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token, version: APP_VERSION });
+      await ctx.addInitScript(df5Init);
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const pg = await ctx.newPage();
+      watchPage(pg, tag);
+      const settle = restReadsSettled(pg);
+      const reads = [];
+      await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await pg.route((url) => url.hostname === SUPABASE_HOST, (route) => {
+        const req = route.request(); const url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname.startsWith("/rest/v1/")) reads.push({ path: url.pathname.slice("/rest/v1/".length), at: Date.now() });
+        return routeSupabase(route);
+      });
+      return { ctx, pg, settle, reads };
+    };
+    const since = (reads, n) => reads.slice(n).map(r => r.path);
+    const tickAndSettle = async (P) => { const n = P.reads.length; await P.pg.evaluate(() => window.__df5Poll()); await P.settle(); return since(P.reads, n); };
+    // (1)-(5): signed in
+    const A = await mkPage5(df5Jwt, "do-first-5");
+    try {
+      await A.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await A.pg.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await A.settle();
+      await A.pg.waitForTimeout(500);
+      const armed = await A.pg.evaluate(() => window.__df5PollCount());
+      if (armed !== 1) throw new Error(`expected one 60 s interval armed after the load, found ${armed}`);
+      // (1) hidden
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      const hid = await tickAndSettle(A);
+      // review of Do first 5 (10/1): exactly notifications - any other table read by a hidden tick fails (not only the full poll's list)
+      const hidFull = hid.filter(p => p !== "notifications");
+      if (!hid.includes("notifications")) fail(`Do first 5 (hidden tab): the tick did not read notifications (background pop-ups depend on it): ${JSON.stringify(hid)}`);
+      else if (hidFull.length) fail(`Do first 5 (hidden tab): the tick read ${hidFull.length} table(s) beyond notifications (${DF5_FULL.some(p => hidFull.includes(p)) ? "the full poll ran" : "a read the hidden head must not make"}): ${JSON.stringify(hid)}`);
+      else ok(`Do first 5 (hidden tab): one tick read ${JSON.stringify(hid)} - notifications only, no schedule_days / blob / East / offers / profile`);
+      // (2) shown again inside the minute
+      let n = A.reads.length;
+      await A.pg.evaluate(() => window.__df5SetHidden(false));
+      await A.pg.waitForTimeout(800); await A.settle();
+      const soon = since(A.reads, n);
+      if (soon.includes("schedule_days")) fail(`Do first 5 (visible again within a minute): a catch-up refresh ran although the load was under a minute ago: ${JSON.stringify(soon)}`);
+      else ok(`Do first 5 (visible again within a minute): no catch-up read (${JSON.stringify(soon)})`);
+      // (3) hidden, the clock moves 61 s, shown -> refreshAll at once
+      await A.pg.evaluate(() => window.__df5SetHidden(true));
+      await A.settle();
+      n = A.reads.length;
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; window.__df5SetHidden(false); });
+      const caught = await waitFor(() => A.reads.slice(n).some(r => r.path === "schedule_days"), 3000);
+      await A.settle();
+      const cu = since(A.reads, n);
+      if (!caught) fail(`Do first 5 (visible after more than a minute): no refreshAll on becoming visible - reads: ${JSON.stringify(cu)}`);
+      else if (!cu.includes("east_feed") || !cu.includes("east_forecast") || !cu.includes("east_overrides")) fail(`Do first 5 (visible after more than a minute): the first full run after the load must read the three East tables: ${JSON.stringify(cu)}`);
+      else ok(`Do first 5 (visible after more than a minute): refreshAll ran at once (${cu.length} reads, schedule_days and the three East tables among them)`);
+      // (4) a minute later, visible tick: overrides yes, feed / forecast no
+      await A.pg.evaluate(() => { window.__df5Skew += 61000; });
+      const t4 = await tickAndSettle(A);
+      if (!t4.includes("schedule_days") || !t4.includes("east_overrides")) fail(`Do first 5 (visible tick): the full poll did not run (schedule_days / east_overrides missing): ${JSON.stringify(t4)}`);
+      else if (t4.includes("east_feed") || t4.includes("east_forecast")) fail(`Do first 5 (visible tick, a minute after the last East read): east_feed / east_forecast were read again (every 10 minutes): ${JSON.stringify(t4)}`);
+      else ok(`Do first 5 (visible tick): schedule_days and east_overrides read, east_feed / east_forecast not (${t4.length} reads)`);
+      // (5) eleven minutes on
+      await A.pg.evaluate(() => { window.__df5Skew += 11 * 60000; });
+      const t5 = await tickAndSettle(A);
+      if (!t5.includes("east_feed") || !t5.includes("east_forecast")) fail(`Do first 5 (ten-minute East read): eleven minutes after the last East read the tick did not read east_feed / east_forecast: ${JSON.stringify(t5)}`);
+      else ok("Do first 5 (ten-minute East read): eleven minutes on, the tick reads east_feed and east_forecast again");
+    } catch (e) { fail("Do first 5: " + errLine(e)); try { await A.pg.screenshot({ path: path.join(OUT, "failure-do-first-5.png"), fullPage: true }); } catch (e2) {} }
+    await A.settle();
+    await A.ctx.close();
+    // (6) no session: the sign-in card
+    const B = await mkPage5(null, "do-first-5-signed-out");
+    try {
+      await B.pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await B.pg.waitForSelector("button:has-text('Sign in')", { timeout: 30000 });
+      await B.settle();
+      await B.pg.waitForTimeout(500);
+      const t6 = await tickAndSettle(B);
+      if (t6.length) fail(`Do first 5 (signed out): a tick at the sign-in card read ${JSON.stringify(t6)} - the poll must skip there`);
+      else ok("Do first 5 (signed out): a tick at the sign-in card reads nothing");
+    } catch (e) { fail("Do first 5 (signed out): " + errLine(e)); try { await B.pg.screenshot({ path: path.join(OUT, "failure-do-first-5-signed-out.png"), fullPage: true }); } catch (e2) {} }
+    await B.settle();
+    await B.ctx.close();
   }
 
   // ====================== Prompt 11: data management end to end (recorded writes) ======================
