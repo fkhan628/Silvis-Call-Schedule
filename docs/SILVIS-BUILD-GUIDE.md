@@ -683,7 +683,11 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   `DF4_GAP_MS` built on the 4.5 s fade) took the same adaptation: it keys on the text and the `toast-count` chip and
   measures the `toast-box`, and `DF4_GAP_MS` waits out `helpers.toastDurationMs` (8 s for its 109 characters), so each
   load's combined toast is recorded on its own (pinned in data-layer next to the toast-390 pin; the patch and its offline
-  replay are in the gate folder, `run-2026-10-01/3b/df69-fix/`).
+  replay are in the gate folder, `run-2026-10-01/3b/df69-fix/`). The merge review (10/2) made the step enforce that: each
+  record carries the chip, and a combined-toast record with one (an "x2" on the mount run's toast still up) fails it.
+  The smoke's start-time tokens (`FAKE_JWT`, the A3 sign-in / refresh pair, the office, viewer and follower sessions)
+  live 4 h (`SMOKE_JWT_LIFE_SEC`, was 1 h): a run slowed past an hour (72 min under memory pressure) failed late steps on
+  an expired session.
   Second review fixes (10/2): the layout effect runs after a render of the app only, but a choice inside the day editor
   (a pick that raises the override box) re-renders `DayEditor` alone - the centred dialog grew, its row moved under a toast
   that had been clear of it (1180 x 800: Save covered). While a toast and the day editor / claim sheet are up
@@ -722,7 +726,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   **`flex: 1 0 auto; max-width: 100%`** in the phone block (was `1 1 0`): the holder grows into the rest of the line but
   never shrinks below its words - the Following view's badges, right after it, had clipped the colleague's name ("bac..."
   at 360-390 px, every row at 320 px); now badges that do not fit wrap under the name, and a name that does not fit
-  beside the date and role takes a line of its own (an own row at 320 px is three lines, 87 px). A short screen (`@media (max-height: 500px)`, a phone in landscape) drops the 420 px scroller too. Smoke
+  beside the date and role takes a line of its own (an own row at 320 px is three lines, 87 px). A short screen (`@media (max-height: 500px)`, a phone in landscape) drops the 420 px scroller too (smoke "DF9 844x390", since the merge review, 10/2). Smoke
   "DF9 390px own rows" now also fails a clipped holder (`scrollWidth > clientWidth + 1`) or a chip outside `mine-acts`.
   Measured offline on the seed rows at 390 px: a Following row 25 px
   (was 44-48), an own row 67 px (was 71), the list part of the page (was a 420 px box). The `mine-give` line, the

@@ -8694,6 +8694,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const df4 = smoke.split("\n").find(l => l.includes("window.__df4Toasts.push(")) || "";
       assert.ok(df4.includes('const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key;') && df4.includes('const box = t.closest("[data-testid=toast-box]") || t;'), "__df4Toasts keys on the count and measures the box: " + df4.slice(0, 200));
       assert.ok(smoke.includes('const DF4_GAP_MS = DF4_HOLD_MS + HELPERS.toastDurationMs(DF4_TOAST, "error") + 1200;') && !smoke.includes("DF4_HOLD_MS + 4500"), "DF4_GAP_MS waits out the error toast (helpers.toastDurationMs), not the old 4.5 s");
+      // review of the merge (10/2): the gap is enforced, not only written - each record carries the chip and a combined-toast
+      // record that is a repeat ("x2" on the mount run's toast still up) fails the step
+      assert.ok(df4.includes('window.__df4Toasts.push({ txt, cnt: (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent,'), "__df4Toasts records the count chip: " + df4.slice(0, 200));
+      assert.ok(smoke.includes('else if (failT.some(t => t.cnt !== "")) fail("Do first 4: a load\'s combined toast came as a repeat count'), "the DF4 verdict fails a combined toast recorded with a count");
       const boxReads = (smoke.match(/data-testid=toast-box/g) || []).length - (t390.match(/data-testid=toast-box/g) || []).length - (df4.match(/data-testid=toast-box/g) || []).length;
       assert.strictEqual(boxReads, 0, "no smoke read of the box outside the toast-390 geometry step and the DF4 height");
       assert.ok(!/toast-box[^\n]{0,80}textContent/.test(t390), "and that step reads no text off the box");
@@ -9052,6 +9056,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // may wrap under the name), and a names check measures every Following holder at 390 / 360 / 320 px
       assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every locked row's date / role / holder is one line") && smoke.includes("p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));"), "the follower's one-line check (a second line only for badges wrapped under the name)");
       assert.ok(smoke.includes("DF9 1180px"), "the wide-screen scroller check");
+      // review of the merge (10/2): the landscape rule (@media (max-height: 500px)) is run in the browser too, at 844 x 390
+      assert.ok(smoke.includes("await page.setViewportSize({ width: 844, height: 390 });") && smoke.includes('else if (l.lists.some(x => x.maxH !== "none" || x.overflowY !== "visible" || x.nested)) fail(`DF9 844x390:'), "the landscape check");
       const names = smoke.slice(smoke.indexOf("const T9 = `DF9 follower (${theme}) names`;"), smoke.indexOf("} catch (e) { fail(`DF9 follower (${theme}) names: `"));
       assert.ok(names.length > 500 && names.includes("for (const w of [390, 360, 320])") && names.includes('for (const t of ["H", "E", "F", "EV"])') && names.includes("clipped: h.scrollWidth > h.clientWidth + 1") && names.includes("added.forEach(s => s.remove());"), "the follower names check (real rows at 390; H + E + F + EV injected after every holder at 390 / 360 / 320, removed again)");
       const probe = smoke.slice(smoke.indexOf("const DF9_ROWS_PROBE = (scope) => {"), smoke.indexOf("// Prompt 16 A7: the same route for ANOTHER session"));
@@ -9412,20 +9418,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
       const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
       const run = (prevUid, uid, persisted) => {
-        const st = { set: [], chained: 0, refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const st = { set: [], chained: 0, errLog: [], showErr: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
         // review 2 (10/1): an idle day-sync queue (nothing in flight) - the switch must not wait on it
+        // review of the merge (10/2): the Recent-errors setters record, so Do first 8's clear on a switch is run, not only pinned
         fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {},
-          ref(0), ref({ then: () => { st.chained++; } }), () => {}, () => {});
+          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
         return st;
       };
       const sw = run("uA", "uB", TABLE);
       assert.deepStrictEqual(sw.refs.scheduleRef.current, TABLE, "the map is the last persisted one");
       assert.ok(sw.refs.scheduleRef.current !== TABLE && sw.set.length === 1 && sw.set[0] === sw.refs.scheduleRef.current, "a copy, set as the state");
       assert.ok(sw.refs.switchedUserRef.current === true && sw.refs.pendingSaveRef.current === null, "the flag and the dropped payload as before");
+      assert.deepStrictEqual([sw.errLog, sw.showErr], [[[]], [false]], "Do first 8: the switch empties Recent errors and closes it");
       const same = run("uA", "uA", TABLE);
       assert.ok(same.refs.scheduleRef.current === A_MAP && same.set.length === 0, "the same account keeps its edit (it re-syncs)");
+      assert.ok(same.errLog.length === 0 && same.showErr.length === 0, "the same account keeps its Recent errors: " + JSON.stringify([same.errLog, same.showErr]));
       const none = run("uA", "uB", null);
       assert.ok(none.refs.scheduleRef.current === A_MAP && none.set.length === 0, "no persisted map: nothing to fall back to");
+      assert.deepStrictEqual([none.errLog, none.showErr], [[[]], [false]], "Do first 8: a switch with no persisted map empties Recent errors too");
       assert.ok(sw.chained === 0 && same.chained === 0 && none.chained === 0, "an idle queue: nothing waits on it");
     });
     await acheckD("DF4 review 2 (10/1): a day write of the previous account still IN FLIGHT at the switch (lifted switched branch) - once its queue drains, the map follows lastSyncRef (the landed value), so a later merge cannot keep the old value as a local edit and write it back under the new JWT; a map replaced meanwhile (the re-run's adoption, a merge, an edit) is left alone", async () => {
@@ -9435,14 +9445,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const BEFORE = { "2026-11-15": { primary: "s2", backup: "s4" } }, LANDED = { "2026-11-15": { primary: "s1", backup: "s3" } };
       const go = () => {
         let release; const chain = new Promise(r => { release = r; });
-        const st = { cur: A_MAP, sets: 0, release, refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
+        const st = { cur: A_MAP, sets: 0, release, errLog: [], showErr: [], refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
         // setSchedule as React runs it: a value, or an updater handed the latest state
         const setSchedule = (m) => { st.cur = typeof m === "function" ? m(st.cur) : m; st.sets++; };
-        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), () => {}, () => {});
+        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
         return st;
       };
       const a = go();
       assert.deepStrictEqual(a.cur, BEFORE, "the switch: the map falls back to lastSyncRef at once");
+      assert.deepStrictEqual([a.errLog, a.showErr], [[[]], [false]], "Do first 8: the switch with a write in flight empties Recent errors and closes it at once");
       const copy = a.cur;
       a.refs.lastSyncRef.current = { ...BEFORE, ...LANDED };   // the in-flight write lands: syncScheduleDaysNow's lastSyncRef = persisted
       await tick();

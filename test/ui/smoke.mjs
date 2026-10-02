@@ -470,25 +470,30 @@ const eastVacReviewStore = [
 // refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
 let eastVacFeed = EASTVAC_RANGES;
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+// The tokens minted here, at the start, live 4 h (review of the merge of main into fix/do-first-6-9, 10/2): with 1 h a run
+// slowed past an hour by memory pressure (72 min on the 8 GB machine) failed late steps on an expired session (the
+// session-expired banner over the page), unrelated to the code. No step depends on the 1 h (bearerExpired only asks
+// whether a bearer had expired); an expired session is EXPIRED_JWT below, and the later steps mint their own tokens.
+const SMOKE_JWT_LIFE_SEC = 4 * 3600;
+const FAKE_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // The same session, expired an hour ago (datalayer-001: an authenticated-only read must be SKIPPED, not degraded to anon).
 const EXPIRED_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) - 3600 })}.c2ln`;
 // Prompt 16 A3 (session scenario): the pair a password sign-in hands out, and the one a GRANTED refresh hands out
 // (distinct jti so the bearer of each write says which path produced it). The token endpoint mock records every
 // call in authCalls (grant type only - never a password) and rejects a refresh unless authRefreshGrant is armed.
 const mkJwt = (expOffsetSec, tag) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FAKE_UID, role: "authenticated", email: FAKE_EMAIL, exp: Math.floor(Date.now() / 1000) + expOffsetSec, jti: tag })}.c2ln`;
-const NEW_JWT = mkJwt(3600, "a3-signin");
-const NEW2_JWT = mkJwt(3600, "a3-refresh");
+const NEW_JWT = mkJwt(SMOKE_JWT_LIFE_SEC, "a3-signin");
+const NEW2_JWT = mkJwt(SMOKE_JWT_LIFE_SEC, "a3-refresh");
 const bearerExpired = (h) => { try { const t = String(h || "").replace(/^Bearer /, ""); const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); return typeof p.exp === "number" && p.exp * 1000 < Date.now(); } catch (e) { return false; } };
 const authCalls = [];
-const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const COORD_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: COORD_UID, role: "authenticated", email: "office@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // Prompt 16 B3: a third mocked session - the VIEWER (read-only account: role viewer, NO person_id, no display name, so
 // the Account line falls back to "a read-only account"). Its page routes through routeSupabaseAs(VIEWER_PROFILE, extra)
 // where `extra` answers the notifications GET with a four-type feed (newest first, as PostgREST orders it), so the
 // role filter is provable: the viewer must see the open_shifts and schedule_published rows and neither of the others.
 const VIEWER_UID = "00000000-0000-4000-8000-0000000000e1";
 const VIEWER_PROFILE = { id: VIEWER_UID, person_id: null, role: "viewer", display_name: null, email: null, created_at: "2026-09-24T00:00:00Z", authEmail: "viewer@example.com" };
-const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const VIEWER_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: VIEWER_UID, role: "authenticated", email: "viewer@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 const VIEWER_FEED = [
   { id: "vf-4", type: "vacation_logged", title: "Vacation logged (harness)", message: "a vacation was logged", data: { surgeon_id: "s3" }, created_at: "2026-09-23T12:00:00Z" },
   { id: "vf-3", type: "trade_proposed", title: "Trade proposed (harness)", message: "a trade was proposed", data: { from_surgeon_id: "s2", to_surgeon_id: "s3" }, created_at: "2026-09-23T11:00:00Z" },
@@ -507,7 +512,7 @@ const FOLLOW_GIVE_ID = "00000000-0000-4000-8000-0000000000f7";
 const FOLLOW_GIVE_ROW = { id: FOLLOW_GIVE_ID, submitted_at: "2026-09-23T15:00:00Z", day: "2026-12-02", role: "primary", from_surgeon_id: "s3", to_surgeon_id: "s2", return_day: null, return_role: null, status: "pending", kind: "give" };
 const FOLLOW_UID = "00000000-0000-4000-8000-0000000000f3";
 const FOLLOW_PROFILE = { id: FOLLOW_UID, person_id: null, role: "viewer", display_name: "Follower (harness)", email: null, follows: ["s2", "s5"], created_at: "2026-09-24T00:00:00Z", authEmail: "follower@example.com" };
-const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+const FOLLOW_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: FOLLOW_UID, role: "authenticated", email: "follower@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
 // Prompt 20 R2: the follower's OWN notification_preferences row (keyed by profile_id). followPrefsColumn "present" serves
 // it on GET ?profile_id=eq.<his id> (the row below, or [] once cleared) and keeps what a POST ?on_conflict=profile_id sends;
 // "absent" answers every GET naming profile_id like PostgREST before revision o (HTTP 400 42703 - the live answer seen
@@ -6429,6 +6434,17 @@ try {
         else ok(`DF9 1180px: the list is a 420 px scroller (overflow-y auto); ${w.rows} own row(s), each one line with 'Trade' + 'Give away' at its end`);
       }
     } catch (e) { fail("DF9 1180px: " + errLine(e)); }
+    // review of Do first 9 (10/2), a phone in landscape (844 x 390): wider than the phone block's 600 px, under 500 px tall -
+    // @media (max-height: 500px) drops the 420 px scroller there too, so the list is part of the page (merge review, 10/2:
+    // the rule was pinned in data-layer only)
+    try {
+      await page.setViewportSize({ width: 844, height: 390 });
+      await page.waitForTimeout(250);
+      const l = await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]");
+      if (!l || !l.lists.length) console.log("     (DF9 844x390: no mine-upcoming list - not exercised)");
+      else if (l.lists.some(x => x.maxH !== "none" || x.overflowY !== "visible" || x.nested)) fail(`DF9 844x390: on a short (landscape) screen the 90-day list must not be a 420 px scroller, got ${JSON.stringify(l.lists)}`);
+      else ok(`DF9 844x390: on a short (landscape) screen the 90-day list is part of the page (max-height none, overflow-y visible; ${l.rows} row(s))`);
+    } catch (e) { fail("DF9 844x390: " + errLine(e)); }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(250);
     const m390 = await page.evaluate(() => { const c = document.querySelector("[data-testid=mine-offers]"); const p = document.querySelector("[data-testid=mine-offer]"); return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, csw: c ? c.scrollWidth : 0, ccw: c ? c.clientWidth : 0, pill: p ? p.scrollWidth <= p.clientWidth + 0.5 : null }; });
@@ -11202,7 +11218,9 @@ try {
   // 10/2): the combined toast is an error, up max(8 s, 60 ms per character) (helpers.toastDurationMs - 8 s for these 109
   // characters), no longer the old 4.5 s fade - with the old gap the re-run's toast became an "x2" count on the first and
   // the 375 px measure saw none - and the recorder keys on the text AND the toast-count chip (as __df2Toasts / __toastLog),
-  // measuring the toast-box (the message span sits inside its 10 + 10 px padding). Both must be the
+  // measuring the toast-box (the message span sits inside its 10 + 10 px padding); each record carries the chip ("" for a
+  // fresh toast) and a combined-toast record with one fails (review of the merge, 10/2: an "x2" repeat recorded as the
+  // re-run's toast would otherwise pass with the old gap). Both must be the
   // compact sentence naming both reads; the viewport turns 375 x 812 after the first load and the re-run's toast must stay
   // under 20% of the screen height there (the joined sentences covered up to half a phone screen).
   {
@@ -11216,7 +11234,7 @@ try {
     await df4Ctx.addInitScript(() => {
       window.__df4Toasts = [];
       let last = "";
-      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key; if (txt) { const box = t.closest("[data-testid=toast-box]") || t; window.__df4Toasts.push({ txt, h: Math.round(box.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); } };
+      const rec = () => { const t = document.querySelector("[data-testid=toast]"); const txt = t ? t.textContent.trim() : ""; const key = txt + "|" + (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent; if (key === last) return; last = key; if (txt) { const box = t.closest("[data-testid=toast-box]") || t; window.__df4Toasts.push({ txt, cnt: (document.querySelector("[data-testid=toast-count]") || { textContent: "" }).textContent, h: Math.round(box.getBoundingClientRect().height), vw: window.innerWidth, vh: window.innerHeight }); } };
       new MutationObserver(rec).observe(document, { childList: true, subtree: true, characterData: true });
     });
     await df4Ctx.route(cdnMatcher, routeCdn);
@@ -11275,8 +11293,11 @@ try {
       if (forced < 4) fail(`Do first 4: expected both loads to read time_off and availability (4 forced 500s), the route answered ${forced}`);
       else if (!failT.length) fail("Do first 4: no toast named the failed time_off / availability reads: " + JSON.stringify(toasts));
       else if (!failT.every(t => t.txt === DF4_TOAST)) fail("Do first 4: expected every load's toast to be ONE compact sentence naming both failed reads ('" + DF4_TOAST + "') - each toast of its own replaces the one before: " + JSON.stringify(failT));
+      // review of the merge (10/2): a record with the count chip is a repeat of the toast still up, not a load's own toast -
+      // DF4_GAP_MS must let the mount run's toast go before the re-run's comes (else the 375 px record measures the x2 box)
+      else if (failT.some(t => t.cnt !== "")) fail("Do first 4: a load's combined toast came as a repeat count (" + failT.map(t => t.cnt || "fresh").join(", ") + ") on the toast still up - each load's toast must be a fresh one (DF4_GAP_MS waits out helpers.toastDurationMs): " + JSON.stringify(failT));
       else if (failT.length < 2) fail(`Do first 4: ${forced} forced 500s over the two loads but the combined toast was shown ${failT.length} time(s) - one per load expected (the mount run, then the re-run): ${JSON.stringify(toasts)}`);
-      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> the combined toast shown ${failT.length} times (one per load), each the compact sentence: '${DF4_TOAST}'`);
+      else ok(`Do first 4: ${forced} forced 500s on time_off / availability over the two loads -> the combined toast shown ${failT.length} times (one per load, each a fresh toast - no repeat count), each the compact sentence: '${DF4_TOAST}'`);
       if (!phone.length) fail("Do first 4: no combined toast was shown at 375 px (the re-run's) - nothing to measure: " + JSON.stringify(failT));
       else if (phone.some(t => !(t.h > 0) || t.h / t.vh >= 0.2)) fail(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high - over 20% of the screen: ${JSON.stringify(phone)}`);
       else ok(`Do first 4: at 375 x 812 the combined toast is ${phone.map(t => t.h).join(" / ")} px high (${Math.round(100 * Math.max(...phone.map(t => t.h)) / 812)}% of the screen)`);
