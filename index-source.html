@@ -627,6 +627,10 @@ function CallSchedule() {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  // Review 9/27 Do first 7: "" or the notice the sign-in card shows (with Retry) when the stored session could not be
+  // checked at mount - GoTrue unreachable or answering 5xx / 429 / 408, the pair kept by config.js - instead of a bare card
+  const [sessionUnreached, setSessionUnreached] = useState("");
+  const resetReqRef = useRef(0);                           // Do first 7: the reset request in flight - "Back to sign in" drops a late answer
   const [linkSetup, setLinkSetup] = useState(null);       // Prompt 16 B7: { email, unverified } - the account a recovery / invite link sets a password for
   const [linkConflict, setLinkConflict] = useState(null); // Prompt 16 B7: { signedIn: { id, email }, linkEmail, unverified } - another account is signed in on this device
   const pendingLinkRef = useRef(null);                     // Prompt 16 B7: the link pair waiting on that account's sign-out - memory only, never storage
@@ -901,6 +905,7 @@ function CallSchedule() {
   // treated as an unlinked viewer), re-run the data load with the session JWT.
   const adoptSignedInUser = async (user) => {
     setAuthUser(user);
+    setSessionUnreached(""); // Do first 7: any sign-in (Retry, the password, Face ID) ends the "Couldn't reach the server" notice
     setProfileLoadFailed(false);
     // Prompt 16 A3 (review): a DIFFERENT account signing in on the in-place card must not inherit the previous
     // account's unsaved edit (it would be written under the new JWT - or 403 on every pass for a viewer): the
@@ -988,9 +993,11 @@ function CallSchedule() {
         }
 
         if (session && !bioEnrolled) {
-          const { user } = await auth.getUser();
+          const { user, error } = await auth.getUser();
           if (user) { if (linkErr) showToast(linkErr.message, "error"); await adoptSignedInUser(user); }
-          else if (linkErr) setAuthError(linkErr.message); // the stored session was dead: the card follows and carries the message
+          else if (linkErr) setAuthError(linkErr.message); // no user (dead, or unreachable): the card follows and carries it
+          // Do first 7: unreachable (the pair is kept) - the card says so with a Retry, never a bare sign-in form
+          if (!user && error === "network") setSessionUnreached(SESSION_UNREACHED_MESSAGE);
         }
       } catch(e) { console.error("Auth check error:", e); }
       setAuthLoading(false);
@@ -1012,7 +1019,7 @@ function CallSchedule() {
         // The session is intact; the server could not be reached. Say so and
         // keep the unlock screen - never "Session expired" for a bad connection.
         console.warn("Biometric unlock: the session check hit a network error - session kept, try again");
-        setAuthError("Couldn't reach the server to confirm your session - check your connection and try again.");
+        setAuthError(SESSION_UNREACHED_MESSAGE);
       } else {
         // Session invalid or refresh failed. Keep the enrollment - after one
         // password sign-in Face ID works again next time.
@@ -1022,6 +1029,21 @@ function CallSchedule() {
     } else {
       setAuthError(result.error || "Biometric failed");
     }
+    setAuthBusy(false);
+  };
+
+  // Review 9/27 Do first 7: Retry on the sign-in card's "Couldn't reach the server" notice - the same check the mount
+  // ran. A live session signs in (adoptSignedInUser clears the notice); a rejected one (getUser cleared the pair)
+  // leaves the ordinary card with the biometric path's "Session expired" line; still unreachable keeps the notice
+  // with its "Still couldn't reach" wording. Never a stuck "Checking" button.
+  const retrySessionCheck = async () => {
+    setAuthError(""); setAuthBusy(true);
+    try {
+      const { user, error } = await auth.getUser();
+      if (user) await adoptSignedInUser(user);
+      else if (error === "network") setSessionUnreached(SESSION_STILL_UNREACHED_MESSAGE);
+      else { setSessionUnreached(""); setAuthError("Session expired. Please sign in with your password to refresh."); }
+    } catch (e) { console.warn("Session re-check failed:", e); setAuthError((e && e.message) || "Session check failed"); }
     setAuthBusy(false);
   };
 
@@ -6188,11 +6210,18 @@ function CallSchedule() {
       else{setAuthMode("login");setLinkSetup(null);setAuthError("");setNewPassword("");setNewPasswordConfirm("");alert("Password updated. Please sign in with your new password.");auth.signOut();}
     }).catch(e=>{setAuthBusy(false);setAuthError((e&&e.message)||"Update failed");}); // never a stuck "Updating" button (the review of B7)
   };
+  // Review 9/27 Do first 7: auth.resetPassword resolves an error object now (a thrown fetch, an HTML 502) and the .catch
+  // is the backstop - the "Sending" button always comes back. resetReqRef numbers the request: "Back to sign in"
+  // (backToSignIn, both buttons) ends the shared busy state at once - a hung request no longer leaves Sign in disabled -
+  // and a late answer of the abandoned request is dropped (it must not end a sign-in's busy state, nor mark a reset sent).
   const submitReset = () => {
     if(!resetEmail){setAuthError("Please enter your email");return;}
+    const req = ++resetReqRef.current;
     setAuthBusy(true);setAuthError("");
-    auth.resetPassword(resetEmail).then(r=>{ setAuthBusy(false); if(r.error){setAuthError(r.error);} else{setResetSent(true);} });
+    auth.resetPassword(resetEmail).then(r=>{ if(req!==resetReqRef.current) return; setAuthBusy(false); if(r.error){setAuthError(r.error);} else{setResetSent(true);} })
+      .catch(e=>{ if(req!==resetReqRef.current) return; setAuthBusy(false); setAuthError((e&&e.message)||"Reset failed - try again"); });
   };
+  const backToSignIn = () => { resetReqRef.current++; setAuthBusy(false); setAuthMode("login"); setResetSent(false); setResetEmail(""); setAuthError(""); };
 
   return (
     <div style={{...css.root,background:dkBg,color:dkText}}>
@@ -6409,7 +6438,7 @@ function CallSchedule() {
                   <div style={{fontSize:13,color:"#1a6030",padding:"12px 14px",background:"#e8f8e8",borderRadius:8,border:"1px solid #a0d8a0",lineHeight:1.5}}>
                     Password reset email sent. Check your inbox for a link to reset your password.
                   </div>
-                  <button onClick={()=>{setAuthMode("login");setResetSent(false);setResetEmail("");setAuthError("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
+                  <button onClick={backToSignIn} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline",textAlign:"center"}}>Back to sign in</button>
                 </>
               ) : (
                 <>
@@ -6418,13 +6447,20 @@ function CallSchedule() {
                   {errBox(authError)}
                   <button onClick={submitReset} disabled={authBusy} style={{...css.cta,width:"100%",padding:"11px 16px",fontSize:14,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Sending" : "Send reset link"}</button>
                   <div style={{textAlign:"center",marginTop:4}}>
-                    <button onClick={()=>{setAuthMode("login");setAuthError("");setResetEmail("");}} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
+                    <button onClick={backToSignIn} style={{background:"none",border:"none",color:T.accentText,fontSize:12,cursor:"pointer",fontFamily:font,textDecoration:"underline"}}>Back to sign in</button>
                   </div>
                 </>
               )}
             </div>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {/* Do first 7: the stored session could not be checked (GoTrue unreachable / 5xx / 429 / 408 - the pair is kept) */}
+              {sessionUnreached && (
+                <div data-testid="auth-unreached" role="alert" style={{fontSize:12,color:"#c04040",padding:"8px 10px",background:"#fce8e8",borderRadius:6,border:"1px solid #e8c0c0",lineHeight:1.5}}>
+                  {sessionUnreached}
+                  <button data-testid="auth-retry" onClick={retrySessionCheck} disabled={authBusy} style={{...css.cta,display:"block",width:"100%",marginTop:8,padding:"9px 14px",fontSize:13,fontWeight:700,opacity:authBusy?0.6:1}}>{authBusy ? "Please wait" : "Retry"}</button>
+                </div>
+              )}
               <input type="email" placeholder="Email address" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               <input type="password" placeholder="Password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAuthSubmit()} style={{...inp,width:"100%",padding:"10px 12px",fontSize:14}}/>
               {authError && <div data-testid="auth-error" role="alert">{errBox(authError)}</div>}

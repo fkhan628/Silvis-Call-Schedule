@@ -122,6 +122,21 @@ function jwtClaims(token) {
     return payload && typeof payload === "object" ? payload : null;
   } catch (e) { return null; }
 }
+// Review 9/27 Do first 7: what a GoTrue answer means for the stored session. ONLY 400 / 401 / 403 are a
+// rejection - the token or the refresh token is dead (invalid_grant is 400, a bad / expired JWT 401 or 403).
+// A 5xx (GoTrue or the gateway down, an HTML 502 page), 429 (rate limited) or 408 (timed out) is "network",
+// and any other status GoTrue does not use for a dead token is "unexpected"; the session paths treat both like
+// a thrown fetch (`!== "rejected"`): the stored pair is kept, no _deadRefresh, no session-expired banner, no
+// sign-out, and the next attempt can still recover ("network" only picks the "Couldn't reach the server"
+// wording of signIn / resetPassword). A brief Auth outage at open used to clear the session (getUser) or raise
+// the banner (ensureFresh), and a good invite link was called dead (_probeLinkPair). 2xx -> "ok". Never throws.
+function authAnswerKind(status) {
+  const s = Number(status);
+  if (s >= 200 && s < 300) return "ok";
+  if (s === 400 || s === 401 || s === 403) return "rejected";
+  if (s >= 500 || s === 429 || s === 408) return "network";
+  return "unexpected";
+}
 // The session headers of the moment plus the caller's extras (Prefer, ...).
 // Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
 // refresh that happened a moment ago is what goes out.
@@ -901,7 +916,8 @@ const auth = {
   // throws. A rejected refresh raises sessionExpired (once) and KEEPS the stored
   // pair: dbAuthHeaders() goes on sending the dead token so every write fails
   // loudly (401) instead of degrading to anon, until a sign-in stores a new
-  // pair. A network error is not an expiry. A pair GoTrue already rejected is
+  // pair. A network error is not an expiry - a thrown fetch or any answer but
+  // 400 / 401 / 403 (Do first 7: a 5xx, 429, 408). A pair GoTrue already rejected is
   // not sent again (no chatter from the poll / the writes); a different pair in
   // storage (a new sign-in) is tried afresh.
   async ensureFresh(opts) {
@@ -915,7 +931,10 @@ const auth = {
       if (auth._deadRefresh === session.refresh_token && auth.sessionExpired) return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
       const r = await auth._refreshShared(session.refresh_token);
       if (r && r.session && r.session.access_token) return { ok: true, expired: false, refreshed: true };
-      if (r && r.error === "network") return { ok: false, expired: false, refreshed: false, reason: "network" };
+      // Review 9/27 Do first 7: only an explicit rejection (HTTP 400 / 401 / 403 from the token endpoint,
+      // authAnswerKind) marks the pair dead and raises the banner - a 5xx / 429 / 408, a thrown fetch or any other
+      // answer is a network error: the pair is kept and the next poll / write tries again.
+      if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: "network" };
       auth._deadRefresh = session.refresh_token;
       auth._setExpired(true);
       return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
@@ -936,17 +955,29 @@ const auth = {
   // No sign-up helper (Prompt 16 A2): accounts are created by invitation from the Supabase
   // dashboard (public sign-ups are off) and the app has no sign-up form.
 
-  // Sign in with email & password
+  // Sign in with email & password. Review 9/27 Do first 7 (updatePassword is the model): a THROWN fetch and a
+  // body that is not JSON (an HTML 502 page) resolve to an error object - never a rejection that leaves the
+  // card's shared busy state on, never a 2xx without a token taken for a sign-in. Never throws.
   async signIn(email, password) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) return { user: null, error: data.msg || data.error_description || data.message || "Sign in failed" };
-    auth._saveSession(data);
-    return { user: data.user, session: data, error: null };
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = (await res.json().catch(() => null)) || {};
+      if (!res.ok) {
+        const why = data.msg || data.error_description || data.message;
+        if (why) return { user: null, error: why };
+        return { user: null, error: authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Sign in failed (HTTP ${res.status})` };
+      }
+      if (typeof data.access_token !== "string" || !data.user) return { user: null, error: "Sign in failed - the server's answer had no session; try again" };
+      auth._saveSession(data);
+      return { user: data.user, session: data, error: null };
+    } catch (e) {
+      console.warn("auth.signIn: network error:", e);
+      return { user: null, error: "No connection - try again" };
+    }
   },
 
   // Get current user from token
@@ -961,6 +992,13 @@ const auth = {
         const user = await res.json();
         return { user };
       }
+      // Review 9/27 Do first 7: a 5xx / 429 / 408 (any answer but 400 / 401 / 403 - authAnswerKind) is the server
+      // failing, not the token: no refresh attempt, nothing cleared - the caller sees error:"network" (the mount
+      // card's "Couldn't reach the server" + Retry, the biometric tile's message), exactly like a thrown fetch.
+      if (authAnswerKind(res.status) !== "rejected") {
+        console.warn(`auth.getUser: HTTP ${res.status} from /auth/v1/user is not a rejection - session kept, try again`);
+        return { user: null, error: "network", status: res.status };
+      }
       // Token rejected. GoTrue may answer 401 OR 403 depending on version/
       // config — attempt a refresh on ANY auth failure when we hold a refresh
       // token, not only on 401. (This project returns 403, which the old
@@ -972,9 +1010,10 @@ const auth = {
         // (the pair still stored) and is cleared below, as before.
         const refreshed = await auth._refreshShared(session.refresh_token);
         if (refreshed?.user) return refreshed;
-        // The refresh could not be attempted (network) - the session is kept
-        // and the caller sees error:"network", exactly like the first call.
-        if (refreshed?.error === "network") return { user: null, error: "network" };
+        // The refresh could not be attempted (network, or - Do first 7 - a 5xx / 429 / 408 from the token
+        // endpoint): the session is kept and the caller sees error:"network", exactly like the first call.
+        // Only an explicit rejection (400 / 401 / 403) falls through to the clear below.
+        if (!refreshed?.rejected) return { user: null, error: "network" };
       }
       // Refresh wasn't possible or genuinely failed — token is dead.
       auth._clearSession();
@@ -999,15 +1038,26 @@ const auth = {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
+        // Review 9/27 Do first 7: only 400 / 401 / 403 reject the refresh token; a 5xx / 429 / 408 (or any other
+        // status) is the server failing - the pair is kept (no clear, no _deadRefresh, no banner) and retried later.
+        if (authAnswerKind(res.status) !== "rejected") {
+          console.warn(`auth._refresh: HTTP ${res.status} from the token endpoint is not a rejection - session kept, refresh will be retried`);
+          return { user: null, error: "network", status: res.status };
+        }
         if (opts && opts.keepOnReject) {
           console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - the stored session is kept and marked expired (sign in again)`);
           return { user: null, rejected: true, status: res.status };
         }
         console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - clearing the stored session`);
         auth._clearSession();
-        return { user: null };
+        return { user: null, rejected: true, status: res.status };
       }
       const data = await res.json();
+      // a 2xx without a token (a proxy's page that happens to be JSON) is not a new pair and not a rejection either
+      if (!data || typeof data.access_token !== "string") {
+        console.warn(`auth._refresh: HTTP ${res.status} without an access token - session kept, refresh will be retried`);
+        return { user: null, error: "network", status: res.status };
+      }
       auth._saveSession(data);
       return { user: data.user, session: data };
     } catch(e) {
@@ -1045,23 +1095,31 @@ const auth = {
   // allow-list (Authentication → URL Configuration). If the allow-list entry
   // doesn't match exactly (including trailing slash), Supabase silently strips
   // redirect_to and falls back to the Site URL default.
+  // Review 9/27 Do first 7 (updatePassword is the model): a THROWN fetch resolves to { error: "No connection - try
+  // again" } and a non-JSON error body (an HTML 502 page) to an error with the status - the reset card's "Sending"
+  // button always comes back. Never throws.
   async resetPassword(email) {
     const redirectUrl = "https://fkhan628.github.io/Silvis-Call-Schedule/";
     const url = `${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectUrl)}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        redirect_to: redirectUrl,
-        gotrue_meta_security: { captcha_token: "" }
-      }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      return { error: data.msg || data.error_description || data.message || "Reset failed" };
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          redirect_to: redirectUrl,
+          gotrue_meta_security: { captcha_token: "" }
+        }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) || {};
+        return { error: data.msg || data.error_description || data.message || (authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Reset failed (HTTP ${res.status})`) };
+      }
+      return { error: null };
+    } catch (e) {
+      console.warn("auth.resetPassword: network error:", e);
+      return { error: "No connection - try again" };
     }
-    return { error: null };
   },
 
   // Update password (after clicking reset link — user has a valid session)
@@ -1154,20 +1212,23 @@ const auth = {
   // Checks a link pair against GoTrue WITHOUT touching storage or the session flags: GET /auth/v1/user with the link's
   // bearer and, when that is rejected and the pair carries a refresh token, ONE refresh POST with it (the rotated pair
   // is then the one to store - the old refresh token is consumed). Never throws:
-  //   { user, pair } | { dead: true, status } | { error: "network" }
+  //   { user, pair } | { dead: true, status } | { error: "network", status? }
+  // Review 9/27 Do first 7: "dead" only on 400 / 401 / 403 (authAnswerKind) - a 5xx / 429 / 408 on either request is
+  // a network error, so a good invite / reset link is never called dead because GoTrue had a bad moment.
   async _probeLinkPair(accessToken, refreshToken) {
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` } });
       if (res.ok) return { user: await res.json(), pair: { access_token: accessToken, refresh_token: refreshToken } };
+      if (authAnswerKind(res.status) !== "rejected") return { error: "network", status: res.status };
       if (!refreshToken) return { dead: true, status: res.status };
       const r2 = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
         method: "POST",
         headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!r2.ok) return { dead: true, status: r2.status };
+      if (!r2.ok) return authAnswerKind(r2.status) === "rejected" ? { dead: true, status: r2.status } : { error: "network", status: r2.status };
       const data = await r2.json();
-      if (!data || typeof data.access_token !== "string") return { dead: true, status: r2.status };
+      if (!data || typeof data.access_token !== "string") return { error: "network", status: r2.status }; // a 2xx without a pair is not a rejection (Do first 7, like _refresh)
       return { user: data.user || null, pair: { access_token: data.access_token, refresh_token: data.refresh_token || null } };
     } catch (e) {
       return { error: "network" };

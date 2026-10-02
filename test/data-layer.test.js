@@ -4466,6 +4466,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     let answer = () => resp(200, []);
     sandbox.__fetch = async (url, opts) => { const c = { url: String(url), method: (opts && opts.method) || "GET", bearer: bearerOf(opts), prefer: String((opts && opts.headers && (opts.headers.Prefer || opts.headers.prefer)) || ""), body: opts && opts.body ? JSON.parse(opts.body) : null }; a3calls.push(c); return answer(c); };
     const isRefresh = (c) => c.method === "POST" && c.url.includes("/auth/v1/token?grant_type=refresh_token");
+    // Review 9/27 Do first 7 - pin moved deliberately: the P20 / P21 cases below answered a refresh they do not expect
+    // with resp(500, "unexpected"). A 500 was a REJECTION then (sessionExpired + _deadRefresh, visible to the next
+    // write); since Do first 7 it is a network error (authAnswerKind) that changes nothing and would go unnoticed. The
+    // sentinel now answers 400 invalid_grant - the rejection the 500 used to mean - and each such case also asserts
+    // that no refresh request went out at all (noRefresh), which the old sentinel only implied.
+    const refreshSentinel = () => resp(400, { error: "invalid_grant", error_description: "sentinel: this case expects no refresh" });
+    const noRefresh = (label) => { const r = a3calls.filter(isRefresh); assert.strictEqual(r.length, 0, (label || "this case") + ": no refresh request expected (the sentinel), got " + r.length); };
     const need = () => { if (!A3) throw new Error("the A3 sandbox exports are missing (auth.ensureFresh / authFetch not implemented)"); };
     const acheck = async (name, fn) => { try { need(); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
     let rtCreate = null; // { url, key, opts } of the createClient call
@@ -4582,13 +4589,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     await acheck("P20 F1: supabase.upsert / db.upsert take { onConflict } and send ?on_conflict=<column> (without it PostgREST merges on the PRIMARY KEY - notification_preferences' key moves from person_id to id); without opts the URL is unchanged; the prefs save names person_id", async () => {
       setSession(FRESH, "r8b"); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, []);
       const r1 = await A3.supabase.from("notification_preferences").upsert({ person_id: "s2" }, { onConflict: "person_id" });
       const r2 = await A3.db.upsert("notification_preferences", { person_id: "s2" }, { onConflict: "person_id" });
       const r3 = await A3.db.upsert("call_schedule_data", { id: "main" });
       assert.deepStrictEqual([r1.error, r2.error, r3.error], [null, null, null], JSON.stringify([r1, r2, r3]));
       const urls = a3calls.filter(c => !isRefresh(c)).map(c => c.url.replace(/^https?:\/\/[^/]+/, ""));
       assert.deepStrictEqual(urls, ["/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/notification_preferences?on_conflict=person_id", "/rest/v1/call_schedule_data"], "onConflict -> ?on_conflict=<column>; no opts -> the bare table URL: " + JSON.stringify(urls));
+      noRefresh("P20 F1"); // Do first 7: pin moved deliberately (the sentinel, above)
       const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
       const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
       // P20 R2: the one prefs upsert lives in config.js notifPrefsDb.save and always names on_conflict (person_id for a
@@ -4603,7 +4611,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const r2Path = (c) => c.url.replace(/^https?:\/\/[^/]+/, "");
     await acheck("P20 R2 behaviour: a follower's save - notifPrefsDb.save({ profileId }) is ONE POST /rest/v1/notification_preferences?on_conflict=profile_id (Prefer resolution=merge-duplicates, the user's bearer) whose body names profile_id and carries NO person_id key (his row's person_id stays null - one_owner), no id, the three flags (a missing flag is on) and the hour", async () => {
       setSession(FRESH, "r8c"); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, []);
       const r = await r2Api().save({ profileId: R2_PID }, { trade_updates_email: false, reminder_hour_central: 20 });
       assert.strictEqual(r.error, null, JSON.stringify(r));
       const w = a3calls.filter(c => !isRefresh(c));
@@ -4617,10 +4625,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!("id" in b), "no id key");
       assert.deepStrictEqual([b.schedule_updates_email, b.trade_updates_email, b.shift_reminders_email, b.reminder_hour_central], [true, false, true, 20]);
       assert.ok(typeof b.updated_at === "string" && !isNaN(Date.parse(b.updated_at)), "updated_at stamped");
+      noRefresh("P20 R2 follower save"); // Do first 7: pin moved deliberately (the sentinel)
     });
     await acheck("P20 R2 pin: a surgeon's save still names person_id - notifPrefsDb.save({ personId: 's2' }) is POST ?on_conflict=person_id with person_id in the body and NO profile_id key (the column exists only from revision o: naming it would 400 every surgeon's save before the apply); an owner with neither key, or both, writes nothing", async () => {
       setSession(FRESH, "r8d"); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, []);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, []);
       const r = await r2Api().save({ personId: "s2" }, { schedule_updates_email: false, reminder_hour_central: "7" });
       assert.strictEqual(r.error, null, JSON.stringify(r));
       const w = a3calls.filter(c => !isRefresh(c));
@@ -4628,6 +4637,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(w[0].body.person_id, "s2");
       assert.ok(!("profile_id" in w[0].body) && !("id" in w[0].body), "neither profile_id nor id: " + JSON.stringify(w[0].body));
       assert.deepStrictEqual([w[0].body.schedule_updates_email, w[0].body.trade_updates_email, w[0].body.shift_reminders_email, w[0].body.reminder_hour_central], [false, true, true, null], "a non-number hour is the default (null)");
+      noRefresh("P20 R2 surgeon save"); // Do first 7: pin moved deliberately (the sentinel)
       a3calls.length = 0;
       for (const owner of [null, {}, { personId: "" }, { profileId: "" }, { personId: "s2", profileId: R2_PID }]) {
         const x = await r2Api().save(owner, {});
@@ -4638,7 +4648,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     await acheck("P20 R2 behaviour: a follower's read - notifPrefsDb.loadFollower(id) is GET /rest/v1/notification_preferences?select=*&profile_id=eq.<id> with the user's bearer -> { state: 'ok', row } (row null when he has none: every flag on); PostgREST's missing-column answer (HTTP 400, 42703 naming profile_id - before revision o) -> 'unavailable'; any other failure (another 400, 401, 500, a network error, a non-array body) -> 'failed', never an empty 'ok'; no id -> 'failed' without a request; it never writes", async () => {
       setSession(FRESH, "r8e"); a3calls.length = 0;
       const ROW = { id: "p-1", person_id: null, profile_id: R2_PID, schedule_updates_email: false, trade_updates_email: true, shift_reminders_email: true, reminder_hour_central: 20 };
-      const run = async (ans) => { answer = (c) => isRefresh(c) ? resp(500, "unexpected") : ans(c); return r2Api().loadFollower(R2_PID); };
+      const run = async (ans) => { answer = (c) => isRefresh(c) ? refreshSentinel() : ans(c); return r2Api().loadFollower(R2_PID); };
       let r = await run(() => resp(200, [ROW]));
       assert.strictEqual(r.state, "ok"); assert.deepStrictEqual(JSON.parse(JSON.stringify(r.row)), ROW);
       const g = a3calls.filter(c => !isRefresh(c));
@@ -4660,6 +4670,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(r.error, label + " carries why");
       }
       assert.ok(a3calls.filter(c => !isRefresh(c)).every(c => c.method === "GET"), "reads only");
+      noRefresh("P20 R2 follower read (a raw read: even its 401 does not refresh)"); // Do first 7: pin moved deliberately (the sentinel)
       a3calls.length = 0;
       r = await r2Api().loadFollower("");
       assert.strictEqual(r.state, "failed"); assert.strictEqual(a3calls.length, 0, "no request without an id");
@@ -4675,7 +4686,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const P21_ROW = { actor_id: "s3", actor_name: "Acton", action: "timeoff.add", detail: { summary: "Added vacation for Acton: 2027-03-15 -> 2027-03-21" } };
     await acheck("P21 S2 behaviour: db.insert(table, row, { returning: 'minimal' }) is ONE POST /rest/v1/<table> with Prefer: return=minimal, the user's bearer and the same body; PostgREST's answer to it - 201 with an EMPTY body - is success { data: null, error: null }", async () => {
       setSession(FRESH, "p21a"); A3.auth._setExpired(false); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      answer = (c) => isRefresh(c) ? refreshSentinel() : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
       const r = await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" });
       assert.deepStrictEqual(p21Plain(r), { data: null, error: null }, "an empty 2xx is a written row: " + JSON.stringify(r));
       const w = p21Writes();
@@ -4683,21 +4694,23 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(w[0].prefer, "return=minimal", "Prefer: " + w[0].prefer);
       assert.strictEqual(w[0].bearer, FRESH, "the user's JWT (authFetch), never anon");
       assert.deepStrictEqual(w[0].body, P21_ROW, "the row as given");
+      noRefresh("P21 S2 minimal"); // Do first 7: pin moved deliberately (the sentinel)
     });
     await acheck("P21 S2 behaviour: the default is unchanged - db.insert(table, row), with {} and with any other `returning` sends Prefer: return=representation and answers the first returned row; an empty 2xx there is still data null (the callers' `if (data)` guards read it as not written)", async () => {
       setSession(FRESH, "p21b"); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, [{ id: 9, message: "m" }]);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, [{ id: 9, message: "m" }]);
       const rs = [];
       for (const opts of [undefined, {}, { returning: "representation" }, { returning: true }, { prefer: "return=minimal" }]) rs.push(await A3.db.insert("notifications", { message: "m" }, opts));
       rs.forEach((r, i) => assert.deepStrictEqual(p21Plain(r), { data: { id: 9, message: "m" }, error: null }, "call " + i + ": " + JSON.stringify(r)));
       assert.deepStrictEqual(p21Writes().map(c => c.prefer), Array(5).fill("return=representation"), "Prefer of each call");
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, "");
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, "");
       assert.deepStrictEqual(p21Plain(await A3.db.insert("notifications", { message: "m" })), { data: null, error: null }, "default + empty 2xx: data null (unchanged)");
       // the live table's answer to a surgeon's RETURNING audit insert before audit_read_own: 403 42501, data null, the error body
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      answer = (c) => isRefresh(c) ? refreshSentinel() : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
       const refused = await A3.db.insert("audit_log", P21_ROW);
       assert.strictEqual(refused.data, null);
       assert.strictEqual(refused.error && refused.error.code, "42501", "the default still reports the refusal: " + JSON.stringify(refused));
+      noRefresh("P21 S2 default"); // Do first 7: pin moved deliberately (the sentinel)
     });
     await acheck("P21 S2 behaviour: with { returning: 'minimal' } a non-2xx fails exactly as without it (the same { data: null, error } for a 403 42501 JSON body, a 400 with an empty body, a 500 HTML page), a 2xx whose body is not JSON (a proxy page) stays an error, and a 2xx with a JSON body is still data null - the body is never a row", async () => {
       setSession(FRESH, "p21c"); a3calls.length = 0;
@@ -4707,15 +4720,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         ["500 html", () => resp(500, "<html><body>502 Bad Gateway</body></html>")],
         ["200 html", () => resp(200, "<html>captive portal</html>")],
       ]) {
-        answer = (c) => isRefresh(c) ? resp(500, "unexpected") : ans(c);
+        answer = (c) => isRefresh(c) ? refreshSentinel() : ans(c);
         const def = p21Plain(await A3.db.insert("audit_log", P21_ROW));
         const min = p21Plain(await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" }));
         assert.deepStrictEqual(min, def, label + ": minimal " + JSON.stringify(min) + " vs default " + JSON.stringify(def));
         assert.strictEqual(min.data, null, label + ": data null");
         assert.ok(min.error, label + ": error set");
       }
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(201, [{ id: "a1", ...P21_ROW }]);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(201, [{ id: "a1", ...P21_ROW }]);
       assert.deepStrictEqual(p21Plain(await A3.db.insert("audit_log", P21_ROW, { returning: "minimal" })), { data: null, error: null }, "a JSON 2xx body under minimal: success, no row handed back");
+      noRefresh("P21 S2 failures"); // Do first 7: pin moved deliberately (the sentinel)
     });
     await acheck("P21 S2 behaviour: a 401 on a minimal insert -> ONE refresh + ONE retry, and the retry carries Prefer: return=minimal too (authFetch keeps the caller's headers)", async () => {
       const NEW_P21 = jwt(3600, "p21"); setSession(FRESH, "p21d"); A3.auth._setExpired(false); a3calls.length = 0;
@@ -4733,16 +4747,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(p21LaAt > 0 && p21LaEnd > p21LaAt, "logAudit not found in index-source.html");
       const mk = (profile) => new Function("db", "userProfile", "authUser", "surgeons", "console", p21Src.slice(p21LaAt, p21LaEnd + 5) + "\nreturn logAudit;")(A3.db, profile, { id: "u-p21" }, [], { warn: () => {} });
       setSession(FRESH, "p21f"); A3.auth._setExpired(false); a3calls.length = 0;
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
+      answer = (c) => isRefresh(c) ? refreshSentinel() : (/return=minimal/.test(c.prefer) ? resp(201, "") : resp(403, P21_DENIED));
       const ok = await mk({ person_id: "s3", display_name: "Acton" })("timeoff.add", "Added vacation for Acton: 2027-03-15 -> 2027-03-21", { person_id: "s3", start: "2027-03-15", end: "2027-03-21" });
       assert.strictEqual(ok, true, "a surgeon's audit row is written");
       const w = p21Writes();
       assert.deepStrictEqual(w.map(c => c.method + " " + r2Path(c) + " [" + c.prefer + "]"), ["POST /rest/v1/audit_log [return=minimal]"]);
       assert.deepStrictEqual([w[0].body.actor_id, w[0].body.actor_name, w[0].body.action, w[0].body.detail.summary, w[0].body.detail.person_id], ["s3", "Acton", "timeoff.add", "Added vacation for Acton: 2027-03-15 -> 2027-03-21", "s3"], "the row logAudit words");
-      answer = (c) => isRefresh(c) ? resp(500, "unexpected") : resp(403, P21_DENIED);
+      answer = (c) => isRefresh(c) ? refreshSentinel() : resp(403, P21_DENIED);
       assert.strictEqual(await mk({ person_id: null, display_name: "Viewer" })("prefs.save", "x", {}), false, "the insert itself refused -> false");
-      answer = (c) => { if (isRefresh(c)) return resp(500, "unexpected"); throw new TypeError("Failed to fetch"); };
+      answer = (c) => { if (isRefresh(c)) return refreshSentinel(); throw new TypeError("Failed to fetch"); };
       assert.strictEqual(await mk({ person_id: "s3", display_name: "Acton" })("timeoff.add", "x", {}), false, "a network error -> false, not a rejection");
+      noRefresh("P21 S2 logAudit"); // Do first 7: pin moved deliberately (the sentinel)
     });
     check("P21 S2 pins: logAudit is the ONLY caller that passes { returning: 'minimal' } - of the five db.insert calls in index-source.html (audit_log, time_off, notifications, shift_trade_requests, office_contacts) only logAudit's audit_log insert has a third argument; no other module calls db.insert; config.js db.insert maps the option to the Prefer header", () => {
       const strip = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
@@ -4816,6 +4831,149 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(store.getItem("silvis-auth-token"), null, "getUser cleared the dead pair");
       assert.strictEqual(a3calls.filter(isRefresh).length, 1);
       setSession(FRESH, "r0"); A3.auth._setExpired(false);
+    });
+    // ---- Review 9/27 Do first 7 (10/1): an Auth answer that is NOT a rejection - the server failing - never ends the
+    //      session. Only 400 / 401 / 403 reject (config.js authAnswerKind); a JSON 503, a 429 rate limit, a 408, an HTML
+    //      502 page (body not JSON) or a 500 is a network error: the pair is kept, no _deadRefresh, no banner, no clear. ----
+    const df7Html = (status, html) => ({ ok: false, status, json: async () => { throw new SyntaxError("Unexpected token '<'"); }, text: async () => html });
+    const DF7_TRANSIENT = [
+      ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" })],
+      ["429 rate limit", () => resp(429, { code: 429, error_code: "over_request_rate_limit", msg: "Request rate limit reached" })],
+      ["408 timeout", () => resp(408, "")],
+      ["HTML 502", () => df7Html(502, "<html><body><h1>502 Bad Gateway</h1></body></html>")],
+      ["500", () => resp(500, { code: 500, msg: "Internal server error" })],
+    ];
+    const df7Reset = () => { setSession(FRESH, "r0"); A3.auth._setExpired(false); A3.auth._deadRefresh = null; };
+    await acheck("DF7 authAnswerKind: 2xx -> 'ok'; ONLY 400 / 401 / 403 -> 'rejected'; 5xx, 429, 408 -> 'network'; any other status (404, 422, 0, junk) -> 'unexpected' (kept like 'network' by the session paths) - never throws", async () => {
+      const kind = vm.runInContext("typeof authAnswerKind === 'function' ? authAnswerKind : null", sandbox);
+      assert.strictEqual(typeof kind, "function", "config.js defines authAnswerKind(status)");
+      assert.deepStrictEqual([200, 201, 204].map(kind), ["ok", "ok", "ok"]);
+      assert.deepStrictEqual([400, 401, 403].map(kind), ["rejected", "rejected", "rejected"]);
+      assert.deepStrictEqual([500, 502, 503, 504, 429, 408].map(kind), Array(6).fill("network"));
+      assert.deepStrictEqual([404, 422, 0, undefined, null, "x"].map(kind), Array(6).fill("unexpected"), "an unexpected status is not a rejection either");
+    });
+    await acheck("DF7 ensureFresh / getUser: an UNEXPECTED status (404) from the token endpoint or /auth/v1/user keeps the pair too - only 400 / 401 / 403 end a session", async () => {
+      df7Reset(); setSession(SOON, "df7-r0"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(404, { msg: "Not Found" }) : c.url.includes("/auth/v1/user") ? resp(404, { msg: "Not Found" }) : resp(500, "unexpected");
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired, reason: r.reason }, { ok: false, expired: false, reason: "network" }, JSON.stringify(r));
+      const g = await A3.auth.getUser();
+      assert.ok(g && g.user === null && g.error === "network", JSON.stringify(g));
+      assert.deepStrictEqual([store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh"), A3.auth.sessionExpired], [SOON, "df7-r0", false]);
+      df7Reset();
+    });
+    await acheck("DF7 ensureFresh: a refresh answered 503 / 429 / 408 / an HTML 502 / 500 is NOT an expiry - { ok: false, expired: false, reason: 'network' }, no 'expired' event, sessionExpired false, _deadRefresh unset, the stored pair kept; the next call tries the refresh AGAIN (the pair is not dead); a 400 still expires it", async () => {
+      for (const [label, ans] of DF7_TRANSIENT) {
+        df7Reset(); setSession(SOON, "df7-r1"); a3calls.length = 0; events.length = 0;
+        answer = (c) => isRefresh(c) ? ans(c) : resp(500, "unexpected");
+        const r = await A3.auth.ensureFresh();
+        assert.deepStrictEqual({ ok: r.ok, expired: r.expired, reason: r.reason }, { ok: false, expired: false, reason: "network" }, label + ": " + JSON.stringify(r));
+        assert.strictEqual(A3.auth.sessionExpired, false, label + ": no banner");
+        assert.ok(!events.includes("expired"), label + ": no 'expired' event: " + JSON.stringify(events));
+        assert.strictEqual(A3.auth._deadRefresh, null, label + ": the pair is not marked dead");
+        assert.deepStrictEqual([store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh")], [SOON, "df7-r1"], label + ": the pair is kept");
+        await A3.auth.ensureFresh();
+        assert.strictEqual(a3calls.filter(isRefresh).length, 2, label + ": the second call refreshes again");
+      }
+      df7Reset(); setSession(SOON, "df7-r2"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Already Used" }) : resp(500, "unexpected");
+      const rj = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: rj.ok, expired: rj.expired }, { ok: false, expired: true }, "control: a 400 is still the rejection");
+      assert.deepStrictEqual(events, ["expired"]);
+      df7Reset();
+    });
+    await acheck("DF7 ensureFresh: a 2xx refresh answer WITHOUT an access token (a proxy's JSON) is not a new pair and not a rejection - network, nothing stored, no banner", async () => {
+      df7Reset(); setSession(SOON, "df7-r3"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(200, { ok: true }) : resp(500, "unexpected");
+      const r = await A3.auth.ensureFresh();
+      assert.deepStrictEqual({ ok: r.ok, expired: r.expired, reason: r.reason }, { ok: false, expired: false, reason: "network" }, JSON.stringify(r));
+      assert.strictEqual(A3.auth.sessionExpired, false);
+      assert.deepStrictEqual([store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh")], [SOON, "df7-r3"]);
+      df7Reset();
+    });
+    await acheck("DF7 authFetch (db.insert): a 401 whose refresh answers 503 returns the 401 (no retry), does NOT raise sessionExpired and keeps the pair - so the next write refreshes again and, granted, retries with the new bearer", async () => {
+      const NEW_DF7 = jwt(3600, "df7"); df7Reset(); setSession(FRESH, "df7-r4"); a3calls.length = 0; events.length = 0;
+      answer = (c) => isRefresh(c) ? resp(503, { msg: "Service Unavailable" }) : (c.bearer === NEW_DF7 ? resp(201, [{ id: 71 }]) : resp(401, { code: "PGRST301", message: "JWT expired" }));
+      const r = await A3.db.insert("notifications", { message: "df7" });
+      assert.strictEqual(r.data, null); assert.strictEqual(r.error && r.error.message, "JWT expired", "the 401 reaches the caller: " + JSON.stringify(r));
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method)), ["POST", "refresh"], "one write, one refresh, no retry");
+      assert.strictEqual(A3.auth.sessionExpired, false, "a 503 on the refresh is not an expiry (no banner)");
+      assert.deepStrictEqual(events, []);
+      assert.strictEqual(store.getItem("silvis-auth-refresh"), "df7-r4", "the pair is kept");
+      a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(200, tokenBody(NEW_DF7, "df7-r5")) : (c.bearer === NEW_DF7 ? resp(201, [{ id: 71 }]) : resp(401, { code: "PGRST301", message: "JWT expired" }));
+      const r2 = await A3.db.insert("notifications", { message: "df7" });
+      assert.strictEqual(r2.error, null, JSON.stringify(r2));
+      assert.deepStrictEqual(a3calls.map(c => (isRefresh(c) ? "refresh" : c.method + " " + c.bearer.slice(-8))), ["POST " + FRESH.slice(-8), "refresh", "POST " + NEW_DF7.slice(-8)], "the next write refreshes again and retries");
+      df7Reset();
+    });
+    await acheck("DF7 getUser (mount / biometric unlock): /auth/v1/user answered 503 / 429 / 408 / an HTML 502 / 500 -> { user: null, error: 'network' } with NO refresh request and the pair kept (it used to refresh, then clear the session on any non-2xx refresh)", async () => {
+      for (const [label, ans] of DF7_TRANSIENT) {
+        df7Reset(); setSession(DEAD, "df7-r6"); a3calls.length = 0; events.length = 0;
+        answer = (c) => c.url.includes("/auth/v1/user") ? ans(c) : isRefresh(c) ? refreshSentinel() : resp(500, "unexpected");
+        const g = await A3.auth.getUser();
+        assert.ok(g && g.user === null && g.error === "network", label + ": " + JSON.stringify(g));
+        assert.strictEqual(a3calls.filter(isRefresh).length, 0, label + ": no refresh on a server failure");
+        assert.deepStrictEqual([store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh")], [DEAD, "df7-r6"], label + ": the pair is kept");
+        assert.strictEqual(A3.auth.sessionExpired, false, label);
+      }
+      df7Reset();
+    });
+    await acheck("DF7 getUser: /auth/v1/user 403 (the token is dead) and the shared refresh answered 503 / 429 / 408 / an HTML 502 / 500 -> { user: null, error: 'network' }, ONE refresh, the pair kept (not cleared), no banner; the same 403 with the refresh 400 still clears (control)", async () => {
+      for (const [label, ans] of DF7_TRANSIENT) {
+        df7Reset(); setSession(DEAD, "df7-r7"); a3calls.length = 0; events.length = 0;
+        answer = (c) => isRefresh(c) ? ans(c) : c.url.includes("/auth/v1/user") ? resp(403, { message: "invalid claim: token is expired" }) : resp(500, "unexpected");
+        const g = await A3.auth.getUser();
+        assert.ok(g && g.user === null && g.error === "network", label + ": " + JSON.stringify(g));
+        assert.strictEqual(a3calls.filter(isRefresh).length, 1, label + ": one refresh");
+        assert.deepStrictEqual([store.getItem("silvis-auth-token"), store.getItem("silvis-auth-refresh")], [DEAD, "df7-r7"], label + ": NOT cleared");
+        assert.strictEqual(A3.auth.sessionExpired, false, label + ": no banner");
+      }
+      df7Reset(); setSession(DEAD, "df7-r8"); a3calls.length = 0;
+      answer = (c) => isRefresh(c) ? resp(400, { error: "invalid_grant" }) : c.url.includes("/auth/v1/user") ? resp(403, {}) : resp(500, "unexpected");
+      const g2 = await A3.auth.getUser();
+      assert.ok(g2 && g2.user === null && !g2.error, "control: " + JSON.stringify(g2));
+      assert.strictEqual(store.getItem("silvis-auth-token"), null, "control: a rejected refresh clears the pair");
+      df7Reset();
+    });
+    await acheck("DF7 signIn: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 (body not JSON) -> 'Couldn't reach the server (HTTP 502)'; a JSON 503 / 429 / 400 -> GoTrue's own words; a 2xx that is not a session (an HTML page) -> an error; nothing is stored on any failure", async () => {
+      const cases = [
+        ["thrown", () => { throw new TypeError("Failed to fetch"); }, (e) => e === "No connection - try again"],
+        ["HTML 502", () => df7Html(502, "<html>502 Bad Gateway</html>"), (e) => /^Couldn't reach the server \(HTTP 502\)/.test(e)],
+        ["503 JSON", () => resp(503, { code: 503, msg: "Service Unavailable" }), (e) => e === "Service Unavailable"],
+        ["429", () => resp(429, { msg: "Request rate limit reached" }), (e) => e === "Request rate limit reached"],
+        ["400 bad password", () => resp(400, { error: "invalid_grant", error_description: "Invalid login credentials" }), (e) => e === "Invalid login credentials"],
+        ["400 empty body", () => df7Html(400, ""), (e) => e === "Sign in failed (HTTP 400)"],
+        ["200 HTML", () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token '<'"); }, text: async () => "<html>portal</html>" }), (e) => /no session/.test(e)],
+      ];
+      for (const [label, ans, okErr] of cases) {
+        setSession(null, null); a3calls.length = 0;
+        answer = (c) => c.url.includes("grant_type=password") ? ans(c) : resp(500, "unexpected");
+        let r;
+        try { r = await A3.auth.signIn("someone@example.com", "placeholder-pw"); } catch (e) { assert.fail(label + ": signIn rejected (" + (e && e.message) + ") - the card's busy state would stay on"); }
+        assert.ok(r && r.user === null && typeof r.error === "string" && okErr(r.error), label + ": " + JSON.stringify(r));
+        assert.strictEqual(store.getItem("silvis-auth-token"), null, label + ": nothing stored");
+      }
+      df7Reset();
+    });
+    await acheck("DF7 resetPassword: never rejects - a thrown fetch -> 'No connection - try again'; an HTML 502 -> 'Couldn't reach the server (HTTP 502) - try again'; a JSON 429 -> GoTrue's words; a 4xx with an empty body -> 'Reset failed (HTTP n)'; 200 -> { error: null }", async () => {
+      const cases = [
+        ["thrown", () => { throw new TypeError("Failed to fetch"); }, "No connection - try again"],
+        ["HTML 502", () => df7Html(502, "<html>502</html>"), "Couldn't reach the server (HTTP 502) - try again"],
+        ["429", () => resp(429, { msg: "For security purposes, you can only request this after 37 seconds." }), "For security purposes, you can only request this after 37 seconds."],
+        ["422 empty", () => df7Html(422, ""), "Reset failed (HTTP 422)"],
+        ["400 empty", () => df7Html(400, ""), "Reset failed (HTTP 400)"],
+        ["200", () => resp(200, {}), null],
+      ];
+      for (const [label, ans, want] of cases) {
+        a3calls.length = 0;
+        answer = (c) => c.url.includes("/auth/v1/recover") ? ans(c) : resp(500, "unexpected");
+        let r;
+        try { r = await A3.auth.resetPassword("someone@example.com"); } catch (e) { assert.fail(label + ": resetPassword rejected (" + (e && e.message) + ") - the reset card's 'Sending' would hang"); }
+        assert.strictEqual(r && r.error, want, label + ": " + JSON.stringify(r));
+        assert.strictEqual(a3calls.length, 1, label + ": one request");
+      }
+      df7Reset();
     });
     // syncScheduleDaysNow lifted out of the component (the app-safety-2 harness): a 401 / 403 must NOT arm the
     // 5-second retry; the toast is skipped for a 401 while the banner is up; a 500 keeps the retry + toast.
@@ -5590,11 +5748,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       if (u.includes("/auth/v1/logout")) return resp(204, "");
       if (u.includes("/auth/v1/user") && method === "GET") {
         if (probe[bearer] === "network") throw new TypeError("Failed to fetch");
+        if (typeof probe[bearer] === "function") return probe[bearer](); // Do first 7: a server failure (503 / 429 / an HTML 502)
         if (probe[bearer] === "dead" || !users[bearer]) return resp(401, { message: "invalid JWT: token is expired" });
         return resp(200, users[bearer]);
       }
       if (u.includes("/auth/v1/token?grant_type=refresh_token")) {
         const g = body && grants[body.refresh_token];
+        if (typeof g === "function") return g(); // Do first 7: a server failure on the probe's refresh POST
         return g ? resp(200, { access_token: g.access_token, refresh_token: g.refresh_token, token_type: "bearer", expires_in: 3600, user: users[g.access_token] || null })
                  : resp(400, { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" });
       }
@@ -5657,6 +5817,33 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(saves, 0);
       assert.deepStrictEqual(calls, [STORED]);
       assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same"]);
+    });
+    // Review 9/27 Do first 7: _probeLinkPair calls a link dead on 400 / 401 / 403 only - a good invite / reset link that
+    // meets a 503 / 429 / an HTML 502 is the "network" verdict above (the live pair kept, the card opens), never "dead"
+    const b7Html = (status) => ({ ok: false, status, json: async () => { throw new SyntaxError("Unexpected token '<'"); }, text: async () => "<html>" + status + " Bad Gateway</html>" });
+    const B7_TRANSIENT = [["503", () => resp(503, { msg: "Service Unavailable" })], ["429", () => resp(429, { msg: "Request rate limit reached" })], ["HTML 502", () => b7Html(502)]];
+    await bcheck("DF7 B7 probe: the link's GET /auth/v1/user answered 503 / 429 / an HTML 502 is NOT a dead link - { status: 'ok', kept: true } for the signed-in account, no refresh POST, nothing stored, no expired-link verdict", async () => {
+      for (const [label, ans] of B7_TRANSIENT) {
+        setSession(STORED, "r1"); reset(); probe[LINK_SAME] = ans;
+        const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+        assert.strictEqual(r.status, "ok", label + ": " + JSON.stringify(r));
+        assert.strictEqual(r.kept, true, label + ": the live pair is kept");
+        assert.deepStrictEqual({ ...r.user }, { id: U1, email: E1 });
+        assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" }, label);
+        assert.strictEqual(saves, 0, label + ": nothing stored");
+        assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same"], label + ": the server failure decides - no refresh POST with the link's token");
+      }
+    });
+    await bcheck("DF7 B7 probe: the link's access token rejected (401) and its refresh POST answered 503 / 429 / an HTML 502 is NOT a dead link either - { status: 'ok', kept: true }, nothing stored (a 400 there is still 'dead', above)", async () => {
+      for (const [label, ans] of B7_TRANSIENT) {
+        setSession(STORED, "r1"); reset(); probe[LINK_SAME] = "dead"; grants["link-r2"] = ans;
+        const r = await B7.auth.adoptLinkSession({ access_token: LINK_SAME, refresh_token: "link-r2" });
+        assert.strictEqual(r.status, "ok", label + ": " + JSON.stringify(r));
+        assert.strictEqual(r.kept, true, label);
+        assert.deepStrictEqual(stored(), { token: STORED, refresh: "r1" }, label);
+        assert.strictEqual(saves, 0, label);
+        assert.deepStrictEqual(seen(), ["GET /auth/v1/user bearer=link-same", "POST /auth/v1/token refresh=link-r2"], label);
+      }
     });
     await bcheck("B7 different user: { status: 'conflict', signedIn: { id, email }, linkEmail } - NOTHING stored (the stored pair untouched, _saveSession never called, one getUser call on the stored token, no expired flag)", async () => {
       setSession(STORED, "r1"); reset();
@@ -7446,6 +7633,150 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("  }, [loaded, authUser, userProfile, isScheduler, notifsRead, notifications, myNotifications, sendBrowserNotif]);"), 1, "the deps");
       assert.ok(count('readAuthOnlyTable("notifications", { order: "created_at.desc", limit: 50 })') >= 1, "the read keeps its 50-row cap");
       assert.strictEqual(count('newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));'), 1, "the E3 line (pinned in test/open-shifts.test.js) kept verbatim");
+    });
+  })();
+
+  /* ---------------- DF7. Review 9/27 Do first 7: an Auth outage at open is not a sign-out; the reset form never hangs ---------------- */
+  // The config.js behaviour (authAnswerKind; ensureFresh / getUser / _refresh / _probeLinkPair / signIn / resetPassword on a
+  // 503, 429, 408, HTML 502) runs in the A3 and B7 harnesses above ("DF7 ..." checks). Here: the component's side, lifted.
+  console.log("\n[DF7] review 9/27 Do first 7 (the mount says 'Couldn't reach the server' with a Retry when getUser reports network; Retry re-checks; submitReset ends its busy state on every answer; both 'Back to sign in' buttons end it and drop a late reply)");
+  await (async () => {
+    const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const cfg = fs.readFileSync(path.join(ROOT, "config.js"), "utf8").replace(/\r\n/g, "\n");
+    const count = (needle) => src.split(needle).length - 1;
+    const between = (a, b) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return src.slice(i, j); };
+    const acheck7 = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const MSG1 = H.SESSION_UNREACHED_MESSAGE, MSG2 = H.SESSION_STILL_UNREACHED_MESSAGE;
+
+    check("DF7 helpers: SESSION_UNREACHED_MESSAGE is the biometric path's line ('Couldn't reach the server to confirm your session ...'), SESSION_STILL_UNREACHED_MESSAGE the Retry's second line; both ASCII", () => {
+      assert.strictEqual(MSG1, "Couldn't reach the server to confirm your session - check your connection and try again.");
+      assert.ok(typeof MSG2 === "string" && /^Still couldn't reach the server/.test(MSG2) && /sign in with your password/.test(MSG2), MSG2);
+      assert.ok(/^[\x20-\x7e]+$/.test(MSG1 + MSG2), "ASCII only (index-source.html stays pure ASCII)");
+    });
+
+    // the mount effect's stored-session branch, lifted verbatim and run against stubs (a lift that is not found fails its
+    // own checks below instead of aborting the suite)
+    const liftOrNull = (a, b) => { try { return between(a, b); } catch (e) { return null; } };
+    const lifted = (x, what) => { if (x === null) throw new Error("lift: " + what + " not found in index-source.html"); return x; };
+    const mountBlock = liftOrNull("        if (session && !bioEnrolled) {", "      } catch(e) { console.error(\"Auth check error:\", e); }");
+    const runMount = async (getUserAnswer, opts) => {
+      lifted(mountBlock, "the mount effect's stored-session branch");
+      const st = { unreached: [], errors: [], adopted: [], toasts: [], getUser: 0 };
+      const auth = { getUser: async () => { st.getUser++; return getUserAnswer; } };
+      await new Function("auth", "adoptSignedInUser", "showToast", "setAuthError", "setSessionUnreached", "SESSION_UNREACHED_MESSAGE", "linkErr", "session", "bioEnrolled", "return (async () => {\n" + mountBlock + "\n})();")(
+        auth, async (u) => { st.adopted.push(u); }, (m) => st.toasts.push(m), (m) => st.errors.push(m), (m) => st.unreached.push(m), MSG1,
+        (opts && opts.linkErr) || null, { access_token: "t", refresh_token: "r" }, !!(opts && opts.bioEnrolled));
+      return st;
+    };
+    await acheck7("DF7 mount (lifted): getUser -> { user: null, error: 'network' } (GoTrue unreachable / 5xx / 429 / 408, the pair kept) sets the 'Couldn't reach the server' notice - the card is no longer bare; nobody is adopted; no card error", async () => {
+      const st = await runMount({ user: null, error: "network" });
+      assert.deepStrictEqual(st.unreached, [MSG1], "the notice is raised once");
+      assert.deepStrictEqual([st.adopted.length, st.errors.length, st.toasts.length], [0, 0, 0]);
+    });
+    await acheck7("DF7 mount (lifted): a live session signs in (adopt, no notice); a dead one (no user, no error) leaves the plain card (no notice); with a link error and the server unreachable the card carries both the link message and the notice; biometric enrollment waits (no getUser)", async () => {
+      let st = await runMount({ user: { id: "u1" } });
+      assert.deepStrictEqual([st.adopted.length, st.unreached.length], [1, 0]);
+      st = await runMount({ user: null });
+      assert.deepStrictEqual([st.adopted.length, st.unreached.length, st.errors.length], [0, 0, 0], "dead: the ordinary card");
+      st = await runMount({ user: null, error: "network" }, { linkErr: { message: "LINK" } });
+      assert.deepStrictEqual([st.errors, st.unreached], [["LINK"], [MSG1]]);
+      st = await runMount({ user: null, error: "network" }, { bioEnrolled: true });
+      assert.deepStrictEqual([st.getUser, st.unreached.length], [0, 0], "the biometric tile handles it (its own network message)");
+    });
+
+    const retryBody = liftOrNull("  const retrySessionCheck = async () => {", "\n  };\n");
+    const retrySrc = retryBody === null ? null : retryBody + "\n  };";
+    const runRetry = async (getUser) => {
+      lifted(retrySrc, "retrySessionCheck");
+      const st = { busy: [], errors: [], unreached: [], adopted: [] };
+      const fn = new Function("auth", "adoptSignedInUser", "setAuthError", "setAuthBusy", "setSessionUnreached", "SESSION_STILL_UNREACHED_MESSAGE", "console", retrySrc + "\nreturn retrySessionCheck;")(
+        { getUser }, async (u) => { st.adopted.push(u); }, (m) => st.errors.push(m), (b) => st.busy.push(b), (m) => st.unreached.push(m), MSG2, { warn: () => {} });
+      await fn();
+      return st;
+    };
+    await acheck7("DF7 Retry (lifted retrySessionCheck): still unreachable -> the 'Still couldn't reach' wording; a live session -> adoptSignedInUser (which clears the notice); a rejected one -> the notice goes and the card says 'Session expired'; a throw -> a message; the busy state always ends", async () => {
+      let st = await runRetry(async () => ({ user: null, error: "network" }));
+      assert.deepStrictEqual(st.unreached, [MSG2]); assert.deepStrictEqual(st.busy, [true, false]); assert.deepStrictEqual(st.adopted, []);
+      st = await runRetry(async () => ({ user: { id: "u1" } }));
+      assert.deepStrictEqual(st.adopted.map(u => u.id), ["u1"]); assert.deepStrictEqual(st.busy, [true, false]);
+      st = await runRetry(async () => ({ user: null }));
+      assert.deepStrictEqual(st.unreached, [""]); assert.ok(st.errors.includes("Session expired. Please sign in with your password to refresh."), JSON.stringify(st.errors)); assert.deepStrictEqual(st.busy, [true, false]);
+      st = await runRetry(async () => { throw new Error("boom"); });
+      assert.ok(st.errors.includes("boom")); assert.deepStrictEqual(st.busy, [true, false], "never a stuck button");
+    });
+
+    const resetSrc = liftOrNull("  const submitReset = () => {", "\n\n  return (");
+    const mkReset = (resetPassword, email) => {
+      lifted(resetSrc, "submitReset / backToSignIn");
+      const st = { busy: [], errors: [], sent: [], modes: [], emails: [] };
+      const ref = { current: 0 };
+      const api = new Function("resetEmail", "setAuthError", "setAuthBusy", "resetReqRef", "auth", "setResetSent", "setAuthMode", "setResetEmail", resetSrc + "\nreturn { submitReset, backToSignIn };")(
+        email === undefined ? "someone@example.com" : email, (m) => st.errors.push(m), (b) => st.busy.push(b), ref, { resetPassword }, (v) => st.sent.push(v), (m) => st.modes.push(m), (v) => st.emails.push(v));
+      return { st, api, ref };
+    };
+    const flush = () => new Promise(r => setTimeout(r, 0));
+    await acheck7("DF7 submitReset (lifted): a resetPassword that REJECTS still ends the busy state with a message (the .catch); an error object -> busy off + the error; success -> 'sent'; no e-mail -> a message and no request", async () => {
+      let x = mkReset(() => Promise.reject(new Error("Failed to fetch")));
+      x.api.submitReset(); await flush();
+      assert.deepStrictEqual(x.st.busy, [true, false], "the 'Sending' button comes back"); assert.deepStrictEqual(x.st.errors, ["", "Failed to fetch"]);
+      x = mkReset(async () => ({ error: "Couldn't reach the server (HTTP 502) - try again" }));
+      x.api.submitReset(); await flush();
+      assert.deepStrictEqual(x.st.busy, [true, false]); assert.deepStrictEqual(x.st.errors, ["", "Couldn't reach the server (HTTP 502) - try again"]); assert.deepStrictEqual(x.st.sent, []);
+      x = mkReset(async () => ({ error: null }));
+      x.api.submitReset(); await flush();
+      assert.deepStrictEqual(x.st.sent, [true]); assert.deepStrictEqual(x.st.busy, [true, false]);
+      let called = 0;
+      x = mkReset(async () => { called++; return { error: null }; }, "");
+      x.api.submitReset(); await flush();
+      assert.deepStrictEqual([called, x.st.busy.length], [0, 0]); assert.deepStrictEqual(x.st.errors, ["Please enter your email"]);
+    });
+    await acheck7("DF7 'Back to sign in' (lifted backToSignIn): ends the shared busy state at once while a reset hangs (Sign in is usable again) and the abandoned request's late answer is dropped - no busy flip under a later sign-in, no 'sent' on the login card", async () => {
+      let release; const pending = new Promise(r => { release = r; });
+      const x = mkReset(() => pending);
+      x.api.submitReset();
+      assert.deepStrictEqual(x.st.busy, [true], "Sending");
+      x.api.backToSignIn();
+      assert.deepStrictEqual(x.st.busy, [true, false], "Back ends the busy state at once");
+      assert.deepStrictEqual(x.st.modes, ["login"]); assert.deepStrictEqual(x.st.sent, [false]); assert.deepStrictEqual(x.st.emails, [""]);
+      release({ error: null }); await flush();
+      assert.deepStrictEqual(x.st.busy, [true, false], "the late answer does not touch the busy state");
+      assert.deepStrictEqual(x.st.sent, [false], "nor mark the reset sent");
+      let rejectIt; const pending2 = new Promise((_, rej) => { rejectIt = rej; });
+      const y = mkReset(() => pending2);
+      y.api.submitReset(); y.api.backToSignIn(); rejectIt(new Error("late")); await flush();
+      assert.deepStrictEqual(y.st.busy, [true, false]); assert.ok(!y.st.errors.includes("late"), "a late rejection is dropped too");
+    });
+
+    check("DF7 pins: both 'Back to sign in' buttons call backToSignIn (which ends authBusy); submitReset carries a .catch; the card's notice (data-testid auth-unreached, role alert) with its Retry (auth-retry -> retrySessionCheck) renders from sessionUnreached; adoptSignedInUser clears it; the biometric path reads the same message constant", () => {
+      assert.strictEqual(count(">Back to sign in</button>"), 2, "two Back buttons");
+      assert.strictEqual(count("<button onClick={backToSignIn} "), 2, "both call backToSignIn");
+      assert.ok(resetSrc.includes("const backToSignIn = () => { resetReqRef.current++; setAuthBusy(false);"), "backToSignIn ends the busy state and drops the request in flight");
+      assert.ok(/auth\.resetPassword\(resetEmail\)\.then\([\s\S]{0,200}?\)\s*\.catch\(e=>\{ if\(req!==resetReqRef\.current\) return; setAuthBusy\(false\);/.test(resetSrc), "submitReset: .catch ends the busy state");
+      assert.strictEqual(count('data-testid="auth-unreached" role="alert"'), 1, "the notice");
+      assert.strictEqual(count('<button data-testid="auth-retry" onClick={retrySessionCheck}'), 1, "its Retry");
+      assert.strictEqual(count("{sessionUnreached && ("), 1, "rendered from sessionUnreached");
+      assert.strictEqual(count('const [sessionUnreached, setSessionUnreached] = useState("");'), 1);
+      const adopt = src.slice(src.indexOf("const adoptSignedInUser = async (user) => {"), src.indexOf("// --- Auth: Check session on mount ---"));
+      assert.ok(adopt.includes('setSessionUnreached("");'), "any sign-in clears the notice");
+      assert.ok(mountBlock.includes("const { user, error } = await auth.getUser();") && mountBlock.includes('if (!user && error === "network") setSessionUnreached(SESSION_UNREACHED_MESSAGE);'), "the mount reads getUser's network verdict");
+      assert.strictEqual(count("setAuthError(SESSION_UNREACHED_MESSAGE);"), 1, "the biometric tile's line is the same constant");
+      assert.strictEqual(count("Couldn't reach the server to confirm"), 0, "no second copy of the wording in the app");
+    });
+    check("DF7 pins (config.js): authAnswerKind decides every Auth answer - getUser, _refresh and _probeLinkPair (both requests) treat only 'rejected' as dead; ensureFresh and getUser read only an explicit `rejected` from the shared refresh; signIn and resetPassword wrap the fetch in try/catch with res.json().catch (updatePassword's shape)", () => {
+      const fnOf = (head, next) => { const i = cfg.indexOf(head); const j = cfg.indexOf(next, i + head.length); assert.ok(i > 0 && j > i, head); return cfg.slice(i, j); };
+      const getUser = fnOf("  async getUser() {", "  async _refresh(refreshToken, opts) {");
+      const refresh = fnOf("  async _refresh(refreshToken, opts) {", "  async signOut() {");
+      const probe = fnOf("  async _probeLinkPair(accessToken, refreshToken) {", "  getAuthHeaders() {");
+      const ensure = fnOf("  async ensureFresh(opts) {", "  _clearSession() {");
+      const signIn = fnOf("  async signIn(email, password) {", "  async getUser() {");
+      const reset = fnOf("  async resetPassword(email) {", "  async updatePassword(newPassword) {");
+      assert.ok(getUser.includes('if (authAnswerKind(res.status) !== "rejected") {') && getUser.includes("if (!refreshed?.rejected) return { user: null, error: \"network\" };"), "getUser");
+      assert.ok(refresh.includes('if (authAnswerKind(res.status) !== "rejected") {'), "_refresh");
+      assert.ok(probe.includes('if (authAnswerKind(res.status) !== "rejected") return { error: "network", status: res.status };') && probe.includes('authAnswerKind(r2.status) === "rejected" ? { dead: true, status: r2.status } : { error: "network", status: r2.status }'), "_probeLinkPair (both requests)");
+      assert.ok(ensure.includes("if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: \"network\" };"), "ensureFresh");
+      [["signIn", signIn], ["resetPassword", reset]].forEach(([n, body]) => {
+        assert.ok(/try \{[\s\S]*?fetch\(/.test(body) && body.includes("await res.json().catch(() => null)") && body.includes('return { ' + (n === "signIn" ? "user: null, " : "") + 'error: "No connection - try again" };'), n + ": try/catch + res.json().catch");
+      });
     });
   })();
 

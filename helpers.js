@@ -5351,6 +5351,12 @@ function suPatternWithKind(p, kind) {
 // such shape reads as this ONE message. The success shape (#access_token=...&type=recovery|invite) is
 // not an error and returns null; so do the app's own deep links (#openshifts, #offers, ?public=1).
 const AUTH_LINK_ERROR_MESSAGE = "This invite or reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password.";
+// Review 9/27 Do first 7: the stored session could not be checked - auth.getUser answered error "network" (a thrown
+// fetch, or a 5xx / 429 / 408 from GoTrue: config.js authAnswerKind kept the pair). The mount card shows the first
+// line with a Retry (data-testid auth-unreached), a Retry that is still unanswered the second; the biometric tile
+// shows the first as its error. Never a bare sign-in card that reads as "you were signed out".
+const SESSION_UNREACHED_MESSAGE = "Couldn't reach the server to confirm your session - check your connection and try again.";
+const SESSION_STILL_UNREACHED_MESSAGE = "Still couldn't reach the server - try again in a moment, or sign in with your password below.";
 const AUTH_LINK_ERROR_KEYS = ["error", "error_code", "error_description"];
 // authLinkError(hash, search) -> null, or { message, code, description, from: "hash" | "query", cleanSearch }
 // where cleanSearch is the query with the three error keys removed ("" or "?k=v...") - what the app hands
@@ -6054,7 +6060,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     reviewStateFor, derivedEastVacations,
-    authLinkError, AUTH_LINK_ERROR_MESSAGE,
+    authLinkError, AUTH_LINK_ERROR_MESSAGE, SESSION_UNREACHED_MESSAGE, SESSION_STILL_UNREACHED_MESSAGE,
     notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES, notifPopupStep, notifSeenAdd,
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
