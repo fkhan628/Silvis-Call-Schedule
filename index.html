@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-uxiRS3xMhCnfboc6cPNmEgZK6W6Mb140JNRXSOZOCRk=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-u8sEF50hQcQu3nG/YZuvlPE5vfLx7xjtUznyPsNVSNw=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-MOzgACXuWxVGUpDV1LKCuViAOm0aV0CHib83c+EJqQE=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-2W8RCofvUxCoOPJQxw/xMaLUkh/aiPLSqce0zZOyk0s=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -131,7 +131,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.01d";
+    var APP_VERSION = "2026.10.01g";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -355,6 +355,8 @@ function CallSchedule() {
     showToast(DAYS_UNREAD_DAY_MSG, "error");
     return true;
   };
+  const GEN_DAYS_UNREAD_MSG = "Not run: the schedule has not loaded, so this run would treat every day as open and ignore the locks on file. Retry the load (the banner above), then generate. Nothing was run.";
+  const GEN_DAYS_LOADING_MSG = "Not run: the schedule is still loading - wait for it, then generate. Nothing was run.";
   const [reloadTrigger, setReloadTrigger] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveError, setSaveError] = useState(false);
@@ -511,8 +513,11 @@ function CallSchedule() {
     return [...ids];
   }, [allProfiles]);
   const [isScheduler, setIsScheduler] = useState(false);
+  const isSchedulerRef = useRef(false);
   useEffect(() => {
-    setIsScheduler((userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "scheduler" || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin");
+    const sched = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "scheduler" || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
+    isSchedulerRef.current = sched;
+    setIsScheduler(sched);
   }, [userProfile]);
   const isAdmin = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "admin";
   const isCoordinator = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "coordinator";
@@ -725,6 +730,17 @@ function CallSchedule() {
       resetWriteRetryState();
       blobLoadedRef.current = false;
       blobTsRef.current = null;
+      if (lastSyncRef.current) {
+        const persisted = JSON.parse(JSON.stringify(lastSyncRef.current));
+        scheduleRef.current = persisted;
+        setSchedule(persisted);
+        if (daySyncBusyRef.current > 0) daySyncChainRef.current.then(() => setSchedule(cur => {
+          if (cur !== persisted || !lastSyncRef.current) return cur;
+          const landed = JSON.parse(JSON.stringify(lastSyncRef.current));
+          scheduleRef.current = landed;
+          return landed;
+        }));
+      }
       setNotifsRead("unread");
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
@@ -1356,7 +1372,8 @@ function CallSchedule() {
       return true;
     } catch (e) {
       console.warn("time_off load failed", e);
-      if (!quiet) showToast("Couldn't load vacations - data shown may be incomplete.", "error");
+      const msg = "Couldn't load vacations - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
@@ -1371,7 +1388,8 @@ function CallSchedule() {
       return true;
     } catch (e) {
       console.warn("availability load failed", e);
-      if (!quiet) showToast("Couldn't load availability statements - data shown may be incomplete.", "error");
+      const msg = "Couldn't load availability statements - data shown may be incomplete.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
       return false;
     }
   };
@@ -1405,7 +1423,7 @@ function CallSchedule() {
       return false;
     }
   };
-  const loadEastTables = async quiet => {
+  const loadEastTables = async (quiet, overridesOnly) => {
     const one = async (table, order, set, key) => {
       try {
         const rows = await db.query(table, {
@@ -1425,11 +1443,14 @@ function CallSchedule() {
         return null;
       }
     };
-    const r = await Promise.all([one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
-    if (!quiet && r.some(x => x === null) && eastDetailsVisibleRef.current) showToast("Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.", "error");
+    const r = await Promise.all(overridesOnly ? [one("east_overrides", "day.asc", setEastOverrideRows, "overrides")] : [one("east_feed", "week_monday.asc", setEastFeedRows, "feed"), one("east_forecast", "week_monday.asc", setEastForecastRows, "forecast"), one("east_overrides", "day.asc", setEastOverrideRows, "overrides")]);
+    if (r.some(x => x === null) && eastDetailsVisibleRef.current) {
+      const msg = "Couldn't load the East (Davenport) feed cache - East status shows as unknown until it loads.";
+      if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
+    }
     return {
       ok: r.every(x => x !== null),
-      feedRows: r[0]
+      feedRows: overridesOnly ? null : r[0]
     };
   };
   const loadEastVacationReviews = async quiet => {
@@ -1449,7 +1470,10 @@ function CallSchedule() {
       const missing = /HTTP 404\b/.test(String(e && e.message || e));
       console.warn("east_vacation_reviews load failed" + (missing ? " - the table is not on the database yet (migration 2026-09-23 not applied)" : ""), e);
       setEastVacReviewState(missing ? "missing" : "failed");
-      if (!quiet && !missing && eastDetailsVisibleRef.current) showToast("Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.", "error");
+      if (!missing && eastDetailsVisibleRef.current) {
+        const msg = "Couldn't load the East vacation reviews - every East vacation reads as unreviewed until they load.";
+        if (typeof quiet === "function") quiet(msg);else if (!quiet) showToast(msg, "error");
+      }
       return false;
     }
   };
@@ -1875,12 +1899,13 @@ function CallSchedule() {
     markDaysRead();
   };
   const sameAssignment = (day, a, b) => JSON.stringify(assignmentToDayRow(day, a || emptyDayAssignment())) === JSON.stringify(assignmentToDayRow(day, b || emptyDayAssignment()));
-  const mergeLoadedDays = fresh => {
+  const mergeLoadedDays = (fresh, sink) => {
     if (daysReadTripped(fresh.count, lastDaysCountRef.current)) {
       console.warn(`schedule_days read answered 0 rows while ${lastDaysCountRef.current} were on record - treated as a failed read; the schedule this device holds is kept.`);
       if (!daysTripwireWarnedRef.current) {
         daysTripwireWarnedRef.current = true;
-        showToast(`The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`, "error");
+        const msg = `The schedule read came back empty while ${lastDaysCountRef.current} day(s) are on record - keeping the schedule this device has. Check your connection or sign in again, or the schedule was cleared on another device - reload to confirm; nothing was written.`;
+        if (typeof sink === "function") sink(msg);else showToast(msg, "error");
       }
       return false;
     }
@@ -2185,34 +2210,50 @@ function CallSchedule() {
     (async () => {
       loadFailedRef.current = false;
       let daysReadThisRun = false;
-      try {
-        const {
-          data: row
-        } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single();
-        blobLoadedRef.current = true;
-        if (row !== null && row !== void 0 && row.data) {
-          const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          const rerun = !!loadedAtRef.current && !switchedUserRef.current;
-          if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
-            if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
-          } else {
-            if (rerun && isScheduler && pendingSaveRef.current) showToast("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.", "error");
-            if (row.updated_at) blobTsRef.current = row.updated_at;
-            adoptBlob(d);
+      const loadFails = {};
+      const sayLoadFail = key => msg => {
+        loadFails[key] = msg;
+      };
+      const setupOwedAtStart = !!(pendingSaveRef.current || blobDirtyRef.current);
+      const legA = async () => {
+        try {
+          const {
+            data: row
+          } = await supabase.from("call_schedule_data").select("data,updated_at").eq("id", "main").single();
+          blobLoadedRef.current = true;
+          if (row !== null && row !== void 0 && row.data) {
+            const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+            const rerun = !!loadedAtRef.current && !switchedUserRef.current;
+            if (rerun && row.updated_at && row.updated_at === blobTsRef.current) {
+              if (pendingSaveRef.current || blobDirtyRef.current) setSaveTick(t => t + 1);
+            } else {
+              if (rerun && isSchedulerRef.current && setupOwedAtStart) sayLoadFail("blobMoved")("The shared setup changed elsewhere while you were signed out - it was reloaded; re-check any Setup change you made meanwhile.");
+              if (row.updated_at) blobTsRef.current = row.updated_at;
+              adoptBlob(d);
+            }
           }
+        } catch (e) {
+          console.error("Supabase load error (call_schedule_data):", e);
+          sayLoadFail("blob")("Couldn't load the shared setup (roster/rules) - check your connection and reload." + (isSchedulerRef.current ? " Setup changes won't save until it loads." : ""));
         }
-      } catch (e) {
-        console.error("Supabase load error (call_schedule_data):", e);
-        showToast("Couldn't load the shared setup (roster/rules) - check your connection and reload. Setup changes won't save until it loads.", "error");
-      }
-      try {
-        const loadedDays = await loadScheduleDays();
-        if (loadedAtRef.current && !switchedUserRef.current) {
-          mergeLoadedDays(loadedDays);
-          syncScheduleDays(scheduleRef.current);
-        } else adoptLoadedDays(loadedDays);
-        daysReadThisRun = true;
-        markDaysRead();
+      };
+      const legB = async () => {
+        try {
+          const loadedDays = await loadScheduleDays();
+          if (loadedAtRef.current && !switchedUserRef.current) {
+            mergeLoadedDays(loadedDays, sayLoadFail("daysEmpty"));
+            syncScheduleDays(scheduleRef.current);
+          } else adoptLoadedDays(loadedDays);
+          daysReadThisRun = true;
+          markDaysRead();
+        } catch (e) {
+          console.error("Supabase load error (schedule_days):", e);
+          loadFailedRef.current = true;
+          if (!daysReadThisRun) setDaysLoadFailed(true);
+          sayLoadFail("days")("Couldn't load the latest data - check your connection and reload.");
+        }
+      };
+      const loadTrades = async () => {
         try {
           const trades = await readAuthOnlyTable("shift_trade_requests", {
             order: "submitted_at.desc",
@@ -2222,6 +2263,8 @@ function CallSchedule() {
         } catch (e) {
           console.warn("Trade requests load failed:", e);
         }
+      };
+      const loadNotifs = async () => {
         try {
           const notifs = await readAuthOnlyTable("notifications", {
             order: "created_at.desc",
@@ -2235,8 +2278,8 @@ function CallSchedule() {
           console.warn("Notifications load failed:", e);
           setNotifsRead("failed");
         }
-        await loadOffers(true);
-        await loadPeriods(true);
+      };
+      const loadMinVersion = async () => {
         try {
           const mainRows = await db.query("client_versions", {
             eq: {
@@ -2252,19 +2295,18 @@ function CallSchedule() {
         } catch (e) {
           console.warn("client_versions min-version check failed:", e);
         }
-      } catch (e) {
-        console.error("Supabase load error (schedule_days):", e);
-        loadFailedRef.current = true;
-        if (!daysReadThisRun) setDaysLoadFailed(true);
-        showToast("Couldn't load the latest data - check your connection and reload.", "error");
-      }
-      await loadTimeOff();
-      await loadAvailability();
-      await loadEastTables();
-      await loadEastVacationReviews();
+      };
+      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews"))]);
+      const loadFailToast = combinedLoadToast(loadFails, {
+        retry: !daysReadOkRef.current,
+        isScheduler: isSchedulerRef.current
+      });
+      if (loadFailToast) showToast(loadFailToast, "error");
       setLoaded(true);
+      const switchEnds = switchedUserRef.current;
       if (!loadedAtRef.current) loadedAtRef.current = Date.now();
       switchedUserRef.current = false;
+      if (switchEnds) resyncPendingRef.current("switch");
     })();
     const refreshBlobRow = async () => {
       try {
@@ -2334,10 +2376,20 @@ function CallSchedule() {
         console.warn("Background min-version refresh failed:", e);
       }
     };
+    let lastFullPollAt = Date.now();
+    let lastEastPollAt = 0;
+    const refreshEastTables = async () => {
+      const now = Date.now();
+      const all = eastPollDue(lastEastPollAt, now);
+      if (all) lastEastPollAt = now;
+      const r = await loadEastTables(true, !all);
+      if (all && !(r && r.ok)) lastEastPollAt = 0;
+    };
     const refreshAll = async () => {
+      lastFullPollAt = Date.now();
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
-      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), loadEastTables(true), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
+      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
       if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
     };
     refreshDaysRef.current = refreshDays;
@@ -2451,9 +2503,31 @@ function CallSchedule() {
         if (!rtChannel) setupRealtime();
       }, 5000);
     }
-    const pollInterval = setInterval(refreshAll, 60000);
+    const pollTick = async () => {
+      const mode = pollTickMode({
+        signedIn: !!authUserRef.current,
+        publicMode: isPublicMode,
+        hidden: document.hidden
+      });
+      if (mode === "skip") return;
+      if (mode === "full" && pollFullRecent(lastFullPollAt, Date.now())) return;
+      if (mode === "full") {
+        await refreshAll();
+        return;
+      }
+      const fr = await auth.ensureFresh();
+      if (fr && fr.refreshed) resyncPendingRef.current("poll");
+      await refreshNotifs();
+      if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
+    };
+    const onPollVisibility = () => {
+      if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick();
+    };
+    document.addEventListener("visibilitychange", onPollVisibility);
+    const pollInterval = setInterval(pollTick, POLL_MS);
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener("visibilitychange", onPollVisibility);
       if (rtChannel && rtClient) {
         try {
           rtClient.removeChannel(rtChannel);
@@ -2604,10 +2678,12 @@ function CallSchedule() {
       }
       return;
     }
+    if (switchedUserRef.current) return;
     const payload = buildStateBundle();
     pendingSaveRef.current = payload;
     if (!payloadLooksWiped(payload)) everHadRealDataRef.current = true;
     const timer = setTimeout(() => {
+      if (loadFailedRef.current || switchedUserRef.current) return;
       if (payloadLooksWiped(payload) && everHadRealDataRef.current && !allowWipeSaveRef.current) {
         console.warn("Autosave blocked: refusing to write empty payload over real data.");
         setSaveError(true);
@@ -3864,6 +3940,10 @@ function CallSchedule() {
     }
     if (!rulesImported) {
       showToast("Rules are not imported yet - import the seed first.", "error");
+      return;
+    }
+    if (!daysReadOkRef.current) {
+      showToast(loaded ? GEN_DAYS_UNREAD_MSG : GEN_DAYS_LOADING_MSG, "error");
       return;
     }
     const bestOf = Math.max(1, Math.min(2000, Math.floor(Number(o.bestOf) || 200)));
@@ -7189,7 +7269,7 @@ function CallSchedule() {
     role: obRole,
     weekendOnly: obWeekend
   }), [boardSlots, todayStr, obHorizon, obRole, obWeekend]);
-  const boardUnitText = u => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : "weekend" + (u.pattern ? " " + u.pattern : "");
+  const boardUnitText = (u, role) => !u ? "-" : u.kind === "holiday" ? (u.name || "holiday") + " holiday unit" : openSlotPatternWords(u.pattern, role);
   const boardCopyList = async () => {
     const text = boardRows.map(s => openSlotsLine(s)).join("\n");
     if (!text) {
@@ -11283,7 +11363,7 @@ function CallSchedule() {
           whiteSpace: "nowrap",
           fontSize: 12
         }
-      }, boardUnitText(s.unit)), React.createElement("td", {
+      }, boardUnitText(s.unit, s.role)), React.createElement("td", {
         style: {
           fontSize: 12,
           minWidth: 110
@@ -11440,7 +11520,7 @@ function CallSchedule() {
         fontSize: 13,
         lineHeight: 1.7
       }
-    }, React.createElement("div", null, React.createElement("strong", null, DAY_HDR[parse(claimSheet.day).getDay()], " ", fmtMD(claimSheet.day)), " - ", sheetDate(claimSheet.day)), React.createElement("div", null, "Role: ", React.createElement("strong", null, claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"), " - one 24-hour shift, 07:00 to 07:00."), React.createElement("div", null, "Unit: ", boardUnitText(claimSheet.unit))), claimSheet.mates.length > 0 && React.createElement("div", {
+    }, React.createElement("div", null, React.createElement("strong", null, DAY_HDR[parse(claimSheet.day).getDay()], " ", fmtMD(claimSheet.day)), " - ", sheetDate(claimSheet.day)), React.createElement("div", null, "Role: ", React.createElement("strong", null, claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"), " - one 24-hour shift, 07:00 to 07:00."), React.createElement("div", null, "Unit: ", boardUnitText(claimSheet.unit, claimSheet.role))), claimSheet.mates.length > 0 && React.createElement("div", {
       "data-testid": "claim-unit-mates",
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         marginTop: 10
@@ -15510,6 +15590,7 @@ const REASON_WORDS = {
   "rules-error": "eligibility check failed",
   "weekend-primary": "weekend primary block (contribution bonus)",
   "weekend-backup": "weekend backup (contribution penalty)",
+  "weekday-primary": "weekday primary (contribution bonus)",
   "window-week-below-target": "at or under the window-week target",
   "window-week-over-target": "over the window-week target",
   "consecutive-primary": "consecutive primary days (prefers alternate days)",
@@ -15517,7 +15598,12 @@ const REASON_WORDS = {
   "east-clear": "home East vacation day (no East call, no OR block - preferred as primary)",
   "not-offered": "not among the days offered (only these days)",
   "offered": "offered day (bonus)",
-  "outside-offers": "outside the offered days (penalty)"
+  "outside-offers": "outside the offered days (penalty)",
+  "avoid-row": "a day stated as one to avoid",
+  "recurring-avoid": "a recurring day set to avoid",
+  "auto-offer-weekday": "an auto-offered weekday",
+  "pattern-mismatch": "not the preferred weekend style",
+  "under-target": "under the monthly target"
 };
 async function readAuthOnlyTable(table, opts) {
   let token = null;
@@ -15577,8 +15663,18 @@ function reasonLabel(code, nameOf) {
       return "backup weekend cap of " + arg + " reached";
     case "max-major-holidays":
       return "already holds " + arg + " major holiday(s) in 12 months";
+    case "lone-weekend-day":
+      return arg === "Sat" ? "a Saturday alone as primary, without its Sunday" : arg === "Sun" ? "a Sunday alone as primary, without its Saturday" : "a weekend day alone as primary, without its pair";
+    case "weekend-cap":
+      return "past the soft weekend cap of " + arg + " a month";
+    case "pattern-mismatch":
+      return arg === "standalone-friday" ? "not the preferred weekend style (the Friday stands on its own)" : arg ? "not the preferred weekend style (prefers " + arg + ")" : "not the preferred weekend style";
+    case "hard-never-beyond-notice":
+      return arg + " is a never-on day, allowed with a soft penalty far ahead or when already held";
     default:
-      return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : s;
+      return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " (" + arg + ")" : "") : softTag({
+        reason: s
+      });
   }
 }
 function softTag(soft) {
@@ -15618,6 +15714,8 @@ function softTag(soft) {
       return "backup after primary";
     case "pattern-mismatch":
       return "style: " + arg;
+    case "pattern-daily":
+      return "daily weekend pattern";
     case "aledo-week":
       return "Aledo week";
     case "holiday-waiver":
@@ -15626,6 +15724,10 @@ function softTag(soft) {
       return "offered day (bonus)";
     case "outside-offers":
       return "outside the offered days (penalty)";
+    case "weekend-cap":
+      return "over weekend cap " + arg;
+    case "hard-never-beyond-notice":
+      return "never-on " + arg + ": far ahead or held";
     default:
       return REASON_WORDS[key] ? REASON_WORDS[key] + (arg ? " " + arg : "") : s;
   }

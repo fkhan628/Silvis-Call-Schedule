@@ -193,3 +193,4 @@ drop trigger if exists time_off_vacation_guard_trg on public.time_off;
 create trigger time_off_vacation_guard_trg
   before insert or update on public.time_off
   for each row execute function public.time_off_vacation_guard();
+-- applied 2026-10-01 16:53:33Z by Faraz (apply-vacation-guard.sh through Git's bash.exe, AI_AGENT=1; repo HEAD 00d446b); the body above this line is the applied file, sha256 6b6b4a31cae2ff619f94f8849e70d215a2f0c2155f59dacadae56731617f3db0 - its header is the text as it ran (test/schema.test.js pins it; docs/SCHEMA-REVIEW.md "2026-09-30 - vacation guard" quotes the probe observed right after)

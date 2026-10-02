@@ -151,22 +151,64 @@ check("openSlotWeekendKinds(diagnostics.weekendUnits) keeps block/split/daily an
 // Follow-ups 10/1 item 2 (the 10/1 queue report): the generator's 'friday' weekend pattern (Prompt 23 B2 - one surgeon on
 // the Friday alone, the Saturday + Sunday a unit of their own) has words: it reaches the unit, the persisted kinds and the
 // line instead of reading as plain "weekend". One word table (OPEN_SLOT_PATTERN_WORDS) for openSlotsLine and the board.
-check("Follow-ups 10/1 (2): the 'friday' weekend pattern - openSlotUnit / openSlotWeekendKinds keep it, openSlotsLine and openSlotPatternWords read 'weekend, Friday separate'; the other words byte for byte as before", () => {
-  assert.deepStrictEqual(H.OPEN_SLOT_PATTERN_WORDS, { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday separate" });
+// Review 10/1: the words are the app's own name for the shape ("a Friday on its own" - the painter, the Setup summary), and
+// 'friday' is a PRIMARY shape only (rules.js builds it for primary; generator.js records the primary kind), so a backup slot
+// of such a weekend reads plain "weekend" (block / split / daily stay on both roles, as before).
+check("Follow-ups 10/1 (2): the 'friday' weekend pattern - openSlotUnit / openSlotWeekendKinds keep it, openSlotsLine and openSlotPatternWords read 'weekend, Friday on its own' on a primary slot, plain 'weekend' on a backup slot; the other words byte for byte as before", () => {
+  assert.deepStrictEqual(H.OPEN_SLOT_PATTERN_WORDS, { block: "weekend block", split: "weekend split", daily: "weekend daily", friday: "weekend, Friday on its own" });
   const out = H.openSlots({}, "2026-11-06", "2026-11-08", "2026-11-04", { weekendKinds: { "2026-11-06": "friday" } });
   assert.strictEqual(out.length, 6);
   out.forEach(s => assert.deepStrictEqual(s.unit, { kind: "weekend", pattern: "friday", friday: "2026-11-06" }, s.day + " " + s.role));
   assert.deepStrictEqual(H.openSlotWeekendKinds([{ friday: "2026-11-06", kind: "friday" }, { friday: "2026-11-13", kind: "block" }, { friday: "2026-11-20", kind: "open" }]), { "2026-11-06": "friday", "2026-11-13": "block" });
   assert.deepStrictEqual(H.openSlotWeekendKinds({ "2026-11-06": "friday", "2026-11-13": "weird", "2026-11-20": "toString" }), { "2026-11-06": "friday" }, "the map form validated the same way (no prototype key passes)");
-  assert.strictEqual(H.openSlotsLine({ day: "2026-11-07", role: "primary", unit: { kind: "weekend", pattern: "friday", friday: "2026-11-06" }, reason: null }), "Sat 11/07 - primary (weekend, Friday separate) - open");
-  assert.strictEqual(H.openSlotsLine(out[0]), "Fri 11/06 - primary (weekend, Friday separate) - open");
-  // the words that were there, unchanged
-  [["block", "Fri 11/06 - primary (weekend block) - open"], ["split", "Fri 11/06 - primary (weekend split) - open"], ["daily", "Fri 11/06 - primary (weekend daily) - open"], [null, "Fri 11/06 - primary (weekend) - open"]].forEach(([p, line]) =>
-    assert.strictEqual(H.openSlotsLine({ day: "2026-11-06", role: "primary", unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: null }), line, String(p)));
-  assert.deepStrictEqual(["block", "split", "daily", "friday", null, undefined, "weird", "toString", 3].map(p => H.openSlotPatternWords(p)), ["weekend block", "weekend split", "weekend daily", "weekend, Friday separate", "weekend", "weekend", "weekend", "weekend", "weekend"]);
+  assert.strictEqual(H.openSlotsLine({ day: "2026-11-07", role: "primary", unit: { kind: "weekend", pattern: "friday", friday: "2026-11-06" }, reason: null }), "Sat 11/07 - primary (weekend, Friday on its own) - open");
+  assert.strictEqual(H.openSlotsLine(out[0]), "Fri 11/06 - primary (weekend, Friday on its own) - open");
+  // the backup slots of that weekend: plain "weekend" (the same shared unit object, the role decides the words)
+  assert.deepStrictEqual(out.filter(s => s.role === "backup").map(s => H.openSlotsLine(s)), ["Fri 11/06 - backup (weekend) - open", "Sat 11/07 - backup (weekend) - open", "Sun 11/08 - backup (weekend) - open"]);
+  assert.deepStrictEqual(out.filter(s => s.role === "primary").map(s => H.openSlotsLine(s)), ["Fri 11/06 - primary (weekend, Friday on its own) - open", "Sat 11/07 - primary (weekend, Friday on its own) - open", "Sun 11/08 - primary (weekend, Friday on its own) - open"]);
+  // the words that were there, unchanged - on both roles
+  [["block", "(weekend block)"], ["split", "(weekend split)"], ["daily", "(weekend daily)"], [null, "(weekend)"]].forEach(([p, words]) => ["primary", "backup"].forEach(role =>
+    assert.strictEqual(H.openSlotsLine({ day: "2026-11-06", role, unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: null }), "Fri 11/06 - " + role + " " + words + " - open", String(p) + " " + role)));
+  assert.deepStrictEqual(["block", "split", "daily", "friday", null, undefined, "weird", "toString", 3].map(p => H.openSlotPatternWords(p)), ["weekend block", "weekend split", "weekend daily", "weekend, Friday on its own", "weekend", "weekend", "weekend", "weekend", "weekend"]);
+  assert.deepStrictEqual(["block", "split", "daily", "friday", null, "toString"].map(p => H.openSlotPatternWords(p, "backup")), ["weekend block", "weekend split", "weekend daily", "weekend", "weekend", "weekend"]);
+  assert.strictEqual(H.openSlotPatternWords("friday", "primary"), "weekend, Friday on its own");
+  // the e-mail composer reads the same line: the friday weekend's backup lines say plain "weekend"
+  const mail = H.openShiftsEmail(out, "https://example.test/app").message;
+  assert.ok(mail.indexOf("  Fri 11/06 - primary (weekend, Friday on its own) - open") > 0 && mail.indexOf("  Fri 11/06 - backup (weekend) - open") > 0, mail);
   // the persisted record carries it (lastGenerateFromDiagnostics -> lastGenerate.weekendKinds, the board's patterns)
   const rec = H.lastGenerateFromDiagnostics({ range: { start: "2026-11-02", end: "2026-11-30" }, uncovered: [], weekendUnits: [{ friday: "2026-11-06", kind: "friday" }, { friday: "2026-11-13", kind: "split" }] }, "2026-10-01T12:00:00.000Z");
   assert.deepStrictEqual(rec.weekendKinds, { "2026-11-06": "friday", "2026-11-13": "split" });
+});
+// Review 10/1 (should-fix): the board half of item 2 had no pin - boardUnitText (the Open shifts Unit column and the claim
+// sheet's "Unit:" line) is lifted from index-source.html and run against helpers here, so a revert to the pre-10/1
+// expression ("weekend friday" on the board while the Copy list and the e-mails say otherwise) or a dropped role fails.
+check("Follow-ups 10/1 (2) review: the board's boardUnitText (Unit column + claim sheet) reads openSlotPatternWords with the slot's role - lifted and run; equal to openSlotPatternWords / openSlotsLine for every pattern and role", () => {
+  const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
+  const m = /const boardUnitText = (\([^)]*\) => [^\n]*?);\n/.exec(src);
+  assert.ok(m, "const boardUnitText = (...) => ...; not found in index-source.html (renamed? the pin must not skip)");
+  const f = new Function("openSlotPatternWords", "return " + m[1])(H.openSlotPatternWords);
+  assert.strictEqual(f({ kind: "weekend", pattern: "friday", friday: "2026-11-06" }, "primary"), "weekend, Friday on its own");
+  assert.strictEqual(f({ kind: "weekend", pattern: "friday", friday: "2026-11-06" }, "backup"), "weekend", "the Friday-alone shape is primary-only");
+  assert.strictEqual(f({ kind: "weekend", pattern: null }, "primary"), "weekend");
+  [["block", "weekend block"], ["split", "weekend split"], ["daily", "weekend daily"]].forEach(([p, w]) => ["primary", "backup"].forEach(role =>
+    assert.strictEqual(f({ kind: "weekend", pattern: p }, role), w, p + " " + role)));
+  assert.strictEqual(f({ kind: "holiday", name: "Thanksgiving" }, "primary"), "Thanksgiving holiday unit");
+  assert.strictEqual(f({ kind: "holiday", name: null }, "backup"), "holiday holiday unit");
+  assert.strictEqual(f(null, "primary"), "-");
+  // drift guard: the board and openSlotsLine (the Copy list, the group e-mails) word every pattern the same, per role
+  Object.keys(H.OPEN_SLOT_PATTERN_WORDS).concat([null, "weird"]).forEach(p => ["primary", "backup"].forEach(role => {
+    const board = f({ kind: "weekend", pattern: p, friday: "2026-11-06" }, role);
+    assert.strictEqual(board, H.openSlotPatternWords(p, role), p + " " + role);
+    assert.strictEqual(H.openSlotsLine({ day: "2026-11-07", role, unit: { kind: "weekend", pattern: p, friday: "2026-11-06" }, reason: null }), "Sat 11/07 - " + role + " (" + board + ") - open", p + " " + role + " line");
+  }));
+  // every call site passes the slot's role. Pin moved deliberately 10/2 at the merge into feat/weekend-pair-claim: the weekend
+  // pair claim's sheet (claimSheet.pair) has its own "Unit:" line - a third call site, which passes claimSheet.role too
+  // (it was written before the role-aware words and read the primary words on a backup pair).
+  assert.ok(src.includes("{boardUnitText(s.unit, s.role)}"), "the board row passes s.role");
+  assert.ok(src.includes("Unit: {boardUnitText(claimSheet.unit, claimSheet.role)}"), "the claim sheet passes claimSheet.role");
+  assert.strictEqual(src.split("boardUnitText(").length - 1, 3, "exactly the three call sites (the board row, the one-day sheet, the pair sheet)");
+  assert.strictEqual(src.split("Unit: {boardUnitText(claimSheet.unit, claimSheet.role)}").length - 1, 2, "both claim sheets (one day, the Sat + Sun pair) pass claimSheet.role");
+  assert.ok(!/boardUnitText\([^,()]*\)/.test(src), "no call site leaves the role out");
 });
 check("openSlotKey(day, role) is 'day|role' - the Set key the only-OPEN filter and the reasons map use", () => {
   assert.strictEqual(H.openSlotKey("2026-11-06", "primary"), "2026-11-06|primary");
@@ -773,7 +815,8 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     // Prompt 23 B2 (9/30) - pin moved from ">= 4 kinds": a weekend filled with the new 'friday' pattern (Khan's standalone
     // Friday, or his Sat+Sun pair beside another Friday) carried no kind in the record. Pin moved again on purpose by the
     // 10/1 follow-ups (item 2): openSlotWeekendKinds keeps 'friday' too (the board and the Copy list word it "weekend,
-    // Friday separate"; the deployed daily-reminder v7 reads it as unknown - plain "weekend" - until its v8 is deployed).
+    // Friday on its own" on primary slots; the deployed daily-reminder v7 reads it as unknown - plain "weekend" - until its
+    // v8 is deployed).
     // Every unit's kind except locked / open / unfilled is carried over, exactly.
     const kept = (out.diagnostics.weekendUnits || []).filter(u => u.kind === "block" || u.kind === "split" || u.kind === "daily" || u.kind === "friday");
     assert.deepStrictEqual(Object.keys(rec.weekendKinds).sort(), kept.map(u => u.friday).sort(), "weekend kinds carried over: " + JSON.stringify(rec.weekendKinds));

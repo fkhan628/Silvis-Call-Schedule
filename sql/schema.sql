@@ -83,7 +83,7 @@
 -- PY004 PAY_READ_ONLY / PY005 PAY_STIPEND_OFF / PY001 PAY_FUTURE / PY002 PAY_NOT_PRIMARY / PY003 PAY_HOURS_OVER);
 -- silvis_pay_enabled(pid) (security definer) reads the switch for the policies and the guard.
 -- Neither is anon-readable (not in the read_all loop; anon's table privileges revoked on top). Nothing that exists is touched.
--- Revision 2026-09-30 s (vacation guard, sql/migrations/2026-09-30-vacation-guard.sql, report-first, NOT yet applied): Faraz 9/30 "need at least
+-- Revision 2026-09-30 s (vacation guard, sql/migrations/2026-09-30-vacation-guard.sql, applied 2026-10-01 16:53:33Z after the probe): Faraz 9/30 "need at least
 -- 2 surgeons around" - one NEW trigger function time_off_vacation_guard() (security definer, search_path public, pg_temp) and one NEW
 -- BEFORE INSERT OR UPDATE trigger time_off_vacation_guard_trg on time_off, firing after time_off_no_call_conflict_trg (unchanged):
 -- VG001 VACATION_TOO_FEW_AROUND when, on a day the row takes the person off, fewer than groupRules.vacations.minSurgeonsAround
@@ -241,7 +241,7 @@ create trigger time_off_no_call_conflict_trg
   before insert or update on public.time_off
   for each row execute function public.time_off_no_call_conflict();
 
--- ---------- vacation guard (2026-09-30, Faraz 9/30 - Prompt 27; sql/migrations/2026-09-30-vacation-guard.sql, revision s - report-first, NOT yet applied)
+-- ---------- vacation guard (2026-09-30, Faraz 9/30 - Prompt 27; sql/migrations/2026-09-30-vacation-guard.sql, revision s - report-first; applied 2026-10-01 16:53:33Z)
 -- "Need at least 2 surgeons around": a vacation is refused when, on a day it takes the person off, fewer than
 -- groupRules.vacations.minSurgeonsAround (blob; a whole number 0-99, absent / junk -> 2 = helpers.js VACATION_GUARD_DEFAULTS)
 -- ACTIVE roster surgeons (active is not false, not type 'external') would stay around. Off = a time_off row, or an East
