@@ -9597,7 +9597,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const auth = { ensureFresh: async () => { st.reads.push("ensureFresh"); return { ok: true, refreshed: !!opt.refreshed }; }, sessionExpired: false };
       const fns = new Function("auth", "resyncPendingRef", "refreshOwnProfile", "refreshBlobRow", "refreshDays", "refreshTradeReqs", "refreshNotifs", "refreshMinVersion",
         "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "loadOffers", "loadPeriods", "blobDirtyRef", "authUserRef", "isPublicMode", "document", "Date",
-        "pollTickMode", "pollCatchUpDue", "eastPollDue", "pollFullRecent",
+        "pollTickMode", "pollCatchUpDue", "eastPollDue", "pollFullRecent", "loadAppDaysRef",
         pollSrc + "\nreturn { refreshAll, refreshEastTables, pollTick, onPollVisibility, clocks: () => ({ lastFullPollAt, lastEastPollAt }) };")(
         auth, refs.resyncPendingRef, async () => { st.reads.push("profile"); }, rd("blob"), rd("days"), rd("trades"), rd("notifications"), rd("minVersion"),
         async (q) => { st.reads.push("time_off:" + q); }, async (q) => { st.reads.push("availability:" + q); },
@@ -9605,11 +9605,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         // outage must not toast once a minute); the moved P15 pin no longer fixed it
         async (q, overridesOnly) => { st.reads.push((overridesOnly ? "east:overrides" : "east:all") + ":" + q); return { ok: !st.eastFail, feedRows: null }; },
         async (q) => { st.reads.push("reviews:" + q); }, async (q) => { st.reads.push("offers:" + q); }, async (q) => { st.reads.push("periods:" + q); },
-        refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue, H.pollFullRecent);
+        refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue, H.pollFullRecent,
+        // Prompt 29 (the merge with main, 10/2): refreshAll reads the APP days through the ref - quiet (false); the stub records the argument
+        ref(async (q) => { st.reads.push("appdays:" + q); }));
       st.take = () => { const r = st.reads.slice(); st.reads.length = 0; return r; };
       return { st, refs, doc, fns };
     };
-    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all:true", "reviews:true", "offers:true", "periods:true"];
+    // Prompt 29 (the merge with main, 10/2): a full refresh also reads the APP days, quietly ("appdays:false"); a hidden tick never does
+    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all:true", "reviews:true", "offers:true", "periods:true", "appdays:false"];
     const sorted = (a) => a.slice().sort();
     const flush = () => new Promise(r => setImmediate(r));
 

@@ -3491,8 +3491,10 @@ ok(!/\r/.test(npPre) && /^[\x00-\x7f]*$/.test(npPre), "the pre-check is LF and A
 
 step("Prompt 28: verify-rls.sh section 16 - anon REST (16a save_no_primary, 16b the seven-key save_offers), the graded probe, leftovers; strict since the record step (PROBE_SETUP and an anon 404 FAIL, no flag); graded against a faked CLI and curl");
 ok(/^echo "== 16\. no-primary days \(2026-10-01, Prompt 28\): save_no_primary \+ save_offers p_np_add \/ p_np_clear - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 16 (no-primary days)");
-const s16 = vr.slice(vr.indexOf('echo "== 16. '), vr.indexOf('echo "RESULT: '));
-ok(s16.length > 0 && vr.indexOf('echo "== 16. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 16 could not be sliced out (after section 15, right before the RESULT line)");
+// pin moved deliberately 10/2 (Prompt 29's merge with main): section 18 (APP call days) follows section 16, so the slice ends at the
+// next section header (vrSectionEnd), else at the RESULT line - section 16's two-REST-call pin must not count section 18's curls.
+const s16 = vr.slice(vr.indexOf('echo "== 16. '), vrSectionEnd('echo "== 16. '));
+ok(s16.length > 0 && vr.indexOf('echo "== 16. ') > vr.indexOf('echo "== 15. ') && (vr.indexOf('echo "== 18. ') < 0 || vr.indexOf('echo "== 18. ') > vr.indexOf('echo "== 16. ')), "verify-rls.sh section 16 could not be sliced out (after section 15 and before section 18, up to the next section header or the RESULT line)");
 const s16code = s16.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 // pins moved deliberately 10/2 (the record step): section 16 reads no flag - SILVIS_NO_PRIMARY_APPLIED / NPSTRICT16 are gone from
 // the whole script (like SILVIS_VACATION_GUARD_APPLIED after its record step)
@@ -3525,11 +3527,13 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   // pins moved deliberately 10/2 (the record step): the header still names section 16 and its anon checks; the header and --help
   // no longer name the flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE again (it ended at SILVIS_NO_PRIMARY_APPLIED
   // from the 10/1 merge with the vacation guard's record step until now)
-  ok(/no-primary days anon RPC checks and probe \(16\)/.test(head) && /anon checks \(1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b\)/.test(head), "verify-rls.sh's header names section 16 and its anon checks");
+  ok(/no-primary days anon RPC checks and probe \(16\)/.test(head) && /anon checks \(1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b[,)]/.test(head), "verify-rls.sh's header names section 16 and its anon checks (moved deliberately 10/2 at Prompt 29's merge: 18a-18d may follow)");
   ok(/SILVIS_PREFS_ROWS_BEFORE - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_NO_PRIMARY_APPLIED dropped)");
 }
 {
-  const code16 = vr.slice(vr.indexOf('echo "== 16. '), vr.indexOf('\necho\necho "RESULT: '));
+  // pin moved deliberately 10/2 (Prompt 29's merge with main): the faked run stops at the next section header (18) - section 18's
+  // anon curls and its probe never run here (section 18 has its own faked run below)
+  const code16 = vr.slice(vr.indexOf('echo "== 16. '), vrSectionEnd('echo "== 16. '));
   // pin moved deliberately 10/2 (the record step): no strict option - section 16 reads no flag (under set -u, with the variable
   // unset); `pre` adds a line before the section, e.g. a SILVIS_NO_PRIMARY_APPLIED left in the environment (the apply script
   // set it), which must change nothing
@@ -4003,7 +4007,7 @@ ok(/^alter table public\.app_call_days +enable row level security;$/m.test(schem
   ok(!/app-call-days\.sql[^\n]*NOT yet applied/.test(schema) && !/Prompt 29[^\n]*NOT yet applied/.test(schema) && !/app_call_days \(Prompt 29[^\n]*NOT yet applied/.test(schema), "schema.sql no longer calls the APP call days migration 'NOT yet applied' anywhere (the record step)");
   ok(schema.includes("\n-- ---------- APP call days (Prompt 29, revision v; sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z)\n") && schema.includes("\n-- Prompt 29 (APP call days, sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z): the APP flag on an EXISTING\n") && (schema.match(/-- (Prompt 29 \(APP call days|app_call_days \(Prompt 29), revision v - report-first; applied 2026-10-02 19:19:27Z\)/g) || []).length === 3, "schema.sql's APP block comments (the table block, the column, silvis_is_app, the self policies, the read policy) read 'report-first; applied 2026-10-02 19:19:27Z'");
   const revV = header.slice(vAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
-  ok(/a FLAG, not a role/.test(revV) && /user_profiles_app_viewer/.test(revV) && /app_call_days \(day date PRIMARY KEY - one APP per day/.test(revV) && /AP001-AP007/.test(revV) && /never anon/.test(revV) && /Letters t and u are taken by prepared, unmerged work/.test(revV), "revision v names the flag decision, the check, the table, the codes, never anon and the taken letters t / u");
+  ok(/a FLAG, not a role/.test(revV) && /user_profiles_app_viewer/.test(revV) && /app_call_days \(day date PRIMARY KEY - one APP per day/.test(revV) && /AP001-AP007/.test(revV) && /never anon/.test(revV) && /Letter t is Prompt 28's no-primary days \(applied, merged ahead of this client\); u is taken by prepared, unmerged work/.test(revV) && !/Letters t and u are taken/.test(revV), "revision v names the flag decision, the check, the table, the codes, never anon and the letters t (merged - moved deliberately 10/2 at the merge with main) / u (taken)");
 }
 
 step("Prompt 29: the probe - self-rolling-back, PROBE_SETUP (absent) first, the is_app check second, the collision guard third, six throwaway users, 69 cases each stating its AFTER string in the header, readbacks filtered to the probe's own users");
@@ -4073,7 +4077,8 @@ step("Prompt 29: verify-rls.sh section 18 - anon REST (18a the table, 18b app_ca
 ok(/^echo "== 18\. APP call days \(2026-10-02, Prompt 29\): app_call_days \+ save_app_days \/ app_call_names \+ user_profiles\.is_app - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 18 (APP call days)");
 const s18 = vr.slice(vr.indexOf('echo "== 18. '), vrSectionEnd('echo "== 18. '));
 ok(s18.length > 0 && vr.indexOf('echo "== 18. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 18 could not be sliced out (after section 15, up to the next section header or the RESULT line)");
-ok(/^# Section 18 \(16 = Prompt 28's no-primary days and 17 = the weekend pair claim are taken on other branches\)\.$/m.test(s18), "section 18's comment says why it is 18 (16 and 17 are taken on other branches)");
+// moved deliberately 10/2 (the merge with main): section 16 sits right above section 18 in this script now
+ok(/^# Section 18 \(16 = Prompt 28's no-primary days, the section above; 17 = the weekend pair claim, taken on its own branch\)\.$/m.test(s18) && vr.indexOf('echo "== 16. ') > 0 && vr.indexOf('echo "== 16. ') < vr.indexOf('echo "== 18. '), "section 18's comment says why it is 18 (16 is the section above it, 17 is on its own branch)");
 const s18code = s18.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 // pins moved deliberately 10/2 (the record step): section 18 reads no flag - SILVIS_APP_DAYS_APPLIED / APSTRICT18 are gone from
 // the whole script (like SILVIS_VACATION_GUARD_APPLIED and SILVIS_NO_PRIMARY_APPLIED after their record steps)
@@ -4272,7 +4277,7 @@ ok(!/^\|[^\n]*(app_call_days|Prompt 29|appdays\.save)[^\n]*NOT APPLIED/m.test(tb
   const apBullet = (guideAll.match(/^- \*\*APP call days \(2026-10-02, [^\n]*/m) || [""])[0];
   const apProof = (guideAll.match(/^Proof: `sql\/probes\/app-call-days-probe\.sql`[^\n]*/m) || [""])[0];
   ok(/^- \*\*APP call days \(2026-10-02, report-first, applied 2026-10-02 19:19 UTC; `sql\/migrations\/2026-10-02-app-call-days\.sql`, revision v\)\.\*\*/.test(apBullet), "guide 4.3 must carry the 'APP call days (2026-10-02, report-first, applied 2026-10-02 19:19 UTC; ..., revision v)' bullet");
-  ok(/section 18 \(16 and 17 are on other branches - 16 Prompt 28's no-primary days, applied and on main; 17 the weekend pair claim, prepared, on its branch; the anon REST checks, the graded probe \+ leftovers; strict since the record step - a PROBE_SETUP or an anon 404 FAILs\)/.test(apProof) && !/taken by prepared work/.test(apProof) && !/SILVIS_APP_DAYS_APPLIED/.test(apProof) && !/_to be filled/.test(apProof) && !/status PREPARED/.test(apProof) && /applied: 2026-10-02 19:19:27 UTC by Faraz/.test(apProof) && /AFTER 69 \/ 69, verify-rls 366 \/ 0 with section 18 graded strictly \(74 \/ 0; 18a-18d HTTP 401\)/.test(apProof) && /the migration file kept as it ran, its sha256 pinned/.test(apProof), "guide 4.3's APP Proof line: section 18 strict (no flag; 16 applied on main, 17 prepared), 'applied: 2026-10-02 19:19:27 UTC' with probe AFTER 69 / 69 and verify-rls 366 / 0, the file kept as it ran");
+  ok(/section 18 \(16 is Prompt 28's no-primary days, applied - the section before it; 17 the weekend pair claim, prepared, on its branch; the anon REST checks, the graded probe \+ leftovers; strict since the record step - a PROBE_SETUP or an anon 404 FAILs\)/.test(apProof) && !/taken by prepared work/.test(apProof) && !/SILVIS_APP_DAYS_APPLIED/.test(apProof) && !/_to be filled/.test(apProof) && !/status PREPARED/.test(apProof) && /applied: 2026-10-02 19:19:27 UTC by Faraz/.test(apProof) && /AFTER 69 \/ 69, verify-rls 366 \/ 0 with section 18 graded strictly \(74 \/ 0; 18a-18d HTTP 401\)/.test(apProof) && /the migration file kept as it ran, its sha256 pinned/.test(apProof), "guide 4.3's APP Proof line: section 18 strict (no flag; 16 applied on main, 17 prepared), 'applied: 2026-10-02 19:19:27 UTC' with probe AFTER 69 / 69 and verify-rls 366 / 0, the file kept as it ran");
   // review 10/2: the client sentences hold before and after the client push (Prompt 28's client is already live - main bc6c89e)
   ok(apProof.endsWith("APP accounts work from the build that ships Prompt 29's client (pushed on Faraz's go; Prompt 28's client, which it follows, is live since 2026-10-02 - main `bc6c89e`); then Faraz sets Role = `app` on each APP account.") && guideAll.includes("APP\naccounts work from the build that ships Prompt 29's client (pushed on Faraz's go; Prompt 28's client, which it follows, is live\nsince 2026-10-02 - main `bc6c89e`); then Faraz sets Role = `app` on each APP account in Setup > Users.*") && !/[Cc]lient ships after Prompt 28's client/.test(guideAll), "guide 4.3's Proof line and guide 21's note: APP accounts work from the build that ships Prompt 29's client (Prompt 28's client already live), not 'ships after Prompt 28's client'");
   ok(guideAll.includes("+ `user_profiles.is_app` (Prompt 29, 10/1 - report-first, applied 2026-10-02; §21) |"), "guide's table row for app_call_days says applied 2026-10-02");

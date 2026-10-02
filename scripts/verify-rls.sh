@@ -1188,7 +1188,7 @@ else
 fi
 
 echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_days / app_call_names + user_profiles.is_app - anon refused, rolled-back probe =="
-# Section 18 (16 = Prompt 28's no-primary days and 17 = the weekend pair claim are taken on other branches).
+# Section 18 (16 = Prompt 28's no-primary days, the section above; 17 = the weekend pair claim, taken on its own branch).
 # sql/migrations/2026-10-02-app-call-days.sql (report-first; applied 2026-10-02 19:19:27Z, revision v): app_call_days (one APP per
 # day - day is the primary key; read by every signed-in role through app_call_days_read, never anon: no anon policy AND anon's table
 # privileges revoked, so an anon request is refused 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke

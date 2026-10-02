@@ -112,8 +112,9 @@
 -- cascade; source 'app' / 'scheduler'; authenticated read through app_call_days_read, never anon - not in the read_all loop, anon's table
 -- privileges revoked; authenticated keeps SELECT only); app_call_names() (security definer, stable: the display names of the APP days)
 -- and save_app_days(p_profile, p_add, p_clear, p_replace) (security definer, volatile; the ONLY write path; AP001-AP007 APP_DAY_* refuse
--- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letters t and
--- u are taken by prepared, unmerged work (independent of this one - either apply order).
+-- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letter t is
+-- Prompt 28's no-primary days (applied, merged ahead of this client); u is taken by prepared, unmerged work (independent - either
+-- apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
