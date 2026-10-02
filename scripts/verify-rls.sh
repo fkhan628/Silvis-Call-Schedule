@@ -6,7 +6,6 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_NO_PRIMARY_APPLIED=1                               grade section 16 strictly (the probe's PROBE_SETUP and the anon 404s = FAIL): only on the run right after sql/migrations/2026-10-01-no-primary-days.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -17,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_NO_PRIMARY_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1062,39 +1061,39 @@ else
 fi
 
 echo "== 16. no-primary days (2026-10-01, Prompt 28): save_no_primary + save_offers p_np_add / p_np_clear - anon refused, rolled-back probe =="
-# sql/migrations/2026-10-01-no-primary-days.sql (report-first, NOT applied; revision t): save_no_primary (security definer) writes one
-# availability row per no-primary day (kind backup_only, role any, note null) for a surgeon himself, the office for a roster id or the
-# scheduler for anyone, and deletes the person's single-day backup_only rows; save_offers (security invoker, seven arguments) calls it inside
-# its own transaction. NP001-NP009 NO_PRIMARY_* refuse before any write. 16a / 16b go over REST as anon and write nothing (refused before
-# the body is used): 401/403 = the function exists and anon holds no EXECUTE; 404 = not applied yet (16b: PGRST202 - the schema cache does
-# not know p_np_add / p_np_clear, the gate before the Prompt 28 client push). 16c runs sql/probes/no-primary-probe.sql through the linked
-# CLI (rolls itself back; 43 cases graded by name - its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP:
-# save_no_primary is absent - a PASS, like the anon 404s, unless SILVIS_NO_PRIMARY_APPLIED=1 (the run right after the apply), then each is a
-# FAIL; its collision guard (PROBE_SETUP: live rows already sit in the probe window) is always a FAIL. 16d counts the probe's leftovers
-# either way, by the probe's identity only (review 10/1): the rows only it writes (tagged) and s3's availability / call_offers rows in its
-# window - never another person's row, and never a ready-to-paste DELETE for a row that is not tagged.
-NPSTRICT16="${SILVIS_NO_PRIMARY_APPLIED:-}"
+# sql/migrations/2026-10-01-no-primary-days.sql (report-first; applied 2026-10-02 12:05:22Z, revision t): save_no_primary (security
+# definer) writes one availability row per no-primary day (kind backup_only, role any, note null) for a surgeon himself, the office for a
+# roster id or the scheduler for anyone, and deletes the person's single-day backup_only rows; save_offers (security invoker, seven
+# arguments) calls it inside its own transaction. NP001-NP009 NO_PRIMARY_* refuse before any write. 16a / 16b go over REST as anon and write
+# nothing (refused before the body is used): 401/403 = the function exists and anon holds no EXECUTE; a 404 is a FAIL (16b: PGRST202 - the
+# schema cache does not know p_np_add / p_np_clear, the gate before the Prompt 28 client push). 16c runs sql/probes/no-primary-probe.sql
+# through the linked CLI (rolls itself back; 43 cases graded by name - its header lists each AFTER string). The functions exist since the
+# apply, so the probe's PROBE_SETUP (save_no_primary is absent) and an anon 404 are FAILs - strict since the record step, which dropped the
+# flag for the run right after the apply (before the apply they passed as the not-applied picture); its collision guard (PROBE_SETUP: live
+# rows already sit in the probe window) is a FAIL too. 16d counts the probe's leftovers either way, by the probe's identity only (review
+# 10/1): the rows only it writes (tagged) and s3's availability / call_offers rows in its window - never another person's row, and never a
+# ready-to-paste DELETE for a row that is not tagged.
 # 16a. anon may not execute save_no_primary
 line=$(curl -s -o $T/vr16a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_no_primary" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_add":[],"p_clear":[]}')
 echo "   16a anon rpc save_no_primary: $line  body: $(head -c 160 $T/vr16a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_no_primary refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$NPSTRICT16" = "1" ]; then bad "anon rpc save_no_primary: HTTP 404 with SILVIS_NO_PRIMARY_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc save_no_primary: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc save_no_primary: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc save_no_primary: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) bad "anon rpc save_no_primary: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 16b. the seven-key save_offers call: PostgREST must know p_np_add / p_np_clear before the Prompt 28 client is pushed
 line=$(curl -s -o $T/vr16b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_rows":[],"p_clear":[],"p_period":null,"p_mode":null,"p_np_add":[],"p_np_clear":[]}')
 echo "   16b anon rpc save_offers (seven keys): $line  body: $(head -c 160 $T/vr16b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "PostgREST knows save_offers' p_np_add / p_np_clear (anon seven-key call refused, $line): the Prompt 28 client may send them";;
-  "HTTP 404") if [ "$NPSTRICT16" = "1" ]; then bad "anon rpc save_offers with seven keys: HTTP 404 with SILVIS_NO_PRIMARY_APPLIED=1 (PGRST202: the schema cache does not know p_np_add / p_np_clear) - do NOT push the Prompt 28 client"; else ok "anon rpc save_offers with seven keys: HTTP 404 - not applied yet (do not push the Prompt 28 client before the apply)"; fi;;
-  *) bad "anon rpc save_offers with seven keys: $line (expected 401/403, or 404 before the apply)";;
+  "HTTP 404") bad "anon rpc save_offers with seven keys: HTTP 404 (PGRST202: the schema cache does not know p_np_add / p_np_clear, which exist since the 2026-10-02 apply) - do NOT push the Prompt 28 client";;
+  *) bad "anon rpc save_offers with seven keys: $line (expected 401/403)";;
 esac
 if linked; then
   PROBE16="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/no-primary-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE16" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: save_no_primary is absent'; then
-    if [ "$NPSTRICT16" = "1" ]; then bad "no-primary probe: PROBE_SETUP - save_no_primary is absent with SILVIS_NO_PRIMARY_APPLIED=1 (the function should exist after the apply)"; else ok "no-primary probe: save_no_primary is absent (before the migration: PROBE_SETUP)"; fi
+    bad "no-primary probe: PROBE_SETUP - save_no_primary is absent (the function exists since the 2026-10-02 apply)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
     bad "no-primary probe reported no sentinel-terminated PROBE_RESULTS (setup error, a fixture collision or truncated output: $(echo "$out" | head -c 400))"
   else

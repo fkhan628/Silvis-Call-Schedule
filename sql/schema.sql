@@ -93,7 +93,7 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
--- Revision 2026-10-01 t (no-primary days, sql/migrations/2026-10-01-no-primary-days.sql, report-first, NOT yet applied): Faraz 10/1 (Prompt 28)
+-- Revision 2026-10-01 t (no-primary days, sql/migrations/2026-10-01-no-primary-days.sql, applied 2026-10-02 12:05:22Z after the probe): Faraz 10/1 (Prompt 28)
 -- - surgeons mark their own no-primary days (Burchett: unavailable for primary, backup is fine). One NEW function save_no_primary(p_person,
 -- p_add, p_clear) (security definer, search_path public, pg_temp): one availability row per day, kind backup_only, role any, note null, source
 -- app / office-relay / email-relay; it clears the person's SINGLE-day backup_only rows of any source and never splits a range. save_offers
@@ -1093,7 +1093,7 @@ create trigger call_offers_delete_guard_trg
 --   save_offers stamps entered_by = its profile id, source 'office-relay', and turns the transaction-local flag
 --   silvis.office_relay on around its delete / upsert so the call_offers policies admit the rows (security invoker kept);
 --   the freeze (OF003 / OM005) applies to it as to a surgeon.
--- Prompt 28 (2026-10-01, revision t; sql/migrations/2026-10-01-no-primary-days.sql - report-first, NOT yet applied): no-primary
+-- Prompt 28 (2026-10-01, revision t; sql/migrations/2026-10-01-no-primary-days.sql - report-first; applied 2026-10-02 12:05:22Z): no-primary
 --   days. save_no_primary(p_person, p_add, p_clear) - SECURITY DEFINER (search_path public, pg_temp) because a surgeon cannot
 --   write availability under RLS (no policy changes): one availability row per day, kind backup_only, role any, note null,
 --   source app / office-relay / email-relay and created_by as save_offers'; it deletes the person's SINGLE-day backup_only rows of

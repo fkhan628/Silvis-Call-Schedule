@@ -1,7 +1,11 @@
 -- ============================================================================
 -- Silvis Call Schedule - no-primary days PRE-CHECK (2026-10-01, Prompt 28; sql/migrations/2026-10-01-no-primary-days.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again
+-- REPORT-FIRST; APPLIED 2026-10-02 12:05:22Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again
 -- right after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record, only the first one is a gate.
+-- As run (2026-10-02): before the apply the gate read np_fn=no offers5=yes offers7=no overloads=1 and right after it
+-- np_fn=yes offers5=no offers7=yes overloads=1, rows 2, 3 and 5 the same both times and no row 4 (no offer conflict) -
+-- docs/SCHEMA-REVIEW.md "2026-10-01 - no-primary days" quotes them. This header was kept byte for byte as reviewed until the apply (the apply script pinned its sha256); the
+-- record step turned it APPLIED and corrected row 2's note (the client reads availability in pages since residual 4).
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/no-primary-precheck.sql
 --
@@ -10,8 +14,8 @@
 --                                       before the apply it reads np_fn=no offers5=yes offers7=no overloads=1,
 --                                       after it np_fn=yes offers5=no offers7=yes overloads=1
 --                                       (offers5 / offers7 = the five- / seven-argument save_offers)
---   2 availability total                rows=<n> - the client reads availability unpaged (PostgREST max-rows, Supabase default
---                                       1000); each no-primary day adds a row
+--   2 availability total                rows=<n> - each no-primary day adds a row (the client reads availability in pages of
+--                                       1000 since residual 4 - PostgREST max-rows, Supabase default 1000)
 --   3 backup_only rows                  per person: single=<n> ranges=<n> with_note=<n> sources=<list> - with_note is a COUNT of
 --                                       rows whose note is not empty (never the text: notes in an anon-readable table carry no reasons)
 --   4 offer conflict                    per person: the days (today or later) with a primary / either offer on a day a backup_only

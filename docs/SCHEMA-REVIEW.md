@@ -15,7 +15,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
-| `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01, NOT APPLIED - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
+| `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01 - report-first, **applied live 2026-10-02 12:05 UTC** - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
@@ -2063,7 +2063,7 @@ Not re-run against the live project after the record step (the record lane ran n
 
 ## 2026-10-01 - no-primary days: save_no_primary + save_offers p_np_add / p_np_clear (Faraz 10/1, Prompt 28; `sql/migrations/2026-10-01-no-primary-days.sql`)
 
-**Status: PREPARED - report-first, NOT APPLIED.**
+**Status: APPLIED 2026-10-02 12:05:22Z** (Faraz, from PowerShell through Git's bash.exe - `apply-no-primary-days.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then.
 
 Faraz 10/1: "I do want them to be able to do that" - surgeons mark their own no-primary days. Burchett's e-mail of 10/1: "These
 are days I am at Jackson County - I need to be blocked out as unavailable for primary call. I can cover backup call these
@@ -2165,8 +2165,10 @@ read (the read headers built once, before page 1); each later page starts ON the
 unless that row comes back first (a row deleted or inserted before the boundary between two requests, or an ignored offset);
 the newest-started read wins in both loaders (an older read finishing late is dropped); the CLI readers
 (`scripts/preview-generate.js`, `scripts/publish-preview.js`, `scripts/import-seed.js`) order on `id` last too. The migration's
-and the pre-check's header sentence "the client reads availability unpaged" predates the fix - both files are kept byte for byte as reviewed
-(sha256-pinned by the apply script). The pre-check still prints the total. (5) closed in review (10/1): `save_offers` now takes
+and the pre-check's header sentence "the client reads availability unpaged" predates the fix - both files were kept byte for byte as
+reviewed (sha256-pinned by the apply script). *As run (2026-10-02): the migration stays byte for byte as it ran (its body sha256-pinned in
+`test/schema.test.js`; its trailer line notes the stale sentence); the record step corrected the pre-check's header (comment only).*
+The pre-check still prints the total. (5) closed in review (10/1): `save_offers` now takes
 `save_no_primary`'s per-person advisory lock before its first write (the lock is re-entrant, so the nested call takes it again),
 so its own `NP009` read and a concurrent mark of the same person from another device run one after the other - before, two
 Saves committed at the same instant (one offering primary on a day, the other marking it No primary) could both pass. (6) NP009
@@ -2190,7 +2192,10 @@ probe BEFORE the migration (the dry run sees it), and section 16 graded the real
 `postgres` role, which bypasses RLS as the owner of `availability` - no `force row level security` anywhere), Supabase's own
 `auth.uid()` and grants, and PostgREST (the HTTP codes of 16a / 16b, the schema-cache reload). The live database is what the
 apply proves - P1 and S1 for the definer's write, 16b for the cache; section 16 grades exact strings and names any difference
-by case.
+by case. *As run (2026-10-02): the first live run read all 43 cases exactly as their header strings (`<name>` = Acton,
+`<today M/D>` = 10/2) - no typo, no other wording, P1 and S1 included (the definer's write); 16a / 16b answered HTTP 401
+`42501 permission denied for function ...` (the cache resolved the seven-key call right after the reload); section 16 graded
+46 / 0.*
 
 **The pre-check (read-only; run before and after the apply).** `sql/probes/no-primary-precheck.sql` - one SELECT returning
 `ord, section, person_id, detail`; row 1 is the apply gate (`np_fn=no offers5=yes offers7=no overloads=1` before,
@@ -2332,7 +2337,8 @@ failure, asks for a typed APPLY before the migration, writes everything to a tim
 "PASTE THIS BACK TO CLAUDE CODE" block; the record step is done from that block. Its CLI calls pass `--agent=yes` (review
 10/1): the CLI's `-o json` is a bare array in a plain terminal and the `{boundary, rows, warning}` envelope when it detects an
 AI agent, so the flag makes every run read the same shape - and its parsers accept both. A stop after the migration applied
-prints the rollback lines below.
+prints the rollback lines below. Faraz ran it on 2026-10-02 at `3c59e79` (the observed lines at the end); the record step followed
+from its paste-back block.
 
 **Rolling back** (nothing else refers to `save_no_primary`; the five-argument text is the coordinator file's):
 
@@ -2343,4 +2349,80 @@ prints the rollback lines below.
 
 A rollback after the client push breaks only no-primary Saves (the client omits the np keys when empty).
 
-observed: _to be filled from Faraz's apply log_
+observed (apply, 2026-10-02): applied 2026-10-02 12:05:22Z (`apply-no-primary-days.sh` step 4: the migration file through
+`supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz, from PowerShell through Git's
+bash.exe (log `apply-no-primary-days-20261002T120405Z.log`, outside the repo, result `APPLIED AND VERIFIED`; repo HEAD
+`3c59e79` on `feat/no-primary-days`; the migration's sha256 `e77a005aceb2ff74acd293b12102295836870faf3d5564c5fb2651e038296f08`
+= the expected one, the probe's, the pre-check's and `scripts/verify-rls.sh`'s sha256 matched too; supabase CLI 2.84.2, the
+workdir linked to `bzhsroegtagqhutbnsrp`; APPLY typed at the prompt). Step 1, the pre-check (read-only) - gate before:
+`np_fn=no offers5=yes offers7=no overloads=1`; its facts (never a stop), as the log printed them:
+
+```text
+2 availability total: rows=45
+3 backup_only rows s2: single=18 ranges=0 with_note=18 sources=seed,setup
+5 primary held on a no-primary day s2: days=2026-10-15
+```
+
+(no row 4: no offer conflict). Step 2, signatures before: `save_offers(text, jsonb, date[], uuid, text) invoker` -
+`save_no_primary` absent, the five-argument `save_offers` the only overload. Step 3, probe BEFORE: `PROBE_SETUP:
+save_no_primary is absent - sql/migrations/2026-10-01-no-primary-days.sql is not applied` (nothing else ran). Step 5, gate
+after: `np_fn=yes offers5=no offers7=yes overloads=1` (rows 2, 3 and 5 unchanged); signatures after: `save_no_primary(text,
+date[], date[]) definer;save_offers(text, jsonb, date[], uuid, text, date[], date[]) invoker`. Step 6, probe AFTER - 43 cases,
+every one as the probe table above lists (`<name>` = Acton, `<today M/D>` = 10/2), as the log printed them (S11 / S12 keep the
+CLI's JSON escaping - a backslash before each double quote - which section 16's graders strip):
+
+```text
+A1=ok np_added=1 src=email-relay by=scheduler
+A2=ok np_cleared=1
+A3=ERR NP008 NO_PRIMARY_ON_CALL: Acton holds primary on 11/5 - trade those days first, then mark them No primary
+A4=ERR NP005 NO_PRIMARY_PAST: 4/6 is before today (10/2) in Central time - a past day stays as it was
+A5=ERR NP007 NO_PRIMARY_RANGE: 11/11 is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements
+A6=ok np_added=0 np_kept=1
+B1=ERR NP008 NO_PRIMARY_ON_CALL: Acton holds primary on 11/5 - trade those days first, then mark them No primary
+B1s=offer_1101=none np_1115=0
+B2=ERR NP004 NO_PRIMARY_BAD_DAY: 11/15 is both marked and cleared in one save - nothing was saved
+B3=ERR NP004 NO_PRIMARY_BAD_DAY: a day in the list is empty - nothing was saved
+C1=ok np_added=1 src=office-relay by=self
+C2=ERR OS004 OFFERS_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only
+C3=ERR NP003 NO_PRIMARY_UNKNOWN_PERSON: zz is not a roster id - the office relays for a roster surgeon only
+C4=ERR NP006 NO_PRIMARY_FROZEN: offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/22)
+C5=ERR NP001 NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)
+D1=ERR NP005 NO_PRIMARY_PAST: 4/6 is before today (10/2) in Central time - a past day stays as it was
+D2=ERR NP005 NO_PRIMARY_PAST: 4/6 is before today (10/2) in Central time - a past day stays as it was
+F1=ERR NP006 NO_PRIMARY_FROZEN: offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/20)
+F2=ERR NP006 NO_PRIMARY_FROZEN: offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/21)
+H1=ERR NP008 NO_PRIMARY_ON_CALL: Acton holds primary on 11/5 - trade those days first, then mark them No primary
+H2=ok np_added=1
+N1=ERR 42501 permission denied for function save_no_primary
+N2=ERR NP001 NO_PRIMARY_NOT_LINKED: sign in with an account that is linked to a roster entry to mark no-primary days
+O1=ok upserted=1 np_added=0
+P1=np_fn=yes np_definer=yes np_path=yes offers7=yes offers5=no offers_invoker=yes overloads=1 np_anon=no np_auth=yes offers_anon=no offers_auth=yes
+R1=ERR OS002 OFFERS_NOT_YOURS: only the scheduler or the office can save another surgeon's offers
+R2=ERR NP002 NO_PRIMARY_NOT_YOURS: only the scheduler or the office can mark another surgeon's no-primary days
+R3=ERR NP009 NO_PRIMARY_OFFER_CONFLICT: Acton offers primary on 11/13 and marks it No primary - keep one of the two (nothing was saved)
+S1=ok np_added=2 np_cleared=0 rows=2 src=app by=s3 role=any note=null
+S10=ok np_cleared=0 unavailable=1
+S11=ERR 42501 new row violates row-level security policy for table \"availability\"
+S12=ERR 42501 new row violates row-level security policy for table \"availability\"
+S13=ERR NP009 NO_PRIMARY_OFFER_CONFLICT: Acton offers primary on 11/10 and marks it No primary - keep one of the two (nothing was saved)
+S2=ok np_added=0 np_kept=2 rows=2
+S3=ok deleted=1 np_added=1 offer=none np=1
+S4=ok np_added=1 offer=backup np=1
+S5=ok upserted=1 np_cleared=1 offer=primary np=0
+S6=ERR NP009 NO_PRIMARY_OFFER_CONFLICT: Acton offers primary on 11/2 and marks it No primary - keep one of the two (nothing was saved)
+S6s=offer=none np=1
+S7=ERR NP009 NO_PRIMARY_OFFER_CONFLICT: Acton offers primary on 11/13 and marks it No primary - keep one of the two (nothing was saved)
+S8=ok np_cleared=1 left=0
+S9=ERR NP007 NO_PRIMARY_RANGE: 11/11 is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements
+V1=ok np_added=1
+```
+
+Step 7, `SILVIS_NO_PRIMARY_APPLIED=1 bash scripts/verify-rls.sh` (section 16 graded strictly): `RESULT: 338 passed, 0 failed` -
+16a `HTTP 401` (`permission denied for function save_no_primary`), 16b `HTTP 401` (`permission denied for function save_offers`:
+PostgREST knows `p_np_add` / `p_np_clear`), every one of the 43 cases PASS and `no-primary probe persisted nothing (leftover
+count 0: ...)`; sections 1-15 green with every leftover count 0; the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d, 14c) skipped - no
+JWT set. The record step (one commit, item 6): this status, table (a)'s `availability` row, schema.sql revision t and its block
+comment, the migration's trailer line and sha256 pin, the probe's and the pre-check's headers, verify-rls section 16 strict by
+default with `SILVIS_NO_PRIMARY_APPLIED` dropped, guide 4.3, the rules doc's section 1 row, and the test pins with them. Not
+re-run against the live project after the record step (the record lane ran nothing live); the next plain
+`bash scripts/verify-rls.sh` grades section 16 strictly with no flag.

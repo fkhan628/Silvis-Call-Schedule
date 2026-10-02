@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - no-primary days PROBE (2026-10-01, Faraz 10/1 - Prompt 28: surgeons mark their own no-primary days;
--- sql/migrations/2026-10-01-no-primary-days.sql, REPORT-FIRST, NOT APPLIED). Proves save_no_primary() and the extended
+-- sql/migrations/2026-10-01-no-primary-days.sql, REPORT-FIRST; APPLIED 2026-10-02 12:05:22Z). Proves save_no_primary() and the extended
 -- save_offers(... p_np_add, p_np_clear) on the LIVE database WITHOUT PERSISTING ANYTHING.
 --
 -- Same mechanism as the other probes: run the whole file as ONE batch through the linked Supabase CLI (the Management API
@@ -19,6 +19,11 @@
 -- sql/migrations/2026-10-01-no-primary-days.sql is not applied' (nothing else runs - that is every case's BEFORE result).
 -- AFTER it every case below must read as listed. The roster is READ from the live blob (call_schedule_data 'main': s3's name
 -- in the NP008 / NP009 texts, the office's roster check), never written.
+-- As run: the migration was applied 2026-10-02 12:05:22Z (schema.sql revision t); the probe read PROBE_SETUP (save_no_primary is
+-- absent) before it and all 43 cases below as listed after it (<name> = Acton, <today M/D> = 10/2). Until the record step
+-- verify-rls read PROBE_SETUP and the anon 404s as the not-applied picture (unless its flag for the run right after the apply was
+-- set); since the record step, which dropped that flag, section 16 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is
+-- history.
 --
 -- Fixtures are FAR-FUTURE days in 2030-11 plus the past day 2020-04-06 (no live day is touched). The collision guard looks
 -- only at what the fixtures and the readbacks can meet: s3's availability / call_offers / time_off rows in 2030-11 (an
