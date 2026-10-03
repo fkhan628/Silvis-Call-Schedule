@@ -131,6 +131,9 @@
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-app { font-size: 9px; }
+      /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
+         tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
+      .cal-line.cal-app { margin-top: 0; line-height: 9.5px; }
       .cal-app-tag { margin-right: 1px; }
       .cal-app-name { display: none; }
       .cal-app-code { display: inline; }
@@ -371,9 +374,17 @@ function CallSchedule() {
   // Spec F (fix/painter-dark-mode, 10/3 - BEHAVIOUR): My APP days' unsaved taps are never dropped silently. AppDaysCard reports
   // its draft count into appDaysDirtyRef; every way off Mine goes through setView (the tabs, an Alerts row, the jumps), which
   // asks first - the painter's model: confirm, then the draft goes - and stays on Mine when the answer is no.
+  // Review of spec F: the guard reads the CURRENT view through viewRef, never the render's `view`, so a setView held by a
+  // long-lived callback (an effect's listener, e.g. Prompt 30's service-worker message handler) still asks; setView returns
+  // false when it stayed (the caller stops: no panel closed, no editor day set, no trade card filled) and true when it moved.
+  // The ref moves with the call, so a second setView in the same handler (a jump right after a tab switch) does not ask again
+  // before the re-render. reloadForUpdate = both update banners' reload: it asks too (an iPhone never shows beforeunload), and
+  // after an OK switches the card's beforeunload question off (APP_DAYS_UNLOAD) so a desktop browser does not ask twice.
   const appDaysDirtyRef = useRef(0);
-  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || view !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };
-  const setView = (k) => { if (k !== view && !leaveMineOk("leave")) return; setViewState(k); };
+  const viewRef = useRef(view); viewRef.current = view;
+  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || viewRef.current !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };
+  const setView = (k) => { if (k !== viewRef.current && !leaveMineOk("leave")) return false; viewRef.current = k; setViewState(k); return true; };
+  const reloadForUpdate = () => { if (!leaveMineOk("reload")) return false; APP_DAYS_UNLOAD.confirmed = true; if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); return true; };
 
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
@@ -1592,7 +1603,10 @@ function CallSchedule() {
       const code = appDaysErrorCode(r.error);
       let reload = null;
       if (code === "AP002" || code === "AP005" || code === "AP006" || code === "AP007" || appDaysSaveUnsure(r.error, r.status)) reload = await loadAppDays(true);
-      return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, reloaded: reload === "ok" }) };
+      const words = appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, reloaded: reload === "ok" });
+      // spec F review: the APP left Mine while this save was running - the card that shows a refusal is gone, so say it here
+      if (viewRef.current !== "myschedule") showToast("My APP days: " + words, "error");
+      return { ok: false, words };
     } finally { setAppDaysBusy(false); }
   };
   // saveAppDayFromEditor(day, mode, profileId, holderId) - the scheduler's APP line in the day editor, saved at once (apart
@@ -3425,6 +3439,7 @@ function CallSchedule() {
   // counter-party (and the return day when one was found) from the vacation-conflict box or the day editor's link.
   // The scheduler's From follows the holder the suggestion was made for; a member always proposes for himself.
   const proposeTradeForDay = (day, role, pick) => {
+    if (!setView("timeoff")) return; // spec F review: Cancel on the unsaved-APP-days question leaves the trade card untouched
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
     setTradeKind("trade"); // Prompt 19: every entry point here reads "Propose a trade" (the pick may carry a return day)
@@ -3432,7 +3447,6 @@ function CallSchedule() {
     else if (isScheduler && pick && pick.from && poolSurgeons.some(s => s.id === pick.from)) setTradeFrom(pick.from); // a pool member only - never an outside surgeon written in by hand (review 9/24)
     if (pick && pick.to) { setTradeTo(pick.to); setTradeReturnDay(pick.returnDay || ""); if (pick.returnRole) setTradeReturnRole(pick.returnRole); }
     setEditorDay(null);
-    setView("timeoff");
     focusTradeCard(); // land on the card (scroll + first empty field) once it renders
   };
 
@@ -3845,9 +3859,9 @@ function CallSchedule() {
   const goToDay = (day) => {
     if (!suIsIso(day)) return;
     if (refuseUnreadDay()) return; // review 9/28: no day opens over an unread schedule (Setup, Time off, trades)
+    if (!setView("calendar")) return; // spec F review: Cancel on the unsaved-APP-days question opens nothing
     const d = parse(day);
     setCalMonth(d.getMonth()); setCalYear(d.getFullYear());
-    setView("calendar");
     setEditorDay(day);
   };
   // --- Generate (preview -> Accept & Publish) ---
@@ -6502,6 +6516,7 @@ function CallSchedule() {
   // `from` (My schedule's row owner): the scheduler giving away a surgeon he picked in mine-person gets that surgeon as
   // From - a pool member only, like proposeTradeForDay's pick.from - so the card's day pick matches the holder.
   const proposeGiveForDay = (day, role, from) => {
+    if (!setView("timeoff")) return; // spec F review: Cancel on the unsaved-APP-days question leaves the trade card untouched
     setTradeDay(day);
     setTradeRole(role === "backup" ? "backup" : "primary");
     setTradeKind("give");
@@ -6509,14 +6524,13 @@ function CallSchedule() {
     if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);
     else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);
     setEditorDay(null);
-    setView("timeoff");
   };
   // Day-click summary (9/27): an OPEN slot's summary (a linked surgeon, today onward) and the coverage strip's open counts
   // (every signed-in non-scheduler) lead to the Open shifts board, where the claim is made - the board's eligibility and
   // its claim sheet are computed only on that view.
   const openShiftsBoard = () => {
+    if (!setView("openshifts")) return; // spec F review: the editor stays as it was on Cancel
     setEditorDay(null);
-    setView("openshifts");
   };
   const rulesImported = surgeonRules !== undefined && groupRules !== undefined && holidays !== undefined;
   // Setup issues (Slice E): computed warnings - roster ids/codes unique, rules
@@ -6879,11 +6893,12 @@ function CallSchedule() {
           <button data-testid="session-expired-signin" onClick={openSignInAgain} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Sign in</button>
         </div>
       )}
-      {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated */}
+      {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated. Both banners' reload buttons
+          ask first while My APP days holds unsaved taps (spec F review: reloadForUpdate - an iPhone never shows beforeunload) */}
       {forceUpdate && !paintSheet && !offerSheet && (
         <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>This app version ({APP_VERSION}) is below the required minimum ({forceUpdate.min_version}). {forceUpdate.message}</span>
-          <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
+          <button onClick={reloadForUpdate} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
         </div>
       )}
       {/* Update-available banner (version.json). The three fixed bottom banners stack 44 px apart through css.bottomBanner
@@ -6893,7 +6908,7 @@ function CallSchedule() {
       {updateAvailable && !paintSheet && !offerSheet && (
         <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
-          <button onClick={()=>{ if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); }} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
+          <button onClick={reloadForUpdate} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
           <button aria-label="Dismiss" onClick={()=>{ updateDismissedRef.current = updateAvailable; setUpdateAvailable(null); }} style={{background:"none",border:"none",color:"#8a9aa8",cursor:"pointer",fontSize:14,padding:"2px 6px"}}>x</button>
         </div>
       )}
@@ -7176,7 +7191,7 @@ function CallSchedule() {
               const tradeT = giveT ? null : notifTradeProposal(n);   // a pending two-way trade this account is asked to answer
               const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
               return (
-              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab){setView(targetTab);setShowNotifs(false);markNotifsSeen();}}}
+              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();}}}
                 style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
@@ -9627,8 +9642,12 @@ function offersLoadVerdict(st) {
 // dark sheet's active-navy rule otherwise lifts to #2E5090, dropping the "+ You" / removal / today outlines); a drafted day shows
 // the unsaved mark "*" (T.paintText, the painters' orange) with a key line under the grid. Unsaved taps are never lost silently
 // (BEHAVIOUR, spec F - the painter's model: confirm before the draft goes): the card reports its count through onDirty, and
-// CallSchedule asks (helpers.appDaysLeaveWords) before a tab switch or "Sign in again" takes the APP off Mine; closing or
-// reloading the page with a draft gets the browser's leave-page question (beforeunload).
+// CallSchedule asks (helpers.appDaysLeaveWords) before a tab switch, "Sign in again" or an update banner's reload takes the APP
+// off Mine; closing or reloading the page with a draft gets the browser's leave-page question (beforeunload) in a desktop
+// browser (an Android browser on a reload) - an iPhone never shows it and closing an app from a phone's switcher skips it, so
+// the words say Save first. APP_DAYS_UNLOAD.confirmed (set by CallSchedule.reloadForUpdate after its own question was
+// answered OK) switches that question off, so a confirmed update reload is not asked about twice.
+const APP_DAYS_UNLOAD = { confirmed: false };
 function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {
   const T = THEME[dk ? "dark" : "light"];
   const todayC = todayOrCentral(today);
@@ -9661,11 +9680,11 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
   React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []); // eslint-disable-line
   React.useEffect(() => {
     if (!diff.count) return undefined;
-    const ask = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    const ask = (e) => { if (APP_DAYS_UNLOAD.confirmed) return undefined; e.preventDefault(); e.returnValue = ""; return ""; };
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
   }, [diff.count > 0]); // eslint-disable-line
-  const listOf =(items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
+  const listOf = (items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
   const applyPlan = (list, label, bad) => {
     const plan = appDaysPlan(list, ctx);
     if (plan.go.length) setDraft(dr => { const n = { ...dr }; plan.go.forEach(x => { n[x] = true; }); return n; });

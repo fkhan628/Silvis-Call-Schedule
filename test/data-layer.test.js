@@ -2738,8 +2738,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const en = src.indexOf("  const editorNav = (delta) => {"), pg = src.indexOf("  const proposeGiveForDay = (day, role, from) => {");
     assert.ok(en > 0 && pg > en && pg > src.indexOf("const proposeTradeForDay = (day, role, pick) => {"), "proposeGiveForDay sits after editorNav");
     const give = src.slice(pg, src.indexOf("\n  };\n", pg));
-    for (const w of ["setTradeDay(day);", 'setTradeRole(role === "backup" ? "backup" : "primary");', 'setTradeKind("give");', 'setTradeReturnDay("");', "if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);", "else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);", "setEditorDay(null);", 'setView("timeoff");']) assert.ok(give.includes(w), "proposeGiveForDay: " + w);
-    assert.ok(src.includes('  const openShiftsBoard = () => {\n    setEditorDay(null);\n    setView("openshifts");\n  };'), "openShiftsBoard closes the editor and shows the board");
+    for (const w of ["setTradeDay(day);", 'setTradeRole(role === "backup" ? "backup" : "primary");', 'setTradeKind("give");', 'setTradeReturnDay("");', "if (mySurgeon && !isScheduler) setTradeFrom(mySurgeon);", "else if (isScheduler && from && poolSurgeons.some(s => s.id === from)) setTradeFrom(from);", "setEditorDay(null);", 'if (!setView("timeoff")) return;']) assert.ok(give.includes(w), "proposeGiveForDay: " + w); // fix/painter-dark-mode review: setView first, stop on a refusal (spec F)
+    assert.ok(src.includes('  const openShiftsBoard = () => {\n    if (!setView("openshifts")) return; // spec F review: the editor stays as it was on Cancel\n    setEditorDay(null);\n  };'), "openShiftsBoard shows the board and closes the editor (nothing when setView refused - fix/painter-dark-mode review)");
     assert.ok(src.includes("onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard} openOnBoard={(d, r) => boardKeys.has(openSlotKey(d, r))}"), "the editor mount passes both callbacks and the board's slot predicate");
     assert.ok(src.includes("const boardKeys = useMemo(() => new Set(boardSlots.map(s => openSlotKey(s.day, s.role))), [boardSlots]);") && src.indexOf("const boardKeys = useMemo(") > src.indexOf("const boardSlots = board.slots;"), "boardKeys is the board's own slot list");
     const mine = src.slice(src.indexOf("const daysBlock = (who, own) => {"), src.indexOf("// end of daysBlock"));
@@ -11457,9 +11457,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     await acheckP("P29 behaviour: saveMyAppDays (lifted verbatim) - only an APP; > 400 days refused with no request; ONE save for its own profile (p_replace false); ok reloads and answers the note; AP002 / AP005 / AP006 / AP007 reload, AP003 / AP004 do not; no audit, no notification", async () => {
       const mk = (answer, isApp) => {
-        const st = { saves: [], loads: 0, busy: [] };
+        const st = { saves: [], loads: 0, busy: [], toasts: [] };
         const ctx = {
           console: { warn() {}, log() {} }, isApp, authUser: { id: PA }, APP_DAYS_MAX_SAVE: H.APP_DAYS_MAX_SAVE, auth: { sessionExpired: !!mk.expired },
+          viewRef: { current: mk.view || "myschedule" }, showToast: (m, tone) => { st.toasts.push([m, tone]); },
           appSavedNote: H.appSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords, appDaysSaveUnsure: H.appDaysSaveUnsure,
           appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
           loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; return mk.reload || "ok"; },
@@ -11515,7 +11516,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         r = await t.fn(["2026-12-10"], []);
         assert.deepStrictEqual(plain(r), { ok: false, words: "the words - nothing was saved" }, code);
         assert.strictEqual(t.st.loads, reload, code + (reload ? " reloads the stale picture" : " does not reload"));
+        assert.deepStrictEqual(t.st.toasts, [], code + ": on Mine the card shows the refusal - no toast");
       }
+      // review of fix/painter-dark-mode (spec F): the APP left Mine while the save ran (the card is gone) - the refusal is toasted;
+      // a save that lands off Mine toasts nothing (the calendar shows it)
+      mk.view = "calendar";
+      t = mk({ ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 already has Jo Applegate - nothing was saved" }) }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.deepStrictEqual(plain(t.st.toasts), [["My APP days: 12/10 already has Jo Applegate - nothing was saved", "error"]], "a refusal off Mine is toasted");
+      t = mk({ ok: true, result: { ok: true } }, true);
+      r = await t.fn(["2026-12-10"], []);
+      mk.view = null;
+      assert.deepStrictEqual([r.ok, t.st.toasts.length], [true, 0], "a landed save off Mine toasts nothing");
       assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveMineSrc), "the client writes no audit row, notification, e-mail or snapshot for an APP save");
     });
     check("P29 pins: saveAppDayFromEditor - the scheduler only (never ?public=1); set = save(profile, [day], [], false), change = p_replace true, clear = save(holder, [], [day], false); the picture is reloaded; a toast names the APP; no audit / notification from the client", () => {
@@ -11995,7 +12007,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("PD B/E sweep: every <button> whose dark background can be T.surface (#13294B) carries data-surface - the offer painter's and the vacation painter's day rows, My APP days' day cells and its month arrow - and nothing else does", () => {
       const tags = buttonTags();
       assert.ok(tags.length > 200, "the scan found " + tags.length + " buttons");
-      const onSurface = tags.filter(t => /(?<![A-Za-z-])background\s*:\s*[^,}]*(T\.surface|panelBg|#13294B|rowBg|lk\.bg|T\.navy|dkHdr)/i.test(t.tag));
+      // T.navy is left out on purpose (review of fix/painter-dark-mode): a dark-aware button ON T.navy is an active-navy button and
+      // should keep the lift to #2E5090 - adding data-surface would erase its active state. The mechanism is opt-out: a new button
+      // on T.surface written through another variable name escapes this scan (the build guide says so).
+      const onSurface = tags.filter(t => /(?<![A-Za-z-])background\s*:\s*[^,}]*(T\.surface|panelBg|#13294B|rowBg|lk\.bg|dkHdr)/i.test(t.tag));
       assert.deepStrictEqual(onSurface.filter(t => !/data-surface="1"/.test(t.tag)).map(t => "line " + t.line), [], "buttons drawn on the dark surface without data-surface");
       const marked = tags.filter(t => /data-surface="1"/.test(t.tag));
       assert.strictEqual(marked.length, 4, "four button tags carry data-surface: " + marked.map(t => t.line).join(", "));
@@ -12032,7 +12047,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(cntP(offer, 'data-pill="1"'), 3, "the offer pill, the own and the range No primary pills");
       assert.ok(sheet.includes('span[style*="color: rgb(19, 41, 75)"]:where(:not([data-pill]))'), "the dark sheet's navy-text rule skips a data-pill span");
       assert.ok(offer.includes("const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;") && vac.includes("const rowBg = isPending ? PR.pending : coveredAll.length > 0 ? PR.vacDraft : isWknd ? PR.vacWeekend : panelBg;"), "the row tints come from PAINT_ROWS");
-      assert.deepStrictEqual({ light: STY.PAINT_ROWS.light, dark: STY.PAINT_ROWS.dark }, { light: { blocked: "#F1F3F6", pending: "#DCECF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" }, dark: { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" } }, "the tints the sheets wrote as literals");
+      assert.deepStrictEqual({ light: STY.PAINT_ROWS.light, dark: STY.PAINT_ROWS.dark }, { light: { blocked: "#F1F3F6", pending: "#DEEDF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" }, dark: { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" } }, "the tints the sheets wrote as literals");
+    });
+    check("PD contrast review: contrast.mjs passes or fails on the UNROUNDED ratio (WCAG does not round) - the old light range-start tint #DCECF8 fails 'painter muted text on the pending row' (4.495:1, printed 4.50); #DEEDF8 passes; the region table compares unrounded too", () => {
+      const { pathToFileURL } = require("url");
+      const cmUrl = pathToFileURL(path.join(ROOT, "test", "ui", "contrast.mjs")).href;
+      const script = `import { createRequire } from "node:module"; import { contrastTable, contrastRatio, contrastRatioExact } from ${JSON.stringify(cmUrl)};
+        const m = createRequire(${JSON.stringify(cmUrl)})(${JSON.stringify(path.join(ROOT, "app-styles.js"))});
+        const old = { ...m, PAINT_ROWS: { ...m.PAINT_ROWS, light: { ...m.PAINT_ROWS.light, pending: "#DCECF8" } } };
+        const pick = (rows) => rows.filter(r => !r.ok).map(r => [r.theme, r.pair, r.ratio]);
+        console.log(JSON.stringify({ old: pick(contrastTable(old)), now: pick(contrastTable(m)), exact: contrastRatioExact("#5B6B82", "#DCECF8"), shown: contrastRatio("#5B6B82", "#DCECF8") }));`;
+      const r = require("child_process").spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", cwd: ROOT, maxBuffer: 16 * 1024 * 1024 });
+      assert.strictEqual(r.status, 0, "contrast probe crashed: " + String(r.stderr || "").slice(0, 400));
+      const out = JSON.parse(String(r.stdout || "").trim().split("\n").pop());
+      assert.ok(out.exact < 4.5 && out.shown === 4.5, "the pair is 4.495:1 and prints 4.50: " + out.exact);
+      assert.deepStrictEqual(out.old, [["light", "painter muted text on the pending row", 4.5]], "the old tint must fail on the unrounded ratio");
+      assert.deepStrictEqual(out.now, [], "this tree's token table passes");
+      const cm = fs.readFileSync(path.join(ROOT, "test", "ui", "contrast.mjs"), "utf8");
+      assert.ok(cm.includes("for (const r of rows) r.ok = r.exact >= r.min;") && cm.includes("ok: contrastRatioExact(fg, bg) >= min });"), "both tables compare contrastRatioExact");
     });
     check("PD A: the No primary legend's ending names the read-only range, no pronoun (both variants)", () => {
       assert.strictEqual(cntP(offer, 'A \\"No primary (set by the scheduler)\\" range only the scheduler can change."'), 2);
@@ -12042,30 +12074,93 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(PSRC.includes('  const [view, setViewState] = useState("calendar");'), "the state setter is private");
       assert.strictEqual(cntP(PSRC, "setViewState("), 1, "only setView calls the raw setter");
       const guard = sliceP("  const appDaysDirtyRef = useRef(0);", "\n\n");
-      assert.ok(guard.includes('  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || view !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };'));
-      assert.ok(guard.includes('  const setView = (k) => { if (k !== view && !leaveMineOk("leave")) return; setViewState(k); };'));
-      // run the two lines: Cancel stays, OK leaves, nothing asked without changes / off Mine / for the same tab
-      const run = (view, dirty, answer, k, why) => {
-        const asked = [], set = [];
-        const fn = new Function("view", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", guard.replace("  const appDaysDirtyRef = useRef(0);", "") + "\nreturn { setView, leaveMineOk };");
-        const g = fn(view, { current: dirty }, (q) => { asked.push(q); return answer; }, H.appDaysLeaveWords, (v) => set.push(v));
-        if (why === "signin") return { ok: g.leaveMineOk("signin"), asked, set };
-        g.setView(k); return { asked, set };
+      assert.ok(guard.includes("  const viewRef = useRef(view); viewRef.current = view;"), "the view is mirrored in a ref every render");
+      assert.ok(guard.includes('  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || viewRef.current !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };'));
+      assert.ok(guard.includes('  const setView = (k) => { if (k !== viewRef.current && !leaveMineOk("leave")) return false; viewRef.current = k; setViewState(k); return true; };'));
+      // A component instance: renders share one viewRef (useRef's own object) and one dirty ref, as React's do. render(view) runs
+      // the guard's lines in that render's scope and returns its { setView, leaveMineOk } - an older render's pair is what a
+      // long-lived callback (Prompt 30's service-worker listener, created once per account) still holds.
+      const instance = (dirty, answer) => {
+        const asked = [], set = [], refs = {}, dirtyRef = { current: dirty }, unload = { confirmed: false };
+        const win = { resets: 0, location: { reload: () => { throw new Error("the plain reload ran although __silvisHardReset exists"); } } };
+        win.__silvisHardReset = () => { win.resets++; };
+        const fn = new Function("view", "useRef", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", "APP_DAYS_UNLOAD", "window", guard.replace("  const appDaysDirtyRef = useRef(0);", "") + "\nreturn { setView, leaveMineOk, reloadForUpdate };");
+        const useRef = (init) => refs.view || (refs.view = { current: init });
+        const render = (view) => fn(view, useRef, dirtyRef, (q) => { asked.push(q); return answer; }, H.appDaysLeaveWords, (v) => set.push(v), unload, win);
+        return { render, asked, set, dirtyRef, unload, win };
       };
-      assert.deepStrictEqual(run("myschedule", 2, false, "calendar"), { asked: [H.appDaysLeaveWords(2, "leave")], set: [] }, "Cancel stays on Mine");
-      assert.deepStrictEqual(run("myschedule", 2, true, "calendar"), { asked: [H.appDaysLeaveWords(2, "leave")], set: ["calendar"] }, "OK leaves");
-      assert.deepStrictEqual(run("myschedule", 0, false, "calendar"), { asked: [], set: ["calendar"] }, "no changes, no question");
-      assert.deepStrictEqual(run("myschedule", 3, false, "myschedule"), { asked: [], set: ["myschedule"] }, "the same tab asks nothing");
-      assert.deepStrictEqual(run("calendar", 3, false, "settings"), { asked: [], set: ["settings"] }, "off Mine nothing is asked");
+      // run the guard: Cancel stays, OK leaves, nothing asked without changes / off Mine / for the same tab
+      const run = (view, dirty, answer, k, why) => {
+        const I = instance(dirty, answer), g = I.render(view);
+        if (why === "signin") return { ok: g.leaveMineOk("signin"), asked: I.asked, set: I.set };
+        if (why === "reload") return { ok: g.leaveMineOk("reload"), asked: I.asked, set: I.set };
+        const moved = g.setView(k); return { moved, asked: I.asked, set: I.set };
+      };
+      assert.deepStrictEqual(run("myschedule", 2, false, "calendar"), { moved: false, asked: [H.appDaysLeaveWords(2, "leave")], set: [] }, "Cancel stays on Mine (setView says false)");
+      assert.deepStrictEqual(run("myschedule", 2, true, "calendar"), { moved: true, asked: [H.appDaysLeaveWords(2, "leave")], set: ["calendar"] }, "OK leaves (true)");
+      assert.deepStrictEqual(run("myschedule", 0, false, "calendar"), { moved: true, asked: [], set: ["calendar"] }, "no changes, no question");
+      assert.deepStrictEqual(run("myschedule", 3, false, "myschedule"), { moved: true, asked: [], set: ["myschedule"] }, "the same tab asks nothing");
+      assert.deepStrictEqual(run("calendar", 3, false, "settings"), { moved: true, asked: [], set: ["settings"] }, "off Mine nothing is asked");
       assert.deepStrictEqual(run("myschedule", 1, false, null, "signin"), { ok: false, asked: [H.appDaysLeaveWords(1, "signin")], set: [] }, "Sign in again asks");
+      assert.deepStrictEqual(run("myschedule", 2, false, null, "reload"), { ok: false, asked: [H.appDaysLeaveWords(2, "reload")], set: [] }, "a banner's reload asks");
+      assert.deepStrictEqual(run("calendar", 2, false, null, "reload"), { ok: true, asked: [], set: [] }, "off Mine a reload asks nothing");
+      // review of spec F: a setView from an OLDER render (view 'calendar' when it was made) still asks once the view is Mine
+      for (const k of ["calendar", "openshifts", "settings"]) {
+        const I = instance(2, false), stale = I.render("calendar");
+        I.render("myschedule");                                        // the APP opened Mine and tapped two days
+        assert.deepStrictEqual({ moved: stale.setView(k), asked: I.asked, set: I.set }, { moved: false, asked: [H.appDaysLeaveWords(2, "leave")], set: [] }, `an old render's setView('${k}') asks and stays on Mine on Cancel`);
+        assert.strictEqual(stale.leaveMineOk("reload"), false, "an old render's leaveMineOk reads the current view too");
+      }
+      { // OK on the first question: a second setView in the same handler (goToDay right after a push tap's tab) asks nothing more
+        const I = instance(2, true), g = I.render("myschedule");
+        assert.deepStrictEqual([g.setView("calendar"), g.setView("calendar"), I.asked.length, I.set], [true, true, 1, ["calendar", "calendar"]]);
+      }
+      // the callers stop on false: the Alerts row keeps its panel and the unread marks, goToDay opens no editor day, the trade /
+      // give jumps fill no trade card and the open-shifts jump keeps the editor
+      assert.ok(PSRC.includes("onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();}}}"), "the Alerts row closes / marks seen only when the view moved");
+      const g2d = sliceP("  const goToDay = (day) => {", "\n  };\n");
+      assert.ok(g2d.includes('    if (!setView("calendar")) return;') && g2d.indexOf('if (!setView("calendar")) return;') < g2d.indexOf("setCalMonth(") && g2d.indexOf('if (!setView("calendar")) return;') < g2d.indexOf("setEditorDay(day);"), "goToDay asks before it moves the month or sets the editor day");
+      for (const [head, tab] of [["  const proposeTradeForDay = (day, role, pick) => {", "timeoff"], ["  const proposeGiveForDay = (day, role, from) => {", "timeoff"], ["  const openShiftsBoard = () => {", "openshifts"]]) {
+        const body = sliceP(head, "\n  };\n");
+        assert.ok(body.startsWith(head + '\n    if (!setView("' + tab + '")) return;'), head.trim() + " asks first and stops on Cancel");
+        assert.strictEqual(cntP(body, "setView("), 1, head.trim() + ": one setView");
+      }
+      // review of spec F: an APP who left Mine while his Save was running hears about a refusal (the card that shows it is gone)
+      const smad = sliceP("  const saveMyAppDays = async (add, clear) => {", "\n  };\n");
+      assert.ok(smad.includes('      if (viewRef.current !== "myschedule") showToast("My APP days: " + words, "error");\n      return { ok: false, words };'), "a refusal off Mine is toasted");
+      // both update banners' reload buttons go through reloadForUpdate: it asks first (an iPhone never shows beforeunload), and
+      // after an OK switches the card's beforeunload question off before the cache / worker clear (a desktop asks once)
+      assert.ok(guard.includes('  const reloadForUpdate = () => { if (!leaveMineOk("reload")) return false; APP_DAYS_UNLOAD.confirmed = true; if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); return true; };'));
+      const bannerBtn = (label) => '<button onClick={reloadForUpdate} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>' + label + "</button>";
+      assert.ok(PSRC.includes(bannerBtn("Reload now")) && PSRC.includes(bannerBtn("Tap to reload")), "Reload now and Tap to reload both call reloadForUpdate");
+      assert.strictEqual(cntP(PSRC, "onClick={reloadForUpdate}"), 2);
+      assert.strictEqual(cntP(PSRC, "window.__silvisHardReset(); else window.location.reload();"), 2, "reloadForUpdate and Settings' Refresh (its own confirm; Settings is off Mine) - no other hard-reset call");
+      assert.ok(PSRC.includes('<button onClick={()=>{ if (confirm("Refresh the app? This clears the local cache and reloads the latest version. No data is lost.")) { if (typeof window.__silvisHardReset === "function") window.__silvisHardReset(); else window.location.reload(); } }}'), "the other one is Settings' Refresh");
+      { // run it: Cancel = no reset and the question stays armed; OK = the flag, then one reset; off Mine / no taps = no question
+        const I = instance(2, false), g = I.render("myschedule");
+        assert.deepStrictEqual([g.reloadForUpdate(), I.asked, I.win.resets, I.unload.confirmed], [false, [H.appDaysLeaveWords(2, "reload")], 0, false], "Cancel: nothing cleared, beforeunload stays armed");
+        const J = instance(2, true), gj = J.render("myschedule");
+        assert.deepStrictEqual([gj.reloadForUpdate(), J.asked.length, J.win.resets, J.unload.confirmed], [true, 1, 1, true], "OK: the card's question off, one hard reset");
+        for (const [v, n] of [["calendar", 2], ["myschedule", 0]]) { const K = instance(n, false), gk = K.render(v); assert.deepStrictEqual([gk.reloadForUpdate(), K.asked.length, K.win.resets], [true, 0, 1], v + " / " + n + " changes: no question"); }
+        const S = instance(2, false), stale = S.render("calendar"); S.render("myschedule");
+        assert.deepStrictEqual([stale.reloadForUpdate(), S.asked.length, S.win.resets], [false, 1, 0], "an old render's reloadForUpdate asks too");
+      }
+      assert.ok(PSRC.includes("const APP_DAYS_UNLOAD = { confirmed: false };\nfunction AppDaysCard("), "the module-scope flag beside the card");
       assert.ok(PSRC.includes('  const openSignInAgain = () => {\n    if (!leaveMineOk("signin")) return;'), "openSignInAgain asks first");
       assert.ok(PSRC.includes("onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>"), "the mount wires onDirty");
       assert.ok(card.includes('  React.useEffect(() => { if (typeof onDirty === "function") onDirty(diff.count); }, [diff.count]);') && card.includes('  React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []);'), "the count, and 0 on unmount");
-      assert.ok(card.includes('    const ask = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };\n    window.addEventListener("beforeunload", ask);\n    return () => window.removeEventListener("beforeunload", ask);\n  }, [diff.count > 0]);') && card.includes("    if (!diff.count) return undefined;"), "beforeunload only while there are changes");
+      assert.ok(card.includes('    const ask = (e) => { if (APP_DAYS_UNLOAD.confirmed) return undefined; e.preventDefault(); e.returnValue = ""; return ""; };\n    window.addEventListener("beforeunload", ask);\n    return () => window.removeEventListener("beforeunload", ask);\n  }, [diff.count > 0]);') && card.includes("    if (!diff.count) return undefined;"), "beforeunload only while there are changes");
       assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
       assert.strictEqual(H.appDaysLeaveWords(1, "leave"), "Discard 1 unsaved APP day change and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
       assert.strictEqual(H.appDaysLeaveWords(3, "signin"), "Discard 3 unsaved APP day changes and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).");
+      assert.strictEqual(H.appDaysLeaveWords(2, "reload"), "Discard 2 unsaved APP day changes and reload?\n\nCancel keeps them - tap Save first, then reload.");
       assert.ok(/^Discard 0 unsaved APP day changes/.test(H.appDaysLeaveWords("x")), "junk reads 0");
+      // the docs promise only what a phone does: leaving Mine / reloading asks; closing asks only on a desktop browser
+      const onb = fs.readFileSync(path.join(ROOT, "docs", "ONBOARDING.md"), "utf8"), bg = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8");
+      assert.ok(!/closing the app with unsaved taps asks first/.test(onb) && !/leaving or closing with unsaved taps asks first/.test(onb), "ONBOARDING no longer says closing the app asks");
+      assert.ok(/an iPhone never asks/.test(onb), "ONBOARDING says an iPhone never asks on close");
+      const bgLines = bg.split("\n").filter(l => /beforeunload/.test(l) && /APP/.test(l));
+      assert.ok(bgLines.length >= 2 && bgLines.every(l => /desktop browser/.test(l) && /iOS never/.test(l)), "every build-guide line on the APP draft's beforeunload names the platforms (a desktop browser; iOS never)");
     });
     check("PD G: a drafted My APP day (add / remove) carries the unsaved mark - appdays-unsaved, '*', T.paintText, aria-hidden, the cell's title says unsaved - and a key line under the grid while the draft holds changes", () => {
       assert.ok(card.includes('const unsaved = st === "add" || st === "remove";'));
@@ -12080,6 +12175,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plain(H.appGridLabels({ a: e("pa", "Pat Appleton"), b: e("pb", "Lee Bramble"), c: e("pc", "Jo Applegate, PA-C") })), { pa: "P.App", pb: "Bram", pc: "J.App" }, "two APPs starting alike");
       assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Pat Smith"), b: e("p2", "Pam Smithers"), c: e("p3", "Kim Do") })), { p1: "Smi1", p2: "Smi2", p3: "Do" }, "same initial: numbered in id order; a short name stays whole");
       assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p2", ""), b: e("p1", "") })), { p1: "APP1", p2: "APP2" }, "two nameless APPs");
+      // review of spec H: two still-alike groups on one stem share ONE count (never App1 twice)
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Pat Appleton"), b: e("p2", "Pam Applegate"), c: e("p3", "Jo Appling"), d: e("p4", "Jim Apple") })), { p1: "App1", p2: "App2", p3: "App3", p4: "App4" }, "P.App x2 + J.App x2 -> App1..App4");
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Pat Smith"), b: e("p2", "Pam Smithers"), c: e("p3", "Jo Smit"), d: e("p4", "Jan Smithson") })), { p1: "Smi1", p2: "Smi2", p3: "Smi3", p4: "Smi4" }, "Smi1..Smi4");
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Pat Appleton"), b: e("p2", "Pam Applegate"), c: e("p3", "Jo Appling"), d: e("p4", "Lee Bramble") })), { p1: "App1", p2: "App2", p3: "J.App", p4: "Bram" }, "only the still-alike pair is numbered");
+      for (const set of [["Pat Appleton", "Pam Applegate", "Jo Appling", "Jim Apple", "Ann Appel"], ["Pat Smith", "Pam Smithers", "Jo Smit", "Jan Smithson", "Al Smyth"], ["", "", "Ana Apple", "Al Appleby"]]) {
+        const map = {}; set.forEach((n, i) => { map["d" + i] = e("p" + i, n); });
+        const out = Object.values(H.appGridLabels(map));
+        assert.strictEqual(new Set(out.map(l => l.toLowerCase())).size, set.length, "distinct: " + JSON.stringify(out));
+      }
       assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Lee") })), { p1: "Lee" });
       assert.deepStrictEqual(plain(H.appGridLabels(null)), {}); assert.deepStrictEqual(plain(H.appGridLabels({ x: null, y: { profileId: "" } })), {});
       const labels = H.appGridLabels({ a: e("pa", "Pat Appleton"), b: e("pb", "Lee Bramble"), c: e("pc", "Jo Applegate") });
@@ -12089,6 +12193,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(PSRC.includes("    .cal-app-code { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"), "hidden on a wide grid");
       const phone = PSRC.slice(PSRC.indexOf("    @media (max-width: 600px) {"), PSRC.indexOf("      .cal-legend { font-size: 10px !important; }"));
       assert.ok(phone.includes("      .cal-app-name { display: none; }\n      .cal-app-code { display: inline; }"), "the phone block swaps the name for the label");
+      // review of spec H: the APP line fits the 66 px phone cell (no top margin, a 9.5 px line) - the smoke compares whole weeks
+      assert.ok(phone.includes("      .cal-line.cal-app { margin-top: 0; line-height: 9.5px; }") && phone.includes("      .cal-cell { min-height: 66px;"), "the phone APP line is tightened; the cell keeps 66 px");
     });
     check("PD smoke pins: the smoke measures the dark painter (free weekday row = the dark surface, weekend T.weekend, every brush outline idle + armed >= 3:1, 'unsaved' >= 4.5:1, the Primary pill, the legend, css.mini(true) / css.btn(true) still #2E5090), the dark vacation painter row, dark My APP days (E / G / F's confirm and beforeunload) and the 390 px APP names (H)", () => {
       const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
@@ -12113,6 +12219,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "if (!buDirty || buClean)",
         "n10.code !== \"P.App\" || n13.code !== \"J.App\"",
         "names.some(x => !x.codeShown || x.nameShown || x.cut)",
+        // review of fix/painter-dark-mode: H compares whole WEEKS (cells grouped by their top edge), F covers the banner's reload
+        "const r = e.getBoundingClientRect(), k = Math.round(r.top);",
+        "else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is",
+        "else if (maxPlain > wk.minH + 0.5) fail(",
+        "const wantR = \"Discard 2 unsaved APP day changes and reload?\\n\\nCancel keeps them - tap Save first, then reload.\";",
+        "cancelled.resets !== 0 || cancelled.count !== \"2 changes\"",
+        "accepted.resets !== 1 || accepted.bu",
+        "A.pg.on(\"dialog\", onDlgF);",
         "appDayStore = appDayStore.filter(r => r.profile_id !== APP_C_UID); appProfiles = appProfiles.filter(p => p.id !== APP_C_UID);",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
     });

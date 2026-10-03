@@ -87,9 +87,11 @@ const LIGHT = THEME.light;
 // row, the range-start row, a drafted row (offer painter), and the vacation painter's painted / weekend rows (the offer
 // painter's weekend row is T.weekend). A free row is T.surface. Every day row carries data-surface, so the dark sheet's
 // active-navy rule never lifts a dark T.surface row to #2E5090. contrast.mjs measures the text tokens on each tint (the
-// greyed row is a disabled control at 0.6 opacity - not measured).
+// greyed row is a disabled control at 0.6 opacity - not measured; T.open on the dark drafted / range-start rows is a known
+// gap, 4.12 / 3.62:1, not measured yet). The light range-start row is #DEEDF8 (review 10/3: the literal #DCECF8 put T.muted at
+// 4.495:1, which only a rounded comparison passed).
 const PAINT_ROWS = {
-  light: { blocked: "#F1F3F6", pending: "#DCECF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" },
+  light: { blocked: "#F1F3F6", pending: "#DEEDF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" },
   dark:  { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" },
 };
 

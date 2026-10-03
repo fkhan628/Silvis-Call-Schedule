@@ -11365,26 +11365,78 @@ try {
             if (!arrows.prevDisabled || arrows.prevBg !== SURF || arrows.nextBg !== rgbOf(themeMod.THEME.dark.raised)) fail(`${EP} E: on the current month '<' should be disabled with no fill (${SURF}) and '>' raised (${rgbOf(themeMod.THEME.dark.raised)}): ${JSON.stringify(arrows)}`);
             else ok(`${EP} E: the disabled '<' has no fill (${arrows.prevBg}), the live '>' the raised ${arrows.nextBg} - it no longer looks active`);
             await A.pg.screenshot({ path: path.join(OUT, "appdays-dark-390-drafted.png"), fullPage: true });
-            // F: beforeunload armed while unsaved; leaving Mine asks - Cancel stays with the taps, OK leaves without them
+            // F: beforeunload armed while unsaved; leaving Mine asks - Cancel stays with the taps, OK leaves without them. One
+            //    persistent dialog listener counts EVERY question (review of spec F: a once-listener let a second question from
+            //    one click pass unseen - Playwright dismisses unhandled dialogs silently): exactly one per guarded click.
             const bu = () => A.pg.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
             const buDirty = await bu();
-            const asked = [];
-            A.pg.once("dialog", (d) => { asked.push(d.message()); d.dismiss().catch(() => {}); });
-            await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
-            const stay = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), count: ((document.querySelector("[data-testid=appdays-count]") || {}).textContent || "").trim() }));
-            A.pg.once("dialog", (d) => { asked.push(d.message()); d.accept().catch(() => {}); });
-            await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
-            const left = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), grid: !!document.querySelector("[data-testid=cal-grid]") }));
-            const buClean = await bu();
-            await toMineM(A.pg);
-            const after = await A.pg.evaluate((ds) => ({ count: document.querySelector("[data-testid=appdays-count]").textContent.trim(), states: ds.map(d => { const c = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return c ? c.getAttribute("data-state") : null; }), key: !!document.querySelector("[data-testid=appdays-unsaved-key]") }), [D12, D10]);
+            const asked = []; let answerF = "dismiss";
+            const onDlgF = (d) => { asked.push(d.message()); (answerF === "accept" ? d.accept() : d.dismiss()).catch(() => {}); };
+            A.pg.on("dialog", onDlgF);
+            let stay, left, buClean, after, nCancel, nOk, disc;
+            try {
+              await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
+              nCancel = asked.length;
+              stay = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), count: ((document.querySelector("[data-testid=appdays-count]") || {}).textContent || "").trim() }));
+              answerF = "accept";
+              await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
+              nOk = asked.length;
+              left = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), grid: !!document.querySelector("[data-testid=cal-grid]") }));
+              buClean = await bu();
+              await toMineM(A.pg);
+              after = await A.pg.evaluate((ds) => ({ count: document.querySelector("[data-testid=appdays-count]").textContent.trim(), states: ds.map(d => { const c = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return c ? c.getAttribute("data-state") : null; }), key: !!document.querySelector("[data-testid=appdays-unsaved-key]") }), [D12, D10]);
+              // the month arrows keep a draft without a question; Discard empties it; leaving then asks nothing
+              const cnt = () => A.pg.$eval("[data-testid=appdays-count]", el => el.textContent.trim());
+              await A.pg.click(`[data-testid=appdays-cell][data-day="${D12}"]`); await A.pg.waitForTimeout(80);
+              const c1 = await cnt();
+              await A.pg.click("[data-testid=appdays-next]"); await A.pg.waitForTimeout(120);
+              await A.pg.click("[data-testid=appdays-prev]"); await A.pg.waitForTimeout(120);
+              const c2 = await cnt(), nArrows = asked.length;
+              await A.pg.click("[data-testid=appdays-discard]"); await A.pg.waitForTimeout(120);
+              const c3 = await cnt();
+              await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
+              disc = { c1, c2, c3, nArrows, nLeave: asked.length, card: !!(await A.pg.$("[data-testid=appdays-card]")) };
+            } finally { A.pg.off("dialog", onDlgF); }
             const wantAsk = "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
             if (!buDirty || buClean) fail(`${EP} F: beforeunload should be armed only while taps are unsaved (dirty ${buDirty}, after leaving ${buClean})`);
-            else if (asked.length !== 2 || asked[0] !== wantAsk || asked[1] !== wantAsk) fail(`${EP} F: leaving Mine with 2 unsaved taps should ask '${wantAsk.replace(/\n/g, " / ")}' each time: ${JSON.stringify(asked)}`);
+            else if (nCancel !== 1 || nOk !== 2 || asked[0] !== wantAsk || asked[1] !== wantAsk) fail(`${EP} F: each click off Mine with 2 unsaved taps should ask '${wantAsk.replace(/\n/g, " / ")}' exactly once (after Cancel ${nCancel}, after OK ${nOk}): ${JSON.stringify(asked)}`);
             else if (!stay.card || stay.count !== "2 changes") fail(`${EP} F: Cancel should stay on My APP days with the 2 taps kept: ${JSON.stringify(stay)}`);
             else if (left.card || !left.grid) fail(`${EP} F: OK should leave Mine for the Calendar: ${JSON.stringify(left)}`);
             else if (after.count !== "No changes" || after.states.join(",") !== "free,mine" || after.key) fail(`${EP} F: after the confirmed leave the taps are gone (No changes, ${D12} free, ${D10} mine): ${JSON.stringify(after)}`);
-            else ok(`${EP} F (BEHAVIOUR): leaving Mine with 2 unsaved taps asked '${asked[0].split("\n")[0]}' - Cancel stayed (2 changes kept), OK left for the Calendar and the taps went (No changes); beforeunload armed only while unsaved`);
+            else if (disc.c1 !== "1 change" || disc.c2 !== "1 change" || disc.nArrows !== 2 || disc.c3 !== "No changes" || disc.nLeave !== 2 || disc.card) fail(`${EP} F: the arrows should keep the draft with no question, Discard empty it, and leaving after Discard ask nothing: ${JSON.stringify(disc)}`);
+            else ok(`${EP} F (BEHAVIOUR): leaving Mine with 2 unsaved taps asked '${asked[0].split("\n")[0]}' once per click - Cancel stayed (2 changes kept), OK left for the Calendar and the taps went (No changes); the arrows kept a tap with no question, Discard emptied it and leaving asked nothing; beforeunload armed only while unsaved`);
+            // F (review): the update banner's "Tap to reload" asks too - an iPhone never shows beforeunload, so it is the only
+            //    question there. A second APP A page whose version.json is newer: 2 unsaved taps, the banner, Cancel = no hard
+            //    reset and the taps kept (beforeunload still armed); OK = one hard reset (stubbed) and the card's beforeunload
+            //    question switched off, so a desktop browser does not ask a second time.
+            const R = await A.ctx.newPage();
+            watchPage(R, "p29-app-a-reload");
+            const askedR = []; let answerR = "dismiss";
+            const onDlgR = (d) => { askedR.push(d.message()); (answerR === "accept" ? d.accept() : d.dismiss()).catch(() => {}); };
+            try {
+              await R.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(APP_A_PROFILE));
+              await R.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+              await R.route((url) => /\/version\.json$/.test(url.pathname), (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "cache-control": "no-store" }, body: JSON.stringify({ version: "2099.01.01" }) }));
+              await loadApp(R, "P29 APP A reload page");
+              await toMineM(R);
+              await R.click(`[data-testid=appdays-cell][data-day="${D12}"]`); await R.click(`[data-testid=appdays-cell][data-day="${D10}"]`); await R.waitForTimeout(120);
+              const banner = R.locator("div[role=status]:has-text('New version available')");
+              await banner.waitFor({ timeout: 20000 }); // the version.json check runs 5 s after mount
+              await R.evaluate(() => { window.__hardResets = 0; window.__silvisHardReset = () => { window.__hardResets++; }; });
+              R.on("dialog", onDlgR);
+              const probe = () => R.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); const c = document.querySelector("[data-testid=appdays-count]"); return { resets: window.__hardResets, bu: e.defaultPrevented, count: c ? c.textContent.trim() : null, card: !!document.querySelector("[data-testid=appdays-card]") }; });
+              const before = await probe();
+              await banner.locator("button:has-text('Tap to reload')").click(); await R.waitForTimeout(250);
+              const nCancelR = askedR.length, cancelled = await probe();
+              answerR = "accept";
+              await banner.locator("button:has-text('Tap to reload')").click(); await R.waitForTimeout(250);
+              const nOkR = askedR.length, accepted = await probe();
+              const wantR = "Discard 2 unsaved APP day changes and reload?\n\nCancel keeps them - tap Save first, then reload.";
+              if (before.count !== "2 changes" || !before.bu) fail(`${EP} F reload: the setup should hold 2 unsaved taps with beforeunload armed: ${JSON.stringify(before)}`);
+              else if (nCancelR !== 1 || askedR[0] !== wantR || cancelled.resets !== 0 || cancelled.count !== "2 changes" || !cancelled.card || !cancelled.bu) fail(`${EP} F reload: Tap to reload with 2 unsaved taps should ask '${wantR.replace(/\n/g, " / ")}' once and, on Cancel, clear nothing and keep the taps (beforeunload still armed): asked ${JSON.stringify(askedR)}, ${JSON.stringify(cancelled)}`);
+              else if (nOkR !== 2 || askedR[1] !== wantR || accepted.resets !== 1 || accepted.bu) fail(`${EP} F reload: OK should run ONE hard reset and switch the card's beforeunload question off (no second question on a desktop): asked ${askedR.length}, ${JSON.stringify(accepted)}`);
+              else ok(`${EP} F reload (BEHAVIOUR): the update banner's Tap to reload asked '${askedR[0].split("\n")[0]}' - Cancel cleared nothing (0 hard resets, 2 changes kept, beforeunload armed), OK ran one hard reset with the card's beforeunload question off`);
+            } catch (e) { fail(`${EP} F reload: ` + errLine(e)); } finally { R.off("dialog", onDlgR); await R.close().catch(() => {}); }
           }
         }
         await showM(A.pg);
@@ -11400,17 +11452,27 @@ try {
         else ok(`${P} 1 (${theme}): the grid shows '${g10.text}' on ${D10} and ${D11} in ${wantColor}, no line overflows at 390 px, the legend explains it`);
         // fix/painter-dark-mode (10/3, spec H): at 390 px the NAME is measured, not only its line - the phone label (cal-app-code)
         // shows whole (nothing cut, no ellipsis) in place of the wide grid's name, Appleton and Applegate read apart ("P.App" /
-        // "J.App"), and a cell with an APP line is never taller than the month's cells without one (the row height holds)
+        // "J.App"), and a WEEK with an APP line is never taller than the month's weeks without one (the row height holds). Review
+        // of spec H: the grid stretches every cell of a week to the week's height, so cells are grouped by their top edge and whole
+        // weeks compared (a per-cell max always met the APP cells' own week-mates); a week without an APP line must also stay at
+        // the phone min-height, or a taller plain week could hide the APP week's growth.
         {
           const names = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const code = a.querySelector("[data-testid=cal-app-code]"), nm = a.querySelector(".cal-app-name"); return { day: e.getAttribute("data-day"), code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, w: code ? Math.round(code.scrollWidth * 10) / 10 : null, nameShown: !!nm && getComputedStyle(nm).display !== "none" }; }).filter(Boolean));
-          const hts = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ app: !!e.querySelector("[data-testid=cal-app]"), h: Math.round(e.getBoundingClientRect().height * 10) / 10 })));
+          const wk = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => {
+            const by = {};
+            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
+            return { weeks: Object.keys(by).map(Number).sort((a, b) => a - b).map(k => by[k]), minH: els.length ? parseFloat(getComputedStyle(els[0]).minHeight) : NaN };
+          });
+          const appWeeks = wk.weeks.filter(w => w.app), plainWeeks = wk.weeks.filter(w => !w.app);
           const n10 = names.find(x => x.day === D10), n13 = names.find(x => x.day === D13H);
-          const maxPlain = Math.max(...hts.filter(x => !x.app).map(x => x.h)), maxApp = Math.max(...hts.filter(x => x.app).map(x => x.h));
+          const maxPlain = plainWeeks.length ? Math.max(...plainWeeks.map(w => w.h)) : NaN, maxApp = appWeeks.length ? Math.max(...appWeeks.map(w => w.h)) : NaN;
           if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
           else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
           else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
-          else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a cell with an APP line is ${maxApp}px tall, the month's cells without one at most ${maxPlain}px - the line grew the row`);
-          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; APP cells ${maxApp}px <= ${maxPlain}px`);
+          else if (!appWeeks.length || !plainWeeks.length || !(wk.minH > 0)) fail(`${P} 1 H (${theme}): the month should have weeks with and without an APP line and a phone min-height to compare: ${JSON.stringify(wk)}`);
+          else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - the APP line grew its row: ${JSON.stringify(wk.weeks)}`);
+          else if (maxPlain > wk.minH + 0.5) fail(`${P} 1 H (${theme}): a week without an APP line is ${maxPlain}px, over the phone min-height ${wk.minH}px - it would hide an APP week's growth: ${JSON.stringify(wk.weeks)}`);
+          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; ${appWeeks.length} week(s) with an APP line ${maxApp}px, ${plainWeeks.length} without ${maxPlain}px (min-height ${wk.minH}px) - the row height holds`);
         }
         p29Judge(`1 contrast: the grid's APP lines (${theme})`, await p29Measure(A.pg, "[data-testid=cal-app]"));
         await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });

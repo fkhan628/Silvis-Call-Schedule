@@ -5876,8 +5876,10 @@ function appDaysByDay(rows, names) {
 // day in byDay (appDaysByDay's map) gets at most four letters and no ellipsis: its short name when that has four letters or
 // fewer, else its first four ("Appleton" -> "Appl", "Bramble" -> "Bram"). APPs whose labels would match (ignoring case) take
 // the first name's initial + "." + three letters ("Pat Appleton" -> "P.App", "Jo Applegate" -> "J.App"); any still alike (no
-// first name, the same initial) are numbered in profile-id order ("App1", "App2"). A wide grid keeps the short name; the
-// full name is in the day's hover and summary. Labels depend on every APP in byDay, so one APP reads the same in each month.
+// first name, the same initial) are numbered in profile-id order ("App1", "App2"), one count per three-letter stem across
+// every such group (review of spec H: two groups on one stem - P.App x2 and J.App x2 - read App1..App4, never App1 twice). A
+// wide grid keeps the short name; the full name is in the day's hover and summary. Labels depend on every APP in byDay, so
+// one APP reads the same in each month.
 function appGridLabels(byDay) {
   const map = byDay && typeof byDay === "object" ? byDay : {};
   const people = {};
@@ -5892,16 +5894,20 @@ function appGridLabels(byDay) {
     const words = String(e.name === null || e.name === undefined ? "" : e.name).split(",")[0].trim().split(/\s+/).filter(Boolean);
     out[id] = (words.length > 1 ? words[0].charAt(0).toUpperCase() + "." : "") + shortOf(e).slice(0, 3);
   }));
-  alike().forEach(list => list.forEach((id, i) => { out[id] = shortOf(people[id]).slice(0, 3) + (i + 1); }));
+  const still = new Set(); alike().forEach(list => list.forEach(id => still.add(id)));
+  const nth = {};
+  ids.filter(id => still.has(id)).forEach(id => { const stem = shortOf(people[id]).slice(0, 3), k = stem.toLowerCase(); nth[k] = (nth[k] || 0) + 1; out[id] = stem + nth[k]; });
   return out;
 }
 // appDaysLeaveWords(n, why) -> the question My APP days asks before unsaved taps go (spec F, 10/3 - BEHAVIOUR; the painter's
 // "Discard N unsaved changes and close?"): why "signin" = the session-expired banner's Sign in again (the sign-in card replaces
-// Mine), anything else = leaving Mine for another tab. OK lets the draft go; Cancel keeps the APP on My APP days.
+// Mine), "reload" = an update banner's Tap to reload / Reload now (spec F review: a reload drops the draft and an iPhone never
+// shows beforeunload), anything else = leaving Mine for another tab. OK lets the draft go; Cancel keeps the APP on My APP days.
 function appDaysLeaveWords(n, why) {
   const k = Math.max(0, Math.floor(Number(n) || 0));
   const what = k + " unsaved APP day change" + (k === 1 ? "" : "s");
   if (why === "signin") return "Discard " + what + " and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).";
+  if (why === "reload") return "Discard " + what + " and reload?\n\nCancel keeps them - tap Save first, then reload.";
   return "Discard " + what + " and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
 }
 // appDaysReadFailureState(status, bodyText) - a non-2xx answer to the APP reads: "unavailable" when the table or the

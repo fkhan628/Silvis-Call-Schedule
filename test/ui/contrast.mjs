@@ -42,10 +42,14 @@ export const hexToRgb = (hex) => {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 };
 const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
-export const contrastRatio = (fgHex, bgHex) => {
+// contrastRatioExact - the unrounded WCAG ratio, which every pass / fail compares (review of fix/painter-dark-mode, 10/3:
+// WCAG does not round - a 4.495:1 pair printed "4.50 ok" when the rounded value was compared). contrastRatio rounds to two
+// decimals for display only.
+export const contrastRatioExact = (fgHex, bgHex) => {
   const la = lum(hexToRgb(fgHex)), lb = lum(hexToRgb(bgHex));
-  return Math.round(((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)) * 100) / 100;
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 };
+export const contrastRatio = (fgHex, bgHex) => Math.round(contrastRatioExact(fgHex, bgHex) * 100) / 100;
 
 export const loadTheme = () => {
   const mod = require(path.join(ROOT, "app-styles.js"));
@@ -58,7 +62,7 @@ export const contrastTable = (mod) => {
   const m = mod || loadTheme();
   const { THEME, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, OPENING } = m;
   const rows = [];
-  const add = (theme, pair, fg, bg, klass) => rows.push({ theme, pair, fg, bg, klass, min: klass === "text" ? 4.5 : 3, ratio: contrastRatio(fg, bg) });
+  const add = (theme, pair, fg, bg, klass) => rows.push({ theme, pair, fg, bg, klass, min: klass === "text" ? 4.5 : 3, ratio: contrastRatio(fg, bg), exact: contrastRatioExact(fg, bg) });
   for (const theme of ["light", "dark"]) {
     const T = THEME[theme];
     // running text
@@ -116,6 +120,9 @@ export const contrastTable = (mod) => {
     // The brushes (WCAG 1.4.11): each chip's outline - idle and armed alike - against the header panel (dark mode: dkBorder),
     // the armed chip's white label on both stops of its gradient (dark primary: dkGradient), and the drafted pill's text on its
     // own tint (a pill keeps its tint in both themes - data-pill keeps the dark sheet off the Primary pill's navy text).
+    // Known exception (review 10/3): the armed labels are 13 px / 800, below the 14 px the label class assumes, so the backup
+    // (3.22) and either (3.39) gradient ends pass here only as labels; the look predates fix/painter-dark-mode - a follow-up.
+    // Also not measured yet: T.open ("OPEN", 10.5 px / 800) on the dark drafted / range-start rows - 4.12 / 3.62:1, a known gap.
     for (const [k, b] of Object.entries(m.OFFER_BRUSH || {})) {
       add(theme, `brush ${k} outline on the panel (idle+armed)`, theme === "dark" ? (b.dkBorder || b.border) : b.border, T.surface, "label");
       const grad = theme === "dark" && b.dkGradient ? b.dkGradient : b.gradient;
@@ -153,7 +160,7 @@ export const contrastTable = (mod) => {
   // opening screens (theme-independent orange gradient, white text)
   add("opening", "white SSC / button label on the orange gradient start", OPENING.text, OPENING.start, "label");
   add("opening", "white SSC / button label on the orange gradient end", OPENING.text, OPENING.end, "label");
-  for (const r of rows) r.ok = r.ratio >= r.min;
+  for (const r of rows) r.ok = r.exact >= r.min;
   return rows;
 };
 
@@ -178,7 +185,7 @@ export const regionTable = (src) => {
         const bg = hit.ownBg ? hit.ownBg[theme] : region.surface[theme];
         const ratio = contrastRatio(fg, bg);
         const min = klass === "text" ? 4.5 : 3;
-        rows.push({ region: region.key, theme, line: hit.line, tag: hit.tag, literal: hit.light, fg, bg, ratio, min, klass, ok: ratio >= min });
+        rows.push({ region: region.key, theme, line: hit.line, tag: hit.tag, literal: hit.light, fg, bg, ratio, min, klass, ok: contrastRatioExact(fg, bg) >= min });
       }
     }
   }
