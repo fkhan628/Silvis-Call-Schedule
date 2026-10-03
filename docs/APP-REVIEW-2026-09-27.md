@@ -326,6 +326,7 @@ No finding was refuted outright. These parts of findings, and these proposals, w
 - A post-deploy reload does not re-download the scripts, which come from the HTTP cache. The real cost is about 171 KB gzip of index.html plus about 103 KB of vendor files per deploy, not 1.8 MB.
 - The duplicate cold-open load doesn't compete with script downloads: the scripts finish before React mounts (158-163).
 - The service-worker/cache wipe harming the Davenport app is unverified. This repo registers no service worker and uses no Cache API.
+  **Corrected 10/2: it was real.** `getRegistrations()` and `caches.keys()` cover the whole origin, so each Silvis update unregistered Davenport's OneSignal worker at `fkhan628.github.io/` whether or not Silvis registers a worker of its own. Fixed by the cross-app reset ship (`fix/cross-app-reset`): the reset keeps to workers inside the Silvis folder and `silvis-` caches (build guide, "Refresh"). Since Prompt 30 it also keeps Silvis's own push worker (`<folder>sw.js`) - build guide section 22.
 - The config blob is about 25 KB, not 52 KB, and it is not the biggest poll payload (schedule_days is).
 - The 9/23 publish was 70 rows written by scripts/publish-preview.js in one SQL block, not an in-app Accept & Publish.
 - The Mine nested scroller doesn't trap scrolling (default scroll chaining). It is friction only.
