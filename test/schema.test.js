@@ -3528,7 +3528,9 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   // no longer name the flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE again (it ended at SILVIS_NO_PRIMARY_APPLIED
   // from the 10/1 merge with the vacation guard's record step until now)
   ok(/no-primary days anon RPC checks and probe \(16\)/.test(head) && /anon checks \(1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b[,)]/.test(head), "verify-rls.sh's header names section 16 and its anon checks (moved deliberately 10/2 at Prompt 29's merge: 18a-18d may follow)");
-  ok(/SILVIS_PREFS_ROWS_BEFORE - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_NO_PRIMARY_APPLIED dropped)");
+  // pin moved deliberately (Prompt 30): --help's env-var list may continue after SILVIS_PREFS_ROWS_BEFORE with Prompt 30's two
+  // flags (SILVIS_PUSH_APPLIED until its record step, SILVIS_PUSH_DEPLOYED); kept intent: SILVIS_NO_PRIMARY_APPLIED stays dropped
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_PUSH_APPLIED)?( \/ SILVIS_PUSH_DEPLOYED)? - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_NO_PRIMARY_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE, or at Prompt 30's flags after it (SILVIS_NO_PRIMARY_APPLIED dropped)");
 }
 {
   // pin moved deliberately 10/2 (Prompt 29's merge with main): the faked run stops at the next section header (18) - section 18's
@@ -4122,7 +4124,8 @@ ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)
   // pins moved deliberately 10/2 (the record step): the header still names section 18 and its anon checks; the header and --help
   // no longer name the flag. Pin moved deliberately 10/2 (ship review of the merge): the TAIL of --help's env-var list is pinned in
   // the Prompt 28 step only (main's rule - a record step moves one pin), so this pin keeps only its own intent: the APP flag is gone
-  ok(/APP call days anon checks and probe \(18\)/.test(head) && /anon checks \([^)]*18a-18d\)/.test(head), "verify-rls.sh's header names section 18 and its anon checks");
+  // pin moved deliberately (Prompt 30): 19a-19e may follow 18a-18d in the anon-checks list; kept intent: the header names 18a-18d
+  ok(/APP call days anon checks and probe \(18\)/.test(head) && /anon checks \([^)]*18a-18d[,)]/.test(head), "verify-rls.sh's header names section 18 and its anon checks");
   ok(/SILVIS_PREFS_ROWS_BEFORE/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_APP_DAYS_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_PREFS_ROWS_BEFORE and no longer SILVIS_APP_DAYS_APPLIED (dropped at the record step)");
 }
 {
@@ -4291,5 +4294,490 @@ ok(!/^\|[^\n]*(app_call_days|Prompt 29|appdays\.save)[^\n]*NOT APPLIED/m.test(tb
   ok(/APP accounts - viewers with `user_profiles\.is_app` who put themselves on call days \(Prompt 29, applied\n2026-10-02\)/.test(claudeMd) && /Dropped: Davenport's APP shifts \(Silvis APPs only put themselves on call days - Prompt 29,\napplied 2026-10-02;/.test(claudeMd) && !/Dropped: APPs,|6 surgeons \+ 1 viewer/.test(claudeMd), "CLAUDE.md: the live users and the dropped list say what an APP is now (Prompt 29, applied 2026-10-02)");
 }
 console.log("- Prompt 29: user_profiles.is_app + app_call_days + silvis_is_app / app_call_names / save_app_days (report-first, applied 2026-10-02 19:19:27Z; the file kept as it ran, sha256-pinned), mirrored (revision v), probe + pre-check + verify-rls section 18 (strict) graded against a faked CLI, apply script kept outside the repo, docs pinned");
+
+// ---- Prompt 30 - phone push (2026-10-03, Faraz 10/2 6:40 PM: "Davenport's look, Silvis's own push") ----
+// sql/migrations/2026-10-03-push-notifications.sql (REPORT-FIRST, NOT APPLIED; revision w): notification_preferences gains
+// trade_updates_push / schedule_updates_push (boolean not null default true); push_subscriptions (one row per device; RLS on; own read
+// and own delete for authenticated; a column grant keeps endpoint / p256dh / auth out of every response; no INSERT / UPDATE for
+// authenticated; anon nothing; not realtime); save_push_subscription / delete_push_subscription / push_subscription_status (security
+// definer, volatile - POST only; PS001-PS007; the push.save / push.delete audit rows). schema.sql mirrors it;
+// sql/probes/push-notifications-probe.sql proves it (rolled back, 51 cases), sql/probes/push-notifications-precheck.sql reads the gate
+// and the facts (read-only), verify-rls.sh section 19 grades both (SILVIS_PUSH_APPLIED strict on the run right after the apply,
+// SILVIS_PUSH_DEPLOYED grades 19i after the deploy). Faraz's apply-push-notifications.sh and setup-push-keys.sh live OUTSIDE the repo.
+// These pins read DB-lane files only (no client file, no edge file).
+const psEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function psTopStatements(sql) {
+  const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const out = []; let cur = ""; let body = false; let str = false;
+  for (let i = 0; i < code.length; i++) {
+    if (!str && code.startsWith("$$", i)) { body = !body; cur += "$$"; i++; continue; }
+    if (!body && code[i] === "'") str = !str;
+    cur += code[i];
+    if (code[i] === ";" && !body && !str) { if (cur.trim()) out.push(cur.trim()); cur = ""; }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+const PS_FILE = "2026-10-03-push-notifications.sql";
+const PS_MIGRATION = path.join(ROOT, "sql", "migrations", PS_FILE);
+const PS_PROBE = path.join(ROOT, "sql", "probes", "push-notifications-probe.sql");
+const PS_PRECHECK = path.join(ROOT, "sql", "probes", "push-notifications-precheck.sql");
+// the endpoint rule (https on a known push service; the edge function POSTs to it - no server-side request forgery lever)
+const PS_ENDPOINT_RE_SQL = "'^https://([a-z0-9-]+\\.)*(fcm\\.googleapis\\.com|android\\.googleapis\\.com|push\\.apple\\.com|push\\.services\\.mozilla\\.com|notify\\.windows\\.com)/[!-~]*$'";
+const PS_COLUMN_LINES = [
+  "alter table public.notification_preferences add column if not exists trade_updates_push boolean not null default true;",
+  "alter table public.notification_preferences add column if not exists schedule_updates_push boolean not null default true;",
+];
+const PS_TABLE = "create table if not exists public.push_subscriptions (\n" +
+  "  id             uuid primary key default gen_random_uuid(),\n" +
+  "  profile_id     uuid not null references public.user_profiles(id) on delete cascade,\n" +
+  "  endpoint       text not null,\n" +
+  "  p256dh         text not null,\n" +
+  "  auth           text not null,\n" +
+  "  device_label   text,\n" +
+  "  created_at     timestamptz not null default now(),\n" +
+  "  last_ok_at     timestamptz,\n" +
+  "  last_error_at  timestamptz,\n" +
+  "  fail_count     integer not null default 0,\n" +
+  "  constraint push_subscriptions_endpoint_key unique (endpoint),\n" +
+  "  constraint push_subscriptions_endpoint_shape check (length(endpoint) <= 2048 and endpoint ~ " + PS_ENDPOINT_RE_SQL + "),\n" +
+  "  constraint push_subscriptions_p256dh_shape check (p256dh ~ '^B[A-Za-z0-9_-]{86}$'),\n" +
+  "  constraint push_subscriptions_auth_shape check (auth ~ '^[A-Za-z0-9_-]{22}$'),\n" +
+  "  constraint push_subscriptions_label_shape check (device_label is null or device_label ~ '^[A-Za-z0-9 .()/-]{1,40}$'),\n" +
+  "  constraint push_subscriptions_fail_count_check check (fail_count >= 0)\n);";
+const PS_INDEX = "create index if not exists push_subscriptions_profile_idx on public.push_subscriptions (profile_id);";
+const PS_ENABLE = "alter table public.push_subscriptions enable row level security;";
+// contract 1.5: the column list of the SELECT grant - never endpoint / p256dh / auth
+const PS_SELECT_GRANT = "grant select (id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count) on table public.push_subscriptions to authenticated;";
+const PS_PRIVS = "revoke all on table public.push_subscriptions from public;\nrevoke all on table public.push_subscriptions from anon;\nrevoke all on table public.push_subscriptions from authenticated;\n" +
+  PS_SELECT_GRANT + "\ngrant delete on table public.push_subscriptions to authenticated;\ngrant select, insert, update, delete on table public.push_subscriptions to service_role;";
+const PS_POLICIES = "drop policy if exists push_subscriptions_own_read on public.push_subscriptions;\n" +
+  "create policy push_subscriptions_own_read on public.push_subscriptions for select to authenticated using (profile_id = auth.uid());\n" +
+  "drop policy if exists push_subscriptions_own_delete on public.push_subscriptions;\n" +
+  "create policy push_subscriptions_own_delete on public.push_subscriptions for delete to authenticated using (profile_id = auth.uid());";
+const PS_FNS = {
+  save_push_subscription: { sig: "save_push_subscription(text, text, text, text)", head: "create or replace function public.save_push_subscription(p_endpoint text, p_p256dh text, p_auth text, p_label text default null) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as $$\n" },
+  delete_push_subscription: { sig: "delete_push_subscription(text)", head: "create or replace function public.delete_push_subscription(p_endpoint text) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as $$\n" },
+  push_subscription_status: { sig: "push_subscription_status(text)", head: "create or replace function public.push_subscription_status(p_endpoint text) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as $$\n" },
+};
+const psGrants = (sig) => "revoke all on function public." + sig + " from public;\nrevoke all on function public." + sig + " from anon;\ngrant execute on function public." + sig + " to authenticated;";
+// the shared contract with the client lane (pushErrorWords): every refusal's exact text
+const PS_TEXT = {
+  PS001: "PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account",
+  PS002: "PUSH_NO_PROFILE: this account has no profile yet - ask the scheduler (nothing was saved)",
+  PS003: "PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved",
+  PS004: "PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)",
+  PS005: "PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)",
+  PS006: "PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)",
+  PS007: "PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)",
+};
+const PS_ORDER = ["PS001", "PS002", "PS003", "PS004", "PS005", "PS006", "PS007"];
+const psRaise = (c) => "raise exception '" + PS_TEXT[c].replace(/'/g, "''") + "' using errcode = '" + c + "';";
+const psErr = (c) => "ERR " + c + " " + PS_TEXT[c];
+const PS_LOCK = "  perform pg_advisory_xact_lock(hashtext('push_subscriptions:save'));";
+// the return shapes (binding, the client reads them)
+const PS_RETURNS = {
+  save_push_subscription: "  return jsonb_build_object('ok', true, 'action', v_action, 'devices', n, 'audit', v_action in ('added', 'moved'));",
+  delete_push_subscription: "  return jsonb_build_object('ok', true, 'removed', v_n, 'devices', n, 'audit', v_n > 0);",
+  push_subscription_status: "  return jsonb_build_object('ok', true,\n    'saved', exists (select 1 from public.push_subscriptions s where s.profile_id = me and s.endpoint = p_endpoint),\n    'devices', (select count(*) from public.push_subscriptions s where s.profile_id = me));",
+};
+const PS_ROLLBACK = [
+  "drop function if exists public.push_subscription_status(text);",
+  "drop function if exists public.delete_push_subscription(text);",
+  "drop function if exists public.save_push_subscription(text, text, text, text);",
+  "drop table if exists public.push_subscriptions;",
+  "alter table public.notification_preferences drop column if exists schedule_updates_push;",
+  "alter table public.notification_preferences drop column if exists trade_updates_push;",
+  "notify pgrst, 'reload schema';",
+];
+const PS_GATE_BEFORE = "table=no push_cols=0 save_fn=no delete_fn=no status_fn=no";
+const PS_GATE_AFTER = "table=yes push_cols=2 save_fn=yes delete_fn=yes status_fn=yes";
+// the probe's 51 cases and what section 19 grades for each: eq = the exact AFTER string; err = ERR <code> ... <message> (the 42501
+// cases - the message is the whole PostgreSQL text). These strings are the probe header's, verify-rls 19's, SCHEMA-REVIEW's and the
+// faked run's below.
+const PS_DENIED_T = "permission denied for table push_subscriptions";
+const PS_PROBE_CASES = {
+  P1: ["eq", "table=yes rls=yes fk=cascade unique_endpoint=yes policies=push_subscriptions_own_delete/delete/authenticated,push_subscriptions_own_read/select/authenticated anon_any=no auth_cols=created_at,device_label,fail_count,id,last_error_at,last_ok_at,profile_id auth_insert=no auth_update=no auth_delete=yes published=no"],
+  P2: ["eq", "save=definer/volatile delete=definer/volatile status=definer/volatile paths=3 public_exec=0 anon_exec=0 auth_exec=3"],
+  P3: ["eq", "checks=push_subscriptions_auth_shape,push_subscriptions_endpoint_shape,push_subscriptions_fail_count_check,push_subscriptions_label_shape,push_subscriptions_p256dh_shape"],
+  P4: ["eq", "trade_updates_push=boolean/not_null/true schedule_updates_push=boolean/not_null/true"],
+  S1: ["eq", "ok action=added devices=1 audit=true"],
+  S2: ["eq", "owner=U1 label=iPhone fail=0 ok_at=null"],
+  S3: ["eq", "audit=1 action=push.save actor=s9push name=probe surgeon sum=probe surgeon: phone notifications on (iPhone) keys=action,device_label,profile_id,summary"],
+  S4: ["eq", "ok action=kept devices=1 audit=false audit_rows=1"],
+  S5: ["eq", "ok action=refreshed devices=1 label=iPhone"],
+  S6: ["eq", "rows=1"],
+  S7: ["err", "42501", PS_DENIED_T], S8: ["err", "42501", PS_DENIED_T], S9: ["err", "42501", PS_DENIED_T],
+  S10: ["eq", "ok saved=true devices=1"],
+  B1: ["eq", psErr("PS003")], B2: ["eq", psErr("PS003")], B3: ["eq", psErr("PS004")], B4: ["eq", psErr("PS004")],
+  B5: ["eq", psErr("PS005")], B6: ["eq", psErr("PS005")], B7: ["eq", "rows=1"],
+  O1: ["eq", "rows=0"],
+  O2: ["eq", "deleted=0 still=1"],
+  O3: ["eq", "ok removed=0 devices=0 audit=false still=1"],
+  O4: ["eq", "ok saved=false devices=0"],
+  O5: ["eq", psErr("PS006")],
+  O5s: ["eq", "owner=U1"],
+  O6: ["eq", "ok action=moved devices=1 audit=true"],
+  O6s: ["eq", "owner=U2 label=Chrome on Windows fail=0"],
+  O6a: ["eq", "actor=self name=probe viewer two sum=probe viewer two: phone notifications on (Chrome on Windows) - moved from another account other_ids=no"],
+  O7: ["eq", "ok saved=false devices=0"],
+  C1: ["eq", "ok devices=10"], C2: ["eq", psErr("PS007")], C3: ["eq", "rows=10"],
+  D1: ["eq", "ok removed=1 devices=9 audit=true"],
+  D2: ["eq", "action=push.delete sum=probe surgeon: phone notifications off (Pixel)"],
+  D3: ["eq", "ok removed=0 devices=9 audit=false"],
+  D4: ["eq", "deleted=1 rows=8"],
+  F1: ["eq", "trade_updates_push=true schedule_updates_push=true"],
+  F2: ["eq", "updated=1 trade_updates_push=false"],
+  F3: ["eq", "ok schedule_updates_push=false trade_updates_push=true"],
+  F4: ["eq", "updated=0"],
+  N1: ["err", "42501", PS_DENIED_T],
+  N2: ["err", "42501", "permission denied for function save_push_subscription"],
+  N3: ["err", "42501", "permission denied for function delete_push_subscription"],
+  N4: ["err", "42501", "permission denied for function push_subscription_status"],
+  N5: ["eq", psErr("PS001")], N6: ["eq", psErr("PS001")], N7: ["eq", psErr("PS001")],
+  N8: ["eq", psErr("PS002")],
+  X1: ["eq", "before=1 after=0 audit_kept=yes"],
+};
+const PS_CASES = Object.keys(PS_PROBE_CASES);
+const psFull = (k) => PS_PROBE_CASES[k][0] === "eq" ? PS_PROBE_CASES[k][1] : "ERR " + PS_PROBE_CASES[k][1] + " " + PS_PROBE_CASES[k][2];
+eq(PS_CASES.length, 51, "the contract's 51 probe cases;");
+
+step("Prompt 30: the migration - notification_preferences *_push, push_subscriptions (column grant, own read / own delete, no insert / update, never anon), three definer RPCs (PS001-PS007, the audit rows); report-first NOT APPLIED; ends with the schema-cache reload");
+const psMig = read(PS_MIGRATION);
+ok(!/\r/.test(psMig) && /^[\x00-\x7f]*$/.test(psMig), "the phone push migration is LF and ASCII");
+ok(migFiles.includes(PS_FILE) && !PREPARED_NOT_MIRRORED.includes(PS_FILE), "sql/migrations/" + PS_FILE + " is a mirrored migration (not exempt)");
+const psHdr = psMig.slice(0, psMig.indexOf("\n-- ============================================================================\n\n"));
+const psHdrFlat = psHdr.replace(/\n-- ?/g, " ");
+ok(psHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(psHdr), "the migration header must say REPORT-FIRST, NOT APPLIED");
+ok(psHdrFlat.includes("\"Davenport's look, Silvis's own push\"") && /Fierce's trade request reached his e-mail/.test(psHdrFlat) && /no OneSignal/.test(psHdrFlat), "the header quotes Faraz's decision and the trigger (Fierce's trade reached e-mail, not his phone)");
+ok(psHdr.includes("\n--   bash <run folder>/apply-push-notifications.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-03-push-notifications.sql   (what it runs)\n"), "the header carries the two apply lines (the one command - its script kept outside the repo - and what it runs)");
+ok(!/bash scripts\/apply-/.test(psHdr), "the migration header names no in-repo apply script");
+ok(/Blast radius/.test(psHdr) && /Who it binds/.test(psHdr) && psHdrFlat.includes("ONE implicit transaction") && psHdrFlat.includes("server-side request forgery") && psHdrFlat.includes("header revision w") && psHdrFlat.includes("\"report-first, NOT yet applied\" until the record step"), "the header states whom it binds, the blast radius, the SSRF reason for the endpoint rule, revision w and that the file runs as one transaction");
+ok(psHdrFlat.includes("sql/probes/push-notifications-precheck.sql") && psHdrFlat.includes(PS_GATE_BEFORE) && psHdrFlat.includes(PS_GATE_AFTER) && psHdrFlat.includes("PROBE_SETUP: push_subscriptions is absent") && psHdrFlat.includes("51 cases") && psHdrFlat.includes("SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh") && psHdrFlat.includes("bash setup-push-keys.sh") && psHdrFlat.includes("SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh") && psHdrFlat.includes("docs/SCHEMA-REVIEW.md \"2026-10-03 - phone push\""), "the header gives the order: pre-check (its gate), probe BEFORE (PROBE_SETUP), the file, the gate after, probe AFTER (51), strict verify-rls, the keys, the deploy (19i), the record step");
+PS_ORDER.forEach((c) => ok(psHdrFlat.includes(c + " " + PS_TEXT[c]), "the header lists " + c + " with its exact message"));
+ok(psHdrFlat.includes("save {ok, action: added|kept|refreshed|moved, devices, audit}; delete {ok, removed, devices, audit}; status {ok, saved, devices}"), "the header states the three return shapes (binding for the client)");
+{
+  const rbText = PS_ROLLBACK.map((l) => "--   " + l).join("\n");
+  ok(psHdr.includes("\n" + rbText + "\n"), "the header's rollback must read exactly (functions, table, the two columns, the reload - in this order):\n" + rbText);
+}
+ok(!/^-- supersedes:/m.test(psMig) && !/^-- PREPARED FOLLOW-UP/m.test(psMig), "the phone push migration has no supersedes line (no function is redefined) and is not a NOT-MIRRORED follow-up");
+eq((psMig.match(/create or replace function/g) || []).length, 3, "the migration creates exactly three functions;");
+const psCode = psMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+eq((psCode.match(/^create table /gm) || []).length, 1, "the migration creates exactly one table;");
+eq((psCode.match(/^create policy /gm) || []).length, 2, "two policies in all (both on push_subscriptions);");
+ok(!/drop function|drop table|create trigger|drop trigger|prefs_own|policy [a-z_]+ on public\.(user_profiles|audit_log|notifications|notification_preferences)\b|read_all|alter publication/.test(psCode),"the migration drops nothing and touches no trigger, prefs_own, user_profiles / audit / notifications policy, the anon read_all loop or the realtime publication");
+ok(psMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST must learn the new table, columns and functions before the client push)");
+const psStmts = psTopStatements(psMig);
+ok(!psStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row (no insert / update / delete outside function bodies)");
+eq(psStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
+  PS_COLUMN_LINES[0], PS_COLUMN_LINES[1],
+  "comment on column public.notification_preferences.trade_updates_push is ...",
+  "comment on column public.notification_preferences.schedule_updates_push is ...",
+  "create table if not exists public.push_subscriptions (",
+  PS_INDEX, PS_ENABLE,
+  "revoke all on table public.push_subscriptions from public;",
+  "revoke all on table public.push_subscriptions from anon;",
+  "revoke all on table public.push_subscriptions from authenticated;",
+  PS_SELECT_GRANT,
+  "grant delete on table public.push_subscriptions to authenticated;",
+  "grant select, insert, update, delete on table public.push_subscriptions to service_role;",
+  "drop policy if exists push_subscriptions_own_read on public.push_subscriptions;",
+  "create policy push_subscriptions_own_read on public.push_subscriptions for select to authenticated using (profile_id = auth.uid());",
+  "drop policy if exists push_subscriptions_own_delete on public.push_subscriptions;",
+  "create policy push_subscriptions_own_delete on public.push_subscriptions for delete to authenticated using (profile_id = auth.uid());",
+  "comment on table public.push_subscriptions is ...",
+  PS_FNS.save_push_subscription.head.split("\n")[0],
+  "revoke all on function public.save_push_subscription(text, text, text, text) from public;",
+  "revoke all on function public.save_push_subscription(text, text, text, text) from anon;",
+  "grant execute on function public.save_push_subscription(text, text, text, text) to authenticated;",
+  "comment on function public.save_push_subscription(text, text, text, text) is ...",
+  PS_FNS.delete_push_subscription.head.split("\n")[0],
+  "revoke all on function public.delete_push_subscription(text) from public;",
+  "revoke all on function public.delete_push_subscription(text) from anon;",
+  "grant execute on function public.delete_push_subscription(text) to authenticated;",
+  "comment on function public.delete_push_subscription(text) is ...",
+  PS_FNS.push_subscription_status.head.split("\n")[0],
+  "revoke all on function public.push_subscription_status(text) from public;",
+  "revoke all on function public.push_subscription_status(text) from anon;",
+  "grant execute on function public.push_subscription_status(text) to authenticated;",
+  "comment on function public.push_subscription_status(text) is ...",
+  "notify pgrst, 'reload schema';",
+], "the migration is exactly: the two columns + comments, the table + index + RLS + privileges + two policies + comment, the three functions each with grants + comment, the reload (in this order);");
+function checkPush(n, s) {
+  PS_COLUMN_LINES.forEach((l) => ok(s.indexOf(l) >= 0, n + ": missing the prefs column line:\n" + l));
+  [["trade_updates_push", "trade_updates_email"], ["schedule_updates_push", "schedule_updates_email"]].forEach(([c, e]) => ok(new RegExp("^comment on column public\\.notification_preferences\\." + c + " is 'Prompt 30: [^\\n]*Default on; only an explicit false opts out\\. Independent of " + e + "\\.';$", "m").test(s), n + ": the " + c + " column comment (default on, independent of " + e + ")"));
+  ok(s.indexOf(PS_TABLE) >= 0, n + ": push_subscriptions must read exactly:\n" + PS_TABLE);
+  ok(s.indexOf(PS_INDEX) >= 0, n + ": the profile index");
+  ok(s.indexOf(PS_PRIVS) >= 0, n + ": the six privilege lines must read exactly (public / anon / authenticated revoked; authenticated SELECT on the seven non-secret columns + DELETE; the service role the four verbs):\n" + PS_PRIVS);
+  ok(s.indexOf(PS_POLICIES) >= 0, n + ": the two policies (each dropped if it exists first) must read exactly:\n" + PS_POLICIES);
+  ok(/^comment on table public\.push_subscriptions is 'Prompt 30: [^\n]*never INSERTs or UPDATEs[^\n]*capability secrets[^\n]*Not in the realtime publication[^\n]*';$/m.test(s), n + ": the table comment names the write path, the capability secrets and the realtime rule");
+  // contract 1.5: no INSERT / UPDATE grant to authenticated (nor ALL, nor a table-level SELECT), nothing to anon / public
+  eq(s.match(/^grant [^\n]*on table public\.push_subscriptions to [a-z_]+;$/gm) || [], [PS_SELECT_GRANT, "grant delete on table public.push_subscriptions to authenticated;", "grant select, insert, update, delete on table public.push_subscriptions to service_role;"], n + ": exactly three grants on push_subscriptions (the column SELECT and DELETE to authenticated, the four verbs to the service role);");
+  ok(!/^grant [^\n]*\b(insert|update|all|truncate|references|trigger)\b[^\n]*on table public\.push_subscriptions to (authenticated|anon|public)\b/m.test(s) && !/^grant [^\n]*on table public\.push_subscriptions to (anon|public)\b/m.test(s) && !/^grant select on table public\.push_subscriptions to authenticated/m.test(s), n + ": no INSERT / UPDATE / ALL and no table-level SELECT to authenticated; nothing to anon or public");
+  ok(!/endpoint|p256dh|\bauth\b/.test(PS_SELECT_GRANT.replace(" to authenticated;", "")), "the SELECT grant's column list never names endpoint / p256dh / auth");
+  // contract 1.5: the two policies' profile_id = auth.uid()
+  eq((s.match(/^create policy [a-z_]+ on public\.push_subscriptions [^\n]*$/gm) || []).map((l) => l.replace(/^create policy ([a-z_]+) on public\.push_subscriptions for ([a-z]+) to ([a-z]+) using \((.*)\);$/, "$1 $2 $3 $4")),
+    ["push_subscriptions_own_read select authenticated profile_id = auth.uid()", "push_subscriptions_own_delete delete authenticated profile_id = auth.uid()"], n + ": exactly the two policies, both `profile_id = auth.uid()` for authenticated (no insert / update policy, no anon policy);");
+  // contract 1.5: the three functions definer + search_path + no anon EXECUTE
+  Object.keys(PS_FNS).forEach((f) => {
+    const fn = functionText(s, f);
+    ok(fn && fn.startsWith(PS_FNS[f].head), n + ": " + f + " must read `" + PS_FNS[f].head.trim() + "` (volatile - PostgREST refuses GET; security definer; search_path public, pg_temp)");
+    ok(s.indexOf(psGrants(PS_FNS[f].sig)) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "() grants must read exactly (after the function):\n" + psGrants(PS_FNS[f].sig));
+    ok(!new RegExp("grant [^\\n]*on function public\\." + psEsc(f) + "\\([^)]*\\) to [^\\n]*\\b(anon|public)\\b").test(s), n + ": no EXECUTE on " + f + " for anon / public");
+    ok(new RegExp("^comment on function public\\." + psEsc(PS_FNS[f].sig) + " is 'Prompt 30: [^\\n]*';$", "m").test(s), n + ": " + f + " carries a Prompt 30 comment");
+    if (!fn) return;
+    ok(fn.includes(PS_RETURNS[f]), n + ": " + f + " returns the binding shape:\n" + PS_RETURNS[f]);
+    ok(fn.includes("  me      uuid := auth.uid();") || fn.includes("  me        uuid := auth.uid();") || fn.includes("  me uuid := auth.uid();"), n + ": " + f + " acts for auth.uid() only (no profile parameter)");
+    const p1 = fn.indexOf("  if me is null then\n    " + psRaise("PS001"));
+    const w1 = fn.search(/\n\s*(with del as|insert into|update|delete from) /);
+    ok(p1 > 0 && (w1 < 0 || p1 < w1), n + ": " + f + " refuses PS001 first (no signed-in user), before any write");
+    ok(!/'(endpoint|p256dh|auth)'/.test(fn), n + ": " + f + " never puts the endpoint or a key into a json object (the return, the audit detail)");
+  });
+  const save = functionText(s, "save_push_subscription");
+  if (save) {
+    const moveUpd = save.indexOf("set profile_id = me,"), ins = save.indexOf("insert into public.push_subscriptions"), firstUpd = save.indexOf("update public.push_subscriptions");
+    let last = -1;
+    PS_ORDER.forEach((c) => { const at = save.indexOf(psRaise(c)); ok(at > last, n + ": save_push_subscription's refusal is missing or out of order (PS001 ... PS007):\n" + psRaise(c)); if (at > last) last = at; });
+    PS_ORDER.slice(0, 5).forEach((c) => ok(save.indexOf(psRaise(c)) < firstUpd && save.indexOf(psRaise(c)) < ins, n + ": " + c + " comes BEFORE every write (fail closed)"));
+    const ps6 = save.indexOf(psRaise("PS006")), ps7a = save.indexOf(psRaise("PS007")), ps7b = save.indexOf(psRaise("PS007"), ps7a + 1);
+    ok(ps6 < ps7a && ps7a < moveUpd && moveUpd < ps7b && ps7b < ins, n + ": a move refuses PS006 then PS007 before its update; an add refuses PS007 before its insert");
+    eq((save.match(/using errcode = 'PS0/g) || []).length, 8, n + ": eight PS raises in save (PS007 twice: a move and an add);");
+    const lock = save.indexOf(PS_LOCK);
+    ok(lock > save.indexOf(psRaise("PS005")) && lock < ps6 && lock < save.indexOf("from public.push_subscriptions"), n + ": the advisory lock push_subscriptions:save comes after PS005, before PS006 and before the first read of push_subscriptions");
+    eq((save.match(/pg_advisory_xact_lock/g) || []).length, 1, n + ": one advisory lock;");
+    ok(save.includes("p_endpoint !~ " + PS_ENDPOINT_RE_SQL), n + ": PS003 checks the table's endpoint regex");
+    ok(save.includes("    if cur.p256dh <> p_p256dh or cur.auth <> p_auth then\n      " + psRaise("PS006")), n + ": an endpoint held by another account moves only with the same p256dh and auth (READING 3)");
+    eq((save.match(/if n >= 10 then/g) || []).length, 2, n + ": the 10-device cap binds a move and an add;");
+    ok(save.includes("  if v_action in ('added', 'moved') then") && save.includes("'push.save',") && save.includes("jsonb_build_object('summary', v_name || ': phone notifications on (' || coalesce(v_dev, 'a device') || ')' || case when v_action = 'moved' then ' - moved from another account' else '' end,\n                               'profile_id', me, 'device_label', v_dev, 'action', v_action)"), n + ": one push.save audit row on added / moved (summary, profile id, device label, action - never naming the account it moved from)");
+    eq((save.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).sort(), ["insert into public.audit_log", "insert into public.push_subscriptions", "update public.push_subscriptions", "update public.push_subscriptions"], n + ": save writes push_subscriptions (one insert, two updates) and audit_log only;");
+  }
+  const del = functionText(s, "delete_push_subscription");
+  if (del) {
+    ok(del.includes("    delete from public.push_subscriptions s where s.endpoint = p_endpoint and s.profile_id = me returning s.device_label"), n + ": delete removes the caller's own row for that endpoint only (another account's row answers removed 0)");
+    ok(del.includes("  if v_n > 0 then") && del.includes("'push.delete',") && del.includes("jsonb_build_object('summary', v_name || ': phone notifications off (' || coalesce(v_label, 'a device') || ')',\n                               'profile_id', me, 'device_label', v_label, 'action', 'removed')"), n + ": one push.delete audit row only when a row went");
+    eq((del.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).sort(), ["delete from public.push_subscriptions", "insert into public.audit_log"], n + ": delete writes push_subscriptions (its own row) and audit_log only;");
+  }
+  const st = functionText(s, "push_subscription_status");
+  if (st) ok(!/(insert into|update|delete from) public\./.test(st) && st.includes("s.profile_id = me and s.endpoint = p_endpoint"), n + ": status writes nothing and answers for the caller's own rows only");
+}
+checkPush("phone push migration", psMig);
+
+step("Prompt 30: schema.sql mirrors the migration (every statement byte for byte, the three functions, revision w after v), the two columns in the from-scratch table, push_subscriptions not anon-readable and not in the read_all loop");
+checkPush("schema.sql", schema);
+Object.keys(PS_FNS).forEach((f) => ok(functionText(schema, f) === functionText(psMig, f), f + "(): schema.sql differs from sql/migrations/" + PS_FILE));
+psStmts.filter((st) => !/^notify pgrst/.test(st) && st !== PS_ENABLE).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this phone push statement byte for byte:\n" + st.slice(0, 300)));
+ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(schema), "schema.sql enables RLS on push_subscriptions (in the RLS list)");
+{
+  const at = (t) => schema.indexOf(t);
+  const rls = at("-- Row Level Security");
+  const prefsTbl = sliceBetween(schema, "create table if not exists public.notification_preferences (", "\n);") || "";
+  ok(/\n  trade_updates_push        boolean not null default true,/.test(prefsTbl) && /\n  schedule_updates_push     boolean not null default true,/.test(prefsTbl), "schema.sql's notification_preferences create table carries both push columns (a from-scratch schema)");
+  ok(at(PS_COLUMN_LINES[0]) > at("alter table public.notification_preferences add constraint notification_preferences_one_owner") && at(PS_COLUMN_LINES[1]) < at("create table if not exists public.audit_log ("), "the two add-column lines sit after the Prompt 20 F1 alters, before audit_log");
+  ok(at(PS_TABLE) > at("comment on function public.save_app_days(uuid, date[], date[], boolean) is") && at(PS_TABLE) < rls && at("create or replace function public.save_push_subscription(") > at(PS_TABLE) && at(psGrants(PS_FNS.push_subscription_status.sig)) < rls, "the push block (table, index, comment, the three functions) sits after the APP call days block, before Row Level Security");
+  ok(at(PS_ENABLE) < 0 && at("alter table public.push_subscriptions      enable row level security;") > rls, "the enable line sits in the RLS list (not in the table block)");
+  ok(at(PS_PRIVS) > at("create policy app_call_days_read on public.app_call_days") && at(PS_POLICIES) > at(PS_PRIVS) && at(PS_POLICIES) < at("-- Seed rows"), "the table's privileges and the two policies sit at the end of the policy section (after app_call_days_read, before the seed rows)");
+  const loop = schema.slice(schema.indexOf("-- Anon-readable tables"), schema.indexOf("end $$;", schema.indexOf("-- Anon-readable tables")));
+  ok(loop.length > 0 && !/push_subscriptions/.test(loop), "push_subscriptions is NOT in the anon read_all loop");
+  ok(!/publication/i.test(schema.slice(at(PS_TABLE), at("-- Seed rows")).split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").replace(/'[^']*'/g, "")) && !/alter publication[^;]*push_subscriptions/i.test(schemaCode), "no publication statement for push_subscriptions (not in the realtime publication)");
+  const wAt = header.search(/^-- Revision 2026-10-03 w \(phone push, sql\/migrations\/2026-10-03-push-notifications\.sql, report-first, NOT yet applied\): /m);
+  const vAt = header.search(/^-- Revision 2026-10-02 v /m);
+  ok(vAt > 0 && wAt > vAt, "schema.sql's header must record revision 2026-10-03 w (phone push; 'report-first, NOT yet applied' until the record step turns it 'applied <ts> after the probe') after revision v");
+  const revW = header.slice(wAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(/Davenport's look, Silvis's own push/.test(revW) && /push_subscriptions/.test(revW) && /column grant/.test(revW) && /PS001-PS007/.test(revW) && /anon holds nothing/.test(revW) && /trade_updates_push \/ schedule_updates_push/.test(revW) && /Not in the realtime publication/.test(revW) && /Letter u stays taken by the weekend pair claim/.test(revW), "revision w names the decision, the table, the column grant, the codes, never anon, the two columns, not realtime and the taken letter u");
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first, NOT yet applied)\n") && (schema.match(/report-first, NOT yet applied/g) || []).length === 4, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read 'report-first, NOT yet applied' (four places - the record step turns them all)");
+}
+
+step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
+const psProbe = read(PS_PROBE);
+ok(!/\r/.test(psProbe) && /^[\x00-\x7f]*$/.test(psProbe), "the phone push probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(psProbe), "the phone push probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(psProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ngrant insert, select on probe_results to anon;\ncreate temp table probe_ctx (k text primary key, v text);\ngrant select on probe_ctx to authenticated;"), "the probe collects into probe_results (granted to authenticated and anon - N1-N4 run as anon) and keeps its context in probe_ctx");
+{
+  const lastDo = psProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(psProbe.slice(lastDo)), "the probe's last DO block raises 'PROBE_RESULTS %;END'");
+  const absentAt = psProbe.indexOf("raise exception 'PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied';");
+  const partAt = psProbe.indexOf("raise exception 'PROBE_SETUP: notification_preferences.trade_updates_push is absent - sql/migrations/2026-10-03-push-notifications.sql is partly applied';");
+  const part2At = psProbe.indexOf("raise exception 'PROBE_SETUP: notification_preferences.schedule_updates_push is absent - sql/migrations/2026-10-03-push-notifications.sql is partly applied';");
+  const usersAt = psProbe.indexOf("insert into auth.users");
+  ok(absentAt > 0 && partAt > absentAt && part2At > partAt && usersAt > part2At, "the setup raises PROBE_SETUP absent first, then the two partly-applied column checks, before any fixture (" + [absentAt, partAt, part2At, usersAt] + ")");
+  const code = psProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ok(code.includes("if to_regclass('public.push_subscriptions') is null then"), "the absent check is to_regclass");
+  ok(code.includes("'probe-push-' || u || '@example.test'") && !/'probe-push-[^'|]*@/.test(code), "the throwaway users are probe-push-<uuid>@example.test, the email built with || (no literal email in the file)");
+  ok(code.includes("update public.user_profiles set person_id = 's9push', role = 'surgeon', display_name = 'probe surgeon' where id = u1;") && code.includes("update public.user_profiles set display_name = 'probe viewer two' where id = u2;") && code.includes("update public.user_profiles set display_name = 'probe viewer three' where id = u3;"), "the three users: U1 a surgeon linked to s9push (on no roster), U2 / U3 viewers - display names 'probe ...' only");
+  ok(code.includes("tag  text := substr(md5(random()::text || clock_timestamp()::text), 1, 8);") && code.includes("base := 'https://fcm.googleapis.com/fcm/send/probe-push-' || tag || '-';") && (code.match(/https:\/\/fcm\.googleapis\.com\/fcm\/send\/probe-push-/g) || []).length === 1, "every endpoint the probe writes is https://fcm.googleapis.com/fcm/send/probe-push-<8 random hex>-<n> (no collision guard needed; under the privacy pin's 40-character token)");
+  ok(code.includes("('k1', 'B' || repeat('A', 86)), ('a1', repeat('A', 22)), ('k2', 'B' || repeat('C', 86)), ('a2', repeat('C', 22)), ('k3', 'B' || repeat('D', 86))"), "the keys are obviously fake, built in the file (B + 86 x A / C / D, 22 x A / C)");
+  ok((code.match(/insert into public\.push_subscriptions/g) || []).length === 1 && code.indexOf("insert into public.push_subscriptions") > code.indexOf("values ('S7', "), "no push_subscriptions fixture row: the only direct insert is the refused case S8");
+  ok(!/(update|insert into|delete from)\s+public\.(call_schedule_data|schedule_days|time_off|availability|call_offers|notifications|app_call_days)\b/.test(code), "the probe never writes the blob, the schedule, vacations, availability, offers, the feed or APP days");
+  PS_CASES.forEach((k) => ok(code.includes("values ('" + k + "', "), "the probe lacks case " + k));
+  ["S2", "S3", "O5s", "O6s", "O6a", "D2"].forEach((k) => ok(code.includes("  begin\n    execute 'reset role';\n    insert into probe_results values ('" + k + "', "), "case " + k + " reads back AS POSTGRES (the role reset first)"));
+  ok((code.match(/l\.detail ->> 'profile_id'/g) || []).length >= 4 && code.includes("l.action like 'push.%' and l.detail ->> 'profile_id' in (select c.v from probe_ctx c where c.k in ('u1', 'u2', 'u3'))"), "the audit readbacks read the push.% rows of the probe's own users only (later runs with real devices read the same)");
+  ok(code.includes("execute 'set local role anon';\n  perform set_config('request.jwt.claims', '', true);") && code.includes("  execute 'reset role';\n  perform set_config('request.jwt.claims', '{}', true);\n  begin\n    r := public.save_push_subscription(e21, k1, a1, null);\n    insert into probe_results values ('N5', "), "N1-N4 run as anon, N5-N7 as postgres with no signed-in user");
+  ok(code.includes("  delete from public.user_profiles where id = u3::uuid;\n  execute 'set local role authenticated';") && code.includes("delete from auth.users where id = u2::uuid;"), "N8 starts from U3's deleted profile row; X1 deletes U2's auth user (its devices cascade)");
+  // review-found (DB lane, 10/2): PostgreSQL applies the SELECT policy to a DELETE only when the statement reads a column, so O2's
+  // delete by id alone could not tell a permissive delete policy (`using (true)`) - the filter-less delete beside it does (PGlite mutant)
+  ok(code.includes("    delete from public.push_subscriptions where id = rid;\n    get diagnostics n = row_count;\n    delete from public.push_subscriptions;\n    get diagnostics m = row_count;\n    n := n + m;"), "O2 deletes U1's row by id AND with no WHERE at all (the form a permissive delete policy lets through) and counts both");
+}
+const psProbeHdr = psProbe.slice(0, psProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(psProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(psProbeHdr) && /\n-- 51 cases\.\n/.test(psProbeHdr), "the probe header: report-first / not applied, nothing persisted, 51 cases");
+const PS_AFTER = {};
+psProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+[as]?)\s+.* -> (.*)$/); if (m) PS_AFTER[m[1]] = m[2]; });
+eq(Object.keys(PS_AFTER).sort(), PS_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
+PS_CASES.forEach((k) => ok(PS_AFTER[k] === psFull(k), "the probe header's AFTER for " + k + " (" + PS_AFTER[k] + ") must be " + psFull(k)));
+
+step("Prompt 30: the pre-check - ONE read-only SELECT (the objects gate, profiles per role, prefs rows by key, the push.% audit rows, the realtime publication facts - counts only)");
+const psPre = read(PS_PRECHECK);
+ok(!/\r/.test(psPre) && /^[\x00-\x7f]*$/.test(psPre), "the pre-check is LF and ASCII");
+{
+  const hdr = psPre.slice(0, psPre.indexOf("with objects as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
+  ok(hdr.includes(PS_GATE_BEFORE) && hdr.includes(PS_GATE_AFTER), "the header states the gate before and after the apply");
+  const code = psPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code), "the pre-check writes, locks and changes nothing");
+  ok(code.includes("'table=' || case when to_regclass('public.push_subscriptions') is null then 'no' else 'yes' end") && code.includes("a.attname in ('trade_updates_push', 'schedule_updates_push')") && code.includes("to_regprocedure('public.save_push_subscription(text, text, text, text)')") && code.includes("to_regprocedure('public.delete_push_subscription(text)')") && code.includes("to_regprocedure('public.push_subscription_status(text)')"), "row 1 (the gate): the table, the two columns, the three functions by exact signature - through catalog lookups only");
+  ok(!/from public\.push_subscriptions|\b[a-z]\.(trade_updates_push|schedule_updates_push)\b/.test(code), "the pre-check never reads the new table or columns directly (it runs before the apply)");
+  ["'objects'::text", "'profiles'::text", "'prefs'::text", "'audit'::text", "'realtime'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  ok(!/display_name|email|endpoint\b(?!s)/.test(code.replace("t.tablename = 'push_subscriptions'", "")), "counts only: no display name, no email, no endpoint is read");
+  ok(code.includes("b.pubname = 'supabase_realtime' and b.puballtables") && code.includes("t.tablename = 'push_subscriptions'") && code.includes("'push_rows=' || (select count(*) from public.audit_log l where l.action like 'push.%')"), "rows 4 / 5: the push.% audit rows and the realtime facts (all tables? push_subscriptions published?)");
+}
+
+step("Prompt 30: verify-rls.sh section 19 - anon REST (19a the table, 19b-19d the three RPCs, 19e the two prefs columns), 19f as a surgeon, the graded probe (51), leftovers (19h), the deployed function (19i); PROBE_SETUP / 404 / 42703 pass as not applied unless SILVIS_PUSH_APPLIED=1; graded against a faked CLI and curl");
+ok(/^echo "== 19\. phone push \(2026-10-03, Prompt 30\): push_subscriptions \+ save \/ delete \/ status RPCs \+ notification_preferences \*_push - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 19 (phone push)");
+const s19 = vr.slice(vr.indexOf('echo "== 19. '), vrSectionEnd('echo "== 19. '));
+ok(s19.length > 0 && vr.indexOf('echo "== 19. ') > vr.indexOf('echo "== 18. '), "verify-rls.sh section 19 could not be sliced out (after section 18, up to the next section header or the RESULT line)");
+ok(/^# Section 19 \(17 = the weekend pair claim, taken on its own branch; 18 = Prompt 29's APP call days, the section above\)\.$/m.test(s19), "section 19's comment says why it is 19");
+const s19code = s19.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(s19code.includes('PUSTRICT19="${SILVIS_PUSH_APPLIED:-}"') && s19code.includes('PUDEPLOYED19="${SILVIS_PUSH_DEPLOYED:-}"'), "section 19 reads SILVIS_PUSH_APPLIED and SILVIS_PUSH_DEPLOYED");
+eq((s19code.match(/curl /g) || []).length, 9, "section 19 makes exactly nine REST calls (19a-19e anon, 19f two as a surgeon, 19i two);");
+const PS_VR_EP = "https://fcm.googleapis.com/fcm/send/verify-rls";
+ok(s19code.includes("\"$URL/rest/v1/push_subscriptions?select=id&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Prefer: count=exact\")"), "19a: anon GET push_subscriptions with Prefer: count=exact");
+ok(s19code.includes("-X POST \"$URL/rest/v1/rpc/save_push_subscription\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_endpoint\":\"" + PS_VR_EP + "\",\"p_p256dh\":\"B" + "A".repeat(86) + "\",\"p_auth\":\"" + "A".repeat(22) + "\",\"p_label\":null}'"), "19b: anon POST rpc/save_push_subscription with the four keys (the schema-cache gate before the client push)");
+["delete_push_subscription", "push_subscription_status"].forEach((f) => ok(s19code.includes("-X POST \"$URL/rest/v1/rpc/" + f + "\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_endpoint\":\"" + PS_VR_EP + "\"}'"), "19c / 19d: anon POST rpc/" + f + " (the endpoint in the body, never in a URL)"));
+ok(s19code.includes("\"$URL/rest/v1/notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\")") && s19code.includes("if [ \"$body19e\" = \"[]\" ]; then ok "), "19e: anon GET the two prefs columns - a 200 must carry no row");
+{
+  const posts = s19code.match(/curl [^\n]*-X POST[^\n]*/g) || [];
+  ok(posts.length === 5 && posts.filter((p) => /rest\/v1\/rpc\//.test(p)).every((p) => /Bearer \$ANON|Bearer \$SILVIS_SURGEON_JWT/.test(p) && p.includes(PS_VR_EP)) && posts.filter((p) => /functions\/v1\/send-notification\?push=test/.test(p)).length === 1 && !/Authorization/.test(posts.find((p) => /\?push=test/.test(p)) || "Authorization"), "every RPC POST in section 19 is an anon or surgeon call about the verify-rls endpoint (nobody's device); the 19i POST carries no session at all");
+  ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s19code) && !/\?endpoint=|endpoint=eq\./.test(s19code), "section 19 never sends the scheduler's token and never puts an endpoint in a URL");
+}
+ok((s19code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s19code.match(/"HTTP 404"\) if \[ "\$PUSTRICT19" = "1" \]; then bad /g) || []).length === 6 && /"HTTP 200"\) bad "anon read of push_subscriptions: HTTP 200/.test(s19code), "19a-19d: 401/403 PASS; 404 PASS unless strict (then FAIL; 19f too); an anon 200 on the table FAILs always");
+ok(/if grep -q '42703' \$T\/vr19e\.json; then\n\s+if \[ "\$PUSTRICT19" = "1" \]; then bad /.test(s19code), "19e: a 400 with 42703 is the not-applied picture unless strict");
+ok(/if \[ -n "\$\{SILVIS_SURGEON_JWT:-\}" \]; then/.test(s19code) && s19code.includes('echo "   SKIP 19f (set SILVIS_SURGEON_JWT=') && s19code.includes("grep -q '\"saved\":false'") && !/-X (PATCH|DELETE|PUT)/.test(s19code), "19f runs only with SILVIS_SURGEON_JWT (a SKIP line otherwise): read-only, the status RPC must answer saved false; no PATCH / DELETE anywhere in section 19");
+ok(/PROBE19="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/push-notifications-probe\.sql"/.test(s19code), "19g runs sql/probes/push-notifications-probe.sql through the linked CLI");
+ok(/if \[ "\$PUSTRICT19" = "1" \]; then bad "phone push probe: PROBE_SETUP - push_subscriptions is absent with SILVIS_PUSH_APPLIED=1/.test(s19code) && /else ok "phone push probe: push_subscriptions is absent \(before the migration: PROBE_SETUP\)"/.test(s19code) && /grep -q 'PROBE_SETUP: notification_preferences\\\.'; then\n\s+bad "phone push probe: PROBE_SETUP - a notification_preferences \*_push column is absent/.test(s19code), "19g: PROBE_SETUP absent is the not-applied picture (a PASS) unless strict; the partly-applied raise FAILs always");
+ok(s19code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'"), "section 19's case reader decodes the CLI's \\u003e / \\u003c / \\u0026 and drops the JSON backslashes before grading");
+ok(s19code.includes('lines19=$(echo "$results19" | tr \';\' \'\\n\' | sed ') && s19code.includes('case_val19()   { CV19=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV19="${l#"$1="}"; return 0;; esac; done <<< "$lines19"; }'), "section 19 decodes the results ONCE and reads each case in plain bash (no process per case)");
+const PS_VARS = { [psErr("PS001")]: "PS001_19", [psErr("PS003")]: "PS003_19", [psErr("PS004")]: "PS004_19", [psErr("PS005")]: "PS005_19" };
+Object.keys(PS_VARS).forEach((v) => ok(s19code.includes(PS_VARS[v] + '="' + v + '"'), "section 19's shared string " + PS_VARS[v] + " is the probe's"));
+PS_CASES.forEach((k) => {
+  const [kind, a, b] = PS_PROBE_CASES[k];
+  let re;
+  if (kind === "eq") re = new RegExp("\\n    expect_eq19\\s+" + psEsc(k) + "\\s+" + (PS_VARS[a] ? "\"\\$" + PS_VARS[a] + "\"" : "\"" + psEsc(a) + "\"") + "\\s");
+  else re = new RegExp("\\n    expect_err19\\s+" + psEsc(k) + "\\s+" + a + "\\s+[\"']" + psEsc(b) + "[\"']\\s");
+  ok(re.test(s19code), "section 19 must grade " + k + " as " + PS_PROBE_CASES[k].join(" | "));
+});
+eq((s19code.match(/\n    expect_(eq|err)19 /g) || []).length, PS_CASES.length, "section 19 grades exactly the 51 cases;");
+ok(s19code.includes("LEFTOVER19_SQL=\"select ((select count(*) from auth.users where email like 'probe-push-%@example.test') + (select count(*) from public.audit_log where action like 'push.%' and detail->>'summary' like 'probe %'))::int as tagged, (case when to_regclass('public.push_subscriptions') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.push_subscriptions where endpoint like ''https://fcm.googleapis.com/fcm/send/probe-push-%''', false, true, '')))[1]::text::int end) as endpoints\"") && /LEFT ROWS BEHIND/.test(s19code), "19h counts leftovers by the probe's identity (its auth users, its push.% audit rows, push rows holding its endpoints - guarded by to_regclass) and fails on non-zero");
+ok(s19code.includes("echo \"      delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-push-%';\"") && s19code.includes("echo \"      delete from auth.users where email like 'probe-push-%@example.test';   -- profiles, their prefs rows and their push rows cascade\"") && !/delete from public\.push_subscriptions where (profile_id|id)/.test(s19code), "19h prints DELETEs for the probe's rows only (by its endpoint prefix and its users)");
+ok(s19code.includes('echo "   SKIP 19g/19h (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 19g / 19h skip (19a-19f still run)");
+ok(s19code.includes('if [ "$PUDEPLOYED19" = "1" ]; then') && s19code.includes("\"$URL/functions/v1/send-notification?vapid=public\")") && s19code.includes("grep -qE '^\\{\"publicKey\":\"B[A-Za-z0-9_-]{86}\"\\}$'") && s19code.includes("-X POST \"$URL/functions/v1/send-notification?push=test\")") && s19code.includes("\"HTTP 401\") ok \"send-notification refuses an unauthenticated test push") && s19code.includes('echo "   INFO 19i not graded (set SILVIS_PUSH_DEPLOYED=1'), "19i grades the deployed function only with SILVIS_PUSH_DEPLOYED=1 (exactly one key publicKey; the unauthenticated test push 401); else one INFO line");
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(head.includes("#   SILVIS_PUSH_APPLIED=1   grade section 19 strictly (the probe's PROBE_SETUP, the anon 404s and 19e's 400 42703 = FAIL): only on the run right after sql/migrations/2026-10-03-push-notifications.sql is applied; the record step makes strict the default and drops this variable") && head.includes("#   SILVIS_PUSH_DEPLOYED=1  also grade 19i") && /phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e\)/.test(head) && /surgeon reads \([^)]*19f;/.test(head), "verify-rls.sh's header names section 19, its anon checks, 19f and the two flags");
+  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_PUSH_APPLIED \/ SILVIS_PUSH_DEPLOYED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_PUSH_APPLIED and SILVIS_PUSH_DEPLOYED");
+}
+{
+  const code19 = vr.slice(vr.indexOf('echo "== 19. '), vrSectionEnd('echo "== 19. '));
+  const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
+  const PK = '{"publicKey":"B' + "A".repeat(86) + '"}';
+  const COL42703 = '{"code":"42703","details":null,"hint":null,"message":"column notification_preferences.trade_updates_push does not exist"}';
+  const run19 = (cliOut, opts) => {
+    const o = Object.assign({ strict: false, deployed: false, surgeon: false, tagged: 0, ep: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", e: "200", eBody: "[]", iGet: "200", iBody: PK, iPost: "401" }, opts || {});
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  {\\n    \"tagged\": " + o.tagged + ",\\n    \"endpoints\": " + o.ep + "\\n  }\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"tagged\": " + o.tagged + ",\\n      \"endpoints\": " + o.ep + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_PUSH_APPLIED='" + (o.strict ? "1" : "") + "'\nSILVIS_PUSH_DEPLOYED='" + (o.deployed ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      "q() { " + qBody + "; }\n" +
+      "curl() { local of='' prev='' code='' post='' sur='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$a\" = POST ] && post=1; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; " +
+      "case \"$u\" in " +
+      "*functions/v1/send-notification?vapid=public*) code=" + o.iGet + "; body=" + sq(o.iBody) + ";; " +
+      "*functions/v1/send-notification?push=test*) code=" + o.iPost + "; body='{\"error\":\"not signed in\"}';; " +
+      "*rpc/save_push_subscription*) code=" + o.b + ";; " +
+      "*rpc/delete_push_subscription*) code=" + o.c + ";; " +
+      "*rpc/push_subscription_status*) if [ -n \"$sur\" ]; then code=200; body='{\"ok\": true, \"saved\": false, \"devices\": 0}'; else code=" + o.d + "; fi;; " +
+      "*rest/v1/push_subscriptions*) if [ -n \"$sur\" ]; then code=200; body='[]'; else code=" + o.a + "; fi;; " +
+      "*rest/v1/notification_preferences*) code=" + o.e + "; body=" + sq(o.eBody) + ";; " +
+      "esac; [ -n \"$of\" ] && printf '%s' \"$body\" > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + code19 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 19: " + (r.error && r.error.message));
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = {};
+  PS_CASES.forEach((k) => { after[k] = psFull(k); });
+  // the CLI's error body as the live apply logs show it (a JSON message, a double quote escaped; CONTEXT after the sentinel)
+  const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"') + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
+  const N19 = PS_CASES.length + 6;   // 19a-19e + 51 cases + 19h
+  const ra = run19(msgOf(after));
+  eq(ra.result, [N19, 0], "section 19 against the AFTER picture (19a-19d 401, 19e 200 [], every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  ok(/SKIP 19f/.test(ra.out) && /INFO 19i not graded/.test(ra.out), "... 19f skipped without a surgeon token, 19i an INFO line without SILVIS_PUSH_DEPLOYED");
+  eq(run19(msgOf(after), { surgeon: true, deployed: true }).result, [N19 + 4, 0], "with SILVIS_SURGEON_JWT 19f adds two PASSes (the read 200, the status saved false); with SILVIS_PUSH_DEPLOYED=1 19i two (the public key, the 401);");
+  const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied\\nCONTEXT:  ..."}';
+  const beforePic = { a: "404", b: "404", c: "404", d: "404", e: "400", eBody: COL42703 };
+  const rb = run19(setup, beforePic);
+  eq(rb.result, [7, 0], "section 19 before the apply (four 404s, 19e 400 42703, PROBE_SETUP): passes as not applied, the leftover check too (" + fails(rb) + ");");
+  eq(run19(setup, Object.assign({ strict: true }, beforePic)).result, [1, 6], "section 19 with SILVIS_PUSH_APPLIED=1: the four 404s, 19e's 42703 and PROBE_SETUP are FAILs;");
+  const rl = run19(msgOf(Object.assign({}, after, { S8: "inserted (NO refusal)", O5: "ok action=moved devices=1 audit=true", C2: "saved (NO refusal) devices=11" })), { a: "200" });
+  eq(rl.result, [N19 - 4, 4], "section 19 must fail a direct insert let through, a move without the keys, no cap and an anon 200 - exactly those four (" + fails(rl) + ");");
+  eq(run19(setup, Object.assign({}, beforePic, { a: "200" })).result, [6, 1], "an anon 200 on the table FAILs, before the apply too (even with Content-Range */0 - the revoke did not take);");
+  eq(run19(msgOf(after), { eBody: '[{"trade_updates_push":true,"schedule_updates_push":true}]' }).result, [N19 - 1, 1], "a 19e answer WITH a row FAILs (anon must never read a prefs row);");
+  eq(run19(msgOf(after), { e: "400", eBody: '{"code":"PGRST100","message":"x"}' }).result, [N19 - 1, 1], "a 19e 400 without 42703 FAILs;");
+  const rq = run19(msgOf(after), { tagged: 3, shape: "bare" });
+  eq(rq.result, [N19 - 1, 1], "section 19 fails a non-zero tagged leftover count (read from a plain terminal's bare-array -o json the same as the agent envelope);");
+  ok(/LEFT ROWS BEHIND \(tagged=3 endpoints=0/.test(rq.out) && rq.out.includes("delete from auth.users where email like 'probe-push-%@example.test';") && rq.out.includes("delete from public.audit_log where action like 'push.%' and detail->>'summary' like 'probe %';") && rq.out.includes("delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-push-%';"), "section 19 names the leftovers and prints their DELETEs");
+  eq(run19(msgOf(after), { ep: 2 }).result, [N19 - 1, 1], "section 19 fails push rows left with a probe endpoint;");
+  eq(run19(msgOf(after), { shape: "error" }).result, [N19 - 1, 1], "19h fails a leftover count it cannot read;");
+  eq(run19('{"message": "connection refused"}').result, [6, 1], "section 19 fails a run with no sentinel-terminated PROBE_RESULTS (19a-19e and the leftover check still run);");
+  const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: notification_preferences.trade_updates_push is absent - sql/migrations/2026-10-03-push-notifications.sql is partly applied\\nCONTEXT:  ..."}';
+  eq(run19(part).result, [6, 1], "the partly-applied raise is a FAIL even before the apply's flag;");
+  eq(run19(msgOf(after), { deployed: true, iBody: '{"publicKey":"B' + "A".repeat(86) + '","privateKey":"x"}' }).result, [N19 + 1, 1], "19i fails a GET ?vapid=public that carries any other key;");
+  eq(run19(msgOf(after), { deployed: true, iGet: "405", iBody: '{"error":"method not allowed"}', iPost: "200" }).result, [N19, 2], "19i fails the pre-deploy function (GET 405) and an unauthenticated test push that is not refused 401;");
+}
+
+step("Prompt 30: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - neither apply-push-notifications.sh nor setup-push-keys.sh under scripts/");
+{
+  ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-push-notifications.sh")) && !fs.existsSync(path.join(ROOT, "scripts", "setup-push-keys.sh")), "the Prompt 30 apply scripts must not be in the repo (they live outside it; test/ci.test.js keeps verify-rls.sh the only shell script)");
+  [PS_MIGRATION, PS_PROBE, PS_PRECHECK, path.join(ROOT, "sql", "schema.sql"), path.join(ROOT, "scripts", "verify-rls.sh"), path.join(ROOT, "docs", "SCHEMA-REVIEW.md")].forEach((p) =>
+    ok(!/bash scripts\/apply-|scripts\/(apply-push-notifications|setup-push-keys)\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
+}
+
+step("Prompt 30: docs - SCHEMA-REVIEW.md section (PREPARED, why, the table + RLS verbatim, the RLS table, READING 2, the refusal table, the pre-check verbatim, the probe table, verify-rls 19a-19i, apply order, one command, rollback verbatim, observed placeholder), tables (a) / (b)");
+ok(/^## 2026-10-03 - phone push: push_subscriptions \+ save_push_subscription \/ delete_push_subscription \/ push_subscription_status \+ notification_preferences \*_push \(Faraz 10\/2, Prompt 30; `sql\/migrations\/2026-10-03-push-notifications\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-03 - phone push: ...' section");
+{
+  const at = review.indexOf("## 2026-10-03 - phone push:"), end = review.indexOf("\n## ", at + 1);
+  const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const flat = sec.replace(/\s+/g, " ");
+  ok(/^\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*$/m.test(sec), "the section's status line reads `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+  ok(flat.includes("Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the send-notification deploy"), "the section gives Faraz's order: the apply script, the key script, the deploy");
+  ok(flat.includes("**\"Davenport's look, Silvis's own push\"**") && /Fierce's trade request/.test(flat) && /No OneSignal/.test(flat), "the section states why (Fierce's trade) and the decision");
+  ok(sec.includes("```sql\n" + [PS_TABLE, PS_INDEX, PS_ENABLE, PS_PRIVS, PS_POLICIES].join("\n") + "\n```"), "the section carries the table and its RLS verbatim");
+  ok(flat.includes("**Blast radius.**") && flat.includes("**Why no direct insert (READING 2).**") && flat.includes("server-side request forgery") && flat.includes("READING 3") && flat.includes("READING 4") && flat.includes("**What could break / what offline cannot show.**"), "the section covers the blast radius, READING 2 (with READING 3 / 4) and what offline cannot show");
+  ok(/^\| who \| select \| insert \| update \| delete \|$/m.test(sec) && /^\| anon \| nothing [^\n]*\| no \| no \| no \|$/m.test(sec) && /^\| authenticated [^\n]*`id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count`[^\n]*never `endpoint`, `p256dh` or `auth`/m.test(sec), "the RLS table (who / select / insert / update / delete) with the column grant");
+  PS_ORDER.forEach((c, i) => ok(new RegExp("^\\| " + (i + 1) + " \\| `" + c + "` \\|[^\\n]*\\| `" + psEsc(PS_TEXT[c]) + "` \\|$", "m").test(sec), "the refusal table lists " + c + " with its exact message"));
+  ok(sec.includes("```sql\n" + psPre.slice(psPre.indexOf("with objects as (")).replace(/\n+$/, "") + "\n```"), "the section carries the pre-check verbatim (= sql/probes/push-notifications-precheck.sql)");
+  ok(flat.includes(PS_GATE_BEFORE) && flat.includes(PS_GATE_AFTER), "the section states the gate strings");
+  PS_CASES.forEach((k) => ok(new RegExp("^\\| " + psEsc(k) + " \\| [^\\n]* \\| `" + psEsc(psFull(k)) + "` \\|$", "m").test(sec), "the section's probe table lists case " + k + " with its AFTER string"));
+  ["19a", "19b", "19c", "19d", "19e", "19f", "19g", "19h", "19i"].forEach((p) => ok(new RegExp("^\\| " + p + " \\| ", "m").test(sec), "the section's verify-rls table lists " + p));
+  ok(flat.includes("6. Probe AFTER: every case as the table lists (51 cases).") && flat.includes("7. `SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh`") && flat.includes("8. `bash setup-push-keys.sh`") && flat.includes("`SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh` - 19i green") && flat.includes("10. The record step, ONE commit:") && flat.includes("`supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-03-push-notifications.sql`") && flat.includes("11. The client push, on Faraz's go"), "the apply order: pre-check, absent check, probe BEFORE, the file, the gate, probe AFTER (51), strict verify-rls, the keys, the deploy (19i), the record step, the client push");
+  ok(flat.includes("**One command (Faraz):** his apply script `apply-push-notifications.sh`, kept OUTSIDE the repo") && flat.includes("sha256") && flat.includes("--dry-run") && flat.includes("AI_AGENT=1") && flat.includes("PASTE THIS BACK TO CLAUDE CODE") && flat.includes("`APPLY` in capital letters"), "the section names the one command (its script outside the repo), the sha256 stop, its dry run, the capital-letters prompt, the agent mode and the paste-back block");
+  ok(sec.includes("```sql\n" + PS_ROLLBACK.join("\n") + "\n```"), "the section gives the rollback verbatim (= the migration header's)");
+  ok(/^observed: _to be filled from Faraz's apply log_$/m.test(sec), "the section keeps the observed placeholder until the record step");
+}
+ok(/^\| `push_subscriptions` \| Phone push \(Faraz 10\/2, Prompt 30\), prepared 2026-10-03 - report-first, NOT APPLIED[^\n]*never anon/m.test(tblA) && /^\| `push_subscriptions` \|[^\n]*write = `save_push_subscription\(\)` only/m.test(tblA),"SCHEMA-REVIEW table (a) needs a push_subscriptions row (prepared, NOT APPLIED; own rows, never anon; write = save_push_subscription only)");
+ok(/^\| `notification_preferences` \|[^\n]*Prompt 30 \(prepared 2026-10-03, NOT APPLIED[^\n]*`trade_updates_push` \/ `schedule_updates_push`/m.test(tblA) && /^\| `notification_preferences` \|[^\n]*Prompt 30 \(prepared 2026-10-03, NOT APPLIED\)[^\n]*`\*_push`/m.test(tblB), "SCHEMA-REVIEW tables (a) / (b): the notification_preferences rows note the two push columns");
+ok(/^\| `push_subscriptions` - prepared 2026-10-03, NOT APPLIED \| its own rows only[^\n]*never anon[^\n]*\| insert \/ update: none directly[^\n]*save_push_subscription\(\)/m.test(tblB), "SCHEMA-REVIEW table (b) needs a push_subscriptions row (read: own rows, the non-secret columns, never anon; write: none directly - save_push_subscription; delete own)");
+console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, NOT applied), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 graded against a faked CLI, apply scripts kept outside the repo, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");
