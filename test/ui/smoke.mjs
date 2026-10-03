@@ -1022,6 +1022,28 @@ const routeEast = async (route) => {
 };
 await context.route((url) => url.hostname === EAST_HOST, routeEast);
 const page = await context.newPage();
+// Smoke round 2 (10/3): the main page records the app's background poll interval (helpers.js POLL_MS, the only
+// setInterval of that period) - when it was created, every tick, when it was cleared - so the expired-token windows
+// (datalayer-001, U3c) can be placed clear of a tick (pollClearWindow below). A tick inside such a window runs
+// auth.ensureFresh() on the expired token, which sends the stored 'fake-refresh' and draws the token mock's 400 - an
+// unclassified console error. Recording only: every call goes on to the browser's own timer functions unchanged.
+const POLL_PERIOD_MS = HELPERS.POLL_MS;
+if (!(POLL_PERIOD_MS > 0)) throw new Error("helpers.js POLL_MS is not a positive number - the poll-tick recorder needs it");
+await page.addInitScript((period) => {
+  try {
+    const rec = { period, intervals: {} };
+    Object.defineProperty(window, "__smokePollTicks", { value: rec });
+    const si = window.setInterval.bind(window), ci = window.clearInterval.bind(window);
+    window.setInterval = function (fn, ms, ...args) {
+      if (ms !== period || typeof fn !== "function") return si(fn, ms, ...args);
+      const entry = { name: fn.name || "", created: Date.now(), fires: [], cleared: null };
+      const id = si(function () { entry.fires.push(Date.now()); return fn.apply(this, arguments); }, ms, ...args);
+      rec.intervals[id] = entry;
+      return id;
+    };
+    window.clearInterval = function (id) { const e = rec.intervals[id]; if (e && e.cleared === null) e.cleared = Date.now(); return ci(id); };
+  } catch (e) {}
+}, POLL_PERIOD_MS);
 
 const pageErrors = [];
 const consoleErrors = [];
@@ -4566,6 +4588,76 @@ try {
     else ok(`${what}: the app's map equals the live rows on this run's ${Object.keys(obs).length} edited day(s) (${Object.keys(obs).join(", ")}) - observed in the grid${unread.length ? "; not readable: " + unread.join(", ") : ""}; the live-state pins derive from the live rows`);
     return stale;
   };
+  // Smoke round 2 (10/3): the main page's expired-token windows (datalayer-001, U3c) open clear of the app's poll tick.
+  // settleMapToLive and freshPollWindow wait for a poll, which lines the harness up with the app's fixed 60-s timer, so a
+  // step a fixed time later can land its window on the next tick: at 6f63fb6, 2 of 4 runs had datalayer-001's 1.5-s
+  // window open ~1.4 s before a tick, whose auth.ensureFresh() sent the stored 'fake-refresh' on the expired token and
+  // drew the token mock's 400 - an unclassified console error. pollClearWindow reads the page's recorder
+  // (window.__smokePollTicks) and opens the window only when the last tick is POLL_GUARD_LEAD_MS old with its
+  // schedule_days read answered, and the next tick is the step's budget + POLL_GUARD_MARGIN_MS away; otherwise it waits
+  // for that tick and its read first. pollWindowClosed logs the window's distance to the ticks on either side and FAILs,
+  // naming the step, when a tick fired inside it or a refresh_token call went out while it was open.
+  const POLL_GUARD_LEAD_MS = 2000, POLL_GUARD_MARGIN_MS = 10000, POLL_GUARD_READ_CAP_MS = 8000;
+  const pollTickInfo = () => page.evaluate(() => {
+    const rec = window.__smokePollTicks;
+    if (!rec) return null;
+    const now = Date.now();
+    const all = Object.values(rec.intervals), live = all.filter(e => e.cleared === null);
+    if (!live.length) return { now, live: 0, allFires: all.flatMap(e => e.fires) };
+    let last = -Infinity, next = Infinity;
+    for (const e of live) { const l = e.fires.length ? e.fires[e.fires.length - 1] : e.created; last = Math.max(last, l); next = Math.min(next, Math.max(now, l + rec.period)); } // an overdue tick is imminent: next = now
+    return { now, live: live.length, names: live.map(e => e.name || "(anonymous)"), last, next, fires: live.reduce((a, e) => a + e.fires.length, 0), allFires: all.flatMap(e => e.fires) };
+  });
+  const secs = (ms) => Number.isFinite(ms) ? (ms / 1000).toFixed(2) + " s" : "?";
+  const pollClearWindow = async (what, budgetMs) => {
+    const g = { what, budgetMs, moved: false, reason: "", waitedMs: 0, lastTick: null, nextTick: null, authAt: authCalls.length, openedAt: null, closedAt: null };
+    try {
+      const t0 = Date.now();
+      let t = await pollTickInfo();
+      if (!t || !t.live) fail(`${what}: no live ${POLL_PERIOD_MS / 1000}-s poll interval recorded on the main page (window.__smokePollTicks) - the expired-token window cannot be placed clear of a tick; it opens unguarded`);
+      else {
+        const leadOk = (x) => x.now - x.last >= POLL_GUARD_LEAD_MS && (lastDaysGetAt >= x.last || x.now - x.last >= POLL_GUARD_READ_CAP_MS);
+        const trailOk = (x) => x.next - x.now >= budgetMs + POLL_GUARD_MARGIN_MS;
+        if (!trailOk(t)) g.reason = `the next tick was ${secs(t.next - t.now)} away`;
+        else if (!leadOk(t)) g.reason = `the last tick was ${secs(t.now - t.last)} ago, its read ${lastDaysGetAt >= t.last ? "answered" : "not yet answered"}`;
+        for (let round = 0; round < 3 && !(leadOk(t) && trailOk(t)); round++) {
+          g.moved = true;
+          if (!trailOk(t)) {
+            const n = t.fires;
+            const fired = await waitFor(async () => { const x = await pollTickInfo(); return !!x && x.fires > n; }, Math.max(0, t.next - t.now) + 10000, 100);
+            if (!fired) console.log(`     (poll guard, ${what}: the predicted tick did not fire within 10 s of its time)`);
+            t = await pollTickInfo();
+          }
+          // the tick's refreshAll: its schedule_days read answered (or POLL_GUARD_READ_CAP_MS gone - a tick may skip the
+          // full refresh, helpers.js pollFullRecent) and POLL_GUARD_LEAD_MS past the tick
+          const tickAt = t.last;
+          await waitFor(() => lastDaysGetAt >= tickAt || Date.now() - tickAt >= POLL_GUARD_READ_CAP_MS, POLL_GUARD_READ_CAP_MS + 1000, 100);
+          const leadLeft = tickAt + POLL_GUARD_LEAD_MS - Date.now();
+          if (leadLeft > 0) await page.waitForTimeout(leadLeft);
+          t = await pollTickInfo();
+        }
+        if (!(leadOk(t) && trailOk(t))) fail(`${what}: the expired-token window could not be placed clear of the app's poll tick (last tick ${secs(t.now - t.last)} ago, next in ${secs(t.next - t.now)}; budget ${secs(budgetMs)} + margin ${secs(POLL_GUARD_MARGIN_MS)})`);
+        g.lastTick = t.last; g.nextTick = t.next; g.waitedMs = Date.now() - t0;
+      }
+    } catch (e) { fail(`${what}: poll guard: ` + errLine(e)); }
+    g.authAt = authCalls.length;
+    g.openedAt = Date.now();
+    return g;
+  };
+  const pollWindowClosed = async (g) => {
+    if (!g || g.closedAt) return;
+    g.closedAt = Date.now();
+    try {
+      const t = await pollTickInfo();
+      const fires = (t && t.allFires) || [];
+      const inside = fires.filter(f => f >= g.openedAt && f <= g.closedAt);
+      const refreshes = authCalls.slice(g.authAt).filter(a => a.grant === "refresh_token");
+      const prevTick = Math.max(g.lastTick === null ? -Infinity : g.lastTick, ...fires.filter(f => f < g.openedAt));
+      const nextTick = Math.min(t && t.next ? t.next : Infinity, ...fires.filter(f => f > g.closedAt));
+      console.log(`     (poll guard, ${g.what}: expired-token window ${secs(g.closedAt - g.openedAt)} - opened ${secs(g.openedAt - prevTick)} after the app's last poll tick, closed ${secs(nextTick - g.closedAt)} before the next (lead ${secs(POLL_GUARD_LEAD_MS)}, budget ${secs(g.budgetMs)} + margin ${secs(POLL_GUARD_MARGIN_MS)})${g.moved ? `; MOVED: ${g.reason} - waited ${secs(g.waitedMs)}` : ""}; ticks inside ${inside.length}${inside.length ? " (+" + inside.map(f => secs(f - g.openedAt)).join(", +") + " after it opened)" : ""}, refresh_token calls ${refreshes.length}; recorded interval(s): ${t && t.names ? t.names.join(", ") : "none"})`);
+      if (inside.length || refreshes.length) fail(`${g.what}: the app's poll ticked ${inside.length} time(s) inside the expired-token window and ${refreshes.length} refresh_token call(s) went out ${JSON.stringify(refreshes.map(a => a.refresh))} - the poll guard did not keep the window clear`);
+    } catch (e) { fail(`${g.what}: poll guard (close): ` + errLine(e)); }
+  };
 
   // ---- Prompt 13 part 3: the Open shifts board ----
   // Runs BEFORE this run's first edit, so the board's rows equal the live rows
@@ -5506,10 +5598,18 @@ try {
   // window takes in more of them each day until that month is published). settleMapToLive waits (at most
   // two polls) until the grid shows the live rows on every edited day - after that a poll changes nothing - so the list
   // must equal the published rows, day by day and role by role.
-  const s1RoleOn = (d) => { const c = curDay(d); return c.primary === "s1" ? "primary" : c.backup === "s1" ? "backup" : null; };
+  // Smoke round 2 (review lows): the settle runs before the checks' try, so a throw in it FAILs loudly and the ~12 checks
+  // below still run; and its answer is used - a day the grid still shows differently from the live rows after two polls
+  // (every edited day, when the settle threw) is expected from the live rows, so the list check names that day instead
+  // of comparing the app with its own grid.
+  let myPremiseStale = [];
+  try { myPremiseStale = await settleMapToLive("My schedule premise"); }
+  catch (e) { fail("My schedule premise: " + errLine(e) + " - the checks below expect the live rows on every edited day"); myPremiseStale = Object.keys(harnessDays); }
+  const myExpDay = (d) => myPremiseStale.includes(d) ? liveHolders(d) : curDay(d);
+  const myExpNote = myPremiseStale.length ? `; expected from the live rows on the unsettled day(s) ${myPremiseStale.join(", ")}` : "";
+  const s1RoleOn = (d) => { const c = myExpDay(d); return c.primary === "s1" ? "primary" : c.backup === "s1" ? "backup" : null; };
   const s1DaysIn = (from, to) => curDays().filter(d => d >= from && (!to || d <= to) && s1RoleOn(d));
   try {
-    await settleMapToLive("My schedule premise");
     await page.click('button[data-tab="myschedule"]');
     await page.waitForSelector("[data-testid=next-call]", { timeout: 8000 });
     await page.waitForFunction(() => { const el = document.querySelector("[data-testid=next-call]"); return el && !/Loading schedule/.test(el.textContent); }, null, { timeout: 8000 });
@@ -5525,14 +5625,14 @@ try {
     else if (nextDay !== expectedNext.day || nextRole !== expRole) fail(`My schedule: next call is ${nextDay} ${nextRole}, the published rows say ${expectedNext.day} ${expRole}`);
     else if (!nextText.includes(`${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}`)) fail(`My schedule: the card does not render '${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}': ` + nextText.slice(0, 140));
     else if (!/Next call - (today|tomorrow|in \d+ days)/i.test(nextText) || !/07:00 to 07:00/.test(nextText)) fail("My schedule: next-call card text wrong: " + nextText); // the label is CSS-uppercased in innerText
-    else ok(`My schedule: next call ${nextDay} (${nextRole}) matches the first published s1 day on/after ${todayIso}, rendered as '${longDate(expectedNext.day)}'; card "${nextText.slice(0, 110)}"`);
+    else ok(`My schedule: next call ${nextDay} (${nextRole}) matches the first published s1 day on/after ${todayIso}, rendered as '${longDate(expectedNext.day)}'; card "${nextText.slice(0, 110)}"${myExpNote}`);
     const mineRows = await page.$$eval("[data-testid=mine-day]", els => els.map(e => e.getAttribute("data-day") + " " + e.getAttribute("data-role")));
     const mineDays = mineRows.map(x => x.slice(0, 10));
     const horizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
     const expectedRows = s1DaysIn(todayIso, horizon).map(d => d + " " + s1RoleOn(d));
     const onlyApp = mineRows.filter(x => !expectedRows.includes(x)), onlyRows = expectedRows.filter(x => !mineRows.includes(x));
     if (mineRows.length !== expectedRows.length || onlyApp.length || onlyRows.length) fail(`My schedule: upcoming list has ${mineRows.length} day(s), the live rows have ${expectedRows.length} for s1 in the next 90 days (${todayIso}..${horizon}) - only in the list: ${onlyApp.join(", ") || "none"}; only in the rows: ${onlyRows.join(", ") || "none"}`);
-    else ok(`My schedule: upcoming list = ${mineRows.length} day(s) in the next 90 days (${todayIso}..${horizon}), day by day and role by role the live rows'${mineDays.length ? ", first " + mineDays[0] : ""}`);
+    else ok(`My schedule: upcoming list = ${mineRows.length} day(s) in the next 90 days (${todayIso}..${horizon}), day by day and role by role the live rows'${mineDays.length ? ", first " + mineDays[0] : ""}${myExpNote}`);
     if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Trade' shortcut (mine-trade) on the upcoming rows");
     // Day-click summary (9/27): 'Give away' beside every 'Trade' (mine-trade) on the own rows
     try {
@@ -7556,6 +7656,7 @@ try {
     ok("screenshot test/ui/out/trades.png");
     // (B3) datalayer-001: expired token + realtime change -> the pending rows survive, no anon read
     {
+      const dlGuard = await pollClearWindow("datalayer-001", 5000); // smoke round 2: the ~1.7-s window opens clear of a poll tick
       const getsBefore = tradeGets.length;
       const warnsBefore = consoleWarns.length;
       await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), EXPIRED_JWT);
@@ -7565,6 +7666,7 @@ try {
       const foreignGet = tradeGets.slice(getsBefore).find(g => g.auth !== "Bearer " + FAKE_JWT);
       const skipWarn = consoleWarns.slice(warnsBefore).find(t => /shift_trade_requests: read skipped/.test(t));
       await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT);
+      await pollWindowClosed(dlGuard);
       await page.waitForTimeout(200);
       if (still !== U_N) fail(`datalayer-001: with the token expired a realtime refresh left ${still} of ${U_N} pending rows listed (the list was wiped by an anon 200 + [])`);
       else if (foreignGet) fail("datalayer-001: shift_trade_requests was read with a non-session Authorization while the token was expired: " + JSON.stringify(foreignGet));
@@ -9554,8 +9656,10 @@ try {
     // stamped STALE - the preview shows the red warning, the toast says so; with the token back and the tables
     // re-read the next run carries no warning. (The 'refuse' tier - never read this session - is a data-layer test:
     // this page read both tables at load.) N=3 keeps the two runs short; both are discarded.
+    let u3cGuard = null; // smoke round 2: the stale window (token expired -> stale preview -> discard, ~1.1-1.4 s) opens clear of a poll tick
     if (offerPeriod) try {
       const genEndStale = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0));
+      u3cGuard = await pollClearWindow("U3c stale offers", 15000);
       const warnsB = consoleWarns.length;
       await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), EXPIRED_JWT);
       rtSendRow("call_offers", { id: "harness-stale-probe", person_id: "s2", day: OTHER_OFFER_DAY }, "UPDATE");
@@ -9583,6 +9687,7 @@ try {
       await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
       // token back, tables re-read -> the next run carries no warning
       await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT);
+      await pollWindowClosed(u3cGuard);
       const offerGetsB = offerGets.length;
       rtSendRow("call_offers", { id: "harness-stale-probe", person_id: "s2", day: OTHER_OFFER_DAY }, "UPDATE");
       rtSendRow("call_periods", { id: offerPeriod.id }, "UPDATE");
@@ -9598,7 +9703,7 @@ try {
       await page.click("[data-testid=gen-discard]");
       await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
       { const tst = await page.$("[data-testid=toast]"); if (tst) await tst.click().catch(() => {}); }
-    } catch (e) { fail("U3c stale offers: " + errLine(e)); await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT); }
+    } catch (e) { fail("U3c stale offers: " + errLine(e)); await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT); await pollWindowClosed(u3cGuard); }
     const genEnd = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0)); // day 0 of the next month = the last day of genStart's month
     const genDays = daysBetween(genStart, genEnd).length;
     const genMonthLabel = `${["January","February","March","April","May","June","July","August","September","October","November","December"][+genStart.slice(5, 7) - 1]} ${genStart.slice(0, 4)}`;
