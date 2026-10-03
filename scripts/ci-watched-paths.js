@@ -11,7 +11,10 @@
 //
 //   node scripts/ci-watched-paths.js [--ref=<rev>] <path> [<path> ...]
 //   exit 0 = none watched (prints nothing), exit 1 = at least one watched (prints
-//   them, one per line), exit 2 = usage error (or the filter could not be read).
+//   them, one per line), exit 2 = usage error (or the filter could not be read, or
+//   it holds an entry not written `- "path"` - merge review of Do first 10: an
+//   unquoted or single-quoted entry is a valid GitHub filter, and skipping it
+//   would call a path unwatched that GitHub watches, so the matcher fails closed).
 //   -h / --help prints this usage.
 //   Without --ref it reads the working tree's build.yml. With --ref=<rev> it reads
 //   build.yml AS OF <rev> (`git show <rev>:.github/workflows/build.yml`, local, no
@@ -28,7 +31,11 @@ const ROOT = path.join(__dirname, "..");
 const WORKFLOW = ".github/workflows/build.yml";
 const USAGE = "usage: node scripts/ci-watched-paths.js [--ref=<rev>] <repo path> [<repo path> ...]   (exit 0 none watched / 1 some watched / 2 usage or unreadable filter)";
 
-// The `- "..."` entries under `paths:` - the same walk test/ci.test.js pins.
+// The `- "..."` entries under `paths:` - the same walk test/ci.test.js pins. Blank and
+// comment lines are skipped at any indentation (YAML ignores a comment wherever it
+// sits, so a column-0 comment inside the list must not end it); the list ends at the
+// first other line indented no deeper than `paths:`. Any other line inside it THROWS:
+// an entry this walk cannot read would otherwise be dropped silently.
 function watchedGlobs(yml) {
   const L = String(yml).replace(/\r\n/g, "\n").split("\n");
   const i = L.findIndex(l => /^\s*paths:\s*$/.test(l));
@@ -37,10 +44,11 @@ function watchedGlobs(yml) {
   const out = [];
   for (let k = i + 1; k < L.length; k++) {
     const l = L[k];
-    if (!l.trim()) continue;
+    if (!l.trim() || /^\s*#/.test(l)) continue;
     if (l.match(/^\s*/)[0].length <= ind) break;
     const m = l.match(/^\s*-\s*"([^"]+)"\s*(#.*)?$/);
-    if (m) out.push(m[1]);
+    if (!m) throw new Error("`paths:` entry not written `- \"path\"` (line " + (k + 1) + "): " + l.trim());
+    out.push(m[1]);
   }
   return out;
 }
@@ -56,7 +64,15 @@ function watchedOf(paths, globs) {
   return paths.map(p => String(p).replace(/\\/g, "/")).filter(p => res.some(r => r.test(p)));
 }
 
-function main(argv) {
+// The filter as of <ref> (or the working tree). `io.readWorkflow` replaces it in tests.
+function readWorkflow(ref) {
+  return ref === null
+    ? fs.readFileSync(path.join(ROOT, WORKFLOW), "utf8")
+    : cp.execFileSync("git", ["show", ref + ":" + WORKFLOW], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function main(argv, io) {
+  const read = (io && io.readWorkflow) || readWorkflow;
   const paths = [];
   let ref = null;
   for (const t of argv) {
@@ -74,14 +90,18 @@ function main(argv) {
   if (!paths.length) { console.error(USAGE); return 2; }
   let yml;
   try {
-    yml = ref === null
-      ? fs.readFileSync(path.join(ROOT, WORKFLOW), "utf8")
-      : cp.execFileSync("git", ["show", ref + ":" + WORKFLOW], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    yml = read(ref);
   } catch (e) {
     console.error("ci-watched-paths: cannot read " + WORKFLOW + (ref === null ? "" : " at " + ref) + ": " + String(e.message || e).split("\n")[0]);
     return 2;
   }
-  const globs = watchedGlobs(yml);
+  let globs;
+  try {
+    globs = watchedGlobs(yml);
+  } catch (e) {
+    console.error("ci-watched-paths: cannot parse the `paths:` filter of " + WORKFLOW + (ref === null ? "" : " at " + ref) + ": " + String(e.message || e));
+    return 2;
+  }
   if (!globs.length) { console.error("ci-watched-paths: no `paths:` filter found in " + WORKFLOW + (ref === null ? "" : " at " + ref)); return 2; }
   const hit = watchedOf(paths, globs);
   hit.forEach(p => console.log(p));

@@ -7,13 +7,18 @@ name: Build & deploy
 # GitHub Pages (serving main) then redeploys automatically. You only ever edit
 # and commit index-source.html — never touch index.html or bump by hand again.
 #
-# A failed build (bad transpile, injected imports, syntax error) exits non-zero
-# and commits nothing, so a broken build can never reach the live site.
+# A failed build or suite (bad transpile, injected imports, syntax error, a red
+# test) exits non-zero and commits nothing, so a broken build never replaces the
+# live index.html. It does NOT hold back the raw files: Pages serves main
+# directly, so a runtime module (or a future service worker) pushed to main is
+# served as soon as Pages redeploys - before this gate finishes - and stays
+# served if the gate fails. Only deploying Pages from this workflow would gate
+# them (a separate task; review 10/2 of Do first 10).
 #
-# It runs only when a push to main touches a RUNTIME input (the paths filter
-# below), and it still runs every suite of the chain, step by step, before it
-# bumps or builds - the deploy keeps its own gate. Every other push, on any
-# branch, and every PR runs the same chain in .github/workflows/test.yml.
+# It runs on workflow_dispatch and when a push to main touches a RUNTIME input
+# (the paths filter below), and it still runs every suite of the chain, step by
+# step, before it bumps or builds - the deploy keeps its own gate. Every push
+# (main included) and every PR also runs the chain in .github/workflows/test.yml.
 
 on:
   push:
@@ -34,6 +39,8 @@ on:
     # test/ci.test.js, in the same commit - until both agree, ci.test.js fails
     # (an unlisted tracked root file is "neither watched nor non-runtime").
     # scripts/ci-watched-paths.js reads this list itself; nothing else to edit.
+    # Every entry is written `- "path"` (double-quoted, one per line): ci.test.js
+    # and the matcher refuse any other shape, so neither can under-read the list.
     # Deliberately NOT watched: test/** (suites, fixtures, the seed adapter),
     # docs/** (the seed too), sql/**, scripts/**, edge-functions/** (deployed by
     # hand with the Supabase CLI), README / CLAUDE.md, .github/**. A push that
@@ -67,6 +74,14 @@ on:
       - "icon-512.png"
       - "icon-192.png"
       - "apple-touch-icon.png"
+      # The CI-owned outputs Pages serves (merge review of Do first 10, 10/2):
+      # this workflow writes them, but a hand-committed copy pushed to main (with
+      # tests, say) must still run the gate and be rebuilt over - unwatched, a
+      # stale index.html would go live unbuilt. The bot's own commit-back pushes
+      # with GITHUB_TOKEN and the skip marker, so this never loops, and
+      # ci-owned-files-gate.yml still refuses both in a PR.
+      - "index.html"
+      - "version.json"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 # Nothing by default; the build job grants itself contents: write for the
@@ -80,6 +95,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A run takes about a minute (the commit step's 0) arm runs the chain a
+    # second time); a hung suite must not hold the non-cancelling concurrency
+    # group - and every later deploy - for GitHub's 6 h default. ci.test.js pins
+    # 10-60 min, as for test.yml.
+    timeout-minutes: 30
     # Skip the bot's own build commits (belt-and-suspenders; GITHUB_TOKEN pushes
     # don't trigger workflows anyway).
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}

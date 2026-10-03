@@ -56,9 +56,11 @@ ok(chain.length >= 11, "test chain lists " + chain.length + " suites; expected a
 const yml = read(".github/workflows/build.yml");
 
 // paths filter: the `- "..."` entries under `paths:`. Walk the lines after it
-// and stop at the first non-blank line indented no deeper than `paths:` itself
-// (a regex anchored on "same indent" skipped past the top-level keys and read
-// 49 lines into the job definition - review 2026-09-23).
+// and stop at the first non-blank, non-comment line indented no deeper than
+// `paths:` itself (a regex anchored on "same indent" skipped past the top-level
+// keys and read 49 lines into the job definition - review 2026-09-23). Comment
+// lines are skipped at any indentation: YAML ignores them wherever they sit, so a
+// column-0 comment inside the list must not end the walk (merge review 10/2).
 function pathsBlockOf(y) {
   const L = y.split("\n");
   const i = L.findIndex(l => /^\s*paths:\s*$/.test(l));
@@ -67,15 +69,21 @@ function pathsBlockOf(y) {
   const out = [];
   for (let k = i + 1; k < L.length; k++) {
     const l = L[k];
-    if (!l.trim()) continue;
+    if (!l.trim() || /^\s*#/.test(l)) continue;
     if (l.match(/^\s*/)[0].length <= ind) break;
     out.push(l);
   }
   return out.join("\n");
 }
+const PATHS_ENTRY = /^\s*-\s*"([^"]+)"\s*(#.*)?$/;
 const pathsBlock = pathsBlockOf(yml);
-const filter = pathsBlock.split("\n").map(l => (l.match(/^\s*-\s*"([^"]+)"\s*(#.*)?$/) || [])[1]).filter(Boolean);
+const filter = pathsBlock.split("\n").map(l => (l.match(PATHS_ENTRY) || [])[1]).filter(Boolean);
 ok(filter.length > 0, "could not parse the `paths:` filter out of build.yml");
+// Every line of the list is a `- "path"` entry (merge review of Do first 10, 10/2): an unquoted (`- docs/**`) or
+// single-quoted (`- 'test/**'`) entry is a valid GitHub filter that this parse - and scripts/ci-watched-paths.js -
+// would skip, so a non-runtime path added that way would deploy on every docs push while every pin below stayed green.
+const oddPathsLines = pathsBlock.split("\n").filter(l => l.trim() && !PATHS_ENTRY.test(l));
+ok(oddPathsLines.length === 0, "every build.yml `paths:` entry must be written `- \"path\"` (double-quoted, one per line) - this test and scripts/ci-watched-paths.js read only that shape; found " + JSON.stringify(oddPathsLines.map(s => s.trim())));
 // self-check on the parse: the block holds the JSX source and nothing from
 // the job definition or the other trigger keys.
 ok(filter.includes("index-source.html"), "paths filter parse lost `index-source.html` - the block boundary is wrong");
@@ -112,6 +120,15 @@ ok(JSON.stringify(stepOrder) === JSON.stringify(chain.filter(p => testSteps.incl
 ok(!/continue-on-error/.test(ymlCode), "build.yml must not use `continue-on-error` (a failing suite would let the bump and build go on)");
 const ymlIfLines = ymlCode.split("\n").filter(l => /^\s*-?\s*if\s*:/.test(l)).map(l => l.replace(/\s+$/, ""));
 ok(JSON.stringify(ymlIfLines) === JSON.stringify(["    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}"]), "build.yml's only `if:` must be the job-level `if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}` (no step-level condition on a suite), found " + JSON.stringify(ymlIfLines));
+// ... and no `shell:` / `working-directory:` / `defaults:` override (merge review 10/2): `shell: bash -c 'true' {0}` on a
+// suite step runs `true` instead of the suite - a green no-op - and a `defaults: run:` block does the same to every step.
+// Block or flow style (`defaults: { run: { shell: ... } }`), any level.
+const SHELL_OVERRIDE = /(^|[\s{,])(shell|working-directory|defaults)\s*:/m;
+ok(!SHELL_OVERRIDE.test(ymlCode), "build.yml must not set `shell:`, `working-directory:` or `defaults:` (an override can turn a suite step into a green no-op)");
+ok(SHELL_OVERRIDE.test("        shell: bash -c 'true' {0}") && SHELL_OVERRIDE.test("defaults: { run: { shell: sh } }") && SHELL_OVERRIDE.test("    - { name: x, run: npm test, shell: sh }") && !SHELL_OVERRIDE.test("        run: npm test"), "the shell-override pattern catches a step, a flow-style defaults block and a flow-style step, and no plain run line");
+// The generator regression runs LAST in the chain (CLAUDE.md, build.yml): section 1a/1c only align the chain with the
+// steps, so dropping it from both would pass them, and section 2e checks only `*.test.*` files.
+ok(chain[chain.length - 1] === "test/generator-regression.js", "package.json's test chain must end with `node test/generator-regression.js` (the hard-rule regression, last - the fast unit suites fail first); last entry is `" + chain[chain.length - 1] + "`");
 flush("chain vs steps");
 
 // ---- 2. the build filter is exactly the deploy's RUNTIME inputs (review 2026-09-27 Do first 10) ----
@@ -125,6 +142,9 @@ const RUNTIME_FILTER = [
   "index-source.html", "build.js", "bump-version.js", "package.json", "package-lock.json",
   "config.js", "helpers.js", "rules.js", "east-feed.js", "generator.js", "importer.js", "app-styles.js",
   "vendor/**", "manifest.json", "icon-512.png", "icon-192.png", "apple-touch-icon.png",
+  // The CI-owned outputs Pages serves (merge review 10/2): build.yml writes them, but a hand-committed copy pushed to
+  // main (with tests, say) must run the gate and be rebuilt over instead of going live unbuilt.
+  "index.html", "version.json",
 ];
 ok(JSON.stringify(filter.slice().sort()) === JSON.stringify(RUNTIME_FILTER.slice().sort()), "build.yml's paths filter must be exactly the runtime inputs " + JSON.stringify(RUNTIME_FILTER) + "; found " + JSON.stringify(filter));
 ok(new Set(filter).size === filter.length, "build.yml's paths filter lists an entry twice: " + JSON.stringify(filter));
@@ -161,7 +181,7 @@ ok(defaultSrcOf(bumpSrc) === "index-source.html" && watched(defaultSrcOf(bumpSrc
 // d. every tracked file is either watched or a known NON-runtime path, and nothing non-runtime is watched; every
 //    filter entry matches a tracked file (no dead entry). A new runtime file (a module, an icon) fails here until it
 //    is classified - added to the filter, or its path named below as non-runtime.
-const NON_RUNTIME = [/^test\//, /^docs\//, /^sql\//, /^scripts\//, /^edge-functions\//, /^\.github\//, /^(README|CLAUDE)\.md$/, /^\.git(ignore|attributes)$/, /^(index\.html|version\.json)$/];
+const NON_RUNTIME = [/^test\//, /^docs\//, /^sql\//, /^scripts\//, /^edge-functions\//, /^\.github\//, /^(README|CLAUDE)\.md$/, /^\.git(ignore|attributes)$/];
 let tracked = [];
 try { tracked = cp.execSync("git ls-files", { cwd: ROOT, encoding: "utf8" }).split("\n").map(s => s.trim()).filter(Boolean); } catch (e) { tracked = []; }
 ok(tracked.length > 0, "git ls-files listed nothing (the classification below would pass vacuously)");
@@ -173,8 +193,12 @@ tracked.forEach(f => {
 filter.forEach(g => ok(tracked.some(f => WP.watchedOf([f], [g]).length === 1), "build.yml's paths filter entry `" + g + "` matches no tracked file"));
 // e. every tracked test/**/*.test.js reaches `npm test`: in the chain, or required by a chain suite in its folder
 //    (test/nov-backups.test.js runs inside test/generator-regression.js - `require("./nov-backups.test.js")`, NB.run -
-//    so it is not a chain entry of its own; that would run its 80 synthetic generations twice).
-tracked.filter(f => /^test\/.+\.test\.(js|mjs)$/.test(f) && !chain.includes(f)).forEach(f => {
+//    so it is not a chain entry of its own; that would run its 80 synthetic generations twice). The two chain suites
+//    named without `.test.` (the generator regression and the contrast gate) are held to the same rule (merge review
+//    10/2: dropping the regression from the chain and the steps together passed every other pin).
+const SUITE_FILE = /^test\/(.+\.test\.(js|mjs)|generator-regression\.js|ui\/contrast\.mjs)$/;
+["test/generator-regression.js", "test/ui/contrast.mjs"].forEach(f => ok(tracked.includes(f), "the suite `" + f + "` is not tracked (section 2e's SUITE_FILE names it)"));
+tracked.filter(f => SUITE_FILE.test(f) && !chain.includes(f)).forEach(f => {
   const host = chain.find(c => path.posix.dirname(c) === path.posix.dirname(f) && read(c).includes('require("./' + path.posix.basename(f) + '")'));
   ok(!!host, "test file `" + f + "` is neither in package.json's test chain nor required by a chain suite - a test that never runs cannot fail");
 });
@@ -184,8 +208,9 @@ ok(!chain.includes("test/nov-backups.test.js") && /require\("\.\/nov-backups\.te
 //    manifest would pass it and never deploy. (1) the worker's importScripts list (helpers.js GEN_WORKER_MODULES) is
 //    loader files only; (2) every path-shaped relative literal handed to fetch / importScripts / new URL / new Worker /
 //    serviceWorker.register / sendBeacon / window.open in index-source.html and every watched root .js file (the loader
-//    modules; since the 10/2 merge also any later root runtime script such as a service worker) is watched, or is the
-//    CI-owned version.json that every deploy rewrites; (3) every manifest icon is watched.
+//    modules; since the 10/2 merge also any later root runtime script such as a service worker) is watched - no
+//    exemption since the merge review: the CI-owned index.html and version.json are in the filter too, so a service
+//    worker's `fetch("./index.html")` offline fallback passes; (3) every manifest icon is watched.
 const GWM = require(path.join(ROOT, "helpers.js")).GEN_WORKER_MODULES;
 ok(Array.isArray(GWM) && GWM.length > 0, "could not read helpers.js GEN_WORKER_MODULES (the generator worker's importScripts list)");
 (GWM || []).forEach(f => ok(loaderFiles.includes(f) && watched(f), "the generator worker imports `" + f + "` (helpers.js GEN_WORKER_MODULES), which is not a watched ?v= loader file - a push changing only it would never deploy"));
@@ -205,16 +230,18 @@ ok(relUrls.some(([, u]) => u === "version.json"), "the relative-URL scan no long
 const swShapes = 'navigator.serviceWorker.register("sw.js?v=" + APP_VERSION, { scope: "./" }); navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`);'
   + ' navigator.serviceWorker.register(silvisBase + "sw.js"); importScripts("push-helpers.js?v=1"); fetch(`${SUPABASE_URL}/rest/v1/x`); fetch("https://example.org/sw.js"); fetch(base + "/rest/v1/y");';
 ok(JSON.stringify(relUrlsOf(swShapes)) === JSON.stringify(["sw.js", "sw.js", "sw.js", "push-helpers.js"]), "the relative-URL scan must read sw.js out of a literal, a template and a `base + \"sw.js\"` registration and a relative importScripts, and nothing out of a Supabase / absolute / rooted URL; got " + JSON.stringify(relUrlsOf(swShapes)));
-relUrls.forEach(([f, u]) => ok(u === "version.json" || watched(u), "`" + f + "` loads the relative URL `" + u + "`, which build.yml's paths filter does not watch - a runtime file belongs in the filter and RUNTIME_FILTER (only the CI-owned version.json is exempt)"));
+const swFallback = 'fetch("./index.html", { cache: "no-store" }); caches.match("./index.html"); clients.openWindow("./?day=1"); fetch("version.json?t=" + Date.now());';
+ok(JSON.stringify(relUrlsOf(swFallback)) === JSON.stringify(["index.html", "version.json"]) && relUrlsOf(swFallback).every(watched), "a service worker's offline fallback (`fetch(\"./index.html\")`) and the version check read as the watched CI-owned index.html / version.json; got " + JSON.stringify(relUrlsOf(swFallback)));
+relUrls.forEach(([f, u]) => ok(watched(u), "`" + f + "` loads the relative URL `" + u + "`, which build.yml's paths filter does not watch - a runtime file belongs in the filter and RUNTIME_FILTER together"));
 const manifest = JSON.parse(read("manifest.json"));
 ok(Array.isArray(manifest.icons) && manifest.icons.length > 0, "manifest.json lists no icons (the parse below would pass vacuously)");
 (manifest.icons || []).forEach(i => ok(watched(String(i.src).replace(/^\.\//, "")), "manifest.json icon `" + i.src + "` is not in build.yml's paths filter"));
 // g. the guard bites on a NEW runtime file (merge of main into Do first 10, 10/2): a root module, a root service worker
 //    or an icon outside the known non-runtime folders is either watched (it deploys) or, tracked but not yet listed,
-//    flagged by (d) until it is added to build.yml's filter and RUNTIME_FILTER together - a two-line change, never a
-//    silent no-deploy. So NON_RUNTIME must never classify such a name. (Probe names no commit will track; Prompt 30's
-//    sw.js takes exactly this path.)
-["sw.js", "ci-probe-module.js", "ci-probe-sw.js", "ci-probe-icon-96.png", "ci-probe/x.js", "manifest.json"].forEach(p => {
+//    failed by (d)'s classification until it is added to build.yml's filter and RUNTIME_FILTER together - a two-line
+//    change, never a silent no-deploy. This section pins the half that keeps (d) able to bite: NON_RUNTIME must never
+//    classify such a name. (Probe names no commit will track; Prompt 30's sw.js takes exactly this path.)
+["sw.js", "ci-probe-module.js", "ci-probe-sw.js", "ci-probe-icon-96.png", "ci-probe/x.js", "manifest.json", "index.html", "version.json"].forEach(p => {
   ok(!NON_RUNTIME.some(r => r.test(p)), "NON_RUNTIME classifies the runtime-shaped name `" + p + "` as non-runtime - section (d) would then pass it unwatched, and a push changing only it would never deploy");
 });
 ["ci-probe-module.js", "ci-probe-sw.js", "ci-probe-icon-96.png", "ci-probe/x.js"].forEach(p => ok(!tracked.includes(p), "the probe name `" + p + "` is tracked - pick another probe name"));
@@ -244,6 +271,7 @@ ok(!/git (push|commit)|bump-version|build\.js|pages/i.test(tymlCode), "test.yml 
 // cannot burn the 6 h default, and the checkout leaves no token in .git/config.
 ok(!/^\s*-?\s*if\s*:/m.test(tymlCode), "test.yml must carry no `if:` (a job- or step-level condition would show a skipped run while no suite ran)");
 ok(!/continue-on-error/.test(tymlCode), "test.yml must not use `continue-on-error` (a failing suite would read as a green run)");
+ok(!SHELL_OVERRIDE.test(tymlCode), "test.yml must not set `shell:`, `working-directory:` or `defaults:` (merge review 10/2: `shell: bash -c 'true' {0}` under `run: npm test` is a green no-op)");
 const tTimeout = Number((tymlCode.match(/^ {4}timeout-minutes:\s*(\d+)\s*$/m) || [])[1]);
 ok(tTimeout >= 10 && tTimeout <= 60, "test.yml's job must set `timeout-minutes:` between 10 and 60 (found " + tTimeout + ")");
 ok(/uses: actions\/checkout@\S+[^\n]*\n\s+with:[ \t]*\n\s+persist-credentials: false[ \t]*$/m.test(tymlCode), "test.yml's checkout must set `with: persist-credentials: false` (nothing here pushes)");
@@ -368,6 +396,10 @@ ok(nodeVer && Number(nodeVer) >= 22, "build.yml node-version must be 22 or newer
 const tNodeVer = (tyml.match(/node-version:\s*"(\d+)"/) || [])[1];
 ok(tNodeVer === nodeVer, "test.yml node-version must equal build.yml's (" + nodeVer + "), found " + tNodeVer);
 ok(/"engines"\s*:\s*\{\s*"node"\s*:\s*">=22\.18"/.test(read("package.json")), "package.json must declare engines.node >=22.18 (the same floor for a developer machine)");
+// merge review 10/2: the build job has a timeout too - the commit step's 0) arm runs the chain a second time, and a hung
+// suite would otherwise hold the non-cancelling build-<ref> concurrency group (every later deploy) for the 6 h default.
+const bTimeout = Number((ymlCode.slice(ymlCode.indexOf("\njobs:")).match(/^ {4}timeout-minutes:\s*(\d+)\s*$/m) || [])[1]);
+ok(bTimeout >= 10 && bTimeout <= 60, "build.yml's build job must set `timeout-minutes:` between 10 and 60 (found " + bTimeout + ")");
 const commitStep = stepBlocks.find(b => /name:\s*Commit built files/.test(b)) || "";
 ok(commitStep.length > 0, "no 'Commit built files' step in build.yml");
 ok(/git fetch(?: --quiet)? origin main/.test(commitStep) && commitStep.indexOf("git fetch") < commitStep.indexOf("git push"), "the commit step must fetch origin/main before it pushes");
@@ -384,7 +416,26 @@ ok(JSON.stringify(rcCases) === JSON.stringify(["0)", "1)", "*)"]), "the case nee
 const starArm = commitStep.split(/^\s*\*\)\s*$/m)[1] || "";
 ok(/::error::[^\n]*ci-watched-paths\.js[^\n]*exit \$rc/.test(starArm) && /^\s*exit 1\s*$/m.test(starArm.split("esac")[0]), "the *) arm must print ::error:: naming ci-watched-paths.js and the exit code, then exit 1 (never the ::notice:: + exit 0 of the step-aside arm)");
 // the matcher reads the SAME paths filter this file parses (WP is required in section 2)
-ok(JSON.stringify(WP.watchedGlobs(yml)) === JSON.stringify(filter), "scripts/ci-watched-paths.js reads the same paths filter as this test");
+let wpGlobs = null;
+try { wpGlobs = WP.watchedGlobs(yml); } catch (e) { wpGlobs = "throws: " + e.message; }
+ok(JSON.stringify(wpGlobs) === JSON.stringify(filter), "scripts/ci-watched-paths.js reads the same paths filter as this test, got " + JSON.stringify(wpGlobs));
+// merge review 10/2: the matcher never under-reads the filter. A list entry it cannot read (unquoted, single-quoted)
+// makes watchedGlobs throw and main exit 2 - never "none watched" for a path GitHub watches - and a column-0 comment
+// inside the list does not end it.
+const ymlWith = (entry) => "on:\n  push:\n    paths:\n      # c\n      - \"index-source.html\"\n" + entry + "\n      - \"rules.js\"\n  workflow_dispatch: {}\n";
+const globsOrErr = (y) => { try { return WP.watchedGlobs(y); } catch (e) { return "ERR"; } };
+ok(globsOrErr(ymlWith("      - docs/**")) === "ERR" && globsOrErr(ymlWith("      - 'test/**'")) === "ERR" && globsOrErr(ymlWith("      - test/**  # x")) === "ERR", "scripts/ci-watched-paths.js watchedGlobs must throw on an unquoted or single-quoted `paths:` entry");
+ok(JSON.stringify(globsOrErr(ymlWith("# a column-0 comment"))) === JSON.stringify(["index-source.html", "rules.js"]) && JSON.stringify(globsOrErr(ymlWith("      - \"docs/**\"  # trailing"))) === JSON.stringify(["index-source.html", "docs/**", "rules.js"]), "scripts/ci-watched-paths.js watchedGlobs reads past a column-0 comment and keeps a trailing-comment entry");
+{
+  const errOut = console.error, logOut = console.log; console.error = () => {}; console.log = () => {};
+  let rcBad, rcGood;
+  try {
+    rcBad = WP.main(["docs/x.md"], { readWorkflow: () => ymlWith("      - docs/**") });
+    rcGood = WP.main(["docs/x.md"], { readWorkflow: () => ymlWith("      - \"docs/**\"") });
+  } finally { console.error = errOut; console.log = logOut; }
+  ok(rcBad === 2, "ci-watched-paths main must exit 2 on a filter with an unreadable entry (GitHub would watch `docs/**`; 'none watched' would rebuild over a move that queued its own run), got " + rcBad);
+  ok(rcGood === 1, "ci-watched-paths main with an injected readable filter reports the watched path (exit 1), got " + rcGood);
+}
 // review 10/2 of Do first 10: (1) the matcher reads the filter AS OF origin/main - GitHub judged the push that moved
 // main with the filter in the pushed commit, not the one this run checked out (a move that edits the filter would
 // otherwise step aside for a run that was never queued: a green run, nothing deployed); (2) the rebuild arm re-runs
@@ -405,7 +456,7 @@ const unwatchedSample = ["docs/PUBLISH-x.md", "sql/schema.sql", "scripts/day-edi
   "test/rules.test.js", "test/fixtures/x/y.json", "test/seed-adapter.js", "docs/silvis-seed.json",
   "edge-functions/daily-reminder/index.ts", "edge-functions/send-notification/index.ts", ".github/workflows/test.yml"];
 ok(WP.watchedOf(unwatchedSample, filter).length === 0, "tests / docs / sql / scripts / edge-function / workflow paths are unwatched (a push there is no deploy and queues no build run): " + JSON.stringify(WP.watchedOf(unwatchedSample, filter)));
-const watchedSample = ["index-source.html", "rules.js", "vendor/x/y.js", "package.json", "package-lock.json", "manifest.json"];
+const watchedSample = ["index-source.html", "rules.js", "vendor/x/y.js", "package.json", "package-lock.json", "manifest.json", "index.html", "version.json"];
 ok(JSON.stringify(WP.watchedOf(watchedSample, filter)) === JSON.stringify(watchedSample), "watched paths match and ** crosses directories: " + JSON.stringify(WP.watchedOf(watchedSample, filter)));
 ok(WP.watchedOf(["vendorX.js", "rules.jsx", "xindex-source.html", "test/rules.js", "docs/config.js"], filter).length === 0, "globs are anchored and '.' is literal");
 flush("deploy job pins");

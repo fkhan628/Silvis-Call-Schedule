@@ -12,7 +12,7 @@ name: Tests
 # before it bumps and builds. test/ci.test.js pins this file (triggers, no paths
 # filter, permissions, the action SHAs, Node version, npm ci, EXPORTS_OFFLINE,
 # no budget overrides, concurrency, the timeout, no if: / continue-on-error,
-# persist-credentials: false).
+# no shell / working-directory / defaults override, persist-credentials: false).
 
 on:
   push:

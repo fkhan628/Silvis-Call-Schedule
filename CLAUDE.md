@@ -81,8 +81,8 @@ approvals, weighted accounting.
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
-- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
-  `[skip ci]`, Pages redeploys.
+- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on a push to `main` that touches a runtime
+  input (build.yml's paths filter; a test/docs-only push runs only test.yml), commits back with `[skip ci]`, Pages redeploys.
 - Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 21 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
   offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain and
