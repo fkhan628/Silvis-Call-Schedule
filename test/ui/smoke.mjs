@@ -5495,27 +5495,44 @@ try {
   }
 
   // ---- My schedule: s1's next call ----
+  // Smoke fix 10/3 (the date-dependent My schedule count): the next call, the 90-day list and the dark step's backup
+  // premise are expected from the harness's picture of the app's map (Item SM: curDay = the live rows + the claim overlay,
+  // and the grid as observed on this run's edited days), never from recountRows. recountRows keeps this run's edits for
+  // good, but every write is intercepted and the realtime rows are only injected, so the app's 60-s poll (refreshDays ->
+  // mergeLoadedDays) puts the table's row back over each of them - when, relative to this step, is a timer race. From
+  // 2026-10-03 the 90-day window reached 2027-01-01, where the realtime step injects a foreign row (P Philip / B Fierce, v5)
+  // over the live row P Burchett / B Khan: the poll ~47 s later restored that row (the grid read s2 / s1), the list showed
+  // 28 days, the recount said 27 (other / third / fourth are the first days of `day`'s month, live rows included, so the
+  // window takes in more of them each day until that month is published). settleMapToLive waits (at most
+  // two polls) until the grid shows the live rows on every edited day - after that a poll changes nothing - so the list
+  // must equal the published rows, day by day and role by role.
+  const s1RoleOn = (d) => { const c = curDay(d); return c.primary === "s1" ? "primary" : c.backup === "s1" ? "backup" : null; };
+  const s1DaysIn = (from, to) => curDays().filter(d => d >= from && (!to || d <= to) && s1RoleOn(d));
   try {
+    await settleMapToLive("My schedule premise");
     await page.click('button[data-tab="myschedule"]');
     await page.waitForSelector("[data-testid=next-call]", { timeout: 8000 });
     await page.waitForFunction(() => { const el = document.querySelector("[data-testid=next-call]"); return el && !/Loading schedule/.test(el.textContent); }, null, { timeout: 8000 });
-    const expectedNext = recountRows.filter(r => r.day >= todayIso && (r.primary_id === "s1" || r.backup_id === "s1")).sort((a, b) => a.day < b.day ? -1 : 1)[0] || null;
+    const nextHeld = s1DaysIn(todayIso, null)[0] || null;
+    const expectedNext = nextHeld ? { day: nextHeld, role: s1RoleOn(nextHeld) } : null;
     const nextDay = await page.$eval("[data-testid=next-call]", el => el.getAttribute("data-next-day"));
     const nextRole = await page.$eval("[data-testid=next-call]", el => el.getAttribute("data-next-role"));
     const nextText = await page.$eval("[data-testid=next-call]", el => el.innerText.replace(/\s+/g, " "));
     // vis-001: the rendered date, not only the data-next-day attribute ("Primary - Thu November 26, 2026")
     const longDate = (d) => { const t = new Date(d + "T12:00:00Z"); return `${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][t.getUTCDay()]} ${["January","February","March","April","May","June","July","August","September","October","November","December"][t.getUTCMonth()]} ${t.getUTCDate()}, ${t.getUTCFullYear()}`; };
-    const expRole = expectedNext ? (expectedNext.primary_id === "s1" ? "primary" : "backup") : null;
+    const expRole = expectedNext ? expectedNext.role : null;
     if (!expectedNext) console.log("     (no published s1 day on/after today - next-call comparison skipped; card reads: " + nextText.slice(0, 100) + ")");
     else if (nextDay !== expectedNext.day || nextRole !== expRole) fail(`My schedule: next call is ${nextDay} ${nextRole}, the published rows say ${expectedNext.day} ${expRole}`);
     else if (!nextText.includes(`${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}`)) fail(`My schedule: the card does not render '${expRole === "primary" ? "Primary" : "Backup"} - ${longDate(expectedNext.day)}': ` + nextText.slice(0, 140));
     else if (!/Next call - (today|tomorrow|in \d+ days)/i.test(nextText) || !/07:00 to 07:00/.test(nextText)) fail("My schedule: next-call card text wrong: " + nextText); // the label is CSS-uppercased in innerText
     else ok(`My schedule: next call ${nextDay} (${nextRole}) matches the first published s1 day on/after ${todayIso}, rendered as '${longDate(expectedNext.day)}'; card "${nextText.slice(0, 110)}"`);
-    const mineDays = await page.$$eval("[data-testid=mine-day]", els => els.map(e => e.getAttribute("data-day")));
+    const mineRows = await page.$$eval("[data-testid=mine-day]", els => els.map(e => e.getAttribute("data-day") + " " + e.getAttribute("data-role")));
+    const mineDays = mineRows.map(x => x.slice(0, 10));
     const horizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
-    const expectedCount = recountRows.filter(r => r.day >= todayIso && r.day <= horizon && (r.primary_id === "s1" || r.backup_id === "s1")).length;
-    if (mineDays.length !== expectedCount) fail(`My schedule: upcoming list has ${mineDays.length} day(s), the live rows have ${expectedCount} for s1 in the next 90 days (${todayIso}..${horizon})`);
-    else ok(`My schedule: upcoming list = ${mineDays.length} day(s) in the next 90 days${mineDays.length ? ", first " + mineDays[0] : ""}`);
+    const expectedRows = s1DaysIn(todayIso, horizon).map(d => d + " " + s1RoleOn(d));
+    const onlyApp = mineRows.filter(x => !expectedRows.includes(x)), onlyRows = expectedRows.filter(x => !mineRows.includes(x));
+    if (mineRows.length !== expectedRows.length || onlyApp.length || onlyRows.length) fail(`My schedule: upcoming list has ${mineRows.length} day(s), the live rows have ${expectedRows.length} for s1 in the next 90 days (${todayIso}..${horizon}) - only in the list: ${onlyApp.join(", ") || "none"}; only in the rows: ${onlyRows.join(", ") || "none"}`);
+    else ok(`My schedule: upcoming list = ${mineRows.length} day(s) in the next 90 days (${todayIso}..${horizon}), day by day and role by role the live rows'${mineDays.length ? ", first " + mineDays[0] : ""}`);
     if (mineDays.length && !(await page.$("[data-testid=mine-trade]"))) fail("My schedule: no 'Trade' shortcut (mine-trade) on the upcoming rows");
     // Day-click summary (9/27): 'Give away' beside every 'Trade' (mine-trade) on the own rows
     try {
@@ -5599,7 +5616,7 @@ try {
     // A missing row is "not exercised" only when the live rows give s1 no backup day in the list's 90-day window;
     // otherwise the selector (mine-day[data-role=backup] / mine-role) broke.
     const bwHorizon = utcDay(Date.parse(todayIso + "T12:00:00Z") + 90 * 86400000);
-    const bwExpected = recountRows.filter(r => r.day >= todayIso && r.day <= bwHorizon && r.backup_id === "s1").length;
+    const bwExpected = s1DaysIn(todayIso, bwHorizon).filter(d => s1RoleOn(d) === "backup").length; // smoke fix 10/3: the map picture, as the list's
     if (!bw && bwExpected) fail(`My schedule dark: the live rows give s1 ${bwExpected} backup day(s) in the next 90 days but no [data-testid=mine-day][data-role=backup] [data-testid=mine-role] was found`);
     else if (!bw) console.log("     (dark Backup role word: not exercised - s1 has no backup row in the next 90 days)");
     else if (bw.ratio === null || bw.ratio < 4.5) fail(`My schedule dark: the Backup role word on ${bw.day} reads ${bw.ratio}:1 (${bw.color} on ${bw.bg}), below 4.5:1`);
