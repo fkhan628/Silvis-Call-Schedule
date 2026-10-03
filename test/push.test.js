@@ -14,8 +14,10 @@
  *        enable (permission FIRST; the save body's four keys; the flag; a refused save unsubscribes, no flag), rearm (never
  *        a prompt; the three-condition path; same hash -> no network; other hash -> save; a foreign subscription), disable,
  *        reset (only the Silvis worker), teardown (the delete before the unsubscribe, capped), dropForeign, state, diagnose
- *   [I]  index-source.html: the head script's keep rule (lifted and run), handleSignOut / signOutForLink lifted and run
- *        (teardown before auth.signOut), source pins on the effects, the card and the manual_edit day
+ *   [I]  index-source.html: the head script's keep rule (lifted and run), handleSignOut / signOutForLink /
+ *        signOutAfterPasswordUpdate lifted and run (teardown before auth.signOut), Periods Remind by channel (remindOffers and
+ *        the row's disabled expression run - review 10/3), the tap-over-a-dirty-day-draft guard (onMsg + pushTapKeepsDraft
+ *        run), source pins on the effects, the card and the manual_edit day
  *   [M]  mutants (contract section 5): each applies one text change to a copy of the source and the named check must FAIL
  *
  * Fakes only: the VAPID-style keys are generated here (P-256), endpoints are short fake tokens. No network.
@@ -248,6 +250,67 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
       else assert.strictEqual(r, null, JSON.stringify(m));
     });
   });
+  // review 10/3: a REAL calendar day only (the edge's pushIsoDay round trip) - an impossible date opens nothing
+  const realDayCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    ["2026-02-31", "2026-13-45", "2026-00-10", "2026-04-31", "2027-02-29", "0050-01-01"].forEach(d => {
+      assert.strictEqual(H.pushDeepLink("?tab=calendar&day=" + d).day, null, "pushDeepLink drops the impossible day " + d);
+      assert.strictEqual(H.pushDeepLink("?tab=calendar&day=" + d).strip, true, "... and still strips it from the URL");
+      assert.deepStrictEqual(H.pushOpenMessage({ type: "silvis-push-open", tab: "calendar", day: d }), { tab: "calendar", day: null }, "pushOpenMessage drops the impossible day " + d);
+    });
+    ["2028-02-29", "2026-12-31", "2027-01-01", "2026-10-15"].forEach(d => {
+      assert.strictEqual(H.pushDeepLink("?tab=calendar&day=" + d).day, d, "a real day " + d + " opens");
+      assert.deepStrictEqual(H.pushOpenMessage({ type: "silvis-push-open", tab: "calendar", day: d }), { tab: "calendar", day: d });
+    });
+  };
+  await check("pushDeepLink / pushOpenMessage: the day must be a REAL calendar day (2026-02-31, 2026-13-45, 2027-02-29 dropped; 2028-02-29 kept) - review 10/3", realDayCheck);
+  // review 10/3: a tap on an open window must not silently drop the day editor's unsaved draft
+  const tapDraftCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const D = "2026-10-04";
+    const T = [
+      [D, true, { tab: "timeoff", day: null }, true, "a dirty draft + another view (the editor unmounts)"],
+      [D, true, { tab: "setup", day: null }, true, "setup"],
+      [D, true, { tab: "settings", day: null }, true, "settings"],
+      [D, true, { tab: "myschedule", day: null }, true, "myschedule"],
+      [D, true, { tab: "calendar", day: "2026-10-07" }, true, "another day (the editor is keyed by its day - a fresh draft)"],
+      [D, true, { tab: "calendar", day: D }, false, "the same day"],
+      [D, true, { tab: "calendar", day: null }, false, "calendar, no day (the editor stays)"],
+      [D, true, { tab: "openshifts", day: null }, false, "openshifts (the editor renders there too)"],
+      [D, false, { tab: "timeoff", day: null }, false, "a clean editor"],
+      [null, true, { tab: "timeoff", day: null }, false, "no editor open"],
+      [D, true, null, false, "no target"],
+    ];
+    T.forEach(([day, dirty, target, want, label]) => assert.strictEqual(H.pushTapLeavesDraft(day, dirty, target), want, "pushTapLeavesDraft: " + label));
+  };
+  await check("pushTapLeavesDraft: true only when the day editor is open with a dirty draft AND the tap leaves calendar / openshifts or opens another day", tapDraftCheck);
+  // review 10/3 (addendum item 5): Periods > Remind is blocked only when BOTH channels are off, and worded by channel
+  const remindHelpersCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const C = (pref) => H.remindChannels(pref);
+    assert.deepStrictEqual(C({ schedule_updates_email: false, schedule_updates_push: true }), { mailOff: true, pushOff: false, blocked: false, channel: "push" }, "e-mail off + push on = phone only, NOT blocked");
+    assert.deepStrictEqual(C({ schedule_updates_email: false, schedule_updates_push: false }), { mailOff: true, pushOff: true, blocked: true, channel: "none" }, "both off = blocked");
+    assert.deepStrictEqual(C({ schedule_updates_email: false }), { mailOff: true, pushOff: true, blocked: true, channel: "none" }, "a row without the push key (the column not there yet) has no phone channel");
+    assert.deepStrictEqual(C({ schedule_updates_email: true, schedule_updates_push: false }), { mailOff: false, pushOff: true, blocked: false, channel: "email" });
+    assert.deepStrictEqual(C({ schedule_updates_email: true, schedule_updates_push: true }), { mailOff: false, pushOff: false, blocked: false, channel: "both" });
+    assert.deepStrictEqual(C(undefined), { mailOff: false, pushOff: false, blocked: false, channel: "both" }, "no row = every switch on");
+    const W = (ch) => H.remindButtonWords(ch, "Burchett", " the heads-up for Q1");
+    assert.deepStrictEqual(W("push"), { label: "Remind (phone)", title: "Phone only - Burchett has schedule-update e-mails turned off. Push Burchett the heads-up for Q1" });
+    assert.deepStrictEqual(W("none"), { label: "Remind", title: "Burchett has schedule-update e-mails and phone notifications turned off - no reminder can be sent" });
+    assert.deepStrictEqual(W("email"), { label: "Remind", title: "E-mail Burchett the heads-up for Q1 (phone notifications are off)" });
+    assert.deepStrictEqual(W("both"), { label: "Remind", title: "E-mail and push Burchett the heads-up for Q1" });
+    const O = (r) => H.remindOutcome(r, "Burchett", "9:05 AM");
+    assert.deepStrictEqual(O({ ok: true, sent: 1, skippedPrefOff: 0, push: { sent: 1 } }), { ok: true, kind: "success", note: "reminded 9:05 AM", toast: "Reminder e-mailed and pushed to Burchett." });
+    assert.deepStrictEqual(O({ ok: true, sent: 1, skippedPrefOff: 0, push: null }), { ok: true, kind: "success", note: "reminded 9:05 AM", toast: "Reminder e-mailed to Burchett." });
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 1, push: { sent: 1, failed: 0, skipped_no_device: 0, skipped_pref_off: 0, error: null } }), { ok: true, kind: "success", note: "pushed 9:05 AM (e-mail off)", toast: "Reminder pushed to Burchett's phone (no e-mail: Burchett has schedule-update e-mails turned off)." }, "e-mail off + a push sent = a success, not 'No reminder went out'");
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 0, push: { sent: 1 } }), { ok: true, kind: "success", note: "pushed 9:05 AM (no linked e-mail)", toast: "Reminder pushed to Burchett's phone (no e-mail: Burchett has no linked account e-mail)." });
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 1, push: { sent: 0, failed: 0, skipped_no_device: 1, skipped_pref_off: 0, error: null } }), { ok: false, kind: "info", note: "e-mail off, no phone on - not sent", toast: "No reminder went out: Burchett has schedule-update e-mails turned off and no phone with notifications on." });
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 1, push: { sent: 0, skipped_pref_off: 1 } }).note, "e-mail off, phone off - not sent");
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 1, push: { sent: 0, failed: 1 } }).note, "e-mail off, phone push failed - not sent");
+    assert.deepStrictEqual(O({ ok: true, sent: 0, skippedPrefOff: 1, push: { sent: 0, error: "push not configured" } }), { ok: false, kind: "info", note: "e-mail off - not sent", toast: "No reminder went out: Burchett has schedule-update e-mails turned off." }, "push did not run: the e-mail reason alone (the old wording)");
+    assert.strictEqual(O({ ok: false, error: "x" }), null, "a failed call is left to the caller");
+  };
+  await check("remindChannels / remindButtonWords / remindOutcome: Remind blocked only when e-mail AND phone are off; 'Remind (phone)' when e-mail is off; a pushed reminder reads 'pushed <time> (e-mail off)'", remindHelpersCheck);
   await check("pushStateOf: ios-home-screen wins over unsupported; blocked = denied; on needs granted + the worker + a subscription + the flag; else off", (S) => {
     const H = loadHelpers(S.helpers);
     const on = { supported: true, ios: false, standalone: false, permission: "granted", hasReg: true, hasSub: true, flag: true };
@@ -741,6 +804,111 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.deepStrictEqual(b2.log.filter(l => /delete_push_subscription|^unsubscribe|auth\.signOut|adoptLinkSession/.test(l)), ["fetch POST rpc/delete_push_subscription", "unsubscribe device-1", "auth.signOut", "adoptLinkSession"], "signOutForLink: the stored session's push row and subscription go before its sign-out: " + b2.log.join(" | "));
   };
   await check("handleSignOut and signOutForLink (lifted and run against the real pushDevice): the device's push row is deleted, THEN unsubscribed, BEFORE auth.signOut()", signOutCheck);
+  // review 10/3: the third sign-out (after a password update) tears the device's push down too
+  const pwSignOutCheck = async (S) => {
+    const b = mkBrowser({ permission: "granted", silvisSub: EP1, lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }) } });
+    const c = loadClient(S, b);
+    const authStub = { signOut: async () => { b.log.push("auth.signOut"); }, getSession: () => ({ access_token: fakeJwt(UID) }) };
+    const base = { pushDevice: c.pushDevice, auth: authStub, pushArmedRef: { current: UID }, console: quiet, jwtClaims: c.jwtClaims, authUser: null };
+    const fn = runLifted(liftHandler(S, "  const signOutAfterPasswordUpdate = async () => {"), base);
+    await fn();
+    assert.deepStrictEqual(b.log.filter(l => /delete_push_subscription|^unsubscribe|auth\.signOut/.test(l)), ["fetch POST rpc/delete_push_subscription", "unsubscribe device-1", "auth.signOut"], "the stored session's push row, then the unsubscribe, then auth.signOut(): " + b.log.join(" | "));
+    assert.strictEqual(b.ls.getItem("silvis-push-on-" + UID), null, "the on-device flag is cleared");
+    const snp = between(S, "  const submitNewPassword = () => {", "\n  };\n");
+    assert.ok(snp.includes("signOutAfterPasswordUpdate();") && !/auth\.signOut\(/.test(snp), "submitNewPassword signs out only through signOutAfterPasswordUpdate (no bare auth.signOut())");
+    assert.strictEqual(S.index.split("auth.signOut()").length - 1, 3, "three sign-out calls, each behind a push teardown (handleSignOut, signOutForLink, signOutAfterPasswordUpdate)");
+  };
+  await check("the sign-out after a password update (signOutAfterPasswordUpdate, lifted and run): the device's push row deleted, THEN unsubscribed, BEFORE auth.signOut() - review 10/3", pwSignOutCheck);
+  // review 10/3 (addendum item 5): Periods > Remind with e-mail off + push on still sends; the row's button by channel
+  const liftConst = (S, decl) => {
+    const i = S.index.indexOf(decl);
+    assert.ok(i > 0, "no " + decl.trim());
+    const j = S.index.indexOf("\n  };\n", i);
+    return S.index.slice(i + decl.length, j + 4).replace(/;\s*$/, "");
+  };
+  const remindRunCheck = async (S) => {
+    const H = loadHelpers(S.helpers);
+    const run = async (prefs, answer) => {
+      const calls = [], toasts = [];
+      let notes = {};
+      const scope = {
+        isScheduler: true, offerPoolIds: () => ["s1", "s2", "s3"], surgeons: [], notifPrefs: prefs, remindChannels: H.remindChannels, remindOutcome: H.remindOutcome,
+        showToast: (m, k) => toasts.push([k, m]), setPrdRemind: (f) => { notes = f(notes); }, nameOf: (id) => ({ s1: "Khan", s2: "Burchett" })[id] || id,
+        offerHeadsUpWords: () => ({ subject: "Heads-up", body: "Body" }), groupRules: {}, OP_PERIOD_DEFAULTS: { remindDaysBeforeClose: [14, 3] }, mySurgeon: "s1",
+        window: { location: { origin: "https://x.test", pathname: "/" } }, console: quiet,
+        sendEmailNotif: async (type, data, ids) => { calls.push({ type, ids }); return answer; },
+      };
+      const fn = runLifted(liftConst(S, "  const remindOffers = "), scope);
+      const r = await fn({ id: "per-1", label: "Q1", offers_close_at: "2026-11-23" }, "s2");
+      return { r, calls, toasts, note: (notes["per-1:s2"] || {}).note || "" };
+    };
+    const PUSHED = { ok: true, sent: 0, failed: 0, skippedPrefOff: 1, push: { sent: 1, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, error: null } };
+    let x = await run({ s2: { person_id: "s2", schedule_updates_email: false, schedule_updates_push: true } }, PUSHED);
+    assert.deepStrictEqual(x.calls, [{ type: "offers_reminder", ids: ["s2"] }], "e-mail off + push on: ONE send-notification offers_reminder to [s2] (the push goes)");
+    assert.ok(/^pushed .+ \(e-mail off\)$/.test(x.note) && x.toasts.length === 1 && x.toasts[0][0] === "success", "the row reads 'pushed <time> (e-mail off)', a success toast: " + JSON.stringify(x));
+    x = await run({ s2: { person_id: "s2", schedule_updates_email: false, schedule_updates_push: false } }, PUSHED);
+    assert.ok(x.calls.length === 0 && x.r && x.r.prefOff === true && x.note === "e-mail and phone off - not sent", "both off: nothing sent: " + JSON.stringify(x));
+    x = await run({ s2: { person_id: "s2", schedule_updates_email: false } }, PUSHED);
+    assert.strictEqual(x.calls.length, 0, "e-mail off and no push column (the migration not applied): nothing sent");
+    x = await run({}, { ok: true, sent: 1, failed: 0, skippedPrefOff: 0, push: null });
+    assert.ok(x.calls.length === 1 && /^reminded /.test(x.note), "no prefs row: e-mailed, 'reminded <time>'");
+    // the row's button: disabled only when both are off; its label / title by channel (the real expressions, run)
+    const at = S.index.indexOf("const ch = remindChannels(notifPrefs && notifPrefs[r.id]);");
+    assert.ok(at > 0, "the Periods row computes its channels with remindChannels");
+    const bAt = S.index.indexOf('data-testid="prd-remind"', at), btn = S.index.slice(bAt, S.index.indexOf("</button>", bAt));
+    const dm = /disabled=\{([^}]*)\}/.exec(btn);
+    assert.ok(dm && btn.includes("title={rw.title}") && btn.includes('{rs && rs.note === "sending" ? "Sending" : rw.label}') && btn.includes("opacity: ch.blocked ? 0.5 : 1"), "the button's title / label / dimming read the channel words: " + btn.slice(0, 300));
+    const disabled = (prefs) => !!new Function("busy", "ch", "rs", "return " + dm[1])(false, H.remindChannels(prefs.s2), undefined);
+    assert.strictEqual(disabled({ s2: { schedule_updates_email: false, schedule_updates_push: true } }), false, "e-mail off + push on: Remind enabled");
+    assert.strictEqual(disabled({ s2: { schedule_updates_email: false, schedule_updates_push: false } }), true, "both off: Remind disabled");
+    assert.strictEqual(disabled({ s2: {} }), false, "no flags: enabled");
+    assert.ok(!/schedule_updates_email === false/.test(liftConst(S, "  const remindOffers = ")), "remindOffers has no e-mail-only gate left");
+    const send = between(S, "  const sendEmailNotif = useCallback(", "  }, []);");
+    assert.ok(send.includes('push: result && result.push && typeof result.push === "object" ? result.push : null'), "sendEmailNotif hands the push summary back");
+  };
+  await check("Periods Remind (remindOffers lifted and run; the row's disabled expression run): e-mail off + push on sends ONE offers_reminder and reads 'pushed <time> (e-mail off)'; blocked only when both channels are off - review 10/3", remindRunCheck);
+  // review 10/3: a notification tap on an open window asks before it drops the day editor's dirty draft
+  const draftGuardCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const keep = liftConst(S, "  const pushTapKeepsDraft = ");
+    const a = S.index.indexOf("    const onMsg = (e) => {"), b = S.index.indexOf("\n    };\n", a);
+    assert.ok(a > 0 && b > a, "the sw message handler onMsg");
+    const msgSrc = S.index.slice(a + "    const onMsg = ".length, b + 6);
+    const Q = "confirm Discard your unsaved changes to this day?";
+    const mk = (editorDay, dirty, answer) => {
+      const log = [];
+      const scope = {
+        editorDayRef: { current: editorDay }, editorDirtyRef: { current: dirty }, pushTapLeavesDraft: H.pushTapLeavesDraft, pushOpenMessage: H.pushOpenMessage, console: quiet,
+        confirm: (m) => { log.push("confirm " + m); return answer; }, showToast: (m, k) => log.push("toast " + k),
+        setEditorDay: (v) => log.push("setEditorDay " + v), setView: (v) => log.push("setView " + v), setPushDay: (v) => log.push("setPushDay " + (v && v.day)),
+      };
+      scope.pushTapKeepsDraft = runLifted(keep, scope);
+      return { onMsg: runLifted(msgSrc, scope), log, scope };
+    };
+    const ev = (tab, day) => ({ data: { type: "silvis-push-open", tab, day } });
+    let m = mk("2026-10-04", true, false); m.onMsg(ev("timeoff", null));
+    assert.deepStrictEqual(m.log, [Q, "toast info"], "dirty draft + a tap to Time off + Cancel: the editor's question, nothing switches");
+    m = mk("2026-10-04", true, true); m.onMsg(ev("timeoff", null));
+    assert.deepStrictEqual(m.log, [Q, "setEditorDay null", "setView timeoff"], "OK: the editor closes first, then the view switches");
+    assert.strictEqual(m.scope.editorDirtyRef.current, false, "the dirty flag is cleared with the discard");
+    m = mk("2026-10-04", true, false); m.onMsg(ev("calendar", "2026-10-07"));
+    assert.deepStrictEqual(m.log, [Q, "toast info"], "another day + Cancel: nothing moves");
+    m = mk("2026-10-04", true, true); m.onMsg(ev("calendar", "2026-10-07"));
+    assert.deepStrictEqual(m.log, [Q, "setEditorDay null", "setView calendar", "setPushDay 2026-10-07"], "another day + OK: closed, then the day is queued");
+    [["calendar", "2026-10-04", ["setView calendar", "setPushDay 2026-10-04"]], ["calendar", null, ["setView calendar"]], ["openshifts", null, ["setView openshifts"]]].forEach(([tab, day, want]) => {
+      const n = mk("2026-10-04", true, false); n.onMsg(ev(tab, day));
+      assert.deepStrictEqual(n.log, want, "no question when the draft stays (" + tab + " " + day + ")");
+    });
+    m = mk("2026-10-04", false, false); m.onMsg(ev("timeoff", null));
+    assert.deepStrictEqual(m.log, ["setView timeoff"], "a clean editor: no question");
+    const eff = between(S, "  useEffect(() => {\n    if (!loaded || !pushDay) return;", "  }, [loaded, pushDay]);");
+    const iK = eff.indexOf('if (pushTapKeepsDraft({ tab: "calendar", day: d })) return;');
+    assert.ok(iK > 0 && iK < eff.indexOf("goToDay(d);"), "the queued day passes the same guard before goToDay");
+    const de = S.index.slice(S.index.indexOf("function DayEditor(props) {"), S.index.indexOf("const requestClose = () => {", S.index.indexOf("function DayEditor(props) {")));
+    assert.ok(de.includes('React.useEffect(() => { if (typeof onDirtyChange === "function") onDirtyChange(dirty); }, [dirty]);') && de.includes('React.useEffect(() => () => { if (typeof onDirtyChange === "function") onDirtyChange(false); }, []);'), "the DayEditor reports its dirty flag (and false on unmount)");
+    assert.ok(S.index.includes("onDirtyChange={(d) => { editorDirtyRef.current = !!d; }}") && S.index.includes("editorDayRef.current = editorDay;"), "the parent keeps the refs the handler reads");
+  };
+  await check("a tap on an open window (onMsg + pushTapKeepsDraft lifted and run): a dirty day draft is never dropped silently - the editor's own question, Cancel keeps it, OK closes it first - review 10/3", draftGuardCheck);
   await check("source pins: the re-arm effect (once per account, isPublicMode-guarded, never requestPermission), the deep link (pushDeepLink once + history.replaceState, isPublicMode-guarded), the sw message listener, adoptSignedInUser's dropForeign, the card's testids and words, the manual_edit day, the corrected addNotification comment", (S) => {
     const idx = S.index;
     const rearm = between(S, "  // Re-arm on start (Cowork 10/2 7:25 PM)", "  // A different account: its own column probe");
@@ -798,6 +966,27 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     "    // (2) the permission FIRST - nothing is awaited before it\n    await pushDb.publicKey();\n    let perm;", enableCheck);
   await mutant("the save body without p_label", "config",
     `{ p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_label: label || null }`, `{ p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }`, enableCheck);
+  // review 10/3 fixes - each check must turn red when its fix is undone
+  await mutant("Remind refused on e-mail off alone (the pre-fix gate in remindOffers)", "index",
+    "    if (ch.blocked) {\n      showToast(`${nameOf(personId)} has schedule-update e-mails and phone notifications turned off",
+    "    if (ch.mailOff) {\n      showToast(`${nameOf(personId)} has schedule-update e-mails and phone notifications turned off", remindRunCheck);
+  await mutant("the Remind button disabled on e-mail off alone", "index",
+    "disabled={busy || ch.blocked || (rs && rs.note === \"sending\")}", "disabled={busy || ch.mailOff || (rs && rs.note === \"sending\")}", remindRunCheck);
+  await mutant("remindChannels blocking on e-mail off alone", "helpers",
+    "blocked: mailOff && pushOff,", "blocked: mailOff,", remindHelpersCheck);
+  await mutant("sendEmailNotif dropping the push summary (a pushed reminder would read 'No reminder went out')", "index",
+    ", push: result && result.push && typeof result.push === \"object\" ? result.push : null };", " };", remindRunCheck);
+  await mutant("onMsg without the draft guard", "index",
+    "      if (pushTapKeepsDraft(r)) return;\n      setView(r.tab);", "      setView(r.tab);", draftGuardCheck);
+  await mutant("pushTapKeepsDraft switching before it closes the editor", "index",
+    "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n    return false;", "    return false;", draftGuardCheck);
+  await mutant("pushTapLeavesDraft ignoring another day", "helpers",
+    "  return !!target.day && target.day !== editorDay;", "  return false;", tapDraftCheck);
+  await mutant("pushIsDay regex-only (an impossible date opens)", "helpers",
+    "  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]);\n};",
+    "  return true;\n};", realDayCheck);
+  await mutant("the password-update sign-out without the push teardown", "index",
+    "    if (uid) { try { await pushDevice.teardown(uid, 4000); } catch (e) { console.warn(\"push teardown after the password update failed (signing out anyway):\", e); } }\n", "", pwSignOutCheck);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -4703,7 +4703,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("const { subject, body } = offerHeadsUpWords({ label: p.label, closeAt: close });") && src.includes("const message = `${body}\\n\\nSent now by ${nameOf(mySurgeon) || \"the scheduler\"} from the Periods page${cadence}.`;"), "the client composes the heads-up through helpers.offerHeadsUpWords - its body word for word, then the sender line");
       assert.strictEqual(/Your call dates for \$\{p\.label\} freeze on|paint them in the app or choose 'go by my rules'|Nothing is entered for you yet/.test(src), false, "the old 'choose your shifts' Remind words are gone");
       assert.ok(src.includes("if (!isScheduler || !p || !p.id || !personId || !offerPoolIds(surgeons).includes(String(personId))) return { ok: false };"), "Remind mails pool surgeons only");
-      assert.ok(src.includes("if (pref && pref.schedule_updates_email === false) {"), "a person with schedule-update e-mails off is not mailed (the server gates too)");
+      // pin moved deliberately 10/3 (Prompt 30 review, addendum item 5 - the channels are independent): Remind is refused here
+      // only when BOTH schedule_updates_email and schedule_updates_push are off (helpers.remindChannels); e-mail off alone
+      // still sends (the server mails nobody and pushes the phones) - test/push.test.js runs it
+      assert.ok(src.includes("const ch = remindChannels(notifPrefs && notifPrefs[personId]);\n    if (ch.blocked) {"), "Remind is refused only when e-mail AND phone are off (the server gates each channel too)");
+      assert.ok(!src.includes("if (pref && pref.schedule_updates_email === false) {"), "no e-mail-only Remind gate left");
       // pin moved deliberately 9/30 (Prompt 26): Remind is offered on EVERY pool row of an open upcoming period (vacations matter
       // for everyone) - it was not_started rows only
       assert.ok(src.includes('{status === "upcoming" && open && (\n                              <button type="button" data-testid="prd-remind"'), "Remind renders on every row (the pool) of an open upcoming period");

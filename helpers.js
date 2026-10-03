@@ -5927,7 +5927,14 @@ function pushStateWords(state, opts) {
   if (state === "unsupported") return { badge: null, line: "Not supported in this browser." };
   return { badge: null, line: o.needsTap ? "Off for this device - tap Enable to turn it back on." : "Off for this device." };
 }
-const pushIsDay = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+// A REAL calendar day "YYYY-MM-DD" - the edge's pushIsoDay round trip (review 10/3): 2026-02-31 or 2026-13-45 is refused, so
+// neither a crafted ?tab=calendar&day= link nor a sw message can open the day editor on a key the date column would refuse.
+const pushIsDay = (d) => {
+  const m = typeof d === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(d) : null;
+  if (!m) return false;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]);
+};
 // pushDeepLink(location.search) -> { tab, day, search, strip }: the tap target sw.js opens (./?tab=<view>[&day=]). tab only from
 // PUSH_TABS, day only ISO and only with tab calendar; search = the query without tab / day (others such as _v kept, in order);
 // strip true when either key was present (the app replaces the URL once so a refresh does not repeat it). Never throws.
@@ -5949,6 +5956,51 @@ function pushOpenMessage(data) {
   const tab = PUSH_TABS.indexOf(data.tab) >= 0 ? data.tab : null;
   if (!tab) return null;
   return { tab, day: tab === "calendar" && pushIsDay(data.day) ? data.day : null };
+}
+// pushTapLeavesDraft(editorDay, dirty, target) -> true when switching an OPEN window to a notification's target ({ tab, day }
+// from pushOpenMessage) would throw away the day editor's unsaved draft (review 10/3): the editor is open on editorDay with a
+// dirty draft AND the target leaves the two views the editor renders in (calendar / openshifts) or opens another day (the
+// editor is keyed by its day - another day is a fresh draft). The app then asks the editor's own question first.
+function pushTapLeavesDraft(editorDay, dirty, target) {
+  if (!editorDay || !dirty || !target || typeof target !== "object") return false;
+  if (target.tab !== "calendar" && target.tab !== "openshifts") return true;
+  return !!target.day && target.day !== editorDay;
+}
+// Periods > Remind (offers_reminder) by channel (review 10/3; addendum item 5: the channels are independent end to end).
+// E-mail off alone no longer blocks it: the heads-up still goes to the person's phones unless schedule_updates_push is off.
+// Only an explicit false is off - except that a prefs row WITHOUT the schedule_updates_push key means the column does not
+// exist yet (the Prompt 30 migration not applied; notifPrefs loads select=*), so there is no phone channel to fall back to.
+// channel: "both" | "email" | "push" | "none" (blocked = none).
+function remindChannels(pref) {
+  const mailOff = !!(pref && pref.schedule_updates_email === false);
+  const pushOff = !!(pref && (pref.schedule_updates_push === false || !Object.prototype.hasOwnProperty.call(pref, "schedule_updates_push")));
+  return { mailOff, pushOff, blocked: mailOff && pushOff, channel: mailOff ? (pushOff ? "none" : "push") : (pushOff ? "email" : "both") };
+}
+// remindButtonWords(channel, name, what) -> { label, title } of the Periods row's Remind button by channel; `what` is the
+// " the heads-up for <label>: enter vacations before <freeze>, ..." tail the row composes.
+function remindButtonWords(channel, name, what) {
+  const who = String(name || "this surgeon"), w = String(what || "");
+  if (channel === "none") return { label: "Remind", title: who + " has schedule-update e-mails and phone notifications turned off - no reminder can be sent" };
+  if (channel === "push") return { label: "Remind (phone)", title: "Phone only - " + who + " has schedule-update e-mails turned off. Push " + who + w };
+  if (channel === "email") return { label: "Remind", title: "E-mail " + who + w + " (phone notifications are off)" };
+  return { label: "Remind", title: "E-mail and push " + who + w };
+}
+// remindOutcome(r, name, stamp) -> { ok, kind, note, toast } for the row note and the toast after sendEmailNotif's answer
+// r = { ok, sent, skippedPrefOff, push } (push = the function's push summary, null when it sent none). An e-mail sent reads
+// "reminded <time>"; no e-mail but a push sent reads "pushed <time> (e-mail off)" - a success, not "No reminder went out";
+// nothing sent names why on each channel. A failed call (r.ok false) -> null: the caller words it (sendEmailNotif toasted).
+function remindOutcome(r, name, stamp) {
+  if (!r || !r.ok) return null;
+  const who = String(name || "this surgeon");
+  const push = r.push && typeof r.push === "object" ? r.push : null;
+  const pushed = !!(push && Number(push.sent) > 0);
+  if (Number(r.sent) > 0) return { ok: true, kind: "success", note: "reminded " + stamp, toast: pushed ? "Reminder e-mailed and pushed to " + who + "." : "Reminder e-mailed to " + who + "." };
+  const mailWhy = r.skippedPrefOff ? "e-mail off" : "no linked e-mail";
+  const mailLong = r.skippedPrefOff ? "has schedule-update e-mails turned off" : "has no linked account e-mail";
+  if (pushed) return { ok: true, kind: "success", note: "pushed " + stamp + " (" + mailWhy + ")", toast: "Reminder pushed to " + who + "'s phone (no e-mail: " + who + " " + mailLong + ")." };
+  const pushWhy = !push || push.error ? "" : Number(push.skipped_pref_off) > 0 ? "phone off" : Number(push.skipped_no_device) > 0 ? "no phone on" : Number(push.failed) > 0 ? "phone push failed" : "";
+  const pushLong = pushWhy === "phone off" ? " and phone notifications off" : pushWhy === "no phone on" ? " and no phone with notifications on" : pushWhy === "phone push failed" ? " and the phone push failed" : "";
+  return { ok: false, kind: "info", note: mailWhy + (pushWhy ? ", " + pushWhy : "") + " - not sent", toast: "No reminder went out: " + who + " " + mailLong + pushLong + "." };
 }
 // The refusal codes of save_push_subscription / delete_push_subscription / push_subscription_status (custom SQLSTATEs;
 // PostgREST answers 400 with the code and "<TOKEN>: <text>").
@@ -6709,7 +6761,7 @@ if (typeof module !== "undefined" && module.exports) {
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
-    PUSH_TABS, PUSH_FLAG_PREFIX, PUSH_ENDPOINT_RE, PUSH_UNAVAILABLE_TEXT, PUSH_CODES, pushB64u, pushB64uDecode, pushEndpointAllowed, pushIsIOS, pushIsStandalone, pushDeviceLabel, pushStateOf, pushStateWords, pushDeepLink, pushOpenMessage, pushErrorWords, pushTestWords, pushDiagLine,
+    PUSH_TABS, PUSH_FLAG_PREFIX, PUSH_ENDPOINT_RE, PUSH_UNAVAILABLE_TEXT, PUSH_CODES, pushB64u, pushB64uDecode, pushEndpointAllowed, pushIsIOS, pushIsStandalone, pushDeviceLabel, pushStateOf, pushStateWords, pushDeepLink, pushOpenMessage, pushTapLeavesDraft, remindChannels, remindButtonWords, remindOutcome, pushErrorWords, pushTestWords, pushDiagLine,
     PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT, PAY_STIPEND_OFF_TEXT,
     payStipendOn, payStipendDelta, paySettingsHidden, payStipendKnown, payStipendPending, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,

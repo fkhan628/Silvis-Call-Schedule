@@ -196,13 +196,21 @@ the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
 
 Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID straight from `send-notification`, no OneSignal (the
 Davenport app's OneSignal app, its repo and the user-site root worker are never touched). One function changes:
-`send-notification` (live v9 -> v10; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
+`send-notification` (the live v9 code - `functions list` has read v10 since the 2026-10-03 03:29Z `secrets set` re-versioned
+every function, v11 after a `--rotate`; this deploy is one above whatever it reads then; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
 redeployed - the 6 AM / Monday reminders stay e-mail only, a follow-up). What changes: every send that has a push switch
 (`schedule_updates_push` - publish, manual edit, vacation logged, open shifts, shift taken, offers heads-up / frozen;
 `trade_updates_push` - trade proposed / accepted / declined / applied, a give included) also pushes to the devices
 (`push_subscriptions`) of the SAME people its e-mail is resolved for - resolved BEFORE their e-mail flags, each on his own
 push switch (a missing row or key = on), so e-mail off + push on still pushes and the reverse; the e-mail part of every
-answer is unchanged. 404 / 410 deletes the device row; other failures bump `fail_count` / `last_error_at`; no retry loop.
+answer is unchanged. 404 / 410 deletes the device row; other failures bump `fail_count` / `last_error_at`; no retry loop; a
+3xx is a failure, never followed (`redirect: "manual"`). Decided 10/3 (review): a row that keeps failing with anything but
+404 / 410 (a 403 after a key rotation, a 400, a 5xx, a timeout) is NEVER deleted automatically - a server-side VAPID
+mistake answers 401 / 403 for EVERY device, and an automatic prune would then wipe every device; a device re-enabled after
+a `--rotate` drops its old subscription (config.js), whose endpoint then answers 404 / 410 and goes on the next send. A
+re-arm after another app's update reset saves a new row beside the dead one (the client holds only a hash); the dead row
+goes on the account's next send (404 / 410), and Send test clears it at once. Replacing the row in
+`save_push_subscription` itself is a follow-up (a migration change).
 The answer gains `push` (counts for every caller; the per-recipient lists `results` / `followers` for an admin / scheduler
 only; `push: null` for `test` / `shift_reminder`). Two routes: `GET ?vapid=public` (no auth, the public key only) and
 `POST ?push=test` (any verified session, its own devices). No endpoint, key, payload text or address in any answer or log.
@@ -212,8 +220,10 @@ status RPCs, the two `*_push` columns); 2. the keys - `setup-push-keys.sh` (the 
 like every `secrets set` it re-versions all four functions, no code change); 3. THIS deploy; 4. paste the results back;
 5. Claude Code's record step (this section and `docs/SCHEMA-REVIEW.md`); 6. the client ships on Faraz's go; 7. each user
 taps Enable in Settings > Notification settings > Phone notifications. Deployed out of order nothing breaks the e-mail:
-before step 1 every send answers `push.error` `push_subscriptions unavailable: HTTP 404 ...`; before step 2 `push.error`
-`push not configured` and both routes 503; under v9 the client's `GET ?vapid=public` reads 405 ("available after the next update").
+before step 1 every send answers `push.error` `push_subscriptions unavailable: HTTP 404 ...`; before step 2, on a project
+with no VAPID secrets, `push.error` `push not configured` and both routes 503 (the live project has held a pair since the
+10/3 03:29Z incident - a test harness's fake CLI fell through to the real one; `setup-push-keys.sh --rotate` replaces it -
+so an out-of-order deploy there answers 200 with that pair's key); under v9 the client's `GET ?vapid=public` reads 405 ("available after the next update").
 
 ```powershell
 $wd = "<linked dir>"   # the workdir linked with: supabase link --project-ref bzhsroegtagqhutbnsrp

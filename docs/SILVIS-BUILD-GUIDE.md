@@ -2333,8 +2333,9 @@ taps Enable on each device.
   "Silvis Call - Open the app for details." - iOS drops subscriptions that receive silent pushes); `notificationclick`
   builds `./?tab=<view>[&day=YYYY-MM-DD]` itself from the whitelist `PUSH_TABS` (calendar, openshifts, myschedule, timeoff,
   settings, setup - the same literal in `helpers.js`, `sw.js` and the edge function), relative to its scope - never a URL
-  from the payload - and focuses an open app window + `postMessage({ type: "silvis-push-open", tab, day })` (no reload: an
-  unsaved day edit survives), or opens a new window when none is open.
+  from the payload - and focuses an open app window + `postMessage({ type: "silvis-push-open", tab, day })` (no reload; a
+  dirty day edit is kept unless the person confirms discarding it - the app asks the editor's own question first, review
+  10/3), or opens a new window when none is open.
 - **Finding the worker:** `config.js` `pushDevice.registration()` filters `getRegistrations()` to scope === the app folder
   AND script === `<folder>sw.js` (query stripped). Never `navigator.serviceWorker.ready` / `getRegistration(url)`: on
   fkhan628.github.io both fall back to Davenport's root registration, whose scope covers the Silvis folder too.

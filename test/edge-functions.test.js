@@ -2052,7 +2052,7 @@ async function p30Jwt(jwt, pubRaw) {
   const ok = await P30_SUBTLE.verify({ name: "ECDSA", hash: "SHA-256" }, key, sig, p30Utf8(h + "." + c));
   return { header: JSON.parse(Buffer.from(h, "base64url").toString("utf8")), claims: JSON.parse(Buffer.from(c, "base64url").toString("utf8")), ok, sigLength: sig.length };
 }
-acheck("P30 round trip: a test-generated subscription (P-256 key + 16-byte auth) decrypts, with an independent receiver, to the plaintext followed by the 0x02 last-record delimiter; header rs 4096 / idlen 65 / a fresh sender key and salt per message; a 4079-byte payload fits one record, 4080 does not; a malformed key or auth secret throws", async () => {
+acheck("P30 round trip: a test-generated subscription (P-256 key + 16-byte auth) decrypts, with an independent receiver, to the plaintext followed by the 0x02 last-record delimiter; header rs 4096 / idlen 65 / a fresh sender key and salt per message; a 3993-byte payload fits (the whole body exactly 4096 bytes - RFC 8291 section 4, review 10/3), 3994 does not; a malformed key or auth secret throws", async () => {
   if (!WP) throw new Error("the @webPush block did not load");
   const dev = await p30Device("rt-1");
   const text = JSON.stringify({ v: 1, title: "Silvis Call", body: "round trip", tag: "silvis-test", tab: "settings" });
@@ -2063,9 +2063,12 @@ acheck("P30 round trip: a test-generated subscription (P-256 key + 16-byte auth)
   const two = await p30Decrypt(await WP.wpEncrypt(p30Utf8(text), dev.p256dh, dev.auth), dev);
   assert.notStrictEqual(p30B64u(two.salt), p30B64u(one.salt), "a fresh salt per message");
   assert.notStrictEqual(p30B64u(two.asPub), p30B64u(one.asPub), "a fresh sender key per message");
-  const big = await p30Decrypt(await WP.wpEncrypt(new Uint8Array(4079).fill(65), dev.p256dh, dev.auth), dev);
-  assert.strictEqual(big.sealedLength, 4096, "4079 bytes + the delimiter + the 16-byte tag = exactly one 4096-byte record");
-  await assert.rejects(WP.wpEncrypt(new Uint8Array(4080), dev.p256dh, dev.auth), /one record/, "4080 bytes do not fit");
+  const bigBody = await WP.wpEncrypt(new Uint8Array(3993).fill(65), dev.p256dh, dev.auth);
+  const big = await p30Decrypt(bigBody, dev);
+  assert.strictEqual(new Uint8Array(bigBody).length, 4096, "3993 bytes: the 86-byte header + the record (plaintext, the delimiter, the 16-byte tag) = exactly the 4096-byte body every push service accepts");
+  assert.strictEqual(big.sealedLength, 4010, "3993 + 1 + 16 = a 4010-byte record (inside rs 4096)");
+  await assert.rejects(WP.wpEncrypt(new Uint8Array(3994), dev.p256dh, dev.auth), /one record/, "3994 bytes do not fit (the body would be 4097)");
+  await assert.rejects(WP.wpEncrypt(new Uint8Array(4079), dev.p256dh, dev.auth), /one record/, "the old 4079-byte bound (a 4182-byte body) is refused");
   await assert.rejects(WP.wpEncrypt(p30Utf8("x"), dev.p256dh.slice(0, 40), dev.auth), /uncompressed P-256/, "a short key");
   await assert.rejects(WP.wpEncrypt(p30Utf8("x"), dev.p256dh, dev.auth.slice(0, 10)), /16 bytes/, "a short auth secret");
 });
@@ -2189,6 +2192,12 @@ acheck("P30 pushDeliver with a fake send: 201 -> okIds; 404 and 410 -> goneIds (
   assert.deepStrictEqual(PP.pushEmpty("x"), { sent: 0, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: "x" });
   assert.strictEqual(PP.pushOutcome(200), "sent"); assert.strictEqual(PP.pushOutcome(299), "sent"); assert.strictEqual(PP.pushOutcome(404), "gone"); assert.strictEqual(PP.pushOutcome(410), "gone");
   [0, 400, 401, 403, 413, 429, 500, 503, "x", undefined].forEach((s) => assert.strictEqual(PP.pushOutcome(s), "failed", String(s)));
+  // review 10/3: a redirect is a refusal, never followed - pushSender's fetch says redirect: "manual", and a 3xx (or the opaque 0) is failed
+  [301, 302, 303, 307, 308].forEach((s) => assert.strictEqual(PP.pushOutcome(s), "failed", "a " + s + " redirect"));
+  const senderAt = snSrc.indexOf("function pushSender(");
+  const sender = snSrc.slice(senderAt, snSrc.indexOf("\n}\n", senderAt));
+  assert.ok(senderAt > 0 && sender.includes('const res = await fetch(r.url, { ...r.init, redirect: "manual", signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });'), "pushSender's push-service fetch never follows a redirect (redirect: \"manual\"): " + sender.slice(0, 400));
+  assert.strictEqual(snSrc.split("await fetch(r.url").length - 1, 1, "one push-service fetch site");
   assert.strictEqual(PP.redactEndpoints("x https://fcm.googleapis.com/fcm/send/abc) y http://a.b/c"), "x <url>) y <url>");
 });
 check("P30 payload: keys exactly v / title / body / tag / tab (+ params with a day), never a url; tab from the whitelist (a trade opens timeoff, a follower's myschedule; a manual edit / a claim the calendar ON the day); body = the first non-empty line, whitespace collapsed, at most 180 characters ending '...', an address redacted, empty -> the frame title; a follower's title names whom he follows; a trade's tag is stable across proposed / accepted / declined / applied; every tag fits sw.js's rule; the test notice; at most 3072 bytes", () => {
@@ -2259,7 +2268,12 @@ check("P30 source pins - send-notification: the push fan-out sits AFTER the foll
   assert.ok(/push: pushOut,\s*\}\);/.test(h.slice(iRet, iRet + 600)), "the answer carries push");
   const fb = h.slice(h.indexOf("if (FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {"), iFolCatch);
   const iMail = fb.indexOf("followerRecipients(followers, type, fUniverse, cat.pref)"), iNull = fb.indexOf("followerRecipients(followers, type, fUniverse, null)");
-  assert.ok(iMail > 0 && iNull > iMail, "the e-mail call stays; the push call (prefKey null - nobody skipped) follows it inside the same try");
+  assert.ok(iMail > 0 && iNull > iMail, "the e-mail call stays; the push call (prefKey null - nobody skipped) follows it");
+  // review 10/3: the push side's follower list is built AFTER the follower e-mail loop, in its OWN try - a fault there costs
+  // the push its followers (fAll = []), never the follower e-mails (which would otherwise be skipped and read followers_error)
+  const iLoopMail = fb.indexOf("const res = await sendEmail(f.email, subject, html, `type=${type} follower=${f.tag}`);");
+  assert.ok(iLoopMail > 0 && iNull > iLoopMail, "fAll is built after the follower e-mail loop");
+  assert.ok(/\n        try \{\n          fAll = followerRecipients\(followers, type, fUniverse, null\)\.list\.map\([\s\S]*?\n        \} catch \(e\) \{\n          fAll = \[\];\n          console\.error\(`\[send-notification\] push followers: /.test(fb), "fAll in its own try; a fault leaves fAll = [] and logs (addresses redacted)");
   assert.ok(/fAll = followerRecipients\(followers, type, fUniverse, null\)\.list\.map\(/.test(fb), "fAll is the followers before any e-mail flag");
   assert.ok(/prefs: \(followers\.find\(\(x: any\) => x\.id === f\.id\) \|\| \{\}\)\.prefs \|\| null/.test(fb), "each follower carries HIS OWN prefs row (followerIndex, by profile_id)");
   const rr = snSrc.slice(snSrc.indexOf("async function resolveRecipients("), snSrc.indexOf("// Handler"));

@@ -11911,7 +11911,7 @@ try {
     const P30_UID = "00000000-0000-4000-8000-0000000030a1";
     const P30_PROFILE = { id: P30_UID, person_id: "s2", role: "surgeon", display_name: null, email: null, created_at: "2026-10-02T00:00:00Z" };
     const P30_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: P30_UID, role: "authenticated", email: "push-surgeon@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
-    const p30 = { calls: [], order: [], saved: new Map(), cols: "ok", errors: [], expected400: 0 };
+    const p30 = { calls: [], order: [], saved: new Map(), cols: "ok", errors: [], expected400: 0, profile: null };
     const p30Route = async (route) => {
       const req = route.request();
       const url = new URL(req.url());
@@ -11925,7 +11925,8 @@ try {
       if (url.pathname.startsWith("/auth/v1/user")) return json(200, { id: P30_UID, email: "push-surgeon@example.com", aud: "authenticated", role: "authenticated" });
       if (url.pathname.startsWith("/auth/v1/logout")) return json(200, {});
       if (url.pathname.startsWith("/auth/v1/token")) return json(400, { error: "invalid_grant", error_description: "harness: no refresh in the push step" });
-      if (url.pathname.startsWith("/rest/v1/user_profiles") && method === "GET") return json(200, /role=in\./.test(url.search) ? [{ person_id: "s1", role: "admin" }] : [P30_PROFILE]);
+      // p30.profile: the step (8b) scheduler session's own row (same account id); every other step reads the surgeon's
+      if (url.pathname.startsWith("/rest/v1/user_profiles") && method === "GET") return json(200, /role=in\./.test(url.search) ? [{ person_id: "s1", role: "admin" }] : [p30.profile || P30_PROFILE]);
       let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
       if (url.pathname === "/functions/v1/send-notification" && method === "GET" && url.searchParams.get("vapid") === "public") return json(200, { publicKey: P30_VAPID });
       if (url.pathname === "/functions/v1/send-notification" && method === "POST" && url.searchParams.get("push") === "test") { const n = p30.saved.size; return json(200, { push: { sent: n ? 1 : 0, failed: 0, removed: 0, skipped_no_device: n ? 0 : 1, skipped_pref_off: 0, devices: { sent: n, failed: 0, removed: 0 }, error: null } }); }
@@ -12223,6 +12224,65 @@ try {
       else ok("P30 desktop: no page error, no unexpected console error");
     } catch (e) { fail("P30 phone notifications (desktop): " + errLine(e)); try { if (pg) await pg.screenshot({ path: path.join(OUT, "failure-p30-desktop.png"), fullPage: true }); } catch (e2) {} }
     if (pctx) await pctx.close();
+    // (8b) review 10/3: a notification tap on an open window must not silently drop the scheduler's unsaved day draft. A
+    // scheduler session (same account id, p30.profile), a dirty day editor, then silvis-push-open messages: Time off and
+    // another day ask the editor's own question; Cancel keeps the draft, the day and the editor; OK closes it and switches.
+    {
+      let sctx = null, sp = null;
+      const dialogs = [];
+      let answer = "dismiss";
+      try {
+        p30.errors = [];
+        p30.profile = { ...P30_PROFILE, person_id: "s1", role: "scheduler" };
+        const c0 = p30.calls.length;
+        sctx = await mkP30Ctx();
+        await sctx.addInitScript(p30Init, P30_CFG);
+        sp = await sctx.newPage();
+        watch(sp, "scheduler");
+        sp.on("dialog", async (d) => { dialogs.push(d.message()); try { if (answer === "accept") await d.accept(); else await d.dismiss(); } catch (e) {} });
+        await loadApp(sp, P30_BASE);
+        await sp.waitForSelector("button[data-tab=setup]", { timeout: 20000 });
+        await sp.click("button[data-tab=calendar]");
+        const today = await sp.evaluate(() => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }));
+        const d0 = await sp.evaluate((t) => (Array.from(document.querySelectorAll(".cal-cell[data-day]")).map(c => c.getAttribute("data-day")).filter(d => d > t)[0] || null), today);
+        if (!d0) throw new Error("no future day cell on the calendar");
+        await sp.click(`.cal-cell[data-day="${d0}"]`);
+        await sp.waitForSelector("[data-testid=day-editor] [data-testid=editor-note]", { timeout: 8000 });
+        await sp.fill("[data-testid=editor-note]", "UNSAVED DRAFT NOTE");
+        const title0 = await sp.$eval("[data-testid=editor-title]", el => el.textContent.trim());
+        const post = (data) => sp.evaluate((data) => { navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data })); }, data);
+        const editorNow = async () => ({ open: !!(await sp.$("[data-testid=day-editor]")), title: await sp.$eval("[data-testid=editor-title]", el => el.textContent.trim()).catch(() => null), note: await sp.inputValue("[data-testid=editor-note]").catch(() => null) });
+        const Q = "Discard your unsaved changes to this day?";
+        // Cancel on a tap to Time off
+        dialogs.length = 0; answer = "dismiss";
+        await post({ type: "silvis-push-open", tab: "timeoff", day: null });
+        await sp.waitForTimeout(600);
+        let e1 = await editorNow();
+        if (JSON.stringify(dialogs) !== JSON.stringify([Q]) || !e1.open || e1.note !== "UNSAVED DRAFT NOTE" || e1.title !== title0) fail("P30 open window over a dirty day draft (Time off, Cancel): " + JSON.stringify({ dialogs, e1, title0 }));
+        else ok(`P30 open window over a dirty day draft: a tap to Time off asked '${Q}'; on Cancel the editor, its day (${title0}) and the draft note stayed`);
+        // Cancel on a tap to another day
+        const d3 = await sp.evaluate((d) => { const t = new Date(d + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + 3); return t.toISOString().slice(0, 10); }, d0);
+        dialogs.length = 0;
+        await post({ type: "silvis-push-open", tab: "calendar", day: d3 });
+        await sp.waitForTimeout(800);
+        e1 = await editorNow();
+        if (JSON.stringify(dialogs) !== JSON.stringify([Q]) || !e1.open || e1.note !== "UNSAVED DRAFT NOTE" || e1.title !== title0) fail("P30 open window over a dirty day draft (another day, Cancel): " + JSON.stringify({ dialogs, e1, title0, d3 }));
+        else ok(`P30 open window over a dirty day draft: a tap to another day (${d3}) asked first; on Cancel the editor stayed on ${title0} with the draft`);
+        // OK on a tap to Time off: the editor closes, Time off opens
+        dialogs.length = 0; answer = "accept";
+        await post({ type: "silvis-push-open", tab: "timeoff", day: null });
+        await waitFor(async () => (await viewNow(sp)) === "timeoff", 8000, 200);
+        e1 = await editorNow();
+        const v8 = await viewNow(sp);
+        const dayWrites = p30.calls.slice(c0).filter(c => c.method !== "GET" && /^\/rest\/v1\/schedule_days/.test(c.path));
+        if (JSON.stringify(dialogs) !== JSON.stringify([Q]) || e1.open || v8 !== "timeoff") fail("P30 open window over a dirty day draft (OK): " + JSON.stringify({ dialogs, e1, v8 }));
+        else if (dayWrites.length) fail("P30 open window over a dirty day draft: a schedule_days write happened: " + JSON.stringify(dayWrites.map(c => c.method + " " + c.path)));
+        else ok("P30 open window over a dirty day draft: on OK the editor closed and Time off opened; nothing was written");
+        if (p30.errors.length) fail("P30 scheduler draft step errors: " + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail("P30 open window over a dirty day draft: " + errLine(e)); try { if (sp) await sp.screenshot({ path: path.join(OUT, "failure-p30-draft.png"), fullPage: true }); } catch (e2) {} }
+      p30.profile = null;
+      if (sctx) await sctx.close();
+    }
     // (15) iPhone: Safari outside the Home Screen app -> the iOS line, Enable asks nothing and registers nothing; the Home Screen
     // app (navigator.standalone) -> Enable offered; 390 px screenshots of both for the report
     const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";

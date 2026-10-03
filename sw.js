@@ -9,7 +9,8 @@
 //   notificationclick - opens the app on a whitelisted view: ./?tab=<view>[&day=YYYY-MM-DD], built HERE from the
 //                       notification's own tab / day (re-validated), relative to this worker's scope - never a URL taken
 //                       from the payload. An app window that is already open is focused and told by postMessage (no
-//                       reload - an unsaved day edit survives); only when none is open does a new window open.
+//                       reload; a dirty day edit is kept unless the person confirms discarding it - the app asks);
+//                       only when none is open does a new window open.
 // No fetch handler: the app's version check and cache-busting stay exactly as they are (index-source.html's head script),
 // and the update reset keeps this registration (its keep-predicate names this file).
 "use strict";

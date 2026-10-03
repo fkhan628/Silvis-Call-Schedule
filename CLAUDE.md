@@ -135,6 +135,8 @@ worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30.
 - Show every edit and every command before running it. No auto-accept.
 - Verify by OBSERVING behavior (a passing test, a real row in Supabase, a green CI run, a byte-diff) — never by
   assuming success. Silent failures are this codebase family's signature bug class.
+- Tests that fake a CLI (supabase) must inject it explicitly (SUPABASE_BIN / an absolute POSIX path), prove it resolves
+  first, and never use a workdir holding the real project ref - a fake that did not resolve set live secrets on 10/3.
 - Current milestone: **a published schedule through 2026-12-31** — **published 2026-09-23** from the committed preview
   (`docs/PUBLISH-2026-09-23.md`: 2026-10-07 → 2027-01-03 over the import locks (to 11/29); east-derived primary locks run
   12/7–12/13 and manual backup locks reach 12/18 — Generate never touches any lock). Generate's default range

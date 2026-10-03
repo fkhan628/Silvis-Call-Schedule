@@ -646,6 +646,11 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
 // ---------------------------------------------------------------------------
 // @webPush-start
 const WP_RS = 4096;
+// RFC 8291 section 4 / RFC 8030 section 7.2: the whole BODY - the 86-byte header (salt 16 | rs 4 | idlen 1 | key 65) plus the
+// record (plaintext | 0x02 | 16-byte tag) - stays within the 4096 bytes every push service must accept: 3993 plaintext bytes
+// at most (review 10/3; pushPayload's 3072-byte cap keeps every real payload far below it).
+const WP_MAX_BODY = 4096;
+const WP_HEADER_LEN = 86;
 const WP_TTL = "259200";
 // Uint8Array -> base64url without padding (a byte loop - never a spread, which overflows the call stack on large input)
 function wpB64uEncode(bytes) {
@@ -697,7 +702,7 @@ async function wpEncrypt(plaintextBytes, uaPublicB64u, authB64u, opts) {
   const auth = wpB64uDecode(authB64u);
   if (auth.length !== 16) throw new Error("the subscription auth secret is not 16 bytes");
   const plain = plaintextBytes instanceof Uint8Array ? plaintextBytes : new Uint8Array(plaintextBytes);
-  if (plain.length + 1 + 16 > WP_RS) throw new Error("the payload does not fit one record");
+  if (WP_HEADER_LEN + plain.length + 1 + 16 > WP_MAX_BODY || plain.length + 1 + 16 > WP_RS) throw new Error("the payload does not fit one record (3993 bytes at most)");
   let asPublic, asPrivate;
   if (o.asPublicB64u && o.asPrivateB64u) {
     asPublic = wpB64uDecode(o.asPublicB64u);
@@ -1058,11 +1063,13 @@ async function readPushSubscriptions(profileIds: string[]): Promise<Record<strin
 }
 
 // The send function pushDeliver calls: the encrypted request (@webPush) and one fetch, bounded at PUSH_TIMEOUT_MS.
+// redirect: "manual" (review 10/3): a 3xx is a refusal (pushOutcome -> failed, fail_count + 1), never followed - a followed
+// 307 / 308 would POST the body and the VAPID token to whatever Location names, past the PUSH_ENDPOINT_RE allowlist.
 function pushSender(vapid: any, nowSec: number) {
   const jwtCache = new Map();
   return async (sub: any, payloadText: string) => {
     const r = await wpRequest(sub, payloadText, vapid, VAPID_SUBJECT, nowSec, jwtCache);
-    const res = await fetch(r.url, { ...r.init, signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });
+    const res = await fetch(r.url, { ...r.init, redirect: "manual", signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });
     const text = await res.text().catch(() => "");
     return { status: res.status, body: res.ok ? "" : text };
   };
@@ -1082,6 +1089,8 @@ async function pushBookkeeping(d: any): Promise<void> {
     try { await rest(`push_subscriptions?id=in.(${goneIds.join(",")})`, { method: "DELETE", headers: { Prefer: "return=minimal" } }); }
     catch (e) { console.error(`[push] bookkeeping (gone rows): ${pushLogSafe(e)}`); }
   }
+  // Decided 10/3 (review): a row failing with anything but 404 / 410 is only counted, never deleted here - a server-side
+  // VAPID mistake answers 401 / 403 for EVERY device, and a prune would then wipe them all (README section 3).
   for (const f of (d.failedRows || [])) {
     if (!f || !UUID_SHAPE.test(String(f.id))) continue;
     try { await rest(`push_subscriptions?id=eq.${f.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ last_error_at: now, fail_count: f.fail_count }) }); }
@@ -1316,10 +1325,6 @@ serve(async (req) => {
         const followers = followerIndex(fProfiles, prefRows);
         const fUniverse = followerUniverse(type, targetIds, caller, data, tradeRow);
         const { list: fList, skipped } = followerRecipients(followers, type, fUniverse, cat.pref);
-        // prefKey null skips nobody: the push side applies the follower's *_push flag itself (his own row, by profile_id)
-        fAll = followerRecipients(followers, type, fUniverse, null).list.map((f: any) => ({
-          ...f, prefs: (followers.find((x: any) => x.id === f.id) || {}).prefs || null, followedNames: f.via.map((id: string) => roster.names[id] || id),
-        }));
         followersPrefOff = skipped.length;
         for (const sk of skipped) followersAdded.push(sk);
         for (const f of fList) {
@@ -1330,6 +1335,17 @@ serve(async (req) => {
           else { followersFailed++; followersAdded.push({ follower: f.tag, via: f.via, status: `failed_${res.status}` }); }
         }
         console.log(`[send-notification] type=${type} followers: ${followers.length} account(s) follow someone, added=${fList.length} sent=${followersSent} failed=${followersFailed} pref_off=${followersPrefOff}`);
+        // Prompt 30: the push side's followers - built AFTER the follower e-mail and in its OWN try (review 10/3), so a fault
+        // here can only cost the push its followers, never the e-mails above. prefKey null skips nobody: the push side applies
+        // the follower's *_push flag itself (his own row, by profile_id).
+        try {
+          fAll = followerRecipients(followers, type, fUniverse, null).list.map((f: any) => ({
+            ...f, prefs: (followers.find((x: any) => x.id === f.id) || {}).prefs || null, followedNames: f.via.map((id: string) => roster.names[id] || id),
+          }));
+        } catch (e) {
+          fAll = [];
+          console.error(`[send-notification] push followers: ${redactAddresses(e instanceof Error ? e.message : String(e))}`);
+        }
       } catch (e) {
         followersError = redactAddresses(e instanceof Error ? e.message : String(e));
         console.error(`[send-notification] followers: ${followersError}`);
