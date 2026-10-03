@@ -104,7 +104,7 @@
 //     '// @giveFrame-end'). Cosmetic only: the gate never reads kind, and a
 //     v6 function simply ignores the extra key.
 //
-//   - FOLLOWERS (Prompt 20 F3, Faraz 9/24; revision o; v8 on base v7 - prepared, NOT deployed; README section 3).
+//   - FOLLOWERS (Prompt 20 F3, Faraz 9/24; revision o; v8 on base v7 - deployed 2026-09-27 00:46 UTC; README section 3).
 //     A viewer / coordinator account the admin set to follow roster surgeons (user_profiles.follows) receives what they receive, read-only. For trade_* (a Prompt 19 give
 //     rides them with data.kind 'give'), shift_claimed, open_shifts and schedule_published, AFTER every gate and
 //     after the surgeons' mail, each follower of a surgeon in followerUniverse (the notice's own parties: the trade
@@ -118,7 +118,27 @@
 //     failed accounting (what the client's toast reads) is unchanged. The pure pieces are the @followers mirror block
 //     (identical in daily-reminder).
 //
+//   - PHONE PUSH (Prompt 30, Faraz 10/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3).
+//     Web Push with VAPID, no third-party service: every send that has a push switch (PUSH_PREF_OF -
+//     schedule_updates_push / trade_updates_push in notification_preferences, revision w) also goes to the phones of the
+//     SAME people. resolveRecipients now answers `audience` too (every person of the universe BEFORE the e-mail filter,
+//     with his account ids) and the follower step `fAll` (followerRecipients(..., null) - nobody skipped on an e-mail
+//     flag); the fan-out reads only those two with the *_push flags, so e-mail off + push on still pushes and the
+//     reverse (the e-mail part of the answer is unchanged for every input). It runs AFTER the follower e-mail, in its
+//     own try: a push failure never changes the e-mail answer. Devices are push_subscriptions rows (read with the
+//     service role); 404 / 410 deletes the row, other failures bump fail_count / last_error_at, never a retry loop.
+//     The crypto (RFC 8291 aes128gcm + RFC 8188 one record + RFC 8292 VAPID ES256, WebCrypto only) is the plain-JS
+//     block between '// @webPush-start' and '// @webPush-end'; the decisions and the send loop are the block between
+//     '// @pushPlan-start' and '// @pushPlan-end' (test/edge-functions.test.js lifts both and checks the RFC 8291
+//     Appendix A vector). The payload is { v: 1, title, body, tag, tab, params? } - the body is the first line of
+//     data.message (at most 180 characters, addresses redacted), the tap target a whitelisted view (PUSH_TABS), never
+//     a URL. An endpoint, a key or a payload text never reaches a response or a log line. Two query routes: GET
+//     ?vapid=public (no auth; the public key only) and POST ?push=test (any verified session, the caller's OWN
+//     devices, before the role read - a viewer / follower / APP / the office can test; no body is read).
+//
 // Payload contract:
+//   GET  ?vapid=public -> 200 { publicKey } (Cache-Control: no-store) | 503 { error } when the VAPID secrets are missing / malformed
+//   POST ?push=test    -> any verified session; 200 { push: { sent, failed, removed, skipped_no_device, skipped_pref_off: 0, devices: { sent, failed, removed }, error: null } } for the caller's own devices | 503 { error } (VAPID secrets missing / malformed) | 401
 //   POST { type: string, data: { subject?: string, message: string, detail?: string, trade_id?: uuid, kind?: 'give' }, targetIds?: string[] }
 //     data.kind 'give' (Prompt 19 S4, optional) only re-titles a trade_* frame (frameTitle); the gate never reads it
 //     targetIds ABSENT  -> broadcast to every linked person (opted in for the category)
@@ -128,13 +148,17 @@
 //     trade_applied     -> the same two parties, plus (optionally) scheduler-linked ids (Prompt 19 S3, v7)
 //   -> 200 { sent, failed, skipped_no_email, skipped_pref_off, results: [{ person_id, status }],
 //            followers_sent, followers_failed, followers_skipped_pref_off, followers_error (null, or why the follower
-//            step could not run), and for an admin / scheduler caller followers_added: [{ follower: <id8>, via: [ids], status }] }
+//            step could not run), and for an admin / scheduler caller followers_added: [{ follower: <id8>, via: [ids], status }],
+//            push (Prompt 30): null for a category without a push switch (test, shift_reminder), else { sent, failed, removed,
+//            skipped_no_device, skipped_pref_off, devices: { sent, failed, removed }, error (null, or why push did not run) }
+//            and for an admin / scheduler caller also results: [{ person_id, status }] and followers: [{ follower: <id8>, via, status }] }
 //
 // Secrets (by NAME): RESEND_API_KEY, NOTIFICATION_FROM_EMAIL (required - there is
-// NO hardcoded fallback sender); SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are
-// injected by Supabase.
+// NO hardcoded fallback sender); VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (Prompt 30 phone push - set by
+// setup-push-keys.sh through --env-file; missing / malformed = no push, the e-mail unaffected); SUPABASE_URL and
+// SUPABASE_SERVICE_ROLE_KEY are injected by Supabase.
 //
-// Deploy: supabase functions deploy send-notification --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+// Deploy: supabase functions deploy send-notification --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
@@ -142,15 +166,21 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
 const FROM_EMAIL = Deno.env.get("NOTIFICATION_FROM_EMAIL") || "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+// Prompt 30 phone push: the VAPID pair (web-push formats: the public key = base64url of the 65-byte uncompressed P-256
+// point, the private key = base64url of the 32-byte scalar) and the subject (the app's https URL - no address)
+const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY") || "";
+const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") || "";
+const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "";
 
 const APP_URL = "https://fkhan628.github.io/Silvis-Call-Schedule/";
 const APP_NAME = "Silvis Call Schedule";
 const MAX_MESSAGE_CHARS = 4000;
 
+// pin moved deliberately (Prompt 30): GET joins POST / OPTIONS for the public-key route (?vapid=public)
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 // ---------------------------------------------------------------------------
@@ -606,13 +636,472 @@ function buildEmail(type: string, cat: Category, data: any, recipientName: strin
 }
 
 // ---------------------------------------------------------------------------
+// Phone push (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push"). Two plain-JavaScript blocks - no type
+// annotations, no Deno / Node globals, WebCrypto through crypto.subtle plus TextEncoder / atob / btoa only - so the
+// same text runs here under Deno and in test/edge-functions.test.js under Node (lifted with new Function; the test
+// checks the RFC 8291 Appendix A vector byte for byte). '@webPush' is the transport: RFC 8291 message encryption in
+// ONE RFC 8188 aes128gcm record (rs 4096) and an RFC 8292 VAPID ES256 token per push-service origin. '@pushPlan' is
+// the decisions: which switch, which tab / tag / words, whom (the audience and the followers BEFORE any e-mail flag),
+// the bounded send loop and the response object. The handler below only does I/O around them.
+// ---------------------------------------------------------------------------
+// @webPush-start
+const WP_RS = 4096;
+const WP_TTL = "259200";
+// Uint8Array -> base64url without padding (a byte loop - never a spread, which overflows the call stack on large input)
+function wpB64uEncode(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+// base64url (padding optional) -> Uint8Array; any other character throws
+function wpB64uDecode(text) {
+  const t = String(text == null ? "" : text);
+  if (!/^[A-Za-z0-9_-]*={0,2}$/.test(t)) throw new Error("not base64url");
+  const body = t.replace(/=+$/, "");
+  if (body.length % 4 === 1) throw new Error("not base64url");
+  const s = atob(body.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((body.length + 3) % 4));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function wpConcat(...parts) {
+  let n = 0;
+  for (const p of parts) n += p.length;
+  const out = new Uint8Array(n);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+function wpText(s) { return new TextEncoder().encode(s); }
+async function wpHmac(keyBytes, dataBytes) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, dataBytes));
+}
+// HKDF-SHA-256 (RFC 5869): extract, then ONE expand block - every length here is at most 32
+async function wpHkdf(salt, ikm, info, length) {
+  if (!(length > 0 && length <= 32)) throw new Error("wpHkdf: length must be 1-32");
+  const prk = await wpHmac(salt, ikm);
+  const okm = await wpHmac(prk, wpConcat(info, new Uint8Array([1])));
+  return okm.slice(0, length);
+}
+// RFC 8291 + RFC 8188 aes128gcm, ONE record: plaintext || 0x02 (the last-record delimiter), rs 4096,
+// header = salt (16) | rs (4, big-endian) | idlen (1) = 65 | as_public (65).
+// key_info = "WebPush: info" 0x00 | ua_public | as_public; IKM = HKDF(auth, ecdh, key_info, 32);
+// CEK = HKDF(salt, IKM, "Content-Encoding: aes128gcm" 0x00, 16); NONCE = HKDF(salt, IKM, "Content-Encoding: nonce" 0x00, 12).
+// opts (tests only): { asPublicB64u, asPrivateB64u, saltB64u } - otherwise a fresh ECDH P-256 pair and 16 random bytes.
+async function wpEncrypt(plaintextBytes, uaPublicB64u, authB64u, opts) {
+  const o = opts || {};
+  const ua = wpB64uDecode(uaPublicB64u);
+  if (ua.length !== 65 || ua[0] !== 4) throw new Error("the subscription key is not an uncompressed P-256 point");
+  const auth = wpB64uDecode(authB64u);
+  if (auth.length !== 16) throw new Error("the subscription auth secret is not 16 bytes");
+  const plain = plaintextBytes instanceof Uint8Array ? plaintextBytes : new Uint8Array(plaintextBytes);
+  if (plain.length + 1 + 16 > WP_RS) throw new Error("the payload does not fit one record");
+  let asPublic, asPrivate;
+  if (o.asPublicB64u && o.asPrivateB64u) {
+    asPublic = wpB64uDecode(o.asPublicB64u);
+    const jwk = { kty: "EC", crv: "P-256", x: wpB64uEncode(asPublic.slice(1, 33)), y: wpB64uEncode(asPublic.slice(33, 65)), d: wpB64uEncode(wpB64uDecode(o.asPrivateB64u)), ext: true };
+    asPrivate = await crypto.subtle.importKey("jwk", jwk, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  } else {
+    const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+    asPublic = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    asPrivate = pair.privateKey;
+  }
+  const uaKey = await crypto.subtle.importKey("raw", ua, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const ecdh = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: uaKey }, asPrivate, 256));
+  const keyInfo = wpConcat(wpText("WebPush: info"), new Uint8Array([0]), ua, asPublic);
+  const ikm = await wpHkdf(auth, ecdh, keyInfo, 32);
+  const salt = o.saltB64u ? wpB64uDecode(o.saltB64u) : crypto.getRandomValues(new Uint8Array(16));
+  if (salt.length !== 16) throw new Error("the salt is not 16 bytes");
+  const cek = await wpHkdf(salt, ikm, wpConcat(wpText("Content-Encoding: aes128gcm"), new Uint8Array([0])), 16);
+  const nonce = await wpHkdf(salt, ikm, wpConcat(wpText("Content-Encoding: nonce"), new Uint8Array([0])), 12);
+  const key = await crypto.subtle.importKey("raw", cek, { name: "AES-GCM" }, false, ["encrypt"]);
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, tagLength: 128 }, key, wpConcat(plain, new Uint8Array([2]))));
+  const header = new Uint8Array(21);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, WP_RS, false);
+  header[20] = 65;
+  return wpConcat(header, asPublic, sealed);
+}
+// The VAPID pair -> { publicB64u, key } (an ECDSA P-256 signing key). A malformed pair throws, and so does a pair whose
+// halves do not belong together (a sign / verify self-check - every push service would refuse its tokens with 403).
+async function wpVapidKey(publicB64u, privateB64u) {
+  const pub = wpB64uDecode(publicB64u);
+  const d = wpB64uDecode(privateB64u);
+  if (pub.length !== 65 || pub[0] !== 4 || d.length !== 32) throw new Error("the VAPID key pair is malformed");
+  const jwk = { kty: "EC", crv: "P-256", x: wpB64uEncode(pub.slice(1, 33)), y: wpB64uEncode(pub.slice(33, 65)), d: wpB64uEncode(d), ext: true };
+  let key, verifyKey;
+  try {
+    // some WebCrypto implementations refuse an inconsistent JWK here (Node), others accept it (the self-check below decides)
+    key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    verifyKey = await crypto.subtle.importKey("raw", pub, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+  } catch (e) {
+    throw new Error("the VAPID key pair does not match");
+  }
+  const probe = wpText("silvis-vapid-self-check");
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, probe);
+  if (!(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, verifyKey, sig, probe))) throw new Error("the VAPID key pair does not match");
+  return { publicB64u: wpB64uEncode(pub), key: key };
+}
+// RFC 8292: b64u({"typ":"JWT","alg":"ES256"}) . b64u({"aud","exp","sub"}) . b64u(raw r || s) - exp 12 hours ahead
+// (push services refuse more than 24); WebCrypto's ECDSA signature is already the raw 64-byte r || s
+async function wpVapidJwt(audience, subject, vapidKey, nowSec) {
+  const enc = function (obj) { return wpB64uEncode(wpText(JSON.stringify(obj))); };
+  const unsigned = enc({ typ: "JWT", alg: "ES256" }) + "." + enc({ aud: audience, exp: Math.floor(nowSec) + 43200, sub: subject });
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, vapidKey.key, wpText(unsigned)));
+  return unsigned + "." + wpB64uEncode(sig);
+}
+// One push request: aud = the endpoint's ORIGIN; jwtCache (a Map origin -> token) keeps one token per push service per send
+async function wpRequest(sub, payloadText, vapidKey, subject, nowSec, jwtCache) {
+  const aud = new URL(sub.endpoint).origin;
+  let jwt = jwtCache ? jwtCache.get(aud) : undefined;
+  if (!jwt) {
+    jwt = wpVapidJwt(aud, subject, vapidKey, nowSec);
+    if (jwtCache) jwtCache.set(aud, jwt);
+  }
+  jwt = await jwt;
+  const body = await wpEncrypt(wpText(payloadText), sub.p256dh, sub.auth);
+  return {
+    url: sub.endpoint,
+    init: {
+      method: "POST",
+      headers: { Authorization: "vapid t=" + jwt + ", k=" + vapidKey.publicB64u, "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: WP_TTL, Urgency: "high" },
+      body: body,
+    },
+  };
+}
+// @webPush-end
+
+// @pushPlan-start
+// the views a tap may open (identical literal in helpers.js and sw.js - the tests pin all three against the contract)
+const PUSH_TABS = ["calendar", "openshifts", "myschedule", "timeoff", "settings", "setup"];
+const PUSH_PREF_OF = { schedule_published: "schedule_updates_push", manual_edit: "schedule_updates_push", vacation_logged: "schedule_updates_push",
+  open_shifts: "schedule_updates_push", shift_claimed: "schedule_updates_push", offers_reminder: "schedule_updates_push", offers_closed: "schedule_updates_push",
+  trade_proposed: "trade_updates_push", trade_accepted: "trade_updates_push", trade_declined: "trade_updates_push", trade_applied: "trade_updates_push" };
+// the database's endpoint check (push_subscriptions_endpoint_shape): https on a known push service only - the function
+// POSTs to whatever is stored, so a free-form endpoint would be a server-side request forgery lever
+const PUSH_ENDPOINT_RE = /^https:\/\/([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)\/[!-~]*$/;
+const PUSH_TTL_SECONDS = 259200, PUSH_MAX_BODY = 180, PUSH_CONCURRENCY = 6, PUSH_TIMEOUT_MS = 8000;
+const PUSH_MAX_PAYLOAD_BYTES = 3072;
+const PUSH_TITLE = "Silvis Call";
+const PUSH_TEST_BODY = "Test - phone notifications reach this device.";
+const PUSH_NOT_CONFIGURED = "push not configured";
+const PUSH_NOT_SET_UP = "phone notifications are not set up on the server yet";
+const PUSH_TAB_OF = { schedule_published: "calendar", manual_edit: "calendar", vacation_logged: "timeoff", open_shifts: "openshifts",
+  shift_claimed: "calendar", offers_reminder: "timeoff", offers_closed: "setup", test: "settings" };
+// the category's push switch, or null (test, shift_reminder and anything unknown never push)
+function pushPrefOf(type) {
+  return Object.prototype.hasOwnProperty.call(PUSH_PREF_OF, type) ? PUSH_PREF_OF[type] : null;
+}
+// only an explicit false is off; a missing row or key is on (as on the e-mail side) - only the push key is ever read
+function pushEnabled(prefKey, prefs) {
+  if (!prefKey) return true;
+  return !(prefs && typeof prefs === "object" && prefs[prefKey] === false);
+}
+function pushEndpointAllowed(endpoint) {
+  return typeof endpoint === "string" && endpoint.length <= 2048 && PUSH_ENDPOINT_RE.test(endpoint);
+}
+// the secrets' shapes (web-push formats); the pair itself is checked by wpVapidKey's self-check
+function pushVapidConfigOk(publicKey, privateKey, subject) {
+  return typeof publicKey === "string" && /^B[A-Za-z0-9_-]{86}$/.test(publicKey)
+    && typeof privateKey === "string" && /^[A-Za-z0-9_-]{43}$/.test(privateKey)
+    && typeof subject === "string" && /^(https:\/\/|mailto:)\S+$/.test(subject);
+}
+// "YYYY-MM-DD" that names a real calendar day, else null
+function pushIsoDay(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof v === "string" ? v : "");
+  if (!m) return null;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]) ? v : null;
+}
+// the day a tap opens: the edited day (manual_edit) or the claimed day (shift_claimed); every other category none
+function pushDayOf(type, data) {
+  if (type !== "manual_edit" && type !== "shift_claimed") return null;
+  return pushIsoDay(data && typeof data === "object" ? data.day : null);
+}
+// the first non-empty line of the composed e-mail text, whitespace collapsed, addresses redacted, at most 180
+// characters ("..." when cut); nothing left -> the category's frame title
+function pushBodyOf(type, data, frameTitleText) {
+  const msg = data && typeof data === "object" && typeof data.message === "string" ? data.message : "";
+  const first = msg.split(/\r?\n/).map(function (l) { return l.replace(/\s+/g, " ").trim(); }).find(function (l) { return l !== ""; }) || "";
+  let body = redactAddresses(first).replace(/\s+/g, " ").trim();
+  if (!body) body = String(frameTitleText || PUSH_TITLE).trim() || PUSH_TITLE;
+  const chars = Array.from(body);
+  if (chars.length > PUSH_MAX_BODY) body = chars.slice(0, PUSH_MAX_BODY - 3).join("").replace(/\s+$/, "") + "...";
+  return body;
+}
+// the notification tag: a later notice with the same tag replaces the earlier one on the phone (a trade's notices
+// replace each other; vacations never do). Always matches sw.js's /^silvis-[a-z0-9-]{1,60}$/.
+function pushTagOf(type, data, nowMs) {
+  const d = data && typeof data === "object" ? data : {};
+  const day = pushDayOf(type, d);
+  const compact = day ? day.replace(/-/g, "") : "";
+  if (pushPrefOf(type) === "trade_updates_push") {
+    const id = typeof d.trade_id === "string" ? d.trade_id.trim().toLowerCase() : "";
+    return /^[0-9a-f]{8}/.test(id) ? "silvis-trade-" + id.slice(0, 8) : "silvis-trade";
+  }
+  switch (type) {
+    case "schedule_published": return "silvis-published";
+    case "manual_edit": return compact ? "silvis-edit-" + compact : "silvis-edit";
+    case "vacation_logged": return "silvis-vacation-" + Math.floor(typeof nowMs === "number" ? nowMs : Date.now()).toString(36);
+    case "open_shifts": return "silvis-open-shifts";
+    case "shift_claimed": {
+      const role = d.role === "primary" || d.role === "backup" ? d.role : "";
+      return compact ? "silvis-claimed-" + compact + (role ? "-" + role : "") : "silvis-claimed";
+    }
+    case "offers_reminder": return "silvis-offers";
+    case "offers_closed": return "silvis-offers-closed";
+    case "test": return "silvis-test";
+    default: return "silvis-generic";
+  }
+}
+// the view a tap opens: a trade opens Time off (a follower's opens his Following view - a viewer's Time off has no
+// trade card); always one of PUSH_TABS
+function pushTabOf(type, isFollower) {
+  if (pushPrefOf(type) === "trade_updates_push") return isFollower ? "myschedule" : "timeoff";
+  const t = Object.prototype.hasOwnProperty.call(PUSH_TAB_OF, type) ? PUSH_TAB_OF[type] : "calendar";
+  return PUSH_TABS.indexOf(t) >= 0 ? t : "calendar";
+}
+// the ONLY payload shape sw.js accepts: { v: 1, title, body, tag, tab, params? } - never a url key, never an address.
+// recipient { kind: "person" | "follower" | "self", followedNames }; a follower's title names whom he follows (the
+// body is the surgeon's wording); "self" is the POST ?push=test notice.
+function pushPayload(type, data, recipient, frameTitleText, nowMs) {
+  const r = recipient && typeof recipient === "object" ? recipient : { kind: "person" };
+  const self = r.kind === "self";
+  const follower = r.kind === "follower";
+  let title = PUSH_TITLE;
+  if (follower) {
+    const names = (Array.isArray(r.followedNames) ? r.followedNames : []).filter(function (n) { return typeof n === "string" && n.trim() !== ""; }).map(function (n) { return "Dr. " + n.trim(); });
+    if (names.length) {
+      const full = PUSH_TITLE + " (following " + names.join(" and ") + ")";
+      title = full.length <= 80 ? full : PUSH_TITLE + " (following " + names.length + " surgeons)";
+    }
+  }
+  const body = self ? PUSH_TEST_BODY : pushBodyOf(type, data, frameTitleText);
+  const tag = self ? "silvis-test" : pushTagOf(type, data, nowMs);
+  const tab = self ? "settings" : pushTabOf(type, follower);
+  const day = self ? null : pushDayOf(type, data);
+  const out = day ? { v: 1, title: title, body: body, tag: tag, tab: tab, params: { day: day } } : { v: 1, title: title, body: body, tag: tag, tab: tab };
+  if (new TextEncoder().encode(JSON.stringify(out)).length > PUSH_MAX_PAYLOAD_BYTES) out.body = PUSH_TITLE;
+  return out;
+}
+// whom a send pushes to: every audience person (his account ids) and every follower of the notice (his account id),
+// first come first served per account id, on the PUSH switch only (an explicit false -> skipped_pref_off, devices
+// never read). audience = resolveRecipients' persons BEFORE the e-mail filter; followersAll = followerRecipients(...,
+// null).list with each follower's own prefs row and followed names.
+function pushTargets(audience, followersAll, prefKey) {
+  const targets = [], skipped = [], seen = {};
+  const claim = function (ids) {
+    const out = [];
+    (Array.isArray(ids) ? ids : []).forEach(function (id) { const k = id == null ? "" : String(id); if (k && !seen[k]) { seen[k] = true; out.push(k); } });
+    return out;
+  };
+  (Array.isArray(audience) ? audience : []).forEach(function (p) {
+    if (!p || typeof p !== "object" || p.person_id == null || String(p.person_id) === "") return;
+    const key = String(p.person_id);
+    const ids = Array.isArray(p.profileIds) ? p.profileIds.map(String) : [];
+    if (!pushEnabled(prefKey, p.prefs)) { claim(ids); skipped.push({ key: key, kind: "person", status: "skipped_pref_off" }); return; }
+    const mine = claim(ids);
+    if (ids.length && !mine.length) return;
+    targets.push({ key: key, kind: "person", profileIds: mine });
+  });
+  (Array.isArray(followersAll) ? followersAll : []).forEach(function (f) {
+    if (!f || typeof f !== "object" || !f.id) return;
+    const key = String(f.tag || String(f.id).slice(0, 8));
+    const via = Array.isArray(f.via) ? f.via.slice() : [];
+    if (!pushEnabled(prefKey, f.prefs)) { claim([f.id]); skipped.push({ key: key, kind: "follower", via: via, status: "skipped_pref_off" }); return; }
+    const mine = claim([f.id]);
+    if (!mine.length) return;
+    targets.push({ key: key, kind: "follower", profileIds: mine, via: via, followedNames: Array.isArray(f.followedNames) ? f.followedNames.slice() : [] });
+  });
+  return { targets: targets, skipped: skipped };
+}
+// a push service's answer: 2xx sent; 404 / 410 gone (the subscription is dead - its row is deleted); anything else failed
+function pushOutcome(status) {
+  const s = Number(status);
+  if (s >= 200 && s < 300) return "sent";
+  if (s === 404 || s === 410) return "gone";
+  return "failed";
+}
+// any http(s) URL -> "<url>" (a push service's error text may quote the device's endpoint)
+function redactEndpoints(text) {
+  return String(text == null ? "" : text).replace(/https?:\/\/[^\s"'<>)\]]+/gi, "<url>");
+}
+// The send loop. send(sub, payloadText) -> Promise<{ status, body? }> (the handler's: wpRequest + fetch); at most
+// opts.concurrency (<= PUSH_CONCURRENCY) devices in flight, each bounded by opts.timeoutMs (PUSH_TIMEOUT_MS); a device
+// whose endpoint is not a known push service is never fetched (failed, status 0). One log line per device that was not
+// sent: the target key, the row id's first 8 characters, the status and 80 characters of the answer with every URL
+// and address redacted. Never a retry.
+// -> { recipients: [{ key, kind, via?, status }], okIds, goneIds, failedRows: [{ id, fail_count }], devices: { sent, failed, removed } }
+async function pushDeliver(targets, subsByProfile, payloadFor, send, opts) {
+  const o = opts || {};
+  const limit = Math.max(1, Math.min(PUSH_CONCURRENCY, Math.floor(Number(o.concurrency)) || PUSH_CONCURRENCY));
+  const timeoutMs = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : PUSH_TIMEOUT_MS;
+  const log = typeof o.log === "function" ? o.log : function (line) { console.error(line); };
+  const recipients = [], okIds = [], goneIds = [], failedRows = [], states = [], jobs = [];
+  const devices = { sent: 0, failed: 0, removed: 0 };
+  (Array.isArray(targets) ? targets : []).forEach(function (t) {
+    const subs = [];
+    (Array.isArray(t.profileIds) ? t.profileIds : []).forEach(function (pid) {
+      const own = subsByProfile && Array.isArray(subsByProfile[pid]) ? subsByProfile[pid] : [];
+      own.forEach(function (s) { subs.push(s); });
+    });
+    const rec = Array.isArray(t.via) ? { key: t.key, kind: t.kind, via: t.via.slice(), status: "skipped_no_device" } : { key: t.key, kind: t.kind, status: "skipped_no_device" };
+    recipients.push(rec);
+    if (!subs.length) return;
+    let text = null;
+    try { const p = payloadFor(t); text = typeof p === "string" ? p : JSON.stringify(p); } catch (e) { text = null; }
+    const state = { rec: rec, sent: 0, gone: 0, failed: 0 };
+    states.push(state);
+    subs.forEach(function (s) { jobs.push({ t: t, s: s, text: text, state: state }); });
+  });
+  async function one(job) {
+    const s = job.s;
+    let status = 0, answer = "";
+    if (job.text == null) answer = "no payload";
+    else if (!pushEndpointAllowed(s && s.endpoint)) answer = "endpoint not on a known push service - not sent";
+    else {
+      let timer = null;
+      try {
+        const r = await Promise.race([
+          Promise.resolve().then(function () { return send(s, job.text); }),
+          new Promise(function (resolve) { timer = setTimeout(function () { resolve({ status: 0, body: "no answer within " + timeoutMs + " ms" }); }, timeoutMs); }),
+        ]);
+        status = r && typeof r.status === "number" ? r.status : 0;
+        answer = r && r.body != null ? String(r.body) : "";
+      } catch (e) {
+        status = 0;
+        answer = e && e.message ? String(e.message) : String(e);
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+    }
+    const outcome = pushOutcome(status);
+    const id = s && s.id != null ? String(s.id) : "";
+    if (outcome === "sent") { devices.sent++; job.state.sent++; okIds.push(id); }
+    else if (outcome === "gone") { devices.removed++; job.state.gone++; goneIds.push(id); }
+    else { devices.failed++; job.state.failed++; failedRows.push({ id: id, fail_count: (Number(s && s.fail_count) || 0) + 1 }); }
+    if (outcome !== "sent") log("[push] " + job.t.key + " device=" + id.slice(0, 8) + " status=" + status + " " + redactEndpoints(redactAddresses(answer)).slice(0, 80));
+  }
+  let next = 0;
+  async function worker() {
+    while (next < jobs.length) { const job = jobs[next++]; await one(job); }
+  }
+  const workers = [];
+  for (let i = 0; i < Math.min(limit, jobs.length); i++) workers.push(worker());
+  await Promise.all(workers);
+  states.forEach(function (st) { st.rec.status = st.sent > 0 ? "sent" : (st.gone > 0 && st.failed === 0 ? "gone" : "failed"); });
+  return { recipients: recipients, okIds: okIds, goneIds: goneIds, failedRows: failedRows, devices: devices };
+}
+// the response's push object: counts for every caller (targets: a surgeon by roster id, a follower by account;
+// sent + failed + skipped_no_device + skipped_pref_off = targets; removed = devices answered 404 / 410), the
+// per-recipient lists only for an admin / scheduler caller (whether a colleague has phone notifications on is personal)
+function pushSummary(delivered, skipped, privileged) {
+  const d = delivered && typeof delivered === "object" ? delivered : {};
+  const recs = Array.isArray(d.recipients) ? d.recipients : [];
+  const sk = Array.isArray(skipped) ? skipped : [];
+  const dev = d.devices && typeof d.devices === "object" ? d.devices : {};
+  const count = function (names) { return recs.filter(function (r) { return names.indexOf(r.status) >= 0; }).length; };
+  const out = {
+    sent: count(["sent"]), failed: count(["failed", "gone"]), removed: Number(dev.removed) || 0,
+    skipped_no_device: count(["skipped_no_device"]), skipped_pref_off: sk.length,
+    devices: { sent: Number(dev.sent) || 0, failed: Number(dev.failed) || 0, removed: Number(dev.removed) || 0 },
+    error: null,
+  };
+  if (privileged) {
+    const all = recs.concat(sk);
+    out.results = all.filter(function (r) { return r.kind === "person"; }).map(function (r) { return { person_id: r.key, status: r.status }; });
+    out.followers = all.filter(function (r) { return r.kind === "follower"; }).map(function (r) { return { follower: r.key, via: Array.isArray(r.via) ? r.via.slice() : [], status: r.status }; });
+  }
+  return out;
+}
+// push did not run (why in error); the e-mail answer is unaffected
+function pushEmpty(error) {
+  return { sent: 0, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: error == null ? null : String(error) };
+}
+// @pushPlan-end
+
+// The VAPID pair, imported once per isolate (null = missing / malformed / mismatched: no push, the e-mail unaffected).
+let vapidCache: Promise<any> | null = null;
+function vapidKeyPair(): Promise<any> {
+  if (!vapidCache) {
+    vapidCache = (async () => {
+      if (!pushVapidConfigOk(VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT)) {
+        console.warn("[push] the VAPID secrets are missing or malformed - phone notifications are off (names: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT)");
+        return null;
+      }
+      try { return await wpVapidKey(VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY); }
+      catch (e) { console.warn(`[push] the VAPID secrets do not import: ${(e as Error).message}`); return null; }
+    })();
+  }
+  return vapidCache;
+}
+
+// a log-safe line from an error: every URL and address redacted
+function pushLogSafe(e: unknown): string {
+  return redactEndpoints(redactAddresses(e instanceof Error ? e.message : String(e))).slice(0, 200);
+}
+
+// The devices of these accounts (service role). Account ids are uuids; anything else is dropped before the filter.
+async function readPushSubscriptions(profileIds: string[]): Promise<Record<string, any[]>> {
+  const ids = Array.from(new Set(profileIds.map(String).filter((id) => UUID_SHAPE.test(id))));
+  const byProfile: Record<string, any[]> = {};
+  if (!ids.length) return byProfile;
+  const rows = await rest(`push_subscriptions?select=id,profile_id,endpoint,p256dh,auth,fail_count&profile_id=in.(${ids.join(",")})`);
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    if (!r || !r.profile_id) continue;
+    const k = String(r.profile_id);
+    (byProfile[k] = byProfile[k] || []).push(r);
+  }
+  return byProfile;
+}
+
+// The send function pushDeliver calls: the encrypted request (@webPush) and one fetch, bounded at PUSH_TIMEOUT_MS.
+function pushSender(vapid: any, nowSec: number) {
+  const jwtCache = new Map();
+  return async (sub: any, payloadText: string) => {
+    const r = await wpRequest(sub, payloadText, vapid, VAPID_SUBJECT, nowSec, jwtCache);
+    const res = await fetch(r.url, { ...r.init, signal: AbortSignal.timeout(PUSH_TIMEOUT_MS) });
+    const text = await res.text().catch(() => "");
+    return { status: res.status, body: res.ok ? "" : text };
+  };
+}
+
+// After the sends (service role, one request each, errors logged, never thrown, never retried): the sent rows get
+// last_ok_at + fail_count 0, the 404 / 410 rows are deleted, each failed row gets last_error_at + its fail_count + 1.
+async function pushBookkeeping(d: any): Promise<void> {
+  const now = new Date().toISOString();
+  const okIds = (d.okIds || []).filter((id: string) => UUID_SHAPE.test(id));
+  const goneIds = (d.goneIds || []).filter((id: string) => UUID_SHAPE.test(id));
+  if (okIds.length) {
+    try { await rest(`push_subscriptions?id=in.(${okIds.join(",")})`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ last_ok_at: now, fail_count: 0 }) }); }
+    catch (e) { console.error(`[push] bookkeeping (sent rows): ${pushLogSafe(e)}`); }
+  }
+  if (goneIds.length) {
+    try { await rest(`push_subscriptions?id=in.(${goneIds.join(",")})`, { method: "DELETE", headers: { Prefer: "return=minimal" } }); }
+    catch (e) { console.error(`[push] bookkeeping (gone rows): ${pushLogSafe(e)}`); }
+  }
+  for (const f of (d.failedRows || [])) {
+    if (!f || !UUID_SHAPE.test(String(f.id))) continue;
+    try { await rest(`push_subscriptions?id=eq.${f.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ last_error_at: now, fail_count: f.fail_count }) }); }
+    catch (e) { console.error(`[push] bookkeeping (failed row): ${pushLogSafe(e)}`); }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Recipients: user_profiles (person_id -> email) x notification_preferences
 // ---------------------------------------------------------------------------
 interface Recipient { person_id: string; email: string | null; name: string; prefs: any }
+// Prompt 30: a person of the send's universe BEFORE the e-mail filter, with every account linked to him (the push side
+// reads these - it must never lose someone on his e-mail flag)
+interface AudienceEntry { person_id: string; name: string; prefs: any; profileIds: string[] }
 
-async function resolveRecipients(cat: Category, targetIds: string[] | null, names: Record<string, string>): Promise<{ list: Recipient[]; skippedPrefOff: number; prefRows: any[] }> {
+// pin moved deliberately (Prompt 30): the profiles read adds the account id (the push side's device lookup) and the answer
+// adds `audience`; `list` / `skippedPrefOff` / `prefRows` mean exactly what they meant before for every input
+async function resolveRecipients(cat: Category, targetIds: string[] | null, names: Record<string, string>): Promise<{ list: Recipient[]; skippedPrefOff: number; prefRows: any[]; audience: AudienceEntry[] }> {
   const [profiles, prefRows] = await Promise.all([
-    rest("user_profiles?select=person_id,email&person_id=not.is.null"),
+    rest("user_profiles?select=id,person_id,email&person_id=not.is.null"),
     rest("notification_preferences?select=*"),
   ]);
   const prefsById: Record<string, any> = {};
@@ -621,23 +1110,28 @@ async function resolveRecipients(cat: Category, targetIds: string[] | null, name
   // First non-empty email per person wins; a second account for the same
   // person (should not happen) is ignored rather than double-mailed.
   const emailById: Record<string, string | null> = {};
+  const accountsById: Record<string, string[]> = {};   // Prompt 30: every account id linked to the person (push devices)
   for (const row of (Array.isArray(profiles) ? profiles : [])) {
     const pid = String(row.person_id);
     const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
     if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email;
+    if (row.id != null && String(row.id) !== "") (accountsById[pid] = accountsById[pid] || []).push(String(row.id));
   }
 
   // Universe = targetIds when given, else every linked person. The prefs rows are handed back so the follower step
-  // (Prompt 20 F3) reads the same answer - a follower's own row is in prefRows, keyed by profile_id.
+  // (Prompt 20 F3) reads the same answer - a follower's own row is in prefRows, keyed by profile_id. The audience
+  // (Prompt 30) is the whole universe, recorded BEFORE the e-mail flag is read.
   const universe = targetIds ? targetIds.map(String) : Object.keys(emailById);
   const list: Recipient[] = [];
+  const audience: AudienceEntry[] = [];
   let skippedPrefOff = 0;
   for (const pid of new Set(universe)) {
     const prefs = prefsById[pid] || null;
+    audience.push({ person_id: pid, name: names[pid] || pid, prefs, profileIds: accountsById[pid] || [] });
     if (!emailEnabled(cat, prefs)) { skippedPrefOff++; continue; }
     list.push({ person_id: pid, email: emailById[pid] ?? null, name: names[pid] || pid, prefs });
   }
-  return { list, skippedPrefOff, prefRows: Array.isArray(prefRows) ? prefRows : [] };
+  return { list, skippedPrefOff, prefRows: Array.isArray(prefRows) ? prefRows : [], audience };
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +1139,16 @@ async function resolveRecipients(cat: Category, targetIds: string[] | null, name
 // ---------------------------------------------------------------------------
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  // -- Phone push (Prompt 30): GET ?vapid=public hands out the PUBLIC key only - no auth, no database, never another
+  //    secret; missing / malformed / mismatched secrets -> 503. Every other GET stays 405.
+  if (req.method === "GET" && new URL(req.url).searchParams.get("vapid") === "public") {
+    const pair = await vapidKeyPair();
+    if (!pair) return json(503, { error: PUSH_NOT_SET_UP });
+    return new Response(JSON.stringify({ publicKey: pair.publicB64u }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+    });
+  }
+  // pin moved deliberately (Prompt 30): the 405 now follows the public-key GET above; any other method or GET is refused as before
   if (req.method !== "POST") return json(405, { error: "method not allowed" });
 
   try {
@@ -666,6 +1170,25 @@ serve(async (req) => {
     const user = await userRes.json().catch(() => null);
     const userId = typeof user?.id === "string" ? user.id : "";
     if (!userId) return json(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
+
+    // -- Phone push test (Prompt 30, READING 7): POST ?push=test pushes to the VERIFIED caller's own devices and nobody
+    //    else, for any signed-in role (a viewer, a follower, an APP, the office can test their phones) - so it sits
+    //    BEFORE the role read. No body is read (nothing in a request can aim it at someone else); the devices are read
+    //    by the verified id alone.
+    if (new URL(req.url).searchParams.get("push") === "test") {
+      const pair = await vapidKeyPair();
+      if (!pair) return json(503, { error: PUSH_NOT_SET_UP });
+      if (!UUID_SHAPE.test(userId)) return json(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
+      const own = await rest(`push_subscriptions?select=id,profile_id,endpoint,p256dh,auth,fail_count&profile_id=eq.${encodeURIComponent(userId)}`);
+      const mine = (Array.isArray(own) ? own : []).filter((r: any) => r && String(r.profile_id) === userId);
+      const delivered = await pushDeliver([{ key: "self", kind: "self", profileIds: [userId] }], { [userId]: mine },
+        () => pushPayload("test", {}, { kind: "self" }, PUSH_TITLE), pushSender(pair, Math.floor(Date.now() / 1000)),
+        { log: (l: string) => console.error(l) });
+      await pushBookkeeping(delivered);
+      const p = pushSummary(delivered, [], false);
+      console.log(`[push] type=test (own devices) devices=${mine.length} sent=${p.devices.sent} failed=${p.devices.failed} removed=${p.devices.removed}`);
+      return json(200, { push: { ...p, skipped_pref_off: 0 } });
+    }
 
     // -- Role gate (audit RLS-1): the caller's profile, read by the VERIFIED id with the
     //    service role. A viewer, a missing row or an unlinked surgeon sends nothing, and
@@ -761,7 +1284,8 @@ serve(async (req) => {
       tradeRow = trade;
     }
 
-    const { list, skippedPrefOff, prefRows } = await resolveRecipients(cat, targetIds, roster.names);
+    // pin moved deliberately (Prompt 30): `audience` joins the answer (the push side's people, before any e-mail flag)
+    const { list, skippedPrefOff, prefRows, audience } = await resolveRecipients(cat, targetIds, roster.names);
     console.log(`[send-notification] type=${type} targets=${targetIds ? targetIds.join(",") : "broadcast"} -> ${list.length} candidate(s), ${skippedPrefOff} opted out`);
 
     const results: { person_id: string; status: string }[] = [];
@@ -785,12 +1309,17 @@ serve(async (req) => {
     const followersAdded: { follower: string; via: string[]; status: string }[] = [];
     let followersSent = 0, followersFailed = 0, followersPrefOff = 0;
     let followersError: string | null = null;
+    let fAll: any[] = [];   // Prompt 30: every follower of the notice BEFORE his e-mail flag (the push side reads it); [] when the read failed
     if (FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {
       try {
         const fProfiles = await rest("user_profiles?select=*&role=in.(viewer,coordinator)");
         const followers = followerIndex(fProfiles, prefRows);
         const fUniverse = followerUniverse(type, targetIds, caller, data, tradeRow);
         const { list: fList, skipped } = followerRecipients(followers, type, fUniverse, cat.pref);
+        // prefKey null skips nobody: the push side applies the follower's *_push flag itself (his own row, by profile_id)
+        fAll = followerRecipients(followers, type, fUniverse, null).list.map((f: any) => ({
+          ...f, prefs: (followers.find((x: any) => x.id === f.id) || {}).prefs || null, followedNames: f.via.map((id: string) => roster.names[id] || id),
+        }));
         followersPrefOff = skipped.length;
         for (const sk of skipped) followersAdded.push(sk);
         for (const f of fList) {
@@ -807,10 +1336,46 @@ serve(async (req) => {
       }
     }
 
+    // -- Phone push (Prompt 30): the SAME people as the e-mail above, on the PUSH switch of the category. It reads only
+    //    `audience` (resolveRecipients' persons before any e-mail flag) and `fAll` (the followers before theirs) - e-mail
+    //    off + push on still pushes, and the reverse. Its own try: a failure here is answered as push.error and never
+    //    changes the e-mail answer (already final above). A category without a switch (test, shift_reminder) answers
+    //    push: null and reads nothing.
+    let pushOut: any = null;
+    const pushPref = pushPrefOf(type);
+    if (pushPref) {
+      try {
+        const plan = pushTargets(audience, fAll, pushPref);
+        if (!plan.targets.length) {
+          pushOut = pushSummary({ recipients: [], devices: { sent: 0, failed: 0, removed: 0 } }, plan.skipped, privileged);
+        } else {
+          const pair = await vapidKeyPair();
+          if (!pair) {
+            pushOut = pushEmpty(PUSH_NOT_CONFIGURED);
+          } else {
+            const subsByProfile = await readPushSubscriptions(plan.targets.flatMap((t: any) => t.profileIds));
+            const frame = frameTitle(type, cat.title, data);
+            const delivered = await pushDeliver(plan.targets, subsByProfile,
+              (t: any) => pushPayload(type, data, { kind: t.kind, followedNames: t.followedNames }, frame),
+              pushSender(pair, Math.floor(Date.now() / 1000)), { log: (l: string) => console.error(l) });
+            await pushBookkeeping(delivered);
+            pushOut = pushSummary(delivered, plan.skipped, privileged);
+          }
+        }
+      } catch (e) {
+        const why = e instanceof HttpError && /^push_subscriptions /.test(e.message)
+          ? "push_subscriptions unavailable: " + pushLogSafe(e.message.replace(/^push_subscriptions GET failed: /, "")).slice(0, 160)
+          : pushLogSafe(e);
+        pushOut = pushEmpty(why);
+      }
+      console.log(`[push] type=${type} targets=${pushOut.sent + pushOut.failed + pushOut.skipped_no_device + pushOut.skipped_pref_off} sent=${pushOut.sent} failed=${pushOut.failed} removed=${pushOut.removed} no_device=${pushOut.skipped_no_device} pref_off=${pushOut.skipped_pref_off}${pushOut.error ? ` error=${pushOut.error}` : ""}`);
+    }
+
     return json(200, {
       sent, failed, skipped_no_email: skippedNoEmail, skipped_pref_off: skippedPrefOff, results,
       followers_sent: followersSent, followers_failed: followersFailed, followers_skipped_pref_off: followersPrefOff, followers_error: followersError,
       ...(privileged ? { followers_added: followersAdded } : {}),
+      push: pushOut,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

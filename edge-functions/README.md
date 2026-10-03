@@ -8,7 +8,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 |---|---|---|---|
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
-| `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23) | yes - any non-empty send the gate lets through |
+| `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - prepared, NOT deployed; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
@@ -119,6 +119,9 @@ the repo stays the source of truth.
 | `RESEND_API_KEY` | office-notifications, send-notification, daily-reminder | Resend API key |
 | `NOTIFICATION_FROM_EMAIL` | office-notifications, send-notification, daily-reminder | e.g. `Silvis Call Schedule <schedule@your-verified-domain>` - REQUIRED, no fallback |
 | `CRON_SECRET` | daily-reminder (sole gate), office-notifications (cron path) | long random string; generate with `openssl rand -hex 32` or PowerShell `-join ((1..48) | % { '{0:x}' -f (Get-Random -Max 16) })` |
+| `VAPID_PUBLIC_KEY` | send-notification (Prompt 30 phone push) | base64url of the 65-byte uncompressed P-256 point (87 characters, starts `B`); handed to the app by `GET ?vapid=public`. Set ONLY by `setup-push-keys.sh` (the apply-scripts folder), which generates the pair on Faraz's PC and sets all three through `supabase secrets set --env-file` - never pasted, never printed, never in an argument |
+| `VAPID_PRIVATE_KEY` | send-notification (Prompt 30 phone push) | base64url of the 32-byte P-256 scalar (43 characters); signs the VAPID tokens; never leaves the function (no response, no log) |
+| `VAPID_SUBJECT` | send-notification (Prompt 30 phone push) | `https://fkhan628.github.io/Silvis-Call-Schedule/` (the app's URL - no address). Missing / malformed VAPID secrets = no push (the send's `push.error` reads `push not configured`, `GET ?vapid=public` and `POST ?push=test` answer 503); the e-mail is unaffected. `setup-push-keys.sh --rotate` replaces an existing pair - then every device must tap Reset subscription, then Enable (the old subscriptions were made for the old public key) |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | all | injected automatically by Supabase - do not set |
 
 ```powershell
@@ -126,6 +129,14 @@ supabase secrets set RESEND_API_KEY=<value> "NOTIFICATION_FROM_EMAIL=Silvis Call
 # (quote the sender value: it contains spaces and angle brackets; in PowerShell keep the double quotes exactly as above, or use --env-file)
 supabase secrets list --project-ref bzhsroegtagqhutbnsrp     # names only are printed - fine to paste
 ```
+
+The three VAPID secrets (Prompt 30) take the other path on purpose: the Supabase CLI (2.84.2) offers only `NAME=VALUE`
+arguments or `--env-file` (no stdin), and an argument would sit in the process table for any process on the PC to read.
+`setup-push-keys.sh` therefore writes a one-time env file with node (`mode 0o600`) in a fresh folder under the user's
+LOCAL temp directory - outside OneDrive (the script refuses an OneDrive path), the folder's ACL narrowed to Faraz's
+account with `icacls` - passes it to `supabase secrets set --env-file`, and deletes it at once; an exit trap set before
+the file exists deletes it on any failure too. It refuses when any of the three names already exists unless `--rotate`
+(typed confirmation), and prints only the public key's first 8 characters.
 
 `supabase secrets set` re-versions EVERY deployed function (Davenport lesson:
 the version number jumps without a code change). Set secrets BEFORE the first
@@ -170,7 +181,7 @@ Each function carries its own gate instead:
 |---|---|---|
 | calendar-sync | OFF (must stay OFF - calendar apps send no auth header) | none: public read-only feed of anon-readable data |
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
-| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, deployed 2026-09-25 05:36 UTC): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties. A follower (Prompt 20 F3, v8, deployed 2026-09-27 00:46 UTC: a viewer / coordinator whose `user_profiles.follows` names roster surgeons) only ever RECEIVES - added after this gate for `trade_*` / `shift_claimed` / `open_shifts` / `schedule_published`, never counted in `targetIds`, the cap or the party check; as a caller it is the same 403 - and never one of Prompt 19's scheduler-linked `trade_applied` copies either |
+| send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, deployed 2026-09-25 05:36 UTC): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties. A follower (Prompt 20 F3, v8, deployed 2026-09-27 00:46 UTC: a viewer / coordinator whose `user_profiles.follows` names roster surgeons) only ever RECEIVES - added after this gate for `trade_*` / `shift_claimed` / `open_shifts` / `schedule_published`, never counted in `targetIds`, the cap or the party check; as a caller it is the same 403 - and never one of Prompt 19's scheduler-linked `trade_applied` copies either. Prompt 30 (phone push, v10 - PREPARED, NOT deployed): GET `?vapid=public` - the public key only, no auth (no other GET is served: 405); POST `?push=test` - any GoTrue-verified session (viewer, follower, APP and the office included - it is answered before the role read), its own devices only, no body read; every other POST is judged by the gate above exactly as before, and its push goes only to the people its e-mail is resolved for (before their e-mail flags; each on his own `*_push` switch) |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
@@ -180,6 +191,56 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - Prompt 30 (phone push) - PREPARED, NOT deployed
+
+Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID straight from `send-notification`, no OneSignal (the
+Davenport app's OneSignal app, its repo and the user-site root worker are never touched). One function changes:
+`send-notification` (live v9 -> v10; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
+redeployed - the 6 AM / Monday reminders stay e-mail only, a follow-up). What changes: every send that has a push switch
+(`schedule_updates_push` - publish, manual edit, vacation logged, open shifts, shift taken, offers heads-up / frozen;
+`trade_updates_push` - trade proposed / accepted / declined / applied, a give included) also pushes to the devices
+(`push_subscriptions`) of the SAME people its e-mail is resolved for - resolved BEFORE their e-mail flags, each on his own
+push switch (a missing row or key = on), so e-mail off + push on still pushes and the reverse; the e-mail part of every
+answer is unchanged. 404 / 410 deletes the device row; other failures bump `fail_count` / `last_error_at`; no retry loop.
+The answer gains `push` (counts for every caller; the per-recipient lists `results` / `followers` for an admin / scheduler
+only; `push: null` for `test` / `shift_reminder`). Two routes: `GET ?vapid=public` (no auth, the public key only) and
+`POST ?push=test` (any verified session, its own devices). No endpoint, key, payload text or address in any answer or log.
+
+ORDER (Faraz's): 1. the database - `apply-push-notifications.sh` (revision w: `push_subscriptions`, the save / delete /
+status RPCs, the two `*_push` columns); 2. the keys - `setup-push-keys.sh` (the three VAPID secrets through `--env-file`;
+like every `secrets set` it re-versions all four functions, no code change); 3. THIS deploy; 4. paste the results back;
+5. Claude Code's record step (this section and `docs/SCHEMA-REVIEW.md`); 6. the client ships on Faraz's go; 7. each user
+taps Enable in Settings > Notification settings > Phone notifications. Deployed out of order nothing breaks the e-mail:
+before step 1 every send answers `push.error` `push_subscriptions unavailable: HTTP 404 ...`; before step 2 `push.error`
+`push not configured` and both routes 503; under v9 the client's `GET ?vapid=public` reads 405 ("available after the next update").
+
+```powershell
+$wd = "<linked dir>"   # the workdir linked with: supabase link --project-ref bzhsroegtagqhutbnsrp
+supabase functions list --project-ref bzhsroegtagqhutbnsrp                                          # note send-notification's version (v9, or higher after the keys step re-versioned it)
+supabase functions download send-notification --workdir $wd --project-ref bzhsroegtagqhutbnsrp      # backup of the live copy - copy it aside first (edge-functions/deployed-backup-<date>/send-notification/index.ts)
+Copy-Item "<your clone>\edge-functions\send-notification\index.ts" "$wd\supabase\functions\send-notification\index.ts" -Force
+supabase functions deploy send-notification --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api
+supabase functions list --project-ref bzhsroegtagqhutbnsrp                                          # send-notification one version up (v10 if nothing re-versioned it), ACTIVE
+curl.exe -s -i "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/send-notification?vapid=public"   # 200, Cache-Control: no-store, {"publicKey":"<87 characters, starting with the 8 setup-push-keys.sh printed>"}
+curl.exe -s -o NUL -w "%{http_code}" -X POST "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/send-notification?push=test"   # 401 (no session)
+SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh                                                   # section 19i green (run from the repo root, Git Bash)
+```
+
+Then download it once more and byte-compare with the repo file (`fc.exe /b`), as for every deploy. What to observe, none of
+it sends anything: the GET answers exactly one key, `publicKey`, matching `^B[A-Za-z0-9_-]{86}$` and starting with the
+prefix `setup-push-keys.sh` printed; the unauthenticated `?push=test` POST answers 401; a scheduler session's
+`{"type":"test","targetIds":[]}` still answers `200 {"sent":0,...,"results":[]}` (the empty short circuit, no `push` key).
+After the client ships: Settings > Phone notifications > Send test is the first real push (the caller's own devices only),
+and the first real send answers `push` `{ sent, failed, removed, skipped_no_device, skipped_pref_off, devices, error: null }`
+with the function log line `[push] type=<type> targets=N sent=... failed=... removed=... no_device=... pref_off=...` (a
+device that was not sent logs `[push] <roster id | follower id8> device=<row id 8> status=<code> ...`, the answer's URLs
+redacted). Rollback: redeploy the backed-up v9 `index.ts` with the same command (the client reads the missing routes as
+"unavailable"; the database objects can stay).
+
+| when (UTC) | slug | version before -> after | what changed | proof to observe after the deploy |
+|---|---|---|---|---|
+| (pending - after apply-push-notifications.sh and setup-push-keys.sh) | `send-notification` | the v9 code -> v10 code (prepared, NOT deployed; the version number is one above what `functions list` reads before the deploy - every `secrets set` re-versions; back up the live copy first; re-download and `cmp` after) | phone push beside every e-mail send with a push switch (`@webPush` RFC 8291 / 8188 / 8292 block, `@pushPlan` block), `GET ?vapid=public`, `POST ?push=test`, the `push` key in the answer | `GET ?vapid=public` -> 200 `{"publicKey":"B..."}`; unauthenticated `POST ?push=test` -> 401; `functions list` one version up; `SILVIS_PUSH_DEPLOYED=1` verify-rls 19i green |
 
 ### Deploy record - Prompt 26 (the heads-up before a freeze: vacations in, painting optional - Faraz 9/30) - deployed 2026-10-01 04:11 UTC by the orchestrator
 
@@ -593,7 +654,21 @@ curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" 
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_applied","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","s1"]}' | Select-Object -First 1
 # trade_proposed to the two parties + the scheduler -> 403 {"error":"not allowed: targetIds must be exactly the trade's two parties"} (unchanged: only trade_applied widens)
 curl.exe -s -i -X POST "$URL/send-notification" -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d '{"type":"trade_proposed","data":{"message":"probe","trade_id":"<trade id>"},"targetIds":["<from>","<to>","s1"]}' | Select-Object -First 1
+# Prompt 30 (phone push, once v10 is deployed): the public key - no auth, nothing read, nothing sent
+curl.exe -s -i "$URL/send-notification?vapid=public" | Select-Object -First 12
+#   -> 200, Cache-Control: no-store, {"publicKey":"B<86 more characters>"} - exactly one key; before setup-push-keys.sh (or with a
+#      malformed / mismatched pair): 503 {"error":"phone notifications are not set up on the server yet"}
+curl.exe -s -i "$URL/send-notification" | Select-Object -First 1                     # any other GET -> 405
+# the push test without a session -> 401 (nothing read, nothing pushed); WITH a session it is a real push to the caller's own devices (section 6)
+curl.exe -s -i -X POST "$URL/send-notification?push=test" | Select-Object -First 1
 ```
+Prompt 30 (phone push): every 200 past the empty short circuit also carries `push` - `null` for `test` / `shift_reminder`
+(no push switch), else `{ sent, failed, removed, skipped_no_device, skipped_pref_off, devices: { sent, failed, removed },
+error }` (targets: a surgeon by roster id, a follower by account; `removed` = devices the push service answered 404 / 410,
+whose rows were deleted; `error` null, or why push did not run - `push not configured`, `push_subscriptions unavailable:
+HTTP 404 ...` - the e-mail part is unaffected either way) and, to an admin / scheduler caller only, `results`
+`[{ person_id, status }]` and `followers` `[{ follower: <id8>, via, status }]`. No endpoint, key or payload text is ever in
+the body or a log line.
 Prompt 20 F3 (followers): every 200 past the empty short circuit also carries `followers_sent`, `followers_failed`,
 `followers_skipped_pref_off` and `followers_error` (null, or why the follower read failed - the surgeons' mail stands),
 and - to an admin / scheduler caller only - `followers_added` (a list of `{ follower: <id8>, via: [ids], status }` -
@@ -688,6 +763,9 @@ and quote the 200 body in the deploy record (section 3).
   a broadcast reaches every follower) - a follower account is a real recipient from then on, and only the scheduler can
   change or stop his mail (the section 3 PRECONDITION). The Monday `{"mode":"open-shifts"}` cron and the offers mode do
   NOT add followers.
+- Prompt 30 (phone push; once v10 is deployed and the keys are set): every live `send-notification` send above also pushes to
+  the phones of the same people (each on his own `*_push` switch), and `POST ?push=test` with a session is one real push to
+  the caller's own devices (the Settings "Send test" button - any signed-in role, never anyone else's devices).
 - The third and fourth pg_cron jobs, `silvis-offers-daily` (created 2026-09-23) and `silvis-open-shifts-weekly` (active by the read-only `cron.job` check of 2026-09-28; first observed run 2026-09-28 12:00Z) (section 4) - the daily offers timeline and the Monday open-shifts notice run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
