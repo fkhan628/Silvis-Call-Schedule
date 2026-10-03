@@ -5601,15 +5601,18 @@ function CallSchedule() {
   }, [pushCardOpen, pushUid, refreshPushState]);
   // The tap target (helpers.pushDeepLink): ./?tab=<view>[&day=] - read ONCE per page load once signed in, the keys stripped
   // from the URL (history.replaceState; _v and the rest kept) so a refresh does not repeat it; a day opens when the data is
-  // loaded (goToDay - its own unread-schedule refusal applies). Nothing on ?public=1.
+  // loaded (goToDay - its own unread-schedule refusal applies). Nothing on ?public=1. It waits for THIS account's profile and
+  // for isScheduler to follow it: Setup (offers closed) would otherwise be bounced to the calendar by the restricted-tab redirect
+  // while isScheduler is still its initial false.
+  const pushLinkReady = !!pushUid && !!userProfile && String(userProfile.id) === pushUid && isScheduler === (userProfile.role === "scheduler" || userProfile.role === "admin");
   useEffect(() => {
-    if (isPublicMode || !pushUid || pushLinkDoneRef.current) return;
+    if (isPublicMode || !pushLinkReady || pushLinkDoneRef.current) return;
     pushLinkDoneRef.current = true;
     const r = pushDeepLink(window.location.search);
     if (r.strip) { try { window.history.replaceState(null, "", window.location.pathname + r.search + window.location.hash); } catch (e) { console.warn("could not drop the notification link from the URL:", e); } }
     if (r.tab) setView(r.tab);
     if (r.day) setPushDay({ day: r.day, at: Date.now() });
-  }, [isPublicMode, pushUid]);
+  }, [isPublicMode, pushLinkReady]);
   // An app window that is already open: sw.js focuses it and posts { type: "silvis-push-open", tab, day } - switched in place,
   // no reload (an unsaved day edit survives).
   useEffect(() => {
