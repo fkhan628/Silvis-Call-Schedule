@@ -63,7 +63,8 @@ every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only 
 applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
 approvals, weighted accounting.
 Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
-worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30.
+worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30. Its database part was applied, the VAPID keys set and
+send-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client.
 
 ## Working locations
 

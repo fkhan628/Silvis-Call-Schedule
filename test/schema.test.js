@@ -3528,9 +3528,10 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   // no longer name the flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE again (it ended at SILVIS_NO_PRIMARY_APPLIED
   // from the 10/1 merge with the vacation guard's record step until now)
   ok(/no-primary days anon RPC checks and probe \(16\)/.test(head) && /anon checks \(1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b[,)]/.test(head), "verify-rls.sh's header names section 16 and its anon checks (moved deliberately 10/2 at Prompt 29's merge: 18a-18d may follow)");
-  // pin moved deliberately (Prompt 30): --help's env-var list may continue after SILVIS_PREFS_ROWS_BEFORE with Prompt 30's two
-  // flags (SILVIS_PUSH_APPLIED until its record step, SILVIS_PUSH_DEPLOYED); kept intent: SILVIS_NO_PRIMARY_APPLIED stays dropped
-  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_PUSH_APPLIED)?( \/ SILVIS_PUSH_DEPLOYED)? - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_NO_PRIMARY_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE, or at Prompt 30's flags after it (SILVIS_NO_PRIMARY_APPLIED dropped)");
+  // pin moved deliberately (Prompt 30): --help's env-var list could continue after SILVIS_PREFS_ROWS_BEFORE with Prompt 30's two
+  // flags; moved again 10/3 (Prompt 30's record step dropped both): it ends at SILVIS_PREFS_ROWS_BEFORE, then only another prepared
+  // migration's SILVIS_*_APPLIED flag (the merge-tolerant form); kept intent: SILVIS_NO_PRIMARY_APPLIED stays dropped
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_NO_PRIMARY_APPLIED|SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_NO_PRIMARY_APPLIED and Prompt 30's two flags dropped)");
 }
 {
   // pin moved deliberately 10/2 (Prompt 29's merge with main): the faked run stops at the next section header (18) - section 18's
@@ -4296,15 +4297,20 @@ ok(!/^\|[^\n]*(app_call_days|Prompt 29|appdays\.save)[^\n]*NOT APPLIED/m.test(tb
 console.log("- Prompt 29: user_profiles.is_app + app_call_days + silvis_is_app / app_call_names / save_app_days (report-first, applied 2026-10-02 19:19:27Z; the file kept as it ran, sha256-pinned), mirrored (revision v), probe + pre-check + verify-rls section 18 (strict) graded against a faked CLI, apply script kept outside the repo, docs pinned");
 
 // ---- Prompt 30 - phone push (2026-10-03, Faraz 10/2 6:40 PM: "Davenport's look, Silvis's own push") ----
-// sql/migrations/2026-10-03-push-notifications.sql (REPORT-FIRST, NOT APPLIED; revision w): notification_preferences gains
-// trade_updates_push / schedule_updates_push (boolean not null default true); push_subscriptions (one row per device; RLS on; own read
-// and own delete for authenticated; a column grant keeps endpoint / p256dh / auth out of every response; no INSERT / UPDATE for
-// authenticated; anon nothing; not realtime); save_push_subscription / delete_push_subscription / push_subscription_status (security
-// definer, volatile - POST only; PS001-PS007; the push.save / push.delete audit rows). schema.sql mirrors it;
-// sql/probes/push-notifications-probe.sql proves it (rolled back, 51 cases), sql/probes/push-notifications-precheck.sql reads the gate
-// and the facts (read-only), verify-rls.sh section 19 grades both (SILVIS_PUSH_APPLIED strict on the run right after the apply,
-// SILVIS_PUSH_DEPLOYED grades 19i after the deploy). Faraz's apply-push-notifications.sh and setup-push-keys.sh live OUTSIDE the repo.
-// These pins read DB-lane files only (no client file, no edge file).
+// sql/migrations/2026-10-03-push-notifications.sql (REPORT-FIRST; APPLIED 2026-10-03 16:30:43Z by Faraz; revision w):
+// notification_preferences gains trade_updates_push / schedule_updates_push (boolean not null default true); push_subscriptions (one
+// row per device; RLS on; own read and own delete for authenticated; a column grant keeps endpoint / p256dh / auth out of every
+// response; no INSERT / UPDATE for authenticated; anon nothing; not realtime); save_push_subscription / delete_push_subscription /
+// push_subscription_status (security definer, volatile - POST only; PS001-PS007; the push.save / push.delete audit rows). schema.sql
+// mirrors it; sql/probes/push-notifications-probe.sql proves it (rolled back, 51 cases), sql/probes/push-notifications-precheck.sql
+// reads the gate and the facts (read-only), verify-rls.sh section 19 grades both, and 19i the deployed send-notification (v12, deployed
+// 2026-10-03 16:37:59 UTC). Faraz's apply-push-notifications.sh and setup-push-keys.sh live OUTSIDE the repo. These pins read DB-lane
+// files only (no client file, no edge file), apart from the record step's doc pins at the end.
+// pins moved deliberately 10/3 (the record step, like Prompt 29's, the no-primary days' and the vacation guard's): the applied wording
+// everywhere; verify-rls section 19 strict by default (PROBE_SETUP, an anon 404 and 19e's 42703 FAIL; SILVIS_PUSH_APPLIED gone) and
+// 19i graded on every run (SILVIS_PUSH_DEPLOYED gone - the function is deployed); the migration file is kept byte for byte as it ran -
+// its body is pinned by sha256 (annotated only in ONE trailer line), so its header still reads as it ran ("REPORT-FIRST, NOT APPLIED",
+// both flags in its apply order); the observed apply (Faraz's logs of 10/3) is pinned line by line, its probe block by sha256.
 const psEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function psTopStatements(sql) {
   const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
@@ -4322,6 +4328,12 @@ const PS_FILE = "2026-10-03-push-notifications.sql";
 const PS_MIGRATION = path.join(ROOT, "sql", "migrations", PS_FILE);
 const PS_PROBE = path.join(ROOT, "sql", "probes", "push-notifications-probe.sql");
 const PS_PRECHECK = path.join(ROOT, "sql", "probes", "push-notifications-precheck.sql");
+// sha256 of the applied file, observed 2026-10-03: the log's "migration sha256" line of apply-push-notifications.sh (repo HEAD 04c2245,
+// "(expected cfac...)" matched, all four matched: yes; sha256sum of `git show 04c2245:sql/migrations/2026-10-03-push-notifications.sql`
+// agrees).
+const PUSH_APPLIED_SHA256 = "cfac281e51d365ac5b702829028d9b4cd763ea61348c9a6d6f0f57e6e37f4df0";
+// The repo copy carries ONE trailer line after the applied body; the body (everything before it) is what is hashed.
+const PUSH_TRAILER = "\n-- applied 2026-10-03 16:30:43Z by Faraz";
 // the endpoint rule (https on a known push service; the edge function POSTs to it - no server-side request forgery lever)
 const PS_ENDPOINT_RE_SQL = "'^https://([a-z0-9-]+\\.)*(fcm\\.googleapis\\.com|android\\.googleapis\\.com|push\\.apple\\.com|push\\.services\\.mozilla\\.com|notify\\.windows\\.com)/[!-~]*$'";
 const PS_COLUMN_LINES = [
@@ -4442,13 +4454,30 @@ const PS_CASES = Object.keys(PS_PROBE_CASES);
 const psFull = (k) => PS_PROBE_CASES[k][0] === "eq" ? PS_PROBE_CASES[k][1] : "ERR " + PS_PROBE_CASES[k][1] + " " + PS_PROBE_CASES[k][2];
 eq(PS_CASES.length, 51, "the contract's 51 probe cases;");
 
-step("Prompt 30: the migration - notification_preferences *_push, push_subscriptions (column grant, own read / own delete, no insert / update, never anon), three definer RPCs (PS001-PS007, the audit rows); report-first NOT APPLIED; ends with the schema-cache reload");
-const psMig = read(PS_MIGRATION);
+step("Prompt 30: the migration = the applied file (sha256 of the body; APPLIED 2026-10-03 16:30:43Z in ONE trailer line) - notification_preferences *_push, push_subscriptions (column grant, own read / own delete, no insert / update, never anon), three definer RPCs (PS001-PS007, the audit rows); ends with the schema-cache reload");
+const psBuf = fs.existsSync(PS_MIGRATION) ? fs.readFileSync(PS_MIGRATION) : null;
+ok(psBuf, "missing file " + path.relative(ROOT, PS_MIGRATION));
+const psMig = psBuf.toString("utf8");
 ok(!/\r/.test(psMig) && /^[\x00-\x7f]*$/.test(psMig), "the phone push migration is LF and ASCII");
+let psBody = psMig;
+{
+  // the record step (10/3): the file that ran is the file that is kept - the body hashed, the apply noted after it in ONE line
+  const at = psBuf.indexOf(PUSH_TRAILER);
+  ok(at > 0, "the phone push migration must carry its trailer line `" + PUSH_TRAILER.slice(1) + " ...` after the applied body (the record step)");
+  const tail = at > 0 ? psBuf.slice(at + 1).toString("utf8") : "";
+  ok(tail.split("\n").length === 2 && tail.endsWith("\n") && tail.indexOf("\n") === tail.length - 1, "phone push migration: exactly ONE trailer line (and its LF) after the applied body, nothing after it");
+  ok(tail.includes("the body above this line is the applied file, sha256 " + PUSH_APPLIED_SHA256) && tail.includes("apply-push-notifications.sh") && tail.includes("AI_AGENT") && tail.includes("repo HEAD 04c2245") && tail.includes("an earlier --dry-run (20261003T163001Z) stopped after the probe BEFORE and applied nothing") && tail.includes("SILVIS_PUSH_APPLIED=1 and SILVIS_PUSH_DEPLOYED=1 predate the record step, which made verify-rls section 19 strict, grades 19i on every run and dropped both flags") && tail.includes("the \"backed-up send-notification v9\" is the code deployed as v9 on 2026-10-01, listed v11 on 2026-10-03 and replaced by v12 at 16:37:59 UTC") && tail.includes("docs/SCHEMA-REVIEW.md \"2026-10-03 - phone push\""), "the trailer names the applied sha256, the script, the agent mode, the HEAD it ran at, the dry run, the as-ran header wording (both flags), the v9 backup's versions and the record");
+  eq(crypto.createHash("sha256").update(at > 0 ? psBuf.slice(0, at + 1) : psBuf).digest("hex"), PUSH_APPLIED_SHA256,
+    "phone push migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
+  if (at > 0) psBody = psBuf.slice(0, at + 1).toString("utf8");
+}
 ok(migFiles.includes(PS_FILE) && !PREPARED_NOT_MIRRORED.includes(PS_FILE), "sql/migrations/" + PS_FILE + " is a mirrored migration (not exempt)");
 const psHdr = psMig.slice(0, psMig.indexOf("\n-- ============================================================================\n\n"));
 const psHdrFlat = psHdr.replace(/\n-- ?/g, " ");
-ok(psHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(psHdr), "the migration header must say REPORT-FIRST, NOT APPLIED");
+// pin kept deliberately 10/3 (the record step): the header is the text as it ran (the body is sha256-pinned above), so it still
+// says REPORT-FIRST, NOT APPLIED and its order still names SILVIS_PUSH_APPLIED=1 / SILVIS_PUSH_DEPLOYED=1; the APPLIED note is the
+// trailer line.
+ok(psHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(psHdr), "the migration header (as it ran) must say REPORT-FIRST, NOT APPLIED");
 ok(psHdrFlat.includes("\"Davenport's look, Silvis's own push\"") && /Fierce's trade request reached his e-mail/.test(psHdrFlat) && /no OneSignal/.test(psHdrFlat), "the header quotes Faraz's decision and the trigger (Fierce's trade reached e-mail, not his phone)");
 ok(psHdr.includes("\n--   bash <run folder>/apply-push-notifications.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-03-push-notifications.sql   (what it runs)\n"), "the header carries the two apply lines (the one command - its script kept outside the repo - and what it runs)");
 ok(!/bash scripts\/apply-/.test(psHdr), "the migration header names no in-repo apply script");
@@ -4466,7 +4495,8 @@ const psCode = psMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
 eq((psCode.match(/^create table /gm) || []).length, 1, "the migration creates exactly one table;");
 eq((psCode.match(/^create policy /gm) || []).length, 2, "two policies in all (both on push_subscriptions);");
 ok(!/drop function|drop table|create trigger|drop trigger|prefs_own|policy [a-z_]+ on public\.(user_profiles|audit_log|notifications|notification_preferences)\b|read_all|alter publication/.test(psCode),"the migration drops nothing and touches no trigger, prefs_own, user_profiles / audit / notifications policy, the anon read_all loop or the realtime publication");
-ok(psMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST must learn the new table, columns and functions before the client push)");
+// pin moved deliberately 10/3 (the record step): the applied BODY ends with the reload (the trailer line follows it)
+ok(psBody.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration's applied body ends with `notify pgrst, 'reload schema';` (PostgREST must learn the new table, columns and functions before the client push)");
 const psStmts = psTopStatements(psMig);
 ok(!psStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row (no insert / update / delete outside function bodies)");
 eq(psStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
@@ -4579,12 +4609,15 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   const loop = schema.slice(schema.indexOf("-- Anon-readable tables"), schema.indexOf("end $$;", schema.indexOf("-- Anon-readable tables")));
   ok(loop.length > 0 && !/push_subscriptions/.test(loop), "push_subscriptions is NOT in the anon read_all loop");
   ok(!/publication/i.test(schema.slice(at(PS_TABLE), at("-- Seed rows")).split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").replace(/'[^']*'/g, "")) && !/alter publication[^;]*push_subscriptions/i.test(schemaCode), "no publication statement for push_subscriptions (not in the realtime publication)");
-  const wAt = header.search(/^-- Revision 2026-10-03 w \(phone push, sql\/migrations\/2026-10-03-push-notifications\.sql, report-first, NOT yet applied\): /m);
+  // pins moved deliberately 10/3 (the record step): revision w and the push block comments read applied 2026-10-03 16:30:43Z
+  const wAt = header.search(/^-- Revision 2026-10-03 w \(phone push, sql\/migrations\/2026-10-03-push-notifications\.sql, applied 2026-10-03 16:30:43Z after the probe\): /m);
   const vAt = header.search(/^-- Revision 2026-10-02 v /m);
-  ok(vAt > 0 && wAt > vAt, "schema.sql's header must record revision 2026-10-03 w (phone push; 'report-first, NOT yet applied' until the record step turns it 'applied <ts> after the probe') after revision v");
+  ok(vAt > 0 && wAt > vAt, "schema.sql's header must record revision 2026-10-03 w (phone push; 'applied 2026-10-03 16:30:43Z after the probe' since the record step, 'report-first, NOT yet applied' before it) after revision v");
+  ok(!/push-notifications\.sql[^\n]*NOT yet applied/.test(schema) && !/Prompt 30[^\n]*NOT yet applied/.test(schema) && !/push_subscriptions \(Prompt 30[^\n]*NOT yet applied/.test(schema), "schema.sql no longer calls the phone push migration 'NOT yet applied' anywhere (the record step)");
   const revW = header.slice(wAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
   ok(/Davenport's look, Silvis's own push/.test(revW) && /push_subscriptions/.test(revW) && /column grant/.test(revW) && /PS001-PS007/.test(revW) && /anon holds nothing/.test(revW) && /trade_updates_push \/ schedule_updates_push/.test(revW) && /Not in the realtime publication/.test(revW) && /Letter u stays taken by the weekend pair claim/.test(revW), "revision w names the decision, the table, the column grant, the codes, never anon, the two columns, not realtime and the taken letter u");
-  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first, NOT yet applied)\n") && (schema.match(/report-first, NOT yet applied/g) || []).length === 4, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read 'report-first, NOT yet applied' (four places - the record step turns them all)");
+  // pin moved deliberately 10/3 (the record step): the four places read applied (they read 'report-first, NOT yet applied' before)
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && (schema.match(/report-first, NOT yet applied/g) || []).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left");
 }
 
 step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
@@ -4618,11 +4651,16 @@ ok(psProbe.includes("create temp table probe_results (k text, v text);\ngrant in
   ok(code.includes("    delete from public.push_subscriptions where id = rid;\n    get diagnostics n = row_count;\n    delete from public.push_subscriptions;\n    get diagnostics m = row_count;\n    n := n + m;"), "O2 deletes U1's row by id AND with no WHERE at all (the form a permissive delete policy lets through) and counts both");
 }
 const psProbeHdr = psProbe.slice(0, psProbe.indexOf("create temp table probe_results"));
-ok(/REPORT-FIRST, NOT APPLIED\)/.test(psProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(psProbeHdr) && /\n-- 51 cases\.\n/.test(psProbeHdr), "the probe header: report-first / not applied, nothing persisted, 51 cases");
+// pin moved deliberately 10/3 (the record step, like Prompt 29's probe header): APPLIED 2026-10-03 16:30:43Z + the as-run note
+ok(/REPORT-FIRST; APPLIED 2026-10-03 16:30:43Z\)/.test(psProbeHdr) && !/NOT APPLIED/.test(psProbeHdr) && /-- As run: the migration was applied 2026-10-03 16:30:43Z \(schema\.sql revision w\)/.test(psProbeHdr) && /all 51 cases below as listed after it/.test(psProbeHdr) && /section 19 FAILs a PROBE_SETUP, an anon 404 or a 42703/.test(psProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(psProbeHdr) && /\n-- 51 cases\.\n/.test(psProbeHdr), "the probe header: report-first, APPLIED 2026-10-03 16:30:43Z with the as-run note (section 19 FAILs a PROBE_SETUP since the record step), nothing persisted, 51 cases");
 const PS_AFTER = {};
 psProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+[as]?)\s+.* -> (.*)$/); if (m) PS_AFTER[m[1]] = m[2]; });
 eq(Object.keys(PS_AFTER).sort(), PS_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
 PS_CASES.forEach((k) => ok(PS_AFTER[k] === psFull(k), "the probe header's AFTER for " + k + " (" + PS_AFTER[k] + ") must be " + psFull(k)));
+// the record step (10/3): the 51 probe AFTER lines of the live run as Faraz's log printed them (apply-push-notifications-20261003T163024Z.log,
+// step 6 = verify-rls section 19 = the paste-back block - machine-compared): the header strings sorted by case (no case carries a
+// double quote, so the CLI escaped nothing). The faked section-19 run uses them; SCHEMA-REVIEW's observed block is frozen by sha256.
+const PS_LIVE_LINES = PS_CASES.slice().sort().map((k) => k + "=" + (PS_AFTER[k] || "?").replace(/"/g, '\\"'));
 
 step("Prompt 30: the pre-check - ONE read-only SELECT (the objects gate, profiles per role, prefs rows by key, the push.% audit rows, the realtime publication facts - counts only)");
 const psPre = read(PS_PRECHECK);
@@ -4630,6 +4668,9 @@ ok(!/\r/.test(psPre) && /^[\x00-\x7f]*$/.test(psPre), "the pre-check is LF and A
 {
   const hdr = psPre.slice(0, psPre.indexOf("with objects as ("));
   ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
+  // the record step (10/3): the header reads APPLIED with its as-run note (kept as reviewed until the apply, while the apply script
+  // pinned the file's sha256)
+  ok(/REPORT-FIRST; APPLIED 2026-10-03 16:30:43Z\)/.test(hdr) && !/NOT APPLIED/.test(hdr) && hdr.includes("-- As run (2026-10-03): before the apply the gate read " + PS_GATE_BEFORE + " and right\n-- after it " + PS_GATE_AFTER + ", rows 2-5 the same both times (counts only)"), "the pre-check's header: APPLIED 2026-10-03 16:30:43Z, the as-run gate before / after");
   ok(hdr.includes(PS_GATE_BEFORE) && hdr.includes(PS_GATE_AFTER), "the header states the gate before and after the apply");
   const code = psPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
   ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
@@ -4641,13 +4682,15 @@ ok(!/\r/.test(psPre) && /^[\x00-\x7f]*$/.test(psPre), "the pre-check is LF and A
   ok(code.includes("b.pubname = 'supabase_realtime' and b.puballtables") && code.includes("t.tablename = 'push_subscriptions'") && code.includes("'push_rows=' || (select count(*) from public.audit_log l where l.action like 'push.%')"), "rows 4 / 5: the push.% audit rows and the realtime facts (all tables? push_subscriptions published?)");
 }
 
-step("Prompt 30: verify-rls.sh section 19 - anon REST (19a the table, 19b-19d the three RPCs, 19e the two prefs columns), 19f as a surgeon, the graded probe (51), leftovers (19h), the deployed function (19i); PROBE_SETUP / 404 / 42703 pass as not applied unless SILVIS_PUSH_APPLIED=1; graded against a faked CLI and curl");
+step("Prompt 30: verify-rls.sh section 19 - anon REST (19a the table, 19b-19d the three RPCs, 19e the two prefs columns), 19f as a surgeon, the graded probe (51), leftovers (19h), the deployed function (19i); strict since the record step (PROBE_SETUP, a 404 and 42703 FAIL, no flag) and 19i graded on every run (no flag); graded against a faked CLI and curl");
 ok(/^echo "== 19\. phone push \(2026-10-03, Prompt 30\): push_subscriptions \+ save \/ delete \/ status RPCs \+ notification_preferences \*_push - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 19 (phone push)");
 const s19 = vr.slice(vr.indexOf('echo "== 19. '), vrSectionEnd('echo "== 19. '));
 ok(s19.length > 0 && vr.indexOf('echo "== 19. ') > vr.indexOf('echo "== 18. '), "verify-rls.sh section 19 could not be sliced out (after section 18, up to the next section header or the RESULT line)");
 ok(/^# Section 19 \(17 = the weekend pair claim, taken on its own branch; 18 = Prompt 29's APP call days, the section above\)\.$/m.test(s19), "section 19's comment says why it is 19");
 const s19code = s19.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
-ok(s19code.includes('PUSTRICT19="${SILVIS_PUSH_APPLIED:-}"') && s19code.includes('PUDEPLOYED19="${SILVIS_PUSH_DEPLOYED:-}"'), "section 19 reads SILVIS_PUSH_APPLIED and SILVIS_PUSH_DEPLOYED");
+// pins moved deliberately 10/3 (the record step): section 19 reads no flag - SILVIS_PUSH_APPLIED / PUSTRICT19 and
+// SILVIS_PUSH_DEPLOYED / PUDEPLOYED19 are gone from the whole script (like SILVIS_APP_DAYS_APPLIED after Prompt 29's record step)
+ok(!/SILVIS_PUSH_APPLIED|SILVIS_PUSH_DEPLOYED|PUSTRICT19|PUDEPLOYED19/.test(vr), "verify-rls.sh no longer reads or documents SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED (the record step dropped both; strict and 19i are the default)");
 eq((s19code.match(/curl /g) || []).length, 9, "section 19 makes exactly nine REST calls (19a-19e anon, 19f two as a surgeon, 19i two);");
 const PS_VR_EP = "https://fcm.googleapis.com/fcm/send/verify-rls";
 ok(s19code.includes("\"$URL/rest/v1/push_subscriptions?select=id&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Prefer: count=exact\")"), "19a: anon GET push_subscriptions with Prefer: count=exact");
@@ -4659,11 +4702,13 @@ ok(s19code.includes("\"$URL/rest/v1/notification_preferences?select=trade_update
   ok(posts.length === 5 && posts.filter((p) => /rest\/v1\/rpc\//.test(p)).every((p) => /Bearer \$ANON|Bearer \$SILVIS_SURGEON_JWT/.test(p) && p.includes(PS_VR_EP)) && posts.filter((p) => /functions\/v1\/send-notification\?push=test/.test(p)).length === 1 && !/Authorization/.test(posts.find((p) => /\?push=test/.test(p)) || "Authorization"), "every RPC POST in section 19 is an anon or surgeon call about the verify-rls endpoint (nobody's device); the 19i POST carries no session at all");
   ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s19code) && !/\?endpoint=|endpoint=eq\./.test(s19code), "section 19 never sends the scheduler's token and never puts an endpoint in a URL");
 }
-ok((s19code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s19code.match(/"HTTP 404"\) if \[ "\$PUSTRICT19" = "1" \]; then bad /g) || []).length === 6 && /"HTTP 200"\) bad "anon read of push_subscriptions: HTTP 200/.test(s19code), "19a-19d: 401/403 PASS; 404 PASS unless strict (then FAIL; 19f too); an anon 200 on the table FAILs always");
-ok(/if grep -q '42703' \$T\/vr19e\.json; then\n\s+if \[ "\$PUSTRICT19" = "1" \]; then bad /.test(s19code), "19e: a 400 with 42703 is the not-applied picture unless strict");
+// pins moved deliberately 10/3 (the record step): a 404 and 19e's 42703 are FAILs with no flag (they passed as the not-applied picture before)
+ok((s19code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s19code.match(/"HTTP 404"\) bad "(anon|surgeon) [^"]*: HTTP 404 \([^"]*2026-10-03 apply/g) || []).length === 6 && !/HTTP 404 - not applied yet|or 404 before the apply/.test(s19code) && /"HTTP 200"\) bad "anon read of push_subscriptions: HTTP 200/.test(s19code), "19a-19d (and 19f): 401/403 PASS; a 404 FAILs (the table and the functions exist since the 2026-10-03 apply); an anon 200 on the table FAILs");
+ok(/if grep -q '42703' \$T\/vr19e\.json; then\n\s+bad "anon GET notification_preferences \*_push: HTTP 400 42703 \(the two columns exist since the 2026-10-03 apply/.test(s19code) && !/not applied yet \(the two columns|or 400 42703 before the apply/.test(s19code), "19e: a 400 with 42703 FAILs (the columns exist since the apply)");
 ok(/if \[ -n "\$\{SILVIS_SURGEON_JWT:-\}" \]; then/.test(s19code) && s19code.includes('echo "   SKIP 19f (set SILVIS_SURGEON_JWT=') && s19code.includes("grep -q '\"saved\":false'") && !/-X (PATCH|DELETE|PUT)/.test(s19code), "19f runs only with SILVIS_SURGEON_JWT (a SKIP line otherwise): read-only, the status RPC must answer saved false; no PATCH / DELETE anywhere in section 19");
 ok(/PROBE19="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/push-notifications-probe\.sql"/.test(s19code), "19g runs sql/probes/push-notifications-probe.sql through the linked CLI");
-ok(/if \[ "\$PUSTRICT19" = "1" \]; then bad "phone push probe: PROBE_SETUP - push_subscriptions is absent with SILVIS_PUSH_APPLIED=1/.test(s19code) && /else ok "phone push probe: push_subscriptions is absent \(before the migration: PROBE_SETUP\)"/.test(s19code) && /grep -q 'PROBE_SETUP: notification_preferences\\\.'; then\n\s+bad "phone push probe: PROBE_SETUP - a notification_preferences \*_push column is absent/.test(s19code), "19g: PROBE_SETUP absent is the not-applied picture (a PASS) unless strict; the partly-applied raise FAILs always");
+// pin moved deliberately 10/3 (the record step): PROBE_SETUP (absent) is a FAIL with no flag - the table exists since the apply
+ok(/bad "phone push probe: PROBE_SETUP - push_subscriptions is absent \(the table exists since the 2026-10-03 apply\)"/.test(s19code) && !/ok "phone push probe: push_subscriptions is absent/.test(s19code) && /grep -q 'PROBE_SETUP: notification_preferences\\\.'; then\n\s+bad "phone push probe: PROBE_SETUP - a notification_preferences \*_push column is absent/.test(s19code), "19g must FAIL a PROBE_SETUP (strict since the record step; it passed as the not-applied picture before); the partly-applied raise FAILs too");
 ok(s19code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'"), "section 19's case reader decodes the CLI's \\u003e / \\u003c / \\u0026 and drops the JSON backslashes before grading");
 ok(s19code.includes('lines19=$(echo "$results19" | tr \';\' \'\\n\' | sed ') && s19code.includes('case_val19()   { CV19=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV19="${l#"$1="}"; return 0;; esac; done <<< "$lines19"; }'), "section 19 decodes the results ONCE and reads each case in plain bash (no process per case)");
 const PS_VARS = { [psErr("PS001")]: "PS001_19", [psErr("PS003")]: "PS003_19", [psErr("PS004")]: "PS004_19", [psErr("PS005")]: "PS005_19" };
@@ -4679,25 +4724,33 @@ eq((s19code.match(/\n    expect_(eq|err)19 /g) || []).length, PS_CASES.length, "
 ok(s19code.includes("LEFTOVER19_SQL=\"select ((select count(*) from auth.users where email like 'probe-push-%@example.test') + (select count(*) from public.audit_log where action like 'push.%' and detail->>'summary' like 'probe %'))::int as tagged, (case when to_regclass('public.push_subscriptions') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.push_subscriptions where endpoint like ''https://fcm.googleapis.com/fcm/send/probe-push-%''', false, true, '')))[1]::text::int end) as endpoints\"") && /LEFT ROWS BEHIND/.test(s19code), "19h counts leftovers by the probe's identity (its auth users, its push.% audit rows, push rows holding its endpoints - guarded by to_regclass) and fails on non-zero");
 ok(s19code.includes("echo \"      delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-push-%';\"") && s19code.includes("echo \"      delete from auth.users where email like 'probe-push-%@example.test';   -- profiles, their prefs rows and their push rows cascade\"") && !/delete from public\.push_subscriptions where (profile_id|id)/.test(s19code), "19h prints DELETEs for the probe's rows only (by its endpoint prefix and its users)");
 ok(s19code.includes('echo "   SKIP 19g/19h (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 19g / 19h skip (19a-19f still run)");
-ok(s19code.includes('if [ "$PUDEPLOYED19" = "1" ]; then') && s19code.includes("\"$URL/functions/v1/send-notification?vapid=public\")") && s19code.includes("grep -qE '^\\{\"publicKey\":\"B[A-Za-z0-9_-]{86}\"\\}$'") && s19code.includes("-X POST \"$URL/functions/v1/send-notification?push=test\")") && s19code.includes("\"HTTP 401\") ok \"send-notification refuses an unauthenticated test push") && s19code.includes('echo "   INFO 19i not graded (set SILVIS_PUSH_DEPLOYED=1'), "19i grades the deployed function only with SILVIS_PUSH_DEPLOYED=1 (exactly one key publicKey; the unauthenticated test push 401); else one INFO line");
+// pin moved deliberately 10/3 (the record step): 19i runs on every run, outside any if (send-notification v12 is deployed since
+// 2026-10-03 16:37:59 UTC); kept intent: exactly one key publicKey, the unauthenticated test push 401
+ok(/\nline=\$\(curl -s -o \$T\/vr19i\.json -w 'HTTP %\{http_code\}' "\$URL\/functions\/v1\/send-notification\?vapid=public"\)\n/.test(s19code) && /\nline=\$\(curl -s -o \$T\/vr19i2\.json -w 'HTTP %\{http_code\}' -X POST "\$URL\/functions\/v1\/send-notification\?push=test"\)\n/.test(s19code) && s19code.includes("grep -qE '^\\{\"publicKey\":\"B[A-Za-z0-9_-]{86}\"\\}$'") && s19code.includes("\"HTTP 401\") ok \"send-notification refuses an unauthenticated test push") && !/INFO 19i not graded/.test(s19code), "19i grades the deployed function on every run, at the section's top level (exactly one key publicKey; the unauthenticated test push 401); no INFO line any more");
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
-  ok(head.includes("#   SILVIS_PUSH_APPLIED=1   grade section 19 strictly (the probe's PROBE_SETUP, the anon 404s and 19e's 400 42703 = FAIL): only on the run right after sql/migrations/2026-10-03-push-notifications.sql is applied; the record step makes strict the default and drops this variable") && head.includes("#   SILVIS_PUSH_DEPLOYED=1  also grade 19i") && /phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e\)/.test(head) && /surgeon reads \([^)]*19f;/.test(head), "verify-rls.sh's header names section 19, its anon checks, 19f and the two flags");
-  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_PUSH_APPLIED \/ SILVIS_PUSH_DEPLOYED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_PUSH_APPLIED and SILVIS_PUSH_DEPLOYED");
+  // pins moved deliberately 10/3 (the record step): the header still names section 19, its anon checks (19i among them now) and 19f;
+  // the header and --help no longer name either flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE, then only another
+  // prepared migration's SILVIS_*_APPLIED flag (the merge-tolerant form of the section 15 pin)
+  ok(/phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e, 19i\)/.test(head) && /surgeon reads \([^)]*19f;/.test(head), "verify-rls.sh's header names section 19, its anon checks (19a-19e, 19i) and 19f");
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED dropped)");
 }
 {
   const code19 = vr.slice(vr.indexOf('echo "== 19. '), vrSectionEnd('echo "== 19. '));
   const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
   const PK = '{"publicKey":"B' + "A".repeat(86) + '"}';
   const COL42703 = '{"code":"42703","details":null,"hint":null,"message":"column notification_preferences.trade_updates_push does not exist"}';
+  // pin moved deliberately 10/3 (the record step): no strict and no deployed option - section 19 reads no flag (under set -u, with
+  // the variables unset) and grades 19i on every run; `pre` adds a line before the section, e.g. a SILVIS_PUSH_APPLIED /
+  // SILVIS_PUSH_DEPLOYED left in the environment (the apply script set the first), which must change nothing
   const run19 = (cliOut, opts) => {
-    const o = Object.assign({ strict: false, deployed: false, surgeon: false, tagged: 0, ep: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", e: "200", eBody: "[]", iGet: "200", iBody: PK, iPost: "401" }, opts || {});
+    const o = Object.assign({ surgeon: false, tagged: 0, ep: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", e: "200", eBody: "[]", iGet: "200", iBody: PK, iPost: "401", pre: "" }, opts || {});
     const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
       : o.shape === "bare" ? "printf '[\\n  {\\n    \"tagged\": " + o.tagged + ",\\n    \"endpoints\": " + o.ep + "\\n  }\\n]\\n'"
       : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"tagged\": " + o.tagged + ",\\n      \"endpoints\": " + o.ep + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
       "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
-      "SILVIS_PUSH_APPLIED='" + (o.strict ? "1" : "") + "'\nSILVIS_PUSH_DEPLOYED='" + (o.deployed ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      (o.pre ? o.pre + "\n" : "") + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
       "q() { " + qBody + "; }\n" +
       "curl() { local of='' prev='' code='' post='' sur='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$a\" = POST ] && post=1; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; " +
       "case \"$u\" in " +
@@ -4719,19 +4772,35 @@ ok(s19code.includes('if [ "$PUDEPLOYED19" = "1" ]; then') && s19code.includes("\
   PS_CASES.forEach((k) => { after[k] = psFull(k); });
   // the CLI's error body as the live apply logs show it (a JSON message, a double quote escaped; CONTEXT after the sentinel)
   const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"') + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
-  const N19 = PS_CASES.length + 6;   // 19a-19e + 51 cases + 19h
+  // pin moved deliberately 10/3 (the record step): 19i's two calls count on every run now (the function is deployed)
+  const N19 = PS_CASES.length + 8;   // 19a-19e + 51 cases + 19h + 19i's two
   const ra = run19(msgOf(after));
-  eq(ra.result, [N19, 0], "section 19 against the AFTER picture (19a-19d 401, 19e 200 [], every case, leftover 0): every check PASS (" + fails(ra) + ");");
-  ok(/SKIP 19f/.test(ra.out) && /INFO 19i not graded/.test(ra.out), "... 19f skipped without a surgeon token, 19i an INFO line without SILVIS_PUSH_DEPLOYED");
-  eq(run19(msgOf(after), { surgeon: true, deployed: true }).result, [N19 + 4, 0], "with SILVIS_SURGEON_JWT 19f adds two PASSes (the read 200, the status saved false); with SILVIS_PUSH_DEPLOYED=1 19i two (the public key, the 401);");
+  eq(ra.result, [N19, 0], "section 19 against the AFTER picture (19a-19d 401, 19e 200 [], every case, leftover 0, 19i the public key and the 401): every check PASS (" + fails(ra) + ");");
+  ok(/SKIP 19f/.test(ra.out) && !/INFO 19i/.test(ra.out) && /PASS  send-notification GET \?vapid=public answers exactly/.test(ra.out) && /PASS  send-notification refuses an unauthenticated test push/.test(ra.out), "... 19f skipped without a surgeon token; 19i graded with no flag (no INFO line)");
+  eq(run19(msgOf(after), { surgeon: true }).result, [N19 + 2, 0], "with SILVIS_SURGEON_JWT 19f adds two PASSes (the read 200, the status saved false);");
+  // the record step (10/3): the 2026-10-03 live picture exactly as Faraz's log printed it (the 51 lines of step 6 of
+  // apply-push-notifications-20261003T163024Z.log inside the CLI's 400 envelope; 19a-19d 401, 19e 200 []), 19i answered as the deploy
+  // record observed it (the public key, the 401), both flags left in the environment ignored. The log's section 19 graded 57 / 0 with
+  // 19i one INFO line (the deploy came after); since the record step 19i adds its two PASSes - 59 / 0
+  const liveMsg = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + PS_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
+  const rlive = run19(liveMsg, { pre: "export SILVIS_PUSH_APPLIED=1 SILVIS_PUSH_DEPLOYED=" });
+  eq(rlive.result, [N19, 0], "section 19 against the 2026-10-03 AFTER picture as the log printed it (19a-19d 401, 19e 200 [], the 51 lines, leftover 0) plus 19i as deployed, leftover flags ignored - 59 / 0 (" + fails(rlive) + ");");
+  eq(N19 - 2, 57, "section 19's count in the apply log was 57 (19a-19e, the 51 cases, the leftover check; 19i not graded then) - the log's section 19: 57 PASS, 0 FAIL;");
+  // pins moved deliberately 10/3 (the record step): the not-applied picture is a FAIL with no flag (it passed before; strict was the flag's)
   const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied\\nCONTEXT:  ..."}';
   const beforePic = { a: "404", b: "404", c: "404", d: "404", e: "400", eBody: COL42703 };
   const rb = run19(setup, beforePic);
-  eq(rb.result, [7, 0], "section 19 before the apply (four 404s, 19e 400 42703, PROBE_SETUP): passes as not applied, the leftover check too (" + fails(rb) + ");");
-  eq(run19(setup, Object.assign({ strict: true }, beforePic)).result, [1, 6], "section 19 with SILVIS_PUSH_APPLIED=1: the four 404s, 19e's 42703 and PROBE_SETUP are FAILs;");
+  eq(rb.result, [3, 6], "section 19 since the record step (four 404s, 19e 400 42703, PROBE_SETUP): six FAILs with no flag; the leftover check and 19i's two still run (" + fails(rb) + ");");
+  ok(/FAIL  phone push probe: PROBE_SETUP - push_subscriptions is absent \(the table exists since the 2026-10-03 apply\)/.test(rb.out) && /FAIL  anon GET push_subscriptions: HTTP 404/.test(rb.out) && /FAIL  anon rpc save_push_subscription: HTTP 404/.test(rb.out) && /FAIL  anon rpc delete_push_subscription: HTTP 404/.test(rb.out) && /FAIL  anon rpc push_subscription_status: HTTP 404/.test(rb.out) && /FAIL  anon GET notification_preferences \*_push: HTTP 400 42703/.test(rb.out), "section 19 names the missing table, the four 404s and 19e's 42703");
+  eq(run19(setup, Object.assign({ pre: "SILVIS_PUSH_APPLIED=" }, beforePic)).result, [3, 6], "section 19: an empty SILVIS_PUSH_APPLIED no longer turns the 404s, the 42703 and PROBE_SETUP into PASSes;");
+  eq(run19(setup, Object.assign({ surgeon: true }, beforePic)).result, [5, 6], "... (19f's two calls answered as after the apply do not hide them);");
   const rl = run19(msgOf(Object.assign({}, after, { S8: "inserted (NO refusal)", O5: "ok action=moved devices=1 audit=true", C2: "saved (NO refusal) devices=11" })), { a: "200" });
   eq(rl.result, [N19 - 4, 4], "section 19 must fail a direct insert let through, a move without the keys, no cap and an anon 200 - exactly those four (" + fails(rl) + ");");
-  eq(run19(setup, Object.assign({}, beforePic, { a: "200" })).result, [6, 1], "an anon 200 on the table FAILs, before the apply too (even with Content-Range */0 - the revoke did not take);");
+  // pin moved deliberately 10/3 (the record step): an anon 200 is graded against the applied picture (kept intent: it FAILs even
+  // with Content-Range */0 - the revoke did not take)
+  const r200 = run19(msgOf(after), { a: "200" });
+  eq(r200.result, [N19 - 1, 1], "an anon 200 on the table FAILs (even with Content-Range */0 - the revoke did not take);");
+  ok(/FAIL  anon read of push_subscriptions: HTTP 200/.test(r200.out), "... and says so");
   eq(run19(msgOf(after), { eBody: '[{"trade_updates_push":true,"schedule_updates_push":true}]' }).result, [N19 - 1, 1], "a 19e answer WITH a row FAILs (anon must never read a prefs row);");
   eq(run19(msgOf(after), { e: "400", eBody: '{"code":"PGRST100","message":"x"}' }).result, [N19 - 1, 1], "a 19e 400 without 42703 FAILs;");
   const rq = run19(msgOf(after), { tagged: 3, shape: "bare" });
@@ -4739,11 +4808,13 @@ ok(s19code.includes('if [ "$PUDEPLOYED19" = "1" ]; then') && s19code.includes("\
   ok(/LEFT ROWS BEHIND \(tagged=3 endpoints=0/.test(rq.out) && rq.out.includes("delete from auth.users where email like 'probe-push-%@example.test';") && rq.out.includes("delete from public.audit_log where action like 'push.%' and detail->>'summary' like 'probe %';") && rq.out.includes("delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-push-%';"), "section 19 names the leftovers and prints their DELETEs");
   eq(run19(msgOf(after), { ep: 2 }).result, [N19 - 1, 1], "section 19 fails push rows left with a probe endpoint;");
   eq(run19(msgOf(after), { shape: "error" }).result, [N19 - 1, 1], "19h fails a leftover count it cannot read;");
-  eq(run19('{"message": "connection refused"}').result, [6, 1], "section 19 fails a run with no sentinel-terminated PROBE_RESULTS (19a-19e and the leftover check still run);");
+  eq(run19('{"message": "connection refused"}').result, [8, 1], "section 19 fails a run with no sentinel-terminated PROBE_RESULTS (19a-19e, the leftover check and 19i still run);");
   const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: notification_preferences.trade_updates_push is absent - sql/migrations/2026-10-03-push-notifications.sql is partly applied\\nCONTEXT:  ..."}';
-  eq(run19(part).result, [6, 1], "the partly-applied raise is a FAIL even before the apply's flag;");
-  eq(run19(msgOf(after), { deployed: true, iBody: '{"publicKey":"B' + "A".repeat(86) + '","privateKey":"x"}' }).result, [N19 + 1, 1], "19i fails a GET ?vapid=public that carries any other key;");
-  eq(run19(msgOf(after), { deployed: true, iGet: "405", iBody: '{"error":"method not allowed"}', iPost: "200" }).result, [N19, 2], "19i fails the pre-deploy function (GET 405) and an unauthenticated test push that is not refused 401;");
+  eq(run19(part).result, [8, 1], "the partly-applied raise is a FAIL;");
+  // pins moved deliberately 10/3 (the record step): 19i's refusals need no flag now (kept intent: exactly one key, the 401)
+  eq(run19(msgOf(after), { iBody: '{"publicKey":"B' + "A".repeat(86) + '","privateKey":"x"}' }).result, [N19 - 1, 1], "19i fails a GET ?vapid=public that carries any other key;");
+  eq(run19(msgOf(after), { iGet: "405", iBody: '{"error":"method not allowed"}', iPost: "200" }).result, [N19 - 2, 2], "19i fails the v9 code (GET 405 - a rollback of the function) and an unauthenticated test push that is not refused 401;");
+  eq(run19(msgOf(after), { iGet: "503", iBody: '{"error":"phone notifications are not set up on the server yet"}' }).result, [N19 - 1, 1], "19i fails a function without its VAPID secrets (503);");
 }
 
 step("Prompt 30: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - neither apply-push-notifications.sh nor setup-push-keys.sh under scripts/");
@@ -4753,13 +4824,14 @@ step("Prompt 30: no apply script in the repo (Faraz 10/1: apply scripts live out
     ok(!/bash scripts\/apply-|scripts\/(apply-push-notifications|setup-push-keys)\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
 }
 
-step("Prompt 30: docs - SCHEMA-REVIEW.md section (PREPARED, why, the table + RLS verbatim, the RLS table, READING 2, the refusal table, the pre-check verbatim, the probe table, verify-rls 19a-19i, apply order, one command, rollback verbatim, observed placeholder), tables (a) / (b)");
+step("Prompt 30: docs - SCHEMA-REVIEW.md section (APPLIED 2026-10-03 16:30:43Z + the observed apply, keys and deploy since the record step, why, the table + RLS verbatim, the RLS table, READING 2, the refusal table, the pre-check verbatim, the probe table, verify-rls 19a-19i, apply order, one command, rollback verbatim), tables (a) / (b), edge-functions/README.md's deploy record, guide 22, ONBOARDING, CLAUDE.md");
 ok(/^## 2026-10-03 - phone push: push_subscriptions \+ save_push_subscription \/ delete_push_subscription \/ push_subscription_status \+ notification_preferences \*_push \(Faraz 10\/2, Prompt 30; `sql\/migrations\/2026-10-03-push-notifications\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-03 - phone push: ...' section");
 {
   const at = review.indexOf("## 2026-10-03 - phone push:"), end = review.indexOf("\n## ", at + 1);
   const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const flat = sec.replace(/\s+/g, " ");
-  ok(/^\*\*Status: PREPARED - report-first, NOT APPLIED\.\*\*$/m.test(sec), "the section's status line reads `**Status: PREPARED - report-first, NOT APPLIED.**` until the record step");
+  // pin moved deliberately 10/3 (the record step): the status reads APPLIED (it read `**Status: PREPARED - report-first, NOT APPLIED.**` before)
+  ok(/^\*\*Status: APPLIED 2026-10-03 16:30:43Z\*\* \(Faraz - `apply-push-notifications\.sh`, which exports `AI_AGENT`; the observed lines at the end\)\. Was PREPARED - report-first, NOT APPLIED until then\. The VAPID keys were set \(rotated\) at 16:35:42Z and send-notification v12 deployed at 16:37:59 UTC \(`edge-functions\/README\.md`, "Deploy record - Prompt 30"\); the client ships on Faraz's go\.$/m.test(sec) && !/^\*\*Status: PREPARED/m.test(sec), "the section's status line must read `**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - apply-push-notifications.sh ...)` with the keys and the deploy since the record step");
   ok(flat.includes("Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the send-notification deploy"), "the section gives Faraz's order: the apply script, the key script, the deploy");
   ok(flat.includes("**\"Davenport's look, Silvis's own push\"**") && /Fierce's trade request/.test(flat) && /No OneSignal/.test(flat), "the section states why (Fierce's trade) and the decision");
   ok(sec.includes("```sql\n" + [PS_TABLE, PS_INDEX, PS_ENABLE, PS_PRIVS, PS_POLICIES].join("\n") + "\n```"), "the section carries the table and its RLS verbatim");
@@ -4770,14 +4842,70 @@ ok(/^## 2026-10-03 - phone push: push_subscriptions \+ save_push_subscription \/
   ok(flat.includes(PS_GATE_BEFORE) && flat.includes(PS_GATE_AFTER), "the section states the gate strings");
   PS_CASES.forEach((k) => ok(new RegExp("^\\| " + psEsc(k) + " \\| [^\\n]* \\| `" + psEsc(psFull(k)) + "` \\|$", "m").test(sec), "the section's probe table lists case " + k + " with its AFTER string"));
   ["19a", "19b", "19c", "19d", "19e", "19f", "19g", "19h", "19i"].forEach((p) => ok(new RegExp("^\\| " + p + " \\| ", "m").test(sec), "the section's verify-rls table lists " + p));
+  // kept deliberately 10/3 (the record step): the apply order is the plan as it was run (the flags in items 7 and 9); its as-run note follows
   ok(flat.includes("6. Probe AFTER: every case as the table lists (51 cases).") && flat.includes("7. `SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh`") && flat.includes("8. `bash setup-push-keys.sh`") && flat.includes("`SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh` - 19i green") && flat.includes("10. The record step, ONE commit:") && flat.includes("`supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-03-push-notifications.sql`") && flat.includes("11. The client push, on Faraz's go"), "the apply order: pre-check, absent check, probe BEFORE, the file, the gate, probe AFTER (51), strict verify-rls, the keys, the deploy (19i), the record step, the client push");
   ok(flat.includes("**One command (Faraz):** his apply script `apply-push-notifications.sh`, kept OUTSIDE the repo") && flat.includes("sha256") && flat.includes("--dry-run") && flat.includes("AI_AGENT=1") && flat.includes("PASTE THIS BACK TO CLAUDE CODE") && flat.includes("`APPLY` in capital letters"), "the section names the one command (its script outside the repo), the sha256 stop, its dry run, the capital-letters prompt, the agent mode and the paste-back block");
   ok(sec.includes("```sql\n" + PS_ROLLBACK.join("\n") + "\n```"), "the section gives the rollback verbatim (= the migration header's)");
-  ok(/^observed: _to be filled from Faraz's apply log_$/m.test(sec), "the section keeps the observed placeholder until the record step");
+  // pin moved deliberately 10/3 (the record step): the placeholder is gone - the observed paragraphs from Faraz's logs replace it
+  ok(!/_to be filled/.test(sec), "the section has no observed placeholder since the record step");
+  const at2 = sec.indexOf("observed (apply, 2026-10-03): applied 2026-10-03 16:30:43Z");
+  ok(at2 > 0 && at2 > sec.indexOf("**Rolling back**"), "the section must end with the 'observed (apply, 2026-10-03): applied 2026-10-03 16:30:43Z ...' paragraph");
+  const ob = at2 < 0 ? "" : sec.slice(at2);
+  const obFlat = ob.replace(/\s+/g, " ");
+  ok(obFlat.includes("exit 0, an empty result `\"rows\": []`, no `ERROR:`") && obFlat.includes("log `apply-push-notifications-20261003T163024Z.log`, outside the repo, result `APPLIED AND VERIFIED`") && obFlat.includes("repo HEAD `04c2245`") && obFlat.includes("`" + PUSH_APPLIED_SHA256 + "` = the expected one") && obFlat.includes("(`all four matched: yes`)") && obFlat.includes("supabase CLI 2.84.2") && obFlat.includes("`bzhsroegtagqhutbnsrp`"), "the observed apply names the CLI exit, the log and its result, the repo HEAD, the applied sha256 (all four matched), the CLI version and the project");
+  // the observed lines, copied from the log: the gate before + its seven facts (counts only), the absent check, probe BEFORE, the gate after + signatures
+  ok(obFlat.includes("gate before: `" + PS_GATE_BEFORE + "`") && ob.includes("```text\n2 profiles admin: n=1 linked=1 following=0 app=0\n2 profiles coordinator: n=2 linked=0 following=0 app=0\n2 profiles surgeon: n=5 linked=5 following=0 app=0\n2 profiles viewer: n=3 linked=0 following=2 app=2\n3 prefs: rows=2 person=2 profile=0\n4 audit: push_rows=0\n5 realtime: publication=yes all_tables=no push_subscriptions_published=no\n```"), "the observed apply records the pre-check gate before and its seven facts as the log printed them (counts only)");
+  ok(obFlat.includes("`OK - none of the three functions exists` (signatures before: none)") && obFlat.includes("Step 3, probe BEFORE: `PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied`") && obFlat.includes("gate after: `" + PS_GATE_AFTER + "` (rows 2-5 unchanged)") && obFlat.includes("signatures after: `delete_push_subscription(text) definer;push_subscription_status(text) definer;save_push_subscription(text, text, text, text) definer`"), "the observed apply records the absent check, probe BEFORE, the gate after and the signatures after");
+  // the 51 AFTER lines as the log printed them, in one text block, frozen on their own: the sha256 of the 51 lines (each with its LF)
+  // as step 6 of apply-push-notifications-20261003T163024Z.log printed them (= its paste-back block = verify-rls section 19's print,
+  // machine-compared at the record step), so a later, justified edit of a probe AFTER string never forces a rewrite of this record.
+  const blockAt = ob.indexOf("```text\nB1=");
+  const block = blockAt < 0 ? "" : ob.slice(blockAt + 8, ob.indexOf("\n```", blockAt + 8));
+  eq(block.split("\n").length, 51, "the observed probe AFTER lists 51 lines (one per case);");
+  eq(crypto.createHash("sha256").update(block + "\n").digest("hex"), "1795ca5df1f5dc9bb32f5e5d9eccdd30144d449e2f5f7d072c4c72988bf64614",
+    "the observed probe AFTER block must be the 51 lines exactly as the 20261003T163024Z log printed them (frozen sha256);");
+  ok(obFlat.includes("`RESULT: 469 passed, 0 failed`") && obFlat.includes("section 19 57 / 0") && obFlat.includes("19a `HTTP 401` (`42501`, the table)") && obFlat.includes("19b `HTTP 401` (`permission denied for function save_push_subscription`: PostgREST knows the four keys)") && obFlat.includes("19e `HTTP 200` `[]`") && obFlat.includes("every one of the 51 cases PASS") && obFlat.includes("leftover count 0") && obFlat.includes("19i one INFO line (not graded - the deploy came after)") && obFlat.includes("(3, 6, 7c-7e, 8c / 8d, 9d, 14c, 18e, 19f) skipped"), "the observed apply records verify-rls 469 / 0, section 19 57 / 0 (19a-19d 401, 19e 200 []), leftovers 0, 19i's INFO line and the skipped JWT checks");
+  ok(obFlat.includes("The `--dry-run` minutes earlier (log `apply-push-notifications-20261003T163001Z.log`) read steps 0-3 as above") && obFlat.includes("`APPLY confirmation: not reached`, `migration: not run`"), "the observed apply records the dry run (stopped by design after the probe BEFORE - nothing applied)");
+  // the keys: copied from setup-push-keys-20261003T163542Z.log; the incident and its resolution
+  ok(obFlat.includes("observed (keys, 2026-10-03): `setup-push-keys.sh --rotate` started 20261003T163542Z (log `setup-push-keys-20261003T163542Z.log`, outside the repo, result `OK`") && obFlat.includes("`confirmations: ROTATE typed; SET typed`") && obFlat.includes("`public key prefix: BA2H3T2V`") && obFlat.includes("`secrets set: exit 0`; `temp file removed: yes`") && obFlat.includes("`new pair landed: yes`"), "the observed keys record the rotate's log lines (ROTATE / SET typed, the prefix BA2H3T2V, exit 0, the temp file removed, the new pair landed)");
+  ok(obFlat.includes("at 2026-10-03 03:29:02Z an agent's test harness for `setup-push-keys.sh` fell through its fake CLI to the real one and set a VAPID pair (public key prefix `BOH9yDTn`) on the live project") && obFlat.includes("Faraz's rotate replaced it with a pair he generated") && obFlat.includes("before any device could subscribe to the old one"), "the observed keys name the 03:29Z incident (BOH9yDTn) and its resolution by the rotate");
+  // the deploy, and that nothing live ran after the record step
+  ok(obFlat.includes("observed (deploy, 2026-10-03): send-notification v11 -> v12 at 2026-10-03 16:37:59 UTC by Faraz, `--no-verify-jwt --use-api`") && obFlat.includes("`{\"publicKey\":\"BA2H3T2V...\"}` (the key 87 characters, the rotate's prefix); an unauthenticated `POST ?push=test` -> `401`") && obFlat.includes("byte-identical to `edge-functions/send-notification/index.ts` at `04c2245` (sha256 `ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa`)"), "the observed deploy records v11 -> v12, the public key, the 401 and the byte-compare");
+  ok(obFlat.includes("Not re-run against the live project after the record step") && obFlat.includes("the next plain `bash scripts/verify-rls.sh` grades section 19 strictly, 19i included, with no flag"), "the observed paragraphs say nothing live was re-run by the record step");
+  ok(flat.includes("*As run (2026-10-03): the live probe AFTER (the 20261003T163024Z run - the second script run; the first, at 16:30:01Z, was a `--dry-run` that stopped after the probe BEFORE, as designed) read all 51 cases exactly as their header strings") && flat.includes("no case reads the owner itself") && flat.includes("section 19 graded 57 / 0.*"), "what could break carries its as-run note (the second run's probe AFTER; no case reads the owner)");
+  ok(flat.includes("*As run (the record step, 2026-10-03): `SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist - section 19 is strict by default") && flat.includes("grades 19i on every run"), "the verify-rls table carries its as-run note (both flags gone)");
+  ok(flat.includes("*As run (2026-10-03): items 1-7 by `apply-push-notifications.sh`") && flat.includes("kept byte for byte as it ran (sha256 `" + PUSH_APPLIED_SHA256 + "`") && flat.includes("the deploy made it v12, not v10") && flat.includes("`SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist (section 19 is strict by default and grades 19i on every run).") && flat.includes("The record step changed all four sha256s the apply script checks (the migration's through its trailer line - the body's is unchanged) - the script is one-shot; a re-apply after a rollback (or a `--dry-run`) needs its pins refreshed first, or it stops at step 0. Item 11 follows, on Faraz's go.*") && !/Item 11 waits/.test(flat), "the apply order carries its as-run note (the script's steps, the keys, the v11 -> v12 deploy, the file kept as it ran with its sha256, both flags gone, the apply script one-shot since the record step)");
+  ok(flat.includes("Faraz ran it on 2026-10-03 at `04c2245` (the observed lines at the end; a `--dry-run` minutes earlier stopped after the probe BEFORE and applied nothing)"), "the one-command paragraph says when it ran");
+  ok(flat.includes("`$wd\\backup-send-notification-2026-10-03\\index.ts`"), "the rollback names where the replaced send-notification is backed up");
 }
-ok(/^\| `push_subscriptions` \| Phone push \(Faraz 10\/2, Prompt 30\), prepared 2026-10-03 - report-first, NOT APPLIED[^\n]*never anon/m.test(tblA) && /^\| `push_subscriptions` \|[^\n]*write = `save_push_subscription\(\)` only/m.test(tblA),"SCHEMA-REVIEW table (a) needs a push_subscriptions row (prepared, NOT APPLIED; own rows, never anon; write = save_push_subscription only)");
-ok(/^\| `notification_preferences` \|[^\n]*Prompt 30 \(prepared 2026-10-03, NOT APPLIED[^\n]*`trade_updates_push` \/ `schedule_updates_push`/m.test(tblA) && /^\| `notification_preferences` \|[^\n]*Prompt 30 \(prepared 2026-10-03, NOT APPLIED\)[^\n]*`\*_push`/m.test(tblB), "SCHEMA-REVIEW tables (a) / (b): the notification_preferences rows note the two push columns");
-ok(/^\| `push_subscriptions` - prepared 2026-10-03, NOT APPLIED \| its own rows only[^\n]*never anon[^\n]*\| insert \/ update: none directly[^\n]*save_push_subscription\(\)/m.test(tblB), "SCHEMA-REVIEW table (b) needs a push_subscriptions row (read: own rows, the non-secret columns, never anon; write: none directly - save_push_subscription; delete own)");
-console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, NOT applied), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 graded against a faked CLI, apply scripts kept outside the repo, docs pinned");
+// pins moved deliberately 10/3 (the record step): tables (a) / (b) read applied (they read "prepared 2026-10-03, NOT APPLIED" before)
+ok(/^\| `push_subscriptions` \| Phone push \(Faraz 10\/2, Prompt 30\), prepared 2026-10-03 - report-first, \*\*applied live 2026-10-03 16:30 UTC\*\*[^\n]*never anon/m.test(tblA) && /^\| `push_subscriptions` \|[^\n]*write = `save_push_subscription\(\)` only/m.test(tblA), "SCHEMA-REVIEW table (a) needs a push_subscriptions row (applied live 2026-10-03 16:30 UTC; own rows, never anon; write = save_push_subscription only)");
+ok(/^\| `notification_preferences` \|[^\n]*Prompt 30 \(prepared 2026-10-03 - report-first, \*\*applied live 2026-10-03 16:30 UTC\*\*[^\n]*`trade_updates_push` \/ `schedule_updates_push`/m.test(tblA) && /^\| `notification_preferences` \|[^\n]*Prompt 30 \(applied 2026-10-03 16:30 UTC\)[^\n]*`\*_push`/m.test(tblB), "SCHEMA-REVIEW tables (a) / (b): the notification_preferences rows note the two push columns, applied 2026-10-03 16:30 UTC");
+ok(/^\| `push_subscriptions` - applied 2026-10-03 16:30 UTC \| its own rows only[^\n]*never anon[^\n]*\| insert \/ update: none directly[^\n]*save_push_subscription\(\)/m.test(tblB), "SCHEMA-REVIEW table (b) needs a push_subscriptions row (applied; read: own rows, the non-secret columns, never anon; write: none directly - save_push_subscription; delete own)");
+ok(/^\| `audit_log` \|[^\n]*since 2026-10-03 16:30 UTC `push\.save` \/ `push\.delete` from `save_push_subscription` \/ `delete_push_subscription`, Prompt 30/m.test(tblA), "SCHEMA-REVIEW table (a)'s audit_log row names push.save / push.delete as written since the apply");
+ok(!/^\|[^\n]*(push_subscriptions|Prompt 30|push\.save)[^\n]*NOT APPLIED/m.test(tblA + tblB), "no table (a) / (b) row calls Prompt 30 NOT APPLIED since the record step");
+{
+  // the record step (10/3): edge-functions/README.md's deploy record (observed, the version reading made exact), guide 22, ONBOARDING
+  // and CLAUDE.md say the database, the keys and the function are live - every sentence true before and after the client push
+  const readmeAll = read(path.join(ROOT, "edge-functions", "README.md"));
+  const guideAll = read(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"));
+  const onboarding = read(path.join(ROOT, "docs", "ONBOARDING.md"));
+  const claudeMd = read(path.join(ROOT, "CLAUDE.md"));
+  const rec = readmeAll.slice(readmeAll.indexOf("### Deploy record - Prompt 30 (phone push)"), readmeAll.indexOf("### Deploy record - Prompt 26"));
+  const recFlat = rec.replace(/\s+/g, " ");
+  ok(/^### Deploy record - Prompt 30 \(phone push\) - DEPLOYED 2026-10-03 16:37:59 UTC by Faraz \(v11 -> v12\)$/m.test(readmeAll) && !/Deploy record - Prompt 30 \(phone push\) - PREPARED, NOT deployed/.test(readmeAll), "README section 3: the Prompt 30 deploy record reads DEPLOYED 2026-10-03 16:37:59 UTC (v11 -> v12)");
+  ok(recFlat.includes("`send-notification` v11 (2026-10-01 04:11:58)") && recFlat.includes("`send-notification` **v12 (2026-10-03 16:37:59)**") && recFlat.includes("`$wd\\backup-send-notification-2026-10-03\\index.ts`") && recFlat.includes("`{\"publicKey\":\"BA2H3T2V...\"}` (the key 87 characters") && recFlat.includes("-> `401`") && recFlat.includes("BYTE-IDENTICAL, sha256 `ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa`") && recFlat.includes("`SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh` was not run"), "README's Prompt 30 record carries the observed lines: functions list before / after, the backup, the public key, the 401, the byte-compare, verify-rls 19i not run by flag");
+  // the observed version reading (10/3): a secrets set moves the VERSION (+1 for all four), never the UPDATED_AT - the README's
+  // "re-versions every function" stands; the deploy-day reading "no version changed" is what the listings contradict
+  ok(recFlat.includes("**What a `secrets set` does to `functions list` (observed 10/3):** the version number moves, the update time does not.") && recFlat.includes("`send-notification` v9 -> v11 and `daily-reminder` v7 -> v9") && recFlat.includes("`calendar-sync` v5 -> v7 and `office-notifications` v4 -> v6") && recFlat.includes("every `secrets set` re-versions all four, one version each, no code change"), "README's Prompt 30 record states what a secrets set does to the list (+1 version each, the update time unchanged), from the listings before and after");
+  ok(readmeAll.includes("each `secrets set`\nraises every function's listed VERSION by one and leaves its listed UPDATED_AT\nalone"), "README section 1 says exactly what a secrets set moves (the version, never the update time)");
+  ok(!/neither (run|`secrets set`) changed any listed version[^\n]*\.$/m.test(readmeAll.replace("the\ndeploy-day reading that neither run changed any listed version (it compared the update times only) is not what the listings show.", "")), "README never claims a secrets set leaves the version alone (only quotes that reading as contradicted)");
+  ok(readmeAll.includes("since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3)") && readmeAll.includes("Prompt 30 (phone push, v12 - deployed 2026-10-03 16:37:59 UTC)") && !/once v10 is deployed/.test(readmeAll), "README's function table and gate row say v12 deployed (no 'once v10 is deployed' left)");
+  ok(guideAll.includes("The first three ran on 2026-10-03") && guideAll.includes("the migration applied 16:30:43Z (probe AFTER 51 / 51, verify-rls 469 / 0 with section 19 graded strictly)") && guideAll.includes("send-notification v12 deployed 16:37:59 UTC") && guideAll.includes("Phone push works from the build that ships this client."), "guide 22 says the database, the keys and the function are live since 2026-10-03, the client from its build");
+  ok(onboarding.includes("## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)") && !/live once Faraz has applied the migration/.test(onboarding), "ONBOARDING's phone section header says the server side is live since 2026-10-03 (true before and after the client push)");
+  ok(/Its database part was applied, the VAPID keys set and\nsend-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client\./.test(claudeMd), "CLAUDE.md: Prompt 30's server side is live since 2026-10-03; phone push from the client build");
+  [readmeAll, guideAll, onboarding, claudeMd].forEach((t, i) => ok(!/not live yet|Not live yet|not pushed yet/i.test(t.split("\n").filter((l) => /Prompt 30|phone push|Phone notifications|send-notification v1[0-2]/i.test(l)).join("\n")), ["README", "guide", "ONBOARDING", "CLAUDE.md"][i] + ": no Prompt 30 line says 'not live yet' / 'not pushed yet' (Prompt 29's rule: true before and after the client push)"));
+}
+console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, applied 2026-10-03 16:30:43Z; the file kept as it ran, sha256-pinned; keys rotated 16:35:42Z; send-notification v12 16:37:59 UTC), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 (strict, 19i every run) graded against a faked CLI, apply scripts kept outside the repo, docs pinned");
 
 console.log("schema.test.js: " + N + " assertions passed");

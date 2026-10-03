@@ -1,7 +1,11 @@
 -- ============================================================================
 -- Silvis Call Schedule - phone push PRE-CHECK (2026-10-03, Prompt 30; sql/migrations/2026-10-03-push-notifications.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
+-- REPORT-FIRST; APPLIED 2026-10-03 16:30:43Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record, only the first one is a gate.
+-- As run (2026-10-03): before the apply the gate read table=no push_cols=0 save_fn=no delete_fn=no status_fn=no and right
+-- after it table=yes push_cols=2 save_fn=yes delete_fn=yes status_fn=yes, rows 2-5 the same both times (counts only) -
+-- docs/SCHEMA-REVIEW.md "2026-10-03 - phone push" quotes them. This header was kept byte for byte as reviewed until the apply
+-- (the apply script pinned its sha256); the record step turned it APPLIED.
 -- It runs before the migration, so it never names the new table or columns outside catalog lookups (pg_attribute, to_regclass,
 -- to_regprocedure, pg_publication_tables).
 --

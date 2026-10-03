@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_PUSH_APPLIED=1   grade section 19 strictly (the probe's PROBE_SETUP, the anon 404s and 19e's 400 42703 = FAIL): only on the run right after sql/migrations/2026-10-03-push-notifications.sql is applied; the record step makes strict the default and drops this variable
-#   SILVIS_PUSH_DEPLOYED=1  also grade 19i (send-notification's GET ?vapid=public and an unauthenticated POST ?push=test): only after the Prompt 30 send-notification deploy; without it 19i prints an INFO line and counts nothing
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -18,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1389,7 +1387,7 @@ fi
 
 echo "== 19. phone push (2026-10-03, Prompt 30): push_subscriptions + save / delete / status RPCs + notification_preferences *_push - anon refused, rolled-back probe =="
 # Section 19 (17 = the weekend pair claim, taken on its own branch; 18 = Prompt 29's APP call days, the section above).
-# sql/migrations/2026-10-03-push-notifications.sql (report-first, NOT applied; revision w): push_subscriptions (one row per device that
+# sql/migrations/2026-10-03-push-notifications.sql (report-first; applied 2026-10-03 16:30:43Z, revision w): push_subscriptions (one row per device that
 # turned phone notifications on; own rows only - authenticated SELECTs the non-secret columns through a column grant and DELETEs its own
 # rows, never INSERTs or UPDATEs; anon holds nothing: no anon policy AND anon's privileges revoked, so an anon request is refused 401 /
 # 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke did not take); save_push_subscription /
@@ -1397,50 +1395,50 @@ echo "== 19. phone push (2026-10-03, Prompt 30): push_subscriptions + save / del
 # PS001-PS007 PUSH_* refuse before any write) - EXECUTE for authenticated, never anon; notification_preferences.trade_updates_push /
 # schedule_updates_push (boolean not null default true). 19a-19e go over REST as anon and write nothing (each is refused before a row
 # or a body is used; 19e reads the two new columns and gets no row): 401/403 (19e: 200 []) = the object exists and anon holds no
-# privilege (19e: PostgREST knows both columns); a 404 (19e: a 400 with 42703) = not applied yet (19b: PGRST202 - the schema cache
-# does not know the four keys, the gate before the Prompt 30 client push). 19f (only with SILVIS_SURGEON_JWT) reads as a surgeon and
-# asks the status RPC about an endpoint nobody holds - never a write. 19g runs sql/probes/push-notifications-probe.sql through the
-# linked CLI (rolls itself back; 51 cases graded by name - its header lists each AFTER string); BEFORE the apply it raises PROBE_SETUP:
-# push_subscriptions is absent - a PASS, like the anon 404s and 19e's 42703, unless SILVIS_PUSH_APPLIED=1 (the run right after the
-# apply), then each is a FAIL; its partly-applied raise is always a FAIL. 19h counts the probe's leftovers either way, by the probe's
-# identity only: its auth users, its push.% audit rows (summaries 'probe ...') and push_subscriptions rows holding its endpoints
+# privilege (19e: PostgREST knows both columns); a 404 (19e: a 400 with 42703) is a FAIL (19b: PGRST202 - the schema cache does not
+# know the four keys, the gate before the Prompt 30 client push). 19f (only with SILVIS_SURGEON_JWT) reads as a surgeon and asks the
+# status RPC about an endpoint nobody holds - never a write. 19g runs sql/probes/push-notifications-probe.sql through the linked CLI
+# (rolls itself back; 51 cases graded by name - its header lists each AFTER string). The table, the columns and the functions exist
+# since the apply, so the probe's PROBE_SETUP (push_subscriptions is absent), an anon 404 and 19e's 42703 are FAILs - strict since
+# the record step, which dropped the flag for the run right after the apply (before the apply they passed as the not-applied
+# picture); its partly-applied raise is a FAIL too. 19h counts the probe's leftovers either way, by the probe's identity only: its
+# auth users, its push.% audit rows (summaries 'probe ...') and push_subscriptions rows holding its endpoints
 # (https://fcm.googleapis.com/fcm/send/probe-push-...) - all three are rows only the probe writes, so each gets its DELETE. 19i grades
-# the deployed send-notification only with SILVIS_PUSH_DEPLOYED=1 (GET ?vapid=public answers exactly {"publicKey": <87 base64url
-# characters starting B>}; an unauthenticated POST ?push=test answers 401); without it 19i prints an INFO line and counts nothing.
-PUSTRICT19="${SILVIS_PUSH_APPLIED:-}"
-PUDEPLOYED19="${SILVIS_PUSH_DEPLOYED:-}"
+# the deployed send-notification (v12, deployed 2026-10-03 16:37:59 UTC) on every run since the record step, which dropped the flag
+# for the run after the deploy: GET ?vapid=public answers exactly {"publicKey": <87 base64url characters starting B>}; an
+# unauthenticated POST ?push=test answers 401. Neither call can send anything (no session; the GET reads nothing).
 # 19a. anon may not read push_subscriptions (revoked: a refusal, never 200 + [])
 line=$(curl -s -o $T/vr19a.json -w 'HTTP %{http_code}' "$URL/rest/v1/push_subscriptions?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
 echo "   19a anon GET push_subscriptions: $line  body: $(head -c 160 $T/vr19a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon read of push_subscriptions refused ($line - the table exists, anon holds no privilege)";;
-  "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "anon GET push_subscriptions: HTTP 404 with SILVIS_PUSH_APPLIED=1 (the table should exist after the apply - or the schema cache is stale)"; else ok "anon GET push_subscriptions: HTTP 404 - not applied yet (before the migration)"; fi;;
+  "HTTP 404") bad "anon GET push_subscriptions: HTTP 404 (the table exists since the 2026-10-03 apply - or the schema cache is stale)";;
   "HTTP 200") bad "anon read of push_subscriptions: HTTP 200 - anon's privileges are revoked, so a refusal (401 / 403) is expected, not an answer (a device's push address must never reach anon)";;
-  *) bad "anon GET push_subscriptions: $line (expected 401/403, or 404 before the apply)";;
+  *) bad "anon GET push_subscriptions: $line (expected 401/403)";;
 esac
 # 19b. anon may not execute save_push_subscription; PostgREST must know its four keys before the Prompt 30 client is pushed
 line=$(curl -s -o $T/vr19b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_push_subscription" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_endpoint":"https://fcm.googleapis.com/fcm/send/verify-rls","p_p256dh":"BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","p_auth":"AAAAAAAAAAAAAAAAAAAAAA","p_label":null}')
 echo "   19b anon rpc save_push_subscription: $line  body: $(head -c 160 $T/vr19b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_push_subscription refused ($line): PostgREST knows the four keys - the Prompt 30 client may be pushed";;
-  "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "anon rpc save_push_subscription: HTTP 404 with SILVIS_PUSH_APPLIED=1 (PGRST202: the schema cache does not know the function or its four keys) - do NOT push the Prompt 30 client"; else ok "anon rpc save_push_subscription: HTTP 404 - not applied yet (do not push the Prompt 30 client before the apply)"; fi;;
-  *) bad "anon rpc save_push_subscription: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc save_push_subscription: HTTP 404 (PGRST202: the schema cache does not know the function or its four keys, which exist since the 2026-10-03 apply) - do NOT push the Prompt 30 client";;
+  *) bad "anon rpc save_push_subscription: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 19c. anon may not execute delete_push_subscription (POST: the endpoint travels in the body, never in a URL)
 line=$(curl -s -o $T/vr19c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/delete_push_subscription" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_endpoint":"https://fcm.googleapis.com/fcm/send/verify-rls"}')
 echo "   19c anon rpc delete_push_subscription: $line  body: $(head -c 160 $T/vr19c.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc delete_push_subscription refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "anon rpc delete_push_subscription: HTTP 404 with SILVIS_PUSH_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc delete_push_subscription: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc delete_push_subscription: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc delete_push_subscription: HTTP 404 (the function exists since the 2026-10-03 apply - or the schema cache is stale)";;
+  *) bad "anon rpc delete_push_subscription: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 19d. anon may not execute push_subscription_status (POST, as 19c)
 line=$(curl -s -o $T/vr19d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/push_subscription_status" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_endpoint":"https://fcm.googleapis.com/fcm/send/verify-rls"}')
 echo "   19d anon rpc push_subscription_status: $line  body: $(head -c 160 $T/vr19d.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc push_subscription_status refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "anon rpc push_subscription_status: HTTP 404 with SILVIS_PUSH_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc push_subscription_status: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc push_subscription_status: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc push_subscription_status: HTTP 404 (the function exists since the 2026-10-03 apply - or the schema cache is stale)";;
+  *) bad "anon rpc push_subscription_status: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 19e. PostgREST knows the two prefs columns (anon reads them: 200 with no row - prefs_own gives anon nothing)
 line=$(curl -s -o $T/vr19e.json -w 'HTTP %{http_code}' "$URL/rest/v1/notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
@@ -1449,9 +1447,9 @@ echo "   19e anon GET notification_preferences (the two push columns): $line  bo
 case "$line" in
   "HTTP 200") if [ "$body19e" = "[]" ]; then ok "PostgREST knows notification_preferences.trade_updates_push / schedule_updates_push (anon 200 [] - no row for anon): the Prompt 30 client may read and write them"; else bad "anon GET notification_preferences: HTTP 200 WITH ROWS - anon must never read a prefs row (got $(head -c 120 $T/vr19e.json))"; fi;;
   "HTTP 400") if grep -q '42703' $T/vr19e.json; then
-                if [ "$PUSTRICT19" = "1" ]; then bad "anon GET notification_preferences *_push: HTTP 400 42703 with SILVIS_PUSH_APPLIED=1 (the columns should exist after the apply - or the schema cache is stale) - do NOT push the Prompt 30 client"; else ok "anon GET notification_preferences *_push: HTTP 400 42703 - not applied yet (the two columns come with the migration)"; fi
+                bad "anon GET notification_preferences *_push: HTTP 400 42703 (the two columns exist since the 2026-10-03 apply - or the schema cache is stale) - do NOT push the Prompt 30 client"
               else bad "anon GET notification_preferences *_push: HTTP 400 without 42703 ($(head -c 160 $T/vr19e.json))"; fi;;
-  *) bad "anon GET notification_preferences *_push: $line (expected 200 [], or 400 42703 before the apply)";;
+  *) bad "anon GET notification_preferences *_push: $line (expected 200 [])";;
 esac
 # 19f. as a surgeon (read-only): his own rows' non-secret columns answer 200; the status RPC about an endpoint nobody holds says saved false
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
@@ -1459,14 +1457,14 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   echo "   19f surgeon GET push_subscriptions (id, device_label): $line"
   case "$line" in
     "HTTP 200") ok "a surgeon reads his own push_subscriptions rows (the non-secret columns)";;
-    "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "surgeon GET push_subscriptions: HTTP 404 with SILVIS_PUSH_APPLIED=1"; else ok "surgeon GET push_subscriptions: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon GET push_subscriptions: HTTP 404 (the table exists since the 2026-10-03 apply - or the schema cache is stale)";;
     *) bad "surgeon GET push_subscriptions: $line (expected 200)";;
   esac
   line=$(curl -s -o $T/vr19f2.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/push_subscription_status" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_endpoint":"https://fcm.googleapis.com/fcm/send/verify-rls"}')
   echo "   19f surgeon rpc push_subscription_status: $line  body: $(head -c 160 $T/vr19f2.json)"
   case "$line" in
     "HTTP 200") if tr -d ' \r\n' < $T/vr19f2.json | grep -q '"saved":false'; then ok "a surgeon's status RPC about an endpoint nobody holds answers saved false"; else bad "surgeon rpc push_subscription_status: HTTP 200 without \"saved\":false ($(head -c 160 $T/vr19f2.json))"; fi;;
-    "HTTP 404") if [ "$PUSTRICT19" = "1" ]; then bad "surgeon rpc push_subscription_status: HTTP 404 with SILVIS_PUSH_APPLIED=1"; else ok "surgeon rpc push_subscription_status: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon rpc push_subscription_status: HTTP 404 (the function exists since the 2026-10-03 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc push_subscription_status: $line (expected 200 saved false)";;
   esac
 else
@@ -1476,7 +1474,7 @@ if linked; then
   PROBE19="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/push-notifications-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE19" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: push_subscriptions is absent'; then
-    if [ "$PUSTRICT19" = "1" ]; then bad "phone push probe: PROBE_SETUP - push_subscriptions is absent with SILVIS_PUSH_APPLIED=1 (the table should exist after the apply)"; else ok "phone push probe: push_subscriptions is absent (before the migration: PROBE_SETUP)"; fi
+    bad "phone push probe: PROBE_SETUP - push_subscriptions is absent (the table exists since the 2026-10-03 apply)"
   elif echo "$out" | grep -q 'PROBE_SETUP: notification_preferences\.'; then
     bad "phone push probe: PROBE_SETUP - a notification_preferences *_push column is absent while push_subscriptions exists (the migration is partly applied - ask Claude Code)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
@@ -1568,26 +1566,22 @@ if linked; then
 else
   echo "   SKIP 19g/19h (supabase CLI not linked at $WORKDIR)"
 fi
-# 19i. the deployed send-notification (only with SILVIS_PUSH_DEPLOYED=1, after the Prompt 30 deploy): the public key and nothing else
-# on GET ?vapid=public (no auth); an unauthenticated POST ?push=test is refused 401 (the function's own caller check)
-if [ "$PUDEPLOYED19" = "1" ]; then
-  line=$(curl -s -o $T/vr19i.json -w 'HTTP %{http_code}' "$URL/functions/v1/send-notification?vapid=public")
-  body19i=$(tr -d ' \r\n' < $T/vr19i.json)
-  echo "   19i GET send-notification?vapid=public: $line  body: $(head -c 120 $T/vr19i.json)"
-  if [ "$line" = "HTTP 200" ] && echo "$body19i" | grep -qE '^\{"publicKey":"B[A-Za-z0-9_-]{86}"\}$'; then
-    ok "send-notification GET ?vapid=public answers exactly {\"publicKey\": <a 65-byte P-256 point in base64url>} (no other key)"
-  else
-    bad "send-notification GET ?vapid=public: $line (expected 200 with exactly one key publicKey matching ^B[A-Za-z0-9_-]{86}\$ - not deployed yet, the VAPID secrets missing, or another key leaked)"
-  fi
-  line=$(curl -s -o $T/vr19i2.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/send-notification?push=test")
-  echo "   19i unauthenticated POST send-notification?push=test: $line  body: $(head -c 120 $T/vr19i2.json)"
-  case "$line" in
-    "HTTP 401") ok "send-notification refuses an unauthenticated test push (401 - the function's own caller check)";;
-    *) bad "send-notification POST ?push=test without a session: $line (expected 401)";;
-  esac
+# 19i. the deployed send-notification (v12 since 2026-10-03 16:37:59 UTC; graded on every run since the record step): the public key
+# and nothing else on GET ?vapid=public (no auth); an unauthenticated POST ?push=test is refused 401 (the function's own caller check)
+line=$(curl -s -o $T/vr19i.json -w 'HTTP %{http_code}' "$URL/functions/v1/send-notification?vapid=public")
+body19i=$(tr -d ' \r\n' < $T/vr19i.json)
+echo "   19i GET send-notification?vapid=public: $line  body: $(head -c 120 $T/vr19i.json)"
+if [ "$line" = "HTTP 200" ] && echo "$body19i" | grep -qE '^\{"publicKey":"B[A-Za-z0-9_-]{86}"\}$'; then
+  ok "send-notification GET ?vapid=public answers exactly {\"publicKey\": <a 65-byte P-256 point in base64url>} (no other key)"
 else
-  echo "   INFO 19i not graded (set SILVIS_PUSH_DEPLOYED=1 after the Prompt 30 send-notification deploy: GET ?vapid=public must answer exactly {\"publicKey\":\"B...\"}, an unauthenticated POST ?push=test 401)"
+  bad "send-notification GET ?vapid=public: $line (expected 200 with exactly one key publicKey matching ^B[A-Za-z0-9_-]{86}\$ - the function rolled back to a pre-Prompt 30 copy (405), the VAPID secrets missing (503), or another key leaked)"
 fi
+line=$(curl -s -o $T/vr19i2.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/send-notification?push=test")
+echo "   19i unauthenticated POST send-notification?push=test: $line  body: $(head -c 120 $T/vr19i2.json)"
+case "$line" in
+  "HTTP 401") ok "send-notification refuses an unauthenticated test push (401 - the function's own caller check)";;
+  *) bad "send-notification POST ?push=test without a session: $line (expected 401)";;
+esac
 
 echo
 echo "RESULT: $pass passed, $fail failed"

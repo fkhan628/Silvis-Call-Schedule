@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - phone push PROBE (2026-10-03, Faraz 10/2 - Prompt 30: "Davenport's look, Silvis's own push";
--- sql/migrations/2026-10-03-push-notifications.sql, REPORT-FIRST, NOT APPLIED). Proves push_subscriptions, save_push_subscription(),
+-- sql/migrations/2026-10-03-push-notifications.sql, REPORT-FIRST; APPLIED 2026-10-03 16:30:43Z). Proves push_subscriptions, save_push_subscription(),
 -- delete_push_subscription(), push_subscription_status() and the two notification_preferences *_push columns on the LIVE database
 -- WITHOUT PERSISTING ANYTHING.
 --
@@ -20,6 +20,10 @@
 -- (schedule_updates_push the same). No collision guard is needed: every endpoint the probe writes carries a random tag
 -- (https://fcm.googleapis.com/fcm/send/probe-push-<8 random hex>-<n>, kept in probe_ctx), so no live row can meet it. AFTER the
 -- migration every case below must read as listed.
+-- As run: the migration was applied 2026-10-03 16:30:43Z (schema.sql revision w); the probe read PROBE_SETUP (push_subscriptions
+-- is absent) before it and all 51 cases below as listed after it. Until the record step verify-rls read PROBE_SETUP, the anon 404s
+-- and 19e's 42703 as the not-applied picture (unless its flag for the run right after the apply was set); since the record step,
+-- which dropped that flag, section 19 FAILs a PROBE_SETUP, an anon 404 or a 42703 - the not-applied grading is history.
 --
 -- Fixtures: no push_subscriptions row is written by the setup. Keys: K1 = 'B' + 86 x 'A', A1 = 22 x 'A', K2 = 'B' + 86 x 'C',
 -- A2 = 22 x 'C', K3 = 'B' + 86 x 'D' (shape-valid, obviously fake). Endpoints E1, E2, E10 .. E19, E20, E21 (the tag above with the

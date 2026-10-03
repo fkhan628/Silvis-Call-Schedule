@@ -115,7 +115,7 @@
 -- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letter t is
 -- Prompt 28's no-primary days (applied, merged ahead of this client); u is taken by prepared, unmerged work (independent - either
 -- apply order).
--- Revision 2026-10-03 w (phone push, sql/migrations/2026-10-03-push-notifications.sql, report-first, NOT yet applied): Faraz 10/2 (Prompt 30) -
+-- Revision 2026-10-03 w (phone push, sql/migrations/2026-10-03-push-notifications.sql, applied 2026-10-03 16:30:43Z after the probe): Faraz 10/2 (Prompt 30) -
 -- Fierce's trade request reached his e-mail but not his phone; "Davenport's look, Silvis's own push" (Web Push with VAPID keys, the app's
 -- own sw.js, no OneSignal). One NEW table push_subscriptions (one row per device: profile_id -> user_profiles on delete cascade; endpoint
 -- unique and https on a known push service only; p256dh / auth shape-checked; device_label; last_ok_at / last_error_at / fail_count for
@@ -1465,7 +1465,7 @@ alter table public.notification_preferences add constraint notification_preferen
 alter table public.notification_preferences drop constraint if exists notification_preferences_one_owner;
 alter table public.notification_preferences add constraint notification_preferences_one_owner
   check (num_nonnulls(person_id, profile_id) = 1);   -- a surgeon's row (person_id) or a follower's row (profile_id), never both, never neither
--- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first, NOT yet applied): the two phone switches on an
+-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an
 -- EXISTING table (constant defaults: no rewrite; every existing row - a surgeon's or a follower's - reads on). prefs_own covers them.
 alter table public.notification_preferences add column if not exists trade_updates_push boolean not null default true;
 alter table public.notification_preferences add column if not exists schedule_updates_push boolean not null default true;
@@ -1824,7 +1824,7 @@ revoke all on function public.save_app_days(uuid, date[], date[], boolean) from 
 grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;
 comment on function public.save_app_days(uuid, date[], date[], boolean) is 'Prompt 29: the only write path into app_call_days - an APP for its own profile, the scheduler (admin / scheduler) for any APP profile (adds) or any holder (clears; p_replace takes a day over). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
 
--- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first, NOT yet applied)
+-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)
 -- Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID keys and the app's own sw.js (no OneSignal). One row per
 -- device that turned phone notifications on. Own rows only: authenticated SELECTs the non-secret columns (a column grant - endpoint,
 -- p256dh and auth are capability secrets and never come back in a response) and DELETEs its own rows (the policies below); it never
@@ -2235,7 +2235,7 @@ create policy call_pay_logs_delete on public.call_pay_logs for delete to authent
 drop policy if exists app_call_days_read on public.app_call_days;
 create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
 
--- push_subscriptions (Prompt 30, revision w - report-first, NOT yet applied): own rows only. anon holds nothing (every privilege
+-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only. anon holds nothing (every privilege
 -- revoked, no policy); authenticated SELECTs the non-secret columns of its own rows and DELETEs its own rows (the sign-out cleanup,
 -- Settings > Turn off); no INSERT / UPDATE privilege - save_push_subscription() is the door; the service role (the edge function) reads
 -- the keys and keeps the bookkeeping.

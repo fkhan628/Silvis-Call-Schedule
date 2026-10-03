@@ -214,7 +214,7 @@ shifts board ignore APP days.
 2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
 3. Tap **Save** - your days appear on the calendar of everyone signed in as "A <your last name>".
 
-## Phone notifications (Prompt 30 - live once Faraz has applied the migration, set the VAPID keys, deployed send-notification and shipped the client)
+## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)
 
 The app sends a phone notification for the same events it e-mails a person about (trades, open shifts, a shift taken, the
 schedule published, a manual edit that touches them, offers, vacations logged), to the same people - on every device that

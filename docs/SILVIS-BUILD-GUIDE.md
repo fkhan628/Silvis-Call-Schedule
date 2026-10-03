@@ -2323,7 +2323,11 @@ OneSignal app or the Davenport repo). The binding contract is `push-design.md` (
 database half is `sql/migrations/2026-10-03-push-notifications.sql` (revision w, `docs/SCHEMA-REVIEW.md`), the server half
 `edge-functions/send-notification/index.ts` (its `@webPush` / `@pushPlan` blocks, `edge-functions/README.md`). Order:
 apply -> `setup-push-keys.sh` -> deploy send-notification -> the record step -> the client ship on Faraz's go -> each person
-taps Enable on each device.
+taps Enable on each device. The first three ran on 2026-10-03 (the record step: `docs/SCHEMA-REVIEW.md`, `edge-functions/README.md`):
+the migration applied 16:30:43Z (probe AFTER 51 / 51, verify-rls 469 / 0 with section 19 graded strictly), the VAPID keys set by
+`setup-push-keys.sh --rotate` 16:35:42Z (replacing the pair the 03:29Z incident had set), send-notification v12 deployed 16:37:59 UTC
+(the re-download byte-identical to the repo file); since the record step section 19 of `scripts/verify-rls.sh` is strict and
+grades 19i with no flag. Phone push works from the build that ships this client.
 
 ### 22.1 Transport and the worker
 

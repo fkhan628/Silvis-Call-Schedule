@@ -586,7 +586,17 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   // pin moved deliberately (Prompt 30): README section 3 said the v8 wording flips, with its pin, at the next source change -
   // Prompt 30 is that change, so the FOLLOWERS paragraph now records v8 as deployed and the PHONE PUSH paragraph is the pending v10
   assert.ok(/FOLLOWERS \(Prompt 20 F3, Faraz 9\/24; revision o; v8 on base v7 - deployed 2026-09-27 00:46 UTC; README section 3\)/.test(head), "the FOLLOWERS paragraph records v8 (on base v7) as deployed 2026-09-27 00:46 UTC");
-  assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3\)/.test(head), "the PHONE PUSH paragraph names itself the pending v10 on base v9");
+  // pin kept deliberately 10/3 (Prompt 30's record step): this source IS the deployed send-notification v12 (deployed 2026-10-03
+  // 16:37:59 UTC; the re-download byte-identical, sha256 ab7a6a70...), so its header stays as deployed - README section 3 ("Deploy
+  // record - Prompt 30") says the PHONE PUSH wording flips, with this pin, at the next source change (v12, not v10: two secrets sets
+  // had moved the listed version from v9 to v11)
+  assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3\)/.test(head), "the PHONE PUSH paragraph keeps its deployed wording (the pending v10 on base v9) until the next source change");
+  {
+    // the record step (10/3): README section 3 carries the deploy record and the flip rule; the source is byte-identical to what was deployed
+    const s3p = readme.slice(readme.indexOf("### Deploy record - Prompt 30 (phone push)"), readme.indexOf("### Deploy record - Prompt 26"));
+    assert.ok(/DEPLOYED 2026-10-03 16:37:59 UTC by Faraz \(v11 -> v12\)/.test(s3p) && /The source's own header still reads `v10 on base v9 - prepared, NOT deployed`/.test(s3p) && /that wording flips,\nwith its pin, at the next source change/.test(s3p), "README section 3's Prompt 30 record: DEPLOYED v11 -> v12, the header kept as deployed until the next source change");
+    assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, "edge-functions", "send-notification", "index.ts"))).digest("hex"), "ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa", "edge-functions/send-notification/index.ts must stay byte-identical to the deployed v12 (sha256 of the 10/3 re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+  }
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));

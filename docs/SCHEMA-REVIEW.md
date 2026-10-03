@@ -21,8 +21,8 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
-| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03, NOT APPLIED - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). |
-| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
+| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). |
+| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself; since 2026-10-03 16:30 UTC `push.save` / `push.delete` from `save_push_subscription` / `delete_push_subscription`, Prompt 30 - the function writes the row for every role, in the same transaction as its own write). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
@@ -32,7 +32,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 | `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
-| `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, NOT APPLIED - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. |
+| `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
 
@@ -47,7 +47,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (applied 2026-09-27): self-insert and self-update pin `follows` too (only the admin sets it) - Prompt 29 (applied 2026-10-02 19:19 UTC): self-insert and self-update pin `is_app` too (only the admin marks an APP account) |
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
-| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()`; Prompt 30 (prepared 2026-10-03, NOT APPLIED): the two `*_push` columns ride on the same row and policy |
+| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()`; Prompt 30 (applied 2026-10-03 16:30 UTC): the two `*_push` columns ride on the same row and policy |
 | `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (applied 2026-09-27 00:49:39Z, after the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none (an APP's `appdays.save` rows are written by the definer `save_app_days`, Prompt 29 - not through an insert policy) |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
@@ -57,7 +57,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `call_pay_settings` - applied 2026-09-28, call pay 9/27 | scheduler/admin; the office coordinator (read-only, 9/27 item 5a); a surgeon-role account linked to a roster id that is paid by the call stipend (`silvis_pay_enabled`, item 5b); never a switched-off surgeon / viewer / follower / anon (anon privileges revoked) | scheduler/admin (all verbs) |
 | `call_pay_logs` - applied 2026-09-28, call pay 9/27 | scheduler/admin and the office coordinator every row (a switched-off surgeon's earlier rows included); a surgeon-role account his own rows while switched on (`person_id = silvis_person_id() and silvis_pay_enabled(person_id)`); nobody else (anon privileges revoked) | insert/update/delete: scheduler/admin, and that surgeon his own rows while switched on - never the coordinator; `call_pay_logs_guard` (PY004 office, PY005 switched off, PY001-PY003) applies to every caller, the scheduler included |
 | `app_call_days` - applied 2026-10-02 19:19 UTC | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest) |
-| `push_subscriptions` - prepared 2026-10-03, NOT APPLIED | its own rows only (`push_subscriptions_own_read`: `profile_id = auth.uid()`), the non-secret columns only (`id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count` - a column grant; never `endpoint` / `p256dh` / `auth`); never anon (no anon policy, anon privileges revoked); the scheduler sees only his own devices too | insert / update: none directly (no privilege) - `save_push_subscription()` (security definer: `PS001`-`PS007`); delete: its own rows (`push_subscriptions_own_delete`); the service role (the edge function) keeps the bookkeeping and removes 404 / 410 rows |
+| `push_subscriptions` - applied 2026-10-03 16:30 UTC | its own rows only (`push_subscriptions_own_read`: `profile_id = auth.uid()`), the non-secret columns only (`id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count` - a column grant; never `endpoint` / `p256dh` / `auth`); never anon (no anon policy, anon privileges revoked); the scheduler sees only his own devices too | insert / update: none directly (no privilege) - `save_push_subscription()` (security definer: `PS001`-`PS007`); delete: its own rows (`push_subscriptions_own_delete`); the service role (the edge function) keeps the bookkeeping and removes 404 / 410 rows |
 
 ## (c) Findings
 
@@ -2948,7 +2948,7 @@ strictly with no flag.
 
 ## 2026-10-03 - phone push: push_subscriptions + save_push_subscription / delete_push_subscription / push_subscription_status + notification_preferences *_push (Faraz 10/2, Prompt 30; `sql/migrations/2026-10-03-push-notifications.sql`)
 
-**Status: PREPARED - report-first, NOT APPLIED.**
+**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - `apply-push-notifications.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then. The VAPID keys were set (rotated) at 16:35:42Z and send-notification v12 deployed at 16:37:59 UTC (`edge-functions/README.md`, "Deploy record - Prompt 30"); the client ships on Faraz's go.
 
 Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the
 send-notification deploy (edge-functions/README.md) - in that order, each pasted back; the client ships after all three, on his go.
@@ -3183,6 +3183,11 @@ grades 19i):
 | 19h | leftovers by the probe's identity: `auth.users` `probe-push-%@example.test` + `audit_log` `push.%` with summary `probe %` + `push_subscriptions` with a `probe-push-` endpoint (through `query_to_xml`, guarded by `to_regclass`) | 0 / 0; else FAIL with the three DELETEs (all rows only the probe writes) |
 | 19i | with `SILVIS_PUSH_DEPLOYED=1`: `GET /functions/v1/send-notification?vapid=public`; an unauthenticated `POST ...?push=test` | 200 with exactly `{"publicKey":"<B + 86 base64url>"}`; 401. Without the flag: one INFO line, nothing counted |
 
+*As run (the record step, 2026-10-03): `SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist - section 19 is strict by
+default (an anon 404, 19e's 42703 and PROBE_SETUP are FAILs; they passed as the not-applied picture before) and grades 19i on every
+run (send-notification v12 is deployed: a GET that does not answer exactly the public key - the v9 code answers 405 - or a test
+push that is not refused 401 FAILs).*
+
 **What could break / what offline cannot show.** The probe and section 19 are written against an AFTER picture observed OFFLINE:
 the migration, the pre-check and the probe ran on PGlite (WASM PostgreSQL) over main f2accf8's `schema.sql` with stubbed Supabase
 roles and `auth.uid()` (the DB lane's harness, `push/db-pglite-harness.mjs` beside the apply script): every one of the 51 cases
@@ -3194,7 +3199,14 @@ a faked CLI; the seven mutants each turned a named case red. What PGlite cannot 
 (live: `postgres`, which bypasses RLS as the owner of `push_subscriptions` and `audit_log` - no `force row level security`),
 Supabase's own default privileges (they grant every new table to anon and authenticated - the migration revokes all three, P1
 checks), and PostgREST (the HTTP codes of 19a-19f, the schema-cache reload). The live database is what the apply proves; section 19
-grades exact strings and names any difference by case.
+grades exact strings and names any difference by case. *As run (2026-10-03): the live probe AFTER (the 20261003T163024Z run - the
+second script run; the first, at 16:30:01Z, was a `--dry-run` that stopped after the probe BEFORE, as designed) read all 51 cases
+exactly as their header strings - P1-P4 included (RLS, the cascade, the unique endpoint, the two policies, the column grant, no anon
+privilege, not published; the three functions definer and volatile with their search_path and EXECUTE for authenticated only; the
+five checks; the two columns), S1 / S3 / O6 / O6a / D1 / D2 (the definer's writes and audit rows under the live owner - RLS on, no
+INSERT / UPDATE privilege for authenticated; no case reads the owner itself) and X1 (the cascade); 19a-19d answered HTTP 401
+`42501` and 19e HTTP 200 `[]` (the schema cache knew the four keys and the two columns right after the reload); section 19 graded
+57 / 0.*
 
 **Apply order:**
 
@@ -3219,12 +3231,32 @@ grades exact strings and names any difference by case.
     with them.
 11. The client push, on Faraz's go; then each user taps Enable on each device (iPhone / iPad: from the Home Screen app).
 
+*As run (2026-10-03): items 1-7 by `apply-push-notifications.sh` (Faraz, the repo at `04c2245`), its steps 0-7 in this order: the
+sha256 checks, the pre-check, the function-absent check (none of the three functions), probe BEFORE, the migration (after typing
+APPLY), the gate again with the new signatures, probe AFTER, `SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh` - the first failure
+of any step stops the script; a `--dry-run` at 16:30:01Z stopped after the probe BEFORE, as designed, and applied nothing. Item 8 by
+`setup-push-keys.sh --rotate` at 16:35:42Z (ROTATE and SET typed): it replaced the pair the 03:29Z incident had set (the observed
+lines at the end). Item 9 at 16:37:59 UTC (`edge-functions/README.md`, "Deploy record - Prompt 30"): the live copy was backed up
+first - the v9 code of 2026-10-01, which `functions list` read as v11 after the two `secrets set` runs of the day (the incident's and
+the rotate) - and the deploy made it v12, not v10; 19i's two calls were made by hand with `curl.exe` (the public key
+`BA2H3T2V...`, the unauthenticated test push 401), not through `SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh`. Item 10 is the
+record commit, as listed except the migration file: it is kept byte for byte as it ran (sha256
+`cfac281e51d365ac5b702829028d9b4cd763ea61348c9a6d6f0f57e6e37f4df0`, pinned in `test/schema.test.js`), the apply noted in ONE
+trailer line instead of its header turning APPLIED; the probe's and the pre-check's headers read APPLIED with an as-run note;
+`SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist (section 19 is strict by default and grades 19i on every run). The
+record step changed all four sha256s the apply script checks (the migration's through its trailer line - the body's is unchanged) -
+the script is one-shot; a re-apply after a rollback (or a `--dry-run`) needs its pins refreshed first, or it stops at step 0. Item 11
+follows, on Faraz's go.*
+
 **One command (Faraz):** his apply script `apply-push-notifications.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry
 machine paths) - it checks that the migration's sha256 is the reviewed one (and the probe's, the pre-check's and verify-rls's),
 runs steps 1-7 above, stops at the first failure (nothing after it runs), asks for `APPLY` in capital letters before step 4 (the
 prompt line says so), has a `--dry-run` (steps 0-3 only), exports `AI_AGENT=1`, reads both output shapes of `supabase db query -o
 json` (the bare array and the `{"warning","boundary","rows"}` envelope), writes a log and ends with a PASTE THIS BACK TO CLAUDE
 CODE block for the record step. `setup-push-keys.sh` beside it does step 8 (its own log and paste-back block).
+Faraz ran it on 2026-10-03 at `04c2245` (the observed lines at the end; a `--dry-run` minutes earlier stopped after the probe BEFORE
+and applied nothing), then `setup-push-keys.sh --rotate` and the send-notification deploy; the record step followed from the two
+paste-back blocks and the deploy record.
 
 **Rolling back** (in this order; every saved subscription is lost - each device taps Enable again after a re-apply; the client
 reads the missing objects as "unavailable", the edge function answers `push.error` and keeps mailing; redeploy the backed-up
@@ -3240,4 +3272,116 @@ alter table public.notification_preferences drop column if exists trade_updates_
 notify pgrst, 'reload schema';
 ```
 
-observed: _to be filled from Faraz's apply log_
+*As run: the send-notification copy to redeploy on a rollback is the backup taken before the v12 deploy - the v9 code -
+`$wd\backup-send-notification-2026-10-03\index.ts` (`edge-functions/README.md`, "Deploy record - Prompt 30").*
+
+observed (apply, 2026-10-03): applied 2026-10-03 16:30:43Z (`apply-push-notifications.sh` step 4: the migration file through
+`supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz (log
+`apply-push-notifications-20261003T163024Z.log`, outside the repo, result `APPLIED AND VERIFIED`; repo HEAD `04c2245` on
+`feat/push-notifications`; the migration's sha256 `cfac281e51d365ac5b702829028d9b4cd763ea61348c9a6d6f0f57e6e37f4df0` = the expected one, the
+probe's, the pre-check's and `scripts/verify-rls.sh`'s sha256 matched too (`all four matched: yes`); supabase CLI 2.84.2, the workdir
+linked to `bzhsroegtagqhutbnsrp`; APPLY typed at the prompt). Step 1, the pre-check (read-only) - gate before:
+`table=no push_cols=0 save_fn=no delete_fn=no status_fn=no`; its facts (never a stop; counts only), as the log printed them:
+
+```text
+2 profiles admin: n=1 linked=1 following=0 app=0
+2 profiles coordinator: n=2 linked=0 following=0 app=0
+2 profiles surgeon: n=5 linked=5 following=0 app=0
+2 profiles viewer: n=3 linked=0 following=2 app=2
+3 prefs: rows=2 person=2 profile=0
+4 audit: push_rows=0
+5 realtime: publication=yes all_tables=no push_subscriptions_published=no
+```
+
+Step 2, the function-absent check: 0 rows - `OK - none of the three functions exists` (signatures before: none). Step 3, probe BEFORE:
+`PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied` (nothing else ran). Step 5,
+gate after: `table=yes push_cols=2 save_fn=yes delete_fn=yes status_fn=yes` (rows 2-5 unchanged); signatures after:
+`delete_push_subscription(text) definer;push_subscription_status(text) definer;save_push_subscription(text, text, text, text) definer`.
+Step 6, probe AFTER - 51 cases, every one as the probe table above lists, as the log printed them (sorted by case; no escaped
+character):
+
+```text
+B1=ERR PS003 PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved
+B2=ERR PS003 PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved
+B3=ERR PS004 PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)
+B4=ERR PS004 PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)
+B5=ERR PS005 PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)
+B6=ERR PS005 PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)
+B7=rows=1
+C1=ok devices=10
+C2=ERR PS007 PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)
+C3=rows=10
+D1=ok removed=1 devices=9 audit=true
+D2=action=push.delete sum=probe surgeon: phone notifications off (Pixel)
+D3=ok removed=0 devices=9 audit=false
+D4=deleted=1 rows=8
+F1=trade_updates_push=true schedule_updates_push=true
+F2=updated=1 trade_updates_push=false
+F3=ok schedule_updates_push=false trade_updates_push=true
+F4=updated=0
+N1=ERR 42501 permission denied for table push_subscriptions
+N2=ERR 42501 permission denied for function save_push_subscription
+N3=ERR 42501 permission denied for function delete_push_subscription
+N4=ERR 42501 permission denied for function push_subscription_status
+N5=ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account
+N6=ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account
+N7=ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account
+N8=ERR PS002 PUSH_NO_PROFILE: this account has no profile yet - ask the scheduler (nothing was saved)
+O1=rows=0
+O2=deleted=0 still=1
+O3=ok removed=0 devices=0 audit=false still=1
+O4=ok saved=false devices=0
+O5=ERR PS006 PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)
+O5s=owner=U1
+O6=ok action=moved devices=1 audit=true
+O6a=actor=self name=probe viewer two sum=probe viewer two: phone notifications on (Chrome on Windows) - moved from another account other_ids=no
+O6s=owner=U2 label=Chrome on Windows fail=0
+O7=ok saved=false devices=0
+P1=table=yes rls=yes fk=cascade unique_endpoint=yes policies=push_subscriptions_own_delete/delete/authenticated,push_subscriptions_own_read/select/authenticated anon_any=no auth_cols=created_at,device_label,fail_count,id,last_error_at,last_ok_at,profile_id auth_insert=no auth_update=no auth_delete=yes published=no
+P2=save=definer/volatile delete=definer/volatile status=definer/volatile paths=3 public_exec=0 anon_exec=0 auth_exec=3
+P3=checks=push_subscriptions_auth_shape,push_subscriptions_endpoint_shape,push_subscriptions_fail_count_check,push_subscriptions_label_shape,push_subscriptions_p256dh_shape
+P4=trade_updates_push=boolean/not_null/true schedule_updates_push=boolean/not_null/true
+S1=ok action=added devices=1 audit=true
+S10=ok saved=true devices=1
+S2=owner=U1 label=iPhone fail=0 ok_at=null
+S3=audit=1 action=push.save actor=s9push name=probe surgeon sum=probe surgeon: phone notifications on (iPhone) keys=action,device_label,profile_id,summary
+S4=ok action=kept devices=1 audit=false audit_rows=1
+S5=ok action=refreshed devices=1 label=iPhone
+S6=rows=1
+S7=ERR 42501 permission denied for table push_subscriptions
+S8=ERR 42501 permission denied for table push_subscriptions
+S9=ERR 42501 permission denied for table push_subscriptions
+X1=before=1 after=0 audit_kept=yes
+```
+
+Step 7, `SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh` (section 19 graded strictly): `RESULT: 469 passed, 0 failed` - section 19
+57 / 0: 19a `HTTP 401` (`42501`, the table), 19b `HTTP 401` (`permission denied for function save_push_subscription`: PostgREST knows
+the four keys), 19c `HTTP 401` (`permission denied for function delete_push_subscription`), 19d `HTTP 401` (`permission denied for
+function push_subscription_status`), 19e `HTTP 200` `[]` (PostgREST knows both columns; no row for anon), every one of the 51 cases
+PASS and `phone push probe persisted nothing (leftover count 0: ...)`; 19i one INFO line (not graded - the deploy came after);
+sections 1-16 and 18 green with every leftover count 0 (17 is on another branch); the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d,
+14c, 18e, 19f) skipped - no JWT set. The `--dry-run` minutes earlier (log `apply-push-notifications-20261003T163001Z.log`) read
+steps 0-3 as above (the same HEAD, sha256s, gate, facts and PROBE_SETUP) and stopped there by design - `APPLY confirmation: not
+reached`, `migration: not run`.
+
+observed (keys, 2026-10-03): `setup-push-keys.sh --rotate` started 20261003T163542Z (log `setup-push-keys-20261003T163542Z.log`,
+outside the repo, result `OK`; supabase CLI 2.84.2, the workdir linked to `bzhsroegtagqhutbnsrp`): names before `VAPID_PRIVATE_KEY
+VAPID_PUBLIC_KEY VAPID_SUBJECT`; `confirmations: ROTATE typed; SET typed`; the pair generated and self-checked in node - `public key
+prefix: BA2H3T2V` (a 65-byte P-256 key), the private key never shown; `secrets set: exit 0`; `temp file removed: yes`; names after the
+same three; `new pair landed: yes` (the listed digest of `VAPID_PUBLIC_KEY` is the sha256 of the new key; both digests changed across
+the rotate). The incident it resolves: at 2026-10-03 03:29:02Z an agent's test harness for `setup-push-keys.sh` fell through its fake
+CLI to the real one and set a VAPID pair (public key prefix `BOH9yDTn`) on the live project - no private key was shown and no code,
+row or schema changed (the functions' listed versions rose by one, as on every `secrets set`; the history report `REPORT-AUTONOMOUS-2026-10-01.md`, section "INCIDENT" - `docs/HISTORY.md`). Faraz's rotate replaced it with a pair he generated - the
+deployed function's `GET ?vapid=public` answers `BA2H3T2V...` - before any device could subscribe to the old one (the table came at
+16:30:43Z, five minutes earlier, and no client build that saves subscriptions had shipped).
+
+observed (deploy, 2026-10-03): send-notification v11 -> v12 at 2026-10-03 16:37:59 UTC by Faraz, `--no-verify-jwt --use-api`, after
+backing up the live copy (`edge-functions/README.md`, "Deploy record - Prompt 30", has the proof lines): `GET ?vapid=public` ->
+`{"publicKey":"BA2H3T2V..."}` (the key 87 characters, the rotate's prefix); an unauthenticated `POST ?push=test` -> `401`; the
+re-download is byte-identical to `edge-functions/send-notification/index.ts` at `04c2245` (sha256
+`ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa`). The record step (one commit, item 10 and its as-run note):
+this status, tables (a) / (b)'s `notification_preferences`, `push_subscriptions` and `audit_log` rows, schema.sql revision w and its
+block comments, the migration's trailer line and sha256 pin, the probe's and the pre-check's headers, verify-rls section 19 strict by
+default with 19i graded on every run and `SILVIS_PUSH_APPLIED` / `SILVIS_PUSH_DEPLOYED` dropped, `edge-functions/README.md`'s deploy
+record, guide 22, ONBOARDING, CLAUDE.md, and the test pins with them. Not re-run against the live project after the record step (the
+record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grades section 19 strictly, 19i included, with no flag.
