@@ -583,7 +583,10 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   // P20 R1 (review): v7 is live (README section 3's record), so the header no longer calls it pending; this source is the pending v8
   assert.ok(!/NOT deployed yet/.test(head) && !/pending v7/.test(head), "the header must not call Prompt 19's v7 pending (deployed 2026-09-25 05:36 UTC)");
   assert.ok(/GIVE A DAY \(Prompt 19 S3, 2026-09-24; v7, deployed 2026-09-25 05:36 UTC;/.test(head), "the GIVE A DAY paragraph records v7 as deployed 2026-09-25 05:36 UTC");
-  assert.ok(/FOLLOWERS \(Prompt 20 F3, Faraz 9\/24; revision o; v8 on base v7 - prepared, NOT deployed; README section 3\)/.test(head), "the FOLLOWERS paragraph names itself the pending v8 on base v7");
+  // pin moved deliberately (Prompt 30): README section 3 said the v8 wording flips, with its pin, at the next source change -
+  // Prompt 30 is that change, so the FOLLOWERS paragraph now records v8 as deployed and the PHONE PUSH paragraph is the pending v10
+  assert.ok(/FOLLOWERS \(Prompt 20 F3, Faraz 9\/24; revision o; v8 on base v7 - deployed 2026-09-27 00:46 UTC; README section 3\)/.test(head), "the FOLLOWERS paragraph records v8 (on base v7) as deployed 2026-09-27 00:46 UTC");
+  assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3\)/.test(head), "the PHONE PUSH paragraph names itself the pending v10 on base v9");
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
@@ -1212,7 +1215,8 @@ check("P20 F3 source pins - send-notification: followers are added AFTER the gat
   assert.ok(iGuard > iLoop && iRead > iGuard && iFol > iRead, "review F3: the follower read runs inside the FOLLOWER_SEND_TYPES guard (no read, no followers_error on other sends)");
   assert.ok(iRead > 0, "the follower accounts, select=*");
   assert.ok(!/rest[(]["`][^"`]*follows/.test(snSrc), "no read names the follows column");
-  assert.ok(/const \{ list, skippedPrefOff, prefRows \} = await resolveRecipients\(/.test(h), "resolveRecipients hands back the prefs rows it read");
+  // pin moved deliberately (Prompt 30): the destructuring adds `audience` (the push side's people); the prefs rows are still handed back
+  assert.ok(/const \{ list, skippedPrefOff, prefRows, audience \} = await resolveRecipients\(/.test(h), "resolveRecipients hands back the prefs rows it read (and, since Prompt 30, the audience)");
   const fb = h.slice(iFol - 1200, h.indexOf("return json(200, {", iFol));
   assert.ok(/try \{[^]*followerIndex\(fProfiles, prefRows\)[^]*\} catch \(e\) \{[^]*followersError = /.test(fb), "the follower part is isolated in its own try / catch");
   assert.ok(/console\.error\(`\[send-notification\] followers: /.test(fb), "a follower failure is logged");
@@ -1925,6 +1929,714 @@ check("P26 (review 9/30): the freeze roll call's vacations read the same in the 
   const app = H20.offerFreezeRollcall(P26_PERIOD, [], rows, ids);
   ids.forEach((id) => assert.deepStrictEqual((app.find((r) => r.id === id) || {}).vacations || [], cron[id] || [], "the same ranges for " + id));
   assert.deepStrictEqual(cron.s1, [{ start: "2027-01-04", end: "2027-01-12" }], "fixture: clipped and merged");
+});
+
+/* =====================================================================
+   Prompt 30 (Faraz 10/2: "Davenport's look, Silvis's own push") - PHONE PUSH in send-notification. Web Push with VAPID,
+   no third-party service. Two plain-JS blocks in send-notification/index.ts, lifted here with new Function:
+     '@webPush'  - RFC 8291 message encryption in ONE RFC 8188 aes128gcm record + an RFC 8292 VAPID ES256 token
+                   (checked against the RFC 8291 Appendix A vector, a round trip decrypted by an independent receiver
+                   written below, and a VAPID token verified with the public key);
+     '@pushPlan' - the switch per category, the payload (tab / tag / words), whom (the audience and the followers BEFORE
+                   any e-mail flag), the bounded send loop, the response object.
+   Then the REAL handler: index.ts with its types stripped by Node's own stripTypeScriptTypes (no Deno on this PC), run
+   against a fake fetch that plays GoTrue, PostgREST, Resend and the push services. It proves the channels are
+   independent (e-mail off + push on still pushes, and the reverse), the e-mail part of every answer equals the
+   pre-Prompt-30 logic re-stated here, 404 / 410 delete the row, the counts, the two routes (GET ?vapid=public,
+   POST ?push=test to the caller's own devices without reading a body), and that no endpoint, key or address reaches a
+   response or a log line. Fake endpoints keep their token under 24 characters (privacy A6f); every key is generated here.
+   ===================================================================== */
+const P30_SUBTLE = globalThis.crypto.subtle;
+const p30B64u = (bytes) => Buffer.from(bytes).toString("base64url");
+const p30Unb64u = (text) => new Uint8Array(Buffer.from(String(text), "base64url"));
+const p30Cat = (...parts) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0; parts.forEach((p) => { out.set(p, at); at += p.length; }); return out; };
+const p30Utf8 = (s) => new Uint8Array(Buffer.from(s, "utf8"));
+const P30_NUL = new Uint8Array([0]);
+// an id that is no literal uuid in this file (privacy A6b reads a bare uuid as a session id): <8 hex>-0000-4000-8000-000000000000
+const p30Id = (head) => head + "-0000-4000-" + "8000-" + "0".repeat(12);
+const P30_TRADE_ID = p30Id("abcdef12");
+const P30_CONTRACT_TABS = ["calendar", "openshifts", "myschedule", "timeoff", "settings", "setup"];
+const P30_SW_TAG = /^silvis-[a-z0-9-]{1,60}$/;   // sw.js's tag rule (push-design 3.1)
+const p30Fcm = (token) => "https://fcm.googleapis.com/fcm/send/" + token;
+function p30Block(tag) {
+  const i = snSrc.search(new RegExp("^// @" + tag + "-start[ \\t]*$", "m")), j = snSrc.search(new RegExp("^// @" + tag + "-end[ \\t]*$", "m"));
+  assert.ok(i >= 0 && j > i, "send-notification/index.ts carries '// @" + tag + "-start' / '// @" + tag + "-end' on lines of their own");
+  assert.strictEqual(snSrc.split("\n").filter((l) => l.trim() === "// @" + tag + "-start").length, 1, "the @" + tag + " block exists once");
+  return snSrc.slice(i + ("// @" + tag + "-start").length, j);
+}
+const P30_WP_API = "{ WP_RS, WP_TTL, wpB64uEncode, wpB64uDecode, wpConcat, wpHkdf, wpEncrypt, wpVapidKey, wpVapidJwt, wpRequest }";
+const P30_PP_API = "{ PUSH_TABS, PUSH_PREF_OF, PUSH_ENDPOINT_RE, PUSH_TTL_SECONDS, PUSH_MAX_BODY, PUSH_CONCURRENCY, PUSH_TIMEOUT_MS, PUSH_TITLE, PUSH_TEST_BODY, PUSH_NOT_CONFIGURED, PUSH_NOT_SET_UP, pushPrefOf, pushEnabled, pushEndpointAllowed, pushVapidConfigOk, pushBodyOf, pushTagOf, pushTabOf, pushDayOf, pushPayload, pushTargets, pushOutcome, redactEndpoints, pushDeliver, pushSummary, pushEmpty }";
+let WP = null, PP = null;
+check("P30: send-notification carries the plain-JS '@webPush' and '@pushPlan' blocks once each, on lines of their own, free of type annotations and of Deno / Node globals (no 'Deno.', 'require(', 'process.'); '@webPush' evaluates ALONE (WebCrypto + TextEncoder / atob / btoa only) and '@pushPlan' with only the '@logRedact' block beside it", () => {
+  const wp = p30Block("webPush"), pp = p30Block("pushPlan");
+  [[wp, "@webPush"], [pp, "@pushPlan"]].forEach(([b, n]) => {
+    plainJs(b, "send-notification " + n);
+    assert.ok(!/\bDeno\./.test(b) && !/\brequire\(/.test(b) && !/\bprocess\./.test(b), n + ": no Deno. / require( / process.");
+  });
+  assert.ok(!/\bfetch\(/.test(wp) && !/\bfetch\(/.test(pp), "neither block fetches - the handler does the I/O");
+  WP = new Function(wp + "\nreturn " + P30_WP_API + ";")();
+  PP = new Function(blockOf(snSrc, "send-notification", "logRedact") + pp + "\nreturn " + P30_PP_API + ";")();
+  Object.keys(WP).concat(Object.keys(PP)).forEach((k) => assert.ok((WP[k] !== undefined) || (PP[k] !== undefined), "defines " + k));
+  assert.deepStrictEqual(PP.PUSH_TABS, P30_CONTRACT_TABS, "PUSH_TABS is the contract's whitelist literal (helpers.js and sw.js carry the same - test/push.test.js)");
+  assert.strictEqual(PP.PUSH_CONCURRENCY, 6); assert.strictEqual(PP.PUSH_TIMEOUT_MS, 8000); assert.strictEqual(PP.PUSH_MAX_BODY, 180);
+  assert.strictEqual(PP.PUSH_TTL_SECONDS, 259200); assert.strictEqual(WP.WP_TTL, String(PP.PUSH_TTL_SECONDS), "the TTL header is the plan's 3 days");
+  assert.strictEqual(WP.WP_RS, 4096);
+  assert.ok(!/_email/.test(pp), "the push plan never names an e-mail flag");
+});
+// RFC 8291 Appendix A - PUBLISHED TEST DATA from the RFC (its two private keys are the RFC's example keys, not secrets)
+const RFC8291 = {
+  plaintext: "When I grow up, I want to be a watermelon",
+  as_public: "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+  as_private: "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw",
+  ua_public: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+  ua_private: "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94",
+  salt: "DGv6ra1nlYgDCS1FRnbzlw",
+  auth_secret: "BTBZMqHH6r4Tts7J_aSIgg",
+  ecdh_secret: "kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs",
+  ikm: "S4lYMb_L0FxCeq0WhDx813KgSYqU26kOyzWUdsXYyrg",
+  cek: "oIhVW04MRdy2XN9CiKLxTg",
+  nonce: "4h_95klXJ5E_qnoN",
+  body: "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN",
+};
+acheck("P30 RFC 8291 Appendix A: wpEncrypt with the vector's sender key and salt reproduces the published body byte for byte; IKM / CEK / NONCE through wpHkdf equal the vector's; the ECDH secret WebCrypto derives from the vector's keys is the vector's", async () => {
+  if (!WP) throw new Error("the @webPush block did not load");
+  const body = await WP.wpEncrypt(p30Utf8(RFC8291.plaintext), RFC8291.ua_public, RFC8291.auth_secret, { asPublicB64u: RFC8291.as_public, asPrivateB64u: RFC8291.as_private, saltB64u: RFC8291.salt });
+  assert.strictEqual(WP.wpB64uEncode(body), RFC8291.body, "the aes128gcm body");
+  const ua = p30Unb64u(RFC8291.ua_public), as = p30Unb64u(RFC8291.as_public);
+  const uaPriv = await P30_SUBTLE.importKey("jwk", { kty: "EC", crv: "P-256", x: p30B64u(ua.slice(1, 33)), y: p30B64u(ua.slice(33, 65)), d: RFC8291.ua_private }, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const asPubKey = await P30_SUBTLE.importKey("raw", as, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const ecdh = new Uint8Array(await P30_SUBTLE.deriveBits({ name: "ECDH", public: asPubKey }, uaPriv, 256));
+  assert.strictEqual(p30B64u(ecdh), RFC8291.ecdh_secret, "the ECDH secret (receiver side)");
+  const ikm = await WP.wpHkdf(p30Unb64u(RFC8291.auth_secret), ecdh, p30Cat(p30Utf8("WebPush: info"), P30_NUL, ua, as), 32);
+  assert.strictEqual(p30B64u(ikm), RFC8291.ikm, "IKM = HKDF(auth, ecdh, 'WebPush: info' 0x00 | ua_public | as_public, 32)");
+  const salt = p30Unb64u(RFC8291.salt);
+  assert.strictEqual(p30B64u(await WP.wpHkdf(salt, ikm, p30Cat(p30Utf8("Content-Encoding: aes128gcm"), P30_NUL), 16)), RFC8291.cek, "CEK");
+  assert.strictEqual(p30B64u(await WP.wpHkdf(salt, ikm, p30Cat(p30Utf8("Content-Encoding: nonce"), P30_NUL), 12)), RFC8291.nonce, "NONCE");
+  assert.deepStrictEqual(Array.from(WP.wpB64uDecode(RFC8291.salt + "==")), Array.from(salt), "padding is optional on decode");
+  ["ab+c", "ab/c", "a b", "ab=c"].forEach((t) => assert.throws(() => WP.wpB64uDecode(t), /base64url/, "refuses " + t));
+});
+// an independent receiver (RFC 8291 section 3.4 / RFC 8188): WebCrypto's own HKDF, not the block's
+async function p30Hkdf(salt, ikm, info, len) {
+  const k = await P30_SUBTLE.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await P30_SUBTLE.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, k, len * 8));
+}
+async function p30Decrypt(bodyBytes, dev) {
+  const b = new Uint8Array(bodyBytes);
+  const salt = b.slice(0, 16), rs = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(16, false), idlen = b[20];
+  const asPub = b.slice(21, 21 + idlen), sealed = b.slice(21 + idlen);
+  const asKey = await P30_SUBTLE.importKey("raw", asPub, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const ecdh = new Uint8Array(await P30_SUBTLE.deriveBits({ name: "ECDH", public: asKey }, dev.priv, 256));
+  const ikm = await p30Hkdf(dev.authBytes, ecdh, p30Cat(p30Utf8("WebPush: info"), P30_NUL, dev.pubRaw, asPub), 32);
+  const cek = await p30Hkdf(salt, ikm, p30Cat(p30Utf8("Content-Encoding: aes128gcm"), P30_NUL), 16);
+  const nonce = await p30Hkdf(salt, ikm, p30Cat(p30Utf8("Content-Encoding: nonce"), P30_NUL), 12);
+  const key = await P30_SUBTLE.importKey("raw", cek, "AES-GCM", false, ["decrypt"]);
+  const plain = new Uint8Array(await P30_SUBTLE.decrypt({ name: "AES-GCM", iv: nonce, tagLength: 128 }, key, sealed));
+  return { salt, rs, idlen, asPub, plain, sealedLength: sealed.length };
+}
+async function p30Device(token) {
+  const pair = await P30_SUBTLE.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const pubRaw = new Uint8Array(await P30_SUBTLE.exportKey("raw", pair.publicKey));
+  const authBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  return { endpoint: p30Fcm(token), p256dh: p30B64u(pubRaw), auth: p30B64u(authBytes), priv: pair.privateKey, pubRaw, authBytes };
+}
+async function p30Vapid() {
+  const pair = await P30_SUBTLE.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const pubRaw = new Uint8Array(await P30_SUBTLE.exportKey("raw", pair.publicKey));
+  const jwk = await P30_SUBTLE.exportKey("jwk", pair.privateKey);
+  return { pubRaw, publicB64u: p30B64u(pubRaw), privateB64u: jwk.d };
+}
+async function p30Jwt(jwt, pubRaw) {
+  const [h, c, s] = String(jwt).split(".");
+  const key = await P30_SUBTLE.importKey("raw", pubRaw, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+  const sig = p30Unb64u(s);
+  const ok = await P30_SUBTLE.verify({ name: "ECDSA", hash: "SHA-256" }, key, sig, p30Utf8(h + "." + c));
+  return { header: JSON.parse(Buffer.from(h, "base64url").toString("utf8")), claims: JSON.parse(Buffer.from(c, "base64url").toString("utf8")), ok, sigLength: sig.length };
+}
+acheck("P30 round trip: a test-generated subscription (P-256 key + 16-byte auth) decrypts, with an independent receiver, to the plaintext followed by the 0x02 last-record delimiter; header rs 4096 / idlen 65 / a fresh sender key and salt per message; a 4079-byte payload fits one record, 4080 does not; a malformed key or auth secret throws", async () => {
+  if (!WP) throw new Error("the @webPush block did not load");
+  const dev = await p30Device("rt-1");
+  const text = JSON.stringify({ v: 1, title: "Silvis Call", body: "round trip", tag: "silvis-test", tab: "settings" });
+  const one = await p30Decrypt(await WP.wpEncrypt(p30Utf8(text), dev.p256dh, dev.auth), dev);
+  assert.strictEqual(one.rs, 4096); assert.strictEqual(one.idlen, 65); assert.strictEqual(one.asPub[0], 4, "as_public is an uncompressed point");
+  assert.strictEqual(one.plain[one.plain.length - 1], 2, "the record ends with the 0x02 delimiter");
+  assert.strictEqual(Buffer.from(one.plain.slice(0, -1)).toString("utf8"), text, "the plaintext");
+  const two = await p30Decrypt(await WP.wpEncrypt(p30Utf8(text), dev.p256dh, dev.auth), dev);
+  assert.notStrictEqual(p30B64u(two.salt), p30B64u(one.salt), "a fresh salt per message");
+  assert.notStrictEqual(p30B64u(two.asPub), p30B64u(one.asPub), "a fresh sender key per message");
+  const big = await p30Decrypt(await WP.wpEncrypt(new Uint8Array(4079).fill(65), dev.p256dh, dev.auth), dev);
+  assert.strictEqual(big.sealedLength, 4096, "4079 bytes + the delimiter + the 16-byte tag = exactly one 4096-byte record");
+  await assert.rejects(WP.wpEncrypt(new Uint8Array(4080), dev.p256dh, dev.auth), /one record/, "4080 bytes do not fit");
+  await assert.rejects(WP.wpEncrypt(p30Utf8("x"), dev.p256dh.slice(0, 40), dev.auth), /uncompressed P-256/, "a short key");
+  await assert.rejects(WP.wpEncrypt(p30Utf8("x"), dev.p256dh, dev.auth.slice(0, 10)), /16 bytes/, "a short auth secret");
+});
+acheck("P30 VAPID (RFC 8292): a test-generated pair imports (a malformed or mismatched pair throws); wpRequest's token is {\"typ\":\"JWT\",\"alg\":\"ES256\"} with aud = the endpoint's ORIGIN, sub = the subject, now < exp <= now + 24 h, a raw 64-byte ES256 signature that verifies with the public key; the headers are exactly Authorization 'vapid t=<jwt>, k=<public key>', Content-Encoding aes128gcm, Content-Type application/octet-stream, TTL 259200, Urgency high; one token per push-service origin per send", async () => {
+  if (!WP) throw new Error("the @webPush block did not load");
+  const v = await p30Vapid(), other = await p30Vapid();
+  const key = await WP.wpVapidKey(v.publicB64u, v.privateB64u);
+  assert.strictEqual(key.publicB64u, v.publicB64u);
+  await assert.rejects(WP.wpVapidKey(v.publicB64u, other.privateB64u), /does not match/, "a mismatched pair");
+  await assert.rejects(WP.wpVapidKey(v.publicB64u.slice(0, 60), v.privateB64u), /malformed/, "a short public key");
+  await assert.rejects(WP.wpVapidKey(v.publicB64u, v.privateB64u + "AAAAA"), /malformed/, "a long private key (36 bytes)");
+  await assert.rejects(WP.wpVapidKey(v.publicB64u, v.privateB64u + "AA"), /base64url/, "a private key of impossible length (45 characters)");
+  const subject = "https://fkhan628.github.io/Silvis-Call-Schedule/";
+  const now = 1790000000;
+  const cache = new Map();
+  const dev1 = await p30Device("vp-1"), dev2 = await p30Device("vp-2");
+  const apple = Object.assign({}, await p30Device("vp-3"), { endpoint: "https://web.push.apple.com/vp-3" });
+  const r1 = await WP.wpRequest(dev1, "{}", key, subject, now, cache), r2 = await WP.wpRequest(dev2, "{}", key, subject, now, cache), r3 = await WP.wpRequest(apple, "{}", key, subject, now, cache);
+  assert.strictEqual(r1.url, dev1.endpoint); assert.strictEqual(r1.init.method, "POST");
+  assert.deepStrictEqual(Object.keys(r1.init.headers).sort(), ["Authorization", "Content-Encoding", "Content-Type", "TTL", "Urgency"]);
+  assert.strictEqual(r1.init.headers["Content-Encoding"], "aes128gcm"); assert.strictEqual(r1.init.headers["Content-Type"], "application/octet-stream");
+  assert.strictEqual(r1.init.headers.TTL, "259200"); assert.strictEqual(r1.init.headers.Urgency, "high");
+  const m = /^vapid t=([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+), k=([A-Za-z0-9_-]+)$/.exec(r1.init.headers.Authorization);
+  assert.ok(m, "Authorization reads 'vapid t=<jwt>, k=<key>': " + r1.init.headers.Authorization.slice(0, 40));
+  assert.strictEqual(m[2], v.publicB64u, "k = the public key");
+  const j = await p30Jwt(m[1], v.pubRaw);
+  assert.ok(j.ok, "the ES256 signature verifies with the public key");
+  assert.strictEqual(j.sigLength, 64, "raw r || s");
+  assert.deepStrictEqual(j.header, { typ: "JWT", alg: "ES256" });
+  assert.deepStrictEqual(Object.keys(j.claims).sort(), ["aud", "exp", "sub"]);
+  assert.strictEqual(j.claims.aud, "https://fcm.googleapis.com", "aud = the endpoint's origin, never the full endpoint");
+  assert.strictEqual(j.claims.sub, subject);
+  assert.ok(j.claims.exp > now && j.claims.exp <= now + 86400, "now < exp <= now + 24 h: " + (j.claims.exp - now));
+  assert.strictEqual(/^vapid t=([^,]+),/.exec(r2.init.headers.Authorization)[1], m[1], "the second device on the same push service reuses the token");
+  const j3 = await p30Jwt(/^vapid t=([^,]+),/.exec(r3.init.headers.Authorization)[1], v.pubRaw);
+  assert.strictEqual(j3.claims.aud, "https://web.push.apple.com", "another push service gets its own token");
+  const plain = await p30Decrypt(r1.init.body, dev1);
+  assert.strictEqual(Buffer.from(plain.plain.slice(0, -1)).toString("utf8"), "{}", "the request body decrypts for the device");
+});
+check("P30 channels are independent (pushTargets): e-mail off + push on -> pushed; push off + e-mail on -> skipped_pref_off (devices never read) while the e-mail list still holds him; a missing row or key -> on; a follower's OWN row decides for him (never the followed surgeon's); one target per account (first wins); the e-mail flags are never read", () => {
+  if (!PP) throw new Error("the @pushPlan block did not load");
+  const A = (pid, prefs, ids) => ({ person_id: pid, name: pid, prefs, profileIds: ids });
+  const audience = [
+    A("s2", { trade_updates_email: false, trade_updates_push: true }, ["u2"]),     // e-mail off, push on
+    A("s3", { trade_updates_email: true, trade_updates_push: false }, ["u3"]),     // push off, e-mail on
+    A("s4", null, ["u4", "u4b"]),                                                   // no row
+    A("s5", { schedule_updates_push: false }, []),                                  // another category's flag, no account
+    A("s6", { trade_updates_email: false }, ["u6"]),                                // only the e-mail key, false
+  ];
+  const fol = [
+    { id: "f1-account", tag: "f1accoun", via: ["s3"], prefs: null, followedNames: ["Acton"] },                         // follows the opted-out s3: his own (missing) row decides
+    { id: "f2-account", tag: "f2accoun", via: ["s2"], prefs: { trade_updates_push: false, trade_updates_email: true }, followedNames: ["Burchett"] },
+    { id: "u2", tag: "u2", via: ["s2"], prefs: null },                                                                   // an account already reached
+  ];
+  const r = PP.pushTargets(audience, fol, "trade_updates_push");
+  assert.deepStrictEqual(r.targets.map((t) => [t.key, t.kind, t.profileIds]), [["s2", "person", ["u2"]], ["s4", "person", ["u4", "u4b"]], ["s5", "person", []], ["s6", "person", ["u6"]], ["f1accoun", "follower", ["f1-account"]]]);
+  assert.deepStrictEqual(r.skipped, [{ key: "s3", kind: "person", status: "skipped_pref_off" }, { key: "f2accoun", kind: "follower", via: ["s2"], status: "skipped_pref_off" }]);
+  assert.deepStrictEqual(r.targets.find((t) => t.kind === "follower").followedNames, ["Acton"]);
+  assert.strictEqual(PP.pushEnabled("trade_updates_push", null), true, "no row -> on");
+  assert.strictEqual(PP.pushEnabled("trade_updates_push", { trade_updates_email: false }), true, "an e-mail flag never turns push off");
+  assert.strictEqual(PP.pushEnabled("trade_updates_push", { trade_updates_push: null }), true, "null -> on");
+  assert.strictEqual(PP.pushEnabled("trade_updates_push", { trade_updates_push: false }), false, "only an explicit false");
+  assert.strictEqual(PP.pushEnabled(null, { anything: false }), true, "the test route has no switch");
+  // the e-mail side for the same people: s3 (push off) is still on the e-mail list, s2 (e-mail off) is not
+  const emailOn = (p) => !(p.prefs && p.prefs.trade_updates_email === false);
+  assert.deepStrictEqual(audience.filter(emailOn).map((p) => p.person_id), ["s3", "s4", "s5"]);
+  assert.deepStrictEqual(PP.pushTargets([], [], "schedule_updates_push"), { targets: [], skipped: [] });
+});
+acheck("P30 pushDeliver with a fake send: 201 -> okIds; 404 and 410 -> goneIds (removed); 500 / 403 / a throw / no answer within the timeout -> failedRows with fail_count + 1; an endpoint off the known push services is never sent; never more than 6 in flight; statuses sent / gone / failed / skipped_no_device with the invariant; the summary and every log line carry no endpoint, no key, no https:// and no address", async () => {
+  if (!PP) throw new Error("the @pushPlan block did not load");
+  const K = "B" + "q".repeat(86), A = "w".repeat(22);
+  const sub = (id, token, st, fail) => ({ id, profile_id: "p", endpoint: token.indexOf("https://") === 0 ? token : p30Fcm(token), p256dh: K, auth: A, fail_count: fail || 0, st });
+  const subs = {
+    pa: [sub("a1000000-x", "ok-1", 201), sub("a2000000-x", "gone-1", 410)],
+    pb: [sub("b1000000-x", "gone-2", 404), sub("b2000000-x", "gone-3", 410)],
+    pc: [sub("c1000000-x", "err-500", 500, 2), sub("c2000000-x", "err-403", 403), sub("c3000000-x", "err-throw", "throw")],
+    pd: [sub("d1000000-x", "err-hang", "hang")],
+    pe: [sub("e1000000-x", "https://evil.example/push/x", 201)],
+    pf: Array.from({ length: 20 }, (_, i) => sub("f" + i + "000000-x", "many-" + i, 201)),
+  };
+  const targets = [
+    { key: "s1", kind: "person", profileIds: ["pa"] }, { key: "s2", kind: "person", profileIds: ["pb"] }, { key: "s3", kind: "person", profileIds: ["pc"] },
+    { key: "s4", kind: "person", profileIds: ["pd"] }, { key: "s5", kind: "person", profileIds: ["pe"] }, { key: "s6", kind: "person", profileIds: [] },
+    { key: "f1aaaaaa", kind: "follower", profileIds: ["pf"], via: ["s2"] },
+  ];
+  let inFlight = 0, maxInFlight = 0;
+  const sentTo = [], logs = [];
+  const send = async (s, text) => {
+    sentTo.push(s.endpoint);
+    assert.strictEqual(JSON.parse(text).v, 1, "the payload text reaches send");
+    // the hanging device never answers: pushDeliver gives up on it at timeoutMs and frees the slot (the handler's fetch is
+    // aborted at the same 8 s), so it is not counted as in flight here
+    if (s.st === "hang") return await new Promise(() => {});
+    inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+    try {
+      await new Promise((r) => setTimeout(r, 3));
+      if (s.st === "throw") throw new Error("error sending request for url (" + s.endpoint + ")");
+      return { status: s.st, body: s.st >= 300 ? "push service refused " + s.endpoint + " key " + s.p256dh + " " + s.auth + " for quill.marlow@example.org" : "" };
+    } finally { inFlight--; }
+  };
+  const d = await PP.pushDeliver(targets, subs, (t) => ({ v: 1, title: "Silvis Call", body: "for " + t.key, tag: "silvis-test", tab: "settings" }), send, { timeoutMs: 40, log: (l) => logs.push(l) });
+  assert.deepStrictEqual(d.recipients.map((r) => [r.key, r.status]), [["s1", "sent"], ["s2", "gone"], ["s3", "failed"], ["s4", "failed"], ["s5", "failed"], ["s6", "skipped_no_device"], ["f1aaaaaa", "sent"]]);
+  assert.deepStrictEqual(d.recipients[6].via, ["s2"], "a follower keeps his via");
+  assert.deepStrictEqual(d.okIds.slice().sort(), ["a1000000-x"].concat(subs.pf.map((s) => s.id)).sort());
+  assert.deepStrictEqual(d.goneIds.slice().sort(), ["a2000000-x", "b1000000-x", "b2000000-x"], "404 and 410 are removed - 500 is not");
+  assert.deepStrictEqual(d.failedRows.slice().sort((x, y) => (x.id < y.id ? -1 : 1)), [{ id: "c1000000-x", fail_count: 3 }, { id: "c2000000-x", fail_count: 1 }, { id: "c3000000-x", fail_count: 1 }, { id: "d1000000-x", fail_count: 1 }, { id: "e1000000-x", fail_count: 1 }]);
+  assert.deepStrictEqual(d.devices, { sent: 21, failed: 5, removed: 3 });
+  assert.ok(sentTo.indexOf("https://evil.example/push/x") < 0, "the endpoint off the known push services was never sent to");
+  assert.ok(maxInFlight <= 6 && maxInFlight >= 5, "at most 6 in flight (saw " + maxInFlight + ")");
+  const pub = PP.pushSummary(d, [{ key: "s7", kind: "person", status: "skipped_pref_off" }], false);
+  assert.deepStrictEqual(pub, { sent: 2, failed: 4, removed: 3, skipped_no_device: 1, skipped_pref_off: 1, devices: { sent: 21, failed: 5, removed: 3 }, error: null }, "counts only for a non-scheduler caller (a target whose devices were all gone counts as failed)");
+  assert.strictEqual(pub.sent + pub.failed + pub.skipped_no_device + pub.skipped_pref_off, targets.length + 1, "sent + failed + no_device + pref_off = the targets");
+  const priv = PP.pushSummary(d, [{ key: "s7", kind: "person", status: "skipped_pref_off" }, { key: "f2bbbbbb", kind: "follower", via: ["s3"], status: "skipped_pref_off" }], true);
+  assert.deepStrictEqual(priv.results, [{ person_id: "s1", status: "sent" }, { person_id: "s2", status: "gone" }, { person_id: "s3", status: "failed" }, { person_id: "s4", status: "failed" }, { person_id: "s5", status: "failed" }, { person_id: "s6", status: "skipped_no_device" }, { person_id: "s7", status: "skipped_pref_off" }]);
+  assert.deepStrictEqual(priv.followers, [{ follower: "f1aaaaaa", via: ["s2"], status: "sent" }, { follower: "f2bbbbbb", via: ["s3"], status: "skipped_pref_off" }]);
+  assert.strictEqual(logs.length, 8, "one log line per device not sent (3 gone + 5 failed)");
+  assert.ok(logs.some((l) => /^\[push\] s3 device=c1000000 status=500 /.test(l)), "the line names the target, the row id's first 8 and the status: " + logs.join(" | "));
+  assert.ok(logs.some((l) => /^\[push\] s4 device=d1000000 status=0 no answer within 40 ms/.test(l)), "the timeout");
+  const wire = JSON.stringify(priv) + "\n" + logs.join("\n");
+  ["fcm.googleapis.com", "evil.example", "https://", K, A, "@", "quill"].forEach((bad) => assert.ok(wire.indexOf(bad) < 0, "no '" + bad.slice(0, 20) + "' in the summary or the logs: " + wire.slice(0, 300)));
+  assert.deepStrictEqual(PP.pushEmpty("x"), { sent: 0, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: "x" });
+  assert.strictEqual(PP.pushOutcome(200), "sent"); assert.strictEqual(PP.pushOutcome(299), "sent"); assert.strictEqual(PP.pushOutcome(404), "gone"); assert.strictEqual(PP.pushOutcome(410), "gone");
+  [0, 400, 401, 403, 413, 429, 500, 503, "x", undefined].forEach((s) => assert.strictEqual(PP.pushOutcome(s), "failed", String(s)));
+  assert.strictEqual(PP.redactEndpoints("x https://fcm.googleapis.com/fcm/send/abc) y http://a.b/c"), "x <url>) y <url>");
+});
+check("P30 payload: keys exactly v / title / body / tag / tab (+ params with a day), never a url; tab from the whitelist (a trade opens timeoff, a follower's myschedule; a manual edit / a claim the calendar ON the day); body = the first non-empty line, whitespace collapsed, at most 180 characters ending '...', an address redacted, empty -> the frame title; a follower's title names whom he follows; a trade's tag is stable across proposed / accepted / declined / applied; every tag fits sw.js's rule; the test notice; at most 3072 bytes", () => {
+  if (!PP) throw new Error("the @pushPlan block did not load");
+  const person = { kind: "person" };
+  const p = PP.pushPayload("trade_proposed", { message: "  Fierce proposes a trade -   you take Sat 10/10 primary\nsecond line", trade_id: P30_TRADE_ID }, person, "Shift Trade Proposed");
+  assert.deepStrictEqual(Object.keys(p), ["v", "title", "body", "tag", "tab"]);
+  assert.deepStrictEqual(p, { v: 1, title: "Silvis Call", body: "Fierce proposes a trade - you take Sat 10/10 primary", tag: "silvis-trade-abcdef12", tab: "timeoff" });
+  ["trade_accepted", "trade_declined", "trade_applied"].forEach((t) => assert.strictEqual(PP.pushPayload(t, { message: "x", trade_id: P30_TRADE_ID.toUpperCase() }, person).tag, "silvis-trade-abcdef12", t + " replaces the same notice"));
+  assert.strictEqual(PP.pushPayload("trade_applied", { message: "x" }, person).tag, "silvis-trade", "no trade id -> the generic trade tag");
+  const fol = PP.pushPayload("trade_applied", { message: "Acton takes Sat 10/10", trade_id: P30_TRADE_ID }, { kind: "follower", followedNames: ["Burchett", "Fierce"] }, "Shift Trade Applied");
+  assert.strictEqual(fol.title, "Silvis Call (following Dr. Burchett and Dr. Fierce)");
+  assert.strictEqual(fol.tab, "myschedule", "a follower's trade opens his Following view");
+  assert.strictEqual(PP.pushPayload("schedule_published", { message: "m" }, { kind: "follower", followedNames: ["Abcdefghijklmnopqrstuvwxyz", "Bcdefghijklmnopqrstuvwxyz", "Cdefghijklmnop"] }).title, "Silvis Call (following 3 surgeons)", "a title over 80 characters is shortened (sw.js shows titles of 1-80)");
+  const long = PP.pushPayload("open_shifts", { message: "word ".repeat(80) }, person, "Open Shifts");
+  assert.strictEqual(Array.from(long.body).length, 180); assert.ok(/\.\.\.$/.test(long.body), "cut with ...");
+  assert.strictEqual(PP.pushPayload("open_shifts", { message: "x".repeat(180) }, person).body, "x".repeat(180), "exactly 180 is not cut");
+  assert.strictEqual(PP.pushPayload("vacation_logged", { message: "\n\n  Logged: write to quill.marlow@example.org  today \n" }, person).body, "Logged: write to <redacted> today");
+  assert.strictEqual(PP.pushPayload("open_shifts", { message: "  \n " }, person, "Open Shifts").body, "Open Shifts", "nothing to say -> the frame title");
+  const edit = PP.pushPayload("manual_edit", { message: "Thu 10/15: primary Burchett", day: "2026-10-15" }, person, "Schedule Changed");
+  assert.deepStrictEqual(edit, { v: 1, title: "Silvis Call", body: "Thu 10/15: primary Burchett", tag: "silvis-edit-20261015", tab: "calendar", params: { day: "2026-10-15" } });
+  assert.deepStrictEqual(PP.pushPayload("manual_edit", { message: "m", day: "2026-02-30" }, person), { v: 1, title: "Silvis Call", body: "m", tag: "silvis-edit", tab: "calendar" }, "a day that does not exist is dropped");
+  const claim = PP.pushPayload("shift_claimed", { message: "Acton took Thu 10/15 primary", day: "2026-10-15", role: "primary" }, person);
+  assert.strictEqual(claim.tag, "silvis-claimed-20261015-primary"); assert.deepStrictEqual(claim.params, { day: "2026-10-15" });
+  assert.strictEqual(PP.pushPayload("vacation_logged", { message: "m" }, person, "", 1790000000000).tag, "silvis-vacation-" + (1790000000000).toString(36), "vacations never replace each other");
+  assert.deepStrictEqual(PP.pushPayload("test", { message: "ignored", url: "https://evil.example" }, { kind: "self" }), { v: 1, title: "Silvis Call", body: "Test - phone notifications reach this device.", tag: "silvis-test", tab: "settings" });
+  const TAB = { schedule_published: "calendar", manual_edit: "calendar", vacation_logged: "timeoff", open_shifts: "openshifts", shift_claimed: "calendar", offers_reminder: "timeoff", offers_closed: "setup", trade_proposed: "timeoff", trade_accepted: "timeoff", trade_declined: "timeoff", trade_applied: "timeoff" };
+  assert.deepStrictEqual(Object.keys(PP.PUSH_PREF_OF).sort(), Object.keys(TAB).sort(), "the eleven categories that push");
+  Object.keys(TAB).forEach((t) => {
+    assert.strictEqual(PP.pushPrefOf(t), t.indexOf("trade_") === 0 ? "trade_updates_push" : "schedule_updates_push", t + " switch");
+    const big = PP.pushPayload(t, { message: String.fromCharCode(233).repeat(400) + "\nx", day: "2026-10-15", role: "backup", trade_id: P30_TRADE_ID, url: "https://evil.example", subject: "s" }, { kind: "follower", followedNames: ["Burchett"] }, "Frame");
+    assert.strictEqual(PP.pushTabOf(t, false), TAB[t], t + " tab");
+    assert.ok(P30_CONTRACT_TABS.indexOf(big.tab) >= 0, t + ": the tab is whitelisted");
+    assert.ok(P30_SW_TAG.test(big.tag), t + ": tag " + big.tag + " fits sw.js's rule");
+    assert.ok(!("url" in big) && !/https?:/.test(JSON.stringify(big)), t + ": never a url");
+    assert.ok(Buffer.byteLength(JSON.stringify(big)) <= 3072, t + ": at most 3072 bytes");
+  });
+  ["test", "shift_reminder", "made_up", "constructor", "__proto__", "", null].forEach((t) => assert.strictEqual(PP.pushPrefOf(t), null, String(t) + " never pushes"));
+  // the endpoint rule = the database's push_subscriptions_endpoint_shape (push-design 1.1)
+  const good = ["https://fcm.googleapis.com/fcm/send/abc", "https://android.googleapis.com/gcm/send/abc", "https://web.push.apple.com/QAB", "https://updates.push.services.mozilla.com/wpush/v2/abc", "https://wns2-par02p.notify.windows.com/w/?token=AbC%3D"];
+  const bad = ["http://fcm.googleapis.com/fcm/send/x", "https://evil.example/push/x", "https://fcm.googleapis.com.evil.example/x", "https://evilfcm.googleapis.com.example/x", "https://fcm.googleapis.com", "https://fcm.googleapis.com/a b", "https://FCM.googleapis.com/x", "https://fcm.googleapis.com/" + "x".repeat(2030), null, 42];
+  good.forEach((e) => assert.strictEqual(PP.pushEndpointAllowed(e), true, e));
+  bad.forEach((e) => assert.strictEqual(PP.pushEndpointAllowed(e), false, String(e).slice(0, 60)));
+  const DB_RE = new RegExp("^https://([a-z0-9-]+\\.)*(fcm\\.googleapis\\.com|android\\.googleapis\\.com|push\\.apple\\.com|push\\.services\\.mozilla\\.com|notify\\.windows\\.com)/[!-~]*$");
+  good.concat(bad.filter((e) => typeof e === "string")).forEach((e) => assert.strictEqual(PP.PUSH_ENDPOINT_RE.test(e), DB_RE.test(e), "the JS rule answers like the contract's database rule for " + e.slice(0, 60)));
+  const mig = path.join(ROOT, "sql", "migrations", "2026-10-03-push-notifications.sql");
+  if (fs.existsSync(mig)) {   // once the DB lane's migration is merged: its CHECK pattern must agree too
+    const m = /endpoint ~ '([^']+)'/.exec(fs.readFileSync(mig, "utf8"));
+    assert.ok(m, "the migration's endpoint check is found");
+    const sqlRe = new RegExp(m[1]);
+    good.concat(bad.filter((e) => typeof e === "string")).forEach((e) => assert.strictEqual(PP.PUSH_ENDPOINT_RE.test(e), sqlRe.test(e), "the edge rule answers like the migration's for " + e.slice(0, 60)));
+  }
+  assert.strictEqual(PP.pushVapidConfigOk("B" + "a".repeat(86), "b".repeat(43), "https://fkhan628.github.io/Silvis-Call-Schedule/"), true);
+  [["A" + "a".repeat(86), "b".repeat(43), "https://x"], ["B" + "a".repeat(85), "b".repeat(43), "https://x"], ["B" + "a".repeat(86), "b".repeat(42), "https://x"], ["B" + "a".repeat(86), "b".repeat(43), "http://x"], ["B" + "a".repeat(86), "b".repeat(43), ""], ["", "", ""]].forEach((c) => assert.strictEqual(PP.pushVapidConfigOk(c[0], c[1], c[2]), false, JSON.stringify(c).slice(0, 40)));
+});
+check("P30 source pins - send-notification: the push fan-out sits AFTER the follower block, before the final answer, in its own try, reads `audience` + `fAll` (never `list`, never an *_email key) and answers `push`; the follower step adds followerRecipients(followers, type, fUniverse, null) beside the unchanged e-mail call; resolveRecipients records the audience before the e-mail flag; the GET route answers only the public key and never names VAPID_PRIVATE_KEY; ?push=test sits after the GoTrue check and before the role read, reads no body and no targetIds, and filters on profile_id=eq. of the verified id; no console line interpolates an endpoint; CORS allows GET; the deploy line carries --no-verify-jwt --use-api", () => {
+  const h = snSrc.slice(snSrc.indexOf("serve(async (req) =>"));
+  const iFolCatch = h.indexOf("console.error(`[send-notification] followers: ${followersError}`);");
+  const iPushStart = h.indexOf("let pushOut: any = null;");
+  const iPlan = h.indexOf("const plan = pushTargets(audience, fAll, pushPref);");
+  const iRet = h.lastIndexOf("return json(200, {");
+  assert.ok(iFolCatch > 0 && iPushStart > iFolCatch && iPlan > iPushStart && iRet > iPlan, "the fan-out comes after the follower block and before the final answer");
+  const fan = h.slice(iPushStart, iRet);
+  assert.ok(/if \(pushPref\) \{\s*try \{[\s\S]*\} catch \(e\) \{[\s\S]*pushOut = pushEmpty\(why\);/.test(fan), "inside its own try / catch, a failure answered as push.error");
+  assert.ok(!/\blist\b/.test(fan), "the fan-out never reads `list` (the e-mail recipients)");
+  assert.ok(!/_email\b/.test(fan), "the fan-out never names an e-mail flag");
+  assert.ok(/pushPrefOf\(type\)/.test(fan), "the category's push switch");
+  assert.ok(/push: pushOut,\s*\}\);/.test(h.slice(iRet, iRet + 600)), "the answer carries push");
+  const fb = h.slice(h.indexOf("if (FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {"), iFolCatch);
+  const iMail = fb.indexOf("followerRecipients(followers, type, fUniverse, cat.pref)"), iNull = fb.indexOf("followerRecipients(followers, type, fUniverse, null)");
+  assert.ok(iMail > 0 && iNull > iMail, "the e-mail call stays; the push call (prefKey null - nobody skipped) follows it inside the same try");
+  assert.ok(/fAll = followerRecipients\(followers, type, fUniverse, null\)\.list\.map\(/.test(fb), "fAll is the followers before any e-mail flag");
+  assert.ok(/prefs: \(followers\.find\(\(x: any\) => x\.id === f\.id\) \|\| \{\}\)\.prefs \|\| null/.test(fb), "each follower carries HIS OWN prefs row (followerIndex, by profile_id)");
+  const rr = snSrc.slice(snSrc.indexOf("async function resolveRecipients("), snSrc.indexOf("// Handler"));
+  assert.ok(rr.includes('rest("user_profiles?select=id,person_id,email&person_id=not.is.null")'), "pin moved deliberately (Prompt 30): the profiles read adds the account id");
+  const loop = rr.slice(rr.indexOf("for (const pid of new Set(universe)) {"));
+  assert.ok(loop.indexOf("audience.push(") > 0 && loop.indexOf("audience.push(") < loop.indexOf("if (!emailEnabled(cat, prefs))"), "the audience is recorded BEFORE the e-mail flag is read");
+  const iGet = h.indexOf('if (req.method === "GET" && new URL(req.url).searchParams.get("vapid") === "public") {');
+  const i405 = h.indexOf('if (req.method !== "POST") return json(405, { error: "method not allowed" });');
+  assert.ok(iGet > 0 && i405 > iGet, "the public-key GET is answered before the 405 (pin moved deliberately: the 405 line follows it)");
+  const get = h.slice(iGet, i405);
+  assert.ok(get.includes("JSON.stringify({ publicKey: pair.publicB64u })"), "one key: publicKey");
+  assert.ok(!/VAPID_PRIVATE_KEY|VAPID_SUBJECT|privateB64u|\.key\b/.test(get), "the GET branch never names the private key or the subject");
+  assert.ok(/"Cache-Control": "no-store"/.test(get) && /json\(503, \{ error: PUSH_NOT_SET_UP \}\)/.test(get), "no-store; 503 when the secrets are missing");
+  const iUid = h.indexOf('if (!userId) return json(401,');
+  const iTest = h.indexOf('if (new URL(req.url).searchParams.get("push") === "test") {');
+  const iRole = h.indexOf("user_profiles?select=role,person_id&id=eq.");
+  assert.ok(iUid > h.indexOf("/auth/v1/user") && iTest > iUid && iRole > iTest, "?push=test sits after the GoTrue check and before the role read");
+  const tst = h.slice(iTest, h.indexOf("// -- Role gate", iTest));
+  assert.ok(tst.includes("push_subscriptions?select=id,profile_id,endpoint,p256dh,auth,fail_count&profile_id=eq.${encodeURIComponent(userId)}"), "the caller's own devices by the verified id");
+  assert.ok(!/targetIds|req\.json|\bbody\b|resolveRecipients|audience/.test(tst), "the test route reads no body, no targetIds, nobody else");
+  assert.ok(/pushPayload\("test", \{\}, \{ kind: "self" \}/.test(tst), "the self notice");
+  snSrc.split("\n").filter((l) => /console\.(log|warn|error|info)\(/.test(l)).forEach((l) => assert.ok(!/\$\{[^}]*(endpoint|p256dh|\.auth\b|payloadText)/.test(l) && !/\+\s*[\w.]*(endpoint|p256dh)/.test(l), "no console line interpolates an endpoint / key / payload: " + l.trim().slice(0, 120)));
+  const pp = p30Block("pushPlan");
+  assert.ok(/log\("\[push\] " \+ job\.t\.key \+ " device=" \+ id\.slice\(0, 8\) \+ " status=" \+ status \+ " " \+ redactEndpoints\(redactAddresses\(answer\)\)\.slice\(0, 80\)\);/.test(pp), "the per-device log line: the key, 8 characters of the row id, the status, the redacted answer");
+  assert.ok(/"Access-Control-Allow-Methods": "GET, POST, OPTIONS"/.test(snSrc), "pin moved deliberately (Prompt 30): CORS allows GET");
+  const head = snSrc.slice(0, snSrc.indexOf("import "));
+  assert.ok(/^\/\/ Deploy: supabase functions deploy send-notification --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
+  assert.ok(/VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head) && /GET  \?vapid=public/.test(head) && /POST \?push=test/.test(head), "the header names the three secrets and the two routes");
+  assert.ok(/^const VAPID_PRIVATE_KEY = Deno\.env\.get\("VAPID_PRIVATE_KEY"\) \|\| "";$/m.test(snSrc), "the private key is read from the environment only");
+  ["schedule_updates_email", "trade_updates_email"].forEach((k) => assert.ok(new RegExp('pref: "' + k + '"').test(snSrc), "CATEGORIES keeps the e-mail switches (" + k + ")"));
+});
+
+/* ---- the real handler, types stripped, against a fake fetch ---- */
+const P30_URL = "https://fake-project.supabase.test";
+let P30_JS = null;
+function p30HandlerJs() {
+  if (P30_JS) return P30_JS;
+  const { stripTypeScriptTypes } = require("node:module");
+  assert.strictEqual(typeof stripTypeScriptTypes, "function", "Node's stripTypeScriptTypes (Node >= 22.13 / 23.2) runs the TypeScript handler here - no Deno on this machine");
+  const imp = /^import \{ serve \} from "https:\/\/deno\.land\/std@[0-9.]+\/http\/server\.ts";$/m;
+  assert.ok(imp.test(snSrc), "the one import is the std serve");
+  const orig = process.emitWarning;
+  process.emitWarning = function (w, ...rest) { const t = typeof rest[0] === "string" ? rest[0] : rest[0] && rest[0].type; if (t === "ExperimentalWarning") return; return orig.call(process, w, ...rest); };
+  try { P30_JS = stripTypeScriptTypes(snSrc.replace(imp, "")); } finally { process.emitWarning = orig; }
+  return P30_JS;
+}
+function p30Handler(env, w) {
+  let handler = null;
+  const logs = w.logs;
+  const say = (...a) => logs.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+  const Deno = { env: { get: (k) => (Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined) } };
+  new Function("Deno", "serve", "fetch", "console", p30HandlerJs())(Deno, (h) => { handler = h; }, p30Fetch(w), { log: say, warn: say, error: say, info: say });
+  assert.strictEqual(typeof handler, "function", "the handler registered with serve");
+  return handler;
+}
+function p30World(over) {
+  const w = Object.assign({
+    roster: [["s1", "Khan"], ["s2", "Burchett"], ["s3", "Acton"], ["s4", "Philip"], ["s5", "Fierce"], ["s6", "Sarkar"]].map(([id, name]) => ({ id, name, code: name.slice(0, 3).toUpperCase() })),
+    users: { "tok-admin": p30Id("a1a1a1a1"), "tok-s2": p30Id("a2a2a2a2"), "tok-s3": p30Id("a3a3a3a3"), "tok-viewer": p30Id("b1b1b1b1"), "tok-f1": p30Id("f1aaaaaa") },
+    profiles: [
+      { id: p30Id("a1a1a1a1"), role: "admin", person_id: "s1", email: "s1@example.org", display_name: null, follows: [] },
+      { id: p30Id("a2a2a2a2"), role: "surgeon", person_id: "s2", email: "s2@example.org", display_name: null, follows: [] },
+      { id: p30Id("a3a3a3a3"), role: "surgeon", person_id: "s3", email: "s3@example.org", display_name: null, follows: [] },
+      { id: p30Id("a4a4a4a4"), role: "surgeon", person_id: "s4", email: "s4@example.org", display_name: null, follows: [] },
+      { id: p30Id("a5a5a5a5"), role: "surgeon", person_id: "s4", email: null, display_name: null, follows: [] },   // a second account for s4
+      { id: p30Id("a6a6a6a6"), role: "surgeon", person_id: "s6", email: "s6@example.org", display_name: null, follows: [] },
+      { id: p30Id("b1b1b1b1"), role: "viewer", person_id: null, email: "viewer@example.org", display_name: null, follows: [] },
+      { id: p30Id("f1aaaaaa"), role: "viewer", person_id: null, email: "f1@example.org", display_name: "Follower one", follows: ["s2"] },
+      { id: p30Id("f2bbbbbb"), role: "coordinator", person_id: null, email: "f2@example.org", display_name: null, follows: ["s3"] },
+    ],
+    prefs: [
+      { person_id: "s2", profile_id: null, schedule_updates_email: false, trade_updates_email: true, trade_updates_push: false },
+      { person_id: "s3", profile_id: null, schedule_updates_email: true, schedule_updates_push: false, trade_updates_email: false },
+      { person_id: null, profile_id: p30Id("f2bbbbbb"), schedule_updates_email: true, schedule_updates_push: false },
+    ],
+    trades: {}, subs: [], pushStatus: {}, mailStatus: 200, subsRead: 200,
+  }, over || {});
+  w.calls = []; w.mails = []; w.pushes = []; w.patches = []; w.deletes = []; w.subReads = []; w.logs = []; w.jsonReads = 0;
+  return w;
+}
+function p30Fetch(w) {
+  return async (url, init) => {
+    const o = init || {};
+    const u = new URL(String(url));
+    const method = String(o.method || "GET").toUpperCase();
+    const hdr = (k) => { const h = o.headers || {}; if (typeof h.get === "function") return h.get(k); const key = Object.keys(h).find((x) => x.toLowerCase() === k.toLowerCase()); return key ? h[key] : null; };
+    w.calls.push(method + " " + u.origin + u.pathname + decodeURIComponent(u.search));
+    const ok = (x, status) => new Response(JSON.stringify(x), { status: status || 200, headers: { "Content-Type": "application/json" } });
+    const idsOf = (f) => (/^in\.\((.*)\)$/.test(f || "") ? f.slice(4, -1).split(",") : /^eq\./.test(f || "") ? [f.slice(3)] : null);
+    if (u.origin === P30_URL && u.pathname === "/auth/v1/user") {
+      const uid = w.users[String(hdr("Authorization") || "").replace(/^Bearer\s+/i, "")];
+      return uid ? ok({ id: uid }) : ok({ msg: "invalid JWT" }, 401);
+    }
+    if (u.origin === P30_URL && u.pathname.indexOf("/rest/v1/") === 0) {
+      const table = u.pathname.slice(9), q = u.searchParams, sel = q.get("select");
+      if (table === "user_profiles" && method === "GET") {
+        if (q.get("id")) return ok(w.profiles.filter((p) => p.id === q.get("id").slice(3)).map((p) => ({ role: p.role, person_id: p.person_id })));
+        if (sel === "person_id,role") return ok(w.profiles.filter((p) => (p.role === "admin" || p.role === "scheduler") && p.person_id).map((p) => ({ person_id: p.person_id, role: p.role })));
+        if (sel === "id,person_id,email" && q.get("person_id") === "not.is.null") return ok(w.profiles.filter((p) => p.person_id).map((p) => ({ id: p.id, person_id: p.person_id, email: p.email })));
+        if (sel === "*" && q.get("role") === "in.(viewer,coordinator)") return ok(w.profiles.filter((p) => p.role === "viewer" || p.role === "coordinator"));
+      }
+      if (table === "call_schedule_data" && method === "GET") return ok([{ data: { roster: w.roster } }]);
+      if (table === "notification_preferences" && method === "GET" && sel === "*") return ok(w.prefs);
+      if (table === "shift_trade_requests" && method === "GET") { const t = w.trades[q.get("id").slice(3)]; return ok(t ? [t] : []); }
+      if (table === "push_subscriptions") {
+        if (method === "GET") {
+          if (w.subsRead !== 200) return new Response('{"code":"42P01","message":"relation public.push_subscriptions does not exist"}', { status: w.subsRead });
+          const ids = idsOf(q.get("profile_id"));
+          assert.ok(ids, "a device read always filters by account: " + u.search);
+          w.subReads.push(ids);
+          return ok(w.subs.filter((s) => ids.indexOf(s.profile_id) >= 0).map((s) => ({ id: s.id, profile_id: s.profile_id, endpoint: s.endpoint, p256dh: s.p256dh, auth: s.auth, fail_count: s.fail_count })));
+        }
+        const ids = idsOf(q.get("id"));
+        assert.ok(ids && hdr("Prefer") === "return=minimal", "bookkeeping by row id, return=minimal");
+        if (method === "PATCH") { const b = JSON.parse(o.body); w.patches.push({ ids, body: b }); w.subs.forEach((s) => { if (ids.indexOf(s.id) >= 0) Object.assign(s, b); }); return new Response(null, { status: 204 }); }
+        if (method === "DELETE") { w.deletes.push(ids); w.subs = w.subs.filter((s) => ids.indexOf(s.id) < 0); return new Response(null, { status: 204 }); }
+      }
+      throw new Error("the fake PostgREST does not serve " + method + " " + table + u.search);
+    }
+    if (u.href === "https://api.resend.com/emails") { const b = JSON.parse(o.body); w.mails.push({ to: b.to[0], subject: b.subject }); return ok({ id: "mail" }, w.mailStatus); }
+    if (/^https:\/\/fcm\.googleapis\.com\/fcm\/send\//.test(u.href)) {
+      w.pushes.push({ endpoint: u.href, method, headers: o.headers, body: new Uint8Array(o.body) });
+      const st = w.pushStatus[u.href] == null ? 201 : w.pushStatus[u.href];
+      if (st === "throw") throw new Error("error sending request for url (" + u.href + ")");
+      return new Response(st >= 300 ? "the push service refuses " + u.href : "", { status: st });
+    }
+    throw new Error("unexpected fetch " + method + " " + u.href);
+  };
+}
+async function p30Call(handler, w, opts) {
+  const headers = new Headers();
+  if (opts.token) headers.set("authorization", "Bearer " + opts.token);
+  const req = { method: opts.method || "POST", url: P30_URL + "/functions/v1/send-notification" + (opts.query || ""), headers, json: async () => { w.jsonReads++; return opts.body; } };
+  const res = await handler(req);
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch (e) { body = null; }
+  return { status: res.status, headers: res.headers, text, body };
+}
+async function p30Env(over) {
+  const v = await p30Vapid();
+  return { v, env: Object.assign({ SUPABASE_URL: P30_URL, SUPABASE_SERVICE_ROLE_KEY: "service-role-key-for-tests", RESEND_API_KEY: "resend-key-for-tests", NOTIFICATION_FROM_EMAIL: "Silvis Test <sender@example.org>",
+    VAPID_PUBLIC_KEY: v.publicB64u, VAPID_PRIVATE_KEY: v.privateB64u, VAPID_SUBJECT: "https://fkhan628.github.io/Silvis-Call-Schedule/" }, over || {}) };
+}
+// devices: [[account id head, token, status?, fail_count?]] -> push_subscriptions rows + the device keys by endpoint
+async function p30Devices(w, list) {
+  const keys = {};
+  let n = 0;
+  for (const [head, token, st, fail] of list) {
+    const dev = await p30Device(token);
+    n++;
+    keys[dev.endpoint] = dev;
+    w.subs.push({ id: p30Id("d000000" + n.toString(16)), profile_id: p30Id(head), endpoint: dev.endpoint, p256dh: dev.p256dh, auth: dev.auth, fail_count: fail || 0 });
+    if (st != null) w.pushStatus[dev.endpoint] = st;
+  }
+  return keys;
+}
+const P30_EMAIL_PREF = { schedule_published: "schedule_updates_email", manual_edit: "schedule_updates_email", trade_proposed: "trade_updates_email", trade_accepted: "trade_updates_email",
+  trade_declined: "trade_updates_email", trade_applied: "trade_updates_email", vacation_logged: "schedule_updates_email", shift_reminder: "shift_reminders_email", open_shifts: "schedule_updates_email",
+  shift_claimed: "schedule_updates_email", offers_reminder: "schedule_updates_email", offers_closed: "schedule_updates_email", test: null };
+// the pre-Prompt-30 e-mail side, RE-STATED: resolveRecipients' e-mail filter (person_id rows; a missing row / flag = on),
+// the first non-empty address per person, the surgeons' loop, and the follower step on the category's e-mail flag
+function p30OldEmail(w, type, targetIds, caller, data, trade, privileged) {
+  const pref = P30_EMAIL_PREF[type];
+  const prefsById = {};
+  w.prefs.forEach((p) => { if (p && p.person_id) prefsById[p.person_id] = p; });
+  const emailById = {};
+  w.profiles.filter((p) => p.person_id).forEach((row) => { const pid = String(row.person_id); const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null; if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email; });
+  const universe = targetIds ? targetIds.map(String) : Object.keys(emailById);
+  const mailOk = w.mailStatus >= 200 && w.mailStatus < 300;
+  const part = { sent: 0, failed: 0, skipped_no_email: 0, skipped_pref_off: 0, results: [], followers_sent: 0, followers_failed: 0, followers_skipped_pref_off: 0, followers_error: null };
+  const to = [], added = [];
+  for (const pid of new Set(universe)) {
+    const prefs = prefsById[pid] || null;
+    if (pref && prefs && prefs[pref] === false) { part.skipped_pref_off++; continue; }
+    const email = emailById[pid] == null ? null : emailById[pid];
+    if (!email) { part.skipped_no_email++; part.results.push({ person_id: pid, status: "skipped_no_email" }); continue; }
+    to.push(email);
+    if (mailOk) { part.sent++; part.results.push({ person_id: pid, status: "sent" }); } else { part.failed++; part.results.push({ person_id: pid, status: "failed_" + w.mailStatus }); }
+  }
+  if (FOL.FOLLOWER_SEND_TYPES.indexOf(type) >= 0) {
+    const followers = FOL.followerIndex(w.profiles.filter((p) => p.role === "viewer" || p.role === "coordinator"), w.prefs);
+    const r = FOL.followerRecipients(followers, type, FOL.followerUniverse(type, targetIds, caller, data, trade), pref);
+    part.followers_skipped_pref_off = r.skipped.length;
+    r.skipped.forEach((s) => added.push(s));
+    r.list.forEach((f) => {
+      if (!f.email) { added.push({ follower: f.tag, via: f.via, status: "skipped_no_email" }); return; }
+      to.push(f.email);
+      if (mailOk) { part.followers_sent++; added.push({ follower: f.tag, via: f.via, status: "sent" }); } else { part.followers_failed++; added.push({ follower: f.tag, via: f.via, status: "failed_" + w.mailStatus }); }
+    });
+  }
+  if (privileged) part.followers_added = added;
+  return { part, to };
+}
+const p30EmailPart = (b) => { const c = Object.assign({}, b); delete c.push; return c; };
+function p30NoSecrets(w, res, keys) {
+  const wire = res.text + "\n" + w.logs.join("\n");
+  assert.ok(wire.indexOf("fcm.googleapis.com") < 0 && wire.indexOf("/fcm/send/") < 0, "no endpoint in the answer or the logs: " + wire.slice(0, 400));
+  Object.values(keys || {}).forEach((d) => { assert.ok(wire.indexOf(d.p256dh) < 0 && wire.indexOf(d.auth) < 0, "no device key in the answer or the logs"); });
+  assert.ok(!/"title"|"tag":"silvis-/.test(wire), "no payload text in the answer or the logs");
+  const pushPart = JSON.stringify(res.body && res.body.push) + "\n" + w.logs.filter((l) => /^\[push\]/.test(l)).join("\n");
+  assert.ok(pushPart.indexOf("@") < 0, "no address in the push answer or a [push] log line");
+}
+acheck("P30 handler: GET ?vapid=public -> 200 with exactly { publicKey } (the configured public key), Cache-Control no-store, CORS *; no auth and no database call; secrets missing, malformed or mismatched -> 503; any other GET -> 405; OPTIONS lists GET", async () => {
+  const { v, env } = await p30Env();
+  const w = p30World();
+  const h = p30Handler(env, w);
+  const r = await p30Call(h, w, { method: "GET", query: "?vapid=public" });
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(r.body, { publicKey: v.publicB64u }, "exactly one key");
+  assert.strictEqual(r.headers.get("cache-control"), "no-store"); assert.strictEqual(r.headers.get("access-control-allow-origin"), "*");
+  assert.ok(r.text.indexOf(v.privateB64u) < 0 && r.text.indexOf("Silvis-Call-Schedule") < 0, "never the private key or the subject");
+  assert.deepStrictEqual(w.calls, [], "no auth check, no database read");
+  assert.strictEqual((await p30Call(h, w, { method: "GET" })).status, 405, "a plain GET stays 405");
+  assert.strictEqual((await p30Call(h, w, { method: "GET", query: "?vapid=private" })).status, 405);
+  assert.strictEqual((await p30Call(h, w, { method: "PUT", query: "?vapid=public" })).status, 405);
+  const opt = await p30Call(h, w, { method: "OPTIONS" });
+  assert.ok(/GET/.test(opt.headers.get("access-control-allow-methods")), "CORS allows GET");
+  const other = await p30Vapid();
+  for (const [label, over] of [["no private key", { VAPID_PRIVATE_KEY: "" }], ["no public key", { VAPID_PUBLIC_KEY: undefined }], ["no subject", { VAPID_SUBJECT: "" }], ["a mismatched pair", { VAPID_PRIVATE_KEY: other.privateB64u }], ["a malformed key", { VAPID_PUBLIC_KEY: "B" + "!".repeat(86) }]]) {
+    const w2 = p30World();
+    const r2 = await p30Call(p30Handler(Object.assign({}, env, over), w2), w2, { method: "GET", query: "?vapid=public" });
+    assert.strictEqual(r2.status, 503, label + " -> 503");
+    assert.deepStrictEqual(r2.body, { error: "phone notifications are not set up on the server yet" }, label);
+    assert.ok(w2.logs.join("\n").indexOf(other.privateB64u) < 0 && w2.logs.join("\n").indexOf(env.VAPID_PRIVATE_KEY || "zz") < 0, label + ": no key in the logs");
+  }
+});
+acheck("P30 handler: POST ?push=test pushes to the VERIFIED caller's own devices only, for any role (a viewer here), before the role read and without reading a body (targetIds in it change nothing); the counts; a 410 device is deleted; no device -> skipped_no_device; no session / a bad token -> 401; VAPID secrets missing -> 503", async () => {
+  const { v, env } = await p30Env();
+  const w = p30World();
+  const keys = await p30Devices(w, [["b1b1b1b1", "test-v1"], ["b1b1b1b1", "test-v2", 410], ["a1a1a1a1", "test-s1"]]);
+  const h = p30Handler(env, w);
+  const r = await p30Call(h, w, { query: "?push=test", token: "tok-viewer", body: { type: "schedule_published", targetIds: ["s1"], data: { message: "aimed at s1" } } });
+  assert.strictEqual(r.status, 200, r.text);
+  assert.deepStrictEqual(r.body, { push: { sent: 1, failed: 0, removed: 1, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 1, failed: 0, removed: 1 }, error: null } });
+  assert.strictEqual(w.jsonReads, 0, "the body is never read");
+  assert.deepStrictEqual(w.pushes.map((p) => p.endpoint).sort(), [p30Fcm("test-v1"), p30Fcm("test-v2")], "only the caller's devices - never s1's");
+  assert.ok(!w.calls.some((c) => /select=role,person_id/.test(c)), "no role read: any verified session may test");
+  assert.ok(w.calls.some((c) => c.indexOf("push_subscriptions?select=id,profile_id,endpoint,p256dh,auth,fail_count&profile_id=eq." + p30Id("b1b1b1b1")) >= 0), "the devices are read by the verified id");
+  assert.strictEqual(w.mails.length, 0, "no e-mail");
+  const payload = JSON.parse(Buffer.from((await p30Decrypt(w.pushes.find((p) => p.endpoint === p30Fcm("test-v1")).body, keys[p30Fcm("test-v1")])).plain.slice(0, -1)).toString("utf8"));
+  assert.deepStrictEqual(payload, { v: 1, title: "Silvis Call", body: "Test - phone notifications reach this device.", tag: "silvis-test", tab: "settings" });
+  const auth = w.pushes[0].headers.Authorization;
+  assert.ok((await p30Jwt(/^vapid t=([^,]+), k=/.exec(auth)[1], v.pubRaw)).ok, "a valid VAPID token");
+  assert.deepStrictEqual(w.deletes, [[p30Id("d0000002")]], "the 410 device's row is deleted");
+  assert.ok(w.patches.some((p) => p.ids[0] === p30Id("d0000001") && p.body.fail_count === 0 && typeof p.body.last_ok_at === "string"), "the sent row's last_ok_at");
+  p30NoSecrets(w, r, keys);
+  const none = await p30Call(h, w, { query: "?push=test", token: "tok-f1" });
+  assert.deepStrictEqual(none.body.push, { sent: 0, failed: 0, removed: 0, skipped_no_device: 1, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: null }, "a follower with no device: skipped_no_device");
+  assert.strictEqual((await p30Call(h, w, { query: "?push=test" })).status, 401, "no session");
+  assert.strictEqual((await p30Call(h, w, { query: "?push=test", token: "tok-nobody" })).status, 401, "a token GoTrue refuses");
+  const w3 = p30World();
+  const r3 = await p30Call(p30Handler(Object.assign({}, env, { VAPID_PRIVATE_KEY: "" }), w3), w3, { query: "?push=test", token: "tok-viewer" });
+  assert.strictEqual(r3.status, 503); assert.deepStrictEqual(r3.body, { error: "phone notifications are not set up on the server yet" });
+});
+acheck("P30 handler: a scheduler's schedule_published broadcast - e-mail off + push on is PUSHED (s2), push off + e-mail on is MAILED but not pushed (s3), no row is both (s4, two accounts), no account / no device is skipped_no_device (s5, s6); a follower on his OWN push switch (f1 pushed with 'following Dr. Burchett', f2 off); 201 sent, 404 / 410 deleted, 500 fail_count + 1; the decrypted payloads; the per-recipient lists to the scheduler; the e-mail part equals the pre-Prompt-30 logic; no endpoint / key / address in the answer or the logs", async () => {
+  const { v, env } = await p30Env();
+  const w = p30World();
+  const keys = await p30Devices(w, [["a1a1a1a1", "pub-s1-a"], ["a1a1a1a1", "pub-s1-b", 410], ["a2a2a2a2", "pub-s2"], ["a3a3a3a3", "pub-s3"], ["a4a4a4a4", "pub-s4", 500, 2], ["a5a5a5a5", "pub-s4b", 404], ["f1aaaaaa", "pub-f1"], ["f2bbbbbb", "pub-f2"]]);
+  const h = p30Handler(env, w);
+  const msg = "The schedule for Nov 2026 - Jan 2027 is published.\nYour shifts: ...";
+  const r = await p30Call(h, w, { token: "tok-admin", body: { type: "schedule_published", data: { message: msg, subject: "Schedule published" } } });
+  assert.strictEqual(r.status, 200, r.text);
+  const old = p30OldEmail(w, "schedule_published", null, { role: "admin", personId: "s1" }, { message: msg }, null, true);
+  assert.deepStrictEqual(p30EmailPart(r.body), old.part, "the e-mail part is the pre-Prompt-30 answer");
+  assert.deepStrictEqual(w.mails.map((m) => m.to), old.to, "the same e-mails to the same addresses");
+  assert.ok(old.to.indexOf("s2@example.org") < 0 && old.to.indexOf("s3@example.org") >= 0, "fixture: s2's e-mail is off, s3's on");
+  assert.deepStrictEqual(r.body.push, {
+    sent: 3, failed: 1, removed: 2, skipped_no_device: 1, skipped_pref_off: 2, devices: { sent: 3, failed: 1, removed: 2 }, error: null,
+    results: [{ person_id: "s1", status: "sent" }, { person_id: "s2", status: "sent" }, { person_id: "s4", status: "failed" }, { person_id: "s6", status: "skipped_no_device" }, { person_id: "s3", status: "skipped_pref_off" }],
+    followers: [{ follower: "f1aaaaaa", via: ["s2"], status: "sent" }, { follower: "f2bbbbbb", via: ["s3"], status: "skipped_pref_off" }],
+  });
+  assert.strictEqual(r.body.push.sent + r.body.push.failed + r.body.push.skipped_no_device + r.body.push.skipped_pref_off, 7, "the invariant over the 7 targets (s1 s2 s3 s4 s6 - s5 has no account, so a broadcast never names him - plus f1 and f2)");
+  assert.deepStrictEqual(w.pushes.map((p) => p.endpoint).sort(), ["pub-f1", "pub-s1-a", "pub-s1-b", "pub-s2", "pub-s4", "pub-s4b"].map(p30Fcm).sort(), "never s3's or f2's device (their push switch is off)");
+  assert.deepStrictEqual(w.subReads.length, 1, "one device read for the whole send");
+  assert.ok(w.subReads[0].indexOf(p30Id("a3a3a3a3")) < 0 && w.subReads[0].indexOf(p30Id("f2bbbbbb")) < 0, "an opted-out account's devices are not even read");
+  assert.deepStrictEqual(w.deletes.map((d) => d.slice().sort()), [[p30Id("d0000002"), p30Id("d0000006")].sort()], "the 410 and 404 rows are deleted - never the 500 row");
+  assert.ok(w.patches.some((p) => p.ids.length === 1 && p.ids[0] === p30Id("d0000005") && p.body.fail_count === 3 && typeof p.body.last_error_at === "string"), "the 500 row: fail_count 2 -> 3, last_error_at");
+  assert.ok(w.patches.some((p) => p.ids.slice().sort().join() === [p30Id("d0000001"), p30Id("d0000003"), p30Id("d0000007")].sort().join() && p.body.fail_count === 0), "the sent rows: last_ok_at, fail_count 0");
+  for (const p of w.pushes) {
+    const dev = keys[p.endpoint];
+    const dec = await p30Decrypt(p.body, dev);
+    const payload = JSON.parse(Buffer.from(dec.plain.slice(0, -1)).toString("utf8"));
+    const follower = p.endpoint === p30Fcm("pub-f1");
+    assert.deepStrictEqual(payload, { v: 1, title: follower ? "Silvis Call (following Dr. Burchett)" : "Silvis Call", body: "The schedule for Nov 2026 - Jan 2027 is published.", tag: "silvis-published", tab: "calendar" }, "the payload for " + p.endpoint.slice(-8));
+    const m = /^vapid t=([^,]+), k=(.+)$/.exec(p.headers.Authorization);
+    const j = await p30Jwt(m[1], v.pubRaw);
+    assert.ok(j.ok && m[2] === v.publicB64u && j.claims.aud === "https://fcm.googleapis.com", "VAPID token and key");
+    assert.strictEqual(p.headers.TTL, "259200"); assert.strictEqual(p.headers.Urgency, "high"); assert.strictEqual(p.headers["Content-Encoding"], "aes128gcm");
+  }
+  p30NoSecrets(w, r, keys);
+  assert.ok(w.logs.some((l) => /^\[push\] type=schedule_published targets=7 sent=3 failed=1 removed=2 no_device=1 pref_off=2$/.test(l)), "the summary log line: " + w.logs.filter((l) => /^\[push\]/.test(l)).join(" | "));
+  assert.ok(w.logs.some((l) => /^\[push\] s4 device=d0000005 status=500 the push service refuses <url>$/.test(l)), "the failed device's line: the target, 8 characters of the row id, the status, the answer with the URL redacted");
+});
+acheck("P30 handler: a surgeon's trade_proposed (s2 -> s3) - s3 (trade e-mail OFF, push on) is pushed and not mailed, s2 (trade push OFF) is mailed and not pushed; the follower of s2 is pushed his Following view with his title; tags silvis-trade-<8>; a surgeon caller gets the push COUNTS only (no per-recipient lists)", async () => {
+  const { env } = await p30Env();
+  const w = p30World({ trades: { [P30_TRADE_ID]: { from_surgeon_id: "s2", to_surgeon_id: "s3" } } });
+  const keys = await p30Devices(w, [["a2a2a2a2", "tr-s2"], ["a3a3a3a3", "tr-s3"], ["f1aaaaaa", "tr-f1"], ["f2bbbbbb", "tr-f2"]]);
+  const h = p30Handler(env, w);
+  const data = { message: "Burchett proposes a trade - you take Sat 10/10 primary, Burchett takes Sun 10/18 primary", subject: "Shift trade proposed", trade_id: P30_TRADE_ID };
+  const r = await p30Call(h, w, { token: "tok-s2", body: { type: "trade_proposed", data, targetIds: ["s2", "s3"] } });
+  assert.strictEqual(r.status, 200, r.text);
+  const old = p30OldEmail(w, "trade_proposed", ["s2", "s3"], { role: "surgeon", personId: "s2" }, data, w.trades[P30_TRADE_ID], false);
+  assert.deepStrictEqual(p30EmailPart(r.body), old.part, "the e-mail part is the pre-Prompt-30 answer");
+  // f1 follows s2 (no prefs row: every switch on); f2 follows s3 (his own row turns only schedule_updates_push off - the trade switches stay on)
+  assert.deepStrictEqual(w.mails.map((m) => m.to), ["s2@example.org", "f1@example.org", "f2@example.org"], "s2 is mailed (his trade e-mail is on), s3 is not (off); both followers are mailed");
+  assert.deepStrictEqual(r.body.push, { sent: 3, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 1, devices: { sent: 3, failed: 0, removed: 0 }, error: null }, "counts only for a surgeon caller (s2 skipped_pref_off; s3, f1, f2 sent)");
+  assert.deepStrictEqual(w.pushes.map((p) => p.endpoint).sort(), [p30Fcm("tr-f1"), p30Fcm("tr-f2"), p30Fcm("tr-s3")], "s3 (e-mail off, push on) and the two followers - never s2 (his trade push is off, his e-mail on)");
+  const byEp = {};
+  for (const p of w.pushes) byEp[p.endpoint] = JSON.parse(Buffer.from((await p30Decrypt(p.body, keys[p.endpoint])).plain.slice(0, -1)).toString("utf8"));
+  assert.deepStrictEqual(byEp[p30Fcm("tr-s3")], { v: 1, title: "Silvis Call", body: data.message, tag: "silvis-trade-abcdef12", tab: "timeoff" });
+  assert.deepStrictEqual(byEp[p30Fcm("tr-f1")], { v: 1, title: "Silvis Call (following Dr. Burchett)", body: data.message, tag: "silvis-trade-abcdef12", tab: "myschedule" });
+  assert.deepStrictEqual(byEp[p30Fcm("tr-f2")], { v: 1, title: "Silvis Call (following Dr. Acton)", body: data.message, tag: "silvis-trade-abcdef12", tab: "myschedule" });
+  p30NoSecrets(w, r, keys);
+});
+acheck("P30 equality table: for every input (prefs on / off / missing, every e-mail flag off with push on, followers / none, persons without an account or an address, a failing mailer, push not configured, the device table missing) the e-mail part of the answer and the e-mails sent are exactly the pre-Prompt-30 logic's; push failures are answered in push.error; test / shift_reminder answer push: null and read no device; an empty targetIds answers without a push key", async () => {
+  const { env } = await p30Env();
+  const allEmailOff = [
+    { person_id: "s1", profile_id: null, schedule_updates_email: false, trade_updates_email: false }, { person_id: "s2", profile_id: null, schedule_updates_email: false, trade_updates_email: false },
+    { person_id: "s3", profile_id: null, schedule_updates_email: false }, { person_id: "s4", profile_id: null, schedule_updates_email: false }, { person_id: "s6", profile_id: null, schedule_updates_email: false },
+    { person_id: null, profile_id: p30Id("f1aaaaaa"), schedule_updates_email: false }, { person_id: null, profile_id: p30Id("f2bbbbbb"), schedule_updates_email: false },
+  ];
+  const noFollowers = (w) => { w.profiles = w.profiles.filter((p) => !(p.follows && p.follows.length)); };
+  const S3_SURGEON = { role: "surgeon", personId: "s3" }, ADMIN = { role: "admin", personId: "s1" }, S2_SURGEON = { role: "surgeon", personId: "s2" };
+  const rows = [
+    ["broadcast publish, base prefs", {}, "tok-admin", ADMIN, { type: "schedule_published", data: { message: "Published.\nmore" } }],
+    ["broadcast publish, no prefs rows", { prefs: [] }, "tok-admin", ADMIN, { type: "schedule_published", data: { message: "Published." } }],
+    ["open shifts, every e-mail flag off (push on)", { prefs: allEmailOff }, "tok-admin", ADMIN, { type: "open_shifts", data: { message: "Open: Thu 10/15 primary" } }],
+    ["targeted manual edit with a person without an account", {}, "tok-admin", ADMIN, { type: "manual_edit", data: { message: "Thu 10/15 changed", day: "2026-10-15" }, targetIds: ["s2", "s5", "s4"] }],
+    ["vacation logged by a surgeon to the scheduler", {}, "tok-s3", S3_SURGEON, { type: "vacation_logged", data: { message: "Acton: vacation 11/2-11/6" }, targetIds: ["s1"] }],
+    ["shift claimed", {}, "tok-s3", S3_SURGEON, { type: "shift_claimed", data: { message: "Acton took Thu 10/15 primary", day: "2026-10-15", role: "primary", surgeon_id: "s3" }, targetIds: ["s3", "s1"] }],
+    ["trade declined (a give)", { trades: { [P30_TRADE_ID]: { from_surgeon_id: "s2", to_surgeon_id: "s3" } } }, "tok-s2", S2_SURGEON, { type: "trade_declined", data: { message: "Declined", trade_id: P30_TRADE_ID, kind: "give" }, targetIds: ["s3", "s2"] }],
+    ["a failing mailer", { mailStatus: 500 }, "tok-admin", ADMIN, { type: "schedule_published", data: { message: "Published." } }],
+    ["no followers at all", { prep: noFollowers }, "tok-admin", ADMIN, { type: "open_shifts", data: { message: "Open" } }],
+    ["push not configured", { env: { VAPID_PRIVATE_KEY: "" } }, "tok-admin", ADMIN, { type: "schedule_published", data: { message: "Published." } }],
+    ["the device table missing", { subsRead: 404 }, "tok-admin", ADMIN, { type: "open_shifts", data: { message: "Open" } }],
+  ];
+  for (const [label, over, token, caller, body] of rows) {
+    const w = p30World(Object.assign({}, over, { env: undefined, prep: undefined }));
+    if (over.prep) over.prep(w);
+    const keys = await p30Devices(w, [["a1a1a1a1", "eq-s1"], ["a2a2a2a2", "eq-s2"], ["a3a3a3a3", "eq-s3", 404], ["a4a4a4a4", "eq-s4", 500], ["f1aaaaaa", "eq-f1"], ["f2bbbbbb", "eq-f2"]]);
+    const h = p30Handler(Object.assign({}, env, over.env || {}), w);
+    const r = await p30Call(h, w, { token, body });
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 200));
+    const privileged = caller.role === "admin" || caller.role === "scheduler";
+    const old = p30OldEmail(w, body.type, body.targetIds || null, caller, body.data, (w.trades || {})[P30_TRADE_ID] || null, privileged);
+    assert.deepStrictEqual(p30EmailPart(r.body), old.part, label + ": the e-mail part");
+    assert.deepStrictEqual(w.mails.map((m) => m.to), old.to, label + ": the e-mails sent");
+    const p = r.body.push;
+    assert.ok(p && typeof p === "object", label + ": a push object");
+    if (over.env) assert.strictEqual(p.error, "push not configured", label);
+    else if (over.subsRead) assert.ok(/^push_subscriptions unavailable: HTTP 404/.test(p.error), label + ": " + p.error);
+    else {
+      assert.strictEqual(p.error, null, label + ": " + p.error);
+      const followers = FOL.followerIndex(w.profiles.filter((x) => x.role === "viewer" || x.role === "coordinator"), w.prefs);
+      const fAll = FOL.followerRecipients(followers, body.type, FOL.followerUniverse(body.type, body.targetIds || null, caller, body.data, (w.trades || {})[P30_TRADE_ID] || null), null).list;
+      const persons = body.targetIds ? new Set(body.targetIds).size : new Set(w.profiles.filter((x) => x.person_id).map((x) => x.person_id)).size;
+      assert.strictEqual(p.sent + p.failed + p.skipped_no_device + p.skipped_pref_off, persons + fAll.length, label + ": sent + failed + no_device + pref_off = the targets");
+    }
+    if (body.type === "open_shifts" && over.prefs === allEmailOff) {
+      assert.strictEqual(w.mails.length, 0, label + ": nobody mailed");
+      assert.ok(p.sent >= 3, label + ": still pushed (s1, s2, f1...): " + JSON.stringify(p));
+    }
+    p30NoSecrets(w, r, keys);
+  }
+  // categories without a switch, and the empty short circuit
+  for (const [type, token, body] of [["test", "tok-s3", { type: "test", targetIds: ["s3"] }], ["shift_reminder", "tok-admin", { type: "shift_reminder", data: { message: "Reminder" }, targetIds: ["s3"] }]]) {
+    const w = p30World();
+    await p30Devices(w, [["a3a3a3a3", "nr-s3"]]);
+    const r = await p30Call(p30Handler(env, w), w, { token, body });
+    assert.strictEqual(r.status, 200, type + ": " + r.text.slice(0, 200));
+    assert.strictEqual(r.body.push, null, type + " answers push: null");
+    assert.ok(!w.calls.some((c) => /push_subscriptions/.test(c)) && w.pushes.length === 0, type + " reads no device and pushes nothing");
+  }
+  const w0 = p30World();
+  const r0 = await p30Call(p30Handler(env, w0), w0, { token: "tok-admin", body: { type: "schedule_published", data: { message: "m" }, targetIds: [] } });
+  assert.deepStrictEqual(r0.body, { sent: 0, failed: 0, skipped_no_email: 0, skipped_pref_off: 0, results: [] }, "the empty short circuit is unchanged (no push key)");
 });
 
 (async () => {
