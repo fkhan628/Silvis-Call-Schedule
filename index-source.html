@@ -76,6 +76,9 @@
     .cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }
     .cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }
     .cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Spec H (10/3): on a phone the name gives way to a short label (helpers.appGridLabels - at most four letters, distinct
+       between the APPs: "Appl" / "Bram", "P.App" / "J.App" when two start alike), like a surgeon's pill gives way to his code */
+    .cal-app-code { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .week-rows td, .week-rows th { vertical-align: top; }
     /* Generate preview (Prompt 6 Slice E): a previewed day is drawn with a
        dashed violet outline and a light hatch so it can never pass for a
@@ -129,6 +132,8 @@
       .cal-badges { top: 2px; right: 2px; }
       .cal-app { font-size: 9px; }
       .cal-app-tag { margin-right: 1px; }
+      .cal-app-name { display: none; }
+      .cal-app-code { display: inline; }
       .cal-legend { font-size: 10px !important; }
       /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
       .editor-kbd-hint { display: none; }
@@ -362,7 +367,13 @@ function CallSchedule() {
     } catch(e) { console.warn("isPublicMode: could not read the URL query (treated as signed-in mode):", e); return false; }
   }, []);
 
-  const [view, setView] = useState("calendar");
+  const [view, setViewState] = useState("calendar");
+  // Spec F (fix/painter-dark-mode, 10/3 - BEHAVIOUR): My APP days' unsaved taps are never dropped silently. AppDaysCard reports
+  // its draft count into appDaysDirtyRef; every way off Mine goes through setView (the tabs, an Alerts row, the jumps), which
+  // asks first - the painter's model: confirm, then the draft goes - and stays on Mine when the answer is no.
+  const appDaysDirtyRef = useRef(0);
+  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || view !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };
+  const setView = (k) => { if (k !== view && !leaveMineOk("leave")) return; setViewState(k); };
 
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
@@ -1302,6 +1313,7 @@ function CallSchedule() {
     return () => { off(); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
   const openSignInAgain = () => {
+    if (!leaveMineOk("signin")) return; // spec F: the sign-in card replaces Mine - unsaved APP day taps are asked about first
     setAuthMode("login"); setAuthError("Your session expired - sign in again."); setBiometricPending(false);
     setAuthUser(null); // the card renders in place of the app; everything else (profile, schedule, pending edits) stays
   };
@@ -1559,6 +1571,7 @@ function CallSchedule() {
     return () => clearTimeout(t);
   }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line
   const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);
+  const appGridLabel = useMemo(() => appGridLabels(appByDay), [appByDay]); // spec H: the phone grid's distinct short names
   // The name the names function gave a profile ("APP" when it gave none).
   const appNameOf = (profileId) => { const n = appNameRows.find(x => x && x.profile_id === profileId); return n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP"; };
   // saveMyAppDays(add, clear) - My APP days' Save: ONE request for the APP's own profile. Refused locally (no request) past the
@@ -6899,16 +6912,21 @@ function CallSchedule() {
         /* the light raised button (css.btn(false)) takes the dark raised surface */
         button[style*="background: rgb(238, 242, 247)"] { background: #0F2140 !important; border-color: #24406B !important; }
         button[style*="background: linear-gradient"] { color: #fff !important; }
-        /* the navy primary gradient and an active navy mini / filter button lift to a lighter navy on the dark surface */
+        /* the navy primary gradient and an active navy mini / filter button lift to a lighter navy on the dark surface. A
+           dark-aware button whose background IS the dark surface (T.surface is #13294B too - the painters' day rows, My APP
+           days' day cells and its disabled month arrow) carries data-surface and keeps its own background, border and text
+           (fix/painter-dark-mode, 10/3: the rule lifted those to #2E5090 - free days looked selected, the outlines vanished);
+           :where() keeps the rule's specificity, so every other button meets it exactly as before */
         button[style*="linear-gradient(135deg, rgb(19, 41, 75)"] { background: linear-gradient(135deg,#1F3A6B,#2E5090) !important; border-color: #2E5090 !important; }
-        button[style*="background: rgb(19, 41, 75)"] { background: #2E5090 !important; border-color: #2E5090 !important; color: #fff !important; }
+        button[style*="background: rgb(19, 41, 75)"]:where(:not([data-surface])) { background: #2E5090 !important; border-color: #2E5090 !important; color: #fff !important; }
         table { color: #C9D6E8 !important; }
         th { color: #9FB0C8 !important; }
         td { color: #C9D6E8 !important; }
         /* light token literals: body text, muted text, navy titles, orange text, OPEN red, page-tint backgrounds */
         div[style*="color: rgb(31, 42, 58)"], span[style*="color: rgb(31, 42, 58)"], p[style*="color: rgb(31, 42, 58)"], h2[style*="color: rgb(31, 42, 58)"], h3[style*="color: rgb(31, 42, 58)"], label[style*="color: rgb(31, 42, 58)"] { color: #E6ECF5 !important; }
         div[style*="color: rgb(91, 107, 130)"], span[style*="color: rgb(91, 107, 130)"], p[style*="color: rgb(91, 107, 130)"], label[style*="color: rgb(91, 107, 130)"] { color: #9FB0C8 !important; }
-        div[style*="color: rgb(19, 41, 75)"], span[style*="color: rgb(19, 41, 75)"], strong[style*="color: rgb(19, 41, 75)"], h3[style*="color: rgb(19, 41, 75)"] { color: #C9D6E8 !important; }
+        /* (a pill span carrying its own tint - data-pill, the painter's Primary pill: navy on #E8EEF8 - keeps its navy text) */
+        div[style*="color: rgb(19, 41, 75)"], span[style*="color: rgb(19, 41, 75)"]:where(:not([data-pill])), strong[style*="color: rgb(19, 41, 75)"], h3[style*="color: rgb(19, 41, 75)"] { color: #C9D6E8 !important; }
         span[style*="color: rgb(194, 65, 12)"], button[style*="color: rgb(194, 65, 12)"], div[style*="color: rgb(194, 65, 12)"] { color: #FF8A4C !important; }
         /* T.accentText / T.accent already resolve to the dark orange; the generic button rule above must not grey them */
         button[style*="color: rgb(255, 138, 76)"] { color: #FF8A4C !important; }
@@ -7506,7 +7524,7 @@ function CallSchedule() {
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
                     {/* Prompt 29: the third line "A <name>" - the APP on call (italic, no pill, appText); the full name is in the hover and the day summary */}
-                    {appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span></div>}
+                    {appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}
                     {((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && (
                       <div className="cal-dots" title={[(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")}>
                         {(vacByDay[d] || []).map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}
@@ -7880,7 +7898,7 @@ function CallSchedule() {
             ));
           // Prompt 29: an APP - My APP days (its own call days: tap to add / remove, one Save), then the Following cards if any.
           if (!pid && isApp) return <>
-            <AppDaysCard css={css} dk={dk} profileId={authUser ? authUser.id : ""} byDay={appByDay} state={appDaysState} today={todayStr} weekStartsOn={weekStartsOn} busy={appDaysBusy} onSave={saveMyAppDays} onRetry={() => loadAppDays(true)}/>
+            <AppDaysCard css={css} dk={dk} profileId={authUser ? authUser.id : ""} byDay={appByDay} state={appDaysState} today={todayStr} weekStartsOn={weekStartsOn} busy={appDaysBusy} onSave={saveMyAppDays} onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>
             {followingCards()}
           </>;
           if (following.length) return <>{followingCards()}</>; // end of the Following view
@@ -8593,11 +8611,11 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
     onClose();
   };
   React.useEffect(() => () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); }, []);
-  const bg = dk ? "#0B1A33" : "#F6F8FB";
-  const panelBg = dk ? "#13294B" : "#fff";
-  const border = dk ? "#24406B" : "#DCE3EC";
-  const text = dk ? "#E6ECF5" : "#1F2A3A";
-  const muted = dk ? "#9FB0C8" : "#5B6B82";
+  // Theme tokens (fix/painter-dark-mode, 10/3 - the same values the sheet wrote as literals; a registered region of
+  // test/ui/theme-regions.js since then, so no literal text colour comes back): the day rows carry data-surface (the dark
+  // sheet's active-navy rule otherwise lifts a dark T.surface row to #2E5090).
+  const T = THEME[dk ? "dark" : "light"], PR = PAINT_ROWS[dk ? "dark" : "light"];
+  const bg = T.bg, panelBg = T.surface, border = T.border, text = T.text, muted = T.muted;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9300, background: bg, display: "flex", flexDirection: "column", fontFamily: font }}>
       <div style={{ background: panelBg, borderBottom: `1px solid ${border}`, padding: "10px 14px 10px", paddingTop: "calc(env(safe-area-inset-top, 0px) + 10px)", flexShrink: 0 }}>
@@ -8613,7 +8631,7 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <select value={armedPerson} onChange={e => { setArmedPerson(e.target.value); setPendingStart(null); }} disabled={surgeons.length === 1}
-              style={{ ...css.inp, ...(dk ? { background: "#0F2140", border: "1px solid #24406B", color: "#E6ECF5" } : {}), minHeight: 40, flex: "1 1 140px" }}>
+              style={{ ...css.inp, ...(dk ? { background: T.inputBg, border: "1px solid " + T.inputBorder, color: T.text } : {}), minHeight: 40, flex: "1 1 140px" }}>
               <option value="">Select person</option>
               {surgeons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -8622,7 +8640,7 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
             {!armedPerson ? "Select a person, then tap a start day and an end day."
               : pendingStart ? <>
                   <span>Start {pendingStart} - tap the end day (same day = just that day).</span>
-                  <button onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: "#c04040", border: "1px solid #c05050" }}>cancel start</button>
+                  <button onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: T.open, border: "1px solid " + T.open }}>cancel start</button>
                 </>
               : `Tap ${personName(armedPerson)}'s start day. Tap a painted range to remove it before saving.`}
           </div>
@@ -8636,13 +8654,13 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
           const off = offByDay[ds] || [];
           const coveredAll = draftCoveringAll(ds);
           const isPending = pendingStart === ds;
-          const rowBg = isPending ? (dk ? "#1a3a5e" : "#dcecf8") : coveredAll.length > 0 ? (dk ? "#1c3050" : "#e6f2ea") : isWknd ? (dk ? "#0F2140" : "#f6f8fa") : panelBg;
+          const rowBg = isPending ? PR.pending : coveredAll.length > 0 ? PR.vacDraft : isWknd ? PR.vacWeekend : panelBg;
           return (
-            <button key={ds} onClick={() => tapDay(ds)}
-              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: "pointer", fontFamily: font, background: rowBg, border: `1px solid ${isPending ? THEME[dk ? "dark" : "light"].accent : border}` }}>
+            <button key={ds} data-testid="vacp-day" data-day={ds} data-surface="1" onClick={() => tapDay(ds)}
+              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: "pointer", fontFamily: font, background: rowBg, border: `1px solid ${isPending ? T.accent : border}` }}>
               <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
                 <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{d.getDate()}</div>
-                <div style={{ fontSize: 9.5, fontWeight: 700, color: isWknd ? "#a05010" : muted, textTransform: "uppercase" }}>{DAY_HDR[dow]}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: isWknd ? T.paintText : muted, textTransform: "uppercase" }}>{DAY_HDR[dow]}</div>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {coveredAll.length > 0 && (
@@ -8650,10 +8668,10 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
                     {coveredAll.map(({ en }, k) => (
                       <span key={k} style={{ ...pillStyle(en.personId), display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 6, fontSize: 11.5, fontWeight: 800 }}>{personName(en.personId)}</span>
                     ))}
-                    <span style={{ fontSize: 9.5, fontWeight: 800, color: "#a05010" }}>unsaved - tap with that person armed to remove</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 800, color: T.paintText }}>unsaved - tap with that person armed to remove</span>
                   </div>
                 )}
-                {isPending && <div style={{ fontSize: 11, fontWeight: 700, color: THEME[dk ? "dark" : "light"].accentText, marginBottom: 2 }}>range starts here</div>}
+                {isPending && <div style={{ fontSize: 11, fontWeight: 700, color: T.paintText, marginBottom: 2 }}>range starts here</div>}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {off.length === 0 && coveredAll.length === 0 && !isPending && <span style={{ fontSize: 10.5, color: muted }}>nobody off</span>}
                   {off.map((pid, i) => (
@@ -8667,15 +8685,15 @@ function MonthPainterSheet({ css, dk, surgeons, vacations, onCommit, onClose }) 
       </div>
       <div style={{ background: panelBg, borderTop: `1px solid ${border}`, padding: "10px 14px", paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 10px)", flexShrink: 0 }}>
         {commitError && (
-          <div role="alert" style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: dk ? "#3a1a1a" : "#fdeaea", border: "1px solid #c05050", maxHeight: 130, overflowY: "auto" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#c04040" }}>Nothing was saved - {commitError.items.length} entr{commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:</div>
-            {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: dk ? "#e0b0b0" : "#8a3030", fontFamily: mono }}>- {it}</div>)}
-            <div style={{ fontSize: 10.5, color: muted, marginTop: 3 }}>({commitError.msg}) - your taps are kept; fix the issue and Save again.</div>
+          <div role="alert" style={{ ...css.errBox, marginBottom: 8, maxHeight: 130, overflowY: "auto" }}>
+            <div style={{ fontSize: 12, fontWeight: 800 }}>Nothing was saved - {commitError.items.length} entr{commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:</div>
+            {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, fontFamily: mono }}>- {it}</div>)}
+            <div style={{ fontSize: 10.5, marginTop: 3 }}>({commitError.msg}) - your taps are kept; fix the issue and Save again.</div>
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ flex: 1, fontSize: 12.5, fontWeight: 800, color: dirtyCount ? "#a05010" : muted }}>
-            {dirtyCount ? `${dirtyCount} unsaved` : savedNote ? <span style={{ color: "#1a8040" }}>{savedNote}</span> : "No unsaved changes"}
+          <div style={{ flex: 1, fontSize: 12.5, fontWeight: 800, color: dirtyCount ? T.paintText : muted }}>
+            {dirtyCount ? `${dirtyCount} unsaved` : savedNote ? <span style={{ color: T.success }}>{savedNote}</span> : "No unsaved changes"}
           </div>
           <button onClick={doDiscard} disabled={!dirtyCount || busy} style={{ ...css.btn(false), minHeight: 44, opacity: dirtyCount && !busy ? 1 : 0.45 }}>Discard</button>
           <button onClick={doSave} disabled={!dirtyCount || busy} style={{ ...css.btn(true), minHeight: 44, minWidth: 110, opacity: dirtyCount && !busy ? 1 : 0.55 }}>{busy ? "Saving" : `Save${dirtyCount ? ` (${dirtyCount})` : ""}`}</button>
@@ -9008,7 +9026,12 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
     onClose();
   };
 
+  // fix/painter-dark-mode (10/3): every text colour is a THEME token (the sheet is a region of test/ui/theme-regions.js); the
+  // day rows carry data-surface (a free row's dark T.surface is #13294B, which the dark sheet's active-navy rule otherwise lifts
+  // to #2E5090) and read their tints from PAINT_ROWS; a pill span carries data-pill (the Primary pill's navy text on its own tint
+  // would otherwise be repainted #C9D6E8 by the dark sheet's navy-text rule, 1.26:1).
   const bg = T.bg, panelBg = T.surface, border = T.border, text = T.text, muted = T.muted;
+  const PR = PAINT_ROWS[dk ? "dark" : "light"];
   const openRed = T.open;
   const pillFor = (b) => { const c = OFFER_BRUSH[b] || OFFER_BRUSH.clear; return { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 6, fontSize: 12.5, fontWeight: 800, background: c.tint, color: c.text, border: `1px solid ${c.border}` }; };
   const holderText = (v, ds) => v ? holderLabel(v, nameOf) : (ds >= today ? "OPEN" : "-");
@@ -9021,8 +9044,10 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const npWho = asScheduler && person ? person.name : "yourself";
   const npHint = npExh ? `Tap a day to mark ${npWho} No primary ("Only these days" is on: paint Backup too for backup); tap again to take it back.` // Prompt 28 review: exhaustive
     : `Tap a day to mark ${npWho} No primary (backup is still fine); tap again to take it back.`; // Prompt 28: the No primary brush armed, Range off
-  const npLegend = npExh ? "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change."
-    : "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
+  // 10/3 (spec A): a single day the scheduler entered is still the person's own No primary day (he can clear it); only a
+  // multi-day range - the pill NO_PRIMARY_RANGE_WORDS - is read-only, so the ending names the range, without a pronoun.
+  const npLegend = npExh ? "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. A \"No primary (set by the scheduler)\" range only the scheduler can change."
+    : "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. A \"No primary (set by the scheduler)\" range only the scheduler can change.";
 
   if (!person) {
     return (
@@ -9060,15 +9085,15 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           {["primary", "backup", "either", "noprimary", "clear"].map(k => {
             // Ship review 10/2: the No primary brush waits for the first availability read (the marks it would show are unknown)
             const npOff = k === "noprimary" && !availabilityRead;
-            return <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} disabled={npOff} title={npOff ? "The No primary days have not loaded - reload first" : undefined} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={{ ...css.brush(armed === k, k), ...(npOff ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}>{OFFER_BRUSH[k].label}</button>;
+            return <button key={k} data-testid={"ofp-brush-" + k} data-armed={armed === k ? "1" : "0"} disabled={npOff} title={npOff ? "The No primary days have not loaded - reload first" : undefined} onClick={() => { setArmed(k); setPendingStart(null); setHint(""); }} style={{ ...css.brush(armed === k, k, dk), ...(npOff ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}>{OFFER_BRUSH[k].label}</button>;
           })}
-          <button data-testid="ofp-range" data-on={rangeMode ? "1" : "0"} onClick={() => { setRangeMode(v => !v); setPendingStart(null); setHint(""); }} title="Paint a run of days: tap the start day, then the end day" style={{ ...css.btn(false), minHeight: 44, padding: "8px 12px", fontSize: 12, marginLeft: "auto", ...(rangeMode ? { background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`, color: "#fff", borderColor: T.navy } : {}) }}>{rangeMode ? "Range: on" : "Range"}</button>
+          <button data-testid="ofp-range" data-on={rangeMode ? "1" : "0"} onClick={() => { setRangeMode(v => !v); setPendingStart(null); setHint(""); }} title="Paint a run of days: tap the start day, then the end day" style={{ ...css.btn(false), minHeight: 44, padding: "8px 12px", fontSize: 12, marginLeft: "auto", ...(rangeMode ? { background: `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})`, color: T.onPrimary, borderColor: T.navy } : {}) }}>{rangeMode ? "Range: on" : "Range"}</button>
         </div>
-        <div data-testid="ofp-hint" style={{ fontSize: 11, color: hint ? "#a05010" : muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", lineHeight: 1.4 }}>
+        <div data-testid="ofp-hint" style={{ fontSize: 11, color: hint ? T.paintText : muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", lineHeight: 1.4 }}>
           {hint ? <span>{hint}</span>
             : rangeMode && pendingStart ? <>
                 <span>Start {dayText(pendingStart)} - tap the end day (same day = just that day).</span>
-                <button data-testid="ofp-cancel-start" onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: "#c04040", border: "1px solid #c05050" }}>x cancel start</button>
+                <button data-testid="ofp-cancel-start" onClick={() => setPendingStart(null)} style={{ minHeight: 30, padding: "3px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, fontFamily: font, cursor: "pointer", background: "transparent", color: T.open, border: "1px solid " + T.open }}>x cancel start</button>
               </>
             : <span>{armed === "noprimary" && !rangeMode ? npHint : rangeHint}</span>}
         </div>
@@ -9095,28 +9120,28 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           const npWhy = npWhyOf(r);
           const partial = !grey && (r.block.primary || r.block.backup) ? (r.block.primary ? "backup only - " + r.block.primary : "primary only - " + r.block.backup) : null;
           const partialShown = partial && !(r.npRange && r.block.primary === NO_PRIMARY_RANGE_WORDS && !r.block.backup); // the range pill says it
-          const rowBg = grey ? (dk ? "#0F1B33" : "#F1F3F6") : isPending ? (dk ? "#1a3a5e" : "#dcecf8") : drafted ? (dk ? "#1c3050" : "#eaf3fb") : r.weekend ? T.weekend : panelBg;
+          const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;
           const holderP = holderText(r.holders.primary, ds), holderB = holderText(r.holders.backup, ds);
           const npPill = OFFER_BRUSH.noprimary;
           const clearWhat = clearable(r) ? (savedByDay[ds] && np.own[ds] ? " - saved offer and No primary: Clear can take them back" : savedByDay[ds] ? " - saved offer: Clear can take it back" : " - saved No primary: Clear can take it back") : "";
           return (
-            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} data-noprimary={effN ? "own" : r.npRange ? "range" : ""} data-np-draft={npDrafted ? (npDraft[ds] ? "add" : "clear") : ""} data-np-why={npWhy} disabled={!tappable} onClick={() => tapDay(ds)}
+            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} data-noprimary={effN ? "own" : r.npRange ? "range" : ""} data-np-draft={npDrafted ? (npDraft[ds] ? "add" : "clear") : ""} data-np-why={npWhy} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}
               style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: tappable ? "pointer" : "not-allowed", fontFamily: font, background: rowBg, opacity: grey ? 0.6 : 1, border: `1px solid ${isPending ? T.accent : drafted ? T.accent : border}` }}>
               <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
                 <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{r.d}</div>
-                <div style={{ fontSize: 9.5, fontWeight: 700, color: r.weekend ? "#a05010" : muted, textTransform: "uppercase" }}>{DAY_HDR[r.dow]}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: r.weekend ? T.paintText : muted, textTransform: "uppercase" }}>{DAY_HDR[r.dow]}</div>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  {eff ? <span style={pillFor(eff)}>{OFFER_BRUSH[eff].label}</span> : <span style={{ fontSize: 11.5, color: offerDrafted ? "#a05010" : muted, fontWeight: offerDrafted ? 700 : 400 }}>{offerDrafted ? "will clear" : grey || effN || r.npRange || npLift ? "" : "not offered"}</span>}
-                  {effN && <span data-testid="ofp-np-pill" data-np="own" style={pillFor("noprimary")}>No primary</span>}
-                  {r.npRange && <span data-testid="ofp-np-pill" data-np="range" style={{ ...pillFor("noprimary"), border: `1px dashed ${npPill.border}` }}>{NO_PRIMARY_RANGE_WORDS}</span>}
-                  {npLift && <span data-testid="ofp-np-pill" data-np="lift" style={{ fontSize: 11.5, color: "#a05010", fontWeight: 700 }}>will lift No primary</span>}
-                  {drafted && <span style={{ fontSize: 9.5, fontWeight: 800, color: "#a05010" }}>unsaved</span>}
-                  {isPending && <span style={{ fontSize: 11, fontWeight: 700, color: T.accentText }}>range starts here</span>}
+                  {eff ? <span data-testid="ofp-offer-pill" data-pill="1" style={pillFor(eff)}>{OFFER_BRUSH[eff].label}</span> : <span style={{ fontSize: 11.5, color: offerDrafted ? T.paintText : muted, fontWeight: offerDrafted ? 700 : 400 }}>{offerDrafted ? "will clear" : grey || effN || r.npRange || npLift ? "" : "not offered"}</span>}
+                  {effN && <span data-testid="ofp-np-pill" data-np="own" data-pill="1" style={pillFor("noprimary")}>No primary</span>}
+                  {r.npRange && <span data-testid="ofp-np-pill" data-np="range" data-pill="1" style={{ ...pillFor("noprimary"), border: `1px dashed ${npPill.border}` }}>{NO_PRIMARY_RANGE_WORDS}</span>}
+                  {npLift && <span data-testid="ofp-np-pill" data-np="lift" style={{ fontSize: 11.5, color: T.paintText, fontWeight: 700 }}>will lift No primary</span>}
+                  {drafted && <span data-testid="ofp-unsaved" style={{ fontSize: 9.5, fontWeight: 800, color: T.paintText }}>unsaved</span>}
+                  {isPending && <span style={{ fontSize: 11, fontWeight: 700, color: T.paintText }}>range starts here</span>}
                   {grey && <span data-testid="ofp-why" style={{ fontSize: 11, fontWeight: 700, color: muted }}>{r.grey}{clearWhat}</span>}
-                  {!grey && partialShown && <span data-testid="ofp-why" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{partial}</span>}
-                  {!grey && armed === "noprimary" && npWhy && <span data-testid="ofp-why" data-np-reason="1" style={{ fontSize: 10.5, fontWeight: 700, color: "#a05010" }}>{npWhy}</span>}
+                  {!grey && partialShown && <span data-testid="ofp-why" style={{ fontSize: 10.5, fontWeight: 700, color: T.paintText }}>{partial}</span>}
+                  {!grey && armed === "noprimary" && npWhy && <span data-testid="ofp-why" data-np-reason="1" style={{ fontSize: 10.5, fontWeight: 700, color: T.paintText }}>{npWhy}</span>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10.5, color: muted, marginTop: 2 }}>
                   <span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>
@@ -9136,7 +9161,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           {period && (
             <span data-testid="ofp-period-line" style={{ flex: "1 1 170px", minWidth: 0, fontSize: 11.5, fontWeight: 700, color: text, lineHeight: 1.35 }}>
               {periodLabel} - {periodOpen ? (periodClose ? "freezes " + fmtMD(periodClose) : "open") : "closed" + (periodClose ? " " + fmtMD(periodClose) : "")} - {periodStatus === "submitted" ? "days offered" : periodStatus === "rules_only" ? "by your rules" : asScheduler ? "following their rules" : "following your rules"}{periodOpen ? " - " + (shownMode === "exhaustive" ? "only these days" : "preferred days") : ""}
-              {modeDirty && <span style={{ color: "#a05010", marginLeft: 6 }}>mode unsaved</span>}
+              {modeDirty && <span style={{ color: T.paintText, marginLeft: 6 }}>mode unsaved</span>}
             </span>
           )}
           {period && periodOpen && <button data-testid="ofp-period-toggle" data-on={periodExpanded ? "1" : "0"} onClick={() => setPeriodOpenBox(v => !v)} style={{ ...css.mini(periodExpanded), minHeight: 36 }}>{periodExpanded ? "Done" : "Change"}</button>}
@@ -9151,7 +9176,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
             </div>
             <textarea data-testid="ofp-paste-text" value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="11/3, 11/5, 11/16-11/20" style={{ ...css.inp, width: "100%", minHeight: 48, fontFamily: mono, boxSizing: "border-box" }} />
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-              <span data-testid="ofp-paste-preview" style={{ fontSize: 11, color: pasteParsed.bad.length ? "#a05010" : muted }}>{pasteParsed.dates.length} date(s){pasteParsed.bad.length ? " - not understood: " + pasteParsed.bad.slice(0, 5).join(", ") : ""}</span>
+              <span data-testid="ofp-paste-preview" style={{ fontSize: 11, color: pasteParsed.bad.length ? T.paintText : muted }}>{pasteParsed.dates.length} date(s){pasteParsed.bad.length ? " - not understood: " + pasteParsed.bad.slice(0, 5).join(", ") : ""}</span>
               <button data-testid="ofp-paste-add" onClick={addPaste} disabled={!pasteParsed.dates.length} style={{ ...css.btn(true), minHeight: 36, opacity: pasteParsed.dates.length ? 1 : 0.5 }}>Add {pasteParsed.dates.length} day(s) to the draft</button>
             </div>
           </div>
@@ -9193,15 +9218,15 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           </div>
         )}
         {commitError && (
-          <div role="alert" data-testid="ofp-error" style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: dk ? "#3a1a1a" : "#fdeaea", border: "1px solid #c05050", maxHeight: 130, overflowY: "auto" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#c04040" }}>{`Nothing was saved - ${commitError.items.length} entr${commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:`}</div>
-            {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: dk ? "#e0b0b0" : "#8a3030", fontFamily: mono }}>- {it}</div>)}
-            <div style={{ fontSize: 10.5, color: muted, marginTop: 3 }}>({noPrimaryErrorWords(commitError.msg)}) - your taps are kept; fix the issue and Save again.</div>
+          <div role="alert" data-testid="ofp-error" style={{ ...css.errBox, marginBottom: 8, maxHeight: 130, overflowY: "auto" }}>
+            <div style={{ fontSize: 12, fontWeight: 800 }}>{`Nothing was saved - ${commitError.items.length} entr${commitError.items.length === 1 ? "y is" : "ies are"} still unsaved:`}</div>
+            {commitError.items.map((it, i) => <div key={i} style={{ fontSize: 11, fontFamily: mono }}>- {it}</div>)}
+            <div style={{ fontSize: 10.5, marginTop: 3 }}>({noPrimaryErrorWords(commitError.msg)}) - your taps are kept; fix the issue and Save again.</div>
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div data-testid="ofp-status" style={{ flex: 1, fontSize: 12.5, fontWeight: 800, color: dirtyCount ? "#a05010" : muted }}>
-            {dirtyCount ? `${dirtyCount} unsaved` : savedNote ? <span data-testid="ofp-saved" style={{ color: "#1a8040" }}>{savedNote}</span> : "No unsaved changes"}
+          <div data-testid="ofp-status" style={{ flex: 1, fontSize: 12.5, fontWeight: 800, color: dirtyCount ? T.paintText : muted }}>
+            {dirtyCount ? `${dirtyCount} unsaved` : savedNote ? <span data-testid="ofp-saved" style={{ color: T.success }}>{savedNote}</span> : "No unsaved changes"}
           </div>
           <button data-testid="ofp-discard" onClick={doDiscard} disabled={!dirtyCount || busy} style={{ ...css.btn(false), minHeight: 44, opacity: dirtyCount && !busy ? 1 : 0.45 }}>Discard</button>
           <button data-testid="ofp-save" onClick={doSave} disabled={!dirtyCount || busy} style={{ ...css.btn(true), minHeight: 44, minWidth: 110, opacity: dirtyCount && !busy ? 1 : 0.55 }}>{busy ? "Saving" : `Save${dirtyCount ? ` (${dirtyCount})` : ""}`}</button>
@@ -9598,7 +9623,13 @@ function offersLoadVerdict(st) {
 // written while tapping: Save sends the whole draft as ONE request (onSave(add, clear) -> CallSchedule.saveMyAppDays ->
 // the save function, which writes the one audit row); a refusal keeps the draft and shows the function's own words. Module
 // scope on purpose: a parent re-render (the 60 s poll) must not drop the draft. THEME tokens only, no opacity.
-function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry }) {
+// fix/painter-dark-mode (10/3): the day cells and the month arrow carry data-surface (their dark T.surface is #13294B, which the
+// dark sheet's active-navy rule otherwise lifts to #2E5090, dropping the "+ You" / removal / today outlines); a drafted day shows
+// the unsaved mark "*" (T.paintText, the painters' orange) with a key line under the grid. Unsaved taps are never lost silently
+// (BEHAVIOUR, spec F - the painter's model: confirm before the draft goes): the card reports its count through onDirty, and
+// CallSchedule asks (helpers.appDaysLeaveWords) before a tab switch or "Sign in again" takes the APP off Mine; closing or
+// reloading the page with a draft gets the browser's leave-page question (beforeunload).
+function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {
   const T = THEME[dk ? "dark" : "light"];
   const todayC = todayOrCentral(today);
   const curY = Number(todayC.slice(0, 4)), curM = Number(todayC.slice(5, 7)) - 1;
@@ -9625,7 +9656,16 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
   const monthPrefix = ym.y + "-" + String(ym.m + 1).padStart(2, "0") + "-";
   const days = monthGridDays(ym.y, ym.m, weekStartsOn);
   const diff = appDaysDraftDiff(draft, held, profileId, todayC);   // a drafted day that became past never counts (review 10/2)
-  const listOf = (items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
+  // Spec F (10/3): the parent's leave guard reads the count; the card going away (a confirmed leave, a sign-out) reports 0
+  React.useEffect(() => { if (typeof onDirty === "function") onDirty(diff.count); }, [diff.count]); // eslint-disable-line
+  React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []); // eslint-disable-line
+  React.useEffect(() => {
+    if (!diff.count) return undefined;
+    const ask = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [diff.count > 0]); // eslint-disable-line
+  const listOf =(items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
   const applyPlan = (list, label, bad) => {
     const plan = appDaysPlan(list, ctx);
     if (plan.go.length) setDraft(dr => { const n = { ...dr }; plan.go.forEach(x => { n[x] = true; }); return n; });
@@ -9693,7 +9733,7 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
         </div>
       )}
       <div style={{display: "flex", alignItems: "center", gap: 8, marginBottom: 6}}>
-        <button type="button" data-testid="appdays-prev" aria-label="Previous month" disabled={atStart} onClick={() => move(-1)} style={{...css.btn(false), minWidth: 40, minHeight: 36, padding: "4px 10px", background: atStart ? T.surface : T.raised, borderColor: atStart ? T.border : T.inputBorder, color: T.muted, cursor: atStart ? "default" : "pointer"}}>&lsaquo;</button>
+        <button type="button" data-testid="appdays-prev" data-surface="1" aria-label="Previous month" disabled={atStart} onClick={() => move(-1)} style={{...css.btn(false), minWidth: 40, minHeight: 36, padding: "4px 10px", background: atStart ? T.surface : T.raised, borderColor: atStart ? T.border : T.inputBorder, color: T.muted, cursor: atStart ? "default" : "pointer"}}><span style={atStart ? {color: T.muted} : undefined}>&lsaquo;</span></button>
         <span data-testid="appdays-month" style={{flex: 1, textAlign: "center", fontSize: 14, fontWeight: 700, color: T.text}}>{MO[ym.m]} {ym.y}</span>
         <button type="button" data-testid="appdays-next" aria-label="Next month" onClick={() => move(1)} style={{...css.btn(false), minWidth: 40, minHeight: 36, padding: "4px 10px"}}>&rsaquo;</button>
       </div>
@@ -9706,17 +9746,20 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
           const holder = held[d] && held[d].profileId !== profileId ? held[d] : null;
           const off = st === "taken" || st === "past" || st === "past-mine";
           const isToday = d === todayC;
+          const unsaved = st === "add" || st === "remove"; // spec G (10/3): a drafted day carries the unsaved mark
           return (
-            <button key={d} type="button" data-testid="appdays-cell" data-day={d} data-state={st} data-holder={holder ? holder.short : undefined} aria-disabled={off ? "true" : undefined} aria-pressed={st === "mine" || st === "add" ? "true" : "false"}
-              title={holder ? fmtMD(d) + ": " + holder.name : st === "past" || st === "past-mine" ? fmtMD(d) + " is past" : fmtMD(d)}
+            <button key={d} type="button" data-testid="appdays-cell" data-day={d} data-state={st} data-holder={holder ? holder.short : undefined} data-surface="1" aria-disabled={off ? "true" : undefined} aria-pressed={st === "mine" || st === "add" ? "true" : "false"}
+              title={holder ? fmtMD(d) + ": " + holder.name : st === "past" || st === "past-mine" ? fmtMD(d) + " is past" : fmtMD(d) + (unsaved ? " - unsaved" : "")}
               onClick={() => tap(d)}
-              style={{minHeight: 44, minWidth: 0, padding: "3px 1px", borderRadius: 6, background: lk.bg, border: isToday ? "2px solid " + T.accent : lk.border, cursor: locked || off ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, fontFamily: font, overflow: "hidden"}}>
+              style={{position: "relative", minHeight: 44, minWidth: 0, padding: "3px 1px", borderRadius: 6, background: lk.bg, border: isToday ? "2px solid " + T.accent : lk.border, cursor: locked || off ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, fontFamily: font, overflow: "hidden"}}>
+              {unsaved && <span data-testid="appdays-unsaved" aria-hidden="true" style={{position: "absolute", top: 1, right: 3, fontSize: 13, fontWeight: 800, lineHeight: 1, color: T.paintText, fontFamily: font}}>*</span>}
               <span style={{fontSize: 12, fontWeight: isToday ? 800 : 600, color: lk.fg, fontFamily: mono}}>{Number(d.slice(8, 10))}</span>
               <span style={{fontSize: 10, fontWeight: 700, color: lk.lineFg, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: lk.strike ? "line-through" : "none"}}>{holder ? holder.short : lk.line ? lk.line : <>&nbsp;</>}</span>
             </button>
           );
         })}
       </div>
+      {diff.count > 0 && <div data-testid="appdays-unsaved-key" style={{...small, color: T.paintText, fontWeight: 600, marginTop: 6}}>* = unsaved - tap Save to keep these changes; leaving Mine asks first.</div>}
       <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10}}>
         <button type="button" data-testid="appdays-range" aria-pressed={rangeOn ? "true" : "false"} disabled={!ok} onClick={() => { setRangeOn(v => !v); setRangeStart(null); setHint(rangeOn ? "" : "Range: tap the first day, then the last - every free day between joins your changes."); }} style={{...css.mini(rangeOn), minHeight: 36, padding: "6px 12px"}}>Range</button>
         <button type="button" data-testid="appdays-paste-toggle" aria-pressed={pasteOpen ? "true" : "false"} disabled={!ok} onClick={() => setPasteOpen(v => !v)} style={{...css.mini(pasteOpen), minHeight: 36, padding: "6px 12px"}}>Paste dates</button>

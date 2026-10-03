@@ -1,4 +1,5 @@
-// Silvis Call Schedule - the six index-source.html regions whose text colours must be theme tokens
+// Silvis Call Schedule - the index-source.html regions whose text colours must be theme tokens (the six of Prompt 16 B2,
+// Setup > Rules since Prompt 24, the two painter sheets since fix/painter-dark-mode 10/3)
 // (Prompt 16 B2, review 2026-09-23 section 3: dark mode read 1.6:1 on the notification-settings
 // labels, the publish diff, the snapshot list and every Setup checkbox label; the open-shifts board
 // and the claim sheet used light-only greys).
@@ -24,6 +25,11 @@ const REGIONS = [
   // Prompt 24 (10/1): Setup > Rules - the recurring-pattern lists and the rules editor (summary, fields, Advanced), rewritten on
   // theme tokens; the region keeps a literal text colour from coming back (the pattern rows read 2:1 in dark mode before).
   { key: "rules-editor", label: "Setup > Rules (pattern lists + rules editor)", start: "function PatternListEditor(", end: "// --- Availability statements", surface: { light: "#FFFFFF", dark: "#13294B" } },
+  // fix/painter-dark-mode (10/3): the two painter sheets - "Paint my offers" and "Paint vacations" - rewritten on theme tokens
+  // (their #a05010 / #c04040 / #1a8040 literals read about 2.5:1 on the dark panel; T.paintText / T.open / T.success / css.errBox
+  // now). Their rows' own tints are app-styles.js PAINT_ROWS, which contrast.mjs measures the text tokens against.
+  { key: "offer-painter", label: "Paint my offers (the offer painter sheet)", start: "function OfferPainterSheet(", end: "// Reusable collapsible section.", surface: { light: "#FFFFFF", dark: "#13294B" } },
+  { key: "vacation-painter", label: "Paint vacations (the vacation painter sheet)", start: "function MonthPainterSheet(", end: "// Per-device panel state.", surface: { light: "#FFFFFF", dark: "#13294B" } },
 ];
 
 // The literal greys / red the six regions carried before B2 (the "old set"); the data-layer pin names each.

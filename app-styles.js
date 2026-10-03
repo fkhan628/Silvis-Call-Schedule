@@ -58,6 +58,13 @@ const THEME = {
     // on the weekend tint / raised box, 5.76 on the holiday tint, 5.86 on the page, 5.33 on appTint; dark 7.59 / 8.37 / 6.52 /
     // 9.08 / 7.55 (test/ui/contrast.mjs measures every pair).
     appText: "#86506A", appTint: "#F6EAF0",
+    // The painters' orange words (fix/painter-dark-mode, 10/3): "unsaved", "will clear", "will lift No primary", a one-role
+    // reason ("backup only - ..."), the hint, the paste preview, the weekend day name, "range starts here", the unsaved count - in
+    // the offer painter, the vacation painter and on My APP days (its unsaved mark). The light value is the literal the painters
+    // always wrote (#a05010 - the light look is unchanged); T.accentText's #C2410C would read 4.29:1 on the range-start tint.
+    // Light 5.75:1 on the card, 5.12 on the weekend tint, 5.13 on a drafted row, 4.77 on the range-start row, 5.40 / 5.00 on the
+    // vacation painter's weekend / painted rows; dark (= accentText) 6.22 / 6.85 / 5.66 / 4.97 / 6.85 / 5.66 (contrast.mjs).
+    paintText: "#A05010",
   },
   dark: {
     bg: "#0B1A33", surface: "#13294B", raised: "#0F2140", text: "#E6ECF5", muted: "#9FB0C8", border: "#24406B",
@@ -71,9 +78,20 @@ const THEME = {
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
     appText: "#DDAFC2", appTint: "#3A2232",
+    paintText: "#FF8A4C",
   },
 };
 const LIGHT = THEME.light;
+
+// The painters' day-row tints (fix/painter-dark-mode, 10/3 - they were literals in index-source.html): a greyed (blocked)
+// row, the range-start row, a drafted row (offer painter), and the vacation painter's painted / weekend rows (the offer
+// painter's weekend row is T.weekend). A free row is T.surface. Every day row carries data-surface, so the dark sheet's
+// active-navy rule never lifts a dark T.surface row to #2E5090. contrast.mjs measures the text tokens on each tint (the
+// greyed row is a disabled control at 0.6 opacity - not measured).
+const PAINT_ROWS = {
+  light: { blocked: "#F1F3F6", pending: "#DCECF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" },
+  dark:  { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" },
+};
 
 // Opening screens (item R.3): orange gradient, white text, in both themes.
 const OPENING = { start: "#FF5F05", end: "#E8520A", text: "#FFFFFF", gradient: "linear-gradient(135deg,#FF5F05,#E8520A)" };
@@ -145,22 +163,29 @@ const css = {
   tableWrap: { overflowX:"auto", border:`1px solid ${LIGHT.border}`, borderRadius:6 },
   // badge(idx, entry): a roster pill - colours by roster id / type (rosterColors), never by name.
   badge: (i, entry) => { const c = rosterColors(entry, i); return { display:"inline-flex", alignItems:"center", background:c.tg, color:c.tx, border:pillBorder(c), borderRadius:5, padding:"2px 9px", fontSize:12, fontWeight:600, whiteSpace:"nowrap", letterSpacing:0.3 }; },
-  // brush(on, key): an offer-painter brush chip (Prompt 14 part 3a). Armed = its GRADIENT with white text (the dark
+  // brush(on, key, dark): an offer-painter brush chip (Prompt 14 part 3a). Armed = its GRADIENT with white text (the dark
   // sheet recolours flat buttons but exempts linear-gradient ones); idle = transparent with the brush's own text colour.
-  brush: (on, key) => { const b = OFFER_BRUSH[key] || OFFER_BRUSH.clear; return { minHeight:44, padding:"8px 14px", borderRadius:9, fontSize:13, fontWeight:800, fontFamily:font, cursor:"pointer", background:on ? b.gradient : "transparent", color:on ? "#FFFFFF" : b.text, border:`2px solid ${on ? b.border : b.border}` }; },
+  // The outline (armed and idle) is the brush's border; in dark mode its dkBorder (fix/painter-dark-mode, 10/3: the light
+  // outlines read 1.00 / 2.88 / 2.65 / 1.53:1 on the dark panel for primary / backup / either / no primary), and the armed
+  // primary its dkGradient - the lifted navy the dark sheet would paint anyway, written here so that sheet's navy-gradient
+  // rule (which forces border-color #2E5090, 1.84:1 on the panel) no longer reaches the chip and the dkBorder stays.
+  brush: (on, key, dark) => { const b = OFFER_BRUSH[key] || OFFER_BRUSH.clear; return { minHeight:44, padding:"8px 14px", borderRadius:9, fontSize:13, fontWeight:800, fontFamily:font, cursor:"pointer", background:on ? (dark && b.dkGradient ? b.dkGradient : b.gradient) : "transparent", color:on ? "#FFFFFF" : b.text, border:`2px solid ${dark ? (b.dkBorder || b.border) : b.border}` }; },
 };
 
 // Offer painter brushes (Prompt 14 part 3a): primary = the navy, backup = an amber (the My-schedule backup gradient's
 // family), either = a teal, noprimary = a purple (Prompt 28, 10/1: "No primary" - not on primary that day, backup is fine;
 // white on #7A4BB0 about 6.1:1, #5B2E8C on #F1EAFA about 8:1), clear = grey. tint / text carry the drafted pill in both
 // themes (a pill keeps its own background); gradient is the armed chip. Primary / backup stay distinguishable by word as
-// well (P / B / P+B / NP).
+// well (P / B / P+B / NP). dkBorder = the chip's outline in dark mode, a light tone of the brush's own colour (10/3), each
+// >= 3:1 on the dark panel #13294B (WCAG 1.4.11): primary 4.72, backup 6.57 (= THEME.dark.backupText), either 5.91, no primary
+// 4.77, clear 4.09 (its light outline already passed); the light outlines on the white panel are 14.52 / 5.04 / 5.47 / 9.48 /
+// 3.55 (contrast.mjs measures every one, idle and armed). dkGradient = the armed primary in dark mode (see css.brush).
 const OFFER_BRUSH = {
-  primary: { gradient: "linear-gradient(135deg,#13294B,#1F3A6B)", border: "#13294B", text: "#13294B", tint: "#E8EEF8", label: "Primary", short: "P" },
-  backup:  { gradient: "linear-gradient(135deg,#8A6A20,#B08A30)", border: "#8A6A20", text: "#7A5A20", tint: "#FBF1D8", label: "Backup", short: "B" },
-  either:  { gradient: "linear-gradient(135deg,#0F766E,#149C90)", border: "#0F766E", text: "#0F766E", tint: "#E3F4F1", label: "Either", short: "P+B" },
-  noprimary: { gradient: "linear-gradient(135deg,#5B2E8C,#7A4BB0)", border: "#5B2E8C", text: "#5B2E8C", tint: "#F1EAFA", label: "No primary", short: "NP" },
-  clear:   { gradient: "linear-gradient(135deg,#5B6B82,#7A8A98)", border: "#7A8A98", text: "#5B6B82", tint: "#EEF2F7", label: "Clear", short: "-" },
+  primary: { gradient: "linear-gradient(135deg,#13294B,#1F3A6B)", border: "#13294B", text: "#13294B", tint: "#E8EEF8", label: "Primary", short: "P", dkBorder: "#6F93D6", dkGradient: "linear-gradient(135deg,#1F3A6B,#2E5090)" },
+  backup:  { gradient: "linear-gradient(135deg,#8A6A20,#B08A30)", border: "#8A6A20", text: "#7A5A20", tint: "#FBF1D8", label: "Backup", short: "B", dkBorder: "#D4A84A" },
+  either:  { gradient: "linear-gradient(135deg,#0F766E,#149C90)", border: "#0F766E", text: "#0F766E", tint: "#E3F4F1", label: "Either", short: "P+B", dkBorder: "#2EB8AA" },
+  noprimary: { gradient: "linear-gradient(135deg,#5B2E8C,#7A4BB0)", border: "#5B2E8C", text: "#5B2E8C", tint: "#F1EAFA", label: "No primary", short: "NP", dkBorder: "#A982DB" },
+  clear:   { gradient: "linear-gradient(135deg,#5B6B82,#7A8A98)", border: "#7A8A98", text: "#5B6B82", tint: "#EEF2F7", label: "Clear", short: "-", dkBorder: "#7A8A98" },
 };
 
 // East-vacation marker (Prompt 15 part 3, 9/23): the person's Davenport vacation
@@ -204,7 +229,7 @@ function eastVacSegStyle(active, state, dark) {
 
 // Node (tests: test/data-layer.test.js pins, test/ui/contrast.mjs).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, SAFE_AREA, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH };
+  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, SAFE_AREA, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH, PAINT_ROWS };
 }
 
 /* ═══════════════════════════════════════════════════

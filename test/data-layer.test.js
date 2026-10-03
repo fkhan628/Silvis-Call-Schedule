@@ -3709,7 +3709,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   const ratio = (a, b) => { const lum = (hex) => { const c = [1, 3, 5].map(i => { let v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }; const la = lum(a), lb = lum(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
   check("review: every css.badge call passes the roster entry (never x.name); the two pill buttons carry data-pill; the dark sheet's generic button rule excludes [data-pill] / [data-tab] / the Alerts bell instead of listing tint literals", () => {
     assert.strictEqual((src.match(/css\.badge\([^)]*\.name\)/g) || []).length, 0, "css.badge called with a surgeon NAME (falls through to the fallback colours)");
-    assert.strictEqual(count('data-pill="1"'), 2, ".ics download buttons + calendar-sync URL buttons carry data-pill");
+    // pin moved deliberately 10/3 (fix/painter-dark-mode): the offer painter's three pill SPANS carry data-pill too (the dark sheet's
+    // navy-text span rule skips them, section PD); kept intent: the two pill BUTTONS carry it
+    assert.strictEqual(count('data-pill="1"'), 5, ".ics download buttons + calendar-sync URL buttons + the offer painter's three pill spans carry data-pill");
+    assert.strictEqual((src.match(/<button key=\{s\.id\}[^>]*data-pill="1"/g) || []).length, 2, "the two pill buttons");
     assert.ok(src.includes('button:where(:not([data-pill]):not([data-tab]):not([aria-label="Notifications"])) { color: #C9D6E8 !important; }'), "generic dark button rule keyed on data-pill / data-tab");
     assert.strictEqual(count(':not([style*="background: rgb('), 0, "tint-literal :not() clauses remain in the dark sheet");
   });
@@ -4472,7 +4475,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(styles.OFFER_BRUSH.noprimary.label, "No primary", "the noprimary brush reads 'No primary'");
       ["primary", "backup", "either", "noprimary", "clear"].forEach(k => { const b = styles.OFFER_BRUSH[k]; assert.ok(/^linear-gradient\(/.test(b.gradient), k + " armed brush must be a gradient (the dark sheet exempts gradient buttons)"); assert.ok(/^#[0-9A-Fa-f]{6}$/.test(b.text) && /^#[0-9A-Fa-f]{6}$/.test(b.tint) && /^#[0-9A-Fa-f]{6}$/.test(b.border), k + " tokens must be hex"); });
       assert.strictEqual(typeof styles.css.brush, "function", "css.brush(on, key) missing");
-      assert.ok(src.includes("css.brush(armed === k, k)"), "the sheet's brushes must read css.brush");
+      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec C): css.brush takes the theme (dk) for its dark outline; kept
+      // intent: the sheet's brushes read css.brush.
+      assert.ok(src.includes("css.brush(armed === k, k, dk)"), "the sheet's brushes must read css.brush (with dk)");
     });
 
     /* ---------------- P28. Prompt 28 (10/1): No primary days in the offer painter - source pins + the commit / error behaviour ---------------- */
@@ -4516,7 +4521,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("const exhDay = (ds) => { const per = periodFor(ds, periods || []); if (!per) return false; const m = period && per.id === period.id ? shownMode : ((per.offer_modes && typeof per.offer_modes === \"object\" ? per.offer_modes[pid] : null) || \"preferred\"); return m === \"exhaustive\"; };"), "exhDay reads the day's period mode (the drafted mode for the sheet's own period)");
       assert.ok(src.includes("const npExh = days.some(r => exhDay(r.ds));"), "npExh = the shown month holds an exhaustive day");
       assert.ok(src.includes("const npHint = npExh ? `Tap a day to mark ${npWho} No primary (\"Only these days\" is on: paint Backup too for backup); tap again to take it back.`"), "the hint's exhaustive variant");
-      assert.ok(src.includes("const npLegend = npExh ? \"No primary = not on primary. \\\"Only these days\\\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\"\n    : \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\";"), "the legend's two variants");
+      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec A): both endings name the read-only RANGE without a pronoun (a
+      // single day the scheduler entered is the person's own No primary day, which he can clear); kept intent: two variants.
+      assert.ok(src.includes("const npLegend = npExh ? \"No primary = not on primary. \\\"Only these days\\\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. A \\\"No primary (set by the scheduler)\\\" range only the scheduler can change.\"\n    : \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. A \\\"No primary (set by the scheduler)\\\" range only the scheduler can change.\";"), "the legend's two variants");
+      assert.ok(!/days only he can change/.test(src), "the old ending (\"... days only he can change\") is gone");
       assert.ok(src.includes("data-testid=\"ofp-legend\" data-exh={npExh ? \"1\" : \"0\"}") && src.includes(">{npLegend}</div>}"), "the legend renders npLegend and says which variant it shows");
       assert.ok(src.includes("const replacedExh = ok.filter(ds => outs[ds] && outs[ds].replaced && exhDay(ds)).length;") && src.includes("(replacedExh ? \" - with \\\"Only these days\\\" on, a day with no offer is off backup too: paint Backup to keep it\" : \"\")"), "the replace note warns per replaced exhaustive day");
       assert.strictEqual((src.match(/backup still fine/g) || []).length, 1, "'backup still fine' is said once (the plain legend), never unconditionally");
@@ -4526,7 +4534,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("{armed === \"noprimary\" && <div data-testid=\"ofp-legend\""), "the legend shows only while the No primary brush is armed");
       // pin moved deliberately 10/1 (review of Prompt 28): the words moved into npLegend (two variants, pinned in the review check
       // below); kept intent: the plain legend reads exactly these words.
-      assert.ok(src.includes(": \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \\\"Set by the scheduler\\\" days only he can change.\";"), "the legend words");
+      // (and 10/3, spec A: the new ending - the read-only range, no pronoun)
+      assert.ok(src.includes(": \"No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. A \\\"No primary (set by the scheduler)\\\" range only the scheduler can change.\";"), "the legend words");
       assert.ok(src.includes("data-state={grey && !drafted ? \"blocked\" : drafted ? \"draft\" : eff ? \"saved\" : \"free\"}") && src.includes("const drafted = offerDrafted || npDrafted;"), "data-state: draft = either draft holds the day; saved = a saved OFFER");
       assert.ok(src.includes("will lift No primary"), "a drafted lift of a saved No primary reads 'will lift No primary'");
       assert.ok(src.includes("\" - saved No primary: Clear can take it back\""), "a greyed row with a saved own No primary says Clear can take it back");
@@ -6812,8 +6821,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const regionText = (key) => REG.extractRegion(B2SRC, REG.REGIONS.find(r => r.key === key)).text;
     const countIn = (s, n) => (s.match(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
     // pin moved deliberately 10/1 (Prompt 24): a seventh region, Setup > Rules (the pattern lists + the rules editor, rewritten on theme tokens)
-    check("the six regions (+ Setup > Rules since Prompt 24) are found by unique anchors and none carries a literal of the old set (#3a4a58, #7a8a98, #c04040, #5a6a78, #8a94a0, #1a8040, #f0f2f4)", () => {
-      assert.deepStrictEqual(REG.REGIONS.map(r => r.key), ["notif-settings", "publish-diff", "snapshot-list", "sucheck", "openshifts-board", "claim-sheet", "rules-editor"]);
+    // pin moved deliberately 10/3 (fix/painter-dark-mode, spec D): the offer and vacation painter sheets join as regions eight and nine
+    check("the six regions (+ Setup > Rules since Prompt 24, the two painter sheets since 10/3) are found by unique anchors and none carries a literal of the old set (#3a4a58, #7a8a98, #c04040, #5a6a78, #8a94a0, #1a8040, #f0f2f4)", () => {
+      assert.deepStrictEqual(REG.REGIONS.map(r => r.key), ["notif-settings", "publish-diff", "snapshot-list", "sucheck", "openshifts-board", "claim-sheet", "rules-editor", "offer-painter", "vacation-painter"]);
       for (const r of REG.REGIONS) {
         const { text } = REG.extractRegion(B2SRC, r);
         assert.ok(text.length > 200, r.key + ": the region slice is suspiciously short (" + text.length + " chars) - an anchor moved");
@@ -11583,7 +11593,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(cnt(SRC, "  const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);"), 1);
       assert.strictEqual(cnt(SRC, "const appE = !isPublicMode ? appByDay[d] || null : null;"), 1);
       assert.strictEqual(cnt(SRC, 'if (appE) titleBits.push("APP " + appE.name);'), 1);
-      assert.strictEqual(cnt(SRC, '{appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span></div>}'), 1);
+      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec H): the line also carries the phone label (cal-app-code,
+      // helpers.appGridLabels); kept intent: the A tag, the short name, the title and the appText colour.
+      assert.strictEqual(cnt(SRC, '{appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}'), 1);
       const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>'), cellA = SRC.indexOf('data-testid="cal-app"');
       assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 400, "the APP line is the third line, right after B");
       // the merge with main (10/2): a failed read is said in place - the legend for every signed-in role, the summary for all but the scheduler
@@ -11626,7 +11638,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sv.includes("const r = await onSave(diff.add, diff.clear);"), "Save sends the draft diff once");
       assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId, todayC)); }, [byDay, profileId, todayC]);") && cardSrc.includes("const diff = appDaysDraftDiff(draft, held, profileId, todayC);"), "review 10/2: the draft is pruned and counted against today - a day that turns past while the card is open leaves it");
       assert.ok(cardSrc.includes('state === "failed" ? "Couldn\'t load the APP days - the calendar below may be out of date."') && !/nothing was changed/.test(cardSrc), "review 10/2: the failed line never claims 'nothing was changed' (a Save may just have landed)");
-      assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
+      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec F): the signature gains onDirty (the leave guard's count); kept intent
+      assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
       assert.ok(!/opacity/.test(cardSrc), "no opacity");
       assert.ok(!/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(cardSrc), "no literal hex colour - THEME tokens only");
       assert.ok(!/fetch\(|appDaysDb|db\.|supabase\./.test(cardSrc), "the card talks to nothing but its props");
@@ -11938,6 +11951,172 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(HEAD.includes('//   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;'), "the hook's example compares the script URL without its query (sw.js?v=... must be kept too)");
     });
   })();
+
+  /* ---------------- PD. fix/painter-dark-mode (10/3): the painters and My APP days in dark mode, the legend, F / G / H ---------------- */
+  // Spec: silvis-gate/run-2026-10-01/ux/painter-dark-spec.md (A-D from the Prompt 28 phone check, E-H from Prompt 29's). The
+  // root cause of the bright tiles: the dark sheet's active-navy rule (meant for the LIGHT set's navy mini / filter buttons)
+  // also caught every dark-aware button whose background is T.surface (#13294B in dark). The smoke checks the computed result.
+  console.log("\n[PD] painter dark mode: data-surface, the brush outlines, the painter regions, My APP days' leave guard + unsaved mark, the phone APP labels");
+  {
+    const PSRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const STY = require(path.join(ROOT, "app-styles.js"));
+    const L = STY.THEME.light, D = STY.THEME.dark;
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    const cntP = (s, n) => s.split(n).length - 1;
+    const sliceP = (a, b) => { const i = PSRC.indexOf(a); if (i < 0) throw new Error("anchor not found: " + a.slice(0, 60)); const j = PSRC.indexOf(b, i + a.length); if (j < 0) throw new Error("anchor not found: " + b.slice(0, 60)); return PSRC.slice(i, j); };
+    const sheet = sliceP("{darkMode && <style>{`", "`}</style>}");
+    const offer = sliceP("function OfferPainterSheet(", "// Reusable collapsible section.");
+    const vac = sliceP("function MonthPainterSheet(", "// Per-device panel state.");
+    const card = sliceP("function AppDaysCard(", "\n}\n");
+    const lumP = (hex) => { const v = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+    const ratioP = (a, b) => { const x = lumP(a), y = lumP(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const rgbP = (hex) => "rgb(" + [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") + ")";
+    // every <button ...> opening tag (brace / string aware), for the sweep
+    const buttonTags = () => {
+      const out = []; const re = /<button\b/g; let m;
+      while ((m = re.exec(PSRC))) {
+        let i, depth = 0, q = null;
+        for (i = m.index + 7; i < PSRC.length; i++) { const c = PSRC[i]; if (q) { if (c === "\\") { i++; continue; } if (c === q) q = null; continue; } if (c === '"' || c === "'" || c === "`") { q = c; continue; } if (c === "{") depth++; else if (c === "}") depth--; else if (c === ">" && depth === 0) break; }
+        out.push({ line: PSRC.slice(0, m.index).split("\n").length, tag: PSRC.slice(m.index, i + 1) });
+      }
+      return out;
+    };
+    check("PD B/E: the dark sheet's active-navy rule skips [data-surface] through :where() (zero specificity: every other button meets it exactly as before); the navy-gradient and light-raised rules are unchanged; no dark-sheet button rule matches another painter / My APP days background", () => {
+      assert.ok(sheet.includes('button[style*="background: rgb(19, 41, 75)"]:where(:not([data-surface])) { background: #2E5090 !important; border-color: #2E5090 !important; color: #fff !important; }'), "the active-navy rule with its data-surface exemption");
+      assert.strictEqual(cntP(sheet, 'button[style*="background: rgb(19, 41, 75)"]'), 1, "one active-navy rule");
+      assert.ok(sheet.includes('button[style*="linear-gradient(135deg, rgb(19, 41, 75)"] { background: linear-gradient(135deg,#1F3A6B,#2E5090) !important; border-color: #2E5090 !important; }'), "the navy-gradient rule unchanged");
+      assert.ok(sheet.includes('button[style*="background: rgb(238, 242, 247)"] { background: #0F2140 !important; border-color: #24406B !important; }'), "the light raised rule unchanged");
+      const btnBg = (sheet.match(/button\[style\*="background: (rgb\([^)]*\))"\]/g) || []).map(s => s.match(/rgb\([^)]*\)/)[0]).sort();
+      assert.deepStrictEqual(btnBg, ["rgb(19, 41, 75)", "rgb(238, 242, 247)"], "the dark sheet's flat-background button rules");
+      const PR = STY.PAINT_ROWS.dark;
+      for (const hex of [D.weekend, D.raised, D.appTint, PR.blocked, PR.pending, PR.draft, PR.vacDraft, PR.vacWeekend]) assert.ok(!btnBg.includes(rgbP(hex)), hex + " (a painter / My APP days background) is caught by a dark-sheet button rule");
+      assert.strictEqual(D.surface, "#13294B", "T.surface in dark is the navy the rule matches - the reason for data-surface");
+    });
+    check("PD B/E sweep: every <button> whose dark background can be T.surface (#13294B) carries data-surface - the offer painter's and the vacation painter's day rows, My APP days' day cells and its month arrow - and nothing else does", () => {
+      const tags = buttonTags();
+      assert.ok(tags.length > 200, "the scan found " + tags.length + " buttons");
+      const onSurface = tags.filter(t => /(?<![A-Za-z-])background\s*:\s*[^,}]*(T\.surface|panelBg|#13294B|rowBg|lk\.bg|T\.navy|dkHdr)/i.test(t.tag));
+      assert.deepStrictEqual(onSurface.filter(t => !/data-surface="1"/.test(t.tag)).map(t => "line " + t.line), [], "buttons drawn on the dark surface without data-surface");
+      const marked = tags.filter(t => /data-surface="1"/.test(t.tag));
+      assert.strictEqual(marked.length, 4, "four button tags carry data-surface: " + marked.map(t => t.line).join(", "));
+      assert.ok(offer.includes('data-np-why={npWhy} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}'), "the offer painter's day row");
+      assert.ok(vac.includes('<button key={ds} data-testid="vacp-day" data-day={ds} data-surface="1" onClick={() => tapDay(ds)}'), "the vacation painter's day row");
+      assert.ok(card.includes('data-testid="appdays-cell" data-day={d} data-state={st} data-holder={holder ? holder.short : undefined} data-surface="1"'), "My APP days' day cell");
+      assert.ok(card.includes('data-testid="appdays-prev" data-surface="1"') && card.includes("background: atStart ? T.surface : T.raised") && card.includes("<span style={atStart ? {color: T.muted} : undefined}>&lsaquo;</span>"), "the month arrow: no fill when disabled (T.surface, kept dark), the raised fill when it can move; the disabled glyph T.muted");
+    });
+    check("PD C: every brush's outline reaches 3:1 on its panel in both themes (light border on white, dkBorder on the dark panel); css.brush(on, key) is unchanged in light, and in dark uses dkBorder (idle and armed) and the primary's dkGradient (which the navy-gradient rule cannot match)", () => {
+      for (const k of ["primary", "backup", "either", "noprimary", "clear"]) {
+        const b = STY.OFFER_BRUSH[k];
+        assert.ok(/^#[0-9A-F]{6}$/i.test(b.dkBorder), k + " dkBorder");
+        assert.ok(ratioP(b.border, L.surface) >= 3, k + " light outline " + ratioP(b.border, L.surface).toFixed(2));
+        assert.ok(ratioP(b.dkBorder, D.surface) >= 3, k + " dark outline " + ratioP(b.dkBorder, D.surface).toFixed(2));
+        for (const on of [false, true]) {
+          const lt = STY.css.brush(on, k), dkS = STY.css.brush(on, k, true);
+          assert.strictEqual(lt.border, "2px solid " + b.border, k + " light border (unchanged)");
+          assert.strictEqual(lt.background, on ? b.gradient : "transparent", k + " light background (unchanged)");
+          assert.strictEqual(dkS.border, "2px solid " + b.dkBorder, k + " dark border (" + (on ? "armed" : "idle") + ")");
+          assert.strictEqual(dkS.background, on ? (b.dkGradient || b.gradient) : "transparent", k + " dark background");
+        }
+      }
+      assert.ok(!/#13294B/i.test(STY.OFFER_BRUSH.primary.dkGradient), "the dark armed primary does not start with #13294B (the sheet's navy-gradient rule would force border-color #2E5090, 1.84:1)");
+      assert.ok(ratioP("#2E5090", D.surface) < 3, "(why: #2E5090 on the dark panel is " + ratioP("#2E5090", D.surface).toFixed(2) + ":1)");
+    });
+    check("PD D: the two painter regions carry no hex colour at all outside comments (not only the scanner's plain / dk-conditional forms - 'cond ? \"#hex\" : muted' too); T.paintText = the light literal they wrote (#A05010) / the dark accent text; css.errBox carries their error box; data-pill keeps the Primary pill's navy text in dark", () => {
+      const noComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      for (const [name, text] of [["offer painter", offer], ["vacation painter", vac]]) assert.deepStrictEqual(noComments(text).match(/#[0-9a-fA-F]{3,6}\b/g) || [], [], name + ": hex literals");
+      assert.strictEqual(L.paintText, "#A05010"); assert.strictEqual(D.paintText, D.accentText);
+      assert.ok(ratioP(L.paintText, STY.PAINT_ROWS.light.pending) >= 4.5 && ratioP(L.accentText, STY.PAINT_ROWS.light.pending) < 4.5, "why a token: accentText reads " + ratioP(L.accentText, STY.PAINT_ROWS.light.pending).toFixed(2) + ":1 on the light range-start row");
+      assert.ok(offer.includes('<div role="alert" data-testid="ofp-error" style={{ ...css.errBox, marginBottom: 8, maxHeight: 130, overflowY: "auto" }}>') && vac.includes('<div role="alert" style={{ ...css.errBox, marginBottom: 8, maxHeight: 130, overflowY: "auto" }}>'), "the error boxes");
+      assert.ok(cntP(offer, "T.paintText") === 11 && cntP(vac, "T.paintText") === 4, "the orange words read T.paintText (offer painter 11 places, vacation painter 4)");
+      assert.ok(offer.includes('color: T.open, border: "1px solid " + T.open }}>x cancel start</button>') && vac.includes('color: T.open, border: "1px solid " + T.open }}>cancel start</button>'), "cancel start reads T.open");
+      assert.strictEqual(cntP(offer, 'data-pill="1"'), 3, "the offer pill, the own and the range No primary pills");
+      assert.ok(sheet.includes('span[style*="color: rgb(19, 41, 75)"]:where(:not([data-pill]))'), "the dark sheet's navy-text rule skips a data-pill span");
+      assert.ok(offer.includes("const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;") && vac.includes("const rowBg = isPending ? PR.pending : coveredAll.length > 0 ? PR.vacDraft : isWknd ? PR.vacWeekend : panelBg;"), "the row tints come from PAINT_ROWS");
+      assert.deepStrictEqual({ light: STY.PAINT_ROWS.light, dark: STY.PAINT_ROWS.dark }, { light: { blocked: "#F1F3F6", pending: "#DCECF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" }, dark: { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" } }, "the tints the sheets wrote as literals");
+    });
+    check("PD A: the No primary legend's ending names the read-only range, no pronoun (both variants)", () => {
+      assert.strictEqual(cntP(offer, 'A \\"No primary (set by the scheduler)\\" range only the scheduler can change."'), 2);
+      assert.ok(!/only he can change/.test(PSRC), "no 'only he can change' left");
+    });
+    check("PD F (BEHAVIOUR): every way off Mine goes through setView, which asks (helpers.appDaysLeaveWords) while My APP days holds unsaved changes and stays on Mine on Cancel; Sign in again asks too; the card reports its count (0 when it goes) and arms beforeunload while it has changes", () => {
+      assert.ok(PSRC.includes('  const [view, setViewState] = useState("calendar");'), "the state setter is private");
+      assert.strictEqual(cntP(PSRC, "setViewState("), 1, "only setView calls the raw setter");
+      const guard = sliceP("  const appDaysDirtyRef = useRef(0);", "\n\n");
+      assert.ok(guard.includes('  const leaveMineOk = (why) => { const n = appDaysDirtyRef.current; return !n || view !== "myschedule" || confirm(appDaysLeaveWords(n, why)); };'));
+      assert.ok(guard.includes('  const setView = (k) => { if (k !== view && !leaveMineOk("leave")) return; setViewState(k); };'));
+      // run the two lines: Cancel stays, OK leaves, nothing asked without changes / off Mine / for the same tab
+      const run = (view, dirty, answer, k, why) => {
+        const asked = [], set = [];
+        const fn = new Function("view", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", guard.replace("  const appDaysDirtyRef = useRef(0);", "") + "\nreturn { setView, leaveMineOk };");
+        const g = fn(view, { current: dirty }, (q) => { asked.push(q); return answer; }, H.appDaysLeaveWords, (v) => set.push(v));
+        if (why === "signin") return { ok: g.leaveMineOk("signin"), asked, set };
+        g.setView(k); return { asked, set };
+      };
+      assert.deepStrictEqual(run("myschedule", 2, false, "calendar"), { asked: [H.appDaysLeaveWords(2, "leave")], set: [] }, "Cancel stays on Mine");
+      assert.deepStrictEqual(run("myschedule", 2, true, "calendar"), { asked: [H.appDaysLeaveWords(2, "leave")], set: ["calendar"] }, "OK leaves");
+      assert.deepStrictEqual(run("myschedule", 0, false, "calendar"), { asked: [], set: ["calendar"] }, "no changes, no question");
+      assert.deepStrictEqual(run("myschedule", 3, false, "myschedule"), { asked: [], set: ["myschedule"] }, "the same tab asks nothing");
+      assert.deepStrictEqual(run("calendar", 3, false, "settings"), { asked: [], set: ["settings"] }, "off Mine nothing is asked");
+      assert.deepStrictEqual(run("myschedule", 1, false, null, "signin"), { ok: false, asked: [H.appDaysLeaveWords(1, "signin")], set: [] }, "Sign in again asks");
+      assert.ok(PSRC.includes('  const openSignInAgain = () => {\n    if (!leaveMineOk("signin")) return;'), "openSignInAgain asks first");
+      assert.ok(PSRC.includes("onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>"), "the mount wires onDirty");
+      assert.ok(card.includes('  React.useEffect(() => { if (typeof onDirty === "function") onDirty(diff.count); }, [diff.count]);') && card.includes('  React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []);'), "the count, and 0 on unmount");
+      assert.ok(card.includes('    const ask = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };\n    window.addEventListener("beforeunload", ask);\n    return () => window.removeEventListener("beforeunload", ask);\n  }, [diff.count > 0]);') && card.includes("    if (!diff.count) return undefined;"), "beforeunload only while there are changes");
+      assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
+      assert.strictEqual(H.appDaysLeaveWords(1, "leave"), "Discard 1 unsaved APP day change and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
+      assert.strictEqual(H.appDaysLeaveWords(3, "signin"), "Discard 3 unsaved APP day changes and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).");
+      assert.ok(/^Discard 0 unsaved APP day changes/.test(H.appDaysLeaveWords("x")), "junk reads 0");
+    });
+    check("PD G: a drafted My APP day (add / remove) carries the unsaved mark - appdays-unsaved, '*', T.paintText, aria-hidden, the cell's title says unsaved - and a key line under the grid while the draft holds changes", () => {
+      assert.ok(card.includes('const unsaved = st === "add" || st === "remove";'));
+      assert.ok(card.includes('{unsaved && <span data-testid="appdays-unsaved" aria-hidden="true" style={{position: "absolute", top: 1, right: 3, fontSize: 13, fontWeight: 800, lineHeight: 1, color: T.paintText, fontFamily: font}}>*</span>}'));
+      assert.ok(card.includes('fmtMD(d) + (unsaved ? " - unsaved" : "")') && card.includes('style={{position: "relative", minHeight: 44,'), "the title, and the cell positions the mark");
+      assert.ok(card.includes('{diff.count > 0 && <div data-testid="appdays-unsaved-key" style={{...small, color: T.paintText, fontWeight: 600, marginTop: 6}}>* = unsaved - tap Save to keep these changes; leaving Mine asks first.</div>}'));
+      assert.ok(ratioP(L.paintText, L.surface) >= 4.5 && ratioP(D.paintText, D.surface) >= 4.5, "the mark on its cell (T.surface) >= 4.5:1 in both themes");
+    });
+    check("PD H: appGridLabels - four letters at most and no ellipsis, the initial + three letters for APPs that start alike, numbered when still alike; the phone grid shows it (cal-app-code), a wide grid the short name", () => {
+      const e = (id, name) => ({ profileId: id, name, short: H.appShortName(name) });
+      assert.deepStrictEqual(plain(H.appGridLabels({ "2026-11-10": e("pa", "Pat Appleton"), "2026-11-11": e("pa", "Pat Appleton"), "2026-11-12": e("pb", "Lee Bramble") })), { pa: "Appl", pb: "Bram" });
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("pa", "Pat Appleton"), b: e("pb", "Lee Bramble"), c: e("pc", "Jo Applegate, PA-C") })), { pa: "P.App", pb: "Bram", pc: "J.App" }, "two APPs starting alike");
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Pat Smith"), b: e("p2", "Pam Smithers"), c: e("p3", "Kim Do") })), { p1: "Smi1", p2: "Smi2", p3: "Do" }, "same initial: numbered in id order; a short name stays whole");
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p2", ""), b: e("p1", "") })), { p1: "APP1", p2: "APP2" }, "two nameless APPs");
+      assert.deepStrictEqual(plain(H.appGridLabels({ a: e("p1", "Lee") })), { p1: "Lee" });
+      assert.deepStrictEqual(plain(H.appGridLabels(null)), {}); assert.deepStrictEqual(plain(H.appGridLabels({ x: null, y: { profileId: "" } })), {});
+      const labels = H.appGridLabels({ a: e("pa", "Pat Appleton"), b: e("pb", "Lee Bramble"), c: e("pc", "Jo Applegate") });
+      assert.strictEqual(new Set(Object.values(labels)).size, 3, "distinct");
+      assert.ok(Object.values(labels).every(l => l.replace(".", "").length <= 4), "four letters at most");
+      assert.ok(PSRC.includes("  const appGridLabel = useMemo(() => appGridLabels(appByDay), [appByDay]);"), "computed once per APP picture");
+      assert.ok(PSRC.includes("    .cal-app-code { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"), "hidden on a wide grid");
+      const phone = PSRC.slice(PSRC.indexOf("    @media (max-width: 600px) {"), PSRC.indexOf("      .cal-legend { font-size: 10px !important; }"));
+      assert.ok(phone.includes("      .cal-app-name { display: none; }\n      .cal-app-code { display: inline; }"), "the phone block swaps the name for the label");
+    });
+    check("PD smoke pins: the smoke measures the dark painter (free weekday row = the dark surface, weekend T.weekend, every brush outline idle + armed >= 3:1, 'unsaved' >= 4.5:1, the Primary pill, the legend, css.mini(true) / css.btn(true) still #2E5090), the dark vacation painter row, dark My APP days (E / G / F's confirm and beforeunload) and the 390 px APP names (H)", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      for (const t of [
+        'const PDK = "Painter dark (fix/painter-dark-mode)";',
+        "m1.wkBg === \"rgb(46, 80, 144)\" || m1.wkBg !== SURF || m1.wkSurface !== \"1\"",
+        "if (m1.weBg !== WKND)",
+        "const lowB = m1.brushes.filter(b => !(b.ratio >= 3));",
+        "if (!(a.armed === \"1\" && a.ratio >= 3)) armedLow.push(a);",
+        "d1.unsaved.color !== pdRgb(pdTheme.THEME.dark.paintText) || !(d1.unsaved.ratio >= 4.5)",
+        "d1.pill.color !== \"rgb(19, 41, 75)\"",
+        "nav.pasteBg !== \"rgb(46, 80, 144)\"",
+        "!/rgb\\(46, 80, 144\\)/.test(nav.saveImg) || nav.saveBorder !== \"rgb(46, 80, 144)\"",
+        "range only the scheduler can change\\.$/.test(lg)",
+        "the vacation painter's free weekday row should be the dark surface",
+        "free12.bg === \"rgb(46, 80, 144)\" || free12.bg !== SURF",
+        "add12.borderStyle !== \"dashed\" || add12.border !== rgbOf(themeMod.THEME.dark.appText) || !(add12.borderRatio >= 3)",
+        "add12.mark.color !== PAINT || !(add12.mark.ratio >= 4.5)",
+        "todayT.border !== rgbOf(themeMod.THEME.dark.accent) || !(todayT.borderRatio >= 3)",
+        "arrows.prevBg !== SURF || arrows.nextBg !== rgbOf(themeMod.THEME.dark.raised)",
+        "const wantAsk = \"Discard 2 unsaved APP day changes and leave Mine?\\n\\nCancel stays on My APP days - tap Save to keep them.\";",
+        "if (!buDirty || buClean)",
+        "n10.code !== \"P.App\" || n13.code !== \"J.App\"",
+        "names.some(x => !x.codeShown || x.nameShown || x.cut)",
+        "appDayStore = appDayStore.filter(r => r.profile_id !== APP_C_UID); appProfiles = appProfiles.filter(p => p.id !== APP_C_UID);",
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+  }
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

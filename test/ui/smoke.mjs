@@ -6405,10 +6405,106 @@ try {
       await page.waitForTimeout(200);
       const dark390 = await page.evaluate(() => { const s = document.querySelector("[data-testid=ofp-sheet]"); return { sw: s.scrollWidth, cw: s.clientWidth }; });
       if (dark390.sw > dark390.cw + 1) fail(`Offer painter (dark 390px): horizontal scroll (${dark390.sw} > ${dark390.cw})`); else ok(`Offer painter (dark 390px): no horizontal scroll (${dark390.sw} in ${dark390.cw})`);
+      // ---- fix/painter-dark-mode (10/3), the painter in DARK mode (computed styles, the check of record): a free weekday row is
+      //      the dark surface, never the #2E5090 the dark sheet's active-navy rule painted (B); a weekend row T.weekend dark; every
+      //      brush outline >= 3:1 on the panel, idle and armed (C); a drafted row's "unsaved" >= 4.5:1 on its row and the Primary
+      //      pill keeps its navy text on its tint (D); the legend's new ending (A); and the rule still does its job - an active
+      //      navy css.mini(true) (Paste dates open) is #2E5090, the css.btn(true) Save the lifted gradient with border #2E5090 ----
+      const pdTheme = loadTheme(), pdRgb = (hex) => "rgb(" + hexToRgb(hex).join(", ") + ")";
+      {
+        const PDK = "Painter dark (fix/painter-dark-mode)";
+        // (the theme module is loaded again here: the theme section further down declares its own themeMod / rgbOf later)
+        const pdMeasure = () => page.evaluate(() => {
+          const parse = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+          const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+          const ratio = (a, b) => { const x = lum(a), y = lum(b); return Math.round(((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)) * 100) / 100; };
+          const bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const c = parse(getComputedStyle(e).backgroundColor); if (c) return c; } return [255, 255, 255]; };
+          const rows = Array.from(document.querySelectorAll("[data-testid=ofp-day]"));
+          const dow = (d) => new Date(d + "T12:00:00Z").getUTCDay();
+          const plain = rows.filter(r => !r.disabled && (r.getAttribute("data-state") === "free" || r.getAttribute("data-state") === "saved") && !r.getAttribute("data-np-draft"));
+          const wk = plain.find(r => r.getAttribute("data-state") === "free" && dow(r.getAttribute("data-day")) % 6 !== 0 && !r.getAttribute("data-why"));
+          const we = plain.find(r => dow(r.getAttribute("data-day")) % 6 === 0);
+          const panel = bgOf(document.querySelector("[data-testid=ofp-brush-primary]").parentElement);
+          const brushes = ["primary", "backup", "either", "noprimary", "clear"].map(k => { const b = document.querySelector(`[data-testid=ofp-brush-${k}]`); const cs = getComputedStyle(b); return { k, armed: b.getAttribute("data-armed"), border: cs.borderTopColor, ratio: ratio(parse(cs.borderTopColor), panel) }; });
+          return { wkDay: wk ? wk.getAttribute("data-day") : null, wkBg: wk ? getComputedStyle(wk).backgroundColor : null, wkSurface: wk ? wk.getAttribute("data-surface") : null, weDay: we ? we.getAttribute("data-day") : null, weBg: we ? getComputedStyle(we).backgroundColor : null, panel: "rgb(" + panel.join(", ") + ")", brushes };
+        });
+        const m1 = await pdMeasure();
+        const SURF = pdRgb(pdTheme.THEME.dark.surface), WKND = pdRgb(pdTheme.THEME.dark.weekend);
+        if (!m1.wkDay) fail(`${PDK}: no free weekday row in the painter's month to measure`);
+        else if (m1.wkBg === "rgb(46, 80, 144)" || m1.wkBg !== SURF || m1.wkSurface !== "1") fail(`${PDK} B: the free weekday row ${m1.wkDay} should be the dark surface ${SURF} (data-surface), got ${m1.wkBg} (data-surface ${m1.wkSurface})`);
+        else ok(`${PDK} B: free weekday row ${m1.wkDay} = ${m1.wkBg} (the dark surface, not rgb(46, 80, 144))`);
+        if (!m1.weDay) console.log(`     (${PDK}: no plain weekend row in the painter's month - the weekend check is skipped)`);
+        else if (m1.weBg !== WKND) fail(`${PDK} B: the weekend row ${m1.weDay} should be T.weekend dark ${WKND}, got ${m1.weBg}`);
+        else ok(`${PDK} B: weekend row ${m1.weDay} = ${m1.weBg} (T.weekend dark)`);
+        const lowB = m1.brushes.filter(b => !(b.ratio >= 3));
+        if (m1.panel !== SURF) fail(`${PDK} C: the brushes' panel should be the dark surface ${SURF}, got ${m1.panel}`);
+        else if (lowB.length) fail(`${PDK} C: brush outline(s) below 3:1 on the panel: ${JSON.stringify(lowB)}`);
+        else ok(`${PDK} C: every brush outline >= 3:1 on the panel ${m1.panel} - ` + m1.brushes.map(b => `${b.k}${b.armed === "1" ? " (armed)" : ""} ${b.border} ${b.ratio}:1`).join(", "));
+        // every brush armed in turn: its outline (dkBorder) stays >= 3:1 against the panel; then Primary again
+        const armedLow = [];
+        for (const k of ["backup", "either", "noprimary", "clear", "primary"]) {
+          const dis = await page.$eval(`[data-testid=ofp-brush-${k}]`, el => el.disabled);
+          if (dis) continue;
+          await page.click(`[data-testid=ofp-brush-${k}]`); await page.waitForTimeout(60);
+          const a = (await pdMeasure()).brushes.find(b => b.k === k);
+          if (!(a.armed === "1" && a.ratio >= 3)) armedLow.push(a);
+        }
+        if (armedLow.length) fail(`${PDK} C: an ARMED brush outline below 3:1 (or not armed): ${JSON.stringify(armedLow)}`); else ok(`${PDK} C: each brush armed in turn keeps its outline >= 3:1 on the panel`);
+        // A: the legend's new ending, in dark (No primary armed)
+        if (!(await page.$eval("[data-testid=ofp-brush-noprimary]", el => el.disabled))) {
+          await page.click("[data-testid=ofp-brush-noprimary]"); await page.waitForTimeout(80);
+          const lg = await page.$eval("[data-testid=ofp-legend]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
+          if (!/ Clear takes back both\. A "No primary \(set by the scheduler\)" range only the scheduler can change\.$/.test(lg) || /only he can/.test(lg)) fail(`${PDK} A: the legend should end 'A "No primary (set by the scheduler)" range only the scheduler can change.', got '${lg}'`);
+          else ok(`${PDK} A: the legend ends '... A "No primary (set by the scheduler)" range only the scheduler can change.'`);
+          await page.click("[data-testid=ofp-brush-primary]"); await page.waitForTimeout(80);
+        } else console.log(`     (${PDK}: the No primary brush is disabled on this page - the dark legend check is skipped)`);
+        // D: tap the free weekday with Primary armed -> a drafted row: 'unsaved' >= 4.5:1 on its row, the Primary pill navy on its tint
+        if (m1.wkDay) {
+          await page.click(`[data-testid=ofp-day][data-day="${m1.wkDay}"]`); await page.waitForTimeout(150);
+          const d1 = await page.$eval(`[data-testid=ofp-day][data-day="${m1.wkDay}"]`, (row) => {
+            const parse = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); return m ? m[1].split(",").slice(0, 3).map(x => parseFloat(x)) : null; };
+            const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+            const ratio = (a, b) => { const x = lum(a), y = lum(b); return Math.round(((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)) * 100) / 100; };
+            const u = row.querySelector("[data-testid=ofp-unsaved]"), p = row.querySelector("[data-testid=ofp-offer-pill]");
+            const rowBg = getComputedStyle(row).backgroundColor;
+            return { state: row.getAttribute("data-state"), rowBg, unsaved: u ? { text: u.textContent.trim(), color: getComputedStyle(u).color, ratio: ratio(parse(getComputedStyle(u).color), parse(rowBg)) } : null, pill: p ? { text: p.textContent.trim(), color: getComputedStyle(p).color, bg: getComputedStyle(p).backgroundColor, ratio: ratio(parse(getComputedStyle(p).color), parse(getComputedStyle(p).backgroundColor)) } : null };
+          });
+          const DRAFT = pdRgb(pdTheme.PAINT_ROWS.dark.draft);
+          if (d1.state !== "draft" || d1.rowBg !== DRAFT || !d1.unsaved || d1.unsaved.text !== "unsaved" || d1.unsaved.color !== pdRgb(pdTheme.THEME.dark.paintText) || !(d1.unsaved.ratio >= 4.5)) fail(`${PDK} D: the drafted row's 'unsaved' should be T.paintText dark >= 4.5:1 on the drafted tint ${DRAFT}: ${JSON.stringify(d1)}`);
+          else ok(`${PDK} D: drafted row ${m1.wkDay} (${d1.rowBg}) - 'unsaved' ${d1.unsaved.color} ${d1.unsaved.ratio}:1`);
+          if (!d1.pill || d1.pill.text !== "Primary" || d1.pill.color !== "rgb(19, 41, 75)" || !(d1.pill.ratio >= 4.5)) fail(`${PDK} D: the Primary pill should keep its navy text on its own tint in dark (data-pill): ${JSON.stringify(d1.pill)}`);
+          else ok(`${PDK} D: the Primary pill keeps navy ${d1.pill.color} on ${d1.pill.bg} (${d1.pill.ratio}:1)`);
+          // the rule still does its job: Save (css.btn(true), enabled by the draft) = the lifted gradient, border #2E5090; Paste dates
+          // open (css.mini(true), flat navy) = #2E5090 with white text
+          await page.click("[data-testid=ofp-paste-toggle]"); await page.waitForTimeout(80);
+          const nav = await page.evaluate(() => { const s = getComputedStyle(document.querySelector("[data-testid=ofp-save]")), p = getComputedStyle(document.querySelector("[data-testid=ofp-paste-toggle]")); return { saveImg: s.backgroundImage, saveBorder: s.borderTopColor, pasteBg: p.backgroundColor, pasteColor: p.color }; });
+          await page.click("[data-testid=ofp-paste-toggle]"); await page.waitForTimeout(60);
+          if (!/rgb\(46, 80, 144\)/.test(nav.saveImg) || nav.saveBorder !== "rgb(46, 80, 144)") fail(`${PDK}: the active navy css.btn(true) Save should still get the lifted gradient with border #2E5090 in dark: ${JSON.stringify(nav)}`);
+          else if (nav.pasteBg !== "rgb(46, 80, 144)" || nav.pasteColor !== "rgb(255, 255, 255)") fail(`${PDK}: an active navy css.mini(true) (Paste dates open) should still be #2E5090 with white text in dark: ${JSON.stringify(nav)}`);
+          else ok(`${PDK}: the dark sheet's navy rules still lift their targets - Save (css.btn(true)) border ${nav.saveBorder} on the lifted gradient, Paste dates open (css.mini(true)) ${nav.pasteBg} / ${nav.pasteColor}`);
+          await page.screenshot({ path: path.join(OUT, "painter-dark-390-drafted.png"), fullPage: false });
+          ok("screenshot test/ui/out/painter-dark-390-drafted.png");
+          await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(150); // the confirm is accepted by onOfpDialog
+          const back = await page.$eval(`[data-testid=ofp-day][data-day="${m1.wkDay}"]`, el => el.getAttribute("data-state"));
+          if (back !== "free") fail(`${PDK}: Discard should drop the drafted row (state ${back})`);
+        }
+      }
       await page.screenshot({ path: path.join(OUT, "offers-390-dark.png"), fullPage: false });
       ok("screenshot test/ui/out/offers-390-dark.png");
       await page.click("[data-testid=ofp-close]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+      // ---- fix/painter-dark-mode (10/3): the vacation painter (Setup > Vacations > Paint month) in DARK mode - a free weekday row
+      //      is the dark surface (data-surface), not #2E5090 ----
+      try {
+        await page.click('button[data-tab="setup"]');
+        await page.click("[data-testid=card-setup_vacations] button:has-text('Paint month')");
+        await page.waitForSelector("[data-testid=vacp-day]", { timeout: 5000 });
+        const vp = await page.evaluate(() => { const dow = (d) => new Date(d + "T12:00:00Z").getUTCDay(); const rows = Array.from(document.querySelectorAll("[data-testid=vacp-day]")); const r = rows.find(e => dow(e.getAttribute("data-day")) % 6 !== 0 && !e.textContent.includes("unsaved") && !e.textContent.includes("range starts here")); return r ? { day: r.getAttribute("data-day"), bg: getComputedStyle(r).backgroundColor, surface: r.getAttribute("data-surface") } : null; });
+        if (!vp || vp.bg !== pdRgb(pdTheme.THEME.dark.surface) || vp.surface !== "1") fail(`Painter dark (fix/painter-dark-mode) B: the vacation painter's free weekday row should be the dark surface ${pdRgb(pdTheme.THEME.dark.surface)}, got ${JSON.stringify(vp)}`);
+        else ok(`Painter dark (fix/painter-dark-mode) B: the vacation painter's weekday row ${vp.day} = ${vp.bg} (the dark surface, not rgb(46, 80, 144))`);
+        await page.evaluate(() => { const r = document.querySelector("[data-testid=vacp-day]"); const sheet = r && r.closest('div[style*="position: fixed"]'); const x = sheet && sheet.querySelector('button[aria-label="Close"]'); if (x) x.click(); });
+        await page.waitForSelector("[data-testid=vacp-day]", { state: "detached", timeout: 3000 });
+      } catch (e) { fail("Painter dark (fix/painter-dark-mode): the vacation painter step - " + errLine(e)); }
       await page.setViewportSize({ width: 1180, height: 900 });
       await page.click('button[data-tab="settings"]');
       await page.click("button:has-text('Light')");
@@ -6474,7 +6570,10 @@ try {
       const legend = await npp.$eval("[data-testid=ofp-legend]", el => { const r = el.getBoundingClientRect(); return { text: el.innerText.replace(/\s+/g, " ").trim(), h: r.height, visible: r.height > 0 && r.width > 0 }; }).catch(() => null);
       const hintNp = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
       if (armedNp.armed !== "1" || armedNp.text !== "No primary" || !/linear-gradient/.test(armedNp.bg) || armedNp.color !== "rgb(255, 255, 255)") fail("No primary (s2): the fifth brush should arm as 'No primary' (gradient, white text): " + JSON.stringify(armedNp));
-      else if (!legend || !legend.visible || legend.text !== "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change." || legend.h > 40) fail("No primary (s2): the legend should show (at most two lines at 390) while the brush is armed: " + JSON.stringify(legend));
+      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec A): the new ending ("A "No primary (set by the scheduler)" range
+      // only the scheduler can change.") runs the legend to a third line at 390 px; kept intent: it shows, briefly, while armed
+      // (and the day list below keeps its 40 % of the screen)
+      else if (!legend || !legend.visible || legend.text !== "No primary = not on primary, backup still fine. Primary or Either lifts it; Clear takes back both. A \"No primary (set by the scheduler)\" range only the scheduler can change." || legend.h > 52) fail("No primary (s2): the legend should show (at most three lines at 390) while the brush is armed: " + JSON.stringify(legend));
       else if (hintNp !== "Tap a day to mark yourself No primary (backup is still fine); tap again to take it back.") fail("No primary (s2): the tap hint reads '" + hintNp + "'");
       else ok(`No primary (s2): Paint offers -> ${target}; ofp-brush-noprimary armed (gradient, white text), legend shown (${Math.round(legend.h)} px), hint '${hintNp.slice(0, 60)}...'`);
       const listGeomNp = await npp.evaluate(() => { const l = document.querySelector("[data-testid=ofp-list]"); return { list: l ? l.clientHeight : 0, vh: window.innerHeight, sw: document.querySelector("[data-testid=ofp-sheet]").scrollWidth }; });
@@ -6591,7 +6690,7 @@ try {
           await npp.click("[data-testid=ofp-brush-noprimary]"); await npp.waitForTimeout(150);
           const legendExh = await readLegend();
           const hintExh = await npp.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim());
-          const wantExh = "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. \"Set by the scheduler\" days only he can change.";
+          const wantExh = "No primary = not on primary. \"Only these days\" is on: paint Backup too for backup that day. Primary or Either lifts it; Clear takes back both. A \"No primary (set by the scheduler)\" range only the scheduler can change.";
           if (!legendOut || legendOut.exh !== "0" || !/backup still fine/.test(legendOut.text)) fail(`No primary (s2): after every period (${target}) the legend should keep 'backup still fine' (data-exh 0): ` + JSON.stringify(legendOut));
           else if (!legendExh || legendExh.exh !== "1" || legendExh.text !== wantExh) fail(`No primary (s2): in ${exhMonth} (${offerPeriod.label}, s2 'Only these days') the legend should say paint Backup too: ` + JSON.stringify(legendExh));
           else if (hintExh !== "Tap a day to mark yourself No primary (\"Only these days\" is on: paint Backup too for backup); tap again to take it back.") fail(`No primary (s2): in ${exhMonth} the tap hint reads '${hintExh}'`);
@@ -11074,7 +11173,10 @@ try {
   // own BrowserContext at 390 x 844 (the token is read from localStorage at send time).
   //  1. APP A adds D10 + D11 on My APP days: ONE save POST with exactly { p_profile: A, p_add: [D10, D11], p_clear: [],
   //     p_replace: false }; the cells read mine; the grid shows "A ..." on both (no line overflows, the appText colour, the
-  //     legend line); the contrast measure over the card and the grid lines passes in light and in dark;
+  //     legend line); the contrast measure over the card and the grid lines passes in light and in dark; since
+  //     fix/painter-dark-mode (10/3): a third APP "Jo Applegate" holds D13 for this step only - at 390 px the grid's NAME shows
+  //     whole and apart ("P.App" / "J.App", spec H) - and in dark My APP days keeps its tile colours and outlines (E), shows the
+  //     unsaved mark (G) and asks before unsaved taps leave Mine (F, BEHAVIOUR);
   //  2. APP B, holding the picture from before A's Save (a frozen copy the mock releases on B's first save), is refused on D10
   //     (400 AP005, the function's own words); the reload shows D10 taken by Appleton (aria-disabled); a further tap sends nothing;
   //  3. A removes D11 (one POST p_clear [D11]); the grid keeps D10 only;
@@ -11168,6 +11270,12 @@ try {
     const loadApp = async (pg, label) => { await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, label); await pg.waitForSelector("text=Synced", { timeout: 30000 }); await pg.waitForTimeout(500); };
     appProfiles = [appARow, appBRow]; appDayStore = []; appDaysMode = "ok"; appStale = null;
     let A = null, B = null, sc = null, settleSc = null;
+    // fix/painter-dark-mode (10/3, spec H): for step 1 only a third APP whose name starts like Appleton's - "Jo Applegate" on D13
+    // (a harness row, no save) - so the phone grid must tell "Appleton" from "Applegate" (helpers.appGridLabels: "P.App" /
+    // "J.App"); it leaves the store before step 2 (step 3b drafts D13 and step 5's pick list names A and B)
+    const APP_C_UID = "00000000-0000-4000-8000-0000000a0003", D13H = isoM(13);
+    appProfiles.push({ id: APP_C_UID, person_id: null, role: "viewer", is_app: true, display_name: "Jo Applegate", email: null, created_at: "2026-10-01T00:00:00Z" });
+    appDayStore.push({ day: D13H, profile_id: APP_C_UID, source: "app", created_by: APP_C_UID, created_at: "2026-10-01T00:00:00Z" });
     // ---- 1. APP A adds two days and sees them ----
     try {
       A = await mkAppCtx(APP_A_PROFILE, APP_A_JWT, "p29-app-a");
@@ -11212,6 +11320,72 @@ try {
           await toMineM(A.pg);
           p29Judge("1 contrast: My APP days (dark)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
           await A.pg.screenshot({ path: path.join(OUT, "p29-appdays-dark-390.png"), fullPage: true });
+          // ---- fix/painter-dark-mode (10/3) on My APP days in DARK mode (computed styles): E - a free day tile is the dark surface,
+          //      never rgb(46, 80, 144); the "+ You" / removal / today outlines survive (>= 3:1); the disabled month arrow has no
+          //      fill while the live one keeps the raised one; an active navy button still gets #2E5090. G - a drafted day's unsaved
+          //      mark >= 4.5:1 on its tile, the key line. F (BEHAVIOUR) - leaving Mine with unsaved taps asks: Cancel stays (the taps
+          //      kept), OK leaves (the taps gone); the page's beforeunload is armed only while taps are unsaved ----
+          {
+            const EP = `${P} dark (fix/painter-dark-mode)`;
+            const tile = (d) => A.pg.$eval(`[data-testid=appdays-cell][data-day="${d}"]`, (el) => {
+              const parse = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); return m ? m[1].split(",").slice(0, 3).map(x => parseFloat(x)) : null; };
+              const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+              const ratio = (a, b) => { const x = lum(a), y = lum(b); return Math.round(((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)) * 100) / 100; };
+              const cs = getComputedStyle(el), u = el.querySelector("[data-testid=appdays-unsaved]");
+              return { state: el.getAttribute("data-state"), bg: cs.backgroundColor, borderStyle: cs.borderTopStyle, border: cs.borderTopColor, borderRatio: ratio(parse(cs.borderTopColor), parse(cs.backgroundColor)), title: el.getAttribute("title"), mark: u ? { text: u.textContent.trim(), color: getComputedStyle(u).color, ratio: ratio(parse(getComputedStyle(u).color), parse(cs.backgroundColor)) } : null };
+            });
+            const SURF = rgbOf(themeMod.THEME.dark.surface), D12 = isoM(12);
+            const free12 = await tile(D12);
+            if (free12.state !== "free" || free12.bg === "rgb(46, 80, 144)" || free12.bg !== SURF || free12.mark) fail(`${EP} E: the free tile ${D12} should be the dark surface ${SURF} with no unsaved mark, got ${JSON.stringify(free12)}`);
+            else ok(`${EP} E: free tile ${D12} = ${free12.bg} (the dark surface, not rgb(46, 80, 144))`);
+            await A.pg.click(`[data-testid=appdays-cell][data-day="${D12}"]`);   // + You (add)
+            await A.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);   // his own -> removal
+            await A.pg.waitForTimeout(150);
+            const add12 = await tile(D12), rem10 = await tile(D10);
+            const keyLine = await A.pg.$eval("[data-testid=appdays-unsaved-key]", el => ({ text: el.textContent.trim(), color: getComputedStyle(el).color })).catch(() => null);
+            const PAINT = rgbOf(themeMod.THEME.dark.paintText);
+            if (add12.state !== "add" || add12.bg !== SURF || add12.borderStyle !== "dashed" || add12.border !== rgbOf(themeMod.THEME.dark.appText) || !(add12.borderRatio >= 3)) fail(`${EP} E: the "+ You" tile should keep its dashed appText outline (>= 3:1) on the dark surface: ${JSON.stringify(add12)}`);
+            else if (rem10.state !== "remove" || rem10.borderStyle !== "dashed" || rem10.border !== rgbOf(themeMod.THEME.dark.muted) || !(rem10.borderRatio >= 3)) fail(`${EP} E: the removal tile should keep its dashed muted outline (>= 3:1): ${JSON.stringify(rem10)}`);
+            else ok(`${EP} E: "+ You" ${D12} dashed ${add12.border} ${add12.borderRatio}:1, removal ${D10} dashed ${rem10.border} ${rem10.borderRatio}:1, both on ${add12.bg}`);
+            if (!add12.mark || add12.mark.text !== "*" || add12.mark.color !== PAINT || !(add12.mark.ratio >= 4.5) || !rem10.mark || !(rem10.mark.ratio >= 4.5) || !/ - unsaved$/.test(add12.title || "")) fail(`${EP} G: a drafted tile should carry the unsaved mark '*' in T.paintText dark >= 4.5:1 (title '... - unsaved'): add ${JSON.stringify(add12)} / remove ${JSON.stringify(rem10)}`);
+            else if (!keyLine || keyLine.text !== "* = unsaved - tap Save to keep these changes; leaving Mine asks first." || keyLine.color !== PAINT) fail(`${EP} G: the key line under the grid is missing or off: ${JSON.stringify(keyLine)}`);
+            else ok(`${EP} G: the unsaved mark '*' ${add12.mark.color} ${add12.mark.ratio}:1 on the tile (removal ${rem10.mark.ratio}:1), title '${add12.title}', the key line '${keyLine.text}'`);
+            // the active navy targets elsewhere still lift: Save (css.btn(true), enabled by the draft) and Range on (css.mini(true))
+            await A.pg.click("[data-testid=appdays-range]"); await A.pg.waitForTimeout(80);
+            const navy = await A.pg.evaluate(() => { const s = getComputedStyle(document.querySelector("[data-testid=appdays-save]")), r = getComputedStyle(document.querySelector("[data-testid=appdays-range]")); return { saveImg: s.backgroundImage, saveBorder: s.borderTopColor, rangeBg: r.backgroundColor, rangeColor: r.color }; });
+            await A.pg.click("[data-testid=appdays-range]"); await A.pg.waitForTimeout(80);
+            if (!/rgb\(46, 80, 144\)/.test(navy.saveImg) || navy.saveBorder !== "rgb(46, 80, 144)" || navy.rangeBg !== "rgb(46, 80, 144)" || navy.rangeColor !== "rgb(255, 255, 255)") fail(`${EP}: the dark sheet's navy rules should still lift Save (css.btn(true)) and Range on (css.mini(true)) to #2E5090: ${JSON.stringify(navy)}`);
+            else ok(`${EP}: Save (css.btn(true)) keeps the lifted gradient, border ${navy.saveBorder}; Range on (css.mini(true)) ${navy.rangeBg} / ${navy.rangeColor} - the rule still does its job`);
+            // the current month: the today outline survives; the disabled "<" has no fill (the dark surface), ">" the raised fill
+            for (let i = 0; i < 3 && (await A.pg.$eval("[data-testid=appdays-prev]", el => !el.disabled)); i++) { await A.pg.click("[data-testid=appdays-prev]"); await A.pg.waitForTimeout(120); }
+            const todayT = await tile(todayCentral).catch(() => null);
+            const arrows = await A.pg.evaluate(() => { const p = document.querySelector("[data-testid=appdays-prev]"), n = document.querySelector("[data-testid=appdays-next]"); return { prevDisabled: p.disabled, prevBg: getComputedStyle(p).backgroundColor, nextBg: getComputedStyle(n).backgroundColor }; });
+            if (!todayT || todayT.border !== rgbOf(themeMod.THEME.dark.accent) || !(todayT.borderRatio >= 3) || todayT.bg === "rgb(46, 80, 144)") fail(`${EP} E: today's tile ${todayCentral} should keep the orange outline (>= 3:1) on its own background: ${JSON.stringify(todayT)}`);
+            else ok(`${EP} E: today's tile ${todayCentral} keeps its outline ${todayT.border} ${todayT.borderRatio}:1 on ${todayT.bg}`);
+            if (!arrows.prevDisabled || arrows.prevBg !== SURF || arrows.nextBg !== rgbOf(themeMod.THEME.dark.raised)) fail(`${EP} E: on the current month '<' should be disabled with no fill (${SURF}) and '>' raised (${rgbOf(themeMod.THEME.dark.raised)}): ${JSON.stringify(arrows)}`);
+            else ok(`${EP} E: the disabled '<' has no fill (${arrows.prevBg}), the live '>' the raised ${arrows.nextBg} - it no longer looks active`);
+            await A.pg.screenshot({ path: path.join(OUT, "appdays-dark-390-drafted.png"), fullPage: true });
+            // F: beforeunload armed while unsaved; leaving Mine asks - Cancel stays with the taps, OK leaves without them
+            const bu = () => A.pg.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+            const buDirty = await bu();
+            const asked = [];
+            A.pg.once("dialog", (d) => { asked.push(d.message()); d.dismiss().catch(() => {}); });
+            await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
+            const stay = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), count: ((document.querySelector("[data-testid=appdays-count]") || {}).textContent || "").trim() }));
+            A.pg.once("dialog", (d) => { asked.push(d.message()); d.accept().catch(() => {}); });
+            await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
+            const left = await A.pg.evaluate(() => ({ card: !!document.querySelector("[data-testid=appdays-card]"), grid: !!document.querySelector("[data-testid=cal-grid]") }));
+            const buClean = await bu();
+            await toMineM(A.pg);
+            const after = await A.pg.evaluate((ds) => ({ count: document.querySelector("[data-testid=appdays-count]").textContent.trim(), states: ds.map(d => { const c = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return c ? c.getAttribute("data-state") : null; }), key: !!document.querySelector("[data-testid=appdays-unsaved-key]") }), [D12, D10]);
+            const wantAsk = "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
+            if (!buDirty || buClean) fail(`${EP} F: beforeunload should be armed only while taps are unsaved (dirty ${buDirty}, after leaving ${buClean})`);
+            else if (asked.length !== 2 || asked[0] !== wantAsk || asked[1] !== wantAsk) fail(`${EP} F: leaving Mine with 2 unsaved taps should ask '${wantAsk.replace(/\n/g, " / ")}' each time: ${JSON.stringify(asked)}`);
+            else if (!stay.card || stay.count !== "2 changes") fail(`${EP} F: Cancel should stay on My APP days with the 2 taps kept: ${JSON.stringify(stay)}`);
+            else if (left.card || !left.grid) fail(`${EP} F: OK should leave Mine for the Calendar: ${JSON.stringify(left)}`);
+            else if (after.count !== "No changes" || after.states.join(",") !== "free,mine" || after.key) fail(`${EP} F: after the confirmed leave the taps are gone (No changes, ${D12} free, ${D10} mine): ${JSON.stringify(after)}`);
+            else ok(`${EP} F (BEHAVIOUR): leaving Mine with 2 unsaved taps asked '${asked[0].split("\n")[0]}' - Cancel stayed (2 changes kept), OK left for the Calendar and the taps went (No changes); beforeunload armed only while unsaved`);
+          }
         }
         await showM(A.pg);
         const g = await gridApp(A.pg);
@@ -11224,6 +11398,20 @@ try {
         else if (over.length) fail(`${P} 1 (${theme}): ${over.length} grid line(s) overflow their cell at 390 px: ${over.slice(0, 4).join(", ")}`);
         else if (!legend) fail(`${P} 1 (${theme}): the legend has no APP line although the month has APP days`);
         else ok(`${P} 1 (${theme}): the grid shows '${g10.text}' on ${D10} and ${D11} in ${wantColor}, no line overflows at 390 px, the legend explains it`);
+        // fix/painter-dark-mode (10/3, spec H): at 390 px the NAME is measured, not only its line - the phone label (cal-app-code)
+        // shows whole (nothing cut, no ellipsis) in place of the wide grid's name, Appleton and Applegate read apart ("P.App" /
+        // "J.App"), and a cell with an APP line is never taller than the month's cells without one (the row height holds)
+        {
+          const names = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const code = a.querySelector("[data-testid=cal-app-code]"), nm = a.querySelector(".cal-app-name"); return { day: e.getAttribute("data-day"), code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, w: code ? Math.round(code.scrollWidth * 10) / 10 : null, nameShown: !!nm && getComputedStyle(nm).display !== "none" }; }).filter(Boolean));
+          const hts = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ app: !!e.querySelector("[data-testid=cal-app]"), h: Math.round(e.getBoundingClientRect().height * 10) / 10 })));
+          const n10 = names.find(x => x.day === D10), n13 = names.find(x => x.day === D13H);
+          const maxPlain = Math.max(...hts.filter(x => !x.app).map(x => x.h)), maxApp = Math.max(...hts.filter(x => x.app).map(x => x.h));
+          if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
+          else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
+          else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
+          else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a cell with an APP line is ${maxApp}px tall, the month's cells without one at most ${maxPlain}px - the line grew the row`);
+          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; APP cells ${maxApp}px <= ${maxPlain}px`);
+        }
         p29Judge(`1 contrast: the grid's APP lines (${theme})`, await p29Measure(A.pg, "[data-testid=cal-app]"));
         await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });
       }
@@ -11233,6 +11421,7 @@ try {
       await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
       await A.pg.waitForTimeout(500);
     } catch (e) { fail(`${P} 1 (APP A adds two days): ` + errLine(e)); try { if (A) await A.pg.screenshot({ path: path.join(OUT, "failure-p29-1.png"), fullPage: true }); } catch (e2) {} }
+    appDayStore = appDayStore.filter(r => r.profile_id !== APP_C_UID); appProfiles = appProfiles.filter(p => p.id !== APP_C_UID); // spec H's third APP leaves
     // ---- 2. A second APP is refused on one of them ----
     try {
       appStale = { sub: APP_B_UID, rows: [] }; // B holds the picture from before A's Save

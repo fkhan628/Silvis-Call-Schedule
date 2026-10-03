@@ -16,7 +16,8 @@
 //
 // Second table (Prompt 16 B2, 9/24): the REGIONS of index-source.html that
 // test/ui/theme-regions.js names (notification settings, publish diff, snapshot
-// list, SuCheck, open-shifts board, claim sheet; Setup > Rules since Prompt 24). Every literal hex text colour
+// list, SuCheck, open-shifts board, claim sheet; Setup > Rules since Prompt 24; the offer and vacation painter
+// sheets since fix/painter-dark-mode, 10/3). Every literal hex text colour
 // still written in one of them is measured against the region's surface in
 // BOTH themes - in dark mode as the dark <style> sheet would repaint it (or not:
 // an unmapped grey such as #3a4a58 stays and reads ~1.6:1 on the dark card).
@@ -99,6 +100,28 @@ export const contrastTable = (mod) => {
     add(theme, "APP line on the holiday tint", T.appText, T.holiday, "text");
     add(theme, "APP line on page", T.appText, T.bg, "text");
     add(theme, "APP text on its tint (My APP days)", T.appText, T.appTint, "text");
+    // fix/painter-dark-mode (10/3): the painters' orange words (T.paintText: unsaved, will clear, the hint, a one-role reason,
+    // the weekend day name, "range starts here") and My APP days' unsaved mark "*", on the card / a free row and the weekend
+    // tint; then the day rows' text on every painter row tint (app-styles.js PAINT_ROWS - the greyed row is a disabled control
+    // at 0.6 opacity, not measured).
+    add(theme, "painter orange words / APP unsaved mark on card", T.paintText, T.surface, "text");
+    add(theme, "painter orange words on the weekend tint", T.paintText, T.weekend, "text");
+    const PR = (m.PAINT_ROWS || {})[theme] || {};
+    for (const k of ["pending", "draft", "vacDraft", "vacWeekend"]) {
+      if (!PR[k]) continue;
+      add(theme, `painter orange words on the ${k} row`, T.paintText, PR[k], "text");
+      add(theme, `painter day text on the ${k} row`, T.text, PR[k], "text");
+      add(theme, `painter muted text on the ${k} row`, T.muted, PR[k], "text");
+    }
+    // The brushes (WCAG 1.4.11): each chip's outline - idle and armed alike - against the header panel (dark mode: dkBorder),
+    // the armed chip's white label on both stops of its gradient (dark primary: dkGradient), and the drafted pill's text on its
+    // own tint (a pill keeps its tint in both themes - data-pill keeps the dark sheet off the Primary pill's navy text).
+    for (const [k, b] of Object.entries(m.OFFER_BRUSH || {})) {
+      add(theme, `brush ${k} outline on the panel (idle+armed)`, theme === "dark" ? (b.dkBorder || b.border) : b.border, T.surface, "label");
+      const grad = theme === "dark" && b.dkGradient ? b.dkGradient : b.gradient;
+      (String(grad).match(/#[0-9A-Fa-f]{6}/g) || []).forEach((stop, i) => add(theme, `brush ${k} armed label on its gradient ${i ? "end" : "start"}`, "#FFFFFF", stop, "label"));
+      add(theme, `painter pill ${k} text on its tint`, b.text, b.tint, "text");
+    }
     // bold labels + glyphs
     add(theme, "primary button label", T.onPrimary, T.primaryEnd, "label");
     add(theme, "primary button label (gradient start)", T.onPrimary, T.primaryStart, "label");

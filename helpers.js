@@ -5871,6 +5871,39 @@ function appDaysByDay(rows, names) {
   });
   return out;
 }
+// appGridLabels(byDay) -> { profileId: label } - the phone month grid's APP name (fix/painter-dark-mode, 10/3, spec H: at
+// 390 px the name ellipsized to "A Appl..." / "A Bram...", and two APPs starting alike looked the same). Every APP holding a
+// day in byDay (appDaysByDay's map) gets at most four letters and no ellipsis: its short name when that has four letters or
+// fewer, else its first four ("Appleton" -> "Appl", "Bramble" -> "Bram"). APPs whose labels would match (ignoring case) take
+// the first name's initial + "." + three letters ("Pat Appleton" -> "P.App", "Jo Applegate" -> "J.App"); any still alike (no
+// first name, the same initial) are numbered in profile-id order ("App1", "App2"). A wide grid keeps the short name; the
+// full name is in the day's hover and summary. Labels depend on every APP in byDay, so one APP reads the same in each month.
+function appGridLabels(byDay) {
+  const map = byDay && typeof byDay === "object" ? byDay : {};
+  const people = {};
+  Object.keys(map).forEach(d => { const e = map[d]; if (e && typeof e === "object" && typeof e.profileId === "string" && e.profileId && !people[e.profileId]) people[e.profileId] = e; });
+  const ids = Object.keys(people).sort();
+  const shortOf = (e) => (typeof e.short === "string" && e.short ? e.short : appShortName(e.name));
+  const out = {};
+  ids.forEach(id => { const s = shortOf(people[id]); out[id] = s.length <= 4 ? s : s.slice(0, 4); });
+  const alike = () => { const g = {}; ids.forEach(id => { const k = out[id].toLowerCase(); (g[k] = g[k] || []).push(id); }); return Object.keys(g).map(k => g[k]).filter(list => list.length > 1); };
+  alike().forEach(list => list.forEach(id => {
+    const e = people[id];
+    const words = String(e.name === null || e.name === undefined ? "" : e.name).split(",")[0].trim().split(/\s+/).filter(Boolean);
+    out[id] = (words.length > 1 ? words[0].charAt(0).toUpperCase() + "." : "") + shortOf(e).slice(0, 3);
+  }));
+  alike().forEach(list => list.forEach((id, i) => { out[id] = shortOf(people[id]).slice(0, 3) + (i + 1); }));
+  return out;
+}
+// appDaysLeaveWords(n, why) -> the question My APP days asks before unsaved taps go (spec F, 10/3 - BEHAVIOUR; the painter's
+// "Discard N unsaved changes and close?"): why "signin" = the session-expired banner's Sign in again (the sign-in card replaces
+// Mine), anything else = leaving Mine for another tab. OK lets the draft go; Cancel keeps the APP on My APP days.
+function appDaysLeaveWords(n, why) {
+  const k = Math.max(0, Math.floor(Number(n) || 0));
+  const what = k + " unsaved APP day change" + (k === 1 ? "" : "s");
+  if (why === "signin") return "Discard " + what + " and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).";
+  return "Discard " + what + " and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
+}
 // appDaysReadFailureState(status, bodyText) - a non-2xx answer to the APP reads: "unavailable" when the table or the
 // function does not exist yet (the migration not applied, or rolled back): 404 PGRST205 (table) / PGRST202 (function), a
 // 42P01 - payReadFailureState's reading plus PGRST202; anything else is "failed" (never an empty list).
@@ -6531,7 +6564,7 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appGridLabels, appDaysLeaveWords, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,

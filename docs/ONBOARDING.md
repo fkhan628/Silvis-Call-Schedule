@@ -195,12 +195,12 @@ again to take it off. A day with another APP's name on it is taken and cannot be
 last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once and say which days they skipped and
 why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, your
 other taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"; a tap the refusal made
-impossible, such as a day another APP just took, drops out). Past days stay as they are.
+impossible, such as a day another APP just took, drops out). Past days stay as they are. A tapped day shows "*" (unsaved) until Save; leaving Mine (another tab, Sign in again) or closing the app with unsaved taps asks first - Cancel keeps them.
 
 **What you do (the day editor).** Every day's editor has an **APP** line: pick any APP and **Set APP** (it replaces the
 APP already on that day), or **Clear APP**. It is saved at once, apart from the day's own Save, and works on past days too.
 
-**Who sees it.** The calendar shows the APP as a third line "A <last name>" in a muted rose (the full name is in the day's
+**Who sees it.** The calendar shows the APP as a third line "A <last name>" (on a phone the first four letters, or an initial + three letters when two APPs start alike - "P.App" / "J.App") in a muted rose (the full name is in the day's
 hover and in the day summary), and the legend explains it - for every signed-in account: surgeons, the office, viewers,
 followers, the APPs and you. The `?public=1` page, its share links, the printable month, the ER Call Panels, the calendar
 feeds, Totals, pay, the office digest and every e-mail show nothing of it. The generator, the rules, trades and the open
@@ -212,7 +212,7 @@ shifts board ignore APP days.
 **Three lines to send an APP (phone):**
 1. Open the Silvis call schedule and sign in, then tap **Mine**.
 2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
-3. Tap **Save** - your days appear on the calendar of everyone signed in as "A <your last name>".
+3. Tap **Save** before leaving Mine (a tapped day shows "*" until then; leaving or closing with unsaved taps asks first) - your days appear on the calendar of everyone signed in as "A <your last name>" (on a phone its first letters).
 
 ## Removing or changing someone
 
