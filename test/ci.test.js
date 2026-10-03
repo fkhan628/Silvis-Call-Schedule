@@ -109,7 +109,7 @@ flush("chain vs steps vs filter");
 ["importer.js"].forEach(p => ok(filter.includes(p), "module `" + p + "` (required by the importer/publish suites) missing from the paths filter"));
 // PWA shell: index-source.html links these four; a manifest/icon-only push
 // must bump APP_VERSION so cache-busted clients refetch them.
-const SHELL = ["manifest.json", "icon-512.png", "icon-192.png", "apple-touch-icon.png"];
+const SHELL = ["manifest.json", "icon-512.png", "icon-192.png", "apple-touch-icon.png", "sw.js"]; // sw.js: Prompt 30's push worker
 SHELL.forEach(p => ok(filter.includes(p), "PWA shell file `" + p + "` missing from build.yml's paths filter"));
 const idx = read("index-source.html");
 SHELL.forEach(p => ok(idx.includes(p), "index-source.html no longer references `" + p + "` - drop it from this pin and the filter together"));

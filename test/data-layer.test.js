@@ -5132,7 +5132,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // P20 R2: the one prefs upsert lives in config.js notifPrefsDb.save and always names on_conflict (person_id for a
       // surgeon - valid before AND after revision o: person_id is the key before, UNIQUE after; profile_id for a follower)
       assert.strictEqual((cfg.match(/db\.upsert\("notification_preferences", req\.row, \{ onConflict: req\.onConflict \}\)/g) || []).length, 1, "notifPrefsDb.save must upsert with { onConflict: req.onConflict }");
-      assert.ok(src.includes("notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {})"), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
+      // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
+      assert.ok(src.includes('notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok" })'), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
       assert.ok(!/db\.upsert\("notification_preferences"/.test(src) && !/db\.upsert\("notification_preferences", (row|req\.row)\)/.test(cfg), "no prefs upsert without on_conflict is left (and none outside notifPrefsDb)");
     });
     // ---- Prompt 20 R2 (Faraz 9/25): the follower's own prefs row - saved and read by profile_id ----
@@ -7712,7 +7713,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(s0 > 0, "saveFollowerPref");
       const sf = src.slice(s0, src.indexOf("\n  };\n", s0));
       const gate = sf.indexOf('if (followerPrefStateRef.current !== "ok" || !pid) return;');
-      assert.ok(gate > 0 && gate < sf.indexOf("notifPrefsDb.save({ profileId: pid }, followerPrefRef.current)"), "no write unless the read answered ok (never before revision o, never over an unknown row)");
+      // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
+      assert.ok(gate > 0 && gate < sf.indexOf('notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok" })'), "no write unless the read answered ok (never before revision o, never over an unknown row)");
       assert.ok(/notifPrefsDb\.loadFollower\(pid\)/.test(src), "the follower's row is read by profile_id");
     });
   }
@@ -9448,14 +9450,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
       assert.ok(i > 0 && j > i, "the switched branch");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets)
       const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
       const run = (prevUid, uid, persisted) => {
-        const st = { set: [], chained: 0, errLog: [], showErr: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const st = { set: [], chained: 0, errLog: [], showErr: [], dropped: [], pushResets: 0, refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const pushStub = { dropForeign: (uid) => { st.dropped.push(uid); return Promise.resolve({ action: "unsubscribed" }); } };
         // review 2 (10/1): an idle day-sync queue (nothing in flight) - the switch must not wait on it
         // review of the merge (10/2): the Recent-errors setters record, so Do first 8's clear on a switch is run, not only pinned
         fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {},
-          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
+          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v), pushStub, () => { st.pushResets++; }, () => {}, () => {});
         return st;
       };
       const sw = run("uA", "uB", TABLE);
@@ -9470,18 +9473,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(none.refs.scheduleRef.current === A_MAP && none.set.length === 0, "no persisted map: nothing to fall back to");
       assert.deepStrictEqual([none.errLog, none.showErr], [[[]], [false]], "Do first 8: a switch with no persisted map empties Recent errors too");
       assert.ok(sw.chained === 0 && same.chained === 0 && none.chained === 0, "an idle queue: nothing waits on it");
+      // Prompt 30: a different account stops the previous account's phone notifications on this device (dropForeign with the NEW
+      // account's id, fire and forget) and clears the card; the same account keeps them
+      assert.deepStrictEqual([sw.dropped, none.dropped, same.dropped], [["uB"], ["uB"], []], "pushDevice.dropForeign(<the new account>) on a switch only");
+      assert.ok(sw.pushResets === 1 && same.pushResets === 0, "the Phone notifications card is cleared on a switch only");
     });
     await acheckD("DF4 review 2 (10/1): a day write of the previous account still IN FLIGHT at the switch (lifted switched branch) - once its queue drains, the map follows lastSyncRef (the landed value), so a later merge cannot keep the old value as a local edit and write it back under the new JWT; a map replaced meanwhile (the re-run's adoption, a merge, an edit) is left alone", async () => {
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets)
       const BEFORE = { "2026-11-15": { primary: "s2", backup: "s4" } }, LANDED = { "2026-11-15": { primary: "s1", backup: "s3" } };
       const go = () => {
         let release; const chain = new Promise(r => { release = r; });
         const st = { cur: A_MAP, sets: 0, release, errLog: [], showErr: [], refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
         // setSchedule as React runs it: a value, or an updater handed the latest state
         const setSchedule = (m) => { st.cur = typeof m === "function" ? m(st.cur) : m; st.sets++; };
-        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
+        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v), { dropForeign: () => Promise.resolve({}) }, () => {}, () => {}, () => {});
         return st;
       };
       const a = go();
@@ -11782,7 +11789,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const reg = (id, scope, slots, rejects) => ({ id, scope, rejects: !!rejects, active: slots.active ? { scriptURL: slots.active } : null, waiting: slots.waiting ? { scriptURL: slots.waiting } : null, installing: slots.installing ? { scriptURL: slots.installing } : null });
     // Runs the head script once in a fresh sandbox; resolves when it reloads (location.replace / location.reload) or after 2 s.
     const runHead = async (o) => {
-      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], timers: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined };
+      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], timers: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined, appBase: undefined };
       let settle; const settled = new Promise(r => { settle = r; });
       const sandbox = {
         URL,
@@ -11804,6 +11811,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       vm.createContext(sandbox);
       vm.runInContext(HEAD, sandbox, { filename: "index-source.html (head script)" });
       rec.hardReset = sandbox.__silvisHardReset;
+      rec.appBase = typeof sandbox.__silvisAppBase === "function" ? sandbox.__silvisAppBase() : sandbox.__silvisAppBase; // Prompt 30: config.js pushDevice.base()
       if (o.callHardReset) {
         if (typeof sandbox.__silvisHardReset !== "function") throw new Error("window.__silvisHardReset is not a function after a load with no version change");
         sandbox.__silvisHardReset();
@@ -11826,9 +11834,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const LIVE_REGS = [
       reg("root-onesignal", LIVE, { active: LIVE + "OneSignalSDKWorker.js" }), // Davenport's push worker, exactly as served
       reg("root-other", LIVE, { active: LIVE + "sw.js" }), // a root worker with some other script: not Silvis-scoped either
-      // Silvis's push worker as Prompt 30 will register it (scope = the folder, script sw.js): unregistered TODAY (Silvis
-      // registers no worker yet); Prompt 30's keepRegistration hook moves it to kept - this named fake is where that shows.
+      // Silvis's push worker as Prompt 30 registers it (scope = the folder, script <folder>sw.js): KEPT since Prompt 30 (the
+      // keep-predicate's sw.js rule, compared without the query / fragment - so sw.js?v=1 and sw.js#x are kept too); a sw.js
+      // in a SUBfolder scope, or one served from a subfolder, is not Silvis's worker and still goes.
       reg("silvis-push", SIL, { active: SIL + "sw.js" }),
+      reg("silvis-push-v", SIL, { waiting: SIL + "sw.js?v=1" }),
+      reg("silvis-push-frag", SIL, { installing: SIL + "sw.js#x" }),
+      reg("silvis-sub-sw", SIL + "x/", { active: SIL + "x/sw.js" }),
+      reg("silvis-sw-elsewhere", SIL + "y/", { active: SIL + "sw.jsx" }),
       reg("silvis", SIL + "legacy/", { active: SIL + "legacy/old-sw.js" }),
       reg("silvis-sub-installing", SIL + "sub/", { installing: SIL + "sub/w.js" }),
       reg("silvis-no-worker", SIL + "empty/", {}),
@@ -11838,7 +11851,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       reg("prefix-sibling", LIVE + "Silvis-Call-Schedule-old/", { active: LIVE + "Silvis-Call-Schedule-old/sw.js" }), // shares the prefix STRING only
       reg("davenport-folder", LIVE + "Call-Schedule-App/", { active: LIVE + "Call-Schedule-App/sw.js" }),
     ];
-    const LIVE_UNREG = ["silvis-push", "silvis", "silvis-sub-installing", "silvis-no-worker"]; // Prompt 30: silvis-push leaves this list
+    const LIVE_UNREG = ["silvis", "silvis-sub-installing", "silvis-no-worker", "silvis-sub-sw", "silvis-sw-elsewhere"]; // Prompt 30: silvis-push (and its ?v= / # variants) left this list - kept
     const CACHES = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "silvis-shell-v1", "dsg-silvis-mirror", "silvisX-cache"];
     const NOT_OURS = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "dsg-silvis-mirror", "silvisX-cache"];
 
@@ -11847,7 +11860,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!rec.unregistered.includes("root-onesignal"), "Davenport's OneSignal worker at the origin root was unregistered");
       assert.ok(!rec.unregistered.includes("root-other"), "a worker scoped at the origin root (a PARENT of the Silvis folder) was unregistered");
       assert.ok(!rec.unregistered.includes("prefix-sibling"), "/Silvis-Call-Schedule-old/ only shares the prefix string - unregistered");
-      assert.deepStrictEqual(sorted(rec.unregistered), sorted(LIVE_UNREG), "exactly the Silvis-scoped, non-OneSignal registrations");
+      assert.deepStrictEqual(sorted(rec.unregistered), sorted(LIVE_UNREG), "exactly the Silvis-scoped, non-OneSignal registrations that are not the Silvis push worker");
+      ["silvis-push", "silvis-push-v", "silvis-push-frag"].forEach(id => assert.ok(!rec.unregistered.includes(id), "Prompt 30: Silvis's own push worker (" + id + ") was unregistered - every update would drop this device's phone notifications"));
+      assert.ok(rec.unregistered.includes("silvis-sub-sw"), "a sw.js in a SUBfolder scope of the app folder is not Silvis's push worker - it must still go");
     });
     await acheckX("XR caches: only a silvis- cache is deleted - OneSignal..., dsg-..., workbox-..., a name with silvis- inside it and silvisX- (no dash) are kept", async () => {
       const rec = await runHead({ href: SIL, stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, callHardReset: true });
@@ -11896,7 +11911,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const bare = await runHead({ href: LIVE + "Silvis-Call-Schedule", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
       assert.deepStrictEqual(sorted(bare.unregistered), sorted(LIVE_UNREG), "no trailing slash: the base is still the Silvis folder, never the origin root");
       const idx = await runHead({ href: SIL + "index", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
-      assert.deepStrictEqual(sorted(idx.unregistered), sorted(LIVE_UNREG), ".../Silvis-Call-Schedule/index: the base is the Silvis folder (silvis-push at the folder scope is reached)");
+      assert.deepStrictEqual(sorted(idx.unregistered), sorted(LIVE_UNREG), ".../Silvis-Call-Schedule/index: the base is the Silvis folder (the folder-scoped workers are reached; silvis-push is kept by its sw.js rule)");
       assertReloadedWithV(idx, SIL + "index");
     });
     await acheckX("XR no serviceWorker and no caches (an old browser): the _v reload still runs", async () => {
@@ -11925,13 +11940,27 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(rec.unregistered, []);
       assert.deepStrictEqual(rec.deleted, ["silvis-shell-v1"]);
     });
-    check("XR source pins: one nukeAndReload, assigned once to window.__silvisHardReset; the keep-predicate and its Prompt 30 hook comment are in place", () => {
+    check("XR source pins: one nukeAndReload, assigned once to window.__silvisHardReset; the keep-predicate carries Prompt 30's sw.js rule (the hook comment is gone - done) and window.__silvisAppBase is exposed once", () => {
       const cnt = (needle) => SRC.split(needle).length - 1;
       assert.strictEqual(cnt("function nukeAndReload()"), 1);
       assert.strictEqual(cnt("window.__silvisHardReset = nukeAndReload;"), 1);
       assert.strictEqual(cnt("function keepRegistration(scriptURLs, silvisBase)"), 1);
-      assert.ok(HEAD.includes("// KEEP-PREDICATE:") && HEAD.includes("// PROMPT 30 HOOK: Silvis's own push worker (sw.js"), "the commented keep-predicate hook for Prompt 30's push worker");
-      assert.ok(HEAD.includes('//   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;'), "the hook's example compares the script URL without its query (sw.js?v=... must be kept too)");
+      assert.ok(HEAD.includes("// KEEP-PREDICATE:"), "the keep-predicate comment");
+      assert.ok(!HEAD.includes("// PROMPT 30 HOOK:"), "Prompt 30 is done: the hook comment must be replaced by the real rule");
+      assert.strictEqual(cnt(`if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker`), 1, "the keep-predicate's sw.js rule (query and fragment stripped)");
+      assert.strictEqual(cnt("window.__silvisAppBase = silvisResetBase;"), 1, "Prompt 30: the app folder is exposed once for config.js pushDevice");
+      const tail = HEAD.slice(HEAD.indexOf("function nukeAndReload()"));
+      assert.ok(tail.indexOf("window.__silvisAppBase = silvisResetBase;") < tail.indexOf("if (mismatch) {"), "__silvisAppBase is set before the version branch - both branches have it");
+    });
+    await acheckX("XR window.__silvisAppBase (Prompt 30): exposed in BOTH branches (a version change and a plain load) and answers the reset's own base - the folder, also for .../index and a folder URL without its slash", async () => {
+      const a = await runHead({ href: SIL + "?tab=timeoff", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(a.appBase, SIL, "plain load");
+      const b = await runHead({ href: SIL, stored: { "silvis-app-version": "2000.01.01a" }, regs: [] });
+      assert.strictEqual(b.appBase, SIL, "version change");
+      const c = await runHead({ href: SIL + "index", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(c.appBase, SIL, ".../index");
+      const d = await runHead({ href: LIVE + "Silvis-Call-Schedule", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(d.appBase, SIL, "no trailing slash");
     });
   })();
 

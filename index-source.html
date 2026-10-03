@@ -207,16 +207,16 @@
         if (last && last.indexOf(".") < 0 && last !== "index") here.pathname += "/";
         return new URL("./", here.href).href;
       }
-      // KEEP-PREDICATE: a registration inside the Silvis folder that the reset must still keep. Today: one whose
-      // script (active, waiting or installing) is OneSignal's - unregistering it kills that push subscription.
-      // PROMPT 30 HOOK: Silvis's own push worker (sw.js, scope = the Silvis folder) must be kept here too, e.g.
-      //   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;
-      // comparing WITHOUT the query (sw.js?v=<APP_VERSION> must match too), or every update would drop this device's
-      // Silvis push subscription - and the planned silent re-arm would hide the loss. Silvis registers no worker
-      // today; data-layer XR's "silvis-push" fake (unregistered today) turns to kept with that change.
+      // KEEP-PREDICATE: a registration inside the Silvis folder that the reset must still keep. One whose script
+      // (active, waiting or installing) is OneSignal's - unregistering it kills that push subscription - and, since
+      // Prompt 30 (DONE, 10/2), Silvis's own push worker: <the Silvis folder>sw.js, compared WITHOUT the query or the
+      // fragment (sw.js?v=... is the same worker), or every update would drop this device's phone notifications (and
+      // the silent re-arm on start would only hide the loss). A sw.js in a SUBfolder of the app folder is not ours and
+      // still goes. data-layer XR's "silvis-push" fake is kept now.
       function keepRegistration(scriptURLs, silvisBase) {
         for (var i = 0; i < scriptURLs.length; i++) {
           if (/OneSignalSDK/i.test(scriptURLs[i])) return true;
+          if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker
         }
         return false;
       }
@@ -260,6 +260,9 @@
         }).catch(function(e) { console.warn("nukeAndReload: cache/service-worker clear failed - plain reload:", e); window.location.reload(true); });
       }
 
+      // Prompt 30: the app folder, for config.js pushDevice (the push worker's scope) - the same base the reset uses, exposed
+      // once and unconditionally (both branches below).
+      window.__silvisAppBase = silvisResetBase;
       if (mismatch) {
         localStorage.setItem("silvis-app-version", APP_VERSION);
         localStorage.removeItem("silvis_app_version");
@@ -961,6 +964,22 @@ function CallSchedule() {
   const followerSaveTimerRef = useRef(null);
   const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
+  // Prompt 30 (phone push, Faraz 10/2: "Davenport's look, Silvis's own push"): Settings > Notification settings > Phone
+  // notifications. pushInfo = config.js pushDevice.state() of this device (null until read); pushMsg = the card's message box
+  // (the flow words, Diagnose's line, the test's outcome); pushBusy = a button's flow is running ("Working..."); pushNeedsTap =
+  // the silent re-arm on start could not turn this device back on (the state line asks for a tap); pushCols = whether the two
+  // *_push columns exist (notifPrefsDb.pushColumns(): "ok" | "unavailable" | "failed" | "unknown") - the phone switches show
+  // only on "ok", and only then does a prefs save name them (pushColsRef: saveNotifPref is a []-memoized callback).
+  const [pushInfo, setPushInfo] = useState(null);
+  const [pushMsg, setPushMsg] = useState("");
+  const [pushBusy, setPushBusy] = useState("");
+  const [pushNeedsTap, setPushNeedsTap] = useState(false);
+  const [pushCols, setPushCols] = useState("unknown");
+  const pushColsRef = useRef("unknown");
+  const pushKeyRef = useRef(null);      // the server's public key, prefetched when the card opens ({ uid, key })
+  const pushArmedRef = useRef("");      // the account the start-up re-arm already ran for (once per account per page load)
+  const pushLinkDoneRef = useRef(false); // the ?tab= deep link is read once per page load
+  const [pushDay, setPushDay] = useState(null); // a deep link's / a notification tap's day, opened once the data is loaded
   // Review 9/27 Do first 6: the Alerts rows this account has seen on this device, { uid, ids } (helpers.notifPopupStep)
   const notifSeenRef = useRef(null);
 
@@ -1069,6 +1088,11 @@ function CallSchedule() {
       // review of Do first 8 (10/2): the previous account's Recent errors go too (names, override reasons, HTTP bodies) -
       // the in-place card is a sign-in without a sign-out
       setErrorLog([]); setShowErrorLog(false);
+      // Prompt 30: the previous account's phone notifications on this device stop - its subscription is unsubscribed locally
+      // (its token is dead, so its row cannot be deleted; the server drops it on the next 404 / 410) and other accounts'
+      // flags go. Fire and forget; the re-arm for the new account runs on its own.
+      pushDevice.dropForeign(user.id).catch(e => console.warn("push: dropping the previous account's subscription failed:", e));
+      setPushInfo(null); setPushMsg(""); setPushNeedsTap(false);
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -1239,6 +1263,11 @@ function CallSchedule() {
 
   const handleSignOut = async () => {
     clearWriteRetryTimers(); // review of Do first 2 (9/30): no write retry fires into the signed-out page
+    // Prompt 30 (Cowork 10/2 6:30 PM item 1): a signed-out phone must stop getting this person's schedule - while the session
+    // is still valid, this device's push row goes, THEN the browser's subscription (capped at 4 s; a failure never blocks
+    // the sign-out - the server drops a dead endpoint on its next 404 / 410).
+    if (authUser && authUser.id) { try { await pushDevice.teardown(authUser.id, 4000); } catch (e) { console.warn("push teardown at sign-out failed (signing out anyway):", e); } }
+    setPushInfo(null); setPushMsg(""); setPushNeedsTap(false); pushArmedRef.current = "";
     await auth.signOut();
     biometric.unenroll();
     setAuthUser(null); setUserProfile(null); setProfileLoadFailed(false);
@@ -1277,6 +1306,11 @@ function CallSchedule() {
     if (!pair) { setAuthMode("login"); return; }
     setAuthBusy(true); setAuthError("");
     setErrorLog([]); setShowErrorLog(false); // review of Do first 8 (10/2): a sign-out - the signed-in account's Recent errors go with it
+    // Prompt 30: the signed-in account's phone notifications on this device go first, while its session is still valid
+    // (handleSignOut's teardown; the account is the stored session's when the card was reached before a sign-in)
+    const pushUid = (authUser && authUser.id) || ((jwtClaims((auth.getSession() || {}).access_token || "") || {}).sub) || "";
+    if (pushUid) { try { await pushDevice.teardown(pushUid, 4000); } catch (e) { console.warn("push teardown before the link sign-out failed (signing out anyway):", e); } }
+    setPushInfo(null); setPushMsg(""); setPushNeedsTap(false); pushArmedRef.current = "";
     try { await auth.signOut(); biometric.unenroll(); await adoptLinkSession(pair); }
     catch (e) { console.warn("sign out for the link failed:", e); setAuthError(e.message || "Sign out failed"); }
     setAuthBusy(false);
@@ -3375,7 +3409,8 @@ function CallSchedule() {
       // '10/12 P Philip -> Fierce (by Khan)': the in-app note and the email share one composed text.
       const msg = manualEditMsg(lines.filter(l => / [PB] /.test(l)), userProfile?.display_name || nameOf(mySurgeon));
       addNotification("manual_edit", "Schedule changed", msg, { surgeon_id: after.primary || after.backup || before.primary || before.backup, day, affected });
-      sendEmailNotif("manual_edit", { message: msg, subject: "Schedule changed - " + fmtMD(day) }, affected);
+      // Prompt 30: `day` rides along so the phone notification opens the calendar on the edited day (the e-mail ignores it)
+      sendEmailNotif("manual_edit", { message: msg, subject: "Schedule changed - " + fmtMD(day), day }, affected);
     }
     return true;
   };
@@ -4411,8 +4446,9 @@ function CallSchedule() {
   };
 
   // --- In-app notifications ---
-  // Insert a row in the shared feed. No device push in this app (dropped with
-  // the Davenport push stack); email goes through sendEmailNotif separately.
+  // Insert a row in the shared feed. Email - and since Prompt 30 the phone
+  // notification (Web Push, Silvis's own sw.js) - go out server-side through
+  // sendEmailNotif's send-notification call, to the same people.
   const addNotification = useCallback(async (type, title, message, data = {}) => {
     try {
       const notif = { type, title, message, data, created_at: new Date().toISOString() };
@@ -4976,7 +5012,8 @@ function CallSchedule() {
     } catch(e) { console.warn("Couldn't persist notifications-cleared marker:", e); }
   }, []);
 
-  // Browser Notification API (in-app pop-up while the app is open; no push).
+  // Browser Notification API (in-app pop-up while the app is open; the phone notification - Web Push through sw.js, Prompt 30 -
+  // is the Phone notifications box's, sent server-side).
   // Answers true only when new Notification() succeeded (Prompt 16 B9 (d)): on an iPhone the page context has no
   // usable constructor (it throws) even with permission granted - that is not a sent notification.
   const sendBrowserNotif = useCallback((title, body, tag, forceShow) => {
@@ -5068,7 +5105,8 @@ function CallSchedule() {
       try {
         // on_conflict=person_id (Prompt 20 F1): the table's primary key moves to id in revision o; person_id stays UNIQUE.
         // The body names person_id and never profile_id (config.js notifPrefsDb.save / helpers.notifPrefSaveRequest, P20 R2).
-        const { error: prefErr } = await notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {});
+        // Prompt 30: the two *_push columns ride along only once they exist (pushColsRef "ok"); before that the body is unchanged
+        const { error: prefErr } = await notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok" });
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, { person_id: personId });
       } catch(e) { console.warn("Save notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
@@ -5091,7 +5129,7 @@ function CallSchedule() {
       followerSaveTimerRef.current = null;
       setNotifPrefsSaving(true);
       try {
-        const { error } = await notifPrefsDb.save({ profileId: pid }, followerPrefRef.current);
+        const { error } = await notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok" });
         if (error) throw new Error(`follower notif pref save failed: ${String(error).slice(0, 200)}`);
       } catch(e) { console.warn("Save follower notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
       setNotifPrefsSaving(false);
@@ -5129,6 +5167,7 @@ function CallSchedule() {
     }
     setTimeout(() => setNotifTestSent(""), 6000);
   }, [sendBrowserNotif, sendEmailNotif, mySurgeon, browserNotifPermission]);
+
 
   // --- Office Contact Handlers (office_contacts: name, email, role, active) ---
   const addOfficeContact = async () => {
@@ -5517,6 +5556,108 @@ function CallSchedule() {
   const [restoreBusyId, setRestoreBusyId] = useState(null);
   const [openSettingsCards, setOpenSettingsCards] = useState({});
   const toggleSettingsCard = (key) => setOpenSettingsCards(p => ({ ...p, [key]: !p[key] }));
+  // --- Phone notifications (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push") ---
+  // Web Push with VAPID through Silvis's own worker (sw.js, the app folder) and send-notification's server-side fan-out
+  // (same events, same people as the e-mails; each person's *_push switches decide for every device he turned on).
+  // config.js pushDevice / pushDb do the I/O; nothing here ever sees, stores or shows an endpoint or a key.
+  const pushUid = authUser && authUser.id ? String(authUser.id) : "";
+  const refreshPushState = useCallback(async (uid) => {
+    if (!uid) { setPushInfo(null); return null; }
+    const s = await pushDevice.state(uid);
+    setPushInfo(s);
+    if (s.state === "on") setPushNeedsTap(false);
+    return s;
+  }, []);
+  // Re-arm on start (Cowork 10/2 7:25 PM): once per account per page load, after the profile read for THIS account. Never a
+  // prompt: permission not granted -> no call at all (the card shows Off / Blocked); see config.js pushDevice.rearm.
+  useEffect(() => {
+    if (isPublicMode || !pushUid || !userProfile || String(userProfile.id) !== pushUid) return;
+    if (pushArmedRef.current === pushUid) return;
+    pushArmedRef.current = pushUid;
+    const uid = pushUid;
+    pushDevice.rearm(uid, pushDevice.label()).then((r) => {
+      if (pushArmedRef.current !== uid) return; // signed out / switched meanwhile
+      if (r && r.action === "needs-tap") setPushNeedsTap(true);
+      if (r && r.action && r.action !== "none" && r.action !== "skipped" && r.action !== "off-permission") console.info("phone notifications on start:", r.action);
+      refreshPushState(uid);
+    }).catch((e) => console.warn("phone notifications: the start-up check failed:", e));
+  }, [isPublicMode, pushUid, userProfile, refreshPushState]);
+  // A different account: its own column probe (the answer is per database, but a failed probe must not stick to the next account)
+  useEffect(() => { pushColsRef.current = "unknown"; setPushCols("unknown"); }, [pushUid]);
+  // The card: its state on every open, the server's public key prefetched (the Enable tap then awaits nothing before the
+  // permission prompt but what it must), and whether the two *_push columns exist (once per account; a failed probe retries).
+  const pushCardOpen = view === "settings" && !isPublicMode && !!pushUid && !!openSettingsCards.notifSettings;
+  useEffect(() => {
+    if (!pushCardOpen) return;
+    const uid = pushUid;
+    refreshPushState(uid);
+    if (!pushKeyRef.current || pushKeyRef.current.uid !== uid) {
+      pushKeyRef.current = { uid, key: null };
+      pushDb.publicKey().then((k) => { if (pushKeyRef.current && pushKeyRef.current.uid === uid) pushKeyRef.current.key = k.state === "ok" ? k.key : null; });
+    }
+    if (pushColsRef.current !== "ok" && pushColsRef.current !== "unavailable") {
+      notifPrefsDb.pushColumns().then((c) => { pushColsRef.current = c; setPushCols(c); });
+    }
+  }, [pushCardOpen, pushUid, refreshPushState]);
+  // The tap target (helpers.pushDeepLink): ./?tab=<view>[&day=] - read ONCE per page load once signed in, the keys stripped
+  // from the URL (history.replaceState; _v and the rest kept) so a refresh does not repeat it; a day opens when the data is
+  // loaded (goToDay - its own unread-schedule refusal applies). Nothing on ?public=1.
+  useEffect(() => {
+    if (isPublicMode || !pushUid || pushLinkDoneRef.current) return;
+    pushLinkDoneRef.current = true;
+    const r = pushDeepLink(window.location.search);
+    if (r.strip) { try { window.history.replaceState(null, "", window.location.pathname + r.search + window.location.hash); } catch (e) { console.warn("could not drop the notification link from the URL:", e); } }
+    if (r.tab) setView(r.tab);
+    if (r.day) setPushDay({ day: r.day, at: Date.now() });
+  }, [isPublicMode, pushUid]);
+  // An app window that is already open: sw.js focuses it and posts { type: "silvis-push-open", tab, day } - switched in place,
+  // no reload (an unsaved day edit survives).
+  useEffect(() => {
+    if (isPublicMode || !pushUid) return;
+    const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : null;
+    if (!sw || typeof sw.addEventListener !== "function") return;
+    const onMsg = (e) => {
+      const r = pushOpenMessage(e && e.data);
+      if (!r) return;
+      setView(r.tab);
+      if (r.day) setPushDay({ day: r.day, at: Date.now() });
+    };
+    sw.addEventListener("message", onMsg);
+    return () => sw.removeEventListener("message", onMsg);
+  }, [isPublicMode, pushUid]);
+  useEffect(() => {
+    if (!loaded || !pushDay) return;
+    const d = pushDay.day;
+    setPushDay(null);
+    goToDay(d);
+  }, [loaded, pushDay]);
+  // The account's name as the Account card says it ("Subscribed (as <name>).", Diagnose's "Signed in as")
+  const pushName = () => {
+    if (mySurgeon) return nameOf(mySurgeon);
+    if (userProfile && userProfile.display_name) return userProfile.display_name;
+    return isApp ? "an APP account" : isViewer ? "a read-only account" : "an unlinked account";
+  };
+  // One flow at a time; pushBusy names the button that runs it (its label reads "Working...").
+  const pushRun = async (name, fn) => {
+    if (pushBusy || !pushUid) return;
+    setPushBusy(name);
+    try { await fn(pushUid); }
+    catch (e) { console.warn("phone notifications:", e); setPushMsg("Something went wrong - reload the app and try again."); }
+    finally { setPushBusy(""); refreshPushState(pushUid); }
+  };
+  // Enable - Davenport's requestPushPermission (config.js pushDevice.enable: the permission prompt is its FIRST await).
+  const pushEnable = () => pushRun("enable", async (uid) => {
+    setPushMsg("Asking for permission...");
+    const k = pushKeyRef.current && pushKeyRef.current.uid === uid ? pushKeyRef.current.key : null;
+    const r = await pushDevice.enable(uid, pushDevice.label(), { key: k, name: pushName() });
+    if (r.permission) setBrowserNotifPermission(r.permission); // the Pop-ups box reads the same per-origin permission
+    if (r.step === "done") setPushNeedsTap(false);
+    setPushMsg(r.message);
+  });
+  const pushTurnOff = () => pushRun("disable", async (uid) => { const r = await pushDevice.disable(uid); setPushNeedsTap(false); setPushMsg(r.message); });
+  const pushReset = () => pushRun("reset", async (uid) => { const r = await pushDevice.reset(uid); setPushNeedsTap(false); setPushMsg(r.message); });
+  const pushDiagnose = () => pushRun("diagnose", async (uid) => { setPushMsg(await pushDevice.diagnose(uid, pushName())); });
+  const pushSendTest = () => pushRun("test", async () => { setPushMsg(pushTestWords(await pushDb.sendTest())); });
   const loadSnapshots = async () => {
     setSnapshotsLoading(true);
     try {
@@ -8159,6 +8300,54 @@ function CallSchedule() {
               <span>Notification settings</span>
             </div>
             {openSettingsCards.notifSettings && <>
+              {/* Prompt 30 (Faraz 10/2: "Davenport's look, Silvis's own push"): Phone notifications - every signed-in role.
+                  Davenport's card (a badge, one line, Enable / Diagnose / Reset subscription / Send test, a monospace message
+                  box) plus Turn off, the per-origin Blocked wording and the per-category phone switches. Web Push through
+                  Silvis's own sw.js; the words are helpers.pushStateWords / pushTestWords / pushDiagLine's. */}
+              {(() => {
+                const info = pushInfo;
+                const st = info ? info.state : null;
+                const words = st ? pushStateWords(st, { hostname: info.hostname, label: info.label, ios: info.ios, device: info.device, needsTap: pushNeedsTap }) : null;
+                const pbtn = (testid, name, label, onClick, primary) => (
+                  <button data-testid={testid} onClick={onClick} disabled={!!pushBusy} style={{...css.btn(!!primary),padding:"5px 12px",fontSize:11,opacity:pushBusy && pushBusy !== name ? 0.6 : 1}}>{pushBusy === name ? "Working..." : label}</button>
+                );
+                const pushRows = (rows, cur, editable, onSave) => rows.map(([key, text]) => (
+                  <label key={key} data-testid="push-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:editable?"pointer":"default",fontSize:12,color:T.text,opacity:editable?1:0.6}}>
+                    <input type="checkbox" checked={(cur || {})[key] !== false} disabled={!editable} onChange={e=>onSave({[key]:e.target.checked})}/> {text}
+                  </label>
+                ));
+                return (
+                  <div data-testid="push-card" style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+                      <span style={{fontSize:12,fontWeight:600,color:dkText}}>Phone notifications</span>
+                      {words && words.badge && <span data-testid="push-badge" data-state={st} style={{fontSize:11,fontWeight:600,color:st === "on" ? T.success : T.open}}>{words.badge}</span>}
+                    </div>
+                    <p data-testid="push-line" style={{fontSize:11,color:dkSubtext,margin:"0 0 6px",lineHeight:1.5}}>{"Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."}</p>
+                    <p data-testid="push-state" data-state={st || "loading"} style={{fontSize:12,color:st === "blocked" ? T.open : T.text,margin:"0 0 8px",lineHeight:1.5}}>{words ? words.line : "Checking this device..."}</p>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                      {(st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable", pushEnable, true)}
+                      {st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false)}
+                      {pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false)}
+                      {pbtn("push-reset", "reset", "Reset subscription", pushReset, false)}
+                      {pbtn("push-test", "test", "Send test", pushSendTest, false)}
+                    </div>
+                    {pushMsg && <div data-testid="push-msg" role="status" style={{marginTop:8,padding:"6px 10px",background:dk?"#0f1e30":"#eef3f8",border:`1px solid ${dkCardBorder}`,borderRadius:6,fontSize:11,color:dkText,lineHeight:1.5,fontFamily:mono,wordBreak:"break-word"}}>{pushMsg}</div>}
+                    <div style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${dkCardBorder}`}}>
+                      <div style={{fontSize:11,fontWeight:600,color:dkText,marginBottom:6}}>Which events reach your phones</div>
+                      {pushCols === "unknown" ? <span style={{fontSize:11,color:T.muted}}>Checking...</span>
+                        : pushCols !== "ok" ? <div data-testid="push-prefs-unavailable" data-state={pushCols} style={{fontSize:11,color:dkSubtext,lineHeight:1.5}}>{pushCols === "unavailable" ? "Phone switches are available after the next update." : "Couldn't check the phone switches - reload the app to try again."}</div>
+                        : (mySurgeon || isFollowing) ? <>
+                          <div data-testid="push-prefs" data-owner={mySurgeon ? "person" : "follower"} style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {mySurgeon
+                              ? pushRows([["schedule_updates_push","Schedule published, open shifts, changes affecting me"],["trade_updates_push","Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, (u) => saveNotifPref(mySurgeon, u))
+                              : pushRows([["schedule_updates_push","Schedule published, open shifts, shifts taken"],["trade_updates_push","Trade proposed / accepted / declined"]], followerPref, followerPrefsEditable, saveFollowerPref)}
+                          </div>
+                          <p style={{fontSize:10,color:dkSubtext,margin:"6px 0 0",lineHeight:1.5}}>These cover every device you turned on. Reminders stay e-mail only for now.</p>
+                        </> : <p data-testid="push-prefs-none" style={{fontSize:11,color:dkSubtext,margin:0,lineHeight:1.5}}>{"Only your own tests reach this account's phones - phone notifications follow a roster link or the surgeons you follow."}</p>}
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:12}}>
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
                 {/* Only a linked surgeon gets this line; a follower's intro says where his e-mails go, and an unlinked
