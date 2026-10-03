@@ -205,7 +205,12 @@
 //     editor footer, PREVIEW tag fits, trade selects fit, no '[object
 //     Object]' in the Generate score); a second page with version.json newer
 //     than APP_VERSION + client_versions.main.min_version above it asserts
-//     both refresh banners and that their buttons call __silvisHardReset; a
+//     both refresh banners and that their buttons call __silvisHardReset (the
+//     cross-app reset step, 10/2: with the app served under
+//     /Silvis-Call-Schedule/, the version-change reset and __silvisHardReset
+//     unregister only the app-folder worker - the origin-root one, a
+//     Silvis-scoped OneSignal one and a prefix-sharing sibling survive - and
+//     delete only the silvis- cache); a
 //     third page runs data management end to end with recorded writes: JSON
 //     export shape/counts = live anon data, malformed imports refused with no
 //     write, factory reset needs the typed RESET, records the snapshot BEFORE
@@ -620,8 +625,16 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 // worker's importScripts fetch rules.js a second time, which the B9a step reads as proof the worker ran.
 const servedCache = new Map();
 const servedHits = new Map();
+// Cross-app reset step (10/2): the app is ALSO served under its live folder /Silvis-Call-Schedule/ (the prefix is stripped),
+// so the origin root is a PARENT of the Silvis base as on fkhan628.github.io; and any path ending in /xr-sw.js or
+// /OneSignalSDKWorker.js answers a do-nothing service worker (no fetch handler - it never sees a request), so that step
+// can register workers at the origin root, inside the app folder and in a sibling folder. Silvis itself has neither file.
+const XR_APP_PREFIX = "/Silvis-Call-Schedule/";
+const XR_WORKER_JS = "// smoke harness: a do-nothing service worker (no fetch handler)\nself.addEventListener('install', function () { self.skipWaiting(); });\n";
 const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  if (/\/(xr-sw|OneSignalSDKWorker)\.js$/.test(urlPath)) { res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" }); res.end(XR_WORKER_JS); return; }
+  if (urlPath.startsWith(XR_APP_PREFIX)) urlPath = "/" + urlPath.slice(XR_APP_PREFIX.length);
   const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
   const file = path.join(ROOT, rel);
   if (!servedCache.has(file)) {
@@ -11773,6 +11786,85 @@ try {
     } catch (e) { fail("refresh banners: " + errLine(e)); try { await p2.screenshot({ path: path.join(OUT, "failure-refresh.png"), fullPage: true }); } catch (e2) {} }
     minVersionOverride = null;
     await p2.close();
+  }
+
+  // ====================== Cross-app update reset (Cowork 10/2 6:45 PM): a Silvis update never unregisters another app's worker ======================
+  // fkhan628.github.io also serves Davenport, whose OneSignal push worker sits at the origin root. In a context of its own
+  // the app is opened under its live folder (/Silvis-Call-Schedule/ on this server - the origin root is its PARENT), four
+  // do-nothing workers are registered (the origin root; the app folder; a OneSignal script inside the app folder; the
+  // prefix-sharing sibling /Silvis-Call-Schedule-old/) and four caches opened (OneSignal-, dsg-, workbox-, silvis-). The
+  // version-change path (an older silvis-app-version, then a reload) must leave the root, the Silvis-scoped OneSignal one and
+  // the sibling registered and only the app-folder worker gone, delete only the silvis- cache, and reload with _v. Then the
+  // Refresh path (window.__silvisHardReset) on a re-registered app-folder worker does the same. The page is not watched:
+  // the reset reloads while the mount's reads may be in flight (their aborts are not this step's subject); every Supabase
+  // request is answered 200 [] locally and recorded nowhere (the page is signed out; no sweep counts it).
+  {
+    const xrCtx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+    let xr = null;
+    try {
+      await xrCtx.route(cdnMatcher, routeCdn);
+      await xrCtx.route((url) => url.hostname === EAST_HOST, routeEast);
+      await xrCtx.route((url) => url.hostname === SUPABASE_HOST, (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: "[]" }));
+      await xrCtx.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      xr = await xrCtx.newPage();
+      const xrErrors = []; xr.on("pageerror", (e) => xrErrors.push(String(e && e.message || e)));
+      const XR_BASE = `${BASE}Silvis-Call-Schedule/`;
+      const xrRegister = (list) => xr.evaluate(async (list) => {
+        const active = (r) => new Promise((res) => {
+          const w = r.installing || r.waiting;
+          if (!w) return res(!!r.active);
+          if (w.state === "activated") return res(true);
+          const t = setTimeout(() => res(!!r.active), 8000);
+          w.addEventListener("statechange", () => { if (w.state === "activated") { clearTimeout(t); res(true); } });
+        });
+        const out = [];
+        for (const [script, scope] of list) { const r = await navigator.serviceWorker.register(script, { scope }); out.push(r.scope + (await active(r) ? "" : " (not active)")); }
+        return out;
+      }, list);
+      const xrState = () => xr.evaluate(async () => ({
+        regs: (await navigator.serviceWorker.getRegistrations()).map(r => r.scope + " <- " + ((r.active || r.waiting || r.installing || {}).scriptURL || "?").replace(location.origin, "")).sort(),
+        caches: (await caches.keys()).sort(),
+        href: location.href,
+        stored: localStorage.getItem("silvis-app-version"),
+      }));
+      const ROOT_REG = `${BASE} <- /xr-sw.js`, APP_REG = `${XR_BASE} <- /Silvis-Call-Schedule/xr-sw.js`, OS_REG = `${XR_BASE}os/ <- /Silvis-Call-Schedule/os/OneSignalSDKWorker.js`, SIB_REG = `${BASE}Silvis-Call-Schedule-old/ <- /Silvis-Call-Schedule-old/xr-sw.js`;
+      const KEPT = [ROOT_REG, OS_REG, SIB_REG].sort();
+      const OTHER_CACHES = ["OneSignal-xr", "dsg-xr", "workbox-precache-v2-xr"];
+      await xr.goto(XR_BASE, { waitUntil: "domcontentloaded" });
+      await xr.waitForFunction(() => typeof window.__silvisHardReset === "function", null, { timeout: 15000 });
+      const made = await xrRegister([["/xr-sw.js", "/"], ["/Silvis-Call-Schedule/xr-sw.js", "/Silvis-Call-Schedule/"], ["/Silvis-Call-Schedule/os/OneSignalSDKWorker.js", "/Silvis-Call-Schedule/os/"], ["/Silvis-Call-Schedule-old/xr-sw.js", "/Silvis-Call-Schedule-old/"]]);
+      await xr.evaluate(async (names) => { for (const n of names) await caches.open(n); }, [...OTHER_CACHES, "silvis-xr"]);
+      const before = await xrState();
+      if (made.some(m => /not active/.test(m)) || JSON.stringify(before.regs) !== JSON.stringify([...KEPT, APP_REG].sort()) || before.caches.length !== 4) {
+        fail(`cross-app reset: the setup did not take - registered ${JSON.stringify(made)}; getRegistrations ${JSON.stringify(before.regs)}; caches ${JSON.stringify(before.caches)}`);
+      } else {
+        // the version-change path: an older stored version, then a reload - the head script resets and replaces the URL
+        await xr.evaluate(() => { localStorage.setItem("silvis-app-version", "2000.01.01a"); setTimeout(() => location.reload(), 0); });
+        await xr.waitForURL((u) => /[?&]_v=/.test(u.href), { timeout: 20000, waitUntil: "domcontentloaded" });
+        await xr.waitForFunction(() => typeof window.__silvisHardReset === "function", null, { timeout: 15000 });
+        let after = await xrState();
+        await waitFor(async () => { after = await xrState(); return !after.regs.includes(APP_REG); }, 5000, 200);
+        const u1 = new URL(after.href);
+        if (JSON.stringify(after.regs) !== JSON.stringify(KEPT)) fail(`cross-app reset (version change): registrations after the reset ${JSON.stringify(after.regs)} - want the root, the Silvis-scoped OneSignal one and the sibling kept, the app-folder worker gone`);
+        else if (JSON.stringify(after.caches) !== JSON.stringify(OTHER_CACHES.slice().sort())) fail(`cross-app reset (version change): caches after the reset ${JSON.stringify(after.caches)} - want ${JSON.stringify(OTHER_CACHES)} kept and silvis-xr deleted`);
+        else if (u1.pathname !== "/Silvis-Call-Schedule/" || !(u1.searchParams.get("_v") || "").startsWith(APP_VERSION + "-") || after.stored !== APP_VERSION) fail(`cross-app reset (version change): reload ${after.href}, stored version ${after.stored}`);
+        else ok(`cross-app reset (version change, served under /Silvis-Call-Schedule/): the origin-root worker, the Silvis-scoped OneSignal worker and /Silvis-Call-Schedule-old/ stay registered, the app-folder worker is gone; caches ${OTHER_CACHES.join(" / ")} kept, silvis-xr deleted; reloaded to ${u1.pathname}?_v=${u1.searchParams.get("_v")}`);
+        // the Refresh path: window.__silvisHardReset on a re-registered app-folder worker and a new silvis- cache
+        const again = await xrRegister([["/Silvis-Call-Schedule/xr-sw.js", "/Silvis-Call-Schedule/"]]);
+        await xr.evaluate(() => caches.open("silvis-xr2"));
+        const hrefBefore = xr.url();
+        await xr.evaluate(() => { setTimeout(() => window.__silvisHardReset(), 0); });
+        await xr.waitForURL((u) => u.href !== hrefBefore && /[?&]_v=/.test(u.href), { timeout: 20000, waitUntil: "domcontentloaded" });
+        await xr.waitForFunction(() => typeof window.__silvisHardReset === "function", null, { timeout: 15000 });
+        let after2 = await xrState();
+        await waitFor(async () => { after2 = await xrState(); return !after2.regs.includes(APP_REG); }, 5000, 200);
+        if (/not active/.test(again[0] || "not active")) fail("cross-app reset (Refresh): the re-registered app-folder worker never activated: " + JSON.stringify(again));
+        else if (JSON.stringify(after2.regs) !== JSON.stringify(KEPT) || JSON.stringify(after2.caches) !== JSON.stringify(OTHER_CACHES.slice().sort())) fail(`cross-app reset (Refresh): after __silvisHardReset registrations ${JSON.stringify(after2.regs)}, caches ${JSON.stringify(after2.caches)}`);
+        else ok("cross-app reset (Refresh, window.__silvisHardReset): the re-registered app-folder worker and silvis-xr2 are gone; the root, Silvis-scoped OneSignal and sibling workers and the OneSignal / dsg / workbox caches remain");
+      }
+      if (xrErrors.length) fail("cross-app reset page errors: " + xrErrors.slice(0, 5).join(" | "));
+    } catch (e) { fail("cross-app reset: " + errLine(e)); try { if (xr) await xr.screenshot({ path: path.join(OUT, "failure-cross-app-reset.png"), fullPage: true }); } catch (e2) {} }
+    await xrCtx.close();
   }
 
   // ====================== Review 9/27 Do first 1 (9/28): the first schedule_days read fails -> "Schedule not loaded" + Retry ======================

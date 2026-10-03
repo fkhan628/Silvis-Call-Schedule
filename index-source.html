@@ -182,19 +182,76 @@
       var stored = localStorage.getItem("silvis-app-version") || localStorage.getItem("silvis_app_version");
       var mismatch = stored && stored !== APP_VERSION;
 
+      // nukeAndReload - the update reset. Every version change runs it, and so do the Refresh buttons
+      // (window.__silvisHardReset, below - one code path). Cross-app fix (10/2): caches.keys() and
+      // getRegistrations() cover the whole ORIGIN (https://fkhan628.github.io), the Davenport app included, and the
+      // old reset deleted every cache and unregistered every worker there - Davenport's OneSignal push worker at the
+      // origin root among them, which drops that browser's Davenport push subscription. It now touches only Silvis's own:
+      //  - a worker is unregistered only when its scope lies INSIDE the Silvis folder (silvisResetBase) and
+      //    keepRegistration does not keep it. The origin root is a parent of the folder, not inside it, so a root
+      //    worker (Davenport's OneSignal) is never touched; a sibling folder that only shares the letters
+      //    (/Silvis-Call-Schedule-old/) is not inside it either - the base ends in "/".
+      //  - a cache is deleted only when its name starts with "silvis-" (the prefix of every Silvis localStorage key;
+      //    Davenport's are dsg-). Silvis creates no cache today, so nothing is deleted until a Silvis worker caches
+      //    under that prefix - never OneSignal..., dsg-... or workbox-... caches.
+      // The reload is unchanged: the unique _v param, the plain-reload fallback, the console.warn. Review 10/2: a
+      // synchronous throw now takes that fallback too, and a clear that never settles reloads (with _v) after 3 s.
+      function silvisResetBase() {
+        // The page's own folder, from location (GitHub Pages: .../Silvis-Call-Schedule/; a local or preview host:
+        // wherever index.html is served), always ending in "/". A last path segment without a dot is read as a
+        // folder that lost its trailing slash (Pages redirects to the slash; a preview host may not) - this only
+        // ever narrows the base, never widens it to the origin root above the folder. "index" is the exception:
+        // Pages also serves index.html at the extensionless .../index, a file in the folder, not a folder.
+        var here = new URL(window.location.href);
+        var last = here.pathname.split("/").pop();
+        if (last && last.indexOf(".") < 0 && last !== "index") here.pathname += "/";
+        return new URL("./", here.href).href;
+      }
+      // KEEP-PREDICATE: a registration inside the Silvis folder that the reset must still keep. Today: one whose
+      // script (active, waiting or installing) is OneSignal's - unregistering it kills that push subscription.
+      // PROMPT 30 HOOK: Silvis's own push worker (sw.js, scope = the Silvis folder) must be kept here too, e.g.
+      //   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;
+      // comparing WITHOUT the query (sw.js?v=<APP_VERSION> must match too), or every update would drop this device's
+      // Silvis push subscription - and the planned silent re-arm would hide the loss. Silvis registers no worker
+      // today; data-layer XR's "silvis-push" fake (unregistered today) turns to kept with that change.
+      function keepRegistration(scriptURLs, silvisBase) {
+        for (var i = 0; i < scriptURLs.length; i++) {
+          if (/OneSignalSDK/i.test(scriptURLs[i])) return true;
+        }
+        return false;
+      }
+      function resetUnregisters(r, silvisBase) {
+        var scope = String((r && r.scope) || "");
+        if (scope.indexOf(silvisBase) !== 0) return false; // outside the Silvis folder: another app's worker
+        var scriptURLs = [];
+        [r.active, r.waiting, r.installing].forEach(function(w) { if (w && w.scriptURL) scriptURLs.push(String(w.scriptURL)); });
+        return !keepRegistration(scriptURLs, silvisBase);
+      }
+
       function nukeAndReload() {
-        var promises = [];
-        if (window.caches) {
-          promises.push(caches.keys().then(function(names) {
-            return Promise.all(names.map(function(n) { return caches.delete(n); }));
-          }));
-        }
-        if (navigator.serviceWorker) {
-          promises.push(navigator.serviceWorker.getRegistrations().then(function(regs) {
-            return Promise.all(regs.map(function(r) { return r.unregister(); }));
-          }));
-        }
-        Promise.all(promises).then(function() {
+        // Both legs start inside a .then, so a synchronous throw (navigator.serviceWorker or caches refused in this
+        // context, getRegistrations() / caches.keys() throwing) is a rejection that takes the plain-reload fallback,
+        // instead of escaping a Refresh button's click with no reload at all.
+        var cleared = Promise.resolve().then(function() {
+          var promises = [];
+          if (window.caches) {
+            promises.push(caches.keys().then(function(names) {
+              return Promise.all(names.filter(function(n) { return String(n).indexOf("silvis-") === 0; }).map(function(n) { return caches.delete(n); }));
+            }));
+          }
+          if (navigator.serviceWorker) {
+            promises.push(navigator.serviceWorker.getRegistrations().then(function(regs) {
+              var silvisBase = silvisResetBase();
+              return Promise.all(regs.filter(function(r) { return resetUnregisters(r, silvisBase); }).map(function(r) { return r.unregister(); }));
+            }));
+          }
+          return Promise.all(promises).then(function() { return true; });
+        });
+        // A clear that never settles (a hung storage backend) must not leave the page un-reloaded: after 3 s the _v
+        // reload goes ahead anyway (an unregister already under way still completes in the browser).
+        var waited = new Promise(function(resolve) { setTimeout(function() { resolve(false); }, 3000); });
+        Promise.race([cleared, waited]).then(function(done) {
+          if (!done) console.warn("nukeAndReload: cache/service-worker clear did not finish in 3 s - reloading anyway");
           var url = new URL(window.location.href);
           // Unique per reload: reusing the bare APP_VERSION could hit the very
           // cache entry that served THIS (stale) build within max-age.
