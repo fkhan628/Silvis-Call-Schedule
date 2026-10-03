@@ -21,7 +21,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
-| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. |
+| `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03, NOT APPLIED - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). |
 | `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
@@ -32,6 +32,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 | `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
+| `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, NOT APPLIED - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. |
 
 Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
 
@@ -46,7 +47,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `user_profiles` | authenticated | self-insert as `viewer` with **no `person_id`**; self-update may not change `role` or `person_id`; admin: everything. Prompt 20 F1 (applied 2026-09-27): self-insert and self-update pin `follows` too (only the admin sets it) - Prompt 29 (applied 2026-10-02 19:19 UTC): self-insert and self-update pin `is_app` too (only the admin marks an APP account) |
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
-| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()` |
+| `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()`; Prompt 30 (prepared 2026-10-03, NOT APPLIED): the two `*_push` columns ride on the same row and policy |
 | `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (applied 2026-09-27 00:49:39Z, after the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none (an APP's `appdays.save` rows are written by the definer `save_app_days`, Prompt 29 - not through an insert policy) |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
@@ -56,6 +57,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `call_pay_settings` - applied 2026-09-28, call pay 9/27 | scheduler/admin; the office coordinator (read-only, 9/27 item 5a); a surgeon-role account linked to a roster id that is paid by the call stipend (`silvis_pay_enabled`, item 5b); never a switched-off surgeon / viewer / follower / anon (anon privileges revoked) | scheduler/admin (all verbs) |
 | `call_pay_logs` - applied 2026-09-28, call pay 9/27 | scheduler/admin and the office coordinator every row (a switched-off surgeon's earlier rows included); a surgeon-role account his own rows while switched on (`person_id = silvis_person_id() and silvis_pay_enabled(person_id)`); nobody else (anon privileges revoked) | insert/update/delete: scheduler/admin, and that surgeon his own rows while switched on - never the coordinator; `call_pay_logs_guard` (PY004 office, PY005 switched off, PY001-PY003) applies to every caller, the scheduler included |
 | `app_call_days` - applied 2026-10-02 19:19 UTC | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest) |
+| `push_subscriptions` - prepared 2026-10-03, NOT APPLIED | its own rows only (`push_subscriptions_own_read`: `profile_id = auth.uid()`), the non-secret columns only (`id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count` - a column grant; never `endpoint` / `p256dh` / `auth`); never anon (no anon policy, anon privileges revoked); the scheduler sees only his own devices too | insert / update: none directly (no privilege) - `save_push_subscription()` (security definer: `PS001`-`PS007`); delete: its own rows (`push_subscriptions_own_delete`); the service role (the edge function) keeps the bookkeeping and removes 404 / 410 rows |
 
 ## (c) Findings
 
@@ -2943,3 +2945,299 @@ verify-rls section 18 strict by default with `SILVIS_APP_DAYS_APPLIED` dropped, 
 days row, ONBOARDING, CLAUDE.md, `config.js`'s APP block comment, and the test pins with them. Not re-run against the live
 project after the record step (the record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grades section 18
 strictly with no flag.
+
+## 2026-10-03 - phone push: push_subscriptions + save_push_subscription / delete_push_subscription / push_subscription_status + notification_preferences *_push (Faraz 10/2, Prompt 30; `sql/migrations/2026-10-03-push-notifications.sql`)
+
+**Status: PREPARED - report-first, NOT APPLIED.**
+
+Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the
+send-notification deploy (edge-functions/README.md) - in that order, each pasted back; the client ships after all three, on his go.
+
+**Why.** Fierce's trade request reached his e-mail but nothing showed on his phone: the app had no push (e-mail, the in-app bell
+and pop-ups only while the app is open on a computer). Faraz 10/2 6:40 PM: **"Davenport's look, Silvis's own push"** - copy the
+Davenport app's user-facing pattern (the Settings card, Enable / Diagnose / Reset / Send test, tap-to-open, per-type switches)
+but keep Silvis's own Web Push transport: VAPID keys, `sw.js` scoped to the app folder, this subscription table and the
+send-notification fan-out. No OneSignal (two OneSignal apps on one origin conflict); the Davenport repo, its OneSignal app and
+the user-site root worker are never touched. This migration is the database half: where each device's subscription is kept and
+the two per-category switches.
+
+| object | before | after |
+|---|---|---|
+| `notification_preferences.trade_updates_push`, `.schedule_updates_push` | - | new columns `boolean not null default true` (mirroring the `*_email` columns and Davenport's `*_push` naming; a missing row or key = on; independent of the e-mail switches); a column comment each |
+| `push_subscriptions` | - | new table, one row per device that turned phone notifications on (`id`, `profile_id` -> `user_profiles` on delete cascade, `endpoint` unique, `p256dh`, `auth`, `device_label`, `created_at`, `last_ok_at`, `last_error_at`, `fail_count`); five shape checks; RLS on; own read / own delete for authenticated; anon nothing |
+| `save_push_subscription(p_endpoint text, p_p256dh text, p_auth text, p_label text default null)` | - | new function: `language plpgsql volatile security definer set search_path = public, pg_temp`; the ONLY write path; `PS001`-`PS007`; writes the `push.save` audit row; returns `{ok, action: added \| kept \| refreshed \| moved, devices, audit}` |
+| `delete_push_subscription(p_endpoint text)` | - | new function, same attributes; removes the caller's own row for that endpoint; `PS001`; writes the `push.delete` audit row; returns `{ok, removed, devices, audit}` |
+| `push_subscription_status(p_endpoint text)` | - | new function, same attributes; `PS001`; returns `{ok, saved, devices}` (Settings > Diagnose, the start-up ownership check) |
+| `prefs_own`, every other policy, function, trigger and row, the anon `read_all` loop, the realtime publication | - | **unchanged** |
+| PostgREST schema cache | - | the migration ends with `notify pgrst, 'reload schema';` (verify-rls 19b-19e prove it before the client push) |
+
+**Blast radius.** One new table nobody else reads (no anon surface, not in the realtime publication - live 10/2
+`publication=yes all_tables=no`, which the pre-check re-reads and the apply script stops on if it turned `all_tables=yes`);
+two `NOT NULL DEFAULT true` columns on `notification_preferences` (constant defaults: no table rewrite; every existing row - a
+surgeon's by `person_id`, a follower's by `profile_id` - reads on; an upsert without the keys takes the defaults, so today's
+client is unaffected and no one is opted out); three new functions. No existing policy, function, trigger or anon surface
+changes. Independent of the weekend pair claim (revision `u`, prepared on its own branch) - no shared object, either apply order.
+The edge function (send-notification with the push fan-out) reads a missing table as `push.error` and keeps mailing; the client
+reads a missing table / function / column as "unavailable", never as "off". **What could break:** nothing that exists reads the
+new objects; the one path that writes `notification_preferences` (the client's prefs upsert) sends no `*_push` key until the
+Prompt 30 client ships (the client lane's `opts.push`).
+
+**The table and its RLS** (the migration, verbatim; in `sql/schema.sql` the enable line sits in the RLS list and the privileges and
+policies at the end of the policy section):
+
+```sql
+create table if not exists public.push_subscriptions (
+  id             uuid primary key default gen_random_uuid(),
+  profile_id     uuid not null references public.user_profiles(id) on delete cascade,
+  endpoint       text not null,
+  p256dh         text not null,
+  auth           text not null,
+  device_label   text,
+  created_at     timestamptz not null default now(),
+  last_ok_at     timestamptz,
+  last_error_at  timestamptz,
+  fail_count     integer not null default 0,
+  constraint push_subscriptions_endpoint_key unique (endpoint),
+  constraint push_subscriptions_endpoint_shape check (length(endpoint) <= 2048 and endpoint ~ '^https://([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)/[!-~]*$'),
+  constraint push_subscriptions_p256dh_shape check (p256dh ~ '^B[A-Za-z0-9_-]{86}$'),
+  constraint push_subscriptions_auth_shape check (auth ~ '^[A-Za-z0-9_-]{22}$'),
+  constraint push_subscriptions_label_shape check (device_label is null or device_label ~ '^[A-Za-z0-9 .()/-]{1,40}$'),
+  constraint push_subscriptions_fail_count_check check (fail_count >= 0)
+);
+create index if not exists push_subscriptions_profile_idx on public.push_subscriptions (profile_id);
+alter table public.push_subscriptions enable row level security;
+revoke all on table public.push_subscriptions from public;
+revoke all on table public.push_subscriptions from anon;
+revoke all on table public.push_subscriptions from authenticated;
+grant select (id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count) on table public.push_subscriptions to authenticated;
+grant delete on table public.push_subscriptions to authenticated;
+grant select, insert, update, delete on table public.push_subscriptions to service_role;
+drop policy if exists push_subscriptions_own_read on public.push_subscriptions;
+create policy push_subscriptions_own_read on public.push_subscriptions for select to authenticated using (profile_id = auth.uid());
+drop policy if exists push_subscriptions_own_delete on public.push_subscriptions;
+create policy push_subscriptions_own_delete on public.push_subscriptions for delete to authenticated using (profile_id = auth.uid());
+```
+
+| who | select | insert | update | delete |
+|---|---|---|---|---|
+| anon | nothing (every privilege revoked, no policy - a refusal 401 / 403, never `200 + []`) | no | no | no |
+| authenticated (any role: surgeon, scheduler, coordinator, viewer / follower, APP) | its OWN rows (`push_subscriptions_own_read`: `profile_id = auth.uid()`), and only the columns `id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count` (a column grant) - never `endpoint`, `p256dh` or `auth` | no privilege (`42501`) - `save_push_subscription()` only | no privilege (`42501`) | its OWN rows (`push_subscriptions_own_delete`) - the sign-out cleanup and Settings > Turn off |
+| the scheduler / admin | the same as any account: its own devices only (whether a colleague has phone notifications on is personal) | no | no | own rows only |
+| service_role (the edge function) | every row and column (it encrypts to the keys) | yes (unused) | `last_ok_at`, `last_error_at`, `fail_count` | 404 / 410 rows |
+
+**Why no direct insert (READING 2).** The definer is the only way in, because a save has to (1) validate the endpoint - https on a
+known push service only (`fcm.googleapis.com`, `android.googleapis.com`, `push.apple.com`, `push.services.mozilla.com`,
+`notify.windows.com` or a subdomain): the edge function POSTs to whatever is stored, so a free-form endpoint would be a
+server-side request forgery lever; (2) check the two keys and the label; (3) enforce the 10-device cap; (4) move an endpoint held
+by another account only on proof (READING 3: the same `p256dh` and `auth` - what the browser hands over to whoever holds the
+subscription, e.g. a shared office PC), else `PS006`; (5) write the audit row (a viewer cannot insert audit rows). An INSERT
+policy cannot read other accounts' rows for (3) / (4). The owner cannot SELECT `endpoint` / `p256dh` / `auth` either: the
+capability never comes back in any response, and the delete / status RPCs take the endpoint in a POST body (READING 4: both
+VOLATILE, so PostgREST refuses GET - an endpoint never lands in a URL or a server log line).
+
+**Refusals** (custom SQLSTATEs - PostgREST answers HTTP 400; the client's words match these byte for byte), all BEFORE any write,
+in this order (after `PS005` the function takes `pg_advisory_xact_lock(hashtext('push_subscriptions:save'))` - one save at a time,
+since the cap and a move read other rows):
+
+| # | code | when | message |
+|---|---|---|---|
+| 1 | `PS001` | no signed-in user (all three functions) | `PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account` |
+| 2 | `PS002` | the account has no `user_profiles` row | `PUSH_NO_PROFILE: this account has no profile yet - ask the scheduler (nothing was saved)` |
+| 3 | `PS003` | the endpoint is null, longer than 2048, or not https on a known push service | `PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved` |
+| 4 | `PS004` | `p256dh` is not `B` + 86 base64url characters, or `auth` is not 22 | `PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)` |
+| 5 | `PS005` | a label outside 1-40 of letters, digits, spaces and `. ( ) / -` (a blank label is no label) | `PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)` |
+| 6 | `PS006` | the endpoint is held by another account and the keys differ | `PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)` |
+| 7 | `PS007` | the caller already has 10 devices (an add or a move) | `PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)` |
+
+**Writes.** The same account re-saving the same endpoint: `kept` (no write, no audit) when the keys match and no new label, else
+`refreshed` (keys / label updated, `fail_count` 0, `last_error_at` null; no audit). Another account's endpoint with the same keys:
+`moved` (the row's `profile_id` becomes the caller's, a clean slate). A new endpoint: `added`. **The audit row** - written by the
+function on `added` / `moved` (`push.save`) and by `delete_push_subscription` when a row went (`push.delete`), in the same
+transaction: `actor_id` = the caller's roster id, else his auth uid (what the client's `logAudit` sends); `actor_name` = his
+display name, else his roster name, else `Unknown`; `detail` = `{summary, profile_id, device_label, action}`; summary
+`<name>: phone notifications on (<device>)` (` - moved from another account` on a move, never naming that account) or
+`<name>: phone notifications off (<device>)`. Profile id and device label only - never an endpoint or a key. No notification
+row, no e-mail. **Account deletion** (auth.users -> user_profiles -> push_subscriptions, on delete cascade): its rows go; the
+audit rows stay.
+
+**The pre-check (read-only; run before and after the apply).** `sql/probes/push-notifications-precheck.sql` - one SELECT returning
+`ord, section, role, detail`; row 1 is the apply gate (`table=no push_cols=0 save_fn=no delete_fn=no status_fn=no` before,
+`table=yes push_cols=2 save_fn=yes delete_fn=yes status_fn=yes` after), rows 2-5 are facts (accounts per role - counts only; the
+prefs rows by key; the `push.%` audit rows; the realtime publication - `all_tables=yes` is the one fact the apply script stops on):
+
+```sql
+with objects as (
+  select 1 as ord, 'objects'::text as section, ''::text as role,
+         'table=' || case when to_regclass('public.push_subscriptions') is null then 'no' else 'yes' end
+      || ' push_cols=' || (select count(*) from pg_attribute a where a.attrelid = 'public.notification_preferences'::regclass
+                            and a.attname in ('trade_updates_push', 'schedule_updates_push') and not a.attisdropped)
+      || ' save_fn=' || case when to_regprocedure('public.save_push_subscription(text, text, text, text)') is null then 'no' else 'yes' end
+      || ' delete_fn=' || case when to_regprocedure('public.delete_push_subscription(text)') is null then 'no' else 'yes' end
+      || ' status_fn=' || case when to_regprocedure('public.push_subscription_status(text)') is null then 'no' else 'yes' end as detail
+),
+profiles as (
+  select 2 as ord, 'profiles'::text as section, u.role,
+         'n=' || count(*)
+      || ' linked=' || count(*) filter (where u.person_id is not null)
+      || ' following=' || count(*) filter (where jsonb_typeof(u.follows) = 'array' and jsonb_array_length(u.follows) > 0)
+      || ' app=' || count(*) filter (where u.is_app) as detail
+    from public.user_profiles u
+   group by u.role
+),
+prefs as (
+  select 3 as ord, 'prefs'::text as section, ''::text as role,
+         'rows=' || count(*)
+      || ' person=' || count(*) filter (where p.person_id is not null)
+      || ' profile=' || count(*) filter (where p.profile_id is not null) as detail
+    from public.notification_preferences p
+),
+audit as (
+  select 4 as ord, 'audit'::text as section, ''::text as role,
+         'push_rows=' || (select count(*) from public.audit_log l where l.action like 'push.%') as detail
+),
+realtime as (
+  select 5 as ord, 'realtime'::text as section, ''::text as role,
+         'publication=' || case when exists (select 1 from pg_publication b where b.pubname = 'supabase_realtime') then 'yes' else 'no' end
+      || ' all_tables=' || case when exists (select 1 from pg_publication b where b.pubname = 'supabase_realtime' and b.puballtables) then 'yes' else 'no' end
+      || ' push_subscriptions_published=' || case when exists (select 1 from pg_publication_tables t where t.pubname = 'supabase_realtime' and t.schemaname = 'public' and t.tablename = 'push_subscriptions') then 'yes' else 'no' end as detail
+)
+select ord, section, role, detail from objects
+union all select ord, section, role, detail from profiles
+union all select ord, section, role, detail from prefs
+union all select ord, section, role, detail from audit
+union all select ord, section, role, detail from realtime
+order by ord, role;
+```
+
+**The probe** (`sql/probes/push-notifications-probe.sql`, rolled back; three throwaway users - U1 a surgeon linked to `s9push`
+(on no roster), U2 a viewer, U3 a viewer whose profile row is deleted for N8; every endpoint `https://fcm.googleapis.com/fcm/send/probe-push-<8 random hex>-<n>`,
+so no live row can meet it; fake keys `B` + 86 x `A` / `C` / `D`, 22 x `A` / `C`; BEFORE the migration every case =
+`PROBE_SETUP: push_subscriptions is absent`):
+
+| case | actor / call | AFTER |
+|---|---|---|
+| P1 | postgres: the table, its RLS, cascade, unique endpoint, policies, privileges, publication | `table=yes rls=yes fk=cascade unique_endpoint=yes policies=push_subscriptions_own_delete/delete/authenticated,push_subscriptions_own_read/select/authenticated anon_any=no auth_cols=created_at,device_label,fail_count,id,last_error_at,last_ok_at,profile_id auth_insert=no auth_update=no auth_delete=yes published=no` |
+| P2 | postgres: the three functions, security, volatility, search_path, EXECUTE | `save=definer/volatile delete=definer/volatile status=definer/volatile paths=3 public_exec=0 anon_exec=0 auth_exec=3` |
+| P3 | postgres: the table's check constraints | `checks=push_subscriptions_auth_shape,push_subscriptions_endpoint_shape,push_subscriptions_fail_count_check,push_subscriptions_label_shape,push_subscriptions_p256dh_shape` |
+| P4 | postgres: the two prefs columns | `trade_updates_push=boolean/not_null/true schedule_updates_push=boolean/not_null/true` |
+| S1 | U1 sps(E1, K1, A1, 'iPhone') | `ok action=added devices=1 audit=true` |
+| S2 | postgres reads E1 | `owner=U1 label=iPhone fail=0 ok_at=null` |
+| S3 | its audit row | `audit=1 action=push.save actor=s9push name=probe surgeon sum=probe surgeon: phone notifications on (iPhone) keys=action,device_label,profile_id,summary` |
+| S4 | U1 sps(E1, K1, A1, 'iPhone') again | `ok action=kept devices=1 audit=false audit_rows=1` |
+| S5 | U1 sps(E1, K2, A2, null) (new keys, no label) | `ok action=refreshed devices=1 label=iPhone` |
+| S6 | U1 select count(*) | `rows=1` |
+| S7 | U1 select endpoint | `ERR 42501 permission denied for table push_subscriptions` |
+| S8 | U1 direct insert (its own profile) | `ERR 42501 permission denied for table push_subscriptions` |
+| S9 | U1 direct update of fail_count on its own row | `ERR 42501 permission denied for table push_subscriptions` |
+| S10 | U1 pst(E1) | `ok saved=true devices=1` |
+| B1 | U1 sps('https://evil.example/push/x', K1, A1, null) | `ERR PS003 PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved` |
+| B2 | U1 sps('http://fcm.googleapis.com/fcm/send/x', K1, A1, null) | `ERR PS003 PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved` |
+| B3 | U1 sps(E2, 'abc', A1, null) | `ERR PS004 PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)` |
+| B4 | U1 sps(E2, K1, 23 x 'A', null) | `ERR PS004 PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)` |
+| B5 | U1 sps(E2, K1, A1, '<b>x</b>') | `ERR PS005 PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)` |
+| B6 | U1 sps(E2, K1, A1, 41 x 'x') | `ERR PS005 PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)` |
+| B7 | U1 select count(*) after B1-B6 | `rows=1` |
+| O1 | U2 select count(*) | `rows=0` |
+| O2 | U2 direct delete of U1's E1 row by id, then a delete with no WHERE (PostgreSQL applies the SELECT policy to a DELETE only when it reads a column - the filter-less form is what a permissive delete policy would let through) | `deleted=0 still=1` |
+| O3 | U2 dps(E1) | `ok removed=0 devices=0 audit=false still=1` |
+| O4 | U2 pst(E1) | `ok saved=false devices=0` |
+| O5 | U2 sps(E1, K3, A1, 'Chrome on Windows') (not the held keys) | `ERR PS006 PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)` |
+| O5s | owner of E1 after O5 | `owner=U1` |
+| O6 | U2 sps(E1, K2, A2, 'Chrome on Windows') (the held keys) | `ok action=moved devices=1 audit=true` |
+| O6s | postgres reads E1 | `owner=U2 label=Chrome on Windows fail=0` |
+| O6a | its audit row | `actor=self name=probe viewer two sum=probe viewer two: phone notifications on (Chrome on Windows) - moved from another account other_ids=no` |
+| O7 | U1 pst(E1) | `ok saved=false devices=0` |
+| C1 | U1 sps(E10 .. E19, K1, A1, 'Pixel') (ten new endpoints) | `ok devices=10` |
+| C2 | U1 sps(E20, K1, A1, 'Pixel') | `ERR PS007 PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)` |
+| C3 | U1 select count(*) | `rows=10` |
+| D1 | U1 dps(E10) | `ok removed=1 devices=9 audit=true` |
+| D2 | its audit row | `action=push.delete sum=probe surgeon: phone notifications off (Pixel)` |
+| D3 | U1 dps(E10) again | `ok removed=0 devices=9 audit=false` |
+| D4 | U1 direct delete by id of E11's row | `deleted=1 rows=8` |
+| F1 | U1 inserts its own prefs row (person s9push, no push keys) | `trade_updates_push=true schedule_updates_push=true` |
+| F2 | U1 updates its row trade_updates_push = false | `updated=1 trade_updates_push=false` |
+| F3 | U2 inserts its own follower prefs row (profile_id = U2, schedule_updates_push false) | `ok schedule_updates_push=false trade_updates_push=true` |
+| F4 | U2 updates U1's prefs row | `updated=0` |
+| N1 | anon: select count(*) from push_subscriptions | `ERR 42501 permission denied for table push_subscriptions` |
+| N2 | anon: sps(E21, K1, A1, null) | `ERR 42501 permission denied for function save_push_subscription` |
+| N3 | anon: dps(E1) | `ERR 42501 permission denied for function delete_push_subscription` |
+| N4 | anon: pst(E1) | `ERR 42501 permission denied for function push_subscription_status` |
+| N5 | postgres, no signed-in user: sps(E21, K1, A1, null) | `ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account` |
+| N6 | postgres, no signed-in user: pst(E1) | `ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account` |
+| N7 | postgres, no signed-in user: dps(E1) | `ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account` |
+| N8 | U3 after postgres deleted its profile row: sps(E21, K1, A1, null) | `ERR PS002 PUSH_NO_PROFILE: this account has no profile yet - ask the scheduler (nothing was saved)` |
+| X1 | postgres deletes U2's auth user (U2 holds E1) | `before=1 after=0 audit_kept=yes` |
+
+**verify-rls.sh section 19** (`SILVIS_PUSH_APPLIED=1` = strict - only on the run right after the apply; `SILVIS_PUSH_DEPLOYED=1`
+grades 19i):
+
+| part | what | PASS |
+|---|---|---|
+| 19a | anon `GET push_subscriptions?select=id&limit=1` (`Prefer: count=exact`) | 401 / 403; 404 = not applied yet (FAIL when strict); 200 is a FAIL always (even `*/0`) |
+| 19b | anon `POST rpc/save_push_subscription` with the four keys | 401 / 403; 404 = PGRST202 (the schema cache does not know the four keys - do NOT push the Prompt 30 client) |
+| 19c | anon `POST rpc/delete_push_subscription` | 401 / 403 (404 rule) |
+| 19d | anon `POST rpc/push_subscription_status` | 401 / 403 (404 rule) |
+| 19e | anon `GET notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1` | 200 `[]` (PostgREST knows both columns; RLS gives anon no row - a row is a FAIL); 400 `42703` = not applied yet (FAIL when strict) |
+| 19f | with `SILVIS_SURGEON_JWT`: the surgeon's `GET push_subscriptions?select=id,device_label` and `POST rpc/push_subscription_status` | 200 and 200 with `"saved":false`; never a write |
+| 19g | the probe through the linked CLI, graded by name (51 cases) | every case as the table above; `PROBE_SETUP: push_subscriptions is absent` = not applied yet (FAIL when strict); a partly-applied raise or no sentinel = FAIL |
+| 19h | leftovers by the probe's identity: `auth.users` `probe-push-%@example.test` + `audit_log` `push.%` with summary `probe %` + `push_subscriptions` with a `probe-push-` endpoint (through `query_to_xml`, guarded by `to_regclass`) | 0 / 0; else FAIL with the three DELETEs (all rows only the probe writes) |
+| 19i | with `SILVIS_PUSH_DEPLOYED=1`: `GET /functions/v1/send-notification?vapid=public`; an unauthenticated `POST ...?push=test` | 200 with exactly `{"publicKey":"<B + 86 base64url>"}`; 401. Without the flag: one INFO line, nothing counted |
+
+**What could break / what offline cannot show.** The probe and section 19 are written against an AFTER picture observed OFFLINE:
+the migration, the pre-check and the probe ran on PGlite (WASM PostgreSQL) over main f2accf8's `schema.sql` with stubbed Supabase
+roles and `auth.uid()` (the DB lane's harness, `push/db-pglite-harness.mjs` beside the apply script): every one of the 51 cases
+read its header string, also with live-like devices and audit rows present; the leftover count was 0; the six older probes that act
+through `user_profiles` / `notification_preferences` / `audit_log` read the same before and after the apply (and after the
+rollback); a failure inside the migration left the database unchanged; the rollback restored the BEFORE picture; the branch's
+`schema.sql` re-ran wholesale (on itself and over main's database) to the migrated picture; section 19 graded the real output with
+a faked CLI; the seven mutants each turned a named case red. What PGlite cannot show: the functions' owner there is a superuser
+(live: `postgres`, which bypasses RLS as the owner of `push_subscriptions` and `audit_log` - no `force row level security`),
+Supabase's own default privileges (they grant every new table to anon and authenticated - the migration revokes all three, P1
+checks), and PostgREST (the HTTP codes of 19a-19f, the schema-cache reload). The live database is what the apply proves; section 19
+grades exact strings and names any difference by case.
+
+**Apply order:**
+
+1. Pre-check `sql/probes/push-notifications-precheck.sql` (read-only): the objects row must read `table=no push_cols=0 save_fn=no
+   delete_fn=no status_fn=no`; the other rows are facts (`all_tables=yes` would publish the table - a STOP).
+2. Function-absent check (pg_proc): none of the three functions exists.
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/push-notifications-probe.sql` -> `PROBE_SETUP:
+   push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied`.
+4. The migration: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-03-push-notifications.sql` (one
+   implicit transaction - a failure changes nothing), after Faraz types APPLY in capital letters.
+5. The gate after: `table=yes push_cols=2 save_fn=yes delete_fn=yes status_fn=yes` and the three signatures (security definer).
+6. Probe AFTER: every case as the table lists (51 cases).
+7. `SILVIS_PUSH_APPLIED=1 bash scripts/verify-rls.sh` - section 19 strict (the anon 404s, 19e's 42703 and PROBE_SETUP are FAILs),
+   every other section green.
+8. `bash setup-push-keys.sh` - the three VAPID secrets (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`) set through
+   `supabase secrets set --env-file` from a user-only temp file outside OneDrive, deleted at once; the private key is never shown.
+9. The send-notification deploy (edge-functions/README.md: back up the live v9, copy, deploy with `--no-verify-jwt --use-api`),
+   then `SILVIS_PUSH_DEPLOYED=1 bash scripts/verify-rls.sh` - 19i green.
+10. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed lines; tables (a) / (b)'s `push_subscriptions`
+    and `notification_preferences` notes; schema.sql revision w ("applied ..."); the migration's trailer line and sha256 pin; the
+    probe's and the pre-check's headers; verify-rls section 19 strict by default with `SILVIS_PUSH_APPLIED` dropped; the test pins
+    with them.
+11. The client push, on Faraz's go; then each user taps Enable on each device (iPhone / iPad: from the Home Screen app).
+
+**One command (Faraz):** his apply script `apply-push-notifications.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry
+machine paths) - it checks that the migration's sha256 is the reviewed one (and the probe's, the pre-check's and verify-rls's),
+runs steps 1-7 above, stops at the first failure (nothing after it runs), asks for `APPLY` in capital letters before step 4 (the
+prompt line says so), has a `--dry-run` (steps 0-3 only), exports `AI_AGENT=1`, reads both output shapes of `supabase db query -o
+json` (the bare array and the `{"warning","boundary","rows"}` envelope), writes a log and ends with a PASTE THIS BACK TO CLAUDE
+CODE block for the record step. `setup-push-keys.sh` beside it does step 8 (its own log and paste-back block).
+
+**Rolling back** (in this order; every saved subscription is lost - each device taps Enable again after a re-apply; the client
+reads the missing objects as "unavailable", the edge function answers `push.error` and keeps mailing; redeploy the backed-up
+send-notification v9 too if the function must go back):
+
+```sql
+drop function if exists public.push_subscription_status(text);
+drop function if exists public.delete_push_subscription(text);
+drop function if exists public.save_push_subscription(text, text, text, text);
+drop table if exists public.push_subscriptions;
+alter table public.notification_preferences drop column if exists schedule_updates_push;
+alter table public.notification_preferences drop column if exists trade_updates_push;
+notify pgrst, 'reload schema';
+```
+
+observed: _to be filled from Faraz's apply log_
