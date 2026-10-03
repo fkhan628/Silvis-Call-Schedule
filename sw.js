@@ -24,7 +24,9 @@ function pushView(p) {
   const out = { title: GENERIC.title, body: GENERIC.body, tag: "silvis-generic", tab: null, day: null };
   if (!p || typeof p !== "object" || p.v !== 1) return out;
   const titleOk = typeof p.title === "string" && p.title.length >= 1 && p.title.length <= 80;
-  const bodyOk = typeof p.body === "string" && p.body.length >= 1 && p.body.length <= 300;
+  // the body is counted in characters (code points), as the edge cuts it (180 characters, Array.from) - an emoji is two
+  // UTF-16 units, so a .length test would turn a legal 180-character body into the generic notice (integration 10/2)
+  const bodyOk = typeof p.body === "string" && p.body.length >= 1 && Array.from(p.body).length <= 300;
   if (titleOk && bodyOk) { out.title = p.title; out.body = p.body; }
   if (typeof p.tag === "string" && TAG_RE.test(p.tag)) out.tag = p.tag;
   if (typeof p.tab === "string" && PUSH_TABS.indexOf(p.tab) >= 0) out.tab = p.tab;

@@ -2416,5 +2416,16 @@ unlinked account that follows nobody reads that only its own tests reach its pho
   unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line; Enable asks nothing) and the
   Home Screen app (Enable offered) at 390 px with screenshots. The shared route answers every push request on every other page
   (never the live project).
+- **Integration cross pins** (`test/data-layer.test.js` [P30], like Prompt 29's): they read the migration, the edge function
+  (its `@pushPlan` / `@webPush` / `@sendGate` blocks, lifted) and `sw.js` (run in a sandbox) and hold the client to them - the
+  three RPCs' names and parameters = what `config.js` posts (and verify-rls 19b-19d); `PUSH_CODES` and every refusal sentence
+  = the migration's raises; the return keys the client reads (and the smoke mock answers); the two `*_push` columns on every
+  side; one endpoint regex (the constraint, the function, `helpers.js`, the edge); the key / label shapes; the two routes and
+  their order in the handler; and every payload the edge builds (each category, person / follower / the test, plain / long /
+  emoji / empty messages) shown by `sw.js` unchanged and read back to the same view by `pushDeepLink` / `pushOpenMessage`.
+  Integration fixed two seams there: `sw.js` counts the body in characters, as the edge cuts it (an emoji is two UTF-16 units,
+  so a legal 180-character body used to turn generic), and `pushDb.sendTest` reads a pre-Prompt-30 function's role-gate 403
+  ("not allowed: role viewer may not send notifications" - the test route never answers 403) as "needs the next update", like
+  its 400 for a surgeon.
 - Not in this prompt: the 6 AM / Monday reminder (daily-reminder) and its `shift_reminders_push` switch; suppressing the
   duplicate desktop pop-up for the same event.

@@ -11766,6 +11766,255 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
+  /* ---------------- [P30] Phone push - integration cross pins (Prompt 30 integrate, 10/2) ---------------- */
+  // The three halves were built apart (push/db, push/edge, push/app); these pins make them meet, as Prompt 29's did. They read
+  // the migration (sql/migrations/2026-10-03-push-notifications.sql), the edge function (its @pushPlan / @webPush / @sendGate
+  // blocks, lifted) and sw.js (run in a sandbox) and hold the client (config.js, helpers.js, index-source.html), the smoke mock
+  // and verify-rls section 19 to them - a renamed RPC or column, a new refusal, a changed payload or route fails here, not on a
+  // phone. Integration found two seams and fixed them (each pinned below): sw.js counted the body in UTF-16 units while the edge
+  // cuts it in characters (an emoji-heavy 180-character body turned generic), and a send-notification deployed before Prompt 30
+  // answers ?push=test from a viewer / follower / APP / office account with its role gate's 403, which the client did not read
+  // as "not deployed".
+  console.log("\n[P30] phone push - integration cross pins (the migration, send-notification, sw.js, the client, the smoke mock, verify-rls 19)");
+  await (async () => {
+    const rd = (...p) => fs.readFileSync(path.join(ROOT, ...p), "utf8").replace(/\r\n/g, "\n");
+    const SRC = rd("index-source.html"), CFG = rd("config.js"), SW = rd("sw.js"), SMK = rd("test", "ui", "smoke.mjs"), VR = rd("scripts", "verify-rls.sh");
+    const EDGE = rd("edge-functions", "send-notification", "index.ts");
+    const MIG = rd("sql", "migrations", "2026-10-03-push-notifications.sql").split("\n").filter(l => !/^\s*--/.test(l)).join("\n"); // the statements (the header's rollback text left out)
+    const between = (text, a, b) => { const i = text.indexOf(a); const j = i < 0 ? -1 : text.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return text.slice(i, j + b.length); };
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    const acheckQ = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const edgeBlock = (tag) => {
+      const i = EDGE.search(new RegExp("^// @" + tag + "-start[ \\t]*$", "m")), j = EDGE.search(new RegExp("^// @" + tag + "-end[ \\t]*$", "m"));
+      if (i < 0 || j < i) throw new Error("send-notification/index.ts has no @" + tag + " block");
+      return EDGE.slice(i, j);
+    };
+    const PP = new Function(edgeBlock("logRedact-mirror") + edgeBlock("pushPlan") + "\nreturn { PUSH_TABS, PUSH_PREF_OF, PUSH_ENDPOINT_RE, PUSH_NOT_SET_UP, PUSH_NOT_CONFIGURED, pushPayload, pushSummary, pushEndpointAllowed, pushVapidConfigOk };")();
+    const WP = new Function(edgeBlock("webPush") + "\nreturn { wpB64uEncode, wpB64uDecode };")();
+    const SG = new Function(edgeBlock("sendGate") + "\nreturn { senderRole };")();
+    // the three RPCs: { name, params: [[name, type...]], body, ret: [keys] }
+    const topArgs = (s) => { const out = []; let d = 0, cur = ""; for (const ch of s) { if (ch === "(") d++; if (ch === ")") d--; if (ch === "," && d === 0) { out.push(cur.trim()); cur = ""; } else cur += ch; } if (cur.trim()) out.push(cur.trim()); return out; };
+    const retKeys = (body) => {
+      const k = "return jsonb_build_object(", i = body.lastIndexOf(k);
+      const s = body.slice(i + k.length);
+      let d = 1, j = 0;
+      for (; j < s.length && d > 0; j++) { if (s[j] === "(") d++; else if (s[j] === ")") d--; }
+      return topArgs(s.slice(0, j - 1)).filter((_, n) => n % 2 === 0).map(a => a.replace(/^'|'$/g, ""));
+    };
+    const FN = {};
+    { const rx = /create or replace function public\.([a-z_]+)\(([^)]*)\) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as \$\$([\s\S]*?)\nend \$\$;/g; let m;
+      while ((m = rx.exec(MIG))) FN[m[1]] = { params: m[2].split(",").map(s => s.trim().split(/\s+/)), body: m[3], ret: retKeys(m[3]) }; }
+    const RAISES = [];
+    { const rx = /raise exception '(PUSH_[A-Z_]+): ((?:[^']|'')*)' using errcode = '(PS\d{3})'/g; let m; while ((m = rx.exec(MIG))) RAISES.push({ token: m[1], text: m[2].replace(/''/g, "'"), code: m[3] }); }
+    const MIG_COLS = Array.from(MIG.matchAll(/alter table public\.notification_preferences add column if not exists ([a-z_]+) boolean not null default true;/g)).map(m => m[1]);
+    const sqlRegex = (constraint) => { const m = new RegExp("constraint " + constraint + " check \\(([^\\n]*)\\),?\\n").exec(MIG); if (!m) throw new Error("no constraint " + constraint); const r = /~ '((?:[^']|'')*)'/.exec(m[1]); return r[1].replace(/''/g, "'"); };
+
+    check("P30 cross pins (integration): the three RPCs exist once each (volatile definer, search_path pinned - PostgREST refuses GET, so the endpoint never rides in a URL) and config.js sends exactly their parameter names, in order, in a POST body; verify-rls 19b-19d post the same keys", () => {
+      assert.deepStrictEqual(Object.keys(FN).sort(), ["delete_push_subscription", "push_subscription_status", "save_push_subscription"], "the migration's three functions");
+      const want = { save_push_subscription: [["p_endpoint", "text"], ["p_p256dh", "text"], ["p_auth", "text"], ["p_label", "text", "default", "null"]], delete_push_subscription: [["p_endpoint", "text"]], push_subscription_status: [["p_endpoint", "text"]] };
+      assert.deepStrictEqual(plain(Object.fromEntries(Object.entries(FN).map(([k, v]) => [k, v.params]))), want, "the parameter names and types");
+      for (const name of Object.keys(FN)) {
+        const calls = Array.from(CFG.matchAll(new RegExp('pushDb\\._rpc\\("' + name + '", \\{ ([^}]*) \\}\\)', "g")));
+        assert.strictEqual(calls.length, 1, "config.js calls " + name + " once (pushDb)");
+        assert.deepStrictEqual((calls[0][1].match(/\bp_[a-z0-9]+(?=:)/g) || []), FN[name].params.map(p => p[0]), "config.js sends exactly " + name + "'s parameter names, in order");
+        assert.strictEqual(CFG.split("/rest/v1/rpc/" + name).length - 1, 0, "the RPC path is built in _rpc only: " + name);
+        assert.ok(!SRC.includes(name), "index-source.html never names " + name + " (config.js pushDb is the only caller)");
+        const vrLine = VR.split("\n").find(l => l.includes('"$URL/rest/v1/rpc/' + name + '"') && /-H "Authorization: Bearer \$ANON"/.test(l));
+        assert.ok(vrLine, "verify-rls posts " + name + " as anon");
+        const body = JSON.parse(/-d '(\{[^']*\})'/.exec(vrLine)[1]);
+        assert.deepStrictEqual(Object.keys(body), FN[name].params.map(p => p[0]), "verify-rls 19's " + name + " body names the parameters");
+      }
+      assert.ok(CFG.includes("const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, { method: \"POST\", body: JSON.stringify(body) });"), "_rpc: one POST through authFetch (the user's JWT)");
+      assert.ok(!/push_subscriptions\?/.test(CFG + SRC), "the client never reads or writes the table over REST - the RPCs only (authenticated has no INSERT / UPDATE and no SELECT on endpoint / p256dh / auth)");
+    });
+    check("P30 cross pins (integration): PUSH_CODES = the codes and tokens the migration raises (10 raises, PS001-PS007); each message, as PostgREST relays it, reads back through pushErrorWords as the function's own sentence; enable()'s two local refusals say the PS003 / PS004 words", () => {
+      assert.strictEqual(RAISES.length, 10, "10 raises: " + RAISES.map(r => r.code).join(","));
+      assert.strictEqual((MIG.match(/errcode = 'PS\d{3}'/g) || []).length, RAISES.length, "every PS errcode sits on a parsed raise");
+      const seen = {};
+      RAISES.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token"); seen[r.code] = r.token; });
+      assert.deepStrictEqual(seen, plain(H.PUSH_CODES), "helpers.js PUSH_CODES = the migration's code -> token pairs");
+      RAISES.forEach(r => {
+        const relayed = JSON.stringify({ code: r.code, details: null, hint: null, message: r.token + ": " + r.text });
+        assert.strictEqual(H.pushErrorWords(relayed, 400), r.text, r.code + " words = the function's sentence");
+      });
+      const txt = (code) => RAISES.find(r => r.code === code).text;
+      assert.ok(CFG.includes(JSON.stringify(txt("PS003"))) && CFG.includes(JSON.stringify(txt("PS004"))), "enable()'s local refusal (an endpoint off the known services / unreadable keys) says the server's PS003 / PS004 sentence");
+      assert.strictEqual(H.pushErrorWords(JSON.stringify({ code: "PGRST202", message: "Could not find the function public.save_push_subscription(p_auth, p_endpoint, p_label, p_p256dh) in the schema cache" }), 404), H.PUSH_UNAVAILABLE_TEXT, "a missing function (migration not applied) is 'available after the next update'");
+    });
+    check("P30 cross pins (integration): the return keys the client reads exist - save {ok, action, devices, audit} (action added / kept / refreshed / moved), delete {ok, removed, devices, audit}, status {ok, saved, devices}; config.js reads only those; the smoke mock answers exactly those keys", () => {
+      assert.deepStrictEqual(FN.save_push_subscription.ret, ["ok", "action", "devices", "audit"]);
+      assert.deepStrictEqual(FN.delete_push_subscription.ret, ["ok", "removed", "devices", "audit"]);
+      assert.deepStrictEqual(FN.push_subscription_status.ret, ["ok", "saved", "devices"]);
+      Object.values(FN).forEach(f => assert.ok(f.body.includes("return jsonb_build_object('ok', true,"), "ok is literally true"));
+      assert.deepStrictEqual(Array.from(new Set(Array.from(FN.save_push_subscription.body.matchAll(/v_action := '([a-z]+)'/g)).map(m => m[1]))).sort(), ["added", "kept", "moved", "refreshed"]);
+      assert.ok(CFG.includes('if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from " + name, unavailable: false };'), "the client accepts only ok === true");
+      const push = between(CFG, "const pushDb = {", "\n// ---- Call pay");
+      const read = Array.from(new Set(Array.from(push.matchAll(/\.result\.([a-z_]+)/g)).map(m => m[1]))).sort();
+      assert.deepStrictEqual(read, ["action", "devices", "saved"], "config.js reads result.action / devices / saved");
+      read.forEach(k => assert.ok(Object.values(FN).some(f => f.ret.includes(k)), k + " is a return key"));
+      for (const name of Object.keys(FN)) {
+        const lines = SMK.split("\n").filter(l => l.includes(name + '")') && /\{ ok: true,/.test(l));
+        assert.ok(lines.length >= 2, "the smoke mock answers " + name + " (shared route + the push step), got " + lines.length);
+        lines.forEach(l => { const o = /\{ (ok: true,[^}]*)\}/.exec(l)[1]; assert.deepStrictEqual(Array.from(o.matchAll(/\b([a-z_]+): /g)).map(m => m[1]), FN[name].ret, "the smoke mock's " + name + " answer keys: " + l.trim().slice(0, 120)); });
+        lines.forEach(l => (l.match(/action: [^,]*/g) || []).forEach(a => (a.match(/"([a-z]+)"/g) || []).forEach(v => assert.ok(["added", "kept", "moved", "refreshed"].includes(v.slice(1, -1)), "mock action " + v))));
+      }
+    });
+    check("P30 cross pins (integration): the two *_push columns are the migration's on every side - the edge's PUSH_PREF_OF switches, notifPrefSaveRequest's opts.push keys, config.js's column probe, the Settings switches, the smoke's probe matcher and verify-rls 19e", () => {
+      assert.deepStrictEqual(MIG_COLS, ["trade_updates_push", "schedule_updates_push"], "the migration adds the two boolean not null default true columns");
+      assert.deepStrictEqual(Array.from(new Set(Object.values(PP.PUSH_PREF_OF))).sort(), MIG_COLS.slice().sort(), "the edge's switches");
+      const row = H.notifPrefSaveRequest({ personId: "s1" }, { trade_updates_push: false }, "2026-10-02T00:00:00Z", { push: true }).row;
+      assert.deepStrictEqual(Object.keys(row).filter(k => /_push$/.test(k)).sort(), MIG_COLS.slice().sort(), "notifPrefSaveRequest(..., { push: true }) writes exactly the two columns");
+      assert.strictEqual(row.trade_updates_push, false); assert.strictEqual(row.schedule_updates_push, true);
+      assert.ok(!Object.keys(H.notifPrefSaveRequest({ profileId: "p" }, {}, "2026-10-02T00:00:00Z").row).some(k => /_push$/.test(k)), "without opts.push no *_push key (the pre-migration body)");
+      const probe = "notification_preferences?select=" + MIG_COLS.join(",") + "&limit=1";
+      assert.ok(CFG.includes("/rest/v1/" + probe + "`"), "config.js pushColumns probes both columns");
+      assert.ok(VR.includes('"$URL/rest/v1/' + probe + '"'), "verify-rls 19e probes both columns");
+      assert.deepStrictEqual(Array.from(new Set(Array.from(SRC.matchAll(/\["([a-z_]+_push)","/g)).map(m => m[1]))).sort(), MIG_COLS.slice().sort(), "the Settings switches (surgeon and follower rows) name exactly the two columns");
+      assert.ok(/\/trade_updates_push\/\.test\(url\.searchParams\.get\("select"\)/.test(SMK), "the smoke answers the column probe locally");
+      assert.ok(EDGE.includes('rest("notification_preferences?select=*")'), "the edge reads every prefs column (select=*) - the push switches arrive with the e-mail flags");
+    });
+    check("P30 cross pins (integration): the endpoint rule is ONE regex - the migration's check constraint = save_push_subscription's test = helpers.js / the edge's PUSH_ENDPOINT_RE (2048 characters at most on every side); the key and label shapes the client produces satisfy the migration's checks; base64url is the same on both ends", () => {
+      const sqlEp = sqlRegex("push_subscriptions_endpoint_shape");
+      assert.ok(MIG.includes("p_endpoint !~ '" + sqlEp.replace(/'/g, "''") + "'"), "the function tests the same regex as the constraint");
+      assert.ok(MIG.includes("length(endpoint) <= 2048") && MIG.includes("length(p_endpoint) > 2048"), "2048 in both SQL places");
+      assert.strictEqual(H.PUSH_ENDPOINT_RE.source, PP.PUSH_ENDPOINT_RE.source, "helpers.js and the edge carry the same literal");
+      assert.strictEqual(H.PUSH_ENDPOINT_RE.source.replace(/\\\//g, "/"), sqlEp, "the JS literal = the SQL regex");
+      const ok = ["https://fcm.googleapis.com/fcm/send/abc", "https://web.push.apple.com/QOp", "https://updates.push.services.mozilla.com/wpush/v2/x", "https://wns2-par02p.notify.windows.com/w/?token=x", "https://android.googleapis.com/gcm/send/x"];
+      const no = ["http://fcm.googleapis.com/fcm/send/x", "https://evil.example/push/x", "https://fcm.googleapis.com.evil.example/x", "https://fcm.googleapis.com/a b", "https://fcm.googleapis.com/" + "x".repeat(2030)];
+      ok.forEach(e => { assert.ok(H.pushEndpointAllowed(e) && PP.pushEndpointAllowed(e), "allowed: " + e); });
+      no.forEach(e => { assert.ok(!H.pushEndpointAllowed(e) && !PP.pushEndpointAllowed(e), "refused: " + e.slice(0, 60)); });
+      const p256 = new RegExp(sqlRegex("push_subscriptions_p256dh_shape")), authRe = new RegExp(sqlRegex("push_subscriptions_auth_shape")), label = new RegExp(sqlRegex("push_subscriptions_label_shape"));
+      assert.strictEqual(label.source, "^[A-Za-z0-9 .()/-]{1,40}$", "the label check's regex");
+      for (let n = 0; n < 20; n++) {
+        const pt = new Uint8Array(require("crypto").randomBytes(65)); pt[0] = 4;
+        const au = new Uint8Array(require("crypto").randomBytes(16));
+        assert.ok(p256.test(H.pushB64u(pt)), "a 65-byte uncompressed point -> the p256dh shape");
+        assert.ok(authRe.test(H.pushB64u(au)), "a 16-byte auth secret -> the auth shape");
+        assert.strictEqual(H.pushB64u(pt), WP.wpB64uEncode(pt), "the client's base64url = the edge's");
+        assert.deepStrictEqual(Array.from(H.pushB64uDecode(WP.wpB64uEncode(pt))), Array.from(pt), "the client decodes the edge's public key (applicationServerKey) byte for byte");
+        assert.deepStrictEqual(Array.from(WP.wpB64uDecode(H.pushB64u(au))), Array.from(au), "the edge decodes the client's auth byte for byte");
+      }
+      const keyRe = /^B[A-Za-z0-9_-]{86}$/;
+      assert.ok(CFG.includes("if (!/^B[A-Za-z0-9_-]{86}$/.test(key)) return { state: \"failed\", error: \"the server's public key is malformed\" };"), "config.js accepts the web-push public key shape");
+      assert.ok(EDGE.includes("/^B[A-Za-z0-9_-]{86}$/.test(publicKey)") && VR.includes("^B[A-Za-z0-9_-]{86}"), "the edge's secret check and verify-rls 19i use the same shape");
+      assert.ok(keyRe.test(H.pushB64u(Object.assign(new Uint8Array(65), { 0: 4 }))));
+      const UAS = [["Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1", 5], ["Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15", 5], ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15", 5], ["Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36", 5], ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Edg/126.0", 0], ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0", 0], ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15", 0], ["Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36", 0], ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 OPR/111.0", 0], ["", 0], ["<script>alert(1)</script>", 0]];
+      UAS.forEach(([ua, t]) => { const l = H.pushDeviceLabel(ua, t); assert.ok(label.test(l), "pushDeviceLabel(" + ua.slice(0, 40) + ") = " + JSON.stringify(l) + " passes the DB label check"); });
+    });
+    check("P30 cross pins (integration): the routes - config.js GETs ?vapid=public with no auth (the edge's GET branch, before any auth) and POSTs ?push=test through authFetch (the edge's test branch: after the GoTrue check, BEFORE the role gate); verify-rls 19i calls the same two; the edge's columns and PATCH keys are the migration's", () => {
+      assert.strictEqual(C.EDGE_FN_BASE, C.SUPABASE_URL + "/functions/v1");
+      assert.ok(CFG.includes("const res = await fetch(`${EDGE_FN_BASE}/send-notification?vapid=public`, { cache: \"no-store\" });"), "the public-key GET: no headers");
+      assert.ok(CFG.includes("const res = await authFetch(`${EDGE_FN_BASE}/send-notification?push=test`, { method: \"POST\", body: \"{}\" });"), "the test POST");
+      const iGet = EDGE.indexOf('if (req.method === "GET" && new URL(req.url).searchParams.get("vapid") === "public") {');
+      const iAuth = EDGE.indexOf('const authz = req.headers.get("authorization") || "";');
+      const iUser = EDGE.indexOf('if (!userId) return json(401,');
+      const iTest = EDGE.indexOf('if (new URL(req.url).searchParams.get("push") === "test") {');
+      const iRole = EDGE.indexOf("const roleDenied = senderRole(caller);");
+      assert.ok(iGet > 0 && iGet < iAuth, "the GET branch runs before any auth");
+      assert.ok(iUser > 0 && iUser < iTest && iTest < iRole, "the test branch: after the verified user, before the role gate");
+      assert.ok(VR.includes('"$URL/functions/v1/send-notification?vapid=public"') && VR.includes('-X POST "$URL/functions/v1/send-notification?push=test"'), "verify-rls 19i");
+      const cols = between(MIG, "create table if not exists public.push_subscriptions (", "\n);").split("\n").map(l => (/^  ([a-z0-9_]+)\s/.exec(l) || [])[1]).filter(Boolean).filter(c => c !== "constraint");
+      assert.deepStrictEqual(cols, ["id", "profile_id", "endpoint", "p256dh", "auth", "device_label", "created_at", "last_ok_at", "last_error_at", "fail_count"]);
+      const sels = Array.from(EDGE.matchAll(/push_subscriptions\?select=([a-z0-9_,]+)&/g));
+      assert.strictEqual(sels.length, 2, "two device reads (the fan-out and the test route)");
+      sels.forEach(m => { assert.strictEqual(m[1], "id,profile_id,endpoint,p256dh,auth,fail_count"); m[1].split(",").forEach(c => assert.ok(cols.includes(c), "the edge selects " + c)); });
+      const patches = Array.from(EDGE.matchAll(/body: JSON\.stringify\(\{ (last_[a-z_]+: [^}]*)\}\)/g));
+      assert.strictEqual(patches.length, 2, "two bookkeeping PATCHes (sent rows, failed rows)");
+      patches.forEach(m => Array.from(m[1].matchAll(/\b([a-z0-9_]+): /g)).forEach(k => assert.ok(cols.includes(k[1]), "the edge patches " + k[1])));
+      assert.ok(MIG.includes("profile_id     uuid not null references public.user_profiles(id) on delete cascade"), "a device belongs to a user_profiles id (= auth.uid())");
+      assert.ok(EDGE.includes("&profile_id=in.(${ids.join(\",\")})") && EDGE.includes("&profile_id=eq.${encodeURIComponent(userId)}"), "the edge reads devices by account id (user_profiles.id / the verified user)");
+      assert.ok(EDGE.includes('rest("user_profiles?select=id,person_id,email&person_id=not.is.null")'), "a surgeon's devices: every account linked to his person id");
+    });
+    await acheckQ("P30 cross pins (integration): the test route's answers are worded by the client - 200 { push } -> the count words; 503 PUSH_NOT_SET_UP -> not set up; a pre-Prompt-30 function -> 'needs the next update' for a surgeon (400 unknown type) AND a viewer / follower / APP / office account or an unlinked surgeon (its role gate's 403, read before the body); the test route itself never answers 403", async () => {
+      const route = between(EDGE, 'if (new URL(req.url).searchParams.get("push") === "test") {', "\n    }\n");
+      assert.deepStrictEqual(Array.from(new Set(Array.from(route.matchAll(/json\((\d{3}),/g)).map(m => Number(m[1])))).sort(), [200, 401, 503], "the test route answers 200 / 401 / 503 only (a read failure goes to the outer catch: 502)");
+      assert.ok(route.includes("return json(503, { error: PUSH_NOT_SET_UP });") && route.includes("return json(200, { push: { ...p, skipped_pref_off: 0 } });"));
+      assert.ok(EDGE.includes("if (!cat) return json(400, { error: `unknown notification type \"${rawType}\"` });"), "the old flow's answer to an empty body");
+      assert.ok(EDGE.includes("return json(403, { error: `not allowed: ${roleDenied}` });"), "the role gate's 403 wording");
+      const pushDb = vm.runInContext("pushDb", sandbox);
+      const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "");
+      const savedLs = sandbox.localStorage._m;
+      sandbox.localStorage._m = { "silvis-auth-token": "h." + b64({ sub: "00000000-0000-4000-8000-0000000b0001", exp: Math.floor(Date.now() / 1000) + 3600 }) + ".s" };
+      const sendTest = async (status, body) => { const seen = []; sandbox.__fetch = async (url, init) => { seen.push({ url: String(url), init: init || {} }); return resp(status, body); }; const r = await pushDb.sendTest(); assert.strictEqual(seen.length, 1); assert.ok(seen[0].url.endsWith("/functions/v1/send-notification?push=test")); return r; };
+      try {
+        const summary = PP.pushSummary({ recipients: [{ key: "self", kind: "self", status: "sent" }], devices: { sent: 2, failed: 0, removed: 0 } }, [], false);
+        let r = await sendTest(200, { push: { ...summary, skipped_pref_off: 0 } });
+        assert.ok(r.ok && !r.notDeployed && !r.notConfigured);
+        assert.strictEqual(H.pushTestWords(r), "Test sent to 2 device(s) on your account - it should arrive in a few seconds.");
+        r = await sendTest(503, { error: PP.PUSH_NOT_SET_UP });
+        assert.ok(r.notConfigured); assert.strictEqual(H.pushTestWords(r), "Phone notifications are not set up on the server yet.");
+        const OLD = "The server does not send phone notifications yet (it needs the next update).";
+        r = await sendTest(400, { error: 'unknown notification type ""' });
+        assert.ok(r.notDeployed, "a surgeon on the old function"); assert.strictEqual(H.pushTestWords(r), OLD);
+        for (const caller of [{ role: "viewer", personId: null }, { role: "coordinator", personId: null }, { role: "surgeon", personId: null }, { role: null, personId: null }]) {
+          const why = SG.senderRole(caller);
+          assert.ok(why, "the old role gate refuses " + JSON.stringify(caller));
+          r = await sendTest(403, { error: "not allowed: " + why });
+          assert.ok(r.notDeployed, "403 '" + why + "' from the old function reads as not deployed");
+          assert.strictEqual(H.pushTestWords(r), OLD);
+        }
+        r = await sendTest(403, { error: "Forbidden" });
+        assert.ok(!r.notDeployed, "a 403 that is not the role gate's is not read as 'not deployed'");
+        r = await sendTest(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
+        assert.strictEqual(H.pushTestWords(r), "Sign in again, then try the test.");
+        assert.ok(/not configured/.test(PP.PUSH_NOT_CONFIGURED) && H.pushTestWords({ ok: true, status: 200, push: { error: PP.PUSH_NOT_CONFIGURED } }) === "Phone notifications are not set up on the server yet.", "a fan-out's push.error 'push not configured' words as not set up");
+        const keys = Object.keys(summary).sort();
+        const mockPush = Array.from(SMK.matchAll(/push: \{ (sent: [^\n]*?), error: null \} \}/g)).map(m => m[1].replace(/devices: \{[^}]*\}/, "devices: 0"));
+        assert.ok(mockPush.length >= 2, "the smoke mock answers ?push=test (shared route + the push step)");
+        mockPush.forEach(o => assert.deepStrictEqual(Array.from(o.matchAll(/\b([a-z_]+): /g)).map(m => m[1]).concat(["error"]).sort(), keys, "the smoke mock's push keys = pushSummary's"));
+      } finally {
+        sandbox.localStorage._m = savedLs;
+      }
+    });
+    await acheckQ("P30 cross pins (integration): the payload the edge builds is the payload sw.js shows - for every push category, a person / a follower (short and long names) and the test notice, with plain, long, address-carrying, emoji-heavy and empty messages: the title, body, tag, tab and day come through unchanged (never the generic notice); a tap opens ./?tab=..[&day=..] that pushDeepLink reads back to the same view, and an open window's message reads back through pushOpenMessage", async () => {
+      const SIL = "https://fkhan628.github.io/Silvis-Call-Schedule/";
+      const loadSw = (clients) => {
+        const listeners = {}, rec = { shown: [], opened: [], posted: [] };
+        const self = {
+          addEventListener: (t, fn) => { listeners[t] = fn; }, skipWaiting: () => Promise.resolve(),
+          registration: { scope: SIL, showNotification: async (title, opt) => { rec.shown.push({ title, opt }); } },
+          clients: { claim: async () => {}, matchAll: async () => (clients || []).map(url => ({ url, focus: async () => {}, postMessage: (m) => rec.posted.push(m) })), openWindow: async (u) => { rec.opened.push(u); } },
+        };
+        const box = { self, URL, console: { log() {}, warn() {}, error() {} } };
+        vm.createContext(box);
+        vm.runInContext(SW, box, { filename: "sw.js" });
+        const fire = async (type, ev) => { const w = []; ev.waitUntil = (p) => w.push(Promise.resolve(p)); listeners[type](ev); await Promise.all(w); };
+        return { rec, fire };
+      };
+      const tradeId = "abcdef12" + "-0000-4000-" + "8000-" + "0".repeat(12);
+      const MSGS = ["Fierce proposes a trade - you take Sat 10/10 primary, Fierce takes Sun 10/18 primary\nNote: thanks", "  \n\n10/12 P Philip -> Fierce (by Khan)", "x ".repeat(300), String.fromCodePoint(0x1F600).repeat(200), String.fromCodePoint(0x1F600) + " " + "y".repeat(400), "Write to someone@example.com about it", ""];
+      const WHO = [{ kind: "person" }, { kind: "follower", followedNames: ["Burchett"] }, { kind: "follower", followedNames: ["Abcdefghijklmnopqrstuvwxyz", "Bcdefghijklmnopqrstuvwxyz", "Cdefghijklmnop"] }];
+      const cases = [];
+      Object.keys(PP.PUSH_PREF_OF).forEach(type => MSGS.forEach(message => WHO.forEach(who => cases.push([type, { message, day: "2026-10-15", role: "backup", trade_id: tradeId }, who]))));
+      cases.push(["test", {}, { kind: "self" }]);
+      let n = 0;
+      for (const [type, data, who] of cases) {
+        const p = PP.pushPayload(type, data, who, "Frame title", Date.UTC(2026, 9, 2));
+        const label = type + " / " + who.kind + " / " + JSON.stringify(String(data.message || "").slice(0, 24));
+        assert.deepStrictEqual(Object.keys(p).filter(k => !["v", "title", "body", "tag", "tab", "params"].includes(k)), [], label + ": only the contract keys");
+        const w = loadSw([]);
+        await w.fire("push", { data: { json: () => JSON.parse(JSON.stringify(p)) } });
+        assert.strictEqual(w.rec.shown.length, 1, label);
+        const s = w.rec.shown[0];
+        assert.deepStrictEqual([s.title, s.opt.body, s.opt.tag], [p.title, p.body, p.tag], label + ": sw.js shows the edge's notification, not the generic one (body " + Array.from(p.body).length + " characters, " + p.body.length + " UTF-16 units)");
+        const day = p.params && p.params.day ? p.params.day : null;
+        assert.deepStrictEqual(plain(s.opt.data), { tab: p.tab, day }, label + ": the tap target rides in data");
+        await w.fire("notificationclick", { notification: { data: s.opt.data, close() {} } });
+        assert.strictEqual(w.rec.opened.length, 1, label + ": no window open -> one new window");
+        const u = new URL(w.rec.opened[0]);
+        assert.strictEqual(u.origin + u.pathname, SIL, label + ": the app folder, same origin");
+        const dl = H.pushDeepLink(u.search);
+        assert.deepStrictEqual([dl.tab, dl.day, dl.strip], [p.tab, day, true], label + ": the app reads the link back to the same view / day");
+        const w2 = loadSw([SIL + "?_v=x"]);
+        await w2.fire("notificationclick", { notification: { data: s.opt.data, close() {} } });
+        assert.deepStrictEqual(plain(H.pushOpenMessage(w2.rec.posted[0])), { tab: p.tab, day }, label + ": an open window is told the same view");
+        n++;
+      }
+      assert.ok(n >= 200, "covered " + n + " payloads");
+      assert.ok(SW.includes("Array.from(p.body).length <= 300"), "sw.js counts the body in characters, as the edge cuts it");
+    });
+  })();
+
   /* ---------------- XR. Cross-app update reset (Cowork 10/2 6:45 PM, Faraz's order: its own small ship) ---------------- */
   // caches.keys() and getRegistrations() are per ORIGIN, and fkhan628.github.io also serves the Davenport app, whose
   // OneSignal push worker sits at the origin root. The head script's nukeAndReload (every version change, and the Refresh

@@ -504,8 +504,10 @@ const pushDb = {
       const push = j && j.push && typeof j.push === "object" ? j.push : null;
       const error = j && typeof j.error === "string" ? j.error : (res.ok ? null : `HTTP ${res.status}`);
       // a function deployed before Prompt 30 reads ?push=test as an ordinary POST: 400 "unknown notification type" (an
-      // empty body) - or a 200 without the push key
-      const notDeployed = res.status === 404 || res.status === 405 || (res.status === 400 && /unknown notification type/i.test(error || "")) || (res.ok && !push);
+      // empty body) - or a 200 without the push key. Its role gate runs BEFORE the body, so a viewer / follower / APP /
+      // office caller gets 403 "not allowed: role ... may not send notifications" there; the Prompt 30 test route sits
+      // before that gate and never answers 403 (integration 10/2 - test/data-layer.test.js [P30] cross pins).
+      const notDeployed = res.status === 404 || res.status === 405 || (res.status === 400 && /unknown notification type/i.test(error || "")) || (res.status === 403 && /^not allowed: /.test(error || "")) || (res.ok && !push);
       return { ok: res.ok && !!push, status: res.status, push, error, notDeployed, notConfigured: res.status === 503 };
     } catch (e) {
       return { ok: false, status: 0, push: null, error: String((e && e.message) || e), notDeployed: false, notConfigured: false };
