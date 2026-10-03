@@ -1104,6 +1104,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const hA = f === "index-source.html" ? text.indexOf('var APP_VERSION = "') : -1;
       const hB = hA < 0 ? -1 : text.indexOf("</script>", hA);
       const withoutHead = hA >= 0 && hB > hA ? text.slice(0, hA) + text.slice(hB) : text;
+      // ...and within the head script the exemption covers the comments and ONE code occurrence: the keep-predicate's
+      // /OneSignalSDK/i.test( - Silvis never loads OneSignal (Cowork 10/2 7:25 PM), so an SDK load or a OneSignal.* call
+      // added to the head script fails here (review 10/2). Comments are stripped up to the line end (not after ":", so
+      // a "https://" in a string would survive).
+      if (hA >= 0 && hB > hA) {
+        const headCode = text.slice(hA, hB).replace(/(^|[^:])\/\/.*$/gm, "$1");
+        const nCode = (headCode.match(/OneSignal/g) || []).length;
+        if (nCode !== 1 || !headCode.includes("/OneSignalSDK/i.test(")) hits.push(`${f} head script code: OneSignal x${nCode} (only the keep-predicate's /OneSignalSDK/i.test( is allowed)`);
+      }
       for (const id of WEEKLY) {
         const rx = id === "apps" ? /\bapps\b/g : new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
         const n = ((id === "OneSignal" ? withoutHead : text).match(rx) || []).length;
@@ -11756,7 +11765,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // buttons through window.__silvisHardReset) unregisters only workers scoped INSIDE the Silvis folder and never a OneSignal
   // script, deletes only silvis- caches, and reloads exactly as before. These checks run the REAL head script (lifted from
   // index-source.html) in a sandbox against fake registrations, caches, location and localStorage. Binding (10/2): the
-  // mutants "unregister every registration" and "delete every cache" each fail the first two checks.
+  // mutant "unregister every registration" fails the registrations check and "delete every cache" the caches check (each
+  // also fails the version-change check); review 10/2 added the sync-throw / never-settling / "index" URL checks.
   console.log("\n[XR] cross-app update reset - the head script's nukeAndReload against fake registrations / caches");
   await (async () => {
     const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
@@ -11772,18 +11782,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const reg = (id, scope, slots, rejects) => ({ id, scope, rejects: !!rejects, active: slots.active ? { scriptURL: slots.active } : null, waiting: slots.waiting ? { scriptURL: slots.waiting } : null, installing: slots.installing ? { scriptURL: slots.installing } : null });
     // Runs the head script once in a fresh sandbox; resolves when it reloads (location.replace / location.reload) or after 2 s.
     const runHead = async (o) => {
-      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined };
+      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], timers: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined };
       let settle; const settled = new Promise(r => { settle = r; });
       const sandbox = {
         URL,
+        // Real timers; o.fastTimers fires them after 5 ms (the never-settling check) - the requested delay is recorded.
+        setTimeout: (fn, ms) => { rec.timers.push(ms); return setTimeout(fn, o.fastTimers ? 5 : ms); },
         console: { warn: (...a) => { rec.warns.push(a.map(String).join(" ")); }, log() {}, error() {} },
         localStorage: { getItem: (k) => (rec.ls.has(k) ? rec.ls.get(k) : null), setItem: (k, v) => { rec.ls.set(k, String(v)); }, removeItem: (k) => { rec.ls.delete(k); } },
         navigator: {},
         location: { href: o.href, replace: (u) => { rec.replaced.push(String(u)); settle(); }, reload: () => { rec.reloads++; settle(); } },
       };
       sandbox.window = sandbox;
-      if (o.regs) sandbox.navigator.serviceWorker = { getRegistrations: () => Promise.resolve(o.regs.map(r => Object.assign({}, r, { unregister: () => { rec.unregistered.push(r.id); return r.rejects ? Promise.reject(new Error("unregister failed (fake)")) : Promise.resolve(true); } }))) };
-      if (o.cacheNames) sandbox.caches = { keys: () => (o.keysReject ? Promise.reject(new Error("caches.keys failed (fake)")) : Promise.resolve(o.cacheNames.slice())), delete: (n) => { rec.deleted.push(n); return Promise.resolve(true); } };
+      if (o.regs) sandbox.navigator.serviceWorker = { getRegistrations: () => {
+        if (o.regsThrow) throw new Error("getRegistrations threw (fake)");
+        if (o.regsHang) return new Promise(() => {});
+        return Promise.resolve(o.regs.map(r => Object.assign({}, r, { unregister: () => { rec.unregistered.push(r.id); return r.rejects ? Promise.reject(new Error("unregister failed (fake)")) : Promise.resolve(true); } })));
+      } };
+      if (o.swGetterThrows) Object.defineProperty(sandbox.navigator, "serviceWorker", { get() { throw new Error("SecurityError: serviceWorker refused (fake)"); } });
+      if (o.cacheNames) sandbox.caches = { keys: () => { if (o.keysThrow) throw new Error("caches.keys threw (fake)"); return o.keysReject ? Promise.reject(new Error("caches.keys failed (fake)")) : Promise.resolve(o.cacheNames.slice()); }, delete: (n) => { rec.deleted.push(n); return Promise.resolve(true); } };
       vm.createContext(sandbox);
       vm.runInContext(HEAD, sandbox, { filename: "index-source.html (head script)" });
       rec.hardReset = sandbox.__silvisHardReset;
@@ -11809,7 +11826,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const LIVE_REGS = [
       reg("root-onesignal", LIVE, { active: LIVE + "OneSignalSDKWorker.js" }), // Davenport's push worker, exactly as served
       reg("root-other", LIVE, { active: LIVE + "sw.js" }), // a root worker with some other script: not Silvis-scoped either
-      reg("silvis", SIL, { active: SIL + "old-sw.js" }),
+      // Silvis's push worker as Prompt 30 will register it (scope = the folder, script sw.js): unregistered TODAY (Silvis
+      // registers no worker yet); Prompt 30's keepRegistration hook moves it to kept - this named fake is where that shows.
+      reg("silvis-push", SIL, { active: SIL + "sw.js" }),
+      reg("silvis", SIL + "legacy/", { active: SIL + "legacy/old-sw.js" }),
       reg("silvis-sub-installing", SIL + "sub/", { installing: SIL + "sub/w.js" }),
       reg("silvis-no-worker", SIL + "empty/", {}),
       reg("silvis-onesignal", SIL + "push/", { active: SIL + "push/OneSignalSDKWorker.js?appId=fake" }),
@@ -11818,9 +11838,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       reg("prefix-sibling", LIVE + "Silvis-Call-Schedule-old/", { active: LIVE + "Silvis-Call-Schedule-old/sw.js" }), // shares the prefix STRING only
       reg("davenport-folder", LIVE + "Call-Schedule-App/", { active: LIVE + "Call-Schedule-App/sw.js" }),
     ];
-    const LIVE_UNREG = ["silvis", "silvis-sub-installing", "silvis-no-worker"];
-    const CACHES = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "silvis-shell-v1", "dsg-silvis-mirror"];
-    const NOT_OURS = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "dsg-silvis-mirror"];
+    const LIVE_UNREG = ["silvis-push", "silvis", "silvis-sub-installing", "silvis-no-worker"]; // Prompt 30: silvis-push leaves this list
+    const CACHES = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "silvis-shell-v1", "dsg-silvis-mirror", "silvisX-cache"];
+    const NOT_OURS = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "dsg-silvis-mirror", "silvisX-cache"];
 
     await acheckX("XR registrations (Refresh buttons, live origin): only workers scoped inside /Silvis-Call-Schedule/ are unregistered - the root OneSignal worker (Davenport's push), a root worker with another script, the prefix-sharing /Silvis-Call-Schedule-old/, Davenport's folder and every Silvis-scoped OneSignal script (active / waiting / installing) are kept", async () => {
       const rec = await runHead({ href: SIL + "?public=1", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, callHardReset: true });
@@ -11829,7 +11849,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!rec.unregistered.includes("prefix-sibling"), "/Silvis-Call-Schedule-old/ only shares the prefix string - unregistered");
       assert.deepStrictEqual(sorted(rec.unregistered), sorted(LIVE_UNREG), "exactly the Silvis-scoped, non-OneSignal registrations");
     });
-    await acheckX("XR caches: only a silvis- cache is deleted - OneSignal..., dsg-..., workbox-... and a name with silvis- inside it are kept", async () => {
+    await acheckX("XR caches: only a silvis- cache is deleted - OneSignal..., dsg-..., workbox-..., a name with silvis- inside it and silvisX- (no dash) are kept", async () => {
       const rec = await runHead({ href: SIL, stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, callHardReset: true });
       NOT_OURS.forEach(n => assert.ok(!rec.deleted.includes(n), "deleted another app's cache " + n));
       assert.deepStrictEqual(rec.deleted, ["silvis-shell-v1"]);
@@ -11863,21 +11883,47 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(rec2.reloads, 1, "caches.keys rejecting -> plain reload");
       assert.deepStrictEqual(sorted(rec2.unregistered), sorted(LIVE_UNREG));
     });
-    await acheckX("XR the base comes from location: a local host at the root (Silvis owns that origin's root there), a preview path (/preview/silvis/index.html - its root, its parent and a prefix-sharing sibling kept) and the folder URL without its trailing slash (the root still kept)", async () => {
+    await acheckX("XR the base comes from location: a local host at the root (Silvis owns that origin's root there), a preview path (/preview/silvis/index.html - its root, its parent and a prefix-sharing sibling kept), the folder URL without its trailing slash (the root still kept) and the extensionless .../index Pages also serves (a file: the base is the folder, not .../index/)", async () => {
       const L = "http://127.0.0.1:5173/";
-      const local = await runHead({ href: L, stored: { "silvis-app-version": VERSION }, regs: [reg("local-root", L, { active: L + "sw.js" }), reg("local-root-onesignal", L, { active: L + "OneSignalSDKWorker.js" })], cacheNames: [], callHardReset: true });
+      // the local and preview Silvis-scoped fakes run old-sw.js, so that only the named silvis-push fake turns with Prompt 30
+      const local = await runHead({ href: L, stored: { "silvis-app-version": VERSION }, regs: [reg("local-root", L, { active: L + "old-sw.js" }), reg("local-root-onesignal", L, { active: L + "OneSignalSDKWorker.js" })], cacheNames: [], callHardReset: true });
       assert.deepStrictEqual(local.unregistered, ["local-root"], "local root host");
       assertReloadedWithV(local, L);
       const P = "http://localhost:8080/";
-      const prev = await runHead({ href: P + "preview/silvis/index.html?x=1", stored: { "silvis-app-version": VERSION }, regs: [reg("p-root", P, { active: P + "sw.js" }), reg("p-parent", P + "preview/", { active: P + "preview/sw.js" }), reg("p-silvis", P + "preview/silvis/", { active: P + "preview/silvis/sw.js" }), reg("p-sibling", P + "preview/silvis-old/", { active: P + "preview/silvis-old/sw.js" })], callHardReset: true });
+      const prev = await runHead({ href: P + "preview/silvis/index.html?x=1", stored: { "silvis-app-version": VERSION }, regs: [reg("p-root", P, { active: P + "sw.js" }), reg("p-parent", P + "preview/", { active: P + "preview/sw.js" }), reg("p-silvis", P + "preview/silvis/", { active: P + "preview/silvis/old-sw.js" }), reg("p-sibling", P + "preview/silvis-old/", { active: P + "preview/silvis-old/sw.js" })], callHardReset: true });
       assert.deepStrictEqual(prev.unregistered, ["p-silvis"], "preview path");
       assertReloadedWithV(prev, P + "preview/silvis/index.html", { x: "1" });
       const bare = await runHead({ href: LIVE + "Silvis-Call-Schedule", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
       assert.deepStrictEqual(sorted(bare.unregistered), sorted(LIVE_UNREG), "no trailing slash: the base is still the Silvis folder, never the origin root");
+      const idx = await runHead({ href: SIL + "index", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
+      assert.deepStrictEqual(sorted(idx.unregistered), sorted(LIVE_UNREG), ".../Silvis-Call-Schedule/index: the base is the Silvis folder (silvis-push at the folder scope is reached)");
+      assertReloadedWithV(idx, SIL + "index");
     });
     await acheckX("XR no serviceWorker and no caches (an old browser): the _v reload still runs", async () => {
       const rec = await runHead({ href: SIL, stored: { "silvis-app-version": VERSION }, callHardReset: true });
       assertReloadedWithV(rec, SIL);
+    });
+    await acheckX("XR a SYNCHRONOUS throw (getRegistrations() or caches.keys() throwing, navigator.serviceWorker refused) does not escape the Refresh click: the plain-reload fallback with its console.warn, nothing outside the folder touched", async () => {
+      for (const extra of [{ regsThrow: true }, { keysThrow: true }, { swGetterThrows: true }]) {
+        const label = JSON.stringify(extra);
+        const rec = await runHead(Object.assign({ href: SIL, stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, callHardReset: true }, extra));
+        assert.strictEqual(rec.reloads, 1, "location.reload ran once, " + label);
+        assert.strictEqual(rec.replaced.length, 0, label);
+        assert.ok(rec.warns.some(w => w.includes("nukeAndReload: cache/service-worker clear failed - plain reload:")), "the console.warn, " + label + ": " + rec.warns.join(" | "));
+        assert.ok(!rec.unregistered.includes("root-onesignal") && !rec.unregistered.includes("root-other"), label);
+      }
+    });
+    await acheckX("XR a clear that never settles (getRegistrations() hangs) still reloads: after the 3 s wait the _v reload goes ahead with a console.warn - the cache leg has run, no worker was touched", async () => {
+      const rec = await runHead({ href: SIL, stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, regsHang: true, fastTimers: true, callHardReset: true });
+      assert.strictEqual(rec.timers.length, 1, "one wait timer, got " + JSON.stringify(rec.timers));
+      assert.ok(rec.timers[0] >= 1000 && rec.timers[0] <= 10000, "the wait is seconds long (the clears get their chance first), got " + rec.timers[0] + " ms");
+      assert.strictEqual(rec.reloads, 0, "the _v reload, not the plain fallback");
+      assert.strictEqual(rec.replaced.length, 1, "exactly one location.replace");
+      const v = new URL(rec.replaced[0]).searchParams.get("_v") || "";
+      assert.ok(v.startsWith(VERSION + "-"), "the reload URL carries _v, got " + JSON.stringify(v));
+      assert.ok(rec.warns.some(w => w.includes("nukeAndReload: cache/service-worker clear did not finish in 3 s - reloading anyway")), "the console.warn: " + rec.warns.join(" | "));
+      assert.deepStrictEqual(rec.unregistered, []);
+      assert.deepStrictEqual(rec.deleted, ["silvis-shell-v1"]);
     });
     check("XR source pins: one nukeAndReload, assigned once to window.__silvisHardReset; the keep-predicate and its Prompt 30 hook comment are in place", () => {
       const cnt = (needle) => SRC.split(needle).length - 1;
@@ -11885,6 +11931,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(cnt("window.__silvisHardReset = nukeAndReload;"), 1);
       assert.strictEqual(cnt("function keepRegistration(scriptURLs, silvisBase)"), 1);
       assert.ok(HEAD.includes("// KEEP-PREDICATE:") && HEAD.includes("// PROMPT 30 HOOK: Silvis's own push worker (sw.js"), "the commented keep-predicate hook for Prompt 30's push worker");
+      assert.ok(HEAD.includes('//   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;'), "the hook's example compares the script URL without its query (sw.js?v=... must be kept too)");
     });
   })();
 
