@@ -11175,7 +11175,9 @@ try {
   //     p_replace: false }; the cells read mine; the grid shows "A ..." on both (no line overflows, the appText colour, the
   //     legend line); the contrast measure over the card and the grid lines passes in light and in dark; since
   //     fix/painter-dark-mode (10/3): a third APP "Jo Applegate" holds D13 for this step only - at 390 px the grid's NAME shows
-  //     whole and apart ("P.App" / "J.App", spec H) - and in dark My APP days keeps its tile colours and outlines (E), shows the
+  //     whole and apart ("P.App" / "J.App", spec H) and a week with an APP line is no taller than one without (measured on a
+  //     month the APP pages see with no vacation dot: their time_off answer leaves out its rows, so live data never reaches
+  //     the heights) - and in dark My APP days keeps its tile colours and outlines (E), shows the
   //     unsaved mark (G) and asks before unsaved taps leave Mine (F, BEHAVIOUR);
   //  2. APP B, holding the picture from before A's Save (a frozen copy the mock releases on B's first save), is refused on D10
   //     (400 AP005, the function's own words); the reload shows D10 taken by Appleton (aria-disabled); a further tap sends nothing;
@@ -11255,6 +11257,32 @@ try {
     const waitCell = (pg, d, st) => pg.waitForFunction(([d, st]) => { const el = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return !!el && el.getAttribute("data-state") === st; }, [d, st], { timeout: 10000 });
     const gridApp = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); return a ? { day: e.getAttribute("data-day"), text: a.textContent.trim(), profile: a.getAttribute("data-app-profile"), color: getComputedStyle(a).color } : null; }).filter(Boolean));
     const lineOverflowOf = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + " " + e.scrollWidth + ">" + e.clientWidth; }));
+    // Re-check of spec H (10/3): step 1's week check measures cell heights, and at 390 px the one piece of LIVE content that
+    // grows a cell is the vacation dots row (+9 px; the holiday name, the NOTE tag and the badges are hidden or absolute). The
+    // APP pages read time_off from the live table (the anon passthrough), so an APP day on a live vacation (the 10th / 11th /
+    // 13th fall on live rows when next month is January, February or April) - or today's 2 px ring over a vacation in the
+    // grid's first week - failed the check on a case the build guide accepts ("an APP line and vacation dots"). So the APP
+    // pages' time_off answer is the served rows (the live read, or the fixture's, plus extraTimeOff) MINUS every row that
+    // overlaps next month's grid weeks: the measured month shows no vacation dot, and the check FAILS (never skips) if a cell
+    // still shows one. A failed read passes through unchanged. appVacLeftOut keeps "<person> <start>..<end>" only.
+    const nmShift = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    const NM_GRID_LO = nmShift(isoM(1), -7), NM_GRID_HI = nmShift(isoM(new Date(Date.UTC(NM.y, NM.m, 0)).getUTCDate()), 7);
+    const appVacLeftOut = new Set();
+    const appTimeOff = async ({ route, req, url, json }) => {
+      if (req.method() !== "GET" || url.pathname !== "/rest/v1/time_off") return false;
+      let rows = fixtureAnswer(url);
+      if (!rows) {
+        const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
+        const body = res.ok() ? await res.json().catch(() => null) : null;
+        if (!Array.isArray(body)) { await route.fulfill({ response: res }); return true; }
+        rows = body;
+      }
+      const all = rows.concat(extraTimeOff.map(r => ({ ...r })));
+      const inGrid = (r) => !!r && r.start_date <= NM_GRID_HI && r.end_date >= NM_GRID_LO;
+      all.filter(inGrid).forEach(r => appVacLeftOut.add(r.person_id + " " + r.start_date + ".." + r.end_date));
+      await json(200, all.filter(r => !inGrid(r)));
+      return true;
+    };
     const mkAppCtx = async (profile, jwt, tag) => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
       await ctx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: jwt, version: APP_VERSION });
@@ -11263,7 +11291,7 @@ try {
       const pg = await ctx.newPage();
       watchPage(pg, tag);
       const settle = restReadsSettled(pg);
-      await pg.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(profile));
+      await pg.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(profile, appTimeOff));
       await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
       return { ctx, pg, settle };
     };
@@ -11455,13 +11483,15 @@ try {
         // "J.App"), and a WEEK with an APP line is never taller than the month's weeks without one (the row height holds). Review
         // of spec H: the grid stretches every cell of a week to the week's height, so cells are grouped by their top edge and whole
         // weeks compared (a per-cell max always met the APP cells' own week-mates); a week without an APP line must also stay at
-        // the phone min-height, or a taller plain week could hide the APP week's growth.
+        // the phone min-height, or a taller plain week could hide the APP week's growth. Re-check (10/3): the heights must not read
+        // live content - the APP pages' time_off answer leaves out every row overlapping this month's grid (appTimeOff above), so
+        // a cell with vacation dots here means that control did not hold and the check FAILS (a dotted week is not measurable).
         {
           const names = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const code = a.querySelector("[data-testid=cal-app-code]"), nm = a.querySelector(".cal-app-name"); return { day: e.getAttribute("data-day"), code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, w: code ? Math.round(code.scrollWidth * 10) / 10 : null, nameShown: !!nm && getComputedStyle(nm).display !== "none" }; }).filter(Boolean));
           const wk = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => {
-            const by = {};
-            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
-            return { weeks: Object.keys(by).map(Number).sort((a, b) => a - b).map(k => by[k]), minH: els.length ? parseFloat(getComputedStyle(els[0]).minHeight) : NaN };
+            const by = {}, dotDays = [];
+            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, dots: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; if (e.querySelector(".cal-dots")) { w.dots++; dotDays.push(e.getAttribute("data-day")); } w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
+            return { weeks: Object.keys(by).map(Number).sort((a, b) => a - b).map(k => by[k]), minH: els.length ? parseFloat(getComputedStyle(els[0]).minHeight) : NaN, dotDays };
           });
           const appWeeks = wk.weeks.filter(w => w.app), plainWeeks = wk.weeks.filter(w => !w.app);
           const n10 = names.find(x => x.day === D10), n13 = names.find(x => x.day === D13H);
@@ -11469,10 +11499,11 @@ try {
           if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
           else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
           else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
+          else if (wk.dotDays.length) fail(`${P} 1 H (${theme}): ${wk.dotDays.length} cell(s) of the month carry vacation dots (${wk.dotDays.slice(0, 6).join(", ")}) although the APP pages' time_off answer leaves out every row overlapping ${NM_GRID_LO}..${NM_GRID_HI} - a dotted week is not measurable (the heights would read live content), so the week comparison cannot run: ${JSON.stringify(wk.weeks)}`);
           else if (!appWeeks.length || !plainWeeks.length || !(wk.minH > 0)) fail(`${P} 1 H (${theme}): the month should have weeks with and without an APP line and a phone min-height to compare: ${JSON.stringify(wk)}`);
           else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - the APP line grew its row: ${JSON.stringify(wk.weeks)}`);
           else if (maxPlain > wk.minH + 0.5) fail(`${P} 1 H (${theme}): a week without an APP line is ${maxPlain}px, over the phone min-height ${wk.minH}px - it would hide an APP week's growth: ${JSON.stringify(wk.weeks)}`);
-          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; ${appWeeks.length} week(s) with an APP line ${maxApp}px, ${plainWeeks.length} without ${maxPlain}px (min-height ${wk.minH}px) - the row height holds`);
+          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; ${appWeeks.length} week(s) with an APP line ${maxApp}px, ${plainWeeks.length} without ${maxPlain}px (min-height ${wk.minH}px) - the row height holds; no vacation dot in the month (the APP pages' time_off answer left out ${appVacLeftOut.size} row(s) overlapping ${NM_GRID_LO}..${NM_GRID_HI}${appVacLeftOut.size ? ": " + [...appVacLeftOut].slice(0, 6).join(", ") : ""})`);
         }
         p29Judge(`1 contrast: the grid's APP lines (${theme})`, await p29Measure(A.pg, "[data-testid=cal-app]"));
         await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });
