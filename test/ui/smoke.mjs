@@ -210,7 +210,14 @@
 //     /Silvis-Call-Schedule/, the version-change reset and __silvisHardReset
 //     unregister only the app-folder worker - the origin-root one, a
 //     Silvis-scoped OneSignal one and a prefix-sharing sibling survive - and
-//     delete only the silvis- cache); a
+//     delete only the silvis- cache); the Prompt 30 phone-push step (own
+//     contexts under /Silvis-Call-Schedule/, Supabase answered locally,
+//     Notification / pushManager faked, the real sw.js registered: Enable ->
+//     the save body + badge, Diagnose, Send test, the phone switches, the
+//     version-change reset keeps sw.js, the silent re-arm, the ?tab= deep
+//     link, the open-window message, Turn off, Reset, the columns absent,
+//     sign-out order, Blocked, ?public=1, iPhone Safari / Home Screen at
+//     390 px); a
 //     third page runs data management end to end with recorded writes: JSON
 //     export shape/counts = live anon data, malformed imports refused with no
 //     write, factory reset needs the typed RESET, records the snapshot BEFORE
@@ -1558,6 +1565,28 @@ const routeSupabaseAs = (profile, extra) => async (route) => {
   if (extra && await extra({ route, req, url, json })) return;
   return routeSupabase(route);
 };
+// Prompt 30 (phone push): fake push material generated HERE for this run - a P-256 public key in the VAPID shape (65-byte
+// uncompressed point, base64url) the mocked ?vapid=public answers, and a subscription's p256dh / auth in the DB's shapes.
+// Fake endpoints use short tokens (https://fcm.googleapis.com/fcm/send/smoke-device-1), never a real device.
+const P30_VAPID = (() => { const j = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" }).publicKey.export({ format: "jwk" }); return Buffer.concat([Buffer.from([4]), Buffer.from(j.x, "base64url"), Buffer.from(j.y, "base64url")]).toString("base64url"); })();
+const P30_P256DH = Buffer.concat([Buffer.from([4]), crypto.randomBytes(64)]).toString("base64url");
+const P30_AUTH = crypto.randomBytes(16).toString("base64url");
+const P30_EP1 = "https://fcm.googleapis.com/fcm/send/smoke-device-1";
+const P30_EP2 = "https://fcm.googleapis.com/fcm/send/smoke-device-2";
+// The push requests (the public-key GET, the test POST, the three RPCs, the *_push column probe): answered by the harness on
+// EVERY page - never passed through to the live project, whose function / migration this branch does not assume. The shared
+// route answers the applied + deployed picture with no device saved; the Prompt 30 step's own context has its own store.
+const P30_RPC_RE = /^\/rest\/v1\/rpc\/(save_push_subscription|delete_push_subscription|push_subscription_status)$/;
+const p30IsPush = (url, method) => (url.pathname === "/functions/v1/send-notification" && ((method === "GET" && url.searchParams.get("vapid") === "public") || (method === "POST" && url.searchParams.get("push") === "test")))
+  || P30_RPC_RE.test(url.pathname)
+  || (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /trade_updates_push/.test(url.searchParams.get("select") || ""));
+const p30SharedAnswer = (url, method) => {
+  if (url.pathname === "/functions/v1/send-notification") return method === "GET" ? { status: 200, body: { publicKey: P30_VAPID } } : { status: 200, body: { push: { sent: 0, failed: 0, removed: 0, skipped_no_device: 1, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: null } } };
+  if (url.pathname.endsWith("/save_push_subscription")) return { status: 200, body: { ok: true, action: "added", devices: 1, audit: true } };
+  if (url.pathname.endsWith("/delete_push_subscription")) return { status: 200, body: { ok: true, removed: 0, devices: 0, audit: false } };
+  if (url.pathname.endsWith("/push_subscription_status")) return { status: 200, body: { ok: true, saved: false, devices: 0 } };
+  return { status: 200, body: [] }; // the *_push column probe: both columns exist
+};
 const routeSupabase = async (route, scope) => {
   // scope: "session" when installed by the A3 session scenario's context (its blob stamp is kept apart); Playwright
   // passes the Request as the second argument when the handler is registered bare, which reads as the main scope.
@@ -1566,6 +1595,7 @@ const routeSupabase = async (route, scope) => {
   const url = new URL(req.url());
   const method = req.method();
   const json = (status, body) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+  if (p30IsPush(url, method)) { const a = p30SharedAnswer(url, method); return json(a.status, a.body); }
   if (url.pathname.startsWith("/auth/v1/user") && method === "GET") {
     return json(200, { id: FAKE_UID, email: FAKE_EMAIL, aud: "authenticated", role: "authenticated" });
   }
@@ -11866,6 +11896,375 @@ try {
     } catch (e) { fail("cross-app reset: " + errLine(e)); try { if (xr) await xr.screenshot({ path: path.join(OUT, "failure-cross-app-reset.png"), fullPage: true }); } catch (e2) {} }
     await xrCtx.close();
   }
+
+  // ====================== Prompt 30: phone notifications (Web Push through Silvis's own sw.js) ======================
+  // @p30-smoke-start
+  // Own BrowserContexts, the app served under /Silvis-Call-Schedule/ (the origin root is its parent, as on fkhan628.github.io),
+  // every Supabase request answered by p30Route (a signed-in surgeon linked to s2; the push RPCs keep a store of saved
+  // endpoints; everything else 200 [] / 201 []) - nothing reaches the live project. The REAL sw.js is registered by the app;
+  // an init script fakes what headless Chromium cannot do: Notification (permission + requestPermission, counted) and each
+  // registration's pushManager (subscribe / getSubscription / unsubscribe, keyed by the registration's scope and kept in
+  // localStorage; unregistering a registration drops its subscription, as browsers do). __p30mark (a binding) puts the
+  // page's unsubscribe calls on the same timeline as the requests the route sees.
+  {
+    const P30_BASE = `${BASE}Silvis-Call-Schedule/`;
+    const P30_UID = "00000000-0000-4000-8000-0000000030a1";
+    const P30_PROFILE = { id: P30_UID, person_id: "s2", role: "surgeon", display_name: null, email: null, created_at: "2026-10-02T00:00:00Z" };
+    const P30_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: P30_UID, role: "authenticated", email: "push-surgeon@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
+    const p30 = { calls: [], order: [], saved: new Map(), cols: "ok", errors: [], expected400: 0 };
+    const p30Route = async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const method = req.method();
+      const body = req.postData() || "";
+      const json = (status, b) => route.fulfill({ status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(b) });
+      const rec = { path: url.pathname + url.search, method, body, at: p30.order.length };
+      p30.calls.push(rec);
+      const tag = p30IsPush(url, method) || url.pathname.startsWith("/auth/v1/logout") || (method !== "GET" && url.pathname === "/rest/v1/notification_preferences");
+      if (tag) p30.order.push(method + " " + url.pathname.replace(/^\/(rest|functions|auth)\/v1\//, "") + url.search);
+      if (url.pathname.startsWith("/auth/v1/user")) return json(200, { id: P30_UID, email: "push-surgeon@example.com", aud: "authenticated", role: "authenticated" });
+      if (url.pathname.startsWith("/auth/v1/logout")) return json(200, {});
+      if (url.pathname.startsWith("/auth/v1/token")) return json(400, { error: "invalid_grant", error_description: "harness: no refresh in the push step" });
+      if (url.pathname.startsWith("/rest/v1/user_profiles") && method === "GET") return json(200, /role=in\./.test(url.search) ? [{ person_id: "s1", role: "admin" }] : [P30_PROFILE]);
+      let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+      if (url.pathname === "/functions/v1/send-notification" && method === "GET" && url.searchParams.get("vapid") === "public") return json(200, { publicKey: P30_VAPID });
+      if (url.pathname === "/functions/v1/send-notification" && method === "POST" && url.searchParams.get("push") === "test") { const n = p30.saved.size; return json(200, { push: { sent: n ? 1 : 0, failed: 0, removed: 0, skipped_no_device: n ? 0 : 1, skipped_pref_off: 0, devices: { sent: n, failed: 0, removed: 0 }, error: null } }); }
+      if (url.pathname === "/rest/v1/rpc/save_push_subscription") { const had = p30.saved.has(b.p_endpoint); p30.saved.set(b.p_endpoint, { p256dh: b.p_p256dh, auth: b.p_auth, label: b.p_label }); return json(200, { ok: true, action: had ? "kept" : "added", devices: p30.saved.size, audit: !had }); }
+      if (url.pathname === "/rest/v1/rpc/delete_push_subscription") { const had = p30.saved.delete(b.p_endpoint); return json(200, { ok: true, removed: had ? 1 : 0, devices: p30.saved.size, audit: had }); }
+      if (url.pathname === "/rest/v1/rpc/push_subscription_status") return json(200, { ok: true, saved: p30.saved.has(b.p_endpoint), devices: p30.saved.size });
+      if (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /trade_updates_push/.test(url.searchParams.get("select") || "")) {
+        if (p30.cols === "ok") return json(200, []);
+        p30.expected400++;
+        return json(400, { code: "42703", details: null, hint: null, message: "column notification_preferences.trade_updates_push does not exist" });
+      }
+      if (method === "GET") return json(200, []);
+      return json(method === "POST" ? 201 : 200, []);
+    };
+    const p30Init = (cfg) => {
+      try {
+        localStorage.setItem("silvis-auth-token", cfg.token);
+        localStorage.setItem("silvis-auth-refresh", "fake-refresh");
+        localStorage.setItem("silvis-app-version", localStorage.getItem("smoke-p30-version") || cfg.version);
+        localStorage.removeItem("smoke-p30-version");
+      } catch (e) {}
+      const LS = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+      const mark = (what) => { try { if (window.__p30mark) window.__p30mark(what); } catch (e) {} };
+      const fromB64u = (s) => { const t = atob(String(s).replace(/-/g, "+").replace(/_/g, "/")); const u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u.buffer; };
+      const toB64u = (buf) => { const u = new Uint8Array(buf); let s = ""; for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+      if (cfg.standalone) { try { Object.defineProperty(Navigator.prototype, "standalone", { get: () => true, configurable: true }); } catch (e) {} }
+      const N = function Notification() {};
+      Object.defineProperty(N, "permission", { get: () => LS("smoke-p30-perm", "default") });
+      N.requestPermission = async () => {
+        localStorage.setItem("smoke-p30-asks", String(Number(LS("smoke-p30-asks", "0")) + 1));
+        const a = LS("smoke-p30-answer", "granted");
+        localStorage.setItem("smoke-p30-perm", a);
+        return a;
+      };
+      Object.defineProperty(window, "Notification", { value: N, configurable: true, writable: true });
+      const subKey = (scope) => "smoke-p30-sub:" + scope;
+      const mkSub = (scope, r) => ({
+        endpoint: r.endpoint,
+        expirationTime: null,
+        options: { userVisibleOnly: true, applicationServerKey: fromB64u(r.key) },
+        getKey: (n) => (n === "p256dh" ? fromB64u(cfg.p256dh) : n === "auth" ? fromB64u(cfg.auth) : null),
+        unsubscribe: async () => { mark("unsubscribe " + r.endpoint.slice(-14)); localStorage.removeItem(subKey(scope)); return true; },
+      });
+      const readSub = (scope) => { try { const r = JSON.parse(localStorage.getItem(subKey(scope)) || "null"); return r && r.endpoint ? mkSub(scope, r) : null; } catch (e) { return null; } };
+      try {
+        Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { configurable: true, get() {
+          const scope = this.scope;
+          return {
+            getSubscription: async () => readSub(scope),
+            permissionState: async () => (LS("smoke-p30-perm", "default") === "granted" ? "granted" : LS("smoke-p30-perm", "default") === "denied" ? "denied" : "prompt"),
+            subscribe: async (opts) => {
+              mark("subscribe");
+              const key = toB64u(opts && opts.applicationServerKey);
+              const cur = readSub(scope);
+              if (cur) { if (toB64u(cur.options.applicationServerKey) !== key) throw new DOMException("a subscription with a different key exists (fake)", "InvalidStateError"); return cur; }
+              localStorage.setItem(subKey(scope), JSON.stringify({ endpoint: LS("smoke-p30-next-ep", cfg.ep1), key }));
+              return readSub(scope);
+            },
+          };
+        } });
+        const unreg = ServiceWorkerRegistration.prototype.unregister;
+        ServiceWorkerRegistration.prototype.unregister = function () { try { localStorage.removeItem(subKey(this.scope)); } catch (e) {} return unreg.call(this); };
+      } catch (e) { console.log("p30 init: could not patch the registration (" + e + ")"); }
+    };
+    const P30_CFG = { token: P30_JWT, version: APP_VERSION, p256dh: P30_P256DH, auth: P30_AUTH, ep1: P30_EP1 };
+    const mkP30Ctx = async (opts) => {
+      const ctx = await browser.newContext(Object.assign({ viewport: { width: 1180, height: 900 } }, opts || {}));
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      await ctx.route((url) => url.hostname === SUPABASE_HOST, p30Route);
+      await ctx.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await ctx.exposeBinding("__p30mark", (src, what) => { p30.order.push(String(what)); });
+      return ctx;
+    };
+    const watch = (pg, label) => {
+      pg.on("pageerror", (e) => p30.errors.push(label + " pageerror: " + String(e && e.message || e)));
+      pg.on("console", (msg) => {
+        if (msg.type() !== "error") return;
+        const t = msg.text();
+        if (EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t))) return;
+        if (/status of 400/.test(t) && p30.expected400 > 0) { p30.expected400--; return; } // the forced 42703 probe answer
+        p30.errors.push(label + " console: " + t.slice(0, 200));
+      });
+    };
+    const loadApp = async (pg, url) => {
+      await pg.goto(url, { waitUntil: "domcontentloaded" });
+      await pg.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
+      await pg.waitForSelector("button[data-tab=settings]", { timeout: 20000 });
+    };
+    const openCard = async (pg) => {
+      await pg.click("button[data-tab=settings]");
+      if (!(await pg.$("[data-testid=push-card]"))) { await pg.click("text=Notification settings"); }
+      await pg.waitForSelector("[data-testid=push-card] [data-testid=push-state]:not([data-state=loading])", { timeout: 15000 });
+    };
+    const stateOf = (pg) => pg.$eval("[data-testid=push-card]", (el) => ({
+      state: (el.querySelector("[data-testid=push-state]") || {}).getAttribute ? el.querySelector("[data-testid=push-state]").getAttribute("data-state") : null,
+      line: (el.querySelector("[data-testid=push-state]") || { textContent: "" }).textContent.trim(),
+      badge: el.querySelector("[data-testid=push-badge]") ? el.querySelector("[data-testid=push-badge]").textContent.trim() : null,
+      msg: el.querySelector("[data-testid=push-msg]") ? el.querySelector("[data-testid=push-msg]").textContent.trim() : null,
+      buttons: Array.from(el.querySelectorAll("button")).map(b => b.textContent.trim()),
+    }));
+    const swRegs = (pg) => pg.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(r => r.scope.replace(location.origin, "") + " <- " + (((r.active || r.waiting || r.installing) || {}).scriptURL || "?").replace(location.origin, "")).sort());
+    const lsGet = (pg, k) => pg.evaluate((k) => localStorage.getItem(k), k);
+    const pushCalls = (from, re) => p30.calls.slice(from).filter(c => re.test(c.path));
+    const SIL_REG = "/Silvis-Call-Schedule/ <- /Silvis-Call-Schedule/sw.js", ROOT_REG = "/ <- /xr-sw.js";
+    const viewNow = (pg) => pg.evaluate(() => document.querySelector("[data-testid=timeoff-card], [data-testid=trades-waiting]") ? "timeoff" : document.querySelector("[data-testid=openshifts-card]") ? "openshifts" : document.querySelector("[data-testid=push-card], button[data-testid=week-start-sun]") ? "settings" : document.querySelector("[data-testid=cal-month]") ? "calendar" : "?");
+    let pctx = null, pg = null;
+    try {
+      pctx = await mkP30Ctx();
+      await pctx.addInitScript(p30Init, P30_CFG);
+      pg = await pctx.newPage();
+      watch(pg, "desktop");
+      await loadApp(pg, P30_BASE);
+      // a dummy worker at the origin root (Davenport's place) - Reset and the update reset must leave it alone
+      await pg.evaluate(async () => { await navigator.serviceWorker.register("/xr-sw.js", { scope: "/" }); });
+      await openCard(pg);
+      let s = await stateOf(pg);
+      if (s.state !== "off" || s.line !== "Off for this device." || s.badge !== null || !s.buttons.includes("Enable")) fail("P30 card (desktop, before Enable): " + JSON.stringify(s));
+      else ok(`P30 card (desktop): Phone notifications box first in Notification settings - 'Off for this device.', buttons ${s.buttons.join(" / ")}, no badge`);
+      // (1) Enable: the permission is asked once, the real sw.js active at the folder scope, the save body, the badge, "Subscribed (as ...)"
+      let c0 = p30.calls.length;
+      await pg.click("[data-testid=push-enable]");
+      await pg.waitForFunction(() => { const m = document.querySelector("[data-testid=push-msg]"); return m && /^(Subscribed \(as |Permission granted, but|Not ready|Couldn't|Phone notifications are available|This browser refused)/.test(m.textContent.trim()); }, null, { timeout: 25000 });
+      await pg.waitForSelector("[data-testid=push-state][data-state=on]", { timeout: 5000 }).catch(() => {});
+      s = await stateOf(pg);
+      let regs = await swRegs(pg);
+      const saves = pushCalls(c0, /rpc\/save_push_subscription$/);
+      let saveBody = null; try { saveBody = JSON.parse(saves[0].body); } catch (e) {}
+      const asks = await lsGet(pg, "smoke-p30-asks");
+      if (!/^Subscribed \(as Burchett\)\.$/.test(s.msg || "")) fail("P30 Enable: the message box reads " + JSON.stringify(s.msg) + " (want 'Subscribed (as Burchett).')");
+      else if (asks !== "1") fail("P30 Enable: requestPermission ran " + asks + " time(s), want 1");
+      else if (!regs.includes(SIL_REG) || !regs.includes(ROOT_REG)) fail("P30 Enable: registrations " + JSON.stringify(regs) + " - want the real sw.js at the folder scope beside the root dummy");
+      else if (saves.length !== 1 || !saveBody || JSON.stringify(Object.keys(saveBody).sort()) !== JSON.stringify(["p_auth", "p_endpoint", "p_label", "p_p256dh"]) || saveBody.p_endpoint !== P30_EP1 || saveBody.p_p256dh !== P30_P256DH || saveBody.p_auth !== P30_AUTH || !/^[A-Za-z0-9 .()/-]{1,40}$/.test(saveBody.p_label || "")) fail("P30 Enable: save requests " + JSON.stringify(saves.map(x => x.path + " " + x.body)));
+      else if (s.state !== "on" || s.badge !== "Subscribed on this device" || !/^On for this device \(.+\)\.$/.test(s.line) || !s.buttons.includes("Turn off") || s.buttons.includes("Enable")) fail("P30 Enable: the card after Enable " + JSON.stringify(s));
+      else ok(`P30 Enable: requestPermission once, sw.js active at /Silvis-Call-Schedule/ (root dummy kept), ONE save with exactly p_endpoint / p_p256dh / p_auth / p_label ('${saveBody.p_label}'), badge 'Subscribed on this device', '${s.line}', message '${s.msg}'`);
+      const flag1 = await lsGet(pg, "silvis-push-on-" + P30_UID);
+      if (!/^\{"v":1,"ep":"[0-9a-f]{16}","at":"/.test(flag1 || "") || /fcm|smoke-device/.test(flag1 || "")) fail("P30 Enable: the on-device flag " + flag1);
+      else ok("P30 Enable: the flag silvis-push-on-<profile> holds { v: 1, ep: <16 hex>, at } - never the endpoint");
+      // (2) Diagnose
+      await pg.click("[data-testid=push-diagnose]");
+      await pg.waitForFunction(() => /^Worker: /.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
+      s = await stateOf(pg);
+      if (!/^Worker: active - Permission: granted - Subscribed: yes - Saved on the server: yes \(1 device\(s\) on this account\) - Signed in as: Burchett$/.test(s.msg) || /https?:|fcm|smoke-device/.test(s.msg)) fail("P30 Diagnose: " + JSON.stringify(s.msg));
+      else ok("P30 Diagnose: '" + s.msg + "' (no URL, no endpoint)");
+      // (3) Send test
+      c0 = p30.calls.length;
+      await pg.click("[data-testid=push-test]");
+      await pg.waitForFunction(() => /^Test sent to|^No device|^The push service|^The server|^Phone notifications are not|^Sign in again|^Couldn't/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
+      s = await stateOf(pg);
+      const tests = pushCalls(c0, /send-notification\?push=test$/);
+      if (tests.length !== 1 || tests[0].method !== "POST" || tests[0].body !== "{}" || s.msg !== "Test sent to 1 device(s) on your account - it should arrive in a few seconds.") fail("P30 Send test: " + JSON.stringify({ tests, msg: s.msg }));
+      else ok("P30 Send test: one POST /functions/v1/send-notification?push=test with body {} -> '" + s.msg + "'");
+      // (4) the phone switches write trade_updates_push beside the e-mail flags
+      c0 = p30.calls.length;
+      const sw = pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=trade_updates_push] input[type=checkbox]");
+      if (!(await sw.count())) fail("P30 phone switches: no trade_updates_push switch for the linked surgeon (columns probe ok)");
+      else {
+        await sw.click();
+        await pg.waitForTimeout(1200);
+        const posts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+        let row = null; try { row = JSON.parse(posts.length ? posts[0].body : "null"); } catch (e) {}
+        if (posts.length !== 1 || !row || row.person_id !== "s2" || row.trade_updates_push !== false || row.schedule_updates_push !== true || row.trade_updates_email !== true || !("schedule_updates_email" in row)) fail("P30 phone switches: " + JSON.stringify(posts.map(x => x.body)));
+        else ok("P30 phone switches: one POST notification_preferences?on_conflict=person_id with trade_updates_push:false, schedule_updates_push:true beside the e-mail flags");
+      }
+      // (5) the version-change reset keeps the Silvis push worker (and the root dummy); the start-up check finds the same hash
+      c0 = p30.calls.length;
+      await pg.evaluate(() => { localStorage.setItem("smoke-p30-version", "2000.01.01a"); setTimeout(() => location.reload(), 0); });
+      await pg.waitForURL((u) => /[?&]_v=/.test(u.href), { timeout: 20000, waitUntil: "domcontentloaded" });
+      await pg.waitForSelector("button[data-tab=settings]", { timeout: 30000 });
+      await pg.waitForTimeout(1500);
+      regs = await swRegs(pg);
+      const sub1 = await pg.evaluate(async () => { const r = (await navigator.serviceWorker.getRegistrations()).find(x => x.scope === new URL("./", location.href).href.split("?")[0]); const s = r ? await r.pushManager.getSubscription() : null; return s ? s.endpoint.slice(-14) : null; });
+      if (!regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || sub1 !== "smoke-device-1") fail("P30 update reset: after the version-change reload registrations " + JSON.stringify(regs) + ", subscription " + sub1);
+      else if (pushCalls(c0, /rpc\/save_push_subscription$/).length) fail("P30 update reset: the start-up check re-saved an unchanged subscription");
+      else ok("P30 update reset (version change): the sw.js registration and its subscription survive (the keep-predicate's sw.js rule); the root dummy too; the start-up check saved nothing (same hash)");
+      // (6) re-arm: the Silvis registration wiped (what Davenport's update reset does), permission still granted, the flag kept
+      await pg.evaluate(async () => { const base = new URL("./", location.href).href.split("?")[0]; for (const r of await navigator.serviceWorker.getRegistrations()) if (r.scope === base) await r.unregister(); localStorage.setItem("smoke-p30-asks", "0"); localStorage.setItem("smoke-p30-next-ep", "https://fcm.googleapis.com/fcm/send/smoke-device-2"); });
+      regs = await swRegs(pg);
+      if (regs.includes(SIL_REG)) fail("P30 re-arm setup: the registration did not go: " + JSON.stringify(regs));
+      c0 = p30.calls.length;
+      await pg.reload({ waitUntil: "domcontentloaded" });
+      await pg.waitForSelector("button[data-tab=settings]", { timeout: 30000 });
+      await waitFor(async () => pushCalls(c0, /rpc\/save_push_subscription$/).length > 0, 15000, 200);
+      await pg.waitForTimeout(500);
+      regs = await swRegs(pg);
+      const reSaves = pushCalls(c0, /rpc\/save_push_subscription$/);
+      const asks2 = await lsGet(pg, "smoke-p30-asks");
+      let reBody = null; try { reBody = JSON.parse(reSaves[0].body); } catch (e) {}
+      if (!regs.includes(SIL_REG) || reSaves.length !== 1 || !reBody || reBody.p_endpoint !== P30_EP2 || asks2 !== "0") fail("P30 re-arm: registrations " + JSON.stringify(regs) + ", saves " + JSON.stringify(reSaves.map(x => x.body)) + ", permission asks " + asks2);
+      else ok("P30 re-arm on start: the wiped registration came back (sw.js at the folder scope), the new subscription was saved (smoke-device-2) - no permission prompt");
+      await openCard(pg);
+      s = await stateOf(pg);
+      if (s.state !== "on") fail("P30 re-arm: the card reads " + JSON.stringify(s)); else ok("P30 re-arm: the card reads 'On for this device' again");
+      // (7) the deep link: ?tab=timeoff&_v=x lands on Time off, the URL keeps _v (tab stripped), a reload does not repeat it; ?tab=evil ignored
+      await loadApp(pg, P30_BASE + "?tab=timeoff&_v=x");
+      await waitFor(async () => (await viewNow(pg)) === "timeoff", 10000, 200);
+      let v = await viewNow(pg);
+      let href = pg.url();
+      if (v !== "timeoff" || href !== P30_BASE + "?_v=x") fail(`P30 deep link: view ${v}, URL ${href} (want timeoff and ${P30_BASE}?_v=x)`);
+      else {
+        await pg.reload({ waitUntil: "domcontentloaded" });
+        await pg.waitForSelector("button[data-tab=settings]", { timeout: 30000 });
+        await waitFor(async () => (await viewNow(pg)) !== "?", 10000, 200);
+        await pg.waitForTimeout(1500);
+        const v2 = await viewNow(pg), href2 = pg.url();
+        if (href2 !== P30_BASE + "?_v=x" || v2 !== "calendar") fail(`P30 deep link: after a reload view ${v2}, URL ${href2} - the link must not repeat`);
+        else ok("P30 deep link: ?tab=timeoff&_v=x opened Time off and left ?_v=x in the URL; a reload stays on ?_v=x (the start view, the link not repeated)");
+      }
+      await loadApp(pg, P30_BASE + "?tab=evil");
+      await waitFor(async () => (await viewNow(pg)) !== "?", 10000, 200);
+      await pg.waitForTimeout(1000);
+      v = await viewNow(pg); href = pg.url();
+      if (v !== "calendar" || href !== P30_BASE) fail(`P30 deep link ?tab=evil: view ${v}, URL ${href}`); else ok("P30 deep link: ?tab=evil is ignored (calendar) and stripped");
+      // (8) a notification tap on an open window: sw.js posts { type: silvis-push-open } - the view switches, no reload
+      await pg.evaluate(() => { window.__p30noReload = 1; navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type: "silvis-push-open", tab: "openshifts", day: null } })); });
+      await waitFor(async () => (await viewNow(pg)) === "openshifts", 8000, 200);
+      v = await viewNow(pg);
+      const same = await pg.evaluate(() => window.__p30noReload === 1);
+      await pg.evaluate(() => { navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type: "silvis-push-open", tab: "evil" } })); });
+      await pg.waitForTimeout(300);
+      const v3 = await viewNow(pg);
+      if (v !== "openshifts" || !same || v3 !== "openshifts") fail(`P30 open window: after the message view ${v} (no reload ${same}), after a bad tab ${v3}`);
+      else ok("P30 open window: a silvis-push-open message switched to Open shifts without a reload; a non-whitelisted tab changed nothing");
+      // (9) Turn off: the delete body + the unsubscribe; the worker stays
+      await openCard(pg);
+      c0 = p30.calls.length; const o0 = p30.order.length;
+      await pg.click("[data-testid=push-disable]");
+      await pg.waitForSelector("[data-testid=push-state][data-state=off]", { timeout: 10000 });
+      s = await stateOf(pg);
+      const dels = pushCalls(c0, /rpc\/delete_push_subscription$/);
+      regs = await swRegs(pg);
+      if (dels.length !== 1 || dels[0].body !== JSON.stringify({ p_endpoint: P30_EP2 }) || !p30.order.slice(o0).some(x => /^unsubscribe /.test(x)) || s.msg !== "Phone notifications are off for this device." || !regs.includes(SIL_REG)) fail("P30 Turn off: " + JSON.stringify({ dels: dels.map(x => x.body), order: p30.order.slice(o0), msg: s.msg, regs }));
+      else ok("P30 Turn off: one delete { p_endpoint } (in the body, never the URL), unsubscribed, 'Phone notifications are off for this device.' - the worker stays");
+      // (10) Reset: Enable again, then Reset - only the Silvis worker is unregistered (the root dummy survives)
+      await pg.evaluate(() => localStorage.setItem("smoke-p30-next-ep", "https://fcm.googleapis.com/fcm/send/smoke-device-1"));
+      await pg.click("[data-testid=push-enable]");
+      await pg.waitForSelector("[data-testid=push-state][data-state=on]", { timeout: 25000 });
+      await pg.waitForFunction(() => /^Subscribed/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 }).catch(() => {});
+      c0 = p30.calls.length;
+      await pg.click("[data-testid=push-reset]");
+      await pg.waitForFunction(() => /^Reset done/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
+      s = await stateOf(pg);
+      regs = await swRegs(pg);
+      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Reload the app, then tap Enable." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
+      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Reload the app, then tap Enable.'");
+      // (11) the columns probe answering 400 42703 (the migration not applied): the switches hidden, the e-mail upsert names no *_push key
+      p30.cols = "unavailable";
+      await loadApp(pg, P30_BASE);
+      await openCard(pg);
+      await pg.waitForSelector("[data-testid=push-prefs-unavailable]", { timeout: 10000 });
+      const unav = await pg.$eval("[data-testid=push-prefs-unavailable]", el => el.textContent.trim());
+      const anySwitch = await pg.$("[data-testid=push-pref]");
+      c0 = p30.calls.length;
+      await pg.locator("[data-testid=notif-pref] input[type=checkbox]").first().click();
+      await pg.waitForTimeout(1200);
+      const ePosts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+      if (unav !== "Phone switches are available after the next update." || anySwitch || ePosts.length !== 1 || /_push/.test(ePosts[0].body)) fail("P30 columns absent: " + JSON.stringify({ unav, anySwitch: !!anySwitch, posts: ePosts.map(x => x.body) }));
+      else ok("P30 columns absent (400 42703): 'Phone switches are available after the next update.', no phone switch, the e-mail upsert carries no *_push key");
+      await pg.locator("[data-testid=notif-pref] input[type=checkbox]").first().click(); // back where it was
+      await pg.waitForTimeout(800);
+      p30.cols = "ok";
+      // (12) sign-out: Enable again, then Sign out - the delete request BEFORE the unsubscribe, both before /auth/v1/logout
+      await loadApp(pg, P30_BASE);
+      await openCard(pg);
+      await pg.click("[data-testid=push-enable]");
+      await pg.waitForSelector("[data-testid=push-state][data-state=on]", { timeout: 25000 });
+      await pg.waitForFunction(() => /^Subscribed/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 }).catch(() => {});
+      const o1 = p30.order.length;
+      await pg.click("button:has-text('Sign out')");
+      await waitFor(async () => p30.order.slice(o1).some(x => /logout/.test(x)), 10000, 100);
+      const seq = p30.order.slice(o1).filter(x => /delete_push_subscription|^unsubscribe |logout/.test(x));
+      const subAfter = await pg.evaluate(() => Object.keys(localStorage).filter(k => /^smoke-p30-sub:|^silvis-push-on-/.test(k)));
+      if (JSON.stringify(seq) !== JSON.stringify(["POST rpc/delete_push_subscription", "unsubscribe smoke-device-1", "POST logout"]) || subAfter.length) fail("P30 sign-out: order " + JSON.stringify(seq) + ", left on the device " + JSON.stringify(subAfter));
+      else ok("P30 sign-out: the device's row deleted (still signed in), THEN unsubscribed, THEN /auth/v1/logout - no subscription or flag left on the device");
+      // (13) denied: 'Blocked for 127.0.0.1' (no Davenport clause off fkhan628.github.io), no Enable
+      await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "denied"));
+      await loadApp(pg, P30_BASE);
+      await openCard(pg);
+      s = await stateOf(pg);
+      const host = new URL(BASE).hostname;
+      if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable.` || s.buttons.includes("Enable")) fail("P30 blocked: " + JSON.stringify(s));
+      else ok(`P30 blocked: badge 'Blocked', '${s.line.slice(0, 60)}...' (no Davenport clause on ${host}), no Enable`);
+      await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "granted"));
+      // (14) ?public=1: no card, no registration, no push request
+      c0 = p30.calls.length;
+      const regsBefore = await swRegs(pg);
+      await pg.goto(P30_BASE + "?public=1&tab=settings", { waitUntil: "domcontentloaded" });
+      await pg.waitForTimeout(3000);
+      const pubCard = await pg.$("[data-testid=push-card]");
+      const pubPush = p30.calls.slice(c0).filter(x => /push_subscription|vapid=public|push=test|trade_updates_push/.test(x.path));
+      const regsPub = await swRegs(pg);
+      if (pubCard || pubPush.length || JSON.stringify(regsPub) !== JSON.stringify(regsBefore) || pg.url() !== P30_BASE + "?public=1&tab=settings") fail("P30 ?public=1: " + JSON.stringify({ card: !!pubCard, push: pubPush.map(x => x.path), regsPub, regsBefore, url: pg.url() }));
+      else ok("P30 ?public=1: no Phone notifications card, no registration change, no push request, the URL untouched");
+      if (p30.errors.length) fail("P30 desktop page errors / console errors: " + p30.errors.slice(0, 6).join(" | "));
+      else ok("P30 desktop: no page error, no unexpected console error");
+    } catch (e) { fail("P30 phone notifications (desktop): " + errLine(e)); try { if (pg) await pg.screenshot({ path: path.join(OUT, "failure-p30-desktop.png"), fullPage: true }); } catch (e2) {} }
+    if (pctx) await pctx.close();
+    // (15) iPhone: Safari outside the Home Screen app -> the iOS line, Enable asks nothing and registers nothing; the Home Screen
+    // app (navigator.standalone) -> Enable offered; 390 px screenshots of both for the report
+    const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+    for (const standalone of [false, true]) {
+      let ictx = null, ip = null;
+      const label = standalone ? "iPhone Home Screen app" : "iPhone Safari";
+      try {
+        p30.errors = [];
+        ictx = await mkP30Ctx({ viewport: { width: 390, height: 844 }, userAgent: IPHONE_UA });
+        await ictx.addInitScript(p30Init, Object.assign({}, P30_CFG, { standalone }));
+        ip = await ictx.newPage();
+        watch(ip, label);
+        await loadApp(ip, P30_BASE);
+        await openCard(ip);
+        let s = await stateOf(ip);
+        if (!standalone) {
+          const want = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable.";
+          if (s.state !== "ios-home-screen" || s.line !== want || !s.buttons.includes("Enable")) fail(`P30 ${label}: ` + JSON.stringify(s));
+          else {
+            await ip.click("[data-testid=push-enable]");
+            await ip.waitForTimeout(800);
+            s = await stateOf(ip);
+            const asks = await lsGet(ip, "smoke-p30-asks");
+            const regs = await swRegs(ip);
+            if (s.msg !== want || asks !== null || regs.length) fail(`P30 ${label} Enable: msg ${JSON.stringify(s.msg)}, permission asks ${asks}, registrations ${JSON.stringify(regs)}`);
+            else ok(`P30 ${label}: the Home Screen line (add to Home Screen, open from the icon, sign in there once, then Enable); Enable asks nothing and registers nothing`);
+          }
+        } else {
+          if (s.state !== "off" || !s.buttons.includes("Enable") || s.line !== "Off for this device.") fail(`P30 ${label}: ` + JSON.stringify(s));
+          else ok(`P30 ${label} (navigator.standalone): 'Off for this device.' with Enable offered`);
+        }
+        await ip.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();
+        const shot = standalone ? "p30-push-card-iphone-standalone-390.png" : "p30-push-card-iphone-safari-390.png";
+        await ip.locator("[data-testid=push-card]").screenshot({ path: path.join(OUT, shot) });
+        const wide = await ip.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        if (wide) fail(`P30 ${label}: the page scrolls sideways at 390 px`); else ok(`P30 ${label}: screenshot test/ui/out/${shot}; no sideways scroll at 390 px`);
+        if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail(`P30 ${label}: ` + errLine(e)); try { if (ip) await ip.screenshot({ path: path.join(OUT, "failure-p30-iphone.png"), fullPage: true }); } catch (e2) {} }
+      if (ictx) await ictx.close();
+    }
+  }
+  // @p30-smoke-end
 
   // ====================== Review 9/27 Do first 1 (9/28): the first schedule_days read fails -> "Schedule not loaded" + Retry ======================
   // The page's schedule_days reads answer 500 from load until Retry (failDaysFor: the mount read and the stored-session

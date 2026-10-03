@@ -62,6 +62,8 @@ Carried over from Davenport on purpose: office notifications, calendar sync, ref
 every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
 applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
 approvals, weighted accounting.
+Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
+worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30.
 
 ## Working locations
 
@@ -80,12 +82,12 @@ approvals, weighted accounting.
 ## Deploy path — repo (the PWA)
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
-  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
+  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`, the push worker `sw.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
   `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 21 suites: rules, east-feed, data-layer,
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 22 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
-  offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain, the
+  offers-timeline, edge-functions, ci, privacy, push, water-fill — then the generator regression as the 23rd, then the build; `test/ci.test.js` keeps the chain, the
   workflow steps and the paths filter aligned, so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
