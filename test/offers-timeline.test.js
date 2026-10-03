@@ -304,7 +304,11 @@ check("wiring: package.json npm test and .github/workflows/build.yml run test/of
   assert.ok(pkg.scripts.test.indexOf("node test/offers-timeline.test.js") > 0, "package.json test chain");
   const wf = read(".github", "workflows", "build.yml");
   assert.ok(wf.indexOf("run: node test/offers-timeline.test.js") > 0, "build.yml step");
-  assert.ok(wf.indexOf('"test/offers-timeline.test.js"') > 0 && wf.indexOf('"test/fixtures/offer-timeline.json"') > 0, "build.yml path filters");
+  // Do first 10 (10/2): a push touching only this suite or test/fixtures/offer-timeline.json runs it through test.yml
+  // (npm test on every push, no paths filter); build.yml's filter is the runtime inputs only.
+  const tw = read(".github", "workflows", "test.yml");
+  assert.ok(/^\s*run:\s*npm test\s*$/m.test(tw) && !/^\s*paths(-ignore)?\s*:/m.test(tw), "test.yml runs npm test with no paths filter");
+  assert.ok(wf.indexOf('"test/offers-timeline.test.js"') < 0 && wf.indexOf('"test/fixtures/') < 0, "build.yml's paths filter no longer watches the suite or its fixture (no deploy on a test-only push)");
 });
 
 // ---- Prompt 14 part 4 review fixes (9/23) ----

@@ -17,8 +17,10 @@ backup per day) and a per-surgeon rules engine.
 ## Build
 
 Edit only `index-source.html` and the plain-JS modules (`config.js`, `rules.js`, `generator.js`, `east-feed.js`,
-`helpers.js`, `app-styles.js`). `index.html` and `APP_VERSION` are CI-owned: a push to `main` runs the tests,
-bumps the version, transpiles `index.html` and commits it back with `[skip ci]`; GitHub Pages redeploys.
+`helpers.js`, `app-styles.js`). `index.html` and `APP_VERSION` are CI-owned: a push to `main` that touches a runtime
+input (build.yml's paths filter) runs the tests, bumps the version, transpiles `index.html` and commits it back with
+`[skip ci]`; GitHub Pages redeploys. Every push to any branch and every pull request runs `npm test` in
+`.github/workflows/test.yml` (read-only, no deploy).
 
 ```
 npm install
@@ -27,8 +29,9 @@ npm run smoke                 # for any change to index-source.html (Playwright 
 ```
 
 `npm test` runs every suite in `package.json`'s test chain - the same suites CI runs step by step - and ends with the
-generator regression; `test/ci.test.js` asserts that the chain, the workflow steps and the workflow paths filter stay
-aligned (no suite count is stated here on purpose: it changes with every added suite). `build.js` writes
+generator regression; `test/ci.test.js` asserts that the chain and the deploy workflow's steps stay aligned and that
+its paths filter is exactly the runtime inputs (no suite count is stated here on purpose: it changes with every added
+suite). `build.js` writes
 `index.html` locally as a byproduct - `git restore index.html` before committing, never commit it by hand. On a loaded
 machine the wall-clock gates can be raised locally with `SILVIS_RULES_BUDGET_MS` (rules, default 5000 ms) and
 `SILVIS_GEN_BUDGET_MS` (the generator regression, default 10000 ms, and the holidays suite, default 4000 ms, share it);

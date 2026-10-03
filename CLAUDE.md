@@ -83,12 +83,13 @@ worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30.
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
   (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`, the push worker `sw.js`).
-- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on push to `main`, commits back with
-  `[skip ci]`, Pages redeploys.
+- **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on a push to `main` that touches a runtime
+  input (build.yml's paths filter; a test/docs-only push runs only test.yml), commits back with `[skip ci]`, Pages redeploys.
 - Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 22 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
-  offers-timeline, edge-functions, ci, privacy, push, water-fill — then the generator regression as the 23rd, then the build; `test/ci.test.js` keeps the chain, the
-  workflow steps and the paths filter aligned, so trust it over this list);
+  offers-timeline, edge-functions, ci, privacy, push, water-fill — then the generator regression as the 23rd, then the build; `test/ci.test.js` keeps the chain and
+  build.yml's steps aligned and pins build.yml's paths filter to exactly the runtime inputs (`.github/workflows/test.yml`
+  runs the chain on every push and PR since 10/2), so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).

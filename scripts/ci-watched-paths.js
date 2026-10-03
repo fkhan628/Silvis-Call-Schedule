@@ -4,22 +4,38 @@
 // commit-back step (audit T3, 9/23): when main moved while the run was queued
 // or running, a move that touched a WATCHED path has its own queued run (the
 // concurrency group serialises them) and owns the deploy; a move outside the
-// filter (docs / sql / scripts only) queued nothing, so the running job rebuilds
-// on top of it. The filter itself stays the single source of truth - nothing is
-// duplicated here.
+// filter (tests / docs / sql / scripts / edge-function sources only - since
+// review 2026-09-27 Do first 10 the filter is the deploy's runtime inputs alone)
+// queued no build run, so the running job rebuilds on top of it. The filter
+// itself stays the single source of truth - nothing is duplicated here.
 //
-//   node scripts/ci-watched-paths.js <path> [<path> ...]
+//   node scripts/ci-watched-paths.js [--ref=<rev>] <path> [<path> ...]
 //   exit 0 = none watched (prints nothing), exit 1 = at least one watched (prints
-//   them, one per line), exit 2 = usage error. -h / --help prints this usage.
-//   Pure file I/O: reads the workflow file only.
+//   them, one per line), exit 2 = usage error (or the filter could not be read, or
+//   it holds an entry not written `- "path"` - merge review of Do first 10: an
+//   unquoted or single-quoted entry is a valid GitHub filter, and skipping it
+//   would call a path unwatched that GitHub watches, so the matcher fails closed).
+//   -h / --help prints this usage.
+//   Without --ref it reads the working tree's build.yml. With --ref=<rev> it reads
+//   build.yml AS OF <rev> (`git show <rev>:.github/workflows/build.yml`, local, no
+//   network): the commit-back step passes --ref=origin/main, because GitHub decided
+//   whether main's move queued a build run with the filter in the PUSHED commit,
+//   not with the filter of the commit this run checked out (a move that edits the
+//   filter itself - review 10/2 of Do first 10).
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const cp = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const USAGE = "usage: node scripts/ci-watched-paths.js <repo path> [<repo path> ...]   (exit 0 none watched / 1 some watched / 2 usage)";
+const WORKFLOW = ".github/workflows/build.yml";
+const USAGE = "usage: node scripts/ci-watched-paths.js [--ref=<rev>] <repo path> [<repo path> ...]   (exit 0 none watched / 1 some watched / 2 usage or unreadable filter)";
 
-// The `- "..."` entries under `paths:` - the same walk test/ci.test.js pins.
+// The `- "..."` entries under `paths:` - the same walk test/ci.test.js pins. Blank and
+// comment lines are skipped at any indentation (YAML ignores a comment wherever it
+// sits, so a column-0 comment inside the list must not end it); the list ends at the
+// first other line indented no deeper than `paths:`. Any other line inside it THROWS:
+// an entry this walk cannot read would otherwise be dropped silently.
 function watchedGlobs(yml) {
   const L = String(yml).replace(/\r\n/g, "\n").split("\n");
   const i = L.findIndex(l => /^\s*paths:\s*$/.test(l));
@@ -28,10 +44,11 @@ function watchedGlobs(yml) {
   const out = [];
   for (let k = i + 1; k < L.length; k++) {
     const l = L[k];
-    if (!l.trim()) continue;
+    if (!l.trim() || /^\s*#/.test(l)) continue;
     if (l.match(/^\s*/)[0].length <= ind) break;
     const m = l.match(/^\s*-\s*"([^"]+)"\s*(#.*)?$/);
-    if (m) out.push(m[1]);
+    if (!m) throw new Error("`paths:` entry not written `- \"path\"` (line " + (k + 1) + "): " + l.trim());
+    out.push(m[1]);
   }
   return out;
 }
@@ -47,16 +64,45 @@ function watchedOf(paths, globs) {
   return paths.map(p => String(p).replace(/\\/g, "/")).filter(p => res.some(r => r.test(p)));
 }
 
-function main(argv) {
+// The filter as of <ref> (or the working tree). `io.readWorkflow` replaces it in tests.
+function readWorkflow(ref) {
+  return ref === null
+    ? fs.readFileSync(path.join(ROOT, WORKFLOW), "utf8")
+    : cp.execFileSync("git", ["show", ref + ":" + WORKFLOW], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function main(argv, io) {
+  const read = (io && io.readWorkflow) || readWorkflow;
   const paths = [];
+  let ref = null;
   for (const t of argv) {
     if (t === "-h" || t === "--help") { console.log(USAGE); return 0; }
+    const rm = t.match(/^--ref=(.*)$/);
+    if (rm) {
+      // a rev name, never an option or a pathspec (no shell: execFileSync with an argument array)
+      if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(rm[1])) { console.error("ci-watched-paths: bad --ref value: " + rm[1] + "\n" + USAGE); return 2; }
+      ref = rm[1];
+      continue;
+    }
     if (/^--/.test(t)) { console.error("unknown argument: " + t + "\n" + USAGE); return 2; }
     if (t.trim()) paths.push(t.trim());
   }
   if (!paths.length) { console.error(USAGE); return 2; }
-  const globs = watchedGlobs(fs.readFileSync(path.join(ROOT, ".github", "workflows", "build.yml"), "utf8"));
-  if (!globs.length) { console.error("ci-watched-paths: no `paths:` filter found in .github/workflows/build.yml"); return 2; }
+  let yml;
+  try {
+    yml = read(ref);
+  } catch (e) {
+    console.error("ci-watched-paths: cannot read " + WORKFLOW + (ref === null ? "" : " at " + ref) + ": " + String(e.message || e).split("\n")[0]);
+    return 2;
+  }
+  let globs;
+  try {
+    globs = watchedGlobs(yml);
+  } catch (e) {
+    console.error("ci-watched-paths: cannot parse the `paths:` filter of " + WORKFLOW + (ref === null ? "" : " at " + ref) + ": " + String(e.message || e));
+    return 2;
+  }
+  if (!globs.length) { console.error("ci-watched-paths: no `paths:` filter found in " + WORKFLOW + (ref === null ? "" : " at " + ref)); return 2; }
   const hit = watchedOf(paths, globs);
   hit.forEach(p => console.log(p));
   return hit.length ? 1 : 0;

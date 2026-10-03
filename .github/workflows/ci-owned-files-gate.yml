@@ -3,9 +3,9 @@
 # stale copy on merge, or hand-bumps into a collision with CI's own
 # sequencing. The rule ("never touch them by hand") has been violated once in
 # each direction since it was written — a memory problem no document fixes,
-# so this check exists (the mojibake-gate move applied here). build.yml's
-# push-to-main filters are why PR branches see no other CI; that is a filter
-# choice, not a platform limit — this gate runs on every PR.
+# so this check exists (the mojibake-gate move applied here). build.yml runs
+# only on a push to main that touches a runtime input; this gate and test.yml
+# (the whole test chain, since review 2026-09-27 Do first 10) run on every PR.
 name: CI-owned files gate
 on: pull_request
 # Read-only: the step lists the PR's files through the API and never writes.
