@@ -183,25 +183,41 @@ ok(!chain.includes("test/nov-backups.test.js") && /require\("\.\/nov-backups\.te
 //    under docs/ or test/ (Pages serves those too) and loaded through the generator worker, a relative fetch or the
 //    manifest would pass it and never deploy. (1) the worker's importScripts list (helpers.js GEN_WORKER_MODULES) is
 //    loader files only; (2) every path-shaped relative literal handed to fetch / importScripts / new URL / new Worker /
-//    serviceWorker.register / sendBeacon / window.open in index-source.html and the loader modules is watched, or is the
+//    serviceWorker.register / sendBeacon / window.open in index-source.html and every watched root .js file (the loader
+//    modules; since the 10/2 merge also any later root runtime script such as a service worker) is watched, or is the
 //    CI-owned version.json that every deploy rewrites; (3) every manifest icon is watched.
 const GWM = require(path.join(ROOT, "helpers.js")).GEN_WORKER_MODULES;
 ok(Array.isArray(GWM) && GWM.length > 0, "could not read helpers.js GEN_WORKER_MODULES (the generator worker's importScripts list)");
 (GWM || []).forEach(f => ok(loaderFiles.includes(f) && watched(f), "the generator worker imports `" + f + "` (helpers.js GEN_WORKER_MODULES), which is not a watched ?v= loader file - a push changing only it would never deploy"));
-const URL_CALL = /\b(fetch|importScripts|new\s+URL|new\s+Worker|new\s+SharedWorker|serviceWorker\.register|sendBeacon|window\.open)\s*\(\s*(['"`])([^'"`]*)/g;
+// The first argument may be a literal or `<name> + "literal"` (a base-folder prefix such as `silvisBase + "sw.js"`).
+const URL_CALL = /\b(fetch|importScripts|new\s+URL|new\s+Worker|new\s+SharedWorker|serviceWorker\.register|sendBeacon|window\.open)\s*\(\s*(?:[A-Za-z_$][\w$.]*\s*\+\s*)?(['"`])([^'"`]*)/g;
+const relUrlsOf = (src) => Array.from(String(src).matchAll(URL_CALL)).map(m => (m[3].match(/^(?:\.\/)?([A-Za-z0-9_][A-Za-z0-9_.\/-]*)(?:[?#]|\$\{|$)/) || [])[1]).filter(Boolean);
+// Scanned: the page and every WATCHED root .js file except the build tooling (the loader modules today; a service
+// worker such as Prompt 30's sw.js once it is listed - its own importScripts / fetch literals are then checked too).
+// vendor/** is the registry's minified bytes, pinned by hash in section 8, and is not scanned.
+const URL_SCANNED = ["index-source.html"].concat(tracked.filter(f => /^[^/]+\.js$/.test(f) && watched(f) && !["build.js", "bump-version.js"].includes(f)));
+ok(loaderFiles.filter(f => /^[^/]+\.js$/.test(f)).every(f => URL_SCANNED.includes(f)), "the relative-URL scan must cover every root ?v= loader module (scanned: " + JSON.stringify(URL_SCANNED) + ")");
 const relUrls = [];
-["index-source.html"].concat(loaderFiles.filter(f => /^[^/]+\.js$/.test(f))).forEach(f => {
-  const src = f === "index-source.html" ? idx : read(f);
-  for (const m of src.matchAll(URL_CALL)) {
-    const pm = m[3].match(/^(?:\.\/)?([A-Za-z0-9_][A-Za-z0-9_.\/-]*)(?:[?#]|\$\{|$)/);
-    if (pm) relUrls.push([f, pm[1]]);
-  }
-});
+URL_SCANNED.forEach(f => relUrlsOf(f === "index-source.html" ? idx : read(f)).forEach(u => relUrls.push([f, u])));
 ok(relUrls.some(([, u]) => u === "version.json"), "the relative-URL scan no longer finds the page's version.json fetch (the scan itself is broken)");
+// The scan itself, on the shapes a service-worker registration and its imports take (merge of main into Do first 10,
+// 10/2: Prompt 30 adds sw.js - it must fail this section until it is in the filter and RUNTIME_FILTER).
+const swShapes = 'navigator.serviceWorker.register("sw.js?v=" + APP_VERSION, { scope: "./" }); navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`);'
+  + ' navigator.serviceWorker.register(silvisBase + "sw.js"); importScripts("push-helpers.js?v=1"); fetch(`${SUPABASE_URL}/rest/v1/x`); fetch("https://example.org/sw.js"); fetch(base + "/rest/v1/y");';
+ok(JSON.stringify(relUrlsOf(swShapes)) === JSON.stringify(["sw.js", "sw.js", "sw.js", "push-helpers.js"]), "the relative-URL scan must read sw.js out of a literal, a template and a `base + \"sw.js\"` registration and a relative importScripts, and nothing out of a Supabase / absolute / rooted URL; got " + JSON.stringify(relUrlsOf(swShapes)));
 relUrls.forEach(([f, u]) => ok(u === "version.json" || watched(u), "`" + f + "` loads the relative URL `" + u + "`, which build.yml's paths filter does not watch - a runtime file belongs in the filter and RUNTIME_FILTER (only the CI-owned version.json is exempt)"));
 const manifest = JSON.parse(read("manifest.json"));
 ok(Array.isArray(manifest.icons) && manifest.icons.length > 0, "manifest.json lists no icons (the parse below would pass vacuously)");
 (manifest.icons || []).forEach(i => ok(watched(String(i.src).replace(/^\.\//, "")), "manifest.json icon `" + i.src + "` is not in build.yml's paths filter"));
+// g. the guard bites on a NEW runtime file (merge of main into Do first 10, 10/2): a root module, a root service worker
+//    or an icon outside the known non-runtime folders is either watched (it deploys) or, tracked but not yet listed,
+//    flagged by (d) until it is added to build.yml's filter and RUNTIME_FILTER together - a two-line change, never a
+//    silent no-deploy. So NON_RUNTIME must never classify such a name. (Probe names no commit will track; Prompt 30's
+//    sw.js takes exactly this path.)
+["sw.js", "ci-probe-module.js", "ci-probe-sw.js", "ci-probe-icon-96.png", "ci-probe/x.js", "manifest.json"].forEach(p => {
+  ok(!NON_RUNTIME.some(r => r.test(p)), "NON_RUNTIME classifies the runtime-shaped name `" + p + "` as non-runtime - section (d) would then pass it unwatched, and a push changing only it would never deploy");
+});
+["ci-probe-module.js", "ci-probe-sw.js", "ci-probe-icon-96.png", "ci-probe/x.js"].forEach(p => ok(!tracked.includes(p), "the probe name `" + p + "` is tracked - pick another probe name"));
 flush("build filter = runtime inputs");
 
 // ---- 2b. test.yml: the whole chain on every push and pull request (review 2026-09-27 Do first 10) ----

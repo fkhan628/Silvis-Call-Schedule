@@ -29,6 +29,11 @@ on:
     # input is in it, and that every tracked file outside it is a known
     # non-runtime path - so a new runtime file loaded any of those ways cannot
     # be left out silently (it would never deploy).
+    # ADDING a runtime file (a new root module, a service worker such as Prompt
+    # 30's sw.js, an icon): list it below AND in RUNTIME_FILTER in
+    # test/ci.test.js, in the same commit - until both agree, ci.test.js fails
+    # (an unlisted tracked root file is "neither watched nor non-runtime").
+    # scripts/ci-watched-paths.js reads this list itself; nothing else to edit.
     # Deliberately NOT watched: test/** (suites, fixtures, the seed adapter),
     # docs/** (the seed too), sql/**, scripts/**, edge-functions/** (deployed by
     # hand with the Supabase CLI), README / CLAUDE.md, .github/**. A push that
