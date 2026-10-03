@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
-#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon read (9d; a SURGEON-role user's access token)
+#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
 #
@@ -1058,6 +1058,331 @@ if linked; then
   fi
 else
   echo "   SKIP 15 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 16. no-primary days (2026-10-01, Prompt 28): save_no_primary + save_offers p_np_add / p_np_clear - anon refused, rolled-back probe =="
+# sql/migrations/2026-10-01-no-primary-days.sql (report-first; applied 2026-10-02 12:05:22Z, revision t): save_no_primary (security
+# definer) writes one availability row per no-primary day (kind backup_only, role any, note null) for a surgeon himself, the office for a
+# roster id or the scheduler for anyone, and deletes the person's single-day backup_only rows; save_offers (security invoker, seven
+# arguments) calls it inside its own transaction. NP001-NP009 NO_PRIMARY_* refuse before any write. 16a / 16b go over REST as anon and write
+# nothing (refused before the body is used): 401/403 = the function exists and anon holds no EXECUTE; a 404 is a FAIL (16b: PGRST202 - the
+# schema cache does not know p_np_add / p_np_clear, the gate before the Prompt 28 client push). 16c runs sql/probes/no-primary-probe.sql
+# through the linked CLI (rolls itself back; 43 cases graded by name - its header lists each AFTER string). The functions exist since the
+# apply, so the probe's PROBE_SETUP (save_no_primary is absent) and an anon 404 are FAILs - strict since the record step, which dropped the
+# flag for the run right after the apply (before the apply they passed as the not-applied picture); its collision guard (PROBE_SETUP: live
+# rows already sit in the probe window) is a FAIL too. 16d counts the probe's leftovers either way, by the probe's identity only (review
+# 10/1): the rows only it writes (tagged) and s3's availability / call_offers rows in its window - never another person's row, and never a
+# ready-to-paste DELETE for a row that is not tagged.
+# 16a. anon may not execute save_no_primary
+line=$(curl -s -o $T/vr16a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_no_primary" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_add":[],"p_clear":[]}')
+echo "   16a anon rpc save_no_primary: $line  body: $(head -c 160 $T/vr16a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc save_no_primary refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") bad "anon rpc save_no_primary: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) bad "anon rpc save_no_primary: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
+esac
+# 16b. the seven-key save_offers call: PostgREST must know p_np_add / p_np_clear before the Prompt 28 client is pushed
+line=$(curl -s -o $T/vr16b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_offers" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_person":"s9test","p_rows":[],"p_clear":[],"p_period":null,"p_mode":null,"p_np_add":[],"p_np_clear":[]}')
+echo "   16b anon rpc save_offers (seven keys): $line  body: $(head -c 160 $T/vr16b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "PostgREST knows save_offers' p_np_add / p_np_clear (anon seven-key call refused, $line): the Prompt 28 client may send them";;
+  "HTTP 404") bad "anon rpc save_offers with seven keys: HTTP 404 (PGRST202: the schema cache does not know p_np_add / p_np_clear, which exist since the 2026-10-02 apply) - do NOT push the Prompt 28 client";;
+  *) bad "anon rpc save_offers with seven keys: $line (expected 401/403)";;
+esac
+if linked; then
+  PROBE16="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/no-primary-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE16" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: save_no_primary is absent'; then
+    bad "no-primary probe: PROBE_SETUP - save_no_primary is absent (the function exists since the 2026-10-02 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "no-primary probe reported no sentinel-terminated PROBE_RESULTS (setup error, a fixture collision or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results16=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results16" | tr ';' '\n' | sed 's/^/   /'
+    case_val16()   { echo "$results16" | tr ';' '\n' | grep "^$1=" | head -1 | sed "s/^$1=//"; }
+    expect_eq16()  { v=$(case_val16 "$1" | sed 's/\\//g'); [ "$v" = "$2" ] && ok "no-primary probe $1: $3" || bad "no-primary probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err16() { v=$(case_val16 "$1" | sed 's/\\//g'); case "$v" in "ERR $2 "*"$3"*) ok "no-primary probe $1: $4";; *) bad "no-primary probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
+    expect_np16()  { v=$(case_val16 "$1" | sed 's/\\//g'); case "$v" in "ERR $2 $3: "*"$4"*) ok "no-primary probe $1: $5";; *) bad "no-primary probe $1: $5 (got '$v', expected ERR $2 $3: ... $4)";; esac; }
+    expect_eq16  P1  "np_fn=yes np_definer=yes np_path=yes offers7=yes offers5=no offers_invoker=yes overloads=1 np_anon=no np_auth=yes offers_anon=no offers_auth=yes" "save_no_primary is security definer with search_path public, pg_temp; save_offers is the one seven-argument invoker overload; both executable by authenticated, not by anon"
+    expect_eq16  S1  "ok np_added=2 np_cleared=0 rows=2 src=app by=s3 role=any note=null" "a surgeon marks two days through save_offers: one row per day, backup_only / any, note null, source app, created_by his id"
+    expect_eq16  S2  "ok np_added=0 np_kept=2 rows=2"                 "the same Save again duplicates nothing (kept)"
+    expect_eq16  S3  "ok deleted=1 np_added=1 offer=none np=1"        "No primary replaces a Primary offer in one Save (the offer cleared, the day marked)"
+    expect_eq16  S4  "ok np_added=1 offer=backup np=1"                "a Backup offer stays beside No primary (backup preferred that day)"
+    expect_eq16  S5  "ok upserted=1 np_cleared=1 offer=primary np=0"  "Primary offered and No primary lifted in one Save"
+    expect_np16  S6  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/2 and marks it No primary - keep one of the two (nothing was saved)" "an Either offer on a No primary day without lifting it is refused (save_offers' own check)"
+    expect_eq16  S6s "offer=none np=1"                                "... and nothing of that Save was written"
+    expect_np16  S7  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/13 and marks it No primary" "marking a day that keeps its Primary offer is refused (save_no_primary's check)"
+    expect_eq16  S8  "ok np_cleared=1 left=0"                         "a surgeon clears his own single day entered in Setup (any source)"
+    expect_np16  S9  NP007 NO_PRIMARY_RANGE "11/11 is part of a longer no-primary range the scheduler set" "a day of a longer Setup range is never cleared by the surgeon"
+    expect_eq16  S10 "ok np_cleared=0 unavailable=1"                  "clearing touches backup_only rows only (an unavailable row stays)"
+    expect_err16 S11 42501 'row-level security policy for table "availability"' "a surgeon still cannot write availability directly (another kind)"
+    expect_err16 S12 42501 'row-level security policy for table "availability"' "a surgeon still cannot write availability directly (backup_only)"
+    expect_np16  S13 NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/10 and marks it No primary" "a Primary offer on a day of a Setup range is refused"
+    expect_eq16  V1  "ok np_added=1"                                  "a vacation day may be marked No primary (no vacation refusal)"
+    expect_np16  H1  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5 - trade those days first, then mark them No primary" "a day he holds as primary on the saved schedule is refused (trade first)"
+    expect_eq16  H2  "ok np_added=1"                                  "a day he holds as backup may be marked (backup is fine)"
+    expect_np16  D1  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day cannot be marked"
+    expect_np16  D2  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day cannot be cleared"
+    expect_np16  F1  NP006 NO_PRIMARY_FROZEN "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/20)" "a day inside a period whose offers closed cannot be marked by a surgeon"
+    expect_np16  F2  NP006 NO_PRIMARY_FROZEN "offers for probe np frozen closed on 2026-09-01 - ask the scheduler (11/21)" "... nor cleared"
+    expect_np16  B1  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5 - trade those days first" "one refused day refuses the whole Save"
+    expect_eq16  B1s "offer_1101=none np_1115=0"                      "... the offer row and the other day rolled back with it (all or nothing)"
+    expect_np16  B2  NP004 NO_PRIMARY_BAD_DAY "11/15 is both marked and cleared in one save - nothing was saved" "a day both marked and cleared is refused"
+    expect_np16  B3  NP004 NO_PRIMARY_BAD_DAY "a day in the list is empty - nothing was saved" "an empty day in the list is refused"
+    expect_err16 R1  OS002 "OFFERS_NOT_YOURS" "a surgeon cannot save another surgeon's days (save_offers' own check answers first)"
+    expect_np16  R2  NP002 NO_PRIMARY_NOT_YOURS "only the scheduler or the office can mark another surgeon's no-primary days" "nor through save_no_primary directly"
+    expect_np16  R3  NP009 NO_PRIMARY_OFFER_CONFLICT "offers primary on 11/13 and marks it No primary" "a direct save_no_primary call carries the offer-conflict check itself"
+    expect_eq16  O1  "ok upserted=1 np_added=0"                       "an older build's three-argument call resolves to the new save_offers and writes no no-primary row"
+    expect_eq16  C1  "ok np_added=1 src=office-relay by=self"         "the office relays a no-primary day for a roster surgeon (source office-relay, created_by its profile id)"
+    expect_err16 C2  OS004 "OFFERS_UNKNOWN_PERSON" "the office cannot relay through save_offers for an id that is not on the roster"
+    expect_np16  C3  NP003 NO_PRIMARY_UNKNOWN_PERSON "zz is not a roster id - the office relays for a roster surgeon only" "nor through save_no_primary directly"
+    expect_np16  C4  NP006 NO_PRIMARY_FROZEN "ask the scheduler (11/22)" "the office is frozen like a surgeon"
+    expect_np16  C5  NP001 NO_PRIMARY_NOT_LINKED "name the person (your account is not linked to a roster entry)" "an unlinked account that names nobody is refused (the office names the surgeon)"
+    expect_eq16  A1  "ok np_added=1 src=email-relay by=scheduler"     "the scheduler marks a day inside a frozen period for a surgeon (exempt from the freeze; source email-relay)"
+    expect_eq16  A2  "ok np_cleared=1"                                "the scheduler clears a frozen single day"
+    expect_np16  A3  NP008 NO_PRIMARY_ON_CALL "holds primary on 11/5" "a held primary refuses the scheduler too (trade first)"
+    expect_np16  A4  NP005 NO_PRIMARY_PAST "4/6 is before today (" "a past day refuses the scheduler too"
+    expect_np16  A5  NP007 NO_PRIMARY_RANGE "11/11 is part of a longer no-primary range" "a range is never split, not by the scheduler either (he edits it in Setup)"
+    expect_eq16  A6  "ok np_added=0 np_kept=1"                        "a day already covered by a range is not duplicated"
+    expect_err16 N1  42501 "permission denied for function save_no_primary" "anon cannot execute save_no_primary"
+    expect_np16  N2  NP001 NO_PRIMARY_NOT_LINKED "sign in with an account that is linked to a roster entry" "a session with no signed-in user is refused"
+  fi
+  # 16d. leftovers, by the probe's identity only (review 10/1): tagged = rows only the probe writes (its users, its schedule_days /
+  # time_off / call_periods, its tagged availability / call_offers fixtures); in_window = s3's availability / call_offers rows in its
+  # window (2030-11; availability also over 2020-04-06) - the rows save_no_primary / save_offers write there carry no tag. The
+  # collision guard refuses to start while any in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent
+  # raise before the apply) they can only be the probe's; after a run that stopped at the guard they are live rows it never wrote -
+  # listed for review, never counted as a leftover and never given a DELETE (a probe row and a real entry of s3 look alike).
+  LEFTOVER16_SQL="select ((select count(*) from auth.users where email like 'probe-noprimary-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-noprimary') + (select count(*) from public.time_off where note = 'probe-noprimary') + (select count(*) from public.call_periods where label like 'probe np %') + (select count(*) from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary') + (select count(*) from public.call_offers where note = 'probe-noprimary'))::int as tagged, ((select count(*) from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date)) + (select count(*) from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30'))::int as in_window"
+  r=$(q "$LEFTOVER16_SQL")
+  rflat16=$(echo "$r" | tr -d ' \n')
+  tagged16=$(echo "$rflat16" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win16=$(echo "$rflat16" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  passed16=""; echo "$out" | grep -qE 'PROBE_RESULTS .*;END|PROBE_SETUP: save_no_primary is absent' && passed16=1
+  if [ -z "$tagged16" ] || [ -z "$win16" ]; then
+    bad "no-primary probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif [ "$tagged16" = "0" ] && [ "$win16" = "0" ]; then
+    ok "no-primary probe persisted nothing (leftover count 0: auth.users probe-noprimary-* / schedule_days, time_off, availability, call_offers tagged probe-noprimary / call_periods probe np * / s3's availability and call_offers in 2030-11 or over 2020-04-06)"
+  else
+    if [ "$tagged16" != "0" ]; then
+      bad "no-primary probe LEFT ROWS BEHIND (tagged=$tagged16 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary';"
+      echo "      delete from public.call_offers where note = 'probe-noprimary';"
+      echo "      delete from public.schedule_days where source = 'probe-noprimary';"
+      echo "      delete from public.time_off where note = 'probe-noprimary';"
+      echo "      delete from public.call_periods where label like 'probe np %';"
+      echo "      delete from auth.users where email like 'probe-noprimary-%@example.test';   -- user_profiles rows cascade"
+    fi
+    if [ "$win16" != "0" ]; then
+      if [ "$passed16" = "1" ]; then
+        bad "no-primary probe LEFT ROWS BEHIND (in_window=$win16 - s3's availability / call_offers rows in the probe window after a run that passed its collision guard): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real entry of s3 look alike), then report:"
+      else
+        echo "   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the probe stopped before writing anything (16c), so an untagged one is a live row, not a leftover; review them:"
+      fi
+      echo "      select * from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date);"
+      echo "      select * from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30';"
+    fi
+  fi
+else
+  echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_days / app_call_names + user_profiles.is_app - anon refused, rolled-back probe =="
+# Section 18 (16 = Prompt 28's no-primary days, the section above; 17 = the weekend pair claim, taken on its own branch).
+# sql/migrations/2026-10-02-app-call-days.sql (report-first; applied 2026-10-02 19:19:27Z, revision v): app_call_days (one APP per
+# day - day is the primary key; read by every signed-in role through app_call_days_read, never anon: no anon policy AND anon's table
+# privileges revoked, so an anon request is refused 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke
+# did not take); save_app_days (security definer, the only write path; AP001-AP007 APP_DAY_* refuse before any write) and
+# app_call_names (security definer, stable) - EXECUTE for authenticated, never anon; user_profiles.is_app (admin-set, pinned in the
+# two self policies). 18a-18d go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the
+# object exists and anon holds no privilege; a 404 is a FAIL (18c: PGRST202 - the schema cache does not know the four keys, the gate
+# before the Prompt 29 client push). 18e (only with SILVIS_SURGEON_JWT) reads as a surgeon and sends an empty save (refused AP001 at
+# the first check). 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
+# its header lists each AFTER string). The table and the functions exist since the apply, so the probe's PROBE_SETUP (app_call_days
+# is absent) and a 404 are FAILs - strict since the record step, which dropped the flag for the run right after the apply (before
+# the apply they passed as the not-applied picture); its partly-applied raise and its collision guard (PROBE_SETUP: live rows
+# already sit in the probe window) are FAILs too. 18g counts the probe's leftovers either way, by the probe's identity only: its
+# auth users and its audit rows (tagged), and app_call_days rows in its window (in_window).
+# 18a. anon may not read app_call_days (revoked: a refusal, never 200 + [])
+line=$(curl -s -o $T/vr18a.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_call_days?select=day&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
+echo "   18a anon GET app_call_days: $line  body: $(head -c 160 $T/vr18a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon read of app_call_days refused ($line - the table exists, anon holds no privilege)";;
+  "HTTP 404") bad "anon GET app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  "HTTP 200") bad "anon read of app_call_days: HTTP 200 - anon's privileges are revoked, so a refusal (401 / 403) is expected, not an answer (an APP day must never reach anon)";;
+  *) bad "anon GET app_call_days: $line (expected 401/403)";;
+esac
+# 18b. anon may not execute app_call_names (GET: the function is stable)
+line=$(curl -s -o $T/vr18b.json -w 'HTTP %{http_code}' "$URL/rest/v1/rpc/app_call_names" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+echo "   18b anon GET rpc/app_call_names: $line  body: $(head -c 160 $T/vr18b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc app_call_names refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") bad "anon rpc app_call_names: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) bad "anon rpc app_call_names: $line (expected 401/403; anything else - a 200 included - means anon reached the names)";;
+esac
+# 18c. anon may not execute save_app_days; PostgREST must know its four keys before the Prompt 29 client is pushed
+line=$(curl -s -o $T/vr18c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
+echo "   18c anon rpc save_app_days: $line  body: $(head -c 160 $T/vr18c.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc save_app_days refused ($line): PostgREST knows the four keys - the Prompt 29 client may be pushed";;
+  "HTTP 404") bad "anon rpc save_app_days: HTTP 404 (PGRST202: the schema cache does not know the function or its four keys, which exist since the 2026-10-02 apply) - do NOT push the Prompt 29 client";;
+  *) bad "anon rpc save_app_days: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
+esac
+# 18d. anon may not write app_call_days directly (no privilege; the zero uuid names no profile, so even an acceptance could not land)
+line=$(curl -s -o $T/vr18d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/app_call_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"day":"2030-12-31","profile_id":"00000000-0000-0000-0000-000000000000","source":"app"}')
+echo "   18d anon POST app_call_days: $line  body: $(head -c 160 $T/vr18d.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon insert into app_call_days refused ($line)";;
+  "HTTP 404") bad "anon POST app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
+  *) if grep -q '42501' $T/vr18d.json; then ok "anon insert into app_call_days refused (42501)"; else bad "anon POST app_call_days: $line (expected 401/403 or 42501)"; fi;;
+esac
+# 18e. as a surgeon (read-only): the table answers 200; an (empty) save is refused at the first check, AP001
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o $T/vr18e.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_call_days?select=day&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
+  echo "   18e surgeon GET app_call_days: $line"
+  case "$line" in
+    "HTTP 200") ok "a surgeon reads app_call_days (every signed-in role sees the APP days)";;
+    "HTTP 404") bad "surgeon GET app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
+    *) bad "surgeon GET app_call_days: $line (expected 200)";;
+  esac
+  line=$(curl -s -o $T/vr18f.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
+  echo "   18e surgeon rpc save_app_days (empty lists): $line  body: $(head -c 160 $T/vr18f.json)"
+  case "$line" in
+    "HTTP 400") if grep -q 'AP001' $T/vr18f.json; then ok "a surgeon's save_app_days is refused AP001 (only an APP or the scheduler)"; else bad "surgeon rpc save_app_days: HTTP 400 without AP001 ($(head -c 160 $T/vr18f.json))"; fi;;
+    "HTTP 404") bad "surgeon rpc save_app_days: HTTP 404 (the function exists since the 2026-10-02 apply - or the schema cache is stale)";;
+    *) bad "surgeon rpc save_app_days: $line (expected 400 AP001)";;
+  esac
+else
+  echo "   SKIP 18e (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment)"
+fi
+if linked; then
+  PROBE18="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/app-call-days-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE18" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: app_call_days is absent'; then
+    bad "APP days probe: PROBE_SETUP - app_call_days is absent (the table exists since the 2026-10-02 apply)"
+  elif echo "$out" | grep -q 'PROBE_SETUP: user_profiles.is_app is absent'; then
+    bad "APP days probe: PROBE_SETUP - user_profiles.is_app is absent while app_call_days exists (the migration is partly applied - ask Claude Code)"
+  elif echo "$out" | grep -q 'PROBE_SETUP: live rows already sit in the probe window'; then
+    bad "APP days probe: PROBE_SETUP - live app_call_days rows sit in the probe window (2030-12 or 2020-05-04): the probe could not run - review them (18g lists them)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "APP days probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results18=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results18" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE: an HTML character (> for '>', <, &) and the backslashes
+    # (an escaped double quote); the graders then read a case in plain bash (no process per case - 69 of them)
+    lines18=$(echo "$results18" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val18()   { CV18=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV18="${l#"$1="}"; return 0;; esac; done <<< "$lines18"; }
+    expect_eq18()  { case_val18 "$1"; v="$CV18"; [ "$v" = "$2" ] && ok "APP days probe $1: $3" || bad "APP days probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err18() { case_val18 "$1"; v="$CV18"; case "$v" in "ERR $2 "*"$3"*) ok "APP days probe $1: $4";; *) bad "APP days probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
+    # expect_ap18 <case> <code> <token> <head> <tail> <words>: the exact text with the run's Central date (M/D) between head and tail
+    expect_ap18()  { case_val18 "$1"; v="$CV18"; case "$v" in "ERR $2 $3: $4"[0-9]*/[0-9]*"$5") ok "APP days probe $1: $6";; *) bad "APP days probe $1: $6 (got '$v', expected ERR $2 $3: $4<M/D>$5)";; esac; }
+    NOTAPP18=" is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)"
+    ALLOW18="ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day"
+    expect_eq18  P1  "table=yes rls=yes pk=day fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "app_call_days: RLS on, day the primary key, profile_id cascades, one select policy for authenticated; anon holds nothing, authenticated SELECT only"
+    expect_eq18  P2  "save_definer=yes names_definer=yes isapp_definer=yes paths=3 names_stable=yes save_volatile=yes save_anon=no save_auth=yes names_anon=no names_auth=yes isapp_anon=no isapp_auth=yes" "the three functions are security definer with search_path public, pg_temp; app_call_names stable, save_app_days volatile; EXECUTE for authenticated, never anon"
+    expect_eq18  P3  "is_app=boolean not_null=yes default=false check=user_profiles_app_viewer self_pins=2" "user_profiles.is_app boolean not null default false, the APP-is-a-viewer check, pinned in both self policies"
+    expect_eq18  A1  "ok added=3 removed=0 kept=0 source=app 12/2=one/app 12/3=one/app 12/11=one/app by=self" "an APP adds three days for itself (source app, created_by itself)"
+    expect_eq18  A2  "audit=1 actor=self name=probe app one sums=probe app one: on call 12/2, 12/3, 12/11" "... and the function writes ONE appdays.save audit row as the APP (an APP cannot insert audit rows itself)"
+    expect_eq18  A3  "ok added=0 kept=2 audit=false audit_rows=1" "the same days again: kept, nothing written, no audit row (a re-sent Save is safe)"
+    expect_eq18  A4  "ok removed=1 12/3=none sums=probe app one: on call 12/2, 12/3, 12/11 | probe app one: removed 12/3" "an APP removes its own day (its own audit row)"
+    expect_eq18  A5  "ok removed=0 absent=1 audit=false" "removing a day nobody holds is absent, not an error"
+    expect_eq18  A6  "ERR AP004 APP_DAY_BAD_DAY: 12/4 is both added and removed in one save - nothing was saved" "a day both added and removed is refused"
+    expect_eq18  A7  "ERR AP004 APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved" "an empty day in the list is refused"
+    expect_eq18  A8  "ERR AP004 APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved" "more than 400 days in one save are refused"
+    expect_ap18  A9  AP006 APP_DAY_PAST "5/4 is before today (" ") in Central time - a past day stays as it was" "a past day (Central time) is refused for an APP"
+    expect_ap18  A10 AP006 APP_DAY_PAST "5/4 is before today (" ") in Central time - a past day stays as it was" "removing a past day is refused too, and the whole save with it"
+    expect_eq18  A10s "12/5=none" "... and its other day was not written (all or nothing)"
+    expect_eq18  A11 "ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler" "an APP cannot add days for another APP"
+    expect_eq18  A12 "ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day" "an APP cannot replace (p_replace is the scheduler's)"
+    expect_err18 A13 42501 "permission denied for table app_call_days" "an APP cannot insert into app_call_days directly (authenticated holds SELECT only)"
+    expect_err18 A14 42501 "permission denied for table app_call_days" "an APP cannot delete from app_call_days directly, not even its own row"
+    expect_eq18  A15 "rows=2" "an APP reads the APP days"
+    expect_eq18  A16 "names=1 self=yes" "app_call_names gives an APP its own name (and the names of the days' holders)"
+    expect_eq18  A17 "ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved" "infinity / -infinity are refused (no calendar day)"
+    expect_err18 A18 42501 'row-level security policy for table "user_profiles"' "an APP cannot rename itself (every signed-in user sees its name; the admin names APPs)"
+    expect_eq18  A19 "updated=1" "... while an update to its own name, unchanged, still lands"
+    expect_eq18  B1  "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" "a second APP is refused on a taken day, naming the holder (one APP per day)"
+    expect_eq18  B1s "12/2=one/app" "... and the day keeps its APP"
+    expect_eq18  B2  "ok added=2 source=app 12/7=two/app 12/8=two/app" "the second APP adds free days"
+    expect_eq18  B3  "ERR AP002 APP_DAY_NOT_YOURS: 12/2 is probe app one's day - only that APP or the scheduler can remove it (nothing was saved)" "an APP cannot remove another APP's day"
+    expect_eq18  B4  "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one, 12/11 already has probe app one - nothing was saved" "every taken day is named; the save writes nothing"
+    expect_eq18  B4s "12/9=none" "... its free day was not written (all or nothing)"
+    expect_eq18  B5  "names=2" "the second APP sees both holders' names"
+    expect_eq18  S1  "$ALLOW18" "a surgeon cannot put an APP on a day"
+    expect_eq18  S2  "$ALLOW18" "... not for a named APP either"
+    expect_eq18  S3  "rows=4" "a surgeon reads every APP day"
+    expect_err18 S4  42501 "permission denied for table app_call_days" "a surgeon cannot write app_call_days directly"
+    expect_eq18  S5  "names=2 one=probe app one two=probe app two" "a surgeon sees the holders' display names (through app_call_names - user_profiles stays unreadable to him)"
+    expect_eq18  C1  "$ALLOW18" "the office coordinator cannot put an APP on a day"
+    expect_eq18  C2  "rows=4" "the office coordinator reads every APP day"
+    expect_eq18  V1  "$ALLOW18" "a plain viewer (not an APP) cannot put an APP on a day"
+    expect_eq18  V2  "rows=4" "a plain viewer reads every APP day"
+    expect_err18 V3  42501 'row-level security policy for table "user_profiles"' "a viewer cannot make itself an APP (user_profiles_self_update pins is_app)"
+    expect_eq18  V4  "updated=1" "... while its own display_name stays editable"
+    expect_eq18  D1  "ok added=1 source=scheduler 12/10=two/scheduler by=admin" "the scheduler puts an APP on a day (source scheduler, created_by the scheduler)"
+    expect_eq18  D2  "actor=s1 name=probe admin sums=probe app two: on call 12/10" "... with the same audit row, as the scheduler (his roster id)"
+    expect_eq18  D3  "ok removed=1 12/10=none" "the scheduler clears an APP's day"
+    expect_eq18  D4  "ok added=1 5/4=one/scheduler" "the scheduler may set a past day (exempt from AP006)"
+    expect_eq18  D5  "ok removed=1 5/4=none" "... and clear one"
+    expect_eq18  D6  "ERR AP005 APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" "the scheduler is refused a taken day without p_replace"
+    expect_eq18  D7  "ok added=1 replaced=1 12/2=two/scheduler last=probe app two: on call 12/2 (was probe app one)" "the scheduler's change replaces the holder in one call; the audit row names the APP replaced"
+    expect_eq18  D8  "ERR AP007 APP_DAY_STALE: 12/2 is probe app two's day - reload the calendar (nothing was saved)" "the scheduler clearing a day another APP now holds is refused (a stale picture)"
+    expect_eq18  D9  "ERR AP003 APP_DAY_NOT_APP: probe viewer$NOTAPP18" "the scheduler cannot put a non-APP account on a day"
+    expect_eq18  D10 "ERR AP003 APP_DAY_NOT_APP: that account$NOTAPP18" "... nor a profile that does not exist"
+    expect_eq18  D11 "ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)" "the scheduler must name the APP"
+    expect_eq18  D12 "names=2 one=app two=app" "the scheduler sees every APP (the day editor's pick list) with the APP flag"
+    expect_eq18  D13 "updated=1 is_app=false" "the admin switches an APP off"
+    expect_eq18  F1  "$ALLOW18" "a former APP can no longer save"
+    expect_eq18  F2  "12/11=one/app" "... and its days stay"
+    expect_eq18  E1  "names=2 one=former two=app" "app_call_names marks the former APP (its day still shows)"
+    expect_eq18  E2  "ok removed=1 12/11=none" "the scheduler clears a former APP's day (AP003 binds adds only)"
+    expect_eq18  E3  "ERR AP003 APP_DAY_NOT_APP: probe app one$NOTAPP18" "the scheduler cannot add days for a former APP"
+    expect_err18 E4  23514 'violates check constraint "user_profiles_app_viewer"' "a surgeon (a roster entry) cannot be an APP"
+    expect_err18 E5  23514 'violates check constraint "user_profiles_app_viewer"' "the office coordinator cannot be an APP"
+    expect_err18 N1  42501 "permission denied for table app_call_days" "anon cannot read app_call_days"
+    expect_err18 N2  42501 "permission denied for function app_call_names" "anon cannot execute app_call_names"
+    expect_err18 N3  42501 "permission denied for function save_app_days" "anon cannot execute save_app_days"
+    expect_eq18  N4  "$ALLOW18" "a session with no signed-in user is refused"
+    expect_eq18  N5  "names=0" "app_call_names gives a session with no signed-in user nothing"
+    expect_eq18  X1  "before=3 after=0 audit_kept=yes" "deleting the account removes its APP days; the audit rows stay"
+    expect_err18 I1  42501 'row-level security policy for table "user_profiles"' "a self-insert cannot make an APP (user_profiles_self_insert pins is_app)"
+    expect_eq18  I2  "ok is_app=false" "a plain self-insert lands as a viewer, not an APP"
+  fi
+  # 18g. leftovers, by the probe's identity only: tagged = its auth users (profiles and their app_call_days rows cascade) and its
+  # appdays.save audit rows (summaries 'probe app ...'); in_window = app_call_days rows in 2030-12 or on 2020-05-04 (read through
+  # query_to_xml, guarded by to_regclass: before the apply - or after a rollback - the table does not exist). The collision guard
+  # refuses to start while an in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent raise - a FAIL
+  # itself since the record step) such rows can only be the probe's; after a run that stopped at the guard (or at the
+  # partly-applied raise) they are live rows it never wrote - listed for review, never counted as a leftover and never given a
+  # DELETE (a probe row and a real APP day look alike).
+  LEFTOVER18_SQL="select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window"
+  r=$(q "$LEFTOVER18_SQL")
+  rflat18=$(echo "$r" | tr -d ' \n')
+  tagged18=$(echo "$rflat18" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win18=$(echo "$rflat18" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  passed18=""; echo "$out" | grep -qE 'PROBE_RESULTS .*;END|PROBE_SETUP: app_call_days is absent' && passed18=1
+  if [ -z "$tagged18" ] || [ -z "$win18" ]; then
+    bad "APP days probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif [ "$tagged18" = "0" ] && [ "$win18" = "0" ]; then
+    ok "APP days probe persisted nothing (leftover count 0: auth.users probe-appdays-* / audit_log appdays.save 'probe app ...' / app_call_days in 2030-12 or on 2020-05-04)"
+  else
+    if [ "$tagged18" != "0" ]; then
+      bad "APP days probe LEFT ROWS BEHIND (tagged=$tagged18 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %';"
+      echo "      delete from auth.users where email like 'probe-appdays-%@example.test';   -- profiles and their app_call_days rows cascade"
+    fi
+    if [ "$win18" != "0" ]; then
+      if [ "$passed18" = "1" ]; then
+        bad "APP days probe LEFT ROWS BEHIND (in_window=$win18 - app_call_days rows in the probe window after a run that passed its collision guard): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real APP day look alike), then report:"
+      else
+        echo "   18g: $win18 app_call_days row(s) sit in the probe window - the probe stopped before writing anything (18f), so they are live rows, not leftovers; review them:"
+      fi
+      echo "      select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';"
+    fi
+  fi
+else
+  echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

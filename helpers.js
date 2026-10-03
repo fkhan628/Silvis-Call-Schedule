@@ -957,8 +957,9 @@ function syncFailLine(dayFail, blobFail) {
 // Setup warning they cannot act on. opts.retry (the "Schedule not loaded" banner with its Retry is up) says "then Retry
 // or reload"; opts.isScheduler adds the Setup clause when the shared setup failed. The two notices - daysEmpty (the
 // empty-read tripwire of mergeLoadedDays) and blobMoved - are not failed reads: they keep their own sentence, in order.
-const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews"];
-const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews" };
+// Prompt 29 (the merge with main, 10/2): appDays - the APP-day read of a signed-in load (APP_DAYS_LOAD_FAIL_TEXT) - goes last.
+const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews", "appDays"];
+const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews", appDays: "the APP days" };
 function combinedLoadToast(fails, opts) {
   const f = fails && typeof fails === "object" ? fails : {};
   const o = opts || {};
@@ -4207,6 +4208,147 @@ function offerNextPeriod(periods, today) {
   return open || any;
 }
 
+/* === No-primary days (Prompt 28, 10/1 - Faraz: "I do want them to be able to do that"; Burchett: "I need to be blocked
+ * out as unavailable for primary call. I can cover backup call these days") ===
+ * The painter's fifth brush "No primary": not on primary that day, backup is fine. Stored as ONE availability row per day,
+ * kind 'backup_only', role 'any' (rules.js already reads it: primary blocked, backup available), written only through
+ * rpc/save_offers -> save_no_primary (security definer; sql/migrations/2026-10-01-no-primary-days.sql). The person's own
+ * SINGLE-day backup_only rows (any source - the app's, Setup's, the seed's) are the No primary state, his to change; a
+ * multi-day backup_only row (a range the scheduler entered in Setup) shows on each of its days as NO_PRIMARY_RANGE_WORDS
+ * and stays read-only in the painter (the database refuses to split it, NP007). Pure: no clock, no DOM, no network;
+ * test/offers.test.js section F runs them. */
+const NO_PRIMARY_RANGE_WORDS = "No primary (set by the scheduler)";
+const NO_PRIMARY_HELD_WORDS = "you hold primary that day - trade it first";
+const NP_RANGE_MAX_DAYS = 3660; // a range is expanded day by day for the painter; a junk end date (9999-12-31) never loops for ever
+// noPrimaryDays(rows, personId) -> { own: { day: true }, range: { day: true } } from availability rows: kind 'backup_only' of
+// that person, any role, any source; ISO start / end (a missing end = the start day), end >= start. start === end -> own[day];
+// a longer row -> range[d] for each of its days (at most NP_RANGE_MAX_DAYS of them). A day covered by a range is NOT in own
+// (a range wins: read-only). Other kinds, other persons and junk rows are ignored.
+function noPrimaryDays(rows, personId) {
+  const out = { own: {}, range: {} };
+  if (!Array.isArray(rows) || !personId) return out;
+  const singles = [], ranges = [];
+  rows.forEach(r => {
+    if (!r || typeof r !== "object" || r.kind !== "backup_only" || r.person_id !== personId) return;
+    const s = r.start_date === undefined || r.start_date === null ? "" : String(r.start_date).slice(0, 10);
+    const e = r.end_date === undefined || r.end_date === null || r.end_date === "" ? s : String(r.end_date).slice(0, 10);
+    if (!suIsIso(s) || !suIsIso(e) || e < s) return;
+    if (s === e) { singles.push(s); return; }
+    ranges.push([s, e]);
+    let d = s;
+    for (let n = 0; d <= e && n < NP_RANGE_MAX_DAYS; n++, d = suAddDays(d, 1)) out.range[d] = true;
+  });
+  singles.forEach(d => { if (!ranges.some(([s, e]) => d >= s && d <= e)) out.own[d] = true; });
+  return out;
+}
+// offerPaintCell(cell, brush, opts) -> { offer, np, skip, lift, replaced } - what ONE brush does to ONE day of the painter.
+//   cell  = { offer: 'primary'|'backup'|'either'|null (the effective offer), np: bool (the effective OWN no-primary), savedOffer,
+//             savedNp: bool (the saved state), range: bool (a scheduler's range covers the day), past: bool, frozen: words|null,
+//             grey: words|null (past / frozen / both roles blocked - the row's grey), blockPrimary / blockBackup: words|null
+//             (a one-role block; a range day's blockPrimary is NO_PRIMARY_RANGE_WORDS), holdsPrimary: bool (published primary) }
+//   brush = 'primary'|'backup'|'either'|'noprimary'|'clear'; opts = { single: bool } (a single tap, not a Range / Paste batch)
+//   offer / np = the state after the brush; skip = the words the sheet lists in "Skipped N day(s): ..." (null = not listed;
+//   unchanged + null = a silent no-op); lift = a primary / either brush lifts a no-primary day (the sheet asks ONCE per batch);
+//   replaced = No primary removed a primary / either offer. First matching rule wins, per brush (guide section 17, Prompt 28):
+//   noprimary: past -> skip 'past'; frozen -> skip its words; range -> silent; own N -> a single tap takes it back (Range /
+//              Paste: silent); greyed -> skip; holds primary -> skip NO_PRIMARY_HELD_WORDS; a primary / either offer -> replaced
+//              (offer none, N); otherwise N (a Backup offer stays: backup preferred that day).
+//   primary / either: greyed -> skip; range -> skip 'primary - <words>'; a one-role block on a needed role -> skip '<role> - <words>';
+//              a single tap on the same brush -> offer none; own N -> offer, N lifted (lift); otherwise -> offer.
+//   backup:    greyed -> skip; backup blocked -> skip 'backup - <words>'; a single tap on Backup -> offer none; otherwise Backup
+//              (N and the range unchanged).
+//   clear:     nothing to clear -> silent (before any grey is named); past -> skip 'past'; frozen -> skip; greyed with neither a
+//              saved offer nor a saved N -> skip; otherwise offer none and N lifted (a range stays: read-only).
+// The weekday-pattern confirm stays in the sheet (it reads the row's confirm words).
+function offerPaintCell(cell, brush, opts) {
+  const c = cell && typeof cell === "object" ? cell : {};
+  const E = OFFER_ROLES[c.offer] ? c.offer : null;
+  const N = !!c.np && !c.range;
+  const single = !!(opts && opts.single);
+  const frozen = c.frozen ? String(c.frozen) : null;
+  const grey = c.grey ? String(c.grey) : c.past ? "past" : frozen;
+  const keep = (skip) => ({ offer: E, np: N, skip: skip || null, lift: false, replaced: false });
+  const to = (offer, np, extra) => Object.assign({ offer, np: !!np, skip: null, lift: false, replaced: false }, extra || {});
+  if (brush === "noprimary") {
+    if (c.past) return keep("past");
+    if (frozen) return keep(frozen);
+    if (c.range) return keep(null);
+    if (N) return single ? to(E, false) : keep(null);
+    if (grey) return keep(grey);
+    if (c.holdsPrimary) return keep(NO_PRIMARY_HELD_WORDS);
+    if (E === "primary" || E === "either") return to(null, true, { replaced: true });
+    return to(E, true);
+  }
+  if (brush === "primary" || brush === "either") {
+    if (grey) return keep(grey);
+    if (c.range) return keep("primary - " + (c.blockPrimary || NO_PRIMARY_RANGE_WORDS));
+    const need = brush === "either" ? ["primary", "backup"] : ["primary"];
+    const words = { primary: c.blockPrimary || null, backup: c.blockBackup || null };
+    const blocked = need.filter(role => words[role]);
+    if (blocked.length) return keep(blocked.map(role => role + " - " + words[role]).join(", "));
+    if (single && E === brush) return to(null, N);
+    if (N) return to(brush, false, { lift: true });
+    return to(brush, false);
+  }
+  if (brush === "backup") {
+    if (grey) return keep(grey);
+    if (c.blockBackup) return keep("backup - " + c.blockBackup);
+    if (single && E === "backup") return to(null, N);
+    return to("backup", N);
+  }
+  if (brush === "clear") {
+    if (!E && !N) return keep(null);
+    if (c.past) return keep("past");
+    if (frozen) return keep(frozen);
+    if (grey && !c.savedOffer && !c.savedNp) return keep(grey);
+    return to(null, false);
+  }
+  return keep(null); // an unknown brush changes nothing
+}
+// noPrimaryDraftDiff(savedOwn, npDraft) -> { add: [day], clear: [day], bad: [day] } in day order. savedOwn = noPrimaryDays(...).own
+// (a { day: true } map; an array of days is accepted too), npDraft = { day: true (mark) | false (lift) }. true on a day not saved
+// -> add; false on a saved day -> clear; equal to the saved state -> dropped; a day that is not 'YYYY-MM-DD' -> bad (fail closed,
+// nothing is written).
+function noPrimaryDraftDiff(savedOwn, npDraft) {
+  const saved = {};
+  if (Array.isArray(savedOwn)) savedOwn.forEach(d => { saved[String(d)] = true; });
+  else if (savedOwn && typeof savedOwn === "object") Object.keys(savedOwn).forEach(d => { if (savedOwn[d]) saved[d] = true; });
+  const out = { add: [], clear: [], bad: [] };
+  const dr = npDraft && typeof npDraft === "object" ? npDraft : {};
+  Object.keys(dr).sort().forEach(day => {
+    if (!suIsIso(day)) { out.bad.push(day); return; }
+    const want = !!dr[day], have = !!saved[day];
+    if (want && !have) out.add.push(day);
+    else if (!want && have) out.clear.push(day);
+  });
+  return out;
+}
+// offersAuditSummary(name, offerCount, np, mode, periodLabel) -> the summary of the painter's ONE audit row 'offers.save'
+// (the Activity log shows it through auditEntryText). np = { add: [day], clear: [day] } (null / missing = empty). With np empty
+// it is byte-for-byte the text the app wrote before Prompt 28: "<Name>: N offer change(s)[, mode m][ (label)]". Days as M/D,
+// ", "-joined, in day order: "Burchett: no primary on 1/6, 1/15"; "Burchett: 2 offer change(s); no primary on 1/6; no primary
+// lifted on 2/3 (Jan 2027 - Jun 2027)". Days and counts only - no amount, no contact, no reason.
+function offersAuditSummary(name, offerCount, np, mode, periodLabel) {
+  const days = (v) => (Array.isArray(v) ? v.map(String).filter(suIsIso) : []).sort();
+  const adds = days(np && np.add), clears = days(np && np.clear);
+  const n = Number(offerCount) || 0;
+  const parts = [];
+  if (n > 0 || adds.length + clears.length === 0) parts.push(n + " offer change(s)");
+  if (adds.length) parts.push("no primary on " + adds.map(fmtMD).join(", "));
+  if (clears.length) parts.push("no primary lifted on " + clears.map(fmtMD).join(", "));
+  return String(name) + ": " + parts.join("; ") + (mode ? ", mode " + mode : "") + (periodLabel ? " (" + periodLabel + ")" : "");
+}
+// noPrimaryErrorWords(msg) -> a message starting "NO_PRIMARY_<X>: " (save_no_primary's NP001-NP009, shown verbatim by
+// describeDbError) loses the token and gets a capital first letter ("NO_PRIMARY_ON_CALL: Burchett holds primary on 1/6 - ..." ->
+// "Burchett holds primary on 1/6 - ..."); any other message comes back unchanged.
+function noPrimaryErrorWords(msg) {
+  const s = msg === undefined || msg === null ? "" : String(msg);
+  const m = /^NO_PRIMARY_[A-Z_]+:\s*/.exec(s);
+  if (!m) return s;
+  const rest = s.slice(m[0].length);
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : s;
+}
+
 /* ═══ Offer deadline notices (Faraz 9/27: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks before") ═══
  * The reading implemented (docs/SILVIS-CALL-RULES.md section 4, build guide section 17): a period's choices FREEZE
  * closeWeeksBeforeStart (6) weeks before it starts and its schedule is due publishWeeksBeforeStart (4) weeks before it
@@ -5420,6 +5562,12 @@ function suPatternWithKind(p, kind) {
 // such shape reads as this ONE message. The success shape (#access_token=...&type=recovery|invite) is
 // not an error and returns null; so do the app's own deep links (#openshifts, #offers, ?public=1).
 const AUTH_LINK_ERROR_MESSAGE = "This invite or reset link has expired or was already used - ask the scheduler for a new invite, or use Forgot your password.";
+// Review 9/27 Do first 7: the stored session could not be checked - auth.getUser answered error "network" (a thrown
+// fetch, or a 5xx / 429 / 408 from GoTrue: config.js authAnswerKind kept the pair). The mount card shows the first
+// line with a Retry (data-testid auth-unreached), a Retry that is still unanswered the second; the biometric tile
+// shows the first as its error. Never a bare sign-in card that reads as "you were signed out".
+const SESSION_UNREACHED_MESSAGE = "Couldn't reach the server to confirm your session - check your connection and try again.";
+const SESSION_STILL_UNREACHED_MESSAGE = "Still couldn't reach the server - try again in a moment, or sign in with your password below.";
 const AUTH_LINK_ERROR_KEYS = ["error", "error_code", "error_description"];
 // authLinkError(hash, search) -> null, or { message, code, description, from: "hash" | "query", cleanSearch }
 // where cleanSearch is the query with the three error keys removed ("" or "?k=v...") - what the app hands
@@ -5481,6 +5629,58 @@ function notifVisibleTo(rows, who) {
   return base.filter(n => (n.created_at || "") > cleared);
 }
 
+/* === Browser pop-ups by seen ids (review 9/27 Do first 6) === */
+// Which Alerts rows raise a browser pop-up (sendBrowserNotif), decided here in one place. One step per change of the
+// feed. state is the seen set of ONE signed-in account, { uid, ids: Set of notification ids }, or null. input:
+//   uid            the signed-in account's id (null: signed out, the sign-in card, ?public=1)
+//   readOk         the feed was read with a session token (notifsRead "ok") - not the skipped / anon pass of the sign-in card
+//   ready          the profile the visible feed is filtered by is this account's and settled
+//   notifications  the raw feed (newest first; the read and the insert cap it at 50 rows)
+//   visible        myNotifications - notifVisibleTo of the same feed
+// - no account: nothing pops and the state is kept (the same account signing back in carries on from it);
+// - a state of another account (or none) is dropped and seeded at this account's first authenticated read with every
+//   row's id - nothing pops then (an anon / skipped first pass never seeds: else every row would look new after the
+//   sign-in);
+// - until ready the step waits (nothing marked, nothing popped): the rows are judged once the audience is known;
+// - then every unseen row is marked seen and only the unseen rows of the VISIBLE feed pop: the office viewer never gets
+//   the trade / vacation pop-ups its feed hides, and a row hidden now never pops later when a follow, a roster link or a
+//   promotion widens the feed.
+// Ids, never a count (the feed is capped at 50 rows: a count stopped changing at 50, and the pop-ups stopped for good)
+// and never a created_at watermark (the inserting device stamps created_at). Pure: the input state is never mutated.
+function notifPopupStep(state, input) {
+  const inp = input || {};
+  const uid = inp.uid || null;
+  if (!uid) return { state: state || null, pop: [] };
+  const idOf = (n) => (n && typeof n === "object" && n.id != null && n.id !== "") ? n.id : null;
+  const all = (Array.isArray(inp.notifications) ? inp.notifications : []).map(idOf).filter(id => id !== null);
+  const own = !!state && state.uid === uid && !!state.ids && typeof state.ids.has === "function";
+  if (!own) {
+    if (!inp.readOk) return { state: null, pop: [] };
+    return { state: { uid, ids: new Set(all) }, pop: [] };
+  }
+  if (!inp.ready) return { state, pop: [] };
+  const pop = [];
+  const fresh = new Set();
+  (Array.isArray(inp.visible) ? inp.visible : []).forEach(n => {
+    const id = idOf(n);
+    if (id !== null && !state.ids.has(id) && !fresh.has(id)) { fresh.add(id); pop.push(n); }
+  });
+  all.forEach(id => { if (!state.ids.has(id)) fresh.add(id); });
+  if (!fresh.size) return { state, pop };
+  const ids = new Set(state.ids);
+  fresh.forEach(id => ids.add(id));
+  return { state: { uid, ids }, pop };
+}
+// This device's own inserted row (addNotification) is seen at once - it never pops back at the device that wrote it.
+// No state yet: nothing to add (the seed reads the row with the rest of the feed). Pure.
+function notifSeenAdd(state, row) {
+  const id = row && typeof row === "object" ? row.id : null;
+  if (!state || !state.ids || typeof state.ids.has !== "function" || id == null || id === "" || state.ids.has(id)) return state || null;
+  const ids = new Set(state.ids);
+  ids.add(id);
+  return { uid: state.uid, ids };
+}
+
 /* === Own profile on the poll (Prompt 16 B4) === */
 // The 60-second poll re-reads the signed-in account's own user_profiles row so a surgeon whose account the admin
 // links or promotes while the app is open sees Mine, the painter and the role gates follow it without a reload.
@@ -5506,6 +5706,9 @@ function profilePollMerge(prev, row) {
   const recovered = !!prev._loadFailed;
   const moved = PROFILE_POLL_KEYS.filter(k => norm(prev[k]) !== norm(row[k]));
   if (JSON.stringify(followsOf(prev)) !== JSON.stringify(followsOf(row))) moved.push("follows");
+  // Prompt 29: the APP flag counts too - a missing key (before the migration) and false are one value (the generic norm would
+  // read them as different), so only false -> true or true -> false moves it.
+  if ((prev.is_app === true) !== (row.is_app === true)) moved.push("is_app");
   if (!moved.length && !recovered) return { next: prev, changed: false, reason: "unchanged" };
   const next = { ...row, id: row.id || prev.id };
   delete next._loadFailed;
@@ -5624,6 +5827,231 @@ function notifPrefReadFailureState(status, bodyText) {
   return Number(status) === 400 && /profile_id/.test(t) && /42703|does not exist/.test(t) ? "unavailable" : "failed";
 }
 
+/* === APP call days (Prompt 29, Faraz 10/1) === */
+// Faraz 10/1: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me
+// ... This would also show up on the calendar". Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not
+// the ?public=1 page; no e-mails, the Activity log only. An APP account is a VIEWER account (no roster link) the admin
+// marks APP in Setup > Users (user_profiles.is_app - a flag, not a role, so an APP keeps everything a viewer has: follows,
+// the follower e-mails, the preferences, the calendar). One row per day in the APP table (its day is the primary key: the
+// database holds one APP per day); the only write path is the save function, which also writes the audit row. config.js
+// appDaysDb is the only client file that names the table or its two functions. These are the pure pieces the client is
+// built on; none of them throws.
+const APP_DAYS_UNAVAILABLE_TEXT = "APP days are available after the next database update.";
+// The mount load's sentence for a failed APP-day read (Do first 4's collector, key appDays - the merge with main, 10/2): every
+// signed-in role sees the A lines, so one wording serves the viewer, the APP and the scheduler (?public=1 never reads them).
+const APP_DAYS_LOAD_FAIL_TEXT = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+// The refusal codes the save function raises (custom SQLSTATEs; PostgREST answers 400 with the code + "<TOKEN>: <text>").
+const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" };
+const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004); the client refuses a bigger save before any request
+const appDayIsIso = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+// appShortName(displayName) -> the grid's name: the part before the first comma (drops ", PA-C"), trimmed, its last word -
+// after trailing credential words written without a comma ("Pat Appleton PA-C", "... NP", "... P.A.-C"; review 10/2), matched
+// in capitals only so a surname such as "Do" or "Pa" stays; a lone word is kept. "Pat Appleton" -> "Appleton"; a nameless APP
+// reads "APP".
+const APP_CREDENTIAL_WORDS = ["PA-C", "PA", "NP", "NP-C", "APRN", "APRN-CNP", "ARNP", "CRNP", "CNP", "FNP", "FNP-C", "FNP-BC", "AGNP", "AGNP-C", "AGACNP", "AGACNP-BC", "ACNP", "ACNP-BC", "CNS", "CRNA", "DNP", "MSN", "BSN", "RN", "MPAS", "MSPAS", "MHS", "MMS", "MPA", "PHD"];
+function appShortName(displayName) {
+  const head = String(displayName === null || displayName === undefined ? "" : displayName).split(",")[0].trim();
+  const words = head.split(/\s+/).filter(Boolean);
+  while (words.length > 1 && APP_CREDENTIAL_WORDS.includes(words[words.length - 1].replace(/\./g, "").replace(/^PhD$/, "PHD"))) words.pop();
+  return words.length ? words[words.length - 1] : "APP";
+}
+// appDaysByDay(rows, names) -> { "YYYY-MM-DD": { day, profileId, name, short, isApp, source } } from the APP table's rows
+// ({ day, profile_id, source, created_at }) and the names function's rows ({ profile_id, display_name, is_app }). A row
+// whose day is not ISO or that has no profile_id is skipped; name = the holder's display name, else "APP"; isApp is false
+// only for a holder whose names row says so (a former APP: his days stay until the scheduler clears them).
+function appDaysByDay(rows, names) {
+  const byId = {};
+  (Array.isArray(names) ? names : []).forEach(n => { if (n && typeof n === "object" && typeof n.profile_id === "string" && n.profile_id) byId[n.profile_id] = n; });
+  const out = {};
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== "object" || !appDayIsIso(r.day) || typeof r.profile_id !== "string" || !r.profile_id) return;
+    const n = byId[r.profile_id];
+    const name = n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP";
+    out[r.day] = { day: r.day, profileId: r.profile_id, name, short: appShortName(name), isApp: !(n && n.is_app === false), source: typeof r.source === "string" ? r.source : null };
+  });
+  return out;
+}
+// appDaysReadFailureState(status, bodyText) - a non-2xx answer to the APP reads: "unavailable" when the table or the
+// function does not exist yet (the migration not applied, or rolled back): 404 PGRST205 (table) / PGRST202 (function), a
+// 42P01 - payReadFailureState's reading plus PGRST202; anything else is "failed" (never an empty list).
+function appDaysReadFailureState(status, bodyText) {
+  const st = Number(status), t = String(bodyText || "");
+  let code = null;
+  try { const j = JSON.parse(t); code = j && typeof j.code === "string" ? j.code : null; } catch (e) { code = null; }
+  if (st === 404 && (code === "PGRST202" || (code === null && /PGRST202/.test(t)))) return "unavailable";
+  return payReadFailureState(st, t);
+}
+// appDaysCellState(day, { byDay, me, draft, today }) -> what the My APP days month cell is:
+//   "past" / "past-mine" (before today, Central - never tappable), "taken" (another profile holds it), "mine" (saved as
+//   mine), "add" (free, drafted to add), "remove" (mine, drafted to remove), "free".
+function appDaysCellState(day, ctx) {
+  const c = ctx || {};
+  const byDay = c.byDay || {}, draft = c.draft || {};
+  const today = todayOrCentral(c.today);
+  const e = byDay[day] || null;
+  const mine = !!(e && c.me && e.profileId === c.me);
+  if (day < today) return mine ? "past-mine" : "past";
+  if (e && !mine) return "taken";
+  if (mine) return draft[day] === false ? "remove" : "mine";
+  return draft[day] === true ? "add" : "free";
+}
+// appDaysToggle(draft, day, ctx) -> the draft after a tap: free -> add, add -> free, mine -> remove, remove -> mine; a past
+// or taken day leaves the draft as it was (the SAME object).
+function appDaysToggle(draft, day, ctx) {
+  const d = draft && typeof draft === "object" ? draft : {};
+  const st = appDaysCellState(day, { ...(ctx || {}), draft: d });
+  if (st !== "free" && st !== "mine" && st !== "add" && st !== "remove") return d;
+  const next = { ...d };
+  if (st === "free") next[day] = true;
+  else if (st === "mine") next[day] = false;
+  else delete next[day];
+  return next;
+}
+// appDaysPlan(days, ctx) - for Range / Paste: { go: [the free days, sorted], skipped: [{ day, why }] }; why =
+// "<M/D> already has <name>", "<M/D> is past", "<M/D> is already yours" (read from the saved picture, not the draft).
+function appDaysPlan(days, ctx) {
+  const c = ctx || {};
+  const byDay = c.byDay || {};
+  const list = Array.from(new Set((Array.isArray(days) ? days : []).filter(appDayIsIso))).sort();
+  const go = [], skipped = [];
+  list.forEach(d => {
+    const st = appDaysCellState(d, { byDay, me: c.me, today: c.today });
+    if (st === "past" || st === "past-mine") skipped.push({ day: d, why: fmtMD(d) + " is past" });
+    else if (st === "taken") skipped.push({ day: d, why: fmtMD(d) + " already has " + byDay[d].name });
+    else if (st === "mine") skipped.push({ day: d, why: fmtMD(d) + " is already yours" });
+    else go.push(d);
+  });
+  return { go, skipped };
+}
+// appDaysDraftDiff(draft, byDay, me, today) -> { add: [drafted-true days not held by me, sorted], clear: [drafted-false days
+// held by me, sorted], count } - what one Save sends. With today (ISO), a day before it never counts (a drafted day that became
+// past while the card was open - the server refuses it with AP006; review 10/2).
+function appDaysDraftDiff(draft, byDay, me, today) {
+  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
+  const t = appDayIsIso(today) ? today : null;
+  const held = (day) => !!(b[day] && me && b[day].profileId === me);
+  const live = (day) => appDayIsIso(day) && !(t && day < t);
+  const add = Object.keys(d).filter(day => live(day) && d[day] === true && !held(day)).sort();
+  const clear = Object.keys(d).filter(day => live(day) && d[day] === false && held(day)).sort();
+  return { add, clear, count: add.length + clear.length };
+}
+// appDaysDraftPrune(draft, byDay, me, today) -> the draft without the entries a reload made impossible (an add on a day somebody
+// now holds, a removal of a day that is no longer mine) and, with today (ISO), without the days before it (midnight Central
+// passed while the card was open; review 10/2); the SAME object when nothing goes.
+function appDaysDraftPrune(draft, byDay, me, today) {
+  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
+  const t = appDayIsIso(today) ? today : null;
+  const drop = Object.keys(d).filter(day => (t && day < t) || (d[day] === true ? !!b[day] : !(b[day] && me && b[day].profileId === me)));
+  if (!drop.length) return d;
+  const next = { ...d };
+  drop.forEach(day => { delete next[day]; });
+  return next;
+}
+// The message of a PostgREST error body (its JSON text, or an object with a message), else the text itself.
+function appDayErrorMessage(body) {
+  if (body && typeof body === "object") return typeof body.message === "string" ? body.message : String(body);
+  const t = body === null || body === undefined ? "" : String(body);
+  try { const j = JSON.parse(t); if (j && typeof j.message === "string") return j.message; } catch (e) { /* not JSON */ }
+  return t;
+}
+// appDaysErrorWords(body, status, opts) -> plain words for a refused / failed save: the function's own sentence (the text after
+// "APP_DAY_<TOKEN>: "); a missing table / function -> APP_DAYS_UNAVAILABLE_TEXT; a permission refusal; an expired session;
+// no connection (a re-save is safe: the save is idempotent); else "Couldn't save the APP days: " + the first 160 characters.
+// opts.sessionExpired (the merge with main, 10/2 - Do first 7): false = the session is not known dead (auth.sessionExpired: a
+// refresh the auth server answered 5xx / 429 / 408 or never answered is "couldn't reach", never a sign-out), so a 401 says the
+// session couldn't be refreshed instead of "sign in again"; true or absent keeps the expired words.
+// Ship review 10/2: a 5xx without a PostgREST code (a gateway's HTML page, or its JSON without `code`) is "outcome unknown" -
+// a PostgREST error with a code means the function's transaction failed and nothing was saved. opts.where "editor" = the
+// scheduler's day editor (no "My APP days" in its words); opts.reloaded true = the caller reloaded the APP days after the
+// refusal and the reload landed, so the words point at the reloaded picture; otherwise at the next refresh.
+function appDaysErrorWords(body, status, opts) {
+  const msg = appDayErrorMessage(body);
+  const raw = body && typeof body === "object" ? msg : String(body === null || body === undefined ? "" : body);
+  const m = /APP_DAY_[A-Z_]+: ([\s\S]*)$/.exec(msg);
+  if (m && m[1].trim()) return m[1].trim();
+  const all = msg + " " + raw;
+  if (/PGRST202|PGRST205|42P01/.test(all)) return APP_DAYS_UNAVAILABLE_TEXT;
+  if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
+  if (/JWT|PGRST301/.test(all) || Number(status) === 401) return opts && opts.sessionExpired === false
+    ? "Your session couldn't be refreshed - nothing was saved. Try again in a moment."
+    : "Your session expired - sign in again. Nothing was saved.";
+  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
+  // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was
+  // saved" - and so for a 5xx JSON body without a PostgREST code (a gateway's own JSON; ship review 10/2)
+  const s = Number(status);
+  if (s >= 500 && !appDayErrorHasCode(body)) {
+    const ed = !!(opts && opts.where === "editor");
+    const head = "Couldn't confirm the save (HTTP " + s + ") - it may or may not have gone through. ";
+    if (opts && opts.reloaded === true) return head + (ed ? "The APP line was reloaded - set it again if it is wrong." : "The calendar was reloaded - save again if a day is missing.");
+    return head + (ed ? "Check this day's APP after the next refresh, then set it again if it is wrong." : "Check your days after the next refresh, then save again if a day is missing.");
+  }
+  // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
+  if (s >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP days (HTTP " + s + ") - nothing was saved. Try again.";
+  return "Couldn't save the APP days: " + msg.slice(0, 160);
+}
+// true when a save's error body is a PostgREST error (an object, or JSON text, with a message)
+function appDayErrorIsJson(body) {
+  if (body && typeof body === "object") return typeof body.message === "string";
+  try { const j = JSON.parse(String(body === null || body === undefined ? "" : body)); return !!(j && typeof j.message === "string"); } catch (e) { return false; }
+}
+// true when a save's error body carries a PostgREST error code (an object, or JSON text, with a non-empty string `code`)
+function appDayErrorHasCode(body) {
+  if (body && typeof body === "object") return typeof body.code === "string" && body.code !== "";
+  try { const j = JSON.parse(String(body === null || body === undefined ? "" : body)); return !!(j && typeof j.code === "string" && j.code !== ""); } catch (e) { return false; }
+}
+// appDaysSaveUnsure(body, status) -> true when a refused save's outcome is unknown: no connection (status 0 - appDaysDb.save's
+// thrown fetch) or a 5xx without a PostgREST code. My APP days reloads the picture after one (ship review 10/2; the save is
+// idempotent, so the reloaded calendar shows what is true).
+function appDaysSaveUnsure(body, status) {
+  if (status !== undefined && status !== null && Number(status) === 0) return true;
+  return Number(status) >= 500 && !appDayErrorHasCode(body);
+}
+// appDaysErrorCode(body) -> the AP00n code of a PostgREST error body (its code, else the token in its message), else null -
+// the client reloads the picture after AP002 / AP005 / AP006 / AP007 (it was stale).
+function appDaysErrorCode(body) {
+  const raw = body === null || body === undefined ? "" : String(body);
+  try { const j = JSON.parse(raw); if (j && typeof j.code === "string" && APP_DAY_CODES[j.code]) return j.code; } catch (e) { /* not JSON */ }
+  const msg = appDayErrorMessage(body);
+  return Object.keys(APP_DAY_CODES).find(k => msg.indexOf(APP_DAY_CODES[k] + ":") >= 0) || null;
+}
+// appSavedNote(add, clear) -> "Saved: on call 12/2, 12/3; removed 12/11" (the parts that apply).
+function appSavedNote(add, clear) {
+  const md = (l) => (Array.isArray(l) ? l : []).filter(appDayIsIso).slice().sort().map(fmtMD).join(", ");
+  const parts = [];
+  if (md(add)) parts.push("on call " + md(add));
+  if (md(clear)) parts.push("removed " + md(clear));
+  return parts.length ? "Saved: " + parts.join("; ") : "Saved: nothing changed";
+}
+// appPickList(names) -> the scheduler's pick list [{ profileId, name }] of the current APP accounts, sorted by name.
+function appPickList(names) {
+  return (Array.isArray(names) ? names : [])
+    .filter(n => n && typeof n === "object" && n.is_app === true && typeof n.profile_id === "string" && n.profile_id)
+    .map(n => ({ profileId: n.profile_id, name: typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP" }))
+    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.profileId < b.profileId ? -1 : a.profileId > b.profileId ? 1 : 0);
+}
+// appColumnState(rows) - "present" when a loaded user_profiles row carries an is_app key (the column is NOT NULL with a
+// default, so after the migration every row has it), "absent" when rows came back without one, "unknown" for none.
+function appColumnState(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "unknown";
+  return rows.some(r => r && typeof r === "object" && Object.prototype.hasOwnProperty.call(r, "is_app")) ? "present" : "absent";
+}
+// userRoleValue(profile) -> the Setup > Users role select's value: "app" for an APP account, else the role (viewer default).
+function userRoleValue(p) {
+  const r = p && typeof p === "object" ? p : {};
+  return r.is_app === true ? "app" : (r.role || "viewer");
+}
+// userRolePatch(profile, value) -> only the keys that change, or null when the value is the row's own (no save):
+//   viewer row -> app = { is_app: true }; any other row -> app = { role: "viewer", is_app: true };
+//   APP row -> viewer = { is_app: false }; APP row -> another role = { role, is_app: false }; any other change = { role }.
+function userRolePatch(p, value) {
+  const r = p && typeof p === "object" ? p : {};
+  if (typeof value !== "string" || !value || value === userRoleValue(r)) return null;
+  const role = r.role || "viewer";
+  if (value === "app") return role === "viewer" ? { is_app: true } : { role: "viewer", is_app: true };
+  if (r.is_app === true) return value === role ? { is_app: false } : { role: value, is_app: false };
+  return { role: value };
+}
+
 // ---- Prompt 16 B9 (9/24): small pure pieces the client items are built on ----
 
 // (a) The Generate worker's script. The app builds a classic Web Worker from a Blob of this text - no second script
@@ -5681,9 +6109,43 @@ function notifPermissionText(permission) {
   return "This browser can't show pop-ups (on an iPhone, add the app to the Home Screen first).";
 }
 
+/* === Toasts (review 9/27 Do first 8) === */
+// The app keeps ONE visible toast and the newest always shows at once (the smoke reads the current one). A success /
+// info toast fades after TOAST_MS (4.5 s, as before); an ERROR stays until tapped or for max(8 s, 60 ms per
+// character) - the long ones (~370 characters) could not be read in 4.5 s. An identical repeat of the toast on screen
+// (same text, same tone) is not a new toast: its count goes up and its time restarts. Every error also goes on a short
+// stack, newest first (TOAST_ERROR_LOG_MAX), that the header opens - so an error a later toast replaced (the override
+// reasons when both audit rows were refused, overwritten ~1 s later by the sync failure) can still be read and copied.
+// A stack, not a queue: the slot never brings an older toast back. All three are pure.
+const TOAST_MS = 4500;
+const TOAST_ERROR_MIN_MS = 8000;
+const TOAST_ERROR_MS_PER_CHAR = 60;
+const TOAST_ERROR_LOG_MAX = 10;
+function toastDurationMs(msg, tone) {
+  if (tone !== "error") return TOAST_MS;
+  return Math.max(TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR * String(msg == null ? "" : msg).length);
+}
+// The toast to show next: { msg, tone, count, at }. `current` is the toast on screen (null once it went away).
+function toastNext(current, msg, tone, at) {
+  const m = String(msg == null ? "" : msg);
+  const t = tone || "info";
+  const same = !!current && current.msg === m && current.tone === t;
+  return { msg: m, tone: t, count: same ? (Number(current.count) || 1) + 1 : 1, at: at };
+}
+// The error stack after one more error: [{ msg, at, first, count }], newest first, one entry per distinct text (a
+// repeat moves to the top with its count + 1 and keeps its first time), at most `max` (TOAST_ERROR_LOG_MAX) entries.
+function toastErrorLogPush(list, msg, at, max) {
+  const m = String(msg == null ? "" : msg);
+  const prev = (Array.isArray(list) ? list : []).filter(e => e && typeof e.msg === "string");
+  const same = prev.find(e => e.msg === m) || null;
+  const entry = { msg: m, at: at, first: same ? same.first : at, count: same ? (Number(same.count) || 1) + 1 : 1 };
+  return [entry].concat(prev.filter(e => e.msg !== m)).slice(0, Math.max(1, Number(max) || TOAST_ERROR_LOG_MAX));
+}
+
 // (e) The toasts for Setup saves that wait for the blob write: ONE toast naming every distinct label, in order
 // ("Group rules and Holiday units saved.") - the app's toast is single-slot (a second showToast replaces the
-// first), so one line per settled run is the only way every label is seen (B9 review 9/24).
+// first), so one line per settled run is the only way every label is seen (B9 review 9/24; still one visible slot
+// since Do first 8 - an error it replaced stays on the header's stack, a success does not).
 function setupSaveToasts(labels, ok, why) {
   const seen = new Set();
   const list = (Array.isArray(labels) ? labels : []).map(l => String(l || "").trim()).filter(k => { if (!k || seen.has(k)) return false; seen.add(k); return true; });
@@ -6069,10 +6531,12 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
+    TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,
-    authLinkError, AUTH_LINK_ERROR_MESSAGE,
-    notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES,
+    authLinkError, AUTH_LINK_ERROR_MESSAGE, SESSION_UNREACHED_MESSAGE, SESSION_STILL_UNREACHED_MESSAGE,
+    notifVisibleTo, NOTIF_VIEWER_TYPES, NOTIF_GROUP_TYPES, notifPopupStep, notifSeenAdd,
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
@@ -6112,6 +6576,7 @@ if (typeof module !== "undefined" && module.exports) {
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
     offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    NO_PRIMARY_RANGE_WORDS, NO_PRIMARY_HELD_WORDS, noPrimaryDays, offerPaintCell, noPrimaryDraftDiff, offersAuditSummary, noPrimaryErrorWords,
     suRulesSummary, suRulesUnknownKeys, suHnOtherDayRules, suSumGoverned, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,
     suRuleFieldHeld, suRuleRemoveConfirm, SU_RULE_VALUE_WORDS,

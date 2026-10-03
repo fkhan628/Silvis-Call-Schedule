@@ -436,6 +436,138 @@ check("E11 (Prompt 26): the app's notice per role - a linked pool surgeon (mySur
   assert.ok(src.includes('{pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}'), "My schedule shows it on his own page only");
 });
 
+/* ---------------- F. Prompt 28 (10/1): No primary days - the painter's pure helpers ---------------- */
+// Faraz 10/1: "I do want them to be able to do that"; Burchett's e-mail of 10/1: "I need to be blocked out as unavailable for
+// primary call. I can cover backup call these days". The fifth brush stores one availability row per day (kind backup_only,
+// role any) through save_offers -> save_no_primary; these are the pure pieces the sheet runs (helpers.js). This section never
+// reads the new migration (the DB lane's schema.test.js pins it).
+console.log("\n[F] Prompt 28: no-primary days (pure helpers)");
+const NPR = (person_id, start_date, end_date, extra) => Object.assign({ id: "a-" + person_id + start_date + (end_date || ""), person_id, kind: "backup_only", role: "any", start_date, end_date: end_date === undefined ? start_date : end_date, note: null, source: "app", created_by: person_id }, extra || {});
+check("noPrimaryDays: own single days of ANY source (setup / seed / app) and any role; a multi-day row gives range days, not own; a single day under a range is range only; other kinds, persons and junk are ignored", () => {
+  const rows = [
+    NPR("s2", "2027-01-06", "2027-01-06", { source: "setup", note: "x" }), NPR("s2", "2026-10-09", "2026-10-09", { source: "seed" }), NPR("s2", "2027-02-03", "2027-02-03", { source: "app", role: "primary" }),
+    NPR("s2", "2027-03-01", "2027-03-03", { source: "setup" }), NPR("s2", "2027-03-02", "2027-03-02", { source: "app" }),
+    NPR("s3", "2027-01-07", "2027-01-07"), Object.assign(NPR("s2", "2027-01-08"), { kind: "unavailable" }), Object.assign(NPR("s2", "2027-01-09"), { kind: "no_backup" }),
+    NPR("s2", "2027-01-10", null), NPR("s2", "bad", "bad"), NPR("s2", "2027-01-12", "2027-01-11"), null, 7, { kind: "backup_only" },
+  ];
+  const np = H.noPrimaryDays(rows, "s2");
+  eq(Object.keys(np.own).sort(), ["2026-10-09", "2027-01-06", "2027-01-10", "2027-02-03"], "own = his single days (a missing end = the start day)");
+  eq(Object.keys(np.range).sort(), ["2027-03-01", "2027-03-02", "2027-03-03"], "range = every day of the multi-day row");
+  eq(np.own["2027-03-02"], undefined, "a single day under a range is the range's (read-only)");
+  eq(H.noPrimaryDays(rows, "s3"), { own: { "2027-01-07": true }, range: {} });
+  eq(H.noPrimaryDays(null, "s2"), { own: {}, range: {} }); eq(H.noPrimaryDays(rows, ""), { own: {}, range: {} });
+  const far = H.noPrimaryDays([NPR("s2", "2027-01-01", "9999-12-31")], "s2");
+  assert.ok(Object.keys(far.range).length <= 3660 && far.range["2027-01-01"], "a junk end date never loops for ever");
+  eq(H.NO_PRIMARY_RANGE_WORDS, "No primary (set by the scheduler)"); eq(H.NO_PRIMARY_HELD_WORDS, "you hold primary that day - trade it first");
+});
+// a free weekday cell: nothing offered, nothing marked, nothing blocked
+const CELL = (o) => Object.assign({ offer: null, np: false, savedOffer: false, savedNp: false, range: false, past: false, frozen: null, grey: null, blockPrimary: null, blockBackup: null, holdsPrimary: false }, o || {});
+const paint = (o, brush, single) => H.offerPaintCell(CELL(o), brush, { single: single !== false });
+const st = (r) => [r.offer, r.np, r.skip, r.lift, r.replaced];
+const FROZEN = "frozen - offers for Nov 2026 - Jan 2027 closed 10/2 - ask the scheduler";
+check("offerPaintCell No primary: REPLACE - on a Primary or Either offer the offer goes and the day is marked (replaced); on a Backup offer the offer STAYS (backup preferred); on nothing it marks", () => {
+  eq(st(paint({ offer: "primary", savedOffer: true }, "noprimary")), [null, true, null, false, true], "primary -> none + N, replaced");
+  eq(st(paint({ offer: "either" }, "noprimary", false)), [null, true, null, false, true], "either (a Range batch too) -> none + N, replaced");
+  eq(st(paint({ offer: "backup", savedOffer: true }, "noprimary")), ["backup", true, null, false, false], "KEEP Backup: the offer stays beside the mark");
+  eq(st(paint({}, "noprimary")), [null, true, null, false, false], "a free day is marked");
+  eq(st(paint({ blockPrimary: "East busy" }, "noprimary")), [null, true, null, false, false], "a one-role block of primary still takes the mark");
+  eq(st(paint({ blockBackup: "a day you stated as no backup - ask the scheduler to change that row first" }, "noprimary")), [null, true, null, false, false], "a one-role block of backup too");
+});
+check("offerPaintCell No primary: tap again takes it back (single tap); a Range / Paste batch over a marked day is a silent no-op; a range day is silent; past / frozen are skipped with their words; a greyed day is skipped; a day he HOLDS as primary is skipped (trade first)", () => {
+  eq(st(paint({ np: true, savedNp: true }, "noprimary")), [null, false, null, false, false], "tap again on an own N -> lifted");
+  eq(st(paint({ np: true, offer: "backup" }, "noprimary")), ["backup", false, null, false, false], "tap again keeps the Backup offer");
+  eq(st(paint({ np: true }, "noprimary", false)), [null, true, null, false, false], "Range / Paste over a marked day: unchanged, silent");
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS }, "noprimary")), [null, false, null, false, false], "a range day: silent (already No primary, read-only)");
+  eq(st(paint({ past: true, grey: "past" }, "noprimary")), [null, false, "past", false, false]);
+  eq(st(paint({ past: true, grey: "past", np: true, savedNp: true }, "noprimary")), [null, true, "past", false, false], "a past mark is never taken back");
+  eq(st(paint({ frozen: FROZEN, grey: FROZEN }, "noprimary")), [null, false, FROZEN, false, false]);
+  eq(st(paint({ frozen: FROZEN, grey: FROZEN, np: true, savedNp: true }, "noprimary")), [null, true, FROZEN, false, false], "a frozen mark stays");
+  eq(st(paint({ grey: "on your vacation", blockPrimary: "on your vacation", blockBackup: "on your vacation" }, "noprimary")), [null, false, "on your vacation", false, false], "greyed (both roles) -> skipped with the grey words");
+  eq(st(paint({ grey: "on your vacation", np: true, savedNp: true }, "noprimary")), [null, false, null, false, false], "a greyed day with his saved mark: a tap takes it back");
+  eq(st(paint({ holdsPrimary: true }, "noprimary")), [null, false, H.NO_PRIMARY_HELD_WORDS, false, false], "published primary -> 'you hold primary that day - trade it first'");
+  eq(st(paint({ holdsPrimary: true, offer: "primary" }, "noprimary")), ["primary", false, H.NO_PRIMARY_HELD_WORDS, false, false], "held primary wins over the replace rule");
+});
+check("offerPaintCell Primary / Either: LIFT - on a No primary day the offer is painted and the mark lifted (lift: the sheet asks once per batch); a single tap on the same brush clears the offer; a range day is skipped 'primary - No primary (set by the scheduler)'; one-role blocks and greys skipped as before", () => {
+  eq(st(paint({ np: true, savedNp: true }, "primary")), ["primary", false, null, true, false], "primary on N -> lift");
+  eq(st(paint({ np: true }, "either", false)), ["either", false, null, true, false], "either on N (a Range batch) -> lift");
+  eq(st(paint({}, "primary")), ["primary", false, null, false, false]);
+  eq(st(paint({ offer: "primary" }, "primary")), [null, false, null, false, false], "tap again with the same brush clears the offer");
+  eq(st(paint({ offer: "primary" }, "primary", false)), ["primary", false, null, false, false], "a Range repaint keeps it");
+  eq(st(paint({ offer: "backup" }, "either")), ["either", false, null, false, false]);
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS }, "primary")), [null, false, "primary - No primary (set by the scheduler)", false, false], "Setup range: read-only");
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS }, "either")), [null, false, "primary - No primary (set by the scheduler)", false, false]);
+  eq(st(paint({ blockBackup: "you opted out of backup" }, "either")), [null, false, "backup - you opted out of backup", false, false], "either needs both roles");
+  eq(st(paint({ blockPrimary: "East busy" }, "primary")), [null, false, "primary - East busy", false, false]);
+  eq(st(paint({ past: true, grey: "past" }, "primary")), [null, false, "past", false, false]);
+  eq(st(paint({ frozen: FROZEN, grey: FROZEN }, "either")), [null, false, FROZEN, false, false]);
+  eq(st(paint({ grey: "on your vacation" }, "primary")), [null, false, "on your vacation", false, false]);
+  eq(st(paint({ holdsPrimary: true }, "primary")), ["primary", false, null, false, false], "holding primary does not stop a primary offer (the generator's business)");
+});
+check("offerPaintCell Backup: a Backup offer sits beside a No primary mark (N kept) and on a range day; tap again clears only the offer; backup blocks and greys skipped", () => {
+  eq(st(paint({ np: true, savedNp: true }, "backup")), ["backup", true, null, false, false], "Backup on N keeps both");
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS }, "backup")), ["backup", false, null, false, false], "Backup on a range day is fine (backup is fine)");
+  eq(st(paint({ np: true, offer: "backup" }, "backup")), [null, true, null, false, false], "tap again: offer cleared, N unchanged");
+  eq(st(paint({ blockBackup: "you opted out of backup" }, "backup")), [null, false, "backup - you opted out of backup", false, false]);
+  eq(st(paint({ past: true, grey: "past" }, "backup")), [null, false, "past", false, false]);
+});
+check("offerPaintCell Clear: CLEAR removes both the offer and the mark; nothing to clear is silent BEFORE past / frozen are named; past / frozen are skipped; a greyed day with neither a saved offer nor a saved mark is skipped, with either one it clears; a range day stays (read-only)", () => {
+  eq(st(paint({ offer: "backup", np: true, savedOffer: true, savedNp: true }, "clear")), [null, false, null, false, false], "clear takes back both");
+  eq(st(paint({ np: true, savedNp: true }, "clear", false)), [null, false, null, false, false], "a Range of Clear lifts the mark too");
+  eq(st(paint({}, "clear")), [null, false, null, false, false], "nothing to clear: silent");
+  eq(st(paint({ past: true, grey: "past" }, "clear")), [null, false, null, false, false], "nothing to clear on a past day: silent (before 'past')");
+  eq(st(paint({ past: true, grey: "past", offer: "primary", savedOffer: true }, "clear")), ["primary", false, "past", false, false]);
+  eq(st(paint({ frozen: FROZEN, grey: FROZEN, np: true, savedNp: true }, "clear")), [null, true, FROZEN, false, false]);
+  eq(st(paint({ grey: "on your vacation", np: true, savedNp: true }, "clear")), [null, false, null, false, false], "greyed with a saved mark: Clear can take it back");
+  eq(st(paint({ grey: "on your vacation", offer: "either", savedOffer: true }, "clear")), [null, false, null, false, false], "greyed with a saved offer: Clear can take it back (as before)");
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS }, "clear")), [null, false, null, false, false], "clear on a range day without an offer: silent");
+  eq(st(paint({ range: true, blockPrimary: H.NO_PRIMARY_RANGE_WORDS, offer: "backup", savedOffer: true }, "clear")), [null, false, null, false, false], "clear on a range day takes the offer only - the range stays (np false = not his own)");
+  eq(st(H.offerPaintCell(CELL({ np: true, range: true }), "noprimary", { single: true })), [null, false, null, false, false], "np on a range day is never his own");
+  eq(st(H.offerPaintCell(null, "bogus", null)), [null, false, null, false, false], "junk in, nothing moves");
+});
+check("noPrimaryDraftDiff: true on an unsaved day -> add, false on a saved day -> clear, equal to saved -> dropped, a non-ISO day -> bad; day order", () => {
+  eq(H.noPrimaryDraftDiff({ "2027-01-06": true, "2027-02-03": true }, { "2027-01-15": true, "2027-01-06": true, "2027-02-03": false, "2027-03-01": false, "bad": true }), { add: ["2027-01-15"], clear: ["2027-02-03"], bad: ["bad"] });
+  eq(H.noPrimaryDraftDiff(["2027-01-06"], { "2027-01-06": false, "2027-01-01": true }), { add: ["2027-01-01"], clear: ["2027-01-06"], bad: [] }, "an array of saved days is accepted");
+  eq(H.noPrimaryDraftDiff(null, null), { add: [], clear: [], bad: [] });
+});
+check("offersAuditSummary (the Activity log text of offers.save): the four pinned examples; with no No primary change it is byte-for-byte the pre-Prompt-28 text", () => {
+  eq(H.offersAuditSummary("Burchett", 0, { add: ["2027-01-06", "2027-01-15"], clear: [] }, null, null), "Burchett: no primary on 1/6, 1/15");
+  eq(H.offersAuditSummary("Burchett", 2, { add: ["2027-01-06"], clear: ["2027-02-03"] }, null, "Jan 2027 - Jun 2027"), "Burchett: 2 offer change(s); no primary on 1/6; no primary lifted on 2/3 (Jan 2027 - Jun 2027)");
+  eq(H.offersAuditSummary("Acton", 2, { add: [], clear: [] }, null, null), "Acton: 2 offer change(s)");
+  eq(H.offersAuditSummary("Khan", 0, { add: [], clear: [] }, "rules_only", "P"), "Khan: 0 offer change(s), mode rules_only (P)");
+  // the old template literal of commitOffersPaint, restated: `${name}: ${count} offer change(s)${mode ? ", mode " + mode : ""}${label ? " (" + label + ")" : ""}`
+  const old = (name, count, mode, label) => `${name}: ${count} offer change(s)${mode ? ", mode " + mode : ""}${label ? " (" + label + ")" : ""}`;
+  [["Acton", 3, "exhaustive", "Nov 2026 - Jan 2027"], ["Fierce", 0, "rules_only", "Nov 2026 - Jan 2027"], ["Khan", 1, null, null]].forEach(([n, c, m, l]) => eq(H.offersAuditSummary(n, c, null, m, l), old(n, c, m, l)));
+  eq(H.offersAuditSummary("Burchett", 0, { add: ["2027-01-15", "2027-01-06"], clear: [] }, null, null), "Burchett: no primary on 1/6, 1/15", "days in day order");
+  assert.ok(!/@|\$/.test(H.offersAuditSummary("Burchett", 1, { add: ["2027-01-06"], clear: [] }, "preferred", "Jan 2027 - Jun 2027")), "no contact, no amount");
+});
+check("noPrimaryErrorWords: a NO_PRIMARY_* message loses its token and gets a capital first letter; anything else is unchanged", () => {
+  eq(H.noPrimaryErrorWords("NO_PRIMARY_ON_CALL: Burchett holds primary on 1/6 - trade those days first, then mark them No primary"), "Burchett holds primary on 1/6 - trade those days first, then mark them No primary");
+  eq(H.noPrimaryErrorWords("NO_PRIMARY_FROZEN: offers for Jan 2027 - Jun 2027 closed on 2026-11-23 - ask the scheduler (1/6)"), "Offers for Jan 2027 - Jun 2027 closed on 2026-11-23 - ask the scheduler (1/6)");
+  eq(H.noPrimaryErrorWords("OFFER_ON_VACATION: 2026-11-03 is inside a vacation of s2"), "OFFER_ON_VACATION: 2026-11-03 is inside a vacation of s2");
+  eq(H.noPrimaryErrorWords(null), ""); eq(H.noPrimaryErrorWords("NO_PRIMARY_X:"), "NO_PRIMARY_X:");
+});
+check("the engine reads a No primary row the way the painter promises: rules.eligibility blocks PRIMARY (backup-only-row) and keeps BACKUP open on that day (Burchett, a Jan 2027 day of the seed period)", () => {
+  const per = seed.offerPeriods[1] || seed.offerPeriods[0];
+  const base = { roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, periods: [{ id: "p", start_day: per.start, end_day: per.end, status: "upcoming" }], offers: [], today: "2026-10-01" };
+  const day = "2027-01-12"; // a Tuesday inside the Jan 2027 - Jun 2027 period
+  const ctx = R.buildContext(Object.assign({}, base, { availabilityRows: [NPR("s2", day, day)] }));
+  const p = R.eligibility(ctx, day, "primary", "s2", { claim: true }), b = R.eligibility(ctx, day, "backup", "s2", { claim: true });
+  assert.ok(p.hard.indexOf("backup-only-row") >= 0, "primary must be hard backup-only-row: " + JSON.stringify(p.hard));
+  assert.ok(b.hard.indexOf("backup-only-row") < 0 && b.hard.indexOf("unavailable-row") < 0, "backup must not be blocked by the row: " + JSON.stringify(b.hard));
+  // a No primary day is NOT an offer (review 10/1: the old line asked offerStatus with no rows at all, which never saw the
+  // availability row - vacuous). Shown where it matters, in "Only these days" (exhaustive) mode with an offer on another day:
+  // without a Backup offer that day backup is hard not-offered (the generator view, no claim) - with one it is not. The painter's
+  // legend says so for such a month (index-source.html npExh); ONBOARDING's "Only these days" line states the same.
+  const exhPer = { id: "p", start_day: per.start, end_day: per.end, status: "upcoming", offers_close_at: "2026-11-23", rules_only_ids: [], offer_modes: { s2: "exhaustive" } };
+  const other = { person_id: "s2", day: "2027-01-14", role_pref: "either" };
+  const exh = (offers) => R.buildContext(Object.assign({}, base, { periods: [exhPer], offers, availabilityRows: [NPR("s2", day, day)] }));
+  const bNo = R.eligibility(exh([other]), day, "backup", "s2"), bYes = R.eligibility(exh([other, { person_id: "s2", day, role_pref: "backup" }]), day, "backup", "s2");
+  assert.ok(bNo.hard.indexOf("not-offered") >= 0, "exhaustive, no Backup offer on the No primary day: backup must be hard not-offered: " + JSON.stringify(bNo.hard));
+  eq(bYes.hard, [], "exhaustive, a Backup offer on the No primary day: backup is open");
+  eq(H.offerStatus(exhPer, [other], "s2"), "submitted", "the status comes from the offer on another day, never from the No primary row");
+  eq(H.offerStatus(exhPer, [], "s2"), "not_started", "with no offer the status stays not_started whatever No primary rows exist (the row is not an offer)");
+});
+
 /* ---------------- D. claim-as-offer migration ---------------- */
 console.log("\n[D] sql/migrations/2026-09-23-claim-offer.sql");
 const MIG = path.join(ROOT, "sql", "migrations", "2026-09-23-claim-offer.sql");

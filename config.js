@@ -122,6 +122,38 @@ function jwtClaims(token) {
     return payload && typeof payload === "object" ? payload : null;
   } catch (e) { return null; }
 }
+// Review 9/27 Do first 7: what a GoTrue answer means for the stored session. ONLY 400 / 401 / 403 are a
+// rejection - the token or the refresh token is dead (invalid_grant is 400, a bad / expired JWT 401 or 403).
+// A 5xx (GoTrue or the gateway down, an HTML 502 page), 429 (rate limited) or 408 (timed out) is "network",
+// and any other status GoTrue does not use for a dead token is "unexpected"; the session paths treat both like
+// a thrown fetch (`!== "rejected"`): the stored pair is kept, no _deadRefresh, no session-expired banner, no
+// sign-out, and the next attempt can still recover ("network" only picks the "Couldn't reach the server"
+// wording of signIn / resetPassword). A brief Auth outage at open used to clear the session (getUser) or raise
+// the banner (ensureFresh), and a good invite link was called dead (_probeLinkPair). 2xx -> "ok". Never throws.
+function authAnswerKind(status) {
+  const s = Number(status);
+  if (s >= 200 && s < 300) return "ok";
+  if (s === 400 || s === 401 || s === 403) return "rejected";
+  if (s >= 500 || s === 429 || s === 408) return "network";
+  return "unexpected";
+}
+// The server itself failing (a 5xx, or 408 timed out): signIn / resetPassword then say "Couldn't reach the server (HTTP n)
+// - try again" whatever the body says - a JSON 503 "Service Unavailable" or 500 "Database error querying schema" gave the
+// person no hint that trying again later works. A 429 is "network" too but keeps GoTrue's words ("only request this
+// after 37 seconds"). Review of Do first 7 (10/2).
+function authServerDown(status) {
+  const s = Number(status);
+  return s >= 500 || s === 408;
+}
+// ... and its words: GoTrue's own message rides along when the body is a JSON error (second review fixes, 10/2) - a
+// persistent "Error sending recovery email" (an SMTP failure) or "Database error querying schema" keeps its diagnosis:
+// "Couldn't reach the server (HTTP 500: Error sending recovery email) - try again". A body that is not JSON (an HTML 502
+// page) or has no message gives the bare wording. One line, at most 140 characters of the server's text.
+function authServerDownMessage(status, data) {
+  const why = data && typeof data === "object" ? (data.msg || data.error_description || data.message) : null;
+  const words = typeof why === "string" ? why.replace(/\s+/g, " ").trim().slice(0, 140) : "";
+  return `Couldn't reach the server (HTTP ${status}${words ? ": " + words : ""}) - try again`;
+}
 // The session headers of the moment plus the caller's extras (Prefer, ...).
 // Authorization / apikey / Content-Type always come from dbAuthHeaders() so a
 // refresh that happened a moment ago is what goes out.
@@ -218,15 +250,29 @@ var supabase = {
   }),
 };
 
+// db.queryAll pages at this size (Prompt 28 residual 4, Faraz 10/1). PostgREST answers at most max-rows rows per request
+// (Supabase default 1000) and says nothing when it caps, so an unpaged read of a table past that size hands back its first
+// 1000 rows as if they were all of them. availability grows by one row per No primary day (Prompt 28), so the app reads it
+// - and time_off beside it - in pages: limit / offset of DB_PAGE until a short page (the PAY_PAGE pattern below;
+// loadScheduleDays and the snapshot reader page the same way). DB_PAGE must not exceed the server's max-rows: a capped
+// page would read as the short last one (an assumption - Supabase's default max-rows is 1000 and this project keeps it).
+// Every page after the first starts ON the last row of the page before (one row of overlap, review 10/1), so a server that
+// ignores offset is caught on the second request; DB_MAX_PAGES (about 200 000 rows) is only the backstop - the read
+// THROWS there, it never loops and never returns what it has.
+const DB_PAGE = 1000;
+const DB_MAX_PAGES = 200;
+
 // Extended DB helpers for new tables
 const db = {
-  async query(table, { eq, order, limit, select } = {}) {
+  async query(table, { eq, order, limit, offset, select, headers } = {}) {
     let url = `${SUPABASE_URL}/rest/v1/${table}?select=${select || "*"}`;
     if (eq) Object.entries(eq).forEach(([k, v]) => { url += `&${k}=eq.${v}`; });
     if (order) url += `&order=${order}`;
     if (limit) url += `&limit=${limit}`;
-    // Read path → expiry-aware headers (anon fallback on a dead token).
-    const res = await fetch(url, { headers: dbReadHeaders() });
+    if (offset) url += `&offset=${offset}`;
+    // Read path → expiry-aware headers (anon fallback on a dead token). `headers` (review 10/1): db.queryAll passes the ones
+    // it built once for its first page, so every page of one read goes out under one identity.
+    const res = await fetch(url, { headers: headers || dbReadHeaders() });
     // HTTP failure THROWS, exactly like a network failure already does — a
     // failed read must never be indistinguishable from an empty table. (An
     // RLS-filtered read is HTTP 200 + [] — that's data, not an error, and
@@ -240,6 +286,42 @@ const db = {
       throw new Error(`db.query(${table}) failed: HTTP ${res.status} ${body.slice(0, 200)}`);
     }
     return await res.json();
+  },
+  // queryAll(table, { eq, order, select }): every row, in pages of DB_PAGE (see DB_PAGE above), through db.query, and a non-2xx
+  // THROWS. `order` must be a TOTAL order ending on the table's unique `id` (e.g. "start_date.asc,id.asc"): offset pages over
+  // tied rows may repeat one row and skip another. Every page must be an array of at most DB_PAGE rows. Any failed page
+  // throws, so the caller's catch keeps its prior rows - a partial list is never returned as the table (CLAUDE.md: a failed
+  // read must never look like an empty or a shorter table).
+  // Review 10/1: (a) ONE identity per read - the read headers are built once, before page 1, and sent on every page; a token
+  // that dies mid-read makes a later page 401 and throw instead of quietly going out as anon. Still, dbReadHeaders falls back
+  // to anon when the token is stale at the start, so this is for tables anon may read IN FULL (availability, time_off: using
+  // true) - an authenticated-only table (call_offers) answers anon 200 + [], which would read as an empty table; page such a
+  // table with the user's token (readAuthOnlyTable's fresh-token gate, or the PAY_PAGE pattern), never through this as is.
+  // (b) Offset pages are no snapshot: a row deleted or inserted before the page boundary between two requests shifts every
+  // later row by one (one row skipped or one doubled). So each page after the first starts ON the last row of the page before
+  // (offset advances by DB_PAGE - 1) and that row must come back first (same id); otherwise the read THROWS (the table changed
+  // under it, or the server ignores offset) and the caller keeps its rows - the write's Realtime event or the next poll reads
+  // again. A delete and an insert both before the boundary between the same two requests cancel out and are not seen; no row
+  // of the list is then doubled or skipped relative to its own page's moment.
+  async queryAll(table, { eq, order, select } = {}) {
+    if (!/(^|,)id\.(asc|desc)$/.test(String(order || ""))) throw new Error(`db.queryAll(${table}) needs a total order ending on id (e.g. "start_date.asc,id.asc"), got "${order || ""}"`);
+    const headers = dbReadHeaders();
+    const keyOf = (r) => (r && typeof r === "object" && r.id !== undefined && r.id !== null) ? "id:" + r.id : "row:" + JSON.stringify(r);
+    const all = [];
+    let offset = 0;
+    for (let page = 0; page < DB_MAX_PAGES; page++) {
+      const rows = await db.query(table, { eq, order, select, limit: DB_PAGE, offset, headers });
+      if (!Array.isArray(rows)) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} is not an array`);
+      if (rows.length > DB_PAGE) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} has ${rows.length} rows (limit ${DB_PAGE} ignored)`);
+      if (page === 0) { for (const r of rows) all.push(r); }
+      else {
+        if (!rows.length || keyOf(rows[0]) !== keyOf(all[all.length - 1])) throw new Error(`db.queryAll(${table}) failed: page ${page + 1} does not start on the last row of page ${page} (the table changed during the read, or the server ignores offset) - read again`);
+        for (let i = 1; i < rows.length; i++) all.push(rows[i]);
+      }
+      if (rows.length < DB_PAGE) return all;
+      offset += DB_PAGE - 1;
+    }
+    throw new Error(`db.queryAll(${table}) failed: more than ${DB_MAX_PAGES} pages of ${DB_PAGE} rows`);
   },
   // opts.returning (Prompt 21 step 2, Faraz 9/26; supabase-js v1's option name, as onConflict is for upsert): "minimal"
   // sends Prefer: return=minimal - PostgREST reads no column of the new row back and answers 201 with an empty body, so
@@ -438,6 +520,86 @@ const payDb = {
   },
 };
 
+// ---- APP call days (Prompt 29, Faraz 10/1; sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02) ----
+// The ONLY client file that names the APP table app_call_days and its two functions (index-source.html and helpers.js never
+// do). Decided 10/1: any day; one APP per day (the table's primary key); everyone signed in sees it, never anon / ?public=1;
+// no e-mails - the save function writes the one audit row. The table is authenticated-only (no anon policy, anon's
+// privileges revoked), so a read goes out only with a FRESH user token (dbAuthHeaders) - without one load() answers
+// { state: "skipped" } and nothing is requested. load() answers
+//   { state: "ok", rows, names }   rows = app_call_days (may be [] - no APP day yet), names = app_call_names() (display names
+//                                  of the holders, of the caller's own APP profile and - for the scheduler - of every APP)
+//   { state: "unavailable" }       the table or a function does not exist yet (404 PGRST205 / PGRST202 / 42P01 -
+//                                  helpers.appDaysReadFailureState): "APP days are available after the next database
+//                                  update", no toast. Also what a rollback leaves behind.
+//   { state: "failed", error }     anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
+//   { state: "skipped" }           no fresh token - nothing was read
+// It stops at the first non-2xx: no further page and no names call after a failed table read. The rows are paged by
+// APP_DAYS_PAGE (PostgREST's max-rows; a capped 200 would drop the latest days without a word). Ship review 10/2 - db.queryAll's
+// guards (D15, review 10/1): every page after the first starts ON the last day of the page before (offset advances by
+// APP_DAYS_PAGE - 1; `day` is the table's primary key) and that day must come back first, else "failed" (the table changed
+// during the read, or the server ignores offset); a page longer than APP_DAYS_PAGE is "failed" (the limit ignored); past
+// APP_DAYS_MAX_PAGES pages the read is "failed" - it never loops and never answers a partial list; ONE set of headers per read.
+// save(profileId, add, clear, replace) is ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace
+// (authFetch: the user's JWT; its single refresh-and-retry on a 401 never reached the function). Answers { ok: true, result }
+// (the function's jsonb: ok, profile_id, added, removed, kept, absent, replaced, source, audit) or { ok: false, status,
+// error } (error = the body text, the function's "APP_DAY_<TOKEN>: <text>" message inside - helpers.appDaysErrorWords).
+const APP_DAYS_PAGE = 1000;
+const APP_DAYS_MAX_PAGES = 200;
+const appDaysDb = {
+  _fresh() {
+    let token = null;
+    try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
+    return !!(token && jwtIsFresh(token));
+  },
+  async load() {
+    if (!appDaysDb._fresh()) return { state: "skipped" };
+    const failed = async (res) => { const body = await res.text().catch(() => ""); return { state: appDaysReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` }; };
+    try {
+      const headers = dbAuthHeaders();
+      const rows = [];
+      let offset = 0, done = false;
+      for (let n = 0; n < APP_DAYS_MAX_PAGES; n++) {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/app_call_days?select=day,profile_id,source,created_at&order=day.asc&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers });
+        if (!res.ok) return await failed(res);
+        const page = await res.json();
+        if (!Array.isArray(page)) return { state: "failed", error: "unexpected response body (app_call_days)" };
+        if (page.length > APP_DAYS_PAGE) return { state: "failed", error: `app_call_days page ${n + 1} has ${page.length} rows (limit ${APP_DAYS_PAGE} ignored)` };
+        if (n === 0) { for (const r of page) rows.push(r); }
+        else {
+          const last = rows[rows.length - 1];
+          if (!page.length || !page[0] || !last || page[0].day !== last.day) return { state: "failed", error: `app_call_days page ${n + 1} does not start on the last day of page ${n} (the table changed during the read, or the server ignores offset) - read again` };
+          for (let i = 1; i < page.length; i++) rows.push(page[i]);
+        }
+        if (page.length < APP_DAYS_PAGE) { done = true; break; }
+        offset += APP_DAYS_PAGE - 1;
+      }
+      if (!done) return { state: "failed", error: `app_call_days: more than ${APP_DAYS_MAX_PAGES} pages of ${APP_DAYS_PAGE} rows` };
+      // app_call_names() is stable: a GET (PostgREST runs it read-only), no body
+      const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });
+      if (!nres.ok) return await failed(nres);
+      const names = await nres.json();
+      if (!Array.isArray(names)) return { state: "failed", error: "unexpected response body (app_call_names)" };
+      return { state: "ok", rows, names };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+  async save(profileId, add, clear, replace) {
+    const body = { p_profile: profileId || null, p_add: Array.isArray(add) ? add : [], p_clear: Array.isArray(clear) ? clear : [], p_replace: !!replace };
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: "POST", body: JSON.stringify(body) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, status: res.status, error: text || `HTTP ${res.status}` };
+      let result = null;
+      try { result = JSON.parse(text); } catch (e) { result = null; }
+      if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from save_app_days: " + text.slice(0, 160) };
+      return { ok: true, result };
+    } catch (e) {
+      return { ok: false, status: 0, error: String((e && e.message) || e) };
+    }
+  },
+};
+
 function payloadLooksWiped(p) {
   if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
   // helpers.js not loaded (should never happen in the app - the loader order
@@ -509,8 +671,9 @@ const snapshots = {
       try {
         cfgRows = await this._readAll("call_schedule_data?id=eq.main&select=data,updated_at", "config");
         dayRows = await this._readAll("schedule_days?select=*&order=day.asc", "schedule_days");
-        toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc", "time_off");
-        avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc", "availability");
+        // id last (Prompt 28 residual 4): a total order, so the offset pages never repeat or skip a tied row
+        toRows  = await this._readAll("time_off?select=*&order=start_date.asc,person_id.asc,id.asc", "time_off");
+        avRows  = await this._readAll("availability?select=*&order=start_date.asc,person_id.asc,id.asc", "availability");
         // Prompt 14 P5 (Faraz 9/22): the offers and their periods are in scope too - captured here so a restore CAN bring
         // them back; the app's table applier does not write them yet (applyPayload reports notApplied; the app says PARTIAL).
         // Both tables are authenticated-read (never anon) - the writer's identity above reads them; a failed read
@@ -901,7 +1064,8 @@ const auth = {
   // throws. A rejected refresh raises sessionExpired (once) and KEEPS the stored
   // pair: dbAuthHeaders() goes on sending the dead token so every write fails
   // loudly (401) instead of degrading to anon, until a sign-in stores a new
-  // pair. A network error is not an expiry. A pair GoTrue already rejected is
+  // pair. A network error is not an expiry - a thrown fetch or any answer but
+  // 400 / 401 / 403 (Do first 7: a 5xx, 429, 408). A pair GoTrue already rejected is
   // not sent again (no chatter from the poll / the writes); a different pair in
   // storage (a new sign-in) is tried afresh.
   async ensureFresh(opts) {
@@ -915,7 +1079,14 @@ const auth = {
       if (auth._deadRefresh === session.refresh_token && auth.sessionExpired) return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
       const r = await auth._refreshShared(session.refresh_token);
       if (r && r.session && r.session.access_token) return { ok: true, expired: false, refreshed: true };
-      if (r && r.error === "network") return { ok: false, expired: false, refreshed: false, reason: "network" };
+      // Review 9/27 Do first 7: only an explicit rejection (HTTP 400 / 401 / 403 from the token endpoint,
+      // authAnswerKind) marks the pair dead and raises the banner - a 5xx / 429 / 408, a thrown fetch or any other
+      // answer is a network error: the pair is kept and the next poll / write tries again.
+      if (!(r && r.rejected)) return { ok: false, expired: false, refreshed: false, reason: "network" };
+      // second review fixes (10/2): a newer pair (a sign-in) or a sign-out landed while the refresh was out - the rejection
+      // is about a pair no longer stored: no banner over the new session
+      const now = auth.getSession();
+      if (!now || now.refresh_token !== session.refresh_token) return { ok: false, expired: false, refreshed: false, reason: "network" };
       auth._deadRefresh = session.refresh_token;
       auth._setExpired(true);
       return { ok: false, expired: true, refreshed: false, reason: "refresh_rejected" };
@@ -936,23 +1107,46 @@ const auth = {
   // No sign-up helper (Prompt 16 A2): accounts are created by invitation from the Supabase
   // dashboard (public sign-ups are off) and the app has no sign-up form.
 
-  // Sign in with email & password
+  // Sign in with email & password. Review 9/27 Do first 7 (updatePassword is the model): a THROWN fetch and a
+  // body that is not JSON (an HTML 502 page) resolve to an error object - never a rejection that leaves the
+  // card's shared busy state on, never a 2xx without a token taken for a sign-in. Never throws.
   async signIn(email, password) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) return { user: null, error: data.msg || data.error_description || data.message || "Sign in failed" };
-    auth._saveSession(data);
-    return { user: data.user, session: data, error: null };
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = (await res.json().catch(() => null)) || {};
+      if (!res.ok) {
+        // review of Do first 7 (10/2): a 5xx / 408 is the server failing whatever its body says - the card says try again;
+        // GoTrue's own words stay for a 4xx and a 429 ("Invalid login credentials", "Request rate limit reached"), and ride
+        // along in the try-again wording of a 5xx (second review fixes, 10/2 - authServerDownMessage)
+        if (authServerDown(res.status)) return { user: null, error: authServerDownMessage(res.status, data) };
+        const why = data.msg || data.error_description || data.message;
+        if (why) return { user: null, error: why };
+        return { user: null, error: authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Sign in failed (HTTP ${res.status})` };
+      }
+      if (typeof data.access_token !== "string" || !data.user) return { user: null, error: "Sign in failed - the server's answer had no session; try again" };
+      auth._saveSession(data);
+      return { user: data.user, session: data, error: null };
+    } catch (e) {
+      console.warn("auth.signIn: network error:", e);
+      return { user: null, error: "No connection - try again" };
+    }
   },
 
   // Get current user from token
-  async getUser() {
+  // Second review fixes of Do first 7 (10/2): the stored pair can change while a request is out (a Retry's check hanging
+  // while another account signs in, ensureFresh refreshing the same account, a sign-out). A rejection then speaks about a
+  // pair that is no longer stored: it is never refreshed (the old account's new pair was stored over the newer sign-in -
+  // the card showed B while every write carried A's JWT) and never cleared (that removed B's pair). getUser asks once more
+  // about the pair stored now ({ again: true }; a second change answers "network", nothing touched; nothing stored -> no user).
+  async getUser(opts) {
     const session = auth.getSession();
     if (!session) return { user: null };
+    const samePair = () => { const cur = auth.getSession(); return !!cur && cur.access_token === session.access_token && cur.refresh_token === session.refresh_token; };
+    const askAgain = () => (opts && opts.again) ? { user: null, error: "network" } : auth.getUser({ again: true });
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
         headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
@@ -961,6 +1155,14 @@ const auth = {
         const user = await res.json();
         return { user };
       }
+      // Review 9/27 Do first 7: a 5xx / 429 / 408 (any answer but 400 / 401 / 403 - authAnswerKind) is the server
+      // failing, not the token: no refresh attempt, nothing cleared - the caller sees error:"network" (the mount
+      // card's "Couldn't reach the server" + Retry, the biometric tile's message), exactly like a thrown fetch.
+      if (authAnswerKind(res.status) !== "rejected") {
+        console.warn(`auth.getUser: HTTP ${res.status} from /auth/v1/user is not a rejection - session kept, try again`);
+        return { user: null, error: "network", status: res.status };
+      }
+      if (!samePair()) return askAgain(); // the pair changed while the request was out (see above)
       // Token rejected. GoTrue may answer 401 OR 403 depending on version/
       // config — attempt a refresh on ANY auth failure when we hold a refresh
       // token, not only on 401. (This project returns 403, which the old
@@ -972,9 +1174,11 @@ const auth = {
         // (the pair still stored) and is cleared below, as before.
         const refreshed = await auth._refreshShared(session.refresh_token);
         if (refreshed?.user) return refreshed;
-        // The refresh could not be attempted (network) - the session is kept
-        // and the caller sees error:"network", exactly like the first call.
-        if (refreshed?.error === "network") return { user: null, error: "network" };
+        // The refresh could not be attempted (network, or - Do first 7 - a 5xx / 429 / 408 from the token
+        // endpoint): the session is kept and the caller sees error:"network", exactly like the first call.
+        // Only an explicit rejection (400 / 401 / 403) falls through to the clear below.
+        if (!refreshed?.rejected) return samePair() ? { user: null, error: "network" } : askAgain();
+        if (!samePair()) return askAgain(); // a newer pair arrived while the refresh was out - never cleared
       }
       // Refresh wasn't possible or genuinely failed — token is dead.
       auth._clearSession();
@@ -999,15 +1203,34 @@ const auth = {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
+        // Review 9/27 Do first 7: only 400 / 401 / 403 reject the refresh token; a 5xx / 429 / 408 (or any other
+        // status) is the server failing - the pair is kept (no clear, no _deadRefresh, no banner) and retried later.
+        if (authAnswerKind(res.status) !== "rejected") {
+          console.warn(`auth._refresh: HTTP ${res.status} from the token endpoint is not a rejection - session kept, refresh will be retried`);
+          return { user: null, error: "network", status: res.status };
+        }
         if (opts && opts.keepOnReject) {
           console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - the stored session is kept and marked expired (sign in again)`);
           return { user: null, rejected: true, status: res.status };
         }
         console.warn(`auth._refresh: refresh token rejected (HTTP ${res.status}) - clearing the stored session`);
         auth._clearSession();
-        return { user: null };
+        return { user: null, rejected: true, status: res.status };
       }
       const data = await res.json();
+      // a 2xx without a token (a proxy's page that happens to be JSON) is not a new pair and not a rejection either
+      if (!data || typeof data.access_token !== "string") {
+        console.warn(`auth._refresh: HTTP ${res.status} without an access token - session kept, refresh will be retried`);
+        return { user: null, error: "network", status: res.status };
+      }
+      // Second review fixes (10/2): a sign-in, a link's pair or a sign-out landed while this request was out - its answer
+      // belongs to a pair that is no longer stored and is dropped (never stored over the newer pair, never signing a
+      // signed-out device back in); "network" to every caller, so nothing else is touched either
+      const cur = auth.getSession();
+      if (!cur || cur.refresh_token !== refreshToken) {
+        console.warn("auth._refresh: the stored session changed while the refresh was out - its answer is dropped, the stored one kept");
+        return { user: null, error: "network", stale: true };
+      }
       auth._saveSession(data);
       return { user: data.user, session: data };
     } catch(e) {
@@ -1045,23 +1268,34 @@ const auth = {
   // allow-list (Authentication → URL Configuration). If the allow-list entry
   // doesn't match exactly (including trailing slash), Supabase silently strips
   // redirect_to and falls back to the Site URL default.
+  // Review 9/27 Do first 7 (updatePassword is the model): a THROWN fetch resolves to { error: "No connection - try
+  // again" } and a non-JSON error body (an HTML 502 page) to an error with the status - the reset card's "Sending"
+  // button always comes back. Never throws.
   async resetPassword(email) {
     const redirectUrl = "https://fkhan628.github.io/Silvis-Call-Schedule/";
     const url = `${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectUrl)}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        redirect_to: redirectUrl,
-        gotrue_meta_security: { captcha_token: "" }
-      }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      return { error: data.msg || data.error_description || data.message || "Reset failed" };
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          redirect_to: redirectUrl,
+          gotrue_meta_security: { captcha_token: "" }
+        }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) || {};
+        // a 5xx / 408 says try again whatever the body (review of Do first 7, 10/2), with GoTrue's words when it sent some
+        // ("Error sending recovery email" - second review fixes, 10/2)
+        if (authServerDown(res.status)) return { error: authServerDownMessage(res.status, data) };
+        return { error: data.msg || data.error_description || data.message || (authAnswerKind(res.status) === "network" ? `Couldn't reach the server (HTTP ${res.status}) - try again` : `Reset failed (HTTP ${res.status})`) };
+      }
+      return { error: null };
+    } catch (e) {
+      console.warn("auth.resetPassword: network error:", e);
+      return { error: "No connection - try again" };
     }
-    return { error: null };
   },
 
   // Update password (after clicking reset link — user has a valid session)
@@ -1154,20 +1388,23 @@ const auth = {
   // Checks a link pair against GoTrue WITHOUT touching storage or the session flags: GET /auth/v1/user with the link's
   // bearer and, when that is rejected and the pair carries a refresh token, ONE refresh POST with it (the rotated pair
   // is then the one to store - the old refresh token is consumed). Never throws:
-  //   { user, pair } | { dead: true, status } | { error: "network" }
+  //   { user, pair } | { dead: true, status } | { error: "network", status? }
+  // Review 9/27 Do first 7: "dead" only on 400 / 401 / 403 (authAnswerKind) - a 5xx / 429 / 408 on either request is
+  // a network error, so a good invite / reset link is never called dead because GoTrue had a bad moment.
   async _probeLinkPair(accessToken, refreshToken) {
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` } });
       if (res.ok) return { user: await res.json(), pair: { access_token: accessToken, refresh_token: refreshToken } };
+      if (authAnswerKind(res.status) !== "rejected") return { error: "network", status: res.status };
       if (!refreshToken) return { dead: true, status: res.status };
       const r2 = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
         method: "POST",
         headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!r2.ok) return { dead: true, status: r2.status };
+      if (!r2.ok) return authAnswerKind(r2.status) === "rejected" ? { dead: true, status: r2.status } : { error: "network", status: r2.status };
       const data = await r2.json();
-      if (!data || typeof data.access_token !== "string") return { dead: true, status: r2.status };
+      if (!data || typeof data.access_token !== "string") return { error: "network", status: r2.status }; // a 2xx without a pair is not a rejection (Do first 7, like _refresh)
       return { user: data.user || null, pair: { access_token: data.access_token, refresh_token: data.refresh_token || null } };
     } catch (e) {
       return { error: "network" };

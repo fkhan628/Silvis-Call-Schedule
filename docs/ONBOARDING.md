@@ -47,7 +47,8 @@ afterwards; the editor keeps query history).*
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is
    admin): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
-   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish). Setup → Users is the normal path; if the
+   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish, `app` for an APP - no roster link;
+   see "APPs: putting yourself on a call day" below). Setup → Users is the normal path; if the
    app is unreachable, the same thing in SQL:
 
    ```sql
@@ -96,17 +97,26 @@ days a surgeon was placed on outside his list.*
 offers** (or the **Paint offers** button in the top bar; a reminder e-mail's link `#offers` opens it too). You get one
 row per day for the month; ‹ › move ahead as far as you like. While a period is open, a **Go to <period> (freezes M/D,
 in N days)** button under the month jumps straight to its first month. Tap a brush at the top — **Primary**, **Backup**, **Either**
-(happy with either role) or **Clear** — then tap the days; tap a day again with the same brush to take it back. For a
-run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which tap you
-are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20". Greyed rows
+(happy with either role), **No primary** or **Clear** — then tap the days; tap a day again with the same brush to take it
+back. For a run of days switch **Range** on, tap the first day, then the last (the line under the brushes tells you which
+tap you are on and has an "x cancel start"). Prefer typing? **Paste dates** takes "11/3, 11/5, 11/16-11/20".
+**No primary** marks a day you cannot be on primary but can still take backup — an outreach or out-of-town day, for
+example: the schedule never puts you on primary that day and may still use you as backup. It replaces a Primary or Either
+offer on that day; a Backup offer stays (backup preferred that day). Painting Primary or Either on a No primary day lifts
+it (the app asks once); **Clear** takes back both. A day you are already published as primary cannot be marked — trade
+it first. A vacation blocks backup too, so when you can still take backup, use No primary instead of a vacation. In
+**Only these days** mode a No primary day is not an offer: paint **Backup** on it as well if you want backup there.
+Single No primary days are yours to change whoever entered them; a longer run Faraz entered reads "No primary (set by the
+scheduler)" and only he can change it. Greyed rows
 cannot be offered and say why: past, your vacation (and the day before it for primary), an East call day or a derived
-East week, outside your window, a day you had Faraz mark as unavailable / no backup / backup only (ask him to change
-that row first), or frozen because that period already closed (ask Faraz). A day your usual pattern excludes — a Tue/Thu
+East week, outside your window, a day you had Faraz mark as unavailable or no backup (ask him to change that row
+first), or frozen because that period already closed (ask Faraz). A day your usual pattern excludes — a Tue/Thu
 OR day, a Clinton or outreach day — is NOT greyed: the app asks once ("... is normally not one of your primary call days
 - offer it anyway?") and your offer counts for that date. If a vacation you entered later covers a day you had
 offered, that row greys but **Clear** can still take the offer back. Each row also shows who is already published that
 day (OPEN in red if nobody) and how many colleagues offered it. Nothing is written while you tap: the footer counts
-your unsaved changes; **Save** writes them all at once — your days and, if you changed it, your mode, in one request;
+your unsaved changes; **Save** writes them all at once — your days, your No primary days and, if you changed it, your
+mode, in one request;
 if it fails nothing at all was saved, the list of what is still pending stays on screen, and you just Save again —
 **Discard** drops them. Above Save, one line names the next period, its freeze date, where you stand and your mode;
 **Change** opens the choice: **Only these days** or **These are my preferred days - use my rules to fill gaps** (the
@@ -154,11 +164,55 @@ Roles (`user_profiles.role`, set in Setup → Users by the admin):
 | `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
 | `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
 | `viewer` | read-only — the office viewer | every write |
+| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02) | everything a viewer has, plus putting itself on call days and taking them off (Mine → My APP days; one APP per day; from today on) | every other write; another APP's days; a roster link |
 
 A viewer (the office viewer, and every invited account until you link *and* promote it) sees the schedule read-only with nothing broken on purpose (Prompt 16 B3): no "not linked" banner, no trade card (Time off lists the group's vacations instead), **Settings → Live calendar sync** offers the public full-schedule feed, and **Alerts** carries only the publish and open-shift notices.
 
 A coordinator account is created like any other (invite from the dashboard), then given the role in Setup → Users with
 **no roster link**; the database refuses a linked coordinator (`user_profiles_coordinator_unlinked`).
+
+## APPs: putting yourself on a call day (Prompt 29, 10/1)
+
+*The database part ran on 2026-10-02 (`apply-app-call-days.sh`); APP accounts work from the build that ships Prompt 29's
+client, then Faraz marks them in Setup → Users. (Should the database part ever be rolled back, the APP line reads "APP days
+are available after the next database update.")*
+
+**What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
+viewer has — the calendar, follows and the follower e-mails, its preferences — and adds one thing: the APP puts itself on
+call days. The decisions (Faraz 10/1): **any day** (no rules, no fairness; a past day is refused for the APP - you can fix
+one); **one APP per day** (the database enforces it); **everyone signed in sees it**, not the `?public=1` page; **no
+e-mails** — the Activity log only.
+
+**How you mark one (Setup → Users).** Invite the APP like a viewer (above). Give the account a **display name** first (a
+nameless APP shows as "APP" on the calendar; the calendar shows the last name - a credential such as "PA-C" after it is
+dropped - and an APP cannot rename itself, so the name you set is the one everyone sees), leave the **roster link** at *none*, then set **Role** to `app`. The app
+refuses `app` on a linked account (and a roster link on an APP), and the database refuses it too. The switch writes the
+usual `users.link` Activity log row ("Account <APP name>: APP on"). Setting the role back to `viewer` takes the APP
+feature away; that person's days stay on the calendar until you clear them (deleting the account removes them).
+
+**What the APP does.** **Mine → My APP days**: a month of days on the phone. Tap a day to put yourself on call; tap it
+again to take it off. A day with another APP's name on it is taken and cannot be picked. **Range** (tap the first and the
+last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once and say which days they skipped and
+why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, your
+other taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"; a tap the refusal made
+impossible, such as a day another APP just took, drops out). Past days stay as they are.
+
+**What you do (the day editor).** Every day's editor has an **APP** line: pick any APP and **Set APP** (it replaces the
+APP already on that day), or **Clear APP**. It is saved at once, apart from the day's own Save, and works on past days too.
+
+**Who sees it.** The calendar shows the APP as a third line "A <last name>" in a muted rose (the full name is in the day's
+hover and in the day summary), and the legend explains it - for every signed-in account: surgeons, the office, viewers,
+followers, the APPs and you. The `?public=1` page, its share links, the printable month, the ER Call Panels, the calendar
+feeds, Totals, pay, the office digest and every e-mail show nothing of it. The generator, the rules, trades and the open
+shifts board ignore APP days.
+
+**The record.** No e-mail and no notification; each Save writes one Activity log row naming the days, e.g.
+"<APP name>: on call 10/14, 10/21" (a change you make reads "<APP name>: on call 10/14 (was <other APP>)").
+
+**Three lines to send an APP (phone):**
+1. Open the Silvis call schedule and sign in, then tap **Mine**.
+2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
+3. Tap **Save** - your days appear on the calendar of everyone signed in as "A <your last name>".
 
 ## Removing or changing someone
 

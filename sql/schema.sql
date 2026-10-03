@@ -93,6 +93,28 @@
 -- row is written - an East review changed to 'away' or a new Davenport range arriving through the East feed refresh can push a
 -- day under the minimum unrefused (no refusing trigger on east_vacation_reviews or east_feed: a Davenport absence is a fact);
 -- sql/probes/vacation-guard-overlimit.sql lists such days (read-only).
+-- Revision 2026-10-01 t (no-primary days, sql/migrations/2026-10-01-no-primary-days.sql, applied 2026-10-02 12:05:22Z after the probe): Faraz 10/1 (Prompt 28)
+-- - surgeons mark their own no-primary days (Burchett: unavailable for primary, backup is fine). One NEW function save_no_primary(p_person,
+-- p_add, p_clear) (security definer, search_path public, pg_temp): one availability row per day, kind backup_only, role any, note null, source
+-- app / office-relay / email-relay; it clears the person's SINGLE-day backup_only rows of any source and never splits a range. save_offers
+-- gains two optional parameters p_np_add / p_np_clear and calls it inside its own transaction (still security invoker; the five-argument
+-- signature is dropped and re-created with seven, so an older build's five-key call resolves to it). Refusals NP001-NP009 (NO_PRIMARY_*: not
+-- linked, not yours, unknown person for the office, bad day, past (everyone), frozen (not the scheduler), part of a longer range (everyone),
+-- holds primary that day (everyone), an offer conflict - save_offers checks it too for the days it offers as primary / either). No table,
+-- column, policy or trigger change (availability has no trigger; its policies are unchanged).
+-- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql, applied 2026-10-02 19:19:27Z after the probe): Faraz 10/1 (Prompt 29) - the
+-- APPs put themselves on call days; any day, ONE APP per day, everyone signed in sees it (never anon / the ?public=1 page), no e-mails
+-- (the Activity log only). user_profiles.is_app boolean not null default false - a FLAG, not a role (an APP stays role 'viewer': the
+-- follower e-mails pick followers by role, Setup's followsPatch clears follows on a role change) - with the check user_profiles_app_viewer
+-- (an APP is an unlinked viewer row) and the is_app pin added to user_profiles_self_insert / _self_update (re-created in place;
+-- _self_update also pins an APP's display_name - every signed-in user sees it); one NEW
+-- helper silvis_is_app() and one NEW table app_call_days (day date PRIMARY KEY - one APP per day; profile_id -> user_profiles on delete
+-- cascade; source 'app' / 'scheduler'; authenticated read through app_call_days_read, never anon - not in the read_all loop, anon's table
+-- privileges revoked; authenticated keeps SELECT only); app_call_names() (security definer, stable: the display names of the APP days)
+-- and save_app_days(p_profile, p_add, p_clear, p_replace) (security definer, volatile; the ONLY write path; AP001-AP007 APP_DAY_* refuse
+-- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letter t is
+-- Prompt 28's no-primary days (applied, merged ahead of this client); u is taken by prepared, unmerged work (independent - either
+-- apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -107,6 +129,7 @@ create table if not exists public.user_profiles (
   email         text,
   display_name  text,
   follows       jsonb not null default '[]'::jsonb,   -- Prompt 20 F1: roster ids this account follows (admin-set)
+  is_app        boolean not null default false,       -- Prompt 29: an APP account (an unlinked viewer row; admin-set)
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -125,6 +148,13 @@ alter table public.user_profiles add column if not exists follows jsonb not null
 alter table public.user_profiles drop constraint if exists user_profiles_follows_shape;
 alter table public.user_profiles add constraint user_profiles_follows_shape
   check (case when jsonb_typeof(follows) = 'array' then not jsonb_path_exists(follows, 'strict $[*] ? (@.type() != "string" || @ == "")') else false end);
+-- Prompt 29 (APP call days, sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z): the APP flag on an EXISTING
+-- table and its rule - an APP is a viewer account, never a roster entry. Only the admin writes it (user_profiles_admin;
+-- user_profiles_self_update and _self_insert below pin it).
+alter table public.user_profiles add column if not exists is_app boolean not null default false;
+alter table public.user_profiles drop constraint if exists user_profiles_app_viewer;
+alter table public.user_profiles add constraint user_profiles_app_viewer
+  check (not is_app or (role = 'viewer' and person_id is null));
 
 -- Profile rows are created by the database when an auth user is created/invited (and the
 -- email is kept in sync), so Setup -> Users can link a person who has never opened the app.
@@ -164,6 +194,18 @@ create or replace function public.silvis_is_coord() returns boolean
 language sql stable security definer set search_path = public as $$
   select public.silvis_role() = 'coordinator';
 $$;
+
+-- Prompt 29 (APP call days, revision v - report-first; applied 2026-10-02 19:19:27Z): the APP flag of the caller (save_app_days asks it; no
+-- policy uses it). The constraint makes the role / person_id terms redundant; they stay as defence in depth.
+create or replace function public.silvis_is_app() returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select coalesce((select p.is_app and p.role = 'viewer' and p.person_id is null from public.user_profiles p where p.id = auth.uid()), false);
+$$;
+revoke all on function public.silvis_is_app() from public;
+revoke all on function public.silvis_is_app() from anon;
+grant execute on function public.silvis_is_app() to authenticated;
+grant execute on function public.silvis_is_app() to service_role;
+comment on function public.silvis_is_app() is 'Prompt 29 (APP call days): true when the signed-in account is an APP - an unlinked viewer row with is_app set by the admin in Setup > Users. Security definer (reads user_profiles past its RLS); EXECUTE for authenticated / service_role only; no policy uses it.';
 
 -- ---------- roster + rules + settings blob (single row id='main')
 create table if not exists public.call_schedule_data (
@@ -1063,7 +1105,7 @@ create trigger call_offers_delete_guard_trg
   for each row execute function public.call_offers_delete_guard();
 
 -- ============================================================================
--- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode) - the offer painter
+-- set_offer_mode(p_period, p_mode, p_person) + save_offers(p_person, p_rows, p_clear, p_period, p_mode, p_np_add, p_np_clear) - the offer painter
 -- (2026-09-23, Prompt 14 part 3a; sql/migrations/2026-09-23-offer-mode-rpc.sql - applied live 2026-09-23 ~12:45 Central,
 -- the orchestrator runs it; probe sql/probes/offer-rpcs-probe.sql rolls itself back)
 --
@@ -1084,6 +1126,20 @@ create trigger call_offers_delete_guard_trg
 --   save_offers stamps entered_by = its profile id, source 'office-relay', and turns the transaction-local flag
 --   silvis.office_relay on around its delete / upsert so the call_offers policies admit the rows (security invoker kept);
 --   the freeze (OF003 / OM005) applies to it as to a surgeon.
+-- Prompt 28 (2026-10-01, revision t; sql/migrations/2026-10-01-no-primary-days.sql - report-first; applied 2026-10-02 12:05:22Z): no-primary
+--   days. save_no_primary(p_person, p_add, p_clear) - SECURITY DEFINER (search_path public, pg_temp) because a surgeon cannot
+--   write availability under RLS (no policy changes): one availability row per day, kind backup_only, role any, note null,
+--   source app / office-relay / email-relay and created_by as save_offers'; it deletes the person's SINGLE-day backup_only rows of
+--   any source and never splits a longer range. save_offers gains p_np_add / p_np_clear and calls it inside its own transaction
+--   (still security invoker - the five-argument signature is dropped right before the create, so an older build's five-key
+--   call resolves to the seven-argument function; the drop line stays here on purpose: a wholesale re-run on a database that
+--   still has the five-argument function must not leave two overloads), then refuses a day it offers as primary / either
+--   that carries a backup_only row afterwards (NP009); it takes save_no_primary's per-person advisory lock before its first
+--   write (review 10/1), so that read and a concurrent mark of the same person serialise. The client writes the audit row
+--   offers.save after ok.
+-- Tokens: NP001 NO_PRIMARY_NOT_LINKED, NP002 NO_PRIMARY_NOT_YOURS, NP003 NO_PRIMARY_UNKNOWN_PERSON, NP004 NO_PRIMARY_BAD_DAY,
+--   NP005 NO_PRIMARY_PAST (everyone), NP006 NO_PRIMARY_FROZEN (not the scheduler), NP007 NO_PRIMARY_RANGE (everyone),
+--   NP008 NO_PRIMARY_ON_CALL (a held primary, everyone), NP009 NO_PRIMARY_OFFER_CONFLICT.
 -- ============================================================================
 create or replace function public.set_offer_mode(p_period uuid, p_mode text, p_person text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -1152,7 +1208,113 @@ revoke all on function public.set_offer_mode(uuid, text, text) from anon;
 grant execute on function public.set_offer_mode(uuid, text, text) to authenticated;
 comment on function public.set_offer_mode(uuid, text, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): one person''s offer mode on one period (exhaustive / preferred -> offer_modes[person], off rules_only_ids; rules_only -> on rules_only_ids, key dropped; refused with offers inside the period). Security definer because surgeons cannot write call_periods; a non-scheduler may only set their own - or, as a coordinator, another ROSTER person''s (OM007 otherwise) - and only before the freeze.';
 
-create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null) returns jsonb
+create or replace function public.save_no_primary(p_person text, p_add date[], p_clear date[]) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me       text := public.silvis_person_id();
+  sched    boolean := public.silvis_is_sched();
+  coord    boolean := public.silvis_is_coord();
+  who      text := nullif(btrim(p_person), '');
+  today_c  date := (now() at time zone 'America/Chicago')::date;
+  adds     date[];
+  clears   date[];
+  v_by     text;
+  v_src    text;
+  v_name   text;
+  frozen   record;
+  bad      text;
+  n_add    integer := 0;
+  n_clear  integer := 0;
+begin
+  if auth.uid() is null or (me is null and not sched and not coord) then
+    raise exception 'NO_PRIMARY_NOT_LINKED: sign in with an account that is linked to a roster entry to mark no-primary days' using errcode = 'NP001';
+  end if;
+  who := coalesce(who, me);
+  if who is null then
+    raise exception 'NO_PRIMARY_NOT_LINKED: name the person (your account is not linked to a roster entry)' using errcode = 'NP001';
+  end if;
+  if who <> coalesce(me, '') and not sched and not coord then
+    raise exception 'NO_PRIMARY_NOT_YOURS: only the scheduler or the office can mark another surgeon''s no-primary days' using errcode = 'NP002';
+  end if;
+  -- The office relays for a roster id only (availability.person_id has no foreign key); the scheduler's relay is not checked (as OS004).
+  if coord and not exists (select 1 from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who) then
+    raise exception 'NO_PRIMARY_UNKNOWN_PERSON: % is not a roster id - the office relays for a roster surgeon only', who using errcode = 'NP003';
+  end if;
+  -- One no-primary write per person at a time: two Saves from two devices serialise, and every read below sees the other's commit.
+  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));
+  if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
+    raise exception 'NO_PRIMARY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'NP004';
+  end if;
+  select coalesce(array_agg(distinct d order by d), '{}') into adds from unnest(coalesce(p_add, '{}'::date[])) d;
+  select coalesce(array_agg(distinct d order by d), '{}') into clears from unnest(coalesce(p_clear, '{}'::date[])) d;
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds) d where d = any(clears);
+  if bad is not null then
+    raise exception 'NO_PRIMARY_BAD_DAY: % is both marked and cleared in one save - nothing was saved', bad using errcode = 'NP004';
+  end if;
+  -- Past days stay as they were for every caller, the scheduler included (like OF001).
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds || clears) d where d < today_c;
+  if bad is not null then
+    raise exception 'NO_PRIMARY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'NP005';
+  end if;
+  -- The offers freeze (the OF003 reading: closed by date or no longer upcoming); the scheduler is exempt, the office is not.
+  if not sched then
+    select p.label, p.offers_close_at,
+           (select string_agg(to_char(x, 'FMMM/FMDD'), ', ' order by x) from unnest(adds || clears) x where x between p.start_day and p.end_day) as days
+      into frozen
+      from public.call_periods p
+     where exists (select 1 from unnest(adds || clears) x where x between p.start_day and p.end_day)
+       and (p.offers_close_at <= today_c or p.status <> 'upcoming')
+     order by p.start_day
+     limit 1;
+    if found then
+      raise exception 'NO_PRIMARY_FROZEN: offers for % closed on % - ask the scheduler (%)', frozen.label, frozen.offers_close_at, frozen.days using errcode = 'NP006';
+    end if;
+  end if;
+  -- A longer range is never split, not by the scheduler either: he edits it in Setup > Availability statements.
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(clears) d
+   where exists (select 1 from public.availability a where a.person_id = who and a.kind = 'backup_only' and a.start_date < a.end_date and d between a.start_date and a.end_date);
+  if bad is not null then
+    raise exception 'NO_PRIMARY_RANGE: % is part of a longer no-primary range the scheduler set - change it in Setup > Availability statements', bad using errcode = 'NP007';
+  end if;
+  v_name := coalesce((select r ->> 'name' from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who limit 1), who);
+  -- A day he holds as PRIMARY on the saved schedule is traded first, for every caller (holding backup is fine).
+  select string_agg(to_char(s.day, 'FMMM/FMDD'), ', ' order by s.day) into bad from public.schedule_days s where s.day = any(adds) and s.primary_id = who;
+  if bad is not null then
+    raise exception 'NO_PRIMARY_ON_CALL: % holds primary on % - trade those days first, then mark them No primary', v_name, bad using errcode = 'NP008';
+  end if;
+  -- A primary / either offer on a day he marks (it sees the offers this Save wrote earlier in the transaction).
+  select string_agg(to_char(o.day, 'FMMM/FMDD'), ', ' order by o.day) into bad from public.call_offers o
+   where o.person_id = who and o.day = any(adds) and o.role_pref in ('primary', 'either');
+  if bad is not null then
+    raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';
+  end if;
+
+  -- Who entered it is a fact of the call, never a client field (save_offers' rule).
+  if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;
+
+  -- Clear: every SINGLE-day backup_only row of the person on those days, any role, any source ('setup', 'seed', the app's).
+  delete from public.availability a
+   where a.person_id = who and a.kind = 'backup_only' and a.start_date = a.end_date and a.start_date = any(clears);
+  get diagnostics n_clear = row_count;
+  -- Add: one row per day not already covered by ANY backup_only row of the person (single or range, any source); note
+  -- always null (an anon-readable table carries no reasons); role 'any'.
+  insert into public.availability (person_id, kind, role, start_date, end_date, note, source, created_by)
+  select who, 'backup_only', 'any', d, d, null, v_src, v_by
+    from unnest(adds) d
+   where not exists (select 1 from public.availability a
+                      where a.person_id = who and a.kind = 'backup_only' and d between a.start_date and a.end_date)
+  on conflict do nothing;
+  get diagnostics n_add = row_count;
+
+  return jsonb_build_object('ok', true, 'person_id', who, 'added', n_add, 'cleared', n_clear, 'kept', cardinality(adds) - n_add, 'source', v_src, 'created_by', v_by);
+end $$;
+revoke all on function public.save_no_primary(text, date[], date[]) from public;
+revoke all on function public.save_no_primary(text, date[], date[]) from anon;
+grant execute on function public.save_no_primary(text, date[], date[]) to authenticated;
+comment on function public.save_no_primary(text, date[], date[]) is 'Prompt 28 (2026-10-01): a person''s no-primary days - one availability row per day, kind backup_only, role any, note null (p_add), and the deletion of his SINGLE-day backup_only rows of any source (p_clear). Security definer because surgeons cannot write availability under RLS; called by save_offers inside its transaction (the painter''s one Save) and callable directly with the same checks: a linked surgeon for himself, the office coordinator for a roster id (NP003), the scheduler for anyone. Refusals before any write: NP001 NO_PRIMARY_NOT_LINKED, NP002 NO_PRIMARY_NOT_YOURS, NP003 NO_PRIMARY_UNKNOWN_PERSON, NP004 NO_PRIMARY_BAD_DAY, NP005 NO_PRIMARY_PAST (everyone), NP006 NO_PRIMARY_FROZEN (not the scheduler), NP007 NO_PRIMARY_RANGE (a longer range is never split), NP008 NO_PRIMARY_ON_CALL (a held primary), NP009 NO_PRIMARY_OFFER_CONFLICT (a primary / either offer that day). source app / office-relay / email-relay, created_by as save_offers. Writes no audit row: the client writes the audit row offers.save after ok.';
+
+drop function if exists public.save_offers(text, jsonb, date[], uuid, text);
+create or replace function public.save_offers(p_person text, p_rows jsonb, p_clear date[], p_period uuid default null, p_mode text default null, p_np_add date[] default null, p_np_clear date[] default null) returns jsonb
 language plpgsql security invoker set search_path = public as $$
 declare
   me        text := public.silvis_person_id();
@@ -1164,6 +1326,8 @@ declare
   n_up      integer := 0;
   n_del     integer := 0;
   bad       text;
+  np        jsonb;
+  v_name    text;
 begin
   if auth.uid() is null or (me is null and not sched and not coord) then
     raise exception 'OFFERS_NOT_LINKED: sign in with an account that is linked to a roster entry to save offers' using errcode = 'OS001';
@@ -1190,6 +1354,9 @@ begin
   if bad is not null then
     raise exception 'OFFERS_BAD_ROW: % (day must be YYYY-MM-DD, role_pref primary / backup / either) - nothing was saved', bad using errcode = 'OS003';
   end if;
+  -- Prompt 28 (review 10/1): save_no_primary's per-person lock, before the first write - this Save's NP009 read below and a
+  -- concurrent no-primary mark of the same person run one after the other (re-entrant: the nested call takes it again).
+  perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));
 
   -- Who entered it is a fact of the call, never a client field.
   if me is not null and who = me then v_by := me; v_src := 'app'; elsif sched then v_by := 'scheduler'; v_src := 'email-relay'; else v_by := auth.uid()::text; v_src := 'office-relay'; end if;
@@ -1212,18 +1379,39 @@ begin
   get diagnostics n_up = row_count;
   if coord then perform set_config('silvis.office_relay', '', true); end if;
 
+  -- Prompt 28: the no-primary days, in this same transaction, through the definer sibling (surgeons cannot write
+  -- availability under RLS); a refusal there rolls the offer rows above back too.
+  if coalesce(cardinality(p_np_add), 0) + coalesce(cardinality(p_np_clear), 0) > 0 then
+    np := public.save_no_primary(who, p_np_add, p_np_clear);
+  end if;
+
+  -- Prompt 28 invariant: a day this Save offers as primary / either carries no no-primary row afterwards (a range from
+  -- Setup, or a single day the Save did not lift).
+  select string_agg(to_char(o.day, 'FMMM/FMDD'), ', ' order by o.day) into bad
+    from public.call_offers o
+   where o.person_id = who and o.role_pref in ('primary', 'either')
+     and o.day in (select (r->>'day')::date from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) r)
+     and exists (select 1 from public.availability a
+                  where a.person_id = who and a.kind = 'backup_only' and o.day between a.start_date and a.end_date);
+  if bad is not null then
+    v_name := coalesce((select r ->> 'name' from public.call_schedule_data d, jsonb_array_elements(case when jsonb_typeof(d.data -> 'roster') = 'array' then d.data -> 'roster' else '[]'::jsonb end) r where d.id = 'main' and r ->> 'id' = who limit 1), who);
+    raise exception 'NO_PRIMARY_OFFER_CONFLICT: % offers primary on % and marks it No primary - keep one of the two (nothing was saved)', v_name, bad using errcode = 'NP009';
+  end if;
+
   -- The mode, when the same Save changed it: inside this transaction, so a refused mode (OM001-OM006, checked by
   -- set_offer_mode itself) rolls the rows above back too - days + mode are one commit or nothing.
   if p_mode is not null then
     perform public.set_offer_mode(p_period, p_mode, who);
   end if;
 
-  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by, 'source', v_src, 'mode', p_mode);
+  return jsonb_build_object('ok', true, 'person_id', who, 'upserted', n_up, 'deleted', n_del, 'entered_by', v_by,
+                            'source', v_src, 'mode', p_mode, 'np_added', coalesce((np->>'added')::int, 0),
+                            'np_cleared', coalesce((np->>'cleared')::int, 0), 'np_kept', coalesce((np->>'kept')::int, 0));
 end $$;
-revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from public;
-revoke all on function public.save_offers(text, jsonb, date[], uuid, text) from anon;
-grant execute on function public.save_offers(text, jsonb, date[], uuid, text) to authenticated;
-comment on function public.save_offers(text, jsonb, date[], uuid, text) is 'Prompt 14 part 3a (+ Prompt 16 A7): the offer painter''s one Save - upserts + deletes (+ the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed - a coordinator''s rows pass the policies through the transaction-local silvis.office_relay flag this function sets). entered_by / source come from the caller identity (own id / app; scheduler / email-relay; the coordinator''s profile id / office-relay - for a roster id only, OS004 otherwise); a row sent without a note keeps its note. The client writes the audit row offers.save after ok.';
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from public;
+revoke all on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) from anon;
+grant execute on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) to authenticated;
+comment on function public.save_offers(text, jsonb, date[], uuid, text, date[], date[]) is 'Prompt 14 part 3a (+ Prompt 16 A7, + Prompt 28): the offer painter''s one Save - upserts + deletes (+ the no-primary days through save_no_primary when p_np_add / p_np_clear carry days, + the period mode through set_offer_mode when p_mode is given) in ONE transaction as the caller (security invoker: RLS + OF001/OF002/OF003 apply per row; nothing bypassed - a coordinator''s rows pass the policies through the transaction-local silvis.office_relay flag this function sets). entered_by / source come from the caller identity (own id / app; scheduler / email-relay; the coordinator''s profile id / office-relay - for a roster id only, OS004 otherwise); a row sent without a note keeps its note. NP009 NO_PRIMARY_OFFER_CONFLICT when a day it offers as primary / either carries a backup_only row afterwards. The client writes the audit row offers.save after ok.';
 
 -- ---------- notifications, prefs, audit, snapshots, versions, contacts
 create table if not exists public.notifications (
@@ -1445,6 +1633,176 @@ revoke truncate, references, trigger on table public.call_pay_logs from authenti
 grant select, insert, update, delete on table public.call_pay_settings to authenticated;
 grant select, insert, update, delete on table public.call_pay_logs to authenticated;
 
+-- ---------- APP call days (Prompt 29, revision v; sql/migrations/2026-10-02-app-call-days.sql - report-first; applied 2026-10-02 19:19:27Z)
+-- Faraz 10/1: the APPs put themselves on call days - any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page;
+-- no e-mails, the Activity log only. One row per day (day is the primary key - the database enforces one APP per day). Read by every
+-- signed-in role (app_call_days_read below), never anon: not in the read_all loop and anon's table privileges revoked, so an anon
+-- request is refused (401 / 403) instead of answered 200 + []. authenticated keeps SELECT only - save_app_days() (security definer,
+-- the table owner) is the only write path, so a direct INSERT / UPDATE / DELETE is 42501. Deleting the account removes its days
+-- (on delete cascade); the audit_log keeps the history. Not part of the blob, snapshots, the data export or a factory reset.
+-- save_app_days refusals (all before any write; custom SQLSTATEs, HTTP 400 through PostgREST):
+--   AP001 APP_DAY_NOT_ALLOWED   no signed-in user / neither an APP nor the scheduler; the scheduler named no APP
+--   AP002 APP_DAY_NOT_YOURS     an APP names another profile / sends p_replace / removes a day another APP holds
+--   AP003 APP_DAY_NOT_APP       an add for a profile that is not a current APP (the scheduler too; clears stay allowed)
+--   AP004 APP_DAY_BAD_DAY       an empty day, a day that is not a calendar day (infinity), more than 400 days in one save,
+--                               a day both added and removed
+--   AP005 APP_DAY_TAKEN         an add on a day another APP holds (without p_replace)
+--   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
+--   AP007 APP_DAY_STALE         the scheduler removes a day another profile holds (a stale picture)
+create table if not exists public.app_call_days (
+  day         date primary key check (isfinite(day)),                                  -- one APP per day: the database enforces it (never infinity)
+  profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
+  source      text not null check (source in ('app', 'scheduler')),                    -- the APP itself / the scheduler for an APP
+  created_by  uuid,                                                                    -- auth.uid() of the writer (no FK: a deleted scheduler account touches nothing)
+  created_at  timestamptz not null default now()
+);
+create index if not exists app_call_days_profile_idx on public.app_call_days (profile_id, day);
+revoke all on table public.app_call_days from anon;
+revoke all on table public.app_call_days from authenticated;
+grant select on table public.app_call_days to authenticated;
+comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on call per day - ONE APP per day (day is the primary key). Read by every signed-in role, never anon (no anon policy, anon privileges revoked); written only through save_app_days() (authenticated holds SELECT only). Deleting the account removes its days (on delete cascade); the audit_log keeps the history.';
+
+create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)
+    from public.user_profiles p
+   where auth.uid() is not null
+     and (exists (select 1 from public.app_call_days a where a.profile_id = p.id)
+          or (p.is_app and p.role = 'viewer' and p.person_id is null and (p.id = auth.uid() or public.silvis_is_sched())))
+   order by p.id;
+$$;
+revoke all on function public.app_call_names() from public;
+revoke all on function public.app_call_names() from anon;
+grant execute on function public.app_call_names() to authenticated;
+comment on function public.app_call_names() is 'Prompt 29: the display names of the APP days - every profile that holds a day (any signed-in caller), the caller''s own APP profile and, for the scheduler, every APP profile (the day editor''s pick list). Display name and the APP flag only - never an email, never a role. Stable: the client calls it with GET.';
+
+create or replace function public.save_app_days(p_profile uuid, p_add date[], p_clear date[], p_replace boolean default false) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me        uuid := auth.uid();
+  sched     boolean := public.silvis_is_sched();
+  c_app     boolean := public.silvis_is_app();
+  who       uuid := p_profile;
+  repl      boolean := coalesce(p_replace, false);
+  today_c   date := (now() at time zone 'America/Chicago')::date;
+  adds      date[];
+  clears    date[];
+  t_app     boolean;
+  t_name    text;
+  v_src     text;
+  bad       text;
+  ins_days  date[] := '{}';
+  del_days  date[] := '{}';
+  replaced  jsonb := '[]'::jsonb;
+  v_sum     text;
+begin
+  if me is null or (not sched and not c_app) then
+    raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day' using errcode = 'AP001';
+  end if;
+  if who is null and c_app then who := me; end if;
+  if who is null then
+    raise exception 'APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)' using errcode = 'AP001';
+  end if;
+  if not sched and who <> me then
+    raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler' using errcode = 'AP002';
+  end if;
+  if repl and not sched then
+    raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day' using errcode = 'AP002';
+  end if;
+  if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';
+  end if;
+  -- infinity / -infinity are dates to PostgreSQL but no calendar day: to_char gives NULL, so every message below would drop them
+  if exists (select 1 from unnest(coalesce(p_add, '{}'::date[]) || coalesce(p_clear, '{}'::date[])) d where not isfinite(d)) then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';
+  end if;
+  if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then
+    raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';
+  end if;
+  select coalesce(array_agg(distinct d order by d), '{}') into adds from unnest(coalesce(p_add, '{}'::date[])) d;
+  select coalesce(array_agg(distinct d order by d), '{}') into clears from unnest(coalesce(p_clear, '{}'::date[])) d;
+  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds) d where d = any(clears);
+  if bad is not null then
+    raise exception 'APP_DAY_BAD_DAY: % is both added and removed in one save - nothing was saved', bad using errcode = 'AP004';
+  end if;
+  select (p.is_app and p.role = 'viewer' and p.person_id is null), nullif(btrim(p.display_name), '')
+    into t_app, t_name from public.user_profiles p where p.id = who;
+  if cardinality(adds) > 0 and not coalesce(t_app, false) then
+    raise exception 'APP_DAY_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AP003';
+  end if;
+  -- One APP-day write at a time, across every profile (a conflict is cross-profile): every read below sees the other's commit.
+  perform pg_advisory_xact_lock(hashtext('app_call_days:save'));
+  if not sched then
+    select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds || clears) d where d < today_c;
+    if bad is not null then
+      raise exception 'APP_DAY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AP006';
+    end if;
+  end if;
+  select string_agg(to_char(a.day, 'FMMM/FMDD') || ' is ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP') || '''s day', ', ' order by a.day)
+    into bad
+    from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+   where a.day = any(clears) and a.profile_id <> who;
+  if bad is not null then
+    if sched then
+      raise exception 'APP_DAY_STALE: % - reload the calendar (nothing was saved)', bad using errcode = 'AP007';
+    end if;
+    raise exception 'APP_DAY_NOT_YOURS: % - only that APP or the scheduler can remove it (nothing was saved)', bad using errcode = 'AP002';
+  end if;
+  if not repl then
+    select string_agg(to_char(a.day, 'FMMM/FMDD') || ' already has ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP'), '; ' order by a.day)
+      into bad
+      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+     where a.day = any(adds) and a.profile_id <> who;
+    if bad is not null then
+      raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';
+    end if;
+  end if;
+
+  v_src := case when who = me then 'app' else 'scheduler' end;
+  if repl then
+    select coalesce(jsonb_agg(jsonb_build_object('day', a.day, 'profile_id', a.profile_id, 'name', coalesce(nullif(btrim(p.display_name), ''), 'another APP')) order by a.day), '[]'::jsonb)
+      into replaced
+      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
+     where a.day = any(adds) and a.profile_id <> who;
+    delete from public.app_call_days a where a.day = any(adds) and a.profile_id <> who;
+  end if;
+  with del as (
+    delete from public.app_call_days a where a.profile_id = who and a.day = any(clears) returning a.day
+  ) select coalesce(array_agg(del.day order by del.day), '{}') into del_days from del;
+  with ins as (
+    insert into public.app_call_days (day, profile_id, source, created_by)
+    select d, who, v_src, me from unnest(adds) d
+    on conflict (day) do nothing
+    returning day
+  ) select coalesce(array_agg(ins.day order by ins.day), '{}') into ins_days from ins;
+  if exists (select 1 from public.app_call_days a where a.day = any(adds) and a.profile_id <> who) then
+    raise exception 'APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)' using errcode = 'AP005';
+  end if;
+
+  if cardinality(ins_days) + cardinality(del_days) > 0 then
+    v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',
+      case when cardinality(ins_days) > 0 then 'on call ' || (select string_agg(to_char(d, 'FMMM/FMDD')
+             || coalesce(' (was ' || (select x ->> 'name' from jsonb_array_elements(replaced) x where (x ->> 'day')::date = d limit 1) || ')', ''),
+             ', ' order by d) from unnest(ins_days) d) end,
+      case when cardinality(del_days) > 0 then 'removed ' || (select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) from unnest(del_days) d) end);
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (coalesce(public.silvis_person_id(), me::text),
+            coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                     (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                       where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                     'Unknown'),
+            'appdays.save',
+            jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', to_jsonb(ins_days), 'removed', to_jsonb(del_days), 'replaced', replaced, 'source', v_src));
+  end if;
+  return jsonb_build_object('ok', true, 'profile_id', who, 'added', cardinality(ins_days), 'removed', cardinality(del_days),
+                            'kept', cardinality(adds) - cardinality(ins_days), 'absent', cardinality(clears) - cardinality(del_days),
+                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', cardinality(ins_days) + cardinality(del_days) > 0);
+end $$;
+revoke all on function public.save_app_days(uuid, date[], date[], boolean) from public;
+revoke all on function public.save_app_days(uuid, date[], date[], boolean) from anon;
+grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;
+comment on function public.save_app_days(uuid, date[], date[], boolean) is 'Prompt 29: the only write path into app_call_days - an APP for its own profile, the scheduler (admin / scheduler) for any APP profile (adds) or any holder (clears; p_replace takes a day over). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
+
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
@@ -1469,6 +1827,7 @@ alter table public.call_offers             enable row level security;
 alter table public.call_periods            enable row level security;
 alter table public.call_pay_settings       enable row level security;
 alter table public.call_pay_logs           enable row level security;
+alter table public.app_call_days           enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
@@ -1538,12 +1897,17 @@ create policy east_vacation_reviews_self_delete on public.east_vacation_reviews 
 -- only: role, person_id AND email are pinned against self-service (the Resend sender must never be re-pointed by its
 -- owner); corrections are the admin's (user_profiles_admin; Setup -> Users is isAdmin-gated in the client).
 -- Prompt 20 F1: follows (whom an account follows) is pinned the same way, and a self-insert follows nobody - the admin sets it.
+-- Prompt 29 (APP call days, revision v - report-first; applied 2026-10-02 19:19:27Z): is_app (an APP account) is pinned the same way - a
+-- self-insert is never an APP and self-service never flips the flag; the admin sets it in Setup > Users. An APP's display_name
+-- is pinned too (review 10/2: app_call_names shows it to every signed-in user - the calendar's A line, the refusal texts, the
+-- audit summary), so the admin names APPs; every other account still renames itself. Both texts are the followers texts plus
+-- those clauses (self_insert: not is_app; self_update: the is_app pin and the APP display_name pin).
 drop policy if exists user_profiles_read on public.user_profiles;
 create policy user_profiles_read on public.user_profiles for select to authenticated
   using (id = auth.uid() or public.silvis_is_sched() or role in ('admin','scheduler'));
 drop policy if exists user_profiles_self_insert on public.user_profiles;
 create policy user_profiles_self_insert on public.user_profiles for insert to authenticated
-  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb);   -- signup lands as viewer, unlinked, following nobody; admin links + promotes
+  with check (id = auth.uid() and role = 'viewer' and person_id is null and follows = '[]'::jsonb and not is_app);   -- signup lands as viewer, unlinked, following nobody, not an APP; admin links + promotes
 drop policy if exists user_profiles_self_update on public.user_profiles;
 create policy user_profiles_self_update on public.user_profiles for update to authenticated
   using (id = auth.uid())
@@ -1551,7 +1915,9 @@ create policy user_profiles_self_update on public.user_profiles for update to au
     and role = (select role from public.user_profiles p where p.id = auth.uid())
     and person_id is not distinct from (select person_id from public.user_profiles p where p.id = auth.uid())
     and email is not distinct from (select email from public.user_profiles p where p.id = auth.uid())
-    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid()));   -- self-service may not re-point person_id or email, nor choose whom it follows
+    and follows is not distinct from (select follows from public.user_profiles p where p.id = auth.uid())
+    and is_app is not distinct from (select is_app from public.user_profiles p where p.id = auth.uid())
+    and (not is_app or display_name is not distinct from (select display_name from public.user_profiles p where p.id = auth.uid())));   -- self-service may not re-point person_id or email, nor choose whom it follows or flip the APP flag; an APP may not rename itself
 drop policy if exists user_profiles_admin on public.user_profiles;
 create policy user_profiles_admin on public.user_profiles for all to authenticated
   using (public.silvis_role() = 'admin') with check (public.silvis_role() = 'admin');
@@ -1671,6 +2037,11 @@ drop policy if exists call_pay_logs_delete on public.call_pay_logs;
 create policy call_pay_logs_delete on public.call_pay_logs for delete to authenticated
   using (public.silvis_is_sched() or (public.silvis_role() = 'surgeon' and person_id = public.silvis_person_id() and public.silvis_pay_enabled(person_id)));
 
+-- app_call_days (Prompt 29, revision v - report-first; applied 2026-10-02 19:19:27Z): every signed-in role reads (surgeon, coordinator, viewer,
+-- APP, follower, scheduler - the calendar's third line); never anon (not in the read_all loop; anon's privileges revoked). No write
+-- policy and no write privilege for authenticated: save_app_days() is the door (an APP for its own days, the scheduler for any APP).
+drop policy if exists app_call_days_read on public.app_call_days;
+create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
 
 -- ============================================================================
 -- Seed rows

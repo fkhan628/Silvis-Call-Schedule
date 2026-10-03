@@ -130,8 +130,8 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const [blobRows, dayRows, timeOffRows, availabilityRows, feedRows, forecastRows, overrideRows] = await Promise.all([
     rest("call_schedule_data?id=eq.main&select=data,updated_at"),
     rest("schedule_days?select=*&order=day.asc"),
-    rest("time_off?select=*&order=start_date.asc"),
-    rest("availability?select=*&order=start_date.asc"),
+    rest("time_off?select=*&order=start_date.asc,id.asc"),
+    rest("availability?select=*&order=start_date.asc,id.asc"),
     rest("east_feed?select=week_monday,data,fetched_at&order=week_monday.asc"),
     rest("east_forecast?select=week_monday,data,generated_at&order=week_monday.asc"),
     rest("east_overrides?select=*"),

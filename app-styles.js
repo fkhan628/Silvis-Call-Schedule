@@ -53,6 +53,11 @@ const THEME = {
     // Offer deadline notice (9/27, My schedule / Calendar): amber text on its own amber tint, the css.warnBox look in
     // light mode and a dark amber box in dark mode (the dark sheet repaints neither) - 5.64:1 light, 10.1:1 dark.
     noticeText: "#7A5A20", noticeBg: "#FBF1D8", noticeBorder: "#E8D090",
+    // APP call days (Prompt 29): the grid's third line "A <name>" and the My APP days "You" cells - a muted rose no surgeon
+    // pill uses, italic on the grid (no pill), so it reads apart from the P / B pills. Light appText 6.23:1 on the card, 5.54
+    // on the weekend tint / raised box, 5.76 on the holiday tint, 5.86 on the page, 5.33 on appTint; dark 7.59 / 8.37 / 6.52 /
+    // 9.08 / 7.55 (test/ui/contrast.mjs measures every pair).
+    appText: "#86506A", appTint: "#F6EAF0",
   },
   dark: {
     bg: "#0B1A33", surface: "#13294B", raised: "#0F2140", text: "#E6ECF5", muted: "#9FB0C8", border: "#24406B",
@@ -65,6 +70,7 @@ const THEME = {
     backupText: "#D4A84A", warnText: "#D4A84A",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
+    appText: "#DDAFC2", appTint: "#3A2232",
   },
 };
 const LIGHT = THEME.light;
@@ -145,12 +151,15 @@ const css = {
 };
 
 // Offer painter brushes (Prompt 14 part 3a): primary = the navy, backup = an amber (the My-schedule backup gradient's
-// family), either = a teal, clear = grey. tint / text carry the drafted pill in both themes (a pill keeps its own
-// background); gradient is the armed chip. Primary / backup stay distinguishable by word as well (P / B / P+B).
+// family), either = a teal, noprimary = a purple (Prompt 28, 10/1: "No primary" - not on primary that day, backup is fine;
+// white on #7A4BB0 about 6.1:1, #5B2E8C on #F1EAFA about 8:1), clear = grey. tint / text carry the drafted pill in both
+// themes (a pill keeps its own background); gradient is the armed chip. Primary / backup stay distinguishable by word as
+// well (P / B / P+B / NP).
 const OFFER_BRUSH = {
   primary: { gradient: "linear-gradient(135deg,#13294B,#1F3A6B)", border: "#13294B", text: "#13294B", tint: "#E8EEF8", label: "Primary", short: "P" },
   backup:  { gradient: "linear-gradient(135deg,#8A6A20,#B08A30)", border: "#8A6A20", text: "#7A5A20", tint: "#FBF1D8", label: "Backup", short: "B" },
   either:  { gradient: "linear-gradient(135deg,#0F766E,#149C90)", border: "#0F766E", text: "#0F766E", tint: "#E3F4F1", label: "Either", short: "P+B" },
+  noprimary: { gradient: "linear-gradient(135deg,#5B2E8C,#7A4BB0)", border: "#5B2E8C", text: "#5B2E8C", tint: "#F1EAFA", label: "No primary", short: "NP" },
   clear:   { gradient: "linear-gradient(135deg,#5B6B82,#7A8A98)", border: "#7A8A98", text: "#5B6B82", tint: "#EEF2F7", label: "Clear", short: "-" },
 };
 
