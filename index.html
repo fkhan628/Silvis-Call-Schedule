@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-hCefoiWtb78PzIWImYbwQ3UVLTGnweiXkuB6iPMPMuQ=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-Mx4tFZelcprFoy487FQ3BsDD7thIPZ6xnH9ucvnKXiU=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-70UtldlDqIO67nq6bZGEi/suZeTT0O1ZJO3ZmJo+FhA=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-C1bMOBez6Wxfwaxd1+WnX0NSMRJZBuorQiigay0YAWs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -71,6 +71,11 @@
     .cal-mobile-note { display: none; }
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
     .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
+       "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
+    .cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }
+    .cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }
+    .cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .week-rows td, .week-rows th { vertical-align: top; }
     /* Generate preview (Prompt 6 Slice E): a previewed day is drawn with a
        dashed violet outline and a light hatch so it can never pass for a
@@ -122,6 +127,8 @@
       .cal-hol, .cal-wk-label, .cal-note { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
+      .cal-app { font-size: 9px; }
+      .cal-app-tag { margin-right: 1px; }
       .cal-legend { font-size: 10px !important; }
       /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
       .editor-kbd-hint { display: none; }
@@ -167,7 +174,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.02b";
+    var APP_VERSION = "2026.10.02c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -574,6 +581,8 @@ function CallSchedule() {
   const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;
   const myFollows = useMemo(() => profileLoadFailed ? [] : followedIdsOf(userProfile, surgeons.map(s => s.id)), [userProfile, surgeons, profileLoadFailed]);
   const isFollowing = myFollows.length > 0;
+  const isApp = isViewer && userProfile.is_app === true;
+  const appDaysAllowed = !isPublicMode && !!authUser && !!userProfile && !profileLoadFailed;
   const versionBeatRef = useRef("");
   useEffect(() => {
     if (!authUser || !authUser.id || !userProfile || versionBeatRef.current === authUser.id) return;
@@ -1340,6 +1349,157 @@ function CallSchedule() {
       return true;
     } finally {
       setPayBusy(false);
+    }
+  };
+  const [appDayRows, setAppDayRows] = useState([]);
+  const [appNameRows, setAppNameRows] = useState([]);
+  const [appDaysState, setAppDaysState] = useState("unread");
+  const [appDaysBusy, setAppDaysBusy] = useState(false);
+  const appGenRef = useRef(0);
+  const appSeqRef = useRef(0);
+  const appReadOwedRef = useRef(0);
+  const appFlightRef = useRef(null);
+  const appDaysAllowedRef = useRef(false);
+  appDaysAllowedRef.current = appDaysAllowed;
+  const loadAppDays = async explicit => {
+    if (!appDaysAllowedRef.current) return "none";
+    appReadOwedRef.current = 0;
+    const gen = appGenRef.current;
+    const out = appFlightRef.current;
+    if (explicit !== true && out && out.gen === gen && Date.now() - out.at < 30000) {
+      if (typeof explicit === "function") out.say = explicit;
+      return out.done;
+    }
+    const seq = ++appSeqRef.current;
+    const flight = {
+      gen,
+      at: Date.now(),
+      say: typeof explicit === "function" ? explicit : null,
+      done: null
+    };
+    appFlightRef.current = flight;
+    flight.done = (async () => {
+      let r;
+      try {
+        r = await appDaysDb.load();
+      } finally {
+        if (appFlightRef.current === flight) appFlightRef.current = null;
+      }
+      if (gen !== appGenRef.current || seq !== appSeqRef.current || !appDaysAllowedRef.current) return "dropped";
+      if (r.state === "ok") {
+        setAppDayRows(r.rows);
+        setAppNameRows(r.names);
+        setAppDaysState("ok");
+        return "ok";
+      }
+      if (r.state === "unavailable") {
+        setAppDayRows([]);
+        setAppNameRows([]);
+        setAppDaysState("unavailable");
+        return "unavailable";
+      }
+      if (r.state === "failed") {
+        console.warn("APP days read failed", r.error || "");
+        setAppDaysState("failed");
+        if (typeof flight.say === "function") flight.say(APP_DAYS_LOAD_FAIL_TEXT);else if (explicit === true) showToast("Couldn't load the APP days - the last loaded days are kept.", "error");
+        return "failed";
+      }
+      if (r.state === "skipped") setAppDaysState(s => s === "unread" ? "skipped" : s);
+      return r.state === "skipped" ? "skipped" : "dropped";
+    })();
+    return flight.done;
+  };
+  const loadAppDaysRef = useRef(null);
+  loadAppDaysRef.current = loadAppDays;
+  useEffect(() => {
+    appGenRef.current++;
+    setAppDayRows([]);
+    setAppNameRows([]);
+    setAppDaysState("unread");
+    if (!appDaysAllowed) {
+      appReadOwedRef.current = 0;
+      return;
+    }
+    const gen = appGenRef.current;
+    appReadOwedRef.current = gen;
+    const t = setTimeout(() => {
+      if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [appDaysAllowed, authUser && authUser.id]);
+  const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);
+  const appNameOf = profileId => {
+    const n = appNameRows.find(x => x && x.profile_id === profileId);
+    return n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP";
+  };
+  const saveMyAppDays = async (add, clear) => {
+    if (!isApp || !authUser) return {
+      ok: false,
+      words: "Only an APP account adds or removes its own APP days."
+    };
+    const a = Array.isArray(add) ? add : [],
+      c = Array.isArray(clear) ? clear : [];
+    if (a.length + c.length > APP_DAYS_MAX_SAVE) return {
+      ok: false,
+      words: "at most " + APP_DAYS_MAX_SAVE + " days in one save - nothing was saved"
+    };
+    if (!a.length && !c.length) return {
+      ok: true,
+      note: appSavedNote(a, c)
+    };
+    setAppDaysBusy(true);
+    try {
+      const r = await appDaysDb.save(authUser.id, a, c, false);
+      if (r.ok) {
+        await loadAppDays(true);
+        return {
+          ok: true,
+          note: appSavedNote(a, c)
+        };
+      }
+      console.warn("APP days save refused", r.status, r.error);
+      const code = appDaysErrorCode(r.error);
+      let reload = null;
+      if (code === "AP002" || code === "AP005" || code === "AP006" || code === "AP007" || appDaysSaveUnsure(r.error, r.status)) reload = await loadAppDays(true);
+      return {
+        ok: false,
+        words: appDaysErrorWords(r.error, r.status, {
+          sessionExpired: !!auth.sessionExpired,
+          reloaded: reload === "ok"
+        })
+      };
+    } finally {
+      setAppDaysBusy(false);
+    }
+  };
+  const saveAppDayFromEditor = async (day, mode, profileId, holderId) => {
+    if (!isScheduler || isPublicMode) return {
+      ok: false,
+      words: "Only the scheduler sets the APP of a day."
+    };
+    setAppDaysBusy(true);
+    try {
+      const r = mode === "clear" ? await appDaysDb.save(holderId, [], [day], false) : await appDaysDb.save(profileId, [day], [], mode === "change");
+      const reload = await loadAppDays(true);
+      if (!r.ok) {
+        console.warn("APP day save refused", r.status, r.error);
+        return {
+          ok: false,
+          words: appDaysErrorWords(r.error, r.status, {
+            sessionExpired: !!auth.sessionExpired,
+            where: "editor",
+            reloaded: reload === "ok"
+          })
+        };
+      }
+      const words = mode === "clear" ? "APP cleared for " + fmtMD(day) : "APP for " + fmtMD(day) + ": " + appNameOf(profileId);
+      showToast(words, "success");
+      return {
+        ok: true,
+        words
+      };
+    } finally {
+      setAppDaysBusy(false);
     }
   };
   const loadAudit = async () => {
@@ -2482,7 +2642,7 @@ function CallSchedule() {
           console.warn("client_versions min-version check failed:", e);
         }
       };
-      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews"))]);
+      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")), loadAppDaysRef.current(sayLoadFail("appDays"))]);
       const loadFailToast = combinedLoadToast(loadFails, {
         retry: !daysReadOkRef.current,
         isScheduler: isSchedulerRef.current
@@ -2575,7 +2735,7 @@ function CallSchedule() {
       lastFullPollAt = Date.now();
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
-      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true)]);
+      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true), loadAppDaysRef.current(false)]);
       if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
     };
     refreshDaysRef.current = refreshDays;
@@ -3590,6 +3750,11 @@ function CallSchedule() {
       showToast("Refused: a coordinator (office account) is never linked to a roster id - set the roster link to none first.", "error");
       return false;
     }
+    const nextIsApp = patch.is_app !== undefined ? patch.is_app === true : p.is_app === true;
+    if (nextIsApp && nextPerson) {
+      showToast("Refused: an APP account is never linked to a roster id - set the roster link to none first.", "error");
+      return false;
+    }
     const fp = followsPatch(p, patch, rosterPool.map(s => s.id));
     if (!fp.ok) {
       showToast("Refused: " + fp.error + ".", "error");
@@ -3620,12 +3785,13 @@ function CallSchedule() {
       const updated = rows[0];
       setAllProfiles(prev => prev.map(x => x.id === p.id ? _objectSpread(_objectSpread({}, x), updated) : x));
       if (authUser && p.id === authUser.id) setUserProfile(prev => _objectSpread(_objectSpread({}, prev || {}), updated));
-      const what = Object.keys(patch).map(k => k === "follows" ? followsAuditText(patch[k]) : k + " -> " + (k === "person_id" ? patch[k] ? nameOf(patch[k]) : "none" : String(patch[k]))).join(", ");
+      const what = Object.keys(patch).map(k => k === "follows" ? followsAuditText(patch[k]) : k === "is_app" ? patch[k] === true ? "APP on" : "APP off" : k + " -> " + (k === "person_id" ? patch[k] ? nameOf(patch[k]) : "none" : String(patch[k]))).join(", ");
       logAudit("users.link", `Account ${p.display_name || p.id.slice(0, 8)}: ${what}`, {
         user_id: p.id,
         patch
       });
       showToast("Account updated.", "success");
+      if (patch.is_app !== undefined) loadAppDays(true);
       return true;
     } catch (e) {
       console.warn("user_profiles PATCH error", e);
@@ -9797,10 +9963,10 @@ function CallSchedule() {
   }, errorLog.length === 1 ? "1 error" : errorLog.length + " errors"))))), !isPublicMode && React.createElement("div", {
     style: css.nav
   }, (() => {
-    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", isFollowing ? "Following" : "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
+    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", isApp ? "Mine" : isFollowing ? "Following" : "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
     let tabs = allTabs;
     if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
-    if (!mySurgeon && !isFollowing) tabs = tabs.filter(([k]) => k !== "myschedule");
+    if (!mySurgeon && !isFollowing && !isApp) tabs = tabs.filter(([k]) => k !== "myschedule");
     const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
     return tabs.map(([k, l]) => React.createElement("button", {
       key: k,
@@ -11148,6 +11314,8 @@ function CallSchedule() {
       const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
       if (hol) titleBits.push(hol.name + " (holiday unit)");
       if (a && a.note) titleBits.push("note: " + a.note);
+      const appE = !isPublicMode ? appByDay[d] || null : null;
+      if (appE) titleBits.push("APP " + appE.name);
       if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
       const nBadges = awaitingConfirmation(a) ? 1 : 0;
       return React.createElement("div", {
@@ -11221,7 +11389,20 @@ function CallSchedule() {
         day: d,
         holder: bH,
         locked: !!(a && a.backupLocked)
-      }), ((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && React.createElement("div", {
+      }), appE && React.createElement("div", {
+        className: "cal-line cal-app",
+        "data-testid": "cal-app",
+        "data-app-profile": appE.profileId,
+        "data-app-day": d,
+        title: "APP: " + appE.name,
+        style: {
+          color: T.appText
+        }
+      }, React.createElement("span", {
+        className: "cal-app-tag"
+      }, "A"), React.createElement("span", {
+        className: "cal-app-name"
+      }, appE.short)), ((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && React.createElement("div", {
         className: "cal-dots",
         title: [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")
       }, (vacByDay[d] || []).map(pid => React.createElement("span", {
@@ -11310,7 +11491,27 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), !isPublicMode && appDaysState === "failed" && React.createElement("span", {
+      "data-testid": "legend-app-failed",
+      style: {
+        color: T.open,
+        fontWeight: 700
+      }
+    }, "APP days couldn't be loaded - the A lines may be missing"), !isPublicMode && appDaysState === "skipped" && React.createElement("span", {
+      "data-testid": "legend-app-unread",
+      style: {
+        color: T.open,
+        fontWeight: 700
+      }
+    }, "APP days not loaded yet - the A lines may be missing"), !isPublicMode && gridDays.some(gd => appByDay[gd]) && React.createElement("span", {
+      "data-testid": "legend-app"
+    }, React.createElement("span", {
+      style: {
+        color: T.appText,
+        fontStyle: "italic",
+        fontWeight: 700
+      }
+    }, "A"), " name = the APP on call that day (third line)"), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
@@ -11655,6 +11856,11 @@ function CallSchedule() {
     mySurgeon: mySurgeon,
     vacationNames: vacNamesOn(editorDay),
     focusExternal: editorFocus === "external",
+    appEntry: !isPublicMode ? appByDay[editorDay] || null : null,
+    appChoices: appPickList(appNameRows),
+    appState: appDaysState,
+    myProfileId: authUser && authUser.id,
+    onSetApp: saveAppDayFromEditor,
     onGive: proposeGiveForDay,
     onOpenShifts: openShiftsBoard,
     openOnBoard: (d, r) => boardKeys.has(openSlotKey(d, r)),
@@ -12203,7 +12409,7 @@ function CallSchedule() {
   })(), view === "myschedule" && !isPublicMode && (() => {
     const pid = isScheduler && minePerson && sMap[minePerson] ? minePerson : mySurgeon;
     const following = !pid ? myFollows : [];
-    if (!pid && !following.length) return React.createElement("div", {
+    if (!pid && !following.length && !isApp) return React.createElement("div", {
       style: css.card
     }, React.createElement("div", {
       style: css.cardT
@@ -12471,7 +12677,7 @@ function CallSchedule() {
         })
       }, "Give away"))))));
     };
-    if (following.length) return React.createElement(React.Fragment, null, following.map(fid => React.createElement("div", {
+    const followingCards = () => following.map(fid => React.createElement("div", {
       key: fid,
       style: css.card,
       "data-testid": "following-card",
@@ -12492,7 +12698,20 @@ function CallSchedule() {
       id: fid
     }), React.createElement("span", {
       style: muted
-    }, nameOf(fid), "'s schedule - read-only")), daysBlock(fid, false))));
+    }, nameOf(fid), "'s schedule - read-only")), daysBlock(fid, false)));
+    if (!pid && isApp) return React.createElement(React.Fragment, null, React.createElement(AppDaysCard, {
+      css: css,
+      dk: dk,
+      profileId: authUser ? authUser.id : "",
+      byDay: appByDay,
+      state: appDaysState,
+      today: todayStr,
+      weekStartsOn: weekStartsOn,
+      busy: appDaysBusy,
+      onSave: saveMyAppDays,
+      onRetry: () => loadAppDays(true)
+    }), followingCards());
+    if (following.length) return React.createElement(React.Fragment, null, followingCards());
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: css.card,
       "data-testid": "mine-card"
@@ -13511,11 +13730,12 @@ function CallSchedule() {
     style: {
       color: T.title
     }
-  }, mySurgeon ? nameOf(mySurgeon) : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || (isViewer ? "a read-only account" : "unlinked account")), React.createElement("span", {
+  }, mySurgeon ? nameOf(mySurgeon) : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || (isApp ? "an APP account" : isViewer ? "a read-only account" : "unlinked account")), React.createElement("span", {
+    "data-testid": "account-role",
     style: _objectSpread(_objectSpread({}, muted), {}, {
       marginLeft: 6
     })
-  }, "(", (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) || "viewer", ")")), React.createElement("p", {
+  }, "(", isApp ? "APP" : (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) || "viewer", ")")), React.createElement("p", {
     style: {
       fontSize: 11,
       color: T.muted,
@@ -16667,6 +16887,520 @@ function offersLoadVerdict(st) {
     verdict: "ok"
   };
 }
+function AppDaysCard({
+  css,
+  dk,
+  profileId,
+  byDay,
+  state,
+  today,
+  weekStartsOn,
+  busy,
+  onSave,
+  onRetry
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const todayC = todayOrCentral(today);
+  const curY = Number(todayC.slice(0, 4)),
+    curM = Number(todayC.slice(5, 7)) - 1;
+  const [ym, setYm] = React.useState({
+    y: curY,
+    m: curM
+  });
+  const [draft, setDraft] = React.useState({});
+  const [hint, setHint] = React.useState("");
+  const [saved, setSaved] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [rangeOn, setRangeOn] = React.useState(false);
+  const [rangeStart, setRangeStart] = React.useState(null);
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+  const [pasteText, setPasteText] = React.useState("");
+  const [pasteYear, setPasteYear] = React.useState(null);
+  const [saving, setSaving] = React.useState(false);
+  const held = byDay || {};
+  const ctx = {
+    byDay: held,
+    me: profileId,
+    today: todayC
+  };
+  React.useEffect(() => {
+    setDraft(d => appDaysDraftPrune(d, held, profileId, todayC));
+  }, [byDay, profileId, todayC]);
+  const ok = state === "ok";
+  const locked = !ok || !!busy || saving;
+  const atStart = ym.y < curY || ym.y === curY && ym.m <= curM;
+  const move = n => {
+    setYm(p => {
+      const d = new Date(p.y, p.m + n, 1);
+      return {
+        y: d.getFullYear(),
+        m: d.getMonth()
+      };
+    });
+  };
+  const monthPrefix = ym.y + "-" + String(ym.m + 1).padStart(2, "0") + "-";
+  const days = monthGridDays(ym.y, ym.m, weekStartsOn);
+  const diff = appDaysDraftDiff(draft, held, profileId, todayC);
+  const listOf = (items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
+  const applyPlan = (list, label, bad) => {
+    const plan = appDaysPlan(list, ctx);
+    if (plan.go.length) setDraft(dr => {
+      const n = _objectSpread({}, dr);
+      plan.go.forEach(x => {
+        n[x] = true;
+      });
+      return n;
+    });
+    const bits = [plan.go.length ? label + ": " + plan.go.length + " day" + (plan.go.length === 1 ? "" : "s") + " added to your changes" : label + ": nothing to add"];
+    if (plan.skipped.length) bits.push("skipped " + listOf(plan.skipped.map(s => s.why), 6));
+    if (bad && bad.length) bits.push("not a date: " + listOf(bad, 6));
+    setHint(bits.join(" - "));
+  };
+  const tap = d => {
+    if (locked) return;
+    setSaved("");
+    setError("");
+    if (rangeOn) {
+      if (!rangeStart) {
+        setRangeStart(d);
+        setHint("Range from " + fmtMD(d) + " - now tap the last day.");
+        return;
+      }
+      const a = rangeStart < d ? rangeStart : d,
+        b = rangeStart < d ? d : rangeStart;
+      setRangeStart(null);
+      if (suDaysBetween(a, b) > 366) {
+        setHint("A range is at most a year - tap a nearer last day.");
+        return;
+      }
+      const list = [];
+      for (let x = a; x <= b; x = suAddDays(x, 1)) list.push(x);
+      applyPlan(list, "Range " + fmtMD(a) + "-" + fmtMD(b));
+      return;
+    }
+    const st = appDaysCellState(d, _objectSpread(_objectSpread({}, ctx), {}, {
+      draft
+    }));
+    if (st === "taken") {
+      setHint(fmtMD(d) + " already has " + held[d].name);
+      return;
+    }
+    if (st === "past" || st === "past-mine") {
+      setHint(fmtMD(d) + " is past - a past day stays as it was (ask the scheduler).");
+      return;
+    }
+    setDraft(dr => appDaysToggle(dr, d, ctx));
+    setHint("");
+  };
+  const pasteAdd = () => {
+    if (locked) return;
+    setSaved("");
+    setError("");
+    const y = Number(pasteYear !== null ? pasteYear : ym.y);
+    const r = suParseDateList(pasteText, y >= 2000 && y <= 2100 ? y : ym.y);
+    applyPlan(r.dates, "Paste", r.bad);
+    if (r.dates.length && !r.bad.length) setPasteText("");
+  };
+  const save = async () => {
+    if (locked || !diff.count || typeof onSave !== "function") return;
+    setSaving(true);
+    setSaved("");
+    setError("");
+    setHint("");
+    try {
+      const r = await onSave(diff.add, diff.clear);
+      if (r && r.ok) {
+        setDraft({});
+        setSaved(r.note || "Saved");
+      } else setError(r && r.words || "Couldn't save the APP days - nothing was saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const upcoming = Object.keys(held).filter(d => d >= todayC && held[d].profileId === profileId).sort().slice(0, 10);
+  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP days - the calendar below may be out of date." : state === "skipped" ? "Sign in again to load the APP days." : "";
+  const small = {
+    fontSize: 12,
+    color: T.muted,
+    lineHeight: 1.5
+  };
+  const cellLook = st => {
+    if (st === "mine") return {
+      bg: T.appTint,
+      border: "1px solid " + T.appText,
+      fg: T.text,
+      line: "You",
+      lineFg: T.appText,
+      strike: false
+    };
+    if (st === "add") return {
+      bg: T.surface,
+      border: "2px dashed " + T.appText,
+      fg: T.text,
+      line: "+ You",
+      lineFg: T.appText,
+      strike: false
+    };
+    if (st === "remove") return {
+      bg: T.surface,
+      border: "2px dashed " + T.muted,
+      fg: T.text,
+      line: "You",
+      lineFg: T.muted,
+      strike: true
+    };
+    if (st === "taken") return {
+      bg: T.raised,
+      border: "1px solid " + T.border,
+      fg: T.muted,
+      line: null,
+      lineFg: T.muted,
+      strike: false
+    };
+    if (st === "past-mine") return {
+      bg: T.raised,
+      border: "1px solid " + T.border,
+      fg: T.muted,
+      line: "You",
+      lineFg: T.muted,
+      strike: false
+    };
+    if (st === "past") return {
+      bg: T.raised,
+      border: "1px solid " + T.border,
+      fg: T.muted,
+      line: "",
+      lineFg: T.muted,
+      strike: false
+    };
+    return {
+      bg: T.surface,
+      border: "1px solid " + T.border,
+      fg: T.text,
+      line: "",
+      lineFg: T.muted,
+      strike: false
+    };
+  };
+  return React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.card), {}, {
+      background: T.surface,
+      borderColor: T.border
+    }),
+    "data-testid": "appdays-card",
+    "data-state": state
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+      color: T.title
+    })
+  }, "My APP days"), React.createElement("p", {
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      margin: "0 0 10px"
+    })
+  }, "Tap a day to put yourself on call as the APP; tap it again to take it off. One APP per day - a day with a name on it is taken. Save sends all your changes at once. Past days stay as they are (ask the scheduler)."), state !== "ok" && React.createElement("div", {
+    "data-testid": "appdays-state",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      color: state === "failed" ? T.open : T.muted,
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 10
+    })
+  }, React.createElement("span", null, stateLine), state === "failed" && typeof onRetry === "function" && React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-retry",
+    onClick: onRetry,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "6px 12px",
+      minHeight: 36
+    })
+  }, "Try again")), React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 6
+    }
+  }, React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-prev",
+    "aria-label": "Previous month",
+    disabled: atStart,
+    onClick: () => move(-1),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 40,
+      minHeight: 36,
+      padding: "4px 10px",
+      background: atStart ? T.surface : T.raised,
+      borderColor: atStart ? T.border : T.inputBorder,
+      color: T.muted,
+      cursor: atStart ? "default" : "pointer"
+    })
+  }, "‹"), React.createElement("span", {
+    "data-testid": "appdays-month",
+    style: {
+      flex: 1,
+      textAlign: "center",
+      fontSize: 14,
+      fontWeight: 700,
+      color: T.text
+    }
+  }, MO[ym.m], " ", ym.y), React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-next",
+    "aria-label": "Next month",
+    onClick: () => move(1),
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minWidth: 40,
+      minHeight: 36,
+      padding: "4px 10px"
+    })
+  }, "›")), React.createElement("div", {
+    className: "appdays-grid",
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+      gap: 3
+    }
+  }, weekdayLabels(weekStartsOn).map(h => React.createElement("div", {
+    key: h,
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      textAlign: "center",
+      color: T.muted,
+      padding: "2px 0",
+      textTransform: "uppercase"
+    }
+  }, h)), days.map(d => {
+    if (d.indexOf(monthPrefix) !== 0) return React.createElement("div", {
+      key: d,
+      "aria-hidden": "true"
+    });
+    const st = appDaysCellState(d, _objectSpread(_objectSpread({}, ctx), {}, {
+      draft
+    }));
+    const lk = cellLook(st);
+    const holder = held[d] && held[d].profileId !== profileId ? held[d] : null;
+    const off = st === "taken" || st === "past" || st === "past-mine";
+    const isToday = d === todayC;
+    return React.createElement("button", {
+      key: d,
+      type: "button",
+      "data-testid": "appdays-cell",
+      "data-day": d,
+      "data-state": st,
+      "data-holder": holder ? holder.short : undefined,
+      "aria-disabled": off ? "true" : undefined,
+      "aria-pressed": st === "mine" || st === "add" ? "true" : "false",
+      title: holder ? fmtMD(d) + ": " + holder.name : st === "past" || st === "past-mine" ? fmtMD(d) + " is past" : fmtMD(d),
+      onClick: () => tap(d),
+      style: {
+        minHeight: 44,
+        minWidth: 0,
+        padding: "3px 1px",
+        borderRadius: 6,
+        background: lk.bg,
+        border: isToday ? "2px solid " + T.accent : lk.border,
+        cursor: locked || off ? "default" : "pointer",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 1,
+        fontFamily: font,
+        overflow: "hidden"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: isToday ? 800 : 600,
+        color: lk.fg,
+        fontFamily: mono
+      }
+    }, Number(d.slice(8, 10))), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: lk.lineFg,
+        maxWidth: "100%",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        textDecoration: lk.strike ? "line-through" : "none"
+      }
+    }, holder ? holder.short : lk.line ? lk.line : React.createElement(React.Fragment, null, "\xA0")));
+  })), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginTop: 10
+    }
+  }, React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-range",
+    "aria-pressed": rangeOn ? "true" : "false",
+    disabled: !ok,
+    onClick: () => {
+      setRangeOn(v => !v);
+      setRangeStart(null);
+      setHint(rangeOn ? "" : "Range: tap the first day, then the last - every free day between joins your changes.");
+    },
+    style: _objectSpread(_objectSpread({}, css.mini(rangeOn)), {}, {
+      minHeight: 36,
+      padding: "6px 12px"
+    })
+  }, "Range"), React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-paste-toggle",
+    "aria-pressed": pasteOpen ? "true" : "false",
+    disabled: !ok,
+    onClick: () => setPasteOpen(v => !v),
+    style: _objectSpread(_objectSpread({}, css.mini(pasteOpen)), {}, {
+      minHeight: 36,
+      padding: "6px 12px"
+    })
+  }, "Paste dates"), rangeOn && rangeStart && React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-range-cancel",
+    onClick: () => {
+      setRangeStart(null);
+      setHint("");
+    },
+    style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+      minHeight: 36,
+      padding: "6px 12px"
+    })
+  }, "x cancel start")), pasteOpen && React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "flex-end",
+      marginTop: 8
+    }
+  }, React.createElement("textarea", {
+    "data-testid": "appdays-paste",
+    value: pasteText,
+    onChange: e => setPasteText(e.target.value),
+    rows: 2,
+    placeholder: "12/2, 12/9, 12/14-12/16",
+    style: {
+      flex: "1 1 200px",
+      minWidth: 0,
+      fontFamily: font,
+      fontSize: 14,
+      padding: "6px 8px",
+      borderRadius: 6,
+      background: T.inputBg,
+      color: T.text,
+      border: "1px solid " + T.inputBorder
+    }
+  }), React.createElement("label", {
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      display: "flex",
+      flexDirection: "column",
+      gap: 2
+    })
+  }, "Year", React.createElement("input", {
+    type: "number",
+    "data-testid": "appdays-paste-year",
+    value: pasteYear !== null ? pasteYear : String(ym.y),
+    onChange: e => setPasteYear(e.target.value),
+    style: {
+      width: 76,
+      padding: "4px 6px",
+      borderRadius: 6,
+      background: T.inputBg,
+      color: T.text,
+      border: "1px solid " + T.inputBorder
+    }
+  })), React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-paste-add",
+    disabled: locked || !pasteText.trim(),
+    onClick: pasteAdd,
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minHeight: 36,
+      padding: "6px 12px"
+    })
+  }, "Add these days")), hint && React.createElement("div", {
+    role: "status",
+    "data-testid": "appdays-hint",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      color: T.text,
+      marginTop: 8
+    })
+  }, hint), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginTop: 10,
+      paddingTop: 10,
+      borderTop: "1px solid " + T.border
+    }
+  }, React.createElement("span", {
+    "data-testid": "appdays-count",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      color: T.text,
+      fontWeight: 600
+    })
+  }, diff.count === 0 ? "No changes" : diff.count === 1 ? "1 change" : diff.count + " changes"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-discard",
+    disabled: !Object.keys(draft).length || saving,
+    onClick: () => {
+      setDraft({});
+      setHint("");
+      setError("");
+      setSaved("");
+      setRangeStart(null);
+    },
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      minHeight: 36,
+      padding: "6px 12px"
+    })
+  }, "Discard"), React.createElement("button", {
+    type: "button",
+    "data-testid": "appdays-save",
+    disabled: locked || !diff.count,
+    onClick: save,
+    style: _objectSpread(_objectSpread({}, css.btn(!(locked || !diff.count))), {}, {
+      minHeight: 36,
+      padding: "6px 16px"
+    })
+  }, saving ? "Saving" : "Save")), saved && React.createElement("div", {
+    role: "status",
+    "data-testid": "appdays-saved",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      color: T.success,
+      fontWeight: 600,
+      marginTop: 8
+    })
+  }, saved), error && React.createElement("div", {
+    role: "alert",
+    "data-testid": "appdays-error",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      color: T.open,
+      fontWeight: 700,
+      marginTop: 8
+    })
+  }, error), React.createElement("div", {
+    "data-testid": "appdays-upcoming",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      marginTop: 10
+    })
+  }, upcoming.length ? "Your next APP days: " + upcoming.map(fmtMD).join(", ") : "No APP days on file from today on."));
+}
 function DayEditor(props) {
   const {
     day,
@@ -16695,6 +17429,13 @@ function DayEditor(props) {
     onOpenShifts,
     openOnBoard
   } = props;
+  const {
+    appEntry,
+    appChoices,
+    appState,
+    myProfileId,
+    onSetApp
+  } = props;
   const T = THEME[dk ? "dark" : "light"];
   const externalRef = React.useRef(null);
   React.useEffect(() => {
@@ -16714,6 +17455,14 @@ function DayEditor(props) {
   const [pending, setPending] = React.useState(null);
   const [hint, setHint] = React.useState("");
   const [info, setInfo] = React.useState("");
+  const appHolderId = appEntry ? appEntry.profileId : "";
+  const [appPick, setAppPick] = React.useState(appHolderId);
+  const [appBusy, setAppBusy] = React.useState(false);
+  const [appStatus, setAppStatus] = React.useState("");
+  const [appError, setAppError] = React.useState("");
+  React.useEffect(() => {
+    setAppPick(appHolderId);
+  }, [appHolderId]);
   const extInfo = name => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = a => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
@@ -17261,6 +18010,230 @@ function DayEditor(props) {
       }, x.name, " - ", x.w.words))));
     })());
   };
+  const appSummaryLine = () => !canEdit && appEntry && !isPublicMode ? React.createElement("div", {
+    "data-testid": "editor-app-line",
+    "data-app-profile": appEntry.profileId,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      padding: "8px 0",
+      borderBottom: "1px solid " + border
+    }
+  }, React.createElement("span", {
+    style: _objectSpread(_objectSpread({}, label), {}, {
+      marginBottom: 0,
+      minWidth: 60
+    })
+  }, "APP"), React.createElement("span", {
+    "data-testid": "editor-app-name",
+    style: {
+      color: T.appText,
+      fontStyle: "italic",
+      fontWeight: 700,
+      fontSize: 12.5
+    }
+  }, appEntry.name), myProfileId && appEntry.profileId === myProfileId && React.createElement("span", {
+    "data-testid": "editor-app-you",
+    style: {
+      background: T.surface,
+      color: T.accentText,
+      border: "1px solid " + T.accent,
+      borderRadius: 10,
+      padding: "0 8px",
+      fontSize: 11,
+      fontWeight: 700
+    }
+  }, "You")) : !canEdit && !isPublicMode && (appState === "failed" || appState === "skipped") ? React.createElement("div", {
+    "data-testid": "editor-app-summary-failed",
+    "data-state": appState,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+      padding: "8px 0",
+      borderBottom: "1px solid " + border
+    }
+  }, React.createElement("span", {
+    style: _objectSpread(_objectSpread({}, label), {}, {
+      marginBottom: 0,
+      minWidth: 60
+    })
+  }, "APP"), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: sub
+    }
+  }, appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded")) : null;
+  const appEditorBlock = () => {
+    if (!canEdit || isPublicMode) return null;
+    const choices = Array.isArray(appChoices) ? appChoices : [];
+    if (appState === "unavailable" || appState === "failed" || appState === "skipped") return React.createElement("div", {
+      "data-testid": "editor-app-block",
+      style: {
+        border: "1px solid " + border,
+        borderRadius: 8,
+        padding: "8px 12px",
+        marginBottom: 10
+      }
+    }, React.createElement("div", {
+      "data-testid": "editor-app-unavailable",
+      style: {
+        fontSize: 12,
+        color: sub
+      }
+    }, React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, label), {}, {
+        display: "inline",
+        marginRight: 8
+      })
+    }, "APP"), appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"), appStatus && React.createElement("div", {
+      role: "status",
+      "data-testid": "editor-app-status",
+      style: {
+        fontSize: 12,
+        color: sub,
+        fontWeight: 600,
+        marginTop: 5
+      }
+    }, appStatus), appError && React.createElement("div", {
+      role: "alert",
+      "data-testid": "editor-app-error",
+      style: {
+        fontSize: 12,
+        color: T.open,
+        fontWeight: 700,
+        marginTop: 5
+      }
+    }, appError));
+    if (appState !== "ok" || !choices.length && !appEntry) return null;
+    const opts = appEntry && !choices.some(c => c.profileId === appEntry.profileId) ? choices.concat([{
+      profileId: appEntry.profileId,
+      name: appEntry.name + (appEntry.isApp ? "" : " (no longer an APP)")
+    }]) : choices;
+    const canSet = !appBusy && !!appPick && appPick !== appHolderId && typeof onSetApp === "function";
+    const run = async (mode, profileId, holderId) => {
+      if (appBusy || typeof onSetApp !== "function") return;
+      setAppBusy(true);
+      setAppStatus("");
+      setAppError("");
+      try {
+        const r = await onSetApp(day, mode, profileId, holderId);
+        if (r && r.ok) setAppStatus(r.words || "Saved.");else setAppError(r && r.words || "Couldn't save the APP of this day.");
+      } finally {
+        setAppBusy(false);
+      }
+    };
+    return React.createElement("div", {
+      "data-testid": "editor-app-block",
+      style: {
+        border: "1px solid " + border,
+        borderRadius: 8,
+        padding: "10px 12px",
+        marginBottom: 10,
+        background: dk ? "#1a2540" : "#fafbfc"
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: _objectSpread(_objectSpread({}, label), {}, {
+        marginBottom: 0,
+        minWidth: 60
+      })
+    }, "APP"), React.createElement("span", {
+      "data-testid": "editor-app-holder",
+      "data-app-profile": appHolderId || undefined,
+      style: appEntry ? {
+        color: T.appText,
+        fontStyle: "italic",
+        fontWeight: 700,
+        fontSize: 12.5
+      } : {
+        color: sub,
+        fontSize: 12
+      }
+    }, appEntry ? appEntry.name + (appEntry.isApp ? "" : " (no longer an APP)") : "none")), React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, React.createElement("select", {
+      "data-testid": "editor-app",
+      "aria-label": "APP",
+      value: appPick,
+      disabled: appBusy,
+      onChange: e => {
+        setAppPick(e.target.value);
+        setAppStatus("");
+        setAppError("");
+      },
+      style: _objectSpread(_objectSpread({}, inp), {}, {
+        minWidth: 200,
+        fontSize: 13
+      })
+    }, React.createElement("option", {
+      value: ""
+    }, "none"), opts.map(o => React.createElement("option", {
+      key: o.profileId,
+      value: o.profileId
+    }, o.name))), React.createElement("button", {
+      type: "button",
+      "data-testid": "editor-app-set",
+      disabled: !canSet,
+      onClick: () => run(appEntry ? "change" : "set", appPick, appHolderId),
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "7px 12px",
+        fontSize: 12,
+        minHeight: 36,
+        opacity: canSet ? 1 : 0.5
+      })
+    }, "Set APP"), React.createElement("button", {
+      type: "button",
+      "data-testid": "editor-app-clear",
+      disabled: !appEntry || appBusy,
+      onClick: () => run("clear", "", appHolderId),
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "7px 12px",
+        fontSize: 12,
+        minHeight: 36,
+        opacity: appEntry && !appBusy ? 1 : 0.5
+      })
+    }, "Clear APP")), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: sub,
+        marginTop: 5
+      }
+    }, "Saved at once - separate from Save below."), appStatus && React.createElement("div", {
+      role: "status",
+      "data-testid": "editor-app-status",
+      style: {
+        fontSize: 12,
+        color: sub,
+        fontWeight: 600,
+        marginTop: 5
+      }
+    }, appStatus), appError && React.createElement("div", {
+      role: "alert",
+      "data-testid": "editor-app-error",
+      style: {
+        fontSize: 12,
+        color: T.open,
+        fontWeight: 700,
+        marginTop: 5
+      }
+    }, appError));
+  };
   return React.createElement("div", {
     "data-testid": "day-editor",
     onClick: requestClose,
@@ -17377,7 +18350,7 @@ function DayEditor(props) {
     }
   }, "Eligibility unavailable: ", ctxError), canEdit && !rulesImported && React.createElement("div", null, "Rules not imported yet - eligibility reflects locks, vacations and availability rows only."), canEdit && entry && entry.source && React.createElement("div", {
     "data-testid": "editor-source"
-  }, "Source: ", entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source)), roleBlock("primary"), roleBlock("backup"), pending && React.createElement("div", {
+  }, "Source: ", entry.source === "east-derived" && !eastDetailsVisible ? "generated" : entry.source)), roleBlock("primary"), roleBlock("backup"), appSummaryLine(), appEditorBlock(), pending && React.createElement("div", {
     "data-testid": "override-confirm",
     role: "alertdialog",
     style: {
@@ -19582,6 +20555,7 @@ function UsersCard({
   };
   const [busy, setBusy] = React.useState({});
   const followsState = followsColumnState(profiles);
+  const appState = appColumnState(profiles);
   const active = (roster || []).filter(s => s.active !== false);
   const order = (roster || []).map(s => s.id);
   const chipIds = p => active.map(s => s.id).concat(followsOf(p).filter(id => !active.some(s => s.id === id)));
@@ -19642,7 +20616,8 @@ function UsersCard({
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Address (display only)"), React.createElement("th", null, "Display name"), React.createElement("th", null, "Role"), React.createElement("th", null, "Roster link"), React.createElement("th", null, "Follows"), React.createElement("th", null, "Since"))), React.createElement("tbody", null, profiles.map(p => React.createElement("tr", {
     key: p.id,
     "data-user": p.id,
-    "data-role": p.role
+    "data-role": p.role,
+    "data-app": p.is_app === true ? "1" : undefined
   }, React.createElement("td", {
     style: {
       fontFamily: mono,
@@ -19676,16 +20651,18 @@ function UsersCard({
     })
   })), React.createElement("td", null, React.createElement("select", {
     "data-testid": "user-role-" + p.id,
-    value: p.role || "viewer",
-    onChange: e => onSave(p, {
-      role: e.target.value
-    }),
+    value: userRoleValue(p),
+    onChange: e => {
+      const patch = userRolePatch(p, e.target.value);
+      if (patch) onSave(p, patch);
+    },
     style: _objectSpread(_objectSpread({}, inp), {}, {
       width: 110
     })
-  }, ["viewer", "surgeon", "coordinator", "scheduler", "admin"].map(r => React.createElement("option", {
+  }, ["viewer", "app", "surgeon", "coordinator", "scheduler", "admin"].filter(r => r !== "app" || appState === "present" || p.is_app === true).map(r => React.createElement("option", {
     key: r,
-    value: r
+    value: r,
+    title: r === "app" ? "APP: a viewer account that puts itself on call days" : undefined
   }, r)))), React.createElement("td", null, React.createElement("select", {
     "data-testid": "user-link-" + p.id,
     value: p.person_id || "",
@@ -19697,7 +20674,7 @@ function UsersCard({
     })
   }, React.createElement("option", {
     value: ""
-  }, "none (viewer / coordinator)"), (roster || []).map(s => React.createElement("option", {
+  }, "none (viewer / APP / coordinator)"), (roster || []).map(s => React.createElement("option", {
     key: s.id,
     value: s.id
   }, s.id, " ", s.name)))), React.createElement("td", null, FOLLOWER_ROLES.includes(p.role || "viewer") ? React.createElement("div", {
