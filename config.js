@@ -534,12 +534,17 @@ const payDb = {
 //   { state: "failed", error }     anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
 //   { state: "skipped" }           no fresh token - nothing was read
 // It stops at the first non-2xx: no further page and no names call after a failed table read. The rows are paged by
-// APP_DAYS_PAGE (PostgREST's max-rows; a capped 200 would drop the latest days without a word).
+// APP_DAYS_PAGE (PostgREST's max-rows; a capped 200 would drop the latest days without a word). Ship review 10/2 - db.queryAll's
+// guards (D15, review 10/1): every page after the first starts ON the last day of the page before (offset advances by
+// APP_DAYS_PAGE - 1; `day` is the table's primary key) and that day must come back first, else "failed" (the table changed
+// during the read, or the server ignores offset); a page longer than APP_DAYS_PAGE is "failed" (the limit ignored); past
+// APP_DAYS_MAX_PAGES pages the read is "failed" - it never loops and never answers a partial list; ONE set of headers per read.
 // save(profileId, add, clear, replace) is ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace
 // (authFetch: the user's JWT; its single refresh-and-retry on a 401 never reached the function). Answers { ok: true, result }
 // (the function's jsonb: ok, profile_id, added, removed, kept, absent, replaced, source, audit) or { ok: false, status,
 // error } (error = the body text, the function's "APP_DAY_<TOKEN>: <text>" message inside - helpers.appDaysErrorWords).
 const APP_DAYS_PAGE = 1000;
+const APP_DAYS_MAX_PAGES = 200;
 const appDaysDb = {
   _fresh() {
     let token = null;
@@ -550,17 +555,27 @@ const appDaysDb = {
     if (!appDaysDb._fresh()) return { state: "skipped" };
     const failed = async (res) => { const body = await res.text().catch(() => ""); return { state: appDaysReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` }; };
     try {
+      const headers = dbAuthHeaders();
       const rows = [];
-      for (let offset = 0; ; offset += APP_DAYS_PAGE) {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/app_call_days?select=day,profile_id,source,created_at&order=day.asc&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers: dbAuthHeaders() });
+      let offset = 0, done = false;
+      for (let n = 0; n < APP_DAYS_MAX_PAGES; n++) {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/app_call_days?select=day,profile_id,source,created_at&order=day.asc&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers });
         if (!res.ok) return await failed(res);
         const page = await res.json();
         if (!Array.isArray(page)) return { state: "failed", error: "unexpected response body (app_call_days)" };
-        for (const r of page) rows.push(r);
-        if (page.length < APP_DAYS_PAGE) break;
+        if (page.length > APP_DAYS_PAGE) return { state: "failed", error: `app_call_days page ${n + 1} has ${page.length} rows (limit ${APP_DAYS_PAGE} ignored)` };
+        if (n === 0) { for (const r of page) rows.push(r); }
+        else {
+          const last = rows[rows.length - 1];
+          if (!page.length || !page[0] || !last || page[0].day !== last.day) return { state: "failed", error: `app_call_days page ${n + 1} does not start on the last day of page ${n} (the table changed during the read, or the server ignores offset) - read again` };
+          for (let i = 1; i < page.length; i++) rows.push(page[i]);
+        }
+        if (page.length < APP_DAYS_PAGE) { done = true; break; }
+        offset += APP_DAYS_PAGE - 1;
       }
+      if (!done) return { state: "failed", error: `app_call_days: more than ${APP_DAYS_MAX_PAGES} pages of ${APP_DAYS_PAGE} rows` };
       // app_call_names() is stable: a GET (PostgREST runs it read-only), no body
-      const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers: dbAuthHeaders() });
+      const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });
       if (!nres.ok) return await failed(nres);
       const names = await nres.json();
       if (!Array.isArray(names)) return { state: "failed", error: "unexpected response body (app_call_names)" };

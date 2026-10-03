@@ -11010,9 +11010,33 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP days: " + "x".repeat(160));
       // review 10/2: an HTTP error whose body is no PostgREST JSON (a gateway's HTML page) shows the status, never the page
       // pin moved deliberately 10/2 (re-check): a 5xx gateway page leaves the outcome unknown; a 4xx page still means nothing was saved
-      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), "Couldn't confirm the save (HTTP 502) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.");
+      // pins moved deliberately 10/2 (ship review): nothing reloaded "My APP days" on a 5xx, and the scheduler has no such card - the
+      // words now say whether the caller's reload landed (opts.reloaded) and the day editor gets its own (opts.where "editor")
+      const UNK = (s) => "Couldn't confirm the save (HTTP " + s + ") - it may or may not have gone through. ";
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), UNK(502) + "Check your days after the next refresh, then save again if a day is missing.");
       assert.strictEqual(H.appDaysErrorWords("<html><body>Too large</body></html>", 413), "Couldn't save the APP days (HTTP 413) - nothing was saved. Try again.");
-      assert.strictEqual(H.appDaysErrorWords("", 503), "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { reloaded: true }), UNK(503) + "The calendar was reloaded - save again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { reloaded: false }), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { where: "editor", reloaded: true }), UNK(503) + "The APP line was reloaded - set it again if it is wrong.");
+      assert.strictEqual(H.appDaysErrorWords("<html>503</html>", 503, { where: "editor", reloaded: false, sessionExpired: false }), UNK(503) + "Check this day's APP after the next refresh, then set it again if it is wrong.");
+      for (const o of [undefined, {}, { reloaded: true }, { where: "editor" }, { where: "editor", reloaded: true }]) assert.ok(!/My APP days/.test(H.appDaysErrorWords("", 504, o)), "no 5xx words send anyone to a 'My APP days' reload (" + JSON.stringify(o) + ")");
+      // ship review 10/2: a 5xx JSON body WITHOUT a PostgREST code (a gateway's own JSON) is outcome-unknown too; with a code
+      // (the function's transaction failed) it still says nothing was saved
+      assert.strictEqual(H.appDaysErrorWords('{"message":"upstream connect error"}', 503, { sessionExpired: false }), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
+      assert.strictEqual(H.appDaysErrorWords({ message: "upstream request timeout" }, 504), UNK(504) + "Check your days after the next refresh, then save again if a day is missing.", "an object body without a code");
+      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "boom"), 500, { reloaded: true }), "Couldn't save the APP days: boom", "a coded 5xx: the transaction failed - nothing was saved");
+      // ship review 10/2: status 0 (appDaysDb.save's thrown fetch) is "couldn't reach" whatever the thrown text (an AbortError too)
+      assert.strictEqual(H.appDaysErrorWords("The user aborted a request.", 0), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
+      assert.strictEqual(H.appDaysErrorWords("AbortError", 0, { where: "editor", reloaded: false }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
+      // appDaysSaveUnsure: the refusals whose outcome is unknown (My APP days reloads after them)
+      assert.strictEqual(H.appDaysSaveUnsure("The user aborted a request.", 0), true, "status 0");
+      assert.strictEqual(H.appDaysSaveUnsure("<html>503</html>", 503), true, "a 5xx gateway page");
+      assert.strictEqual(H.appDaysSaveUnsure('{"message":"upstream connect error"}', 502), true, "a 5xx JSON without a code");
+      assert.strictEqual(H.appDaysSaveUnsure(pg("XX000", "boom"), 500), false, "a coded 5xx: nothing was saved");
+      assert.strictEqual(H.appDaysSaveUnsure(pg("AP005", "APP_DAY_TAKEN: x"), 400), false, "a refusal");
+      assert.strictEqual(H.appDaysSaveUnsure(pg("PGRST301", "JWT expired"), 401), false, "a 401");
+      assert.strictEqual(H.appDaysSaveUnsure("<html>Too large</html>", 413), false, "a 4xx page: nothing was saved");
       assert.strictEqual(H.appDaysErrorWords("unexpected response from save_app_days: {}", 200), "Couldn't save the APP days: unexpected response from save_app_days: {}", "a 2xx with an unexpected body keeps its words");
       assert.strictEqual(H.appDaysErrorCode(pg("AP005", "APP_DAY_TAKEN: ...")), "AP005");
       assert.strictEqual(H.appDaysErrorCode("APP_DAY_STALE: 12/2 is Lee's day - reload the calendar (nothing was saved)"), "AP007", "from the token");
@@ -11086,17 +11110,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual((await appDaysDb.load()).state, "skipped");
       assert.strictEqual(calls.length, 0);
     });
-    await acheckP("P29 appDaysDb.load: ok across two pages (1000 + 1 rows, the second with offset=1000), then ONE names GET with the user's JWT", async () => {
+    // ship review 10/2: the table's rows by day (its primary key) - row i is the day i days after 2027-01-01
+    const apDay = (i) => new Date(Date.UTC(2027, 0, 1 + i)).toISOString().slice(0, 10);
+    const apRows = (from, n) => Array.from({ length: n }, (_, i) => ({ day: apDay(from + i), profile_id: PA, source: "app", created_at: "x" + (from + i) }));
+    const apOffset = (url) => Number((/[?&]offset=(\d+)/.exec(url) || [0, 0])[1]);
+    // pin moved deliberately 10/2 (ship review): page 2 starts ON the last day of page 1 (offset 999, db.queryAll's overlap) - it was offset=1000
+    await acheckP("P29 appDaysDb.load: ok across two pages (1000 rows, then the overlap page at offset=999 that starts on day 1000 and adds day 1001), then ONE names GET with the user's JWT", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
-      const page = (n, from) => Array.from({ length: n }, (_, i) => ({ day: "2027-01-01", profile_id: PA, source: "app", created_at: "x" + (from + i) }));
-      serve((url) => /rpc\/app_call_names/.test(url) ? res(200, NAMES) : res(200, /offset=1000/.test(url) ? page(1, 1000) : page(1000, 0)));
+      serve((url) => /rpc\/app_call_names/.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? 1000 : 2)));
       const r = await appDaysDb.load();
       assert.strictEqual(r.state, "ok");
       assert.strictEqual(r.rows.length, 1001);
+      assert.deepStrictEqual(plain(r.rows.map(x => x.day)), Array.from({ length: 1001 }, (_, i) => apDay(i)), "every day once, in order - the overlap row is not doubled");
       assert.strictEqual(r.names.length, 3);
       assert.strictEqual(calls.length, 3);
       assert.match(calls[0].url, /\/rest\/v1\/app_call_days\?select=day,profile_id,source,created_at&order=day\.asc&limit=1000&offset=0$/);
-      assert.match(calls[1].url, /\/rest\/v1\/app_call_days\?.*&offset=1000$/);
+      assert.match(calls[1].url, /\/rest\/v1\/app_call_days\?.*&limit=1000&offset=999$/);
       assert.match(calls[2].url, /\/rest\/v1\/rpc\/app_call_names$/);
       assert.strictEqual((calls[2].init.method || "GET"), "GET", "the names function is called with GET (stable - PostgREST runs it read-only)");
       assert.ok(!calls[2].init.body, "no body");
@@ -11126,12 +11155,46 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual((await appDaysDb.load()).state, "failed");
       serve((url) => /rpc\//.test(url) ? res(200, { not: "a list" }) : res(200, []));
       assert.strictEqual((await appDaysDb.load()).state, "failed", "a non-array names body");
-      serve((url) => /offset=1000/.test(url) ? res(500, "boom") : res(200, Array.from({ length: 1000 }, () => ({ day: "2027-01-01", profile_id: PA }))));
+      serve((url) => apOffset(url) > 0 ? res(500, "boom") : res(200, apRows(0, 1000)));
       assert.strictEqual((await appDaysDb.load()).state, "failed", "never a truncated ok");
+      assert.strictEqual(calls.length, 2, "it stopped at the failing second page");
       serve(() => { throw new Error("offline"); });
       const n = await appDaysDb.load();
       assert.strictEqual(n.state, "failed");
       assert.match(n.error, /offline/);
+    });
+    // ship review 10/2: db.queryAll's D15 guards, for the APP table (its loader pages on its own - the user's token, never anon)
+    await acheckP("P29 appDaysDb.load (ship review 10/2, D15's guards): a page longer than APP_DAYS_PAGE is 'failed'; a server that ignores offset is 'failed' on the SECOND request; a table that moved between pages (a row deleted / inserted before the boundary) is 'failed'; an endless table stops at APP_DAYS_MAX_PAGES requests - never a loop, never a partial ok, never a names call; ONE set of headers per read", async () => {
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH };
+      const PAGE = vm.runInContext("APP_DAYS_PAGE", sandbox), MAXP = vm.runInContext("APP_DAYS_MAX_PAGES", sandbox);
+      assert.deepStrictEqual([PAGE, MAXP], [1000, 200]);
+      serve(() => res(200, apRows(0, PAGE + 1)));
+      let r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, calls.length], ["failed", 1], "the limit ignored");
+      assert.match(r.error, /page 1 has 1001 rows \(limit 1000 ignored\)/);
+      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(0, PAGE)));
+      r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, calls.length], ["failed", 2], "the same full page again: caught on the second request");
+      assert.match(r.error, /page 2 does not start on the last day of page 1/);
+      // a row deleted before the boundary between the two requests: page 2 (offset 999) now starts on day 1000, not day 999
+      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apOffset(url) === 0 ? apRows(0, PAGE) : apRows(apOffset(url) + 1, 5)));
+      r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, calls.length], ["failed", 2], "a table that moved between pages");
+      // an endless table: every page full and overlapping right - the backstop answers failed, no names call
+      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), PAGE)));
+      r = await appDaysDb.load();
+      assert.strictEqual(r.state, "failed");
+      assert.match(r.error, /more than 200 pages of 1000 rows/);
+      assert.strictEqual(calls.length, MAXP, "exactly APP_DAYS_MAX_PAGES requests");
+      assert.ok(!calls.some(c => /rpc\//.test(c.url)), "no names call after a failed table read");
+      // ONE identity per read: the token changes after page 1 - every request still carries the first one
+      const FRESH2 = "h." + b64({ sub: PA, exp: Math.floor(Date.now() / 1000) + 7200 }) + ".s2";
+      serve((url) => { sandbox.localStorage._m = { "silvis-auth-token": FRESH2 }; return /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? PAGE : 3)); });
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH };
+      r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, r.rows.length, calls.length], ["ok", 1002, 3]);
+      calls.forEach(c => assert.strictEqual(c.init.headers.Authorization, "Bearer " + FRESH, "one identity per read"));
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH };
     });
     await acheckP("P29 appDaysDb.save: exactly ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace; ok needs ok:true; a refusal keeps the status and the body text; a throw = status 0", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
@@ -11184,7 +11247,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const st = { rows: ["old"], names: ["oldn"], state: "ok", toasts: [], loads: 0 };
         const ctx = {
           console: { warn() {}, log() {} },
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 7 }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
+          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 7 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
           appDaysDb: { load: async () => { st.loads++; return typeof answer === "function" ? answer(ctx) : answer; } },
           setAppDayRows: (v) => { st.rows = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
           showToast: (m, k) => { st.toasts.push(m + "|" + k); },
@@ -11243,7 +11306,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const st = { loads: 0, toasts: [], timers: [], state: "ok" };
         const ctx = {
           console: { warn() {}, log() {} }, appDaysAllowed: allowed,
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 3 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
+          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 3 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
           appDaysDb: { load: async () => { st.loads++; return answer || { state: "ok", rows: [], names: [] }; } },
           setAppDayRows() {}, setAppNameRows() {}, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
           showToast: (m, k) => { st.toasts.push(m + "|" + k); },
@@ -11280,14 +11343,97 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       await t.runTimers();
       assert.strictEqual(t.st.loads, 0, "a cleanup before the tick reads nothing (the next run owes its own read)");
     });
+    await acheckP("P29 ship review 10/2: loadAppDays (lifted verbatim) - ONE read of an account in flight: a quiet read (a Realtime SUBSCRIBED refreshAll, the poll) started while the load's collector read is out joins it - one request, and its failure still reaches the collector (the load's one toast), no toast of its own; a collector joining a quiet read out takes the sentence and settles only after it; an explicit reload always reads anew; another account, or a read out for 30 s, is not joined; the answer is the adopted state", async () => {
+      const mk = () => {
+        const st = { loads: 0, toasts: [], state: "ok", rows: ["old"], pending: [] };
+        const clock = { now: 1000 };
+        const ctx = {
+          console: { warn() {}, log() {} },
+          appDaysAllowedRef: { current: true }, appGenRef: { current: 1 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
+          appDaysDb: { load: () => { st.loads++; return new Promise(res => st.pending.push(res)); } },
+          setAppDayRows: (v) => { st.rows = v; }, setAppNameRows() {}, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
+          showToast: (m, k) => { st.toasts.push(m + "|" + k); },
+          Date: { now: () => clock.now },
+        };
+        return { st, ctx, clock, fn: lift(loadSrc, "loadAppDays", ctx) };
+      };
+      const FAIL = { state: "failed", error: "HTTP 500" };
+      const tick = () => new Promise(r => setImmediate(r));
+      // (a) the finding: the load's collector read is out, then the re-run's channel answers SUBSCRIBED -> refreshAll's quiet read
+      let t = mk();
+      const said = [];
+      const pc = t.fn((m) => said.push(m));
+      const pq = t.fn(false);
+      assert.strictEqual(t.st.loads, 1, "the quiet read joined the collector's read - one request");
+      t.st.pending[0](FAIL);
+      const both = await Promise.all([pc, pq]);
+      assert.deepStrictEqual([said, t.st.toasts, t.st.state, both], [[H.APP_DAYS_LOAD_FAIL_TEXT], [], "failed", ["failed", "failed"]], "its failure reached the collector (the load's one toast) - never dropped by the quiet read");
+      // (b) a quiet read is out (the owed read of the in-place sign-in card), then the load's collector joins it
+      t = mk();
+      const said2 = [];
+      const pq2 = t.fn(false);
+      let settled = false;
+      const pc2 = t.fn((m) => said2.push(m)).then((v) => { settled = true; return v; });
+      assert.strictEqual(t.st.loads, 1, "the collector joined the quiet read out");
+      await tick();
+      assert.strictEqual(settled, false, "the joined call settles only after the read out answered (the load's allSettled waits for the sentence)");
+      t.st.pending[0](FAIL);
+      await Promise.all([pq2, pc2]);
+      assert.deepStrictEqual([said2, t.st.toasts], [[H.APP_DAYS_LOAD_FAIL_TEXT], []], "the joined collector took the sentence");
+      // (c) an explicit reload (a Save, Retry, the editor) always reads anew - and the read it overtook is dropped
+      t = mk();
+      const pq3 = t.fn(false);
+      const pe3 = t.fn(true);
+      assert.strictEqual(t.st.loads, 2, "explicit: a new request");
+      t.st.pending[1]({ state: "ok", rows: [5], names: [] });
+      t.st.pending[0]({ state: "ok", rows: [4], names: [] });
+      assert.deepStrictEqual([await pq3, await pe3, t.st.rows], ["dropped", "ok", [5]], "the newest request's answer lands");
+      // (d) a quiet read joins an explicit read out: one request, one toast (the explicit read's)
+      t = mk();
+      const pe4 = t.fn(true);
+      const pq4 = t.fn(false);
+      assert.strictEqual(t.st.loads, 1);
+      t.st.pending[0](FAIL);
+      await Promise.all([pe4, pq4]);
+      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP days - the last loaded days are kept.|error"]);
+      // (e) another account (appGenRef moved) is never joined
+      t = mk();
+      const p5 = t.fn(false);
+      t.ctx.appGenRef.current++;
+      const p5b = t.fn(false);
+      assert.strictEqual(t.st.loads, 2, "a read out for the previous account is not joined");
+      t.st.pending.forEach(r => r({ state: "ok", rows: [], names: [] }));
+      assert.deepStrictEqual([await p5, await p5b], ["dropped", "ok"]);
+      // (f) a read out for 30 s or more (a hung request) is not joined - the poll is never stalled by it
+      t = mk();
+      const p6 = t.fn(false);
+      t.clock.now += 30000;
+      const p6b = t.fn(false);
+      assert.strictEqual(t.st.loads, 2, "a hung read is not joined");
+      t.st.pending.forEach(r => r({ state: "ok", rows: [], names: [] }));
+      await Promise.all([p6, p6b]);
+      // (g) nothing out once a read answered: the next quiet read is a new request; a flight is cleared when it answers
+      t = mk();
+      const p7 = t.fn(false);
+      t.st.pending[0]({ state: "ok", rows: [1], names: [] });
+      assert.strictEqual(await p7, "ok");
+      assert.strictEqual(t.ctx.appFlightRef.current, null, "the flight is cleared once it answered");
+      const p7b = t.fn(false);
+      assert.strictEqual(t.st.loads, 2, "nothing out: a new request");
+      t.st.pending[1]({ state: "skipped" });
+      assert.strictEqual(await p7b, "skipped");
+      t.ctx.appDaysAllowedRef.current = false;
+      assert.strictEqual(await t.fn(false), "none", "not allowed: no request, 'none'");
+      assert.strictEqual(t.st.loads, 2);
+    });
     await acheckP("P29 behaviour: saveMyAppDays (lifted verbatim) - only an APP; > 400 days refused with no request; ONE save for its own profile (p_replace false); ok reloads and answers the note; AP002 / AP005 / AP006 / AP007 reload, AP003 / AP004 do not; no audit, no notification", async () => {
       const mk = (answer, isApp) => {
         const st = { saves: [], loads: 0, busy: [] };
         const ctx = {
           console: { warn() {}, log() {} }, isApp, authUser: { id: PA }, APP_DAYS_MAX_SAVE: H.APP_DAYS_MAX_SAVE, auth: { sessionExpired: !!mk.expired },
-          appSavedNote: H.appSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords,
+          appSavedNote: H.appSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords, appDaysSaveUnsure: H.appDaysSaveUnsure,
           appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
-          loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; },
+          loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; return mk.reload || "ok"; },
           setAppDaysBusy: (v) => { st.busy.push(v); },
           Array,
         };
@@ -11306,9 +11452,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       r = await t.fn(["2026-12-10"], []);
       mk.expired = false;
       assert.deepStrictEqual(plain(r), { ok: false, words: "Your session expired - sign in again. Nothing was saved." }, "a 401 with the session dead");
+      // pin moved deliberately 10/2 (ship review): an unknown outcome (a 5xx gateway page, no connection) now reloads the picture -
+      // nothing else did, though the words sent the APP to reload - and the words say whether that reload landed
       t = mk({ ok: false, status: 503, error: "<html>Service Unavailable</html>" }, true);
       r = await t.fn(["2026-12-10"], []);
-      assert.ok(/may or may not have gone through/.test(r.words) && t.st.loads === 0, "a 5xx gateway page: the outcome is unknown, no reload (and no sign-out - nothing here touches the session)");
+      assert.deepStrictEqual([r.words, t.st.loads, t.st.lastExplicit], ["Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a day is missing.", 1, true], "a 5xx gateway page: the outcome is unknown, ONE explicit reload that landed (and no sign-out - nothing here touches the session)");
+      mk.reload = "failed";
+      t = mk({ ok: false, status: 502, error: '{"message":"upstream connect error"}' }, true);
+      r = await t.fn(["2026-12-10"], []);
+      mk.reload = null;
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't confirm the save (HTTP 502) - it may or may not have gone through. Check your days after the next refresh, then save again if a day is missing.", 1], "a 5xx JSON without a code whose reload failed: never 'reloaded'");
+      t = mk({ ok: false, status: 0, error: "Failed to fetch" }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).", 1], "no connection: reloaded too");
+      t = mk({ ok: false, status: 500, error: JSON.stringify({ code: "XX000", message: "boom" }) }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't save the APP days: boom", 0], "a coded 5xx: nothing was saved - no reload");
+      t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
+      r = await t.fn(["2026-12-10"], []);
+      assert.strictEqual(t.st.loads, 0, "a 401: nothing was saved - no reload");
       t = mk({ ok: true, result: { ok: true } }, true);
       r = await t.fn(Array.from({ length: 401 }, (_, i) => "2027-01-01"), []);
       assert.deepStrictEqual(plain(r), { ok: false, words: "at most 400 days in one save - nothing was saved" });
@@ -11335,6 +11497,43 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveEdSrc));
       assert.ok(!/logAudit\([^)]*appdays/i.test(SRC), "no logAudit(\"appdays...\") anywhere in the client - the save function writes the audit row");
       assert.ok(!/addNotif|sendEmailNotif|notifications|logAudit|snapshots\./.test(appBlockSrc.replace(/\/\/[^\n]*/g, "")), "the APP block's code names no notification, e-mail, audit or snapshot path");
+      // ship review 10/2: the refusal's words - the session flag (Do first 7), the editor's own wording, whether the reload landed
+      assert.ok(saveEdSrc.includes("const reload = await loadAppDays(true);"), "the reload's answer is kept");
+      assert.ok(saveEdSrc.includes('appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, where: "editor", reloaded: reload === "ok" })'), "the words get the session flag, where: editor and the reload's outcome");
+    });
+    await acheckP("P29 ship review 10/2: saveAppDayFromEditor (lifted verbatim) - a refused save answers the editor's words: a 401 with the session not known dead (the refresh unreachable: the reload is skipped) says it couldn't be refreshed, a dead session says sign in again, also when the reload failed; a 503 gateway page / no connection say the outcome is unknown and whether the reload landed - never 'My APP days'; AP005 the function's sentence; every save reloads (explicit); a landed save toasts the APP", async () => {
+      const mk = (answer, reload, expired) => {
+        const st = { saves: [], loads: [], toasts: [], busy: [] };
+        const ctx = {
+          console: { warn() {}, log() {} }, isScheduler: true, isPublicMode: false, auth: { sessionExpired: !!expired },
+          appDaysErrorWords: H.appDaysErrorWords, fmtMD: H.fmtMD, appNameOf: () => "Pat Appleton",
+          appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
+          loadAppDays: async (explicit) => { st.loads.push(explicit); return reload; },
+          showToast: (m, k) => { st.toasts.push(m + "|" + k); }, setAppDaysBusy: (v) => { st.busy.push(v); },
+        };
+        return { st, fn: lift(saveEdSrc, "saveAppDayFromEditor", ctx) };
+      };
+      const J401 = { ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) };
+      const UNK = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. ";
+      const NET = "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
+      const cases = [
+        ["a 401, the refresh unreachable (the reload is skipped: the token is still stale)", J401, "skipped", false, "Your session couldn't be refreshed - nothing was saved. Try again in a moment."],
+        ["a 401, the session dead", J401, "skipped", true, "Your session expired - sign in again. Nothing was saved."],
+        ["a 401 whose reload failed (the client thought the token fresh)", J401, "failed", false, "Your session couldn't be refreshed - nothing was saved. Try again in a moment."],
+        ["a 503 gateway page, the reload failed", { ok: false, status: 503, error: "<html><body>503 Service Unavailable</body></html>" }, "failed", false, UNK + "Check this day's APP after the next refresh, then set it again if it is wrong."],
+        ["a 503 gateway page, the reload landed", { ok: false, status: 503, error: "<html><body>503 Service Unavailable</body></html>" }, "ok", false, UNK + "The APP line was reloaded - set it again if it is wrong."],
+        ["no connection, the reload failed", { ok: false, status: 0, error: "Failed to fetch" }, "failed", false, NET],
+        ["AP005", { ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 already has Lee Bramble - nothing was saved" }) }, "ok", false, "12/10 already has Lee Bramble - nothing was saved"],
+      ];
+      for (const [label, answer, reload, expired, words] of cases) {
+        const t = mk(answer, reload, expired);
+        const r = await t.fn("2026-12-10", "set", "p-a", "");
+        assert.deepStrictEqual(plain([r, t.st.loads, t.st.toasts, t.st.busy]), [{ ok: false, words }, [true], [], [true, false]], label);
+        assert.ok(!/My APP days/.test(r.words), label + ": no 'My APP days' in the scheduler's words");
+      }
+      const t = mk({ ok: true, result: { ok: true } }, "ok", false);
+      const r = await t.fn("2026-12-10", "change", "p-a", "p-b");
+      assert.deepStrictEqual(plain([r, t.st.saves, t.st.loads, t.st.toasts]), [{ ok: true, words: "APP for 12/10: Pat Appleton" }, [["p-a", ["2026-12-10"], [], true]], [true], ["APP for 12/10: Pat Appleton|success"]]);
     });
     check("P29 pins: every APP REST path is named in config.js only (\\b-bounded); index-source.html sends no bare RPC fetch; appDaysDb is the client's only door", () => {
       for (const [label, rx] of [["app_call_days", /\bapp_call_days\b/g], ["rpc/app_call_names", /rpc\/app_call_names\b/g], ["rpc/save_app_days", /rpc\/save_app_days\b/g]]) {
@@ -11370,7 +11569,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 400, "the APP line is the third line, right after B");
       // the merge with main (10/2): a failed read is said in place - the legend for every signed-in role, the summary for all but the scheduler
       assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn\'t be loaded - the A lines may be missing</span>}'), 1, "the legend's failed line");
-      assert.ok(edSrc.includes("  ) : (!canEdit && !isPublicMode && appState === \"failed\") ? (") && edSrc.includes('<div data-testid="editor-app-summary-failed"') && edSrc.includes("APP days could not be loaded</span>"), "the day summary's failed line");
+      // pin moved deliberately 10/2 (ship review): the summary's line covers a skipped first read too (its own words)
+      assert.ok(edSrc.includes("  ) : (!canEdit && !isPublicMode && (appState === \"failed\" || appState === \"skipped\")) ? (") && edSrc.includes('<div data-testid="editor-app-summary-failed" data-state={appState}') && edSrc.includes('{appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}</span>'), "the day summary's failed / not-loaded line");
+      // ship review 10/2: a first read with no fresh token ("skipped") is said in the legend too - never the look of "no APP days"
+      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}'), 1, "the legend's not-loaded line");
       assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}'));
       assert.ok(SRC.includes('<span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>'), "the phone legend line is unchanged");
       for (const css of [".cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }", ".cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }", ".cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", ".cal-app { font-size: 9px; }"]) assert.strictEqual(cnt(SRC, css), 1, css);
@@ -11382,7 +11584,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(edSrc.includes("const appSummaryLine = () => (!canEdit && appEntry && !isPublicMode) ? ("), "the summary gate");
       const blk = between(edSrc, "  const appEditorBlock = () => {", "\n  };\n");
       assert.ok(blk.indexOf("if (!canEdit || isPublicMode) return null;") > 0 && blk.indexOf("if (!canEdit || isPublicMode) return null;") < blk.indexOf("data-testid="), "the scheduler's block returns before any markup for everyone else");
-      assert.ok(blk.includes('if (appState !== "ok" || (!choices.length && !appEntry)) return null;'), "nothing while unread / skipped, nothing with no APP account and no holder");
+      assert.ok(blk.includes('if (appState !== "ok" || (!choices.length && !appEntry)) return null;'), "nothing while unread, nothing with no APP account and no holder");
+      // ship review 10/2: the not-ok block (unavailable / failed / skipped) keeps a save's own words on screen - a save whose reload
+      // failed lands here, and its "nothing was saved" / "may or may not have gone through" must not vanish behind the load line
+      const notOk = blk.slice(blk.indexOf('if (appState === "unavailable" || appState === "failed" || appState === "skipped") return ('), blk.indexOf('if (appState !== "ok" || (!choices.length && !appEntry)) return null;'));
+      assert.ok(notOk.length > 100, "the not-ok branch covers unavailable, failed and skipped");
+      assert.ok(notOk.includes('{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}'), "its line, per state");
+      assert.ok(notOk.includes('{appError && <div role="alert" data-testid="editor-app-error"') && notOk.includes('{appStatus && <div role="status" data-testid="editor-app-status"'), "the save's error / status lines render in the not-ok branch too");
       for (const t of ["editor-app", "editor-app-set", "editor-app-clear", "editor-app-status", "editor-app-error", "editor-app-unavailable", "editor-app-block"]) {
         assert.strictEqual(cnt(edSrc, 'data-testid="' + t + '"'), cnt(blk, 'data-testid="' + t + '"'), t + " only inside the scheduler's block");
         assert.ok(cnt(blk, 'data-testid="' + t + '"') >= 1, t);
@@ -11483,7 +11691,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P29 cross pins (integration): app_call_names is stable (the client GETs it, no body) and its OUT columns = the keys appDaysByDay / appPickList read; the table's columns cover config.js's select and appDaysByDay's reads; is_app is the column the client reads and patches", () => {
       assert.ok(/create or replace function public\.app_call_names\(\) returns table \(profile_id uuid, display_name text, is_app boolean\)\nlanguage sql stable security definer set search_path = public, pg_temp as \$\$/.test(MIGS), "app_call_names: stable, definer, OUT (profile_id, display_name, is_app)");
-      assert.ok(CFG.includes("const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers: dbAuthHeaders() });"), "a GET (no method, no body)");
+      // pin moved deliberately 10/2 (ship review): ONE set of headers per read (built once, before page 1 - D15's rule)
+      assert.ok(CFG.includes("const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });") && CFG.includes("      const headers = dbAuthHeaders();\n      const rows = [];"), "a GET (no method, no body), with the read's one set of user headers");
       const OUT = ["profile_id", "display_name", "is_app"];
       for (const fn of ["function appDaysByDay(", "function appPickList("]) {
         const f = between(HLP, fn, "\n}\n");

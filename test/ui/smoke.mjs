@@ -566,7 +566,7 @@ const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status 
 // steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
 let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
 let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
-let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500)
+let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s - step 8c)
 let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
 const appServed = [];   // { path, method, status, sub }
 const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
@@ -730,6 +730,29 @@ const installRealtimeMock = async (pg) => {
       }
     });
   });
+};
+// Ship review 10/2 (Prompt 29): a page of its own whose Realtime JOINS succeed - the channel answers SUBSCRIBED, so the app runs
+// refreshAll right after its load re-run, as in production - without touching the shared `rt` state the main page's frames use.
+// It answers phx_join (with the bindings' ids), heartbeats, access_token and phx_leave; it never sends a row. `joins` counts joins.
+const answerRealtimeJoinsOnly = async (pg) => {
+  const seen = { joins: 0 };
+  await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), (ws) => {
+    ws.onMessage((raw) => {
+      let m, arr = false;
+      try { m = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8")); } catch (e) { return; }
+      if (Array.isArray(m)) { arr = true; m = { join_ref: m[0], ref: m[1], topic: m[2], event: m[3], payload: m[4] }; }
+      const send = (o) => ws.send(JSON.stringify(arr ? [o.join_ref ?? null, o.ref ?? null, o.topic, o.event, o.payload] : o));
+      if (m.event === "heartbeat") return send({ topic: "phoenix", event: "phx_reply", payload: { status: "ok", response: {} }, ref: m.ref });
+      if (m.event === "phx_join") {
+        seen.joins++;
+        const wanted = (m.payload && m.payload.config && m.payload.config.postgres_changes) || [];
+        const postgres_changes = wanted.map((b, i) => ({ id: i + 1, event: b.event, schema: b.schema, table: b.table }));
+        return send({ topic: m.topic, event: "phx_reply", payload: { status: "ok", response: { postgres_changes } }, ref: m.ref, join_ref: m.ref });
+      }
+      if (m.event === "access_token" || m.event === "phx_leave") return send({ topic: m.topic, event: "phx_reply", payload: { status: "ok", response: {} }, ref: m.ref });
+    });
+  });
+  return seen;
 };
 // Inject one postgres_changes frame for `table` (the binding id is the table's
 // position in the app's subscription list, echoed back at join).
@@ -1461,6 +1484,13 @@ const appRoute = (route, req, url, method, json) => {
     return answer(200, appNamesFor(sub));
   }
   if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
+  // ship review 10/2: the same 500 held 1.5 s (recorded on arrival) - the load's read is still out when a Realtime SUBSCRIBED
+  // refreshAll starts its own (step 8c)
+  if (appDaysMode === "fail500slow") {
+    appServed.push({ path: url.pathname, method, status: 500, sub, at: Date.now() });
+    appForcedLines.push({ path: url.pathname, status: 500 });
+    return new Promise(r => setTimeout(r, 1500)).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
+  }
   if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
   const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
   const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0).map(r => ({ day: r.day, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
@@ -11176,7 +11206,8 @@ try {
       else ok(`${P} 3b: Discard drops the drafted days; nothing was sent`);
     } catch (e) { fail(`${P} 3b (Range / Paste dates): ` + errLine(e)); }
     // ---- 3c. The merge with main (10/2): My APP days' save errors stay in the card (role=alert until the next tap / Save), not in a
-    //      toast (Do first 8's model is for toasts); a 503 gateway page says the outcome is unknown and reloads nothing; a 401 whose
+    //      toast (Do first 8's model is for toasts); a 503 gateway page says the outcome is unknown and - ship review 10/2 - reloads
+    //      the picture (nothing else did, though the words sent the APP to reload) and says the calendar was reloaded; a 401 whose
     //      forced refresh meets an auth 503 (Do first 7: "couldn't reach", never a sign-out) says the session couldn't be refreshed -
     //      the page stays signed in, no banner, no sign-in card ----
     try {
@@ -11202,18 +11233,20 @@ try {
         return route.fallback();
       };
       await A.pg.route((url) => url.hostname === SUPABASE_HOST && (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/auth/v1/token"), xRoute);
-      const gets0 = appServed.filter(x => x.sub === APP_A_UID && x.method === "GET").length;
+      const served0 = appServed.length;
       const toastNow = () => A.pg.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
       await A.pg.click(`[data-testid=appdays-cell][data-day="${D14}"]`);
       await A.pg.click("[data-testid=appdays-save]");
       await A.pg.waitForSelector("[data-testid=appdays-error]", { timeout: 10000 });
       const e503 = await A.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
       const t503 = await toastNow();
-      const want503 = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing.";
+      // pin moved deliberately 10/2 (ship review): the 503 reloads the APP days, and the words say that reload landed
+      const want503 = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a day is missing.";
+      const reloads503 = appServed.slice(served0).filter(x => x.sub === APP_A_UID && x.method === "GET" && x.path === "/rest/v1/app_call_days").length;
       if (e503 !== want503) fail(`${P} 3c: a 503 gateway page should say '${want503}', got '${e503}'`);
       else if (/may or may not/.test(t503)) fail(`${P} 3c: the save error also showed as a toast: '${t503}'`);
-      else if (appServed.filter(x => x.sub === APP_A_UID && x.method === "GET").length !== gets0) fail(`${P} 3c: the 503 reloaded the APP days (the outcome is unknown - the card says reload; the client does not guess)`);
-      else ok(`${P} 3c: a 503 on save_app_days - '${e503}' in the card (role=alert), no toast, no reload`);
+      else if (reloads503 < 1) fail(`${P} 3c: the 503 should reload the APP days (the outcome is unknown - the reloaded calendar shows what is true), got ${reloads503} app_call_days GET(s)`);
+      else ok(`${P} 3c: a 503 on save_app_days - '${e503}' in the card (role=alert), no toast; the APP days were reloaded (${reloads503} app_call_days GET)`);
       saveMode = "401";
       const st0 = forced.token;
       await A.pg.click("[data-testid=appdays-save]");
@@ -11335,6 +11368,67 @@ try {
       const wantSums = [`Lee Bramble: on call ${appMd(D12)}`, `Lee Bramble: on call ${appMd(D10)} (was Pat Appleton)`, `Lee Bramble: removed ${appMd(D12)}`];
       if (!sameJson(sums.slice(-3), wantSums)) fail(`${P} 5: the audit rows should read ${JSON.stringify(wantSums)}, got ${JSON.stringify(sums)}`); else ok(`${P} 5: the audit rows: ${wantSums.join(" | ")}`);
     } catch (e) { fail(`${P} 5 (the scheduler's APP line): ` + errLine(e)); try { if (sc) await sc.screenshot({ path: path.join(OUT, "failure-p29-5.png"), fullPage: true }); } catch (e2) {} }
+    // ---- 5b. Ship review 10/2: the scheduler's Set APP during an outage - save_app_days answers a 503 gateway page and the reload
+    //      after it (app_call_days) a 500. The editor's block turns to "APP days could not be loaded", and the save's own words stay
+    //      under it (editor-app-error, role=alert): the outcome is unknown, in the editor's words (never "My APP days") - they used
+    //      to vanish behind the load line, leaving only the reload's toast. A fresh scheduler page; every answer is the harness's. ----
+    {
+      const D16 = isoM(16);
+      const sb = await context.newPage();
+      watchPage(sb, "p29-scheduler-outage");
+      const settleSb = restReadsSettled(sb);
+      let armed = false;
+      const forced = { save: 0, read: 0 };
+      const outage = async (route) => {
+        const req = route.request(); const u = new URL(req.url());
+        if (!armed) return route.fallback();
+        if (u.pathname === "/rest/v1/rpc/save_app_days" && req.method() === "POST") {
+          forced.save++;
+          writes.push({ method: "POST", path: u.pathname, body: req.postData() || "", sub: FAKE_UID, at: Date.now(), p29x: "outage503" });
+          p29xLines.push({ path: u.pathname, status: 503 });
+          return route.fulfill({ status: 503, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html><body>503 Service Unavailable</body></html>" });
+        }
+        if (u.pathname === "/rest/v1/app_call_days" && req.method() === "GET") {
+          forced.read++;
+          p29xLines.push({ path: u.pathname, status: 500 });
+          return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (5b)" }) });
+        }
+        return route.fallback();
+      };
+      try {
+        await sb.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+        await sb.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+        await sb.route((url) => url.hostname === SUPABASE_HOST && (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/rest/v1/app_call_days"), outage);
+        sb.on("dialog", (d) => d.dismiss().catch(() => {}));
+        await loadApp(sb, "P29 scheduler page (outage)");
+        await showM(sb);
+        await sb.click(`[data-day="${D16}"]`);
+        await sb.waitForSelector("[data-testid=editor-app-set]", { timeout: 8000 });
+        await sb.waitForTimeout(200);
+        const holder0 = await sb.$eval("[data-testid=editor-app-holder]", el => el.textContent.trim()).catch(() => "");
+        await sb.selectOption("[data-testid=editor-app]", APP_A_UID);
+        armed = true;
+        await sb.click("[data-testid=editor-app-set]");
+        await sb.waitForSelector("[data-testid=editor-app-error]", { timeout: 10000 });
+        await sb.waitForTimeout(200);
+        armed = false;
+        const got = await sb.evaluate(() => {
+          const t = (s) => { const el = document.querySelector(s); return el ? el.textContent.trim() : ""; };
+          const errEl = document.querySelector("[data-testid=editor-app-error]");
+          return { err: t("[data-testid=editor-app-error]"), role: errEl ? errEl.getAttribute("role") : "", line: t("[data-testid=editor-app-unavailable]"), toast: t("[data-testid=toast]"), set: !!document.querySelector("[data-testid=editor-app-set]") };
+        });
+        const wantErr = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Check this day's APP after the next refresh, then set it again if it is wrong.";
+        if (holder0 !== "none") fail(`${P} 5b: ${D16} should have no APP before the outage step, got '${holder0}'`);
+        else if (forced.save !== 1 || forced.read < 1) fail(`${P} 5b: the harness should have refused ONE save (503) and at least one reload (500): ${JSON.stringify(forced)}`);
+        else if (got.err !== wantErr || got.role !== "alert") fail(`${P} 5b: the editor should keep the save's words '${wantErr}' (role=alert) under the failed line, got ${JSON.stringify(got)}`);
+        else if (!/^APP\s*APP days could not be loaded$/.test(got.line) || got.set) fail(`${P} 5b: the block should read 'APP days could not be loaded' with no controls, got ${JSON.stringify(got)}`);
+        else if (!got.toast.includes("Couldn't load the APP days - the last loaded days are kept.") || /may or may not/.test(got.toast)) fail(`${P} 5b: the reload's failure should be the toast (and the save's words not), got '${got.toast}'`);
+        else if (appDayStore.some(r => r.day === D16)) fail(`${P} 5b: ${D16} landed in the store although the harness refused the save`);
+        else ok(`${P} 5b: Set APP during an outage (save 503, reload 500) - the block says 'APP days could not be loaded' and keeps '${got.err}' under it (role=alert); the toast is the reload's`);
+        await sb.screenshot({ path: path.join(OUT, "p29-editor-outage.png"), fullPage: false });
+      } catch (e) { armed = false; fail(`${P} 5b (the editor during an outage): ` + errLine(e)); try { await sb.screenshot({ path: path.join(OUT, "failure-p29-5b.png"), fullPage: true }); } catch (e2) {} }
+      try { await settleSb(); await sb.close(); } catch (e) {}
+    }
     // ---- 6. Setup > Users: the pseudo-role "app" ----
     try {
       if (!sc) throw new Error("the scheduler page did not open");
@@ -11483,6 +11577,41 @@ try {
         await rp.screenshot({ path: path.join(OUT, "p29-appfail-viewer-390.png"), fullPage: true });
       } catch (e) { fail(`${P} 8b (a failed APP-day read): ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-p29-8b.png"), fullPage: true }); } catch (e2) {} }
       try { await settleR(); await rp.close(); } catch (e) {}
+      appDaysMode = "ok";
+      await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+    }
+    // ---- 8c. Ship review 10/2: 8b with Realtime WORKING (production's case - 8b silences the socket). The re-run's channel answers
+    //      SUBSCRIBED and its refreshAll starts a quiet APP read while the load's read is still out (the harness holds the 500 for
+    //      1.5 s). That quiet read used to overtake the load's read and drop its sentence: no toast, nothing on Recent errors, and a
+    //      second read. Now it joins the read out: ONE read, the sentence in the load's toast and on Recent errors ----
+    {
+      appDaysMode = "fail500slow";
+      const served0 = appServed.length;
+      const rq = await context.newPage();
+      watchPage(rq, "p29-viewer-appfail-rt");
+      const settleQ = restReadsSettled(rq);
+      try {
+        await rq.setViewportSize({ width: 390, height: 844 });
+        await rq.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VIEWER_JWT);
+        const rtq = await answerRealtimeJoinsOnly(rq);
+        await rq.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
+        await loadApp(rq, "P29 viewer page (APP read 500, Realtime joins answered)");
+        await rq.waitForSelector("[data-testid=toast]", { timeout: 10000 }).catch(() => {});
+        await rq.waitForTimeout(2500); // a second read (the bug) would have been served by now - recorded on arrival anyway
+        const toastTxt = await rq.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+        const errPill = await rq.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
+        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
+        await showM(rq);
+        const legend = await rq.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
+        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        if (rtq.joins < 2) fail(`${P} 8c: the page's Realtime channel should have joined on the mount run and on the sign-in re-run (SUBSCRIBED -> refreshAll), got ${rtq.joins} join(s) - the step does not exercise the race`);
+        else if (!toastTxt.includes(want)) fail(`${P} 8c: with Realtime answering, the load's toast should still say '${want}', got '${toastTxt}' (${reads} app_call_days read(s))`);
+        else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8c: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
+        else if (reads !== 1) fail(`${P} 8c: ONE APP-day read for the sign-in (the SUBSCRIBED refreshAll joins the load's read out), got ${reads}`);
+        else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8c: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
+        else ok(`${P} 8c: Realtime joined (${rtq.joins} joins, SUBSCRIBED -> refreshAll) - ONE app_call_days read, '${want}' in the load's toast and on Recent errors ('${errPill}'), the legend says it`);
+      } catch (e) { fail(`${P} 8c (a failed APP-day read with Realtime up): ` + errLine(e)); try { await rq.screenshot({ path: path.join(OUT, "failure-p29-8c.png"), fullPage: true }); } catch (e2) {} }
+      try { await settleQ(); await rq.close(); } catch (e) {}
       appDaysMode = "ok";
       await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
     }

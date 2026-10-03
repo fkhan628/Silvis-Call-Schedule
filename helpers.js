@@ -5960,6 +5960,10 @@ function appDayErrorMessage(body) {
 // opts.sessionExpired (the merge with main, 10/2 - Do first 7): false = the session is not known dead (auth.sessionExpired: a
 // refresh the auth server answered 5xx / 429 / 408 or never answered is "couldn't reach", never a sign-out), so a 401 says the
 // session couldn't be refreshed instead of "sign in again"; true or absent keeps the expired words.
+// Ship review 10/2: a 5xx without a PostgREST code (a gateway's HTML page, or its JSON without `code`) is "outcome unknown" -
+// a PostgREST error with a code means the function's transaction failed and nothing was saved. opts.where "editor" = the
+// scheduler's day editor (no "My APP days" in its words); opts.reloaded true = the caller reloaded the APP days after the
+// refusal and the reload landed, so the words point at the reloaded picture; otherwise at the next refresh.
 function appDaysErrorWords(body, status, opts) {
   const msg = appDayErrorMessage(body);
   const raw = body && typeof body === "object" ? msg : String(body === null || body === undefined ? "" : body);
@@ -5972,17 +5976,35 @@ function appDaysErrorWords(body, status, opts) {
     ? "Your session couldn't be refreshed - nothing was saved. Try again in a moment."
     : "Your session expired - sign in again. Nothing was saved.";
   if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
+  // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was
+  // saved" - and so for a 5xx JSON body without a PostgREST code (a gateway's own JSON; ship review 10/2)
+  const s = Number(status);
+  if (s >= 500 && !appDayErrorHasCode(body)) {
+    const ed = !!(opts && opts.where === "editor");
+    const head = "Couldn't confirm the save (HTTP " + s + ") - it may or may not have gone through. ";
+    if (opts && opts.reloaded === true) return head + (ed ? "The APP line was reloaded - set it again if it is wrong." : "The calendar was reloaded - save again if a day is missing.");
+    return head + (ed ? "Check this day's APP after the next refresh, then set it again if it is wrong." : "Check your days after the next refresh, then save again if a day is missing.");
+  }
   // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
-  // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was saved"
-  if (Number(status) >= 400 && !appDayErrorIsJson(body)) return Number(status) >= 500
-    ? "Couldn't confirm the save (HTTP " + Number(status) + ") - it may or may not have gone through. Reload My APP days to check, then try again if a day is missing."
-    : "Couldn't save the APP days (HTTP " + Number(status) + ") - nothing was saved. Try again.";
+  if (s >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP days (HTTP " + s + ") - nothing was saved. Try again.";
   return "Couldn't save the APP days: " + msg.slice(0, 160);
 }
 // true when a save's error body is a PostgREST error (an object, or JSON text, with a message)
 function appDayErrorIsJson(body) {
   if (body && typeof body === "object") return typeof body.message === "string";
   try { const j = JSON.parse(String(body === null || body === undefined ? "" : body)); return !!(j && typeof j.message === "string"); } catch (e) { return false; }
+}
+// true when a save's error body carries a PostgREST error code (an object, or JSON text, with a non-empty string `code`)
+function appDayErrorHasCode(body) {
+  if (body && typeof body === "object") return typeof body.code === "string" && body.code !== "";
+  try { const j = JSON.parse(String(body === null || body === undefined ? "" : body)); return !!(j && typeof j.code === "string" && j.code !== ""); } catch (e) { return false; }
+}
+// appDaysSaveUnsure(body, status) -> true when a refused save's outcome is unknown: no connection (status 0 - appDaysDb.save's
+// thrown fetch) or a 5xx without a PostgREST code. My APP days reloads the picture after one (ship review 10/2; the save is
+// idempotent, so the reloaded calendar shows what is true).
+function appDaysSaveUnsure(body, status) {
+  if (status !== undefined && status !== null && Number(status) === 0) return true;
+  return Number(status) >= 500 && !appDayErrorHasCode(body);
 }
 // appDaysErrorCode(body) -> the AP00n code of a PostgREST error body (its code, else the token in its message), else null -
 // the client reloads the picture after AP002 / AP005 / AP006 / AP007 (it was stale).
@@ -6509,7 +6531,7 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,

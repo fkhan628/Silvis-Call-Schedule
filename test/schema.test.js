@@ -4120,10 +4120,10 @@ ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   // pins moved deliberately 10/2 (the record step): the header still names section 18 and its anon checks; the header and --help
-  // no longer name the flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE, then only another prepared migration's
-  // SILVIS_*_APPLIED flag (the merge-tolerant form of the section 15 pin)
+  // no longer name the flag. Pin moved deliberately 10/2 (ship review of the merge): the TAIL of --help's env-var list is pinned in
+  // the Prompt 28 step only (main's rule - a record step moves one pin), so this pin keeps only its own intent: the APP flag is gone
   ok(/APP call days anon checks and probe \(18\)/.test(head) && /anon checks \([^)]*18a-18d\)/.test(head), "verify-rls.sh's header names section 18 and its anon checks");
-  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_APP_DAYS_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_APP_DAYS_APPLIED dropped)");
+  ok(/SILVIS_PREFS_ROWS_BEFORE/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_APP_DAYS_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_PREFS_ROWS_BEFORE and no longer SILVIS_APP_DAYS_APPLIED (dropped at the record step)");
 }
 {
   const code18 = vr.slice(vr.indexOf('echo "== 18. '), vrSectionEnd('echo "== 18. '));
