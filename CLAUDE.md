@@ -62,6 +62,9 @@ Carried over from Davenport on purpose: office notifications, calendar sync, ref
 every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
 applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
 approvals, weighted accounting.
+Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
+worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30. Its database part was applied, the VAPID keys set and
+send-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client.
 
 ## Working locations
 
@@ -80,12 +83,12 @@ approvals, weighted accounting.
 ## Deploy path — repo (the PWA)
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
-  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`).
+  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`, the push worker `sw.js`).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on a push to `main` that touches a runtime
   input (build.yml's paths filter; a test/docs-only push runs only test.yml), commits back with `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 21 suites: rules, east-feed, data-layer,
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 22 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
-  offers-timeline, edge-functions, ci, privacy, water-fill — then the generator regression as the 22nd, then the build; `test/ci.test.js` keeps the chain and
+  offers-timeline, edge-functions, ci, privacy, push, water-fill — then the generator regression as the 23rd, then the build; `test/ci.test.js` keeps the chain and
   build.yml's steps aligned and pins build.yml's paths filter to exactly the runtime inputs (`.github/workflows/test.yml`
   runs the chain on every push and PR since 10/2), so trust it over this list);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
@@ -133,6 +136,8 @@ approvals, weighted accounting.
 - Show every edit and every command before running it. No auto-accept.
 - Verify by OBSERVING behavior (a passing test, a real row in Supabase, a green CI run, a byte-diff) — never by
   assuming success. Silent failures are this codebase family's signature bug class.
+- Tests that fake a CLI (supabase) must inject it explicitly (SUPABASE_BIN / an absolute POSIX path), prove it resolves
+  first, and never use a workdir holding the real project ref - a fake that did not resolve set live secrets on 10/3.
 - Current milestone: **a published schedule through 2026-12-31** — **published 2026-09-23** from the committed preview
   (`docs/PUBLISH-2026-09-23.md`: 2026-10-07 → 2027-01-03 over the import locks (to 11/29); east-derived primary locks run
   12/7–12/13 and manual backup locks reach 12/18 — Generate never touches any lock). Generate's default range

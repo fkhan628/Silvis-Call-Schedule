@@ -268,6 +268,39 @@ function payKeyHits(value, where) {
 }
 // <<< A6e
 
+// >>> A6f
+// ---- A6f: phone push (Prompt 30; the contract calls this check A6e - that letter was already the pay-readers pin above).
+// A device's push endpoint is a capability (with its keys, whoever holds it can push to that phone) and the VAPID private
+// key signs for the whole app: neither may sit in a tracked file. Shapes only, nothing named: a push-service URL carrying a
+// device token of 40+ characters (the tests' fake endpoints keep their tokens under 24 - push-design's header rule), and
+// VAPID_PRIVATE_KEY followed by = or : and a 43-character base64url value. A self-check plants both - built at run time, so
+// this file carries no literal of either - and they must be caught, while the short fakes and the code's reads pass.
+{
+  // The hosts are PUSH_ENDPOINT_RE's (helpers.js - the DB's shape check); any path, a run of 40+ token characters in it
+  // (review 10/3: Chrome's VAPID endpoints are https://fcm.googleapis.com/wp/<token>, legacy Android's
+  // https://android.googleapis.com/gcm/send/<token> - the old fixed paths missed both).
+  const ENDPOINT = /https:\/\/([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)\/[A-Za-z0-9_:%.?=&+\/-]*?[A-Za-z0-9_:%=-]{40,}/;
+  const VAPID_PRIV = /VAPID_PRIVATE_KEY["'`]?\s*[=:]\s*["'`]?[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/;
+  report("A6f push endpoints / a VAPID private key in a tracked file", scan([{ label: "a device push endpoint", re: ENDPOINT }, { label: "a VAPID private key value", re: VAPID_PRIV }]));
+  const planted = [
+    "https://fcm.googleapis.com/fcm/send/" + "dQw4w9WgXcQ:APA91b" + "x".repeat(40),
+    "https://web.push.apple.com/" + "Q".repeat(44),
+    "https://updates.push.services.mozilla.com/wpush/v2/" + "g".repeat(60),
+    "https://wns2-par02p.notify.windows.com/w/?token=" + "B".repeat(50),
+    "https://fcm.googleapis.com/wp/" + "dHIoDxE7Hdg:APA91b" + "y".repeat(40),
+    "https://android.googleapis.com/gcm/send/" + "z".repeat(50),
+  ];
+  ok(planted.every((e) => ENDPOINT.test("x " + e + " y")), "A6f self-check: a planted endpoint of each push service is caught (Chrome's /wp/ and legacy Android's /gcm/send/ shapes too)");
+  // the hosts stay the DB's: every planted endpoint is one PUSH_ENDPOINT_RE accepts (a host the DB refuses is no device)
+  const HELPERS_RE = require(path.join(ROOT, "helpers.js")).PUSH_ENDPOINT_RE;
+  ok(HELPERS_RE instanceof RegExp && planted.every((e) => HELPERS_RE.test(e)), "A6f self-check: every planted endpoint is one helpers.js PUSH_ENDPOINT_RE accepts");
+  ok(!ENDPOINT.test("https://fcm.googleapis.com/wp/" + "x".repeat(39)) && !ENDPOINT.test("https://android.googleapis.com/gcm/send/smoke-device-1"), "A6f self-check: short fakes on the new shapes pass");
+  ok(VAPID_PRIV.test("VAPID_PRIVATE_KEY" + "=" + "a".repeat(43)) && VAPID_PRIV.test("VAPID_PRIVATE_KEY" + ': "' + "b_".repeat(21) + "c" + '"'), "A6f self-check: a planted private key (env-file line, object literal) is caught");
+  ok(!ENDPOINT.test("https://fcm.googleapis.com/fcm/send/smoke-device-1") && !ENDPOINT.test("https://fcm.googleapis.com/fcm/send/" + "x".repeat(39)), "A6f self-check: the tests' short fake endpoints pass");
+  ok(!VAPID_PRIV.test('const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY") || "";') && !VAPID_PRIV.test("VAPID_PRIVATE_KEY: v.privateB64u,") && !VAPID_PRIV.test("VAPID_PRIVATE_KEY" + "=" + "a".repeat(44)), "A6f self-check: the code's reads (and a value of another length) pass");
+}
+// <<< A6f
+
 // ---- summary ----------------------------------------------------------------
 if (failures.length) {
   failures.forEach(f => console.error("FAIL: " + f));

@@ -215,7 +215,9 @@ check("send-notification: categories offers_reminder and offers_closed exist, bo
   assert.ok(!/"Offers Reminder"|"Offers Closed"|"Paint my offers"/.test(snSrc), "the old offers frame titles / CTA are gone");
   assert.strictEqual((snSrc.match(/^const CATEGORIES/gm) || []).length, 1);
   assert.ok(/\/\/.*offers_reminder.*offers_closed|\/\/.*offers_closed.*offers_reminder/.test(snSrc.split("\n").slice(0, 60).join(" ")), "the header comment lists the two categories");
-  assert.ok(snSrc.indexOf('rest("user_profiles?select=person_id,email&person_id=not.is.null")') > 0, "recipients still come from user_profiles by person_id");
+  // pin moved deliberately (Prompt 30): the read adds the account id (phone push looks up each person's devices by it);
+  // recipients still come from user_profiles by person_id
+  assert.ok(snSrc.indexOf('rest("user_profiles?select=id,person_id,email&person_id=not.is.null")') > 0, "recipients still come from user_profiles by person_id");
 });
 check("daily-reminder: mode \"offers\" is dispatched behind the x-cron-secret gate with the shared dryRun flag; an unknown mode is still a 400", () => {
   assert.ok(/mode === "offers"\)\s*return await runOffers\(centralNow\(\), dryRun\)/.test(drSrc), "dispatch: mode offers -> runOffers(centralNow(), dryRun)");

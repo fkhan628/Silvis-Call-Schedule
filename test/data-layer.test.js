@@ -4712,7 +4712,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("const { subject, body } = offerHeadsUpWords({ label: p.label, closeAt: close });") && src.includes("const message = `${body}\\n\\nSent now by ${nameOf(mySurgeon) || \"the scheduler\"} from the Periods page${cadence}.`;"), "the client composes the heads-up through helpers.offerHeadsUpWords - its body word for word, then the sender line");
       assert.strictEqual(/Your call dates for \$\{p\.label\} freeze on|paint them in the app or choose 'go by my rules'|Nothing is entered for you yet/.test(src), false, "the old 'choose your shifts' Remind words are gone");
       assert.ok(src.includes("if (!isScheduler || !p || !p.id || !personId || !offerPoolIds(surgeons).includes(String(personId))) return { ok: false };"), "Remind mails pool surgeons only");
-      assert.ok(src.includes("if (pref && pref.schedule_updates_email === false) {"), "a person with schedule-update e-mails off is not mailed (the server gates too)");
+      // pin moved deliberately 10/3 (Prompt 30 review, addendum item 5 - the channels are independent): Remind is refused here
+      // only when BOTH schedule_updates_email and schedule_updates_push are off (helpers.remindChannels); e-mail off alone
+      // still sends (the server mails nobody and pushes the phones) - test/push.test.js runs it
+      assert.ok(src.includes("const ch = remindChannels(notifPrefs && notifPrefs[personId]);\n    if (ch.blocked) {"), "Remind is refused only when e-mail AND phone are off (the server gates each channel too)");
+      assert.ok(!src.includes("if (pref && pref.schedule_updates_email === false) {"), "no e-mail-only Remind gate left");
       // pin moved deliberately 9/30 (Prompt 26): Remind is offered on EVERY pool row of an open upcoming period (vacations matter
       // for everyone) - it was not_started rows only
       assert.ok(src.includes('{status === "upcoming" && open && (\n                              <button type="button" data-testid="prd-remind"'), "Remind renders on every row (the pool) of an open upcoming period");
@@ -5141,7 +5145,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // P20 R2: the one prefs upsert lives in config.js notifPrefsDb.save and always names on_conflict (person_id for a
       // surgeon - valid before AND after revision o: person_id is the key before, UNIQUE after; profile_id for a follower)
       assert.strictEqual((cfg.match(/db\.upsert\("notification_preferences", req\.row, \{ onConflict: req\.onConflict \}\)/g) || []).length, 1, "notifPrefsDb.save must upsert with { onConflict: req.onConflict }");
-      assert.ok(src.includes("notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {})"), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
+      // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
+      assert.ok(src.includes('notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok" })'), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
       assert.ok(!/db\.upsert\("notification_preferences"/.test(src) && !/db\.upsert\("notification_preferences", (row|req\.row)\)/.test(cfg), "no prefs upsert without on_conflict is left (and none outside notifPrefsDb)");
     });
     // ---- Prompt 20 R2 (Faraz 9/25): the follower's own prefs row - saved and read by profile_id ----
@@ -7726,7 +7731,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(s0 > 0, "saveFollowerPref");
       const sf = src.slice(s0, src.indexOf("\n  };\n", s0));
       const gate = sf.indexOf('if (followerPrefStateRef.current !== "ok" || !pid) return;');
-      assert.ok(gate > 0 && gate < sf.indexOf("notifPrefsDb.save({ profileId: pid }, followerPrefRef.current)"), "no write unless the read answered ok (never before revision o, never over an unknown row)");
+      // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
+      assert.ok(gate > 0 && gate < sf.indexOf('notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok" })'), "no write unless the read answered ok (never before revision o, never over an unknown row)");
       assert.ok(/notifPrefsDb\.loadFollower\(pid\)/.test(src), "the follower's row is read by profile_id");
     });
   }
@@ -9462,14 +9468,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
       assert.ok(i > 0 && j > i, "the switched branch");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets)
       const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
       const run = (prevUid, uid, persisted) => {
-        const st = { set: [], chained: 0, errLog: [], showErr: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const st = { set: [], chained: 0, errLog: [], showErr: [], dropped: [], pushResets: 0, refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const pushStub = { dropForeign: (uid) => { st.dropped.push(uid); return Promise.resolve({ action: "unsubscribed" }); } };
         // review 2 (10/1): an idle day-sync queue (nothing in flight) - the switch must not wait on it
         // review of the merge (10/2): the Recent-errors setters record, so Do first 8's clear on a switch is run, not only pinned
         fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {},
-          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
+          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v), pushStub, () => { st.pushResets++; }, () => {}, () => {});
         return st;
       };
       const sw = run("uA", "uB", TABLE);
@@ -9484,18 +9491,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(none.refs.scheduleRef.current === A_MAP && none.set.length === 0, "no persisted map: nothing to fall back to");
       assert.deepStrictEqual([none.errLog, none.showErr], [[[]], [false]], "Do first 8: a switch with no persisted map empties Recent errors too");
       assert.ok(sw.chained === 0 && same.chained === 0 && none.chained === 0, "an idle queue: nothing waits on it");
+      // Prompt 30: a different account stops the previous account's phone notifications on this device (dropForeign with the NEW
+      // account's id, fire and forget) and clears the card; the same account keeps them
+      assert.deepStrictEqual([sw.dropped, none.dropped, same.dropped], [["uB"], ["uB"], []], "pushDevice.dropForeign(<the new account>) on a switch only");
+      assert.ok(sw.pushResets === 1 && same.pushResets === 0, "the Phone notifications card is cleared on a switch only");
     });
     await acheckD("DF4 review 2 (10/1): a day write of the previous account still IN FLIGHT at the switch (lifted switched branch) - once its queue drains, the map follows lastSyncRef (the landed value), so a later merge cannot keep the old value as a local edit and write it back under the new JWT; a map replaced meanwhile (the re-run's adoption, a merge, an edit) is left alone", async () => {
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2)
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets)
       const BEFORE = { "2026-11-15": { primary: "s2", backup: "s4" } }, LANDED = { "2026-11-15": { primary: "s1", backup: "s3" } };
       const go = () => {
         let release; const chain = new Promise(r => { release = r; });
         const st = { cur: A_MAP, sets: 0, release, errLog: [], showErr: [], refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
         // setSchedule as React runs it: a value, or an updater handed the latest state
         const setSchedule = (m) => { st.cur = typeof m === "function" ? m(st.cur) : m; st.sets++; };
-        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v));
+        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v), { dropForeign: () => Promise.resolve({}) }, () => {}, () => {}, () => {});
         return st;
       };
       const a = go();
@@ -11788,6 +11799,255 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
+  /* ---------------- [P30] Phone push - integration cross pins (Prompt 30 integrate, 10/2) ---------------- */
+  // The three halves were built apart (push/db, push/edge, push/app); these pins make them meet, as Prompt 29's did. They read
+  // the migration (sql/migrations/2026-10-03-push-notifications.sql), the edge function (its @pushPlan / @webPush / @sendGate
+  // blocks, lifted) and sw.js (run in a sandbox) and hold the client (config.js, helpers.js, index-source.html), the smoke mock
+  // and verify-rls section 19 to them - a renamed RPC or column, a new refusal, a changed payload or route fails here, not on a
+  // phone. Integration found two seams and fixed them (each pinned below): sw.js counted the body in UTF-16 units while the edge
+  // cuts it in characters (an emoji-heavy 180-character body turned generic), and a send-notification deployed before Prompt 30
+  // answers ?push=test from a viewer / follower / APP / office account with its role gate's 403, which the client did not read
+  // as "not deployed".
+  console.log("\n[P30] phone push - integration cross pins (the migration, send-notification, sw.js, the client, the smoke mock, verify-rls 19)");
+  await (async () => {
+    const rd = (...p) => fs.readFileSync(path.join(ROOT, ...p), "utf8").replace(/\r\n/g, "\n");
+    const SRC = rd("index-source.html"), CFG = rd("config.js"), SW = rd("sw.js"), SMK = rd("test", "ui", "smoke.mjs"), VR = rd("scripts", "verify-rls.sh");
+    const EDGE = rd("edge-functions", "send-notification", "index.ts");
+    const MIG = rd("sql", "migrations", "2026-10-03-push-notifications.sql").split("\n").filter(l => !/^\s*--/.test(l)).join("\n"); // the statements (the header's rollback text left out)
+    const between = (text, a, b) => { const i = text.indexOf(a); const j = i < 0 ? -1 : text.indexOf(b, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' .. '" + b.slice(0, 60) + "' not found"); return text.slice(i, j + b.length); };
+    const plain = (v) => JSON.parse(JSON.stringify(v));
+    const acheckQ = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const edgeBlock = (tag) => {
+      const i = EDGE.search(new RegExp("^// @" + tag + "-start[ \\t]*$", "m")), j = EDGE.search(new RegExp("^// @" + tag + "-end[ \\t]*$", "m"));
+      if (i < 0 || j < i) throw new Error("send-notification/index.ts has no @" + tag + " block");
+      return EDGE.slice(i, j);
+    };
+    const PP = new Function(edgeBlock("logRedact-mirror") + edgeBlock("pushPlan") + "\nreturn { PUSH_TABS, PUSH_PREF_OF, PUSH_ENDPOINT_RE, PUSH_NOT_SET_UP, PUSH_NOT_CONFIGURED, pushPayload, pushSummary, pushEndpointAllowed, pushVapidConfigOk };")();
+    const WP = new Function(edgeBlock("webPush") + "\nreturn { wpB64uEncode, wpB64uDecode };")();
+    const SG = new Function(edgeBlock("sendGate") + "\nreturn { senderRole };")();
+    // the three RPCs: { name, params: [[name, type...]], body, ret: [keys] }
+    const topArgs = (s) => { const out = []; let d = 0, cur = ""; for (const ch of s) { if (ch === "(") d++; if (ch === ")") d--; if (ch === "," && d === 0) { out.push(cur.trim()); cur = ""; } else cur += ch; } if (cur.trim()) out.push(cur.trim()); return out; };
+    const retKeys = (body) => {
+      const k = "return jsonb_build_object(", i = body.lastIndexOf(k);
+      const s = body.slice(i + k.length);
+      let d = 1, j = 0;
+      for (; j < s.length && d > 0; j++) { if (s[j] === "(") d++; else if (s[j] === ")") d--; }
+      return topArgs(s.slice(0, j - 1)).filter((_, n) => n % 2 === 0).map(a => a.replace(/^'|'$/g, ""));
+    };
+    const FN = {};
+    { const rx = /create or replace function public\.([a-z_]+)\(([^)]*)\) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as \$\$([\s\S]*?)\nend \$\$;/g; let m;
+      while ((m = rx.exec(MIG))) FN[m[1]] = { params: m[2].split(",").map(s => s.trim().split(/\s+/)), body: m[3], ret: retKeys(m[3]) }; }
+    const RAISES = [];
+    { const rx = /raise exception '(PUSH_[A-Z_]+): ((?:[^']|'')*)' using errcode = '(PS\d{3})'/g; let m; while ((m = rx.exec(MIG))) RAISES.push({ token: m[1], text: m[2].replace(/''/g, "'"), code: m[3] }); }
+    const MIG_COLS = Array.from(MIG.matchAll(/alter table public\.notification_preferences add column if not exists ([a-z_]+) boolean not null default true;/g)).map(m => m[1]);
+    const sqlRegex = (constraint) => { const m = new RegExp("constraint " + constraint + " check \\(([^\\n]*)\\),?\\n").exec(MIG); if (!m) throw new Error("no constraint " + constraint); const r = /~ '((?:[^']|'')*)'/.exec(m[1]); return r[1].replace(/''/g, "'"); };
+
+    check("P30 cross pins (integration): the three RPCs exist once each (volatile definer, search_path pinned - PostgREST refuses GET, so the endpoint never rides in a URL) and config.js sends exactly their parameter names, in order, in a POST body; verify-rls 19b-19d post the same keys", () => {
+      assert.deepStrictEqual(Object.keys(FN).sort(), ["delete_push_subscription", "push_subscription_status", "save_push_subscription"], "the migration's three functions");
+      const want = { save_push_subscription: [["p_endpoint", "text"], ["p_p256dh", "text"], ["p_auth", "text"], ["p_label", "text", "default", "null"]], delete_push_subscription: [["p_endpoint", "text"]], push_subscription_status: [["p_endpoint", "text"]] };
+      assert.deepStrictEqual(plain(Object.fromEntries(Object.entries(FN).map(([k, v]) => [k, v.params]))), want, "the parameter names and types");
+      for (const name of Object.keys(FN)) {
+        const calls = Array.from(CFG.matchAll(new RegExp('pushDb\\._rpc\\("' + name + '", \\{ ([^}]*) \\}\\)', "g")));
+        assert.strictEqual(calls.length, 1, "config.js calls " + name + " once (pushDb)");
+        assert.deepStrictEqual((calls[0][1].match(/\bp_[a-z0-9]+(?=:)/g) || []), FN[name].params.map(p => p[0]), "config.js sends exactly " + name + "'s parameter names, in order");
+        assert.strictEqual(CFG.split("/rest/v1/rpc/" + name).length - 1, 0, "the RPC path is built in _rpc only: " + name);
+        assert.ok(!SRC.includes(name), "index-source.html never names " + name + " (config.js pushDb is the only caller)");
+        const vrLine = VR.split("\n").find(l => l.includes('"$URL/rest/v1/rpc/' + name + '"') && /-H "Authorization: Bearer \$ANON"/.test(l));
+        assert.ok(vrLine, "verify-rls posts " + name + " as anon");
+        const body = JSON.parse(/-d '(\{[^']*\})'/.exec(vrLine)[1]);
+        assert.deepStrictEqual(Object.keys(body), FN[name].params.map(p => p[0]), "verify-rls 19's " + name + " body names the parameters");
+      }
+      assert.ok(CFG.includes("const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, { method: \"POST\", body: JSON.stringify(body) });"), "_rpc: one POST through authFetch (the user's JWT)");
+      assert.ok(!/push_subscriptions\?/.test(CFG + SRC), "the client never reads or writes the table over REST - the RPCs only (authenticated has no INSERT / UPDATE and no SELECT on endpoint / p256dh / auth)");
+    });
+    check("P30 cross pins (integration): PUSH_CODES = the codes and tokens the migration raises (10 raises, PS001-PS007); each message, as PostgREST relays it, reads back through pushErrorWords as the function's own sentence; enable()'s two local refusals say the PS003 / PS004 words", () => {
+      assert.strictEqual(RAISES.length, 10, "10 raises: " + RAISES.map(r => r.code).join(","));
+      assert.strictEqual((MIG.match(/errcode = 'PS\d{3}'/g) || []).length, RAISES.length, "every PS errcode sits on a parsed raise");
+      const seen = {};
+      RAISES.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token"); seen[r.code] = r.token; });
+      assert.deepStrictEqual(seen, plain(H.PUSH_CODES), "helpers.js PUSH_CODES = the migration's code -> token pairs");
+      RAISES.forEach(r => {
+        const relayed = JSON.stringify({ code: r.code, details: null, hint: null, message: r.token + ": " + r.text });
+        assert.strictEqual(H.pushErrorWords(relayed, 400), r.text, r.code + " words = the function's sentence");
+      });
+      const txt = (code) => RAISES.find(r => r.code === code).text;
+      assert.ok(CFG.includes(JSON.stringify(txt("PS003"))) && CFG.includes(JSON.stringify(txt("PS004"))), "enable()'s local refusal (an endpoint off the known services / unreadable keys) says the server's PS003 / PS004 sentence");
+      assert.strictEqual(H.pushErrorWords(JSON.stringify({ code: "PGRST202", message: "Could not find the function public.save_push_subscription(p_auth, p_endpoint, p_label, p_p256dh) in the schema cache" }), 404), H.PUSH_UNAVAILABLE_TEXT, "a missing function (migration not applied) is 'available after the next update'");
+    });
+    check("P30 cross pins (integration): the return keys the client reads exist - save {ok, action, devices, audit} (action added / kept / refreshed / moved), delete {ok, removed, devices, audit}, status {ok, saved, devices}; config.js reads only those; the smoke mock answers exactly those keys", () => {
+      assert.deepStrictEqual(FN.save_push_subscription.ret, ["ok", "action", "devices", "audit"]);
+      assert.deepStrictEqual(FN.delete_push_subscription.ret, ["ok", "removed", "devices", "audit"]);
+      assert.deepStrictEqual(FN.push_subscription_status.ret, ["ok", "saved", "devices"]);
+      Object.values(FN).forEach(f => assert.ok(f.body.includes("return jsonb_build_object('ok', true,"), "ok is literally true"));
+      assert.deepStrictEqual(Array.from(new Set(Array.from(FN.save_push_subscription.body.matchAll(/v_action := '([a-z]+)'/g)).map(m => m[1]))).sort(), ["added", "kept", "moved", "refreshed"]);
+      assert.ok(CFG.includes('if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from " + name, unavailable: false };'), "the client accepts only ok === true");
+      const push = between(CFG, "const pushDb = {", "\n// ---- Call pay");
+      const read = Array.from(new Set(Array.from(push.matchAll(/\.result\.([a-z_]+)/g)).map(m => m[1]))).sort();
+      assert.deepStrictEqual(read, ["action", "devices", "saved"], "config.js reads result.action / devices / saved");
+      read.forEach(k => assert.ok(Object.values(FN).some(f => f.ret.includes(k)), k + " is a return key"));
+      for (const name of Object.keys(FN)) {
+        const lines = SMK.split("\n").filter(l => l.includes(name + '")') && /\{ ok: true,/.test(l));
+        assert.ok(lines.length >= 2, "the smoke mock answers " + name + " (shared route + the push step), got " + lines.length);
+        lines.forEach(l => { const o = /\{ (ok: true,[^}]*)\}/.exec(l)[1]; assert.deepStrictEqual(Array.from(o.matchAll(/\b([a-z_]+): /g)).map(m => m[1]), FN[name].ret, "the smoke mock's " + name + " answer keys: " + l.trim().slice(0, 120)); });
+        lines.forEach(l => (l.match(/action: [^,]*/g) || []).forEach(a => (a.match(/"([a-z]+)"/g) || []).forEach(v => assert.ok(["added", "kept", "moved", "refreshed"].includes(v.slice(1, -1)), "mock action " + v))));
+      }
+    });
+    check("P30 cross pins (integration): the two *_push columns are the migration's on every side - the edge's PUSH_PREF_OF switches, notifPrefSaveRequest's opts.push keys, config.js's column probe, the Settings switches, the smoke's probe matcher and verify-rls 19e", () => {
+      assert.deepStrictEqual(MIG_COLS, ["trade_updates_push", "schedule_updates_push"], "the migration adds the two boolean not null default true columns");
+      assert.deepStrictEqual(Array.from(new Set(Object.values(PP.PUSH_PREF_OF))).sort(), MIG_COLS.slice().sort(), "the edge's switches");
+      const row = H.notifPrefSaveRequest({ personId: "s1" }, { trade_updates_push: false }, "2026-10-02T00:00:00Z", { push: true }).row;
+      assert.deepStrictEqual(Object.keys(row).filter(k => /_push$/.test(k)).sort(), MIG_COLS.slice().sort(), "notifPrefSaveRequest(..., { push: true }) writes exactly the two columns");
+      assert.strictEqual(row.trade_updates_push, false); assert.strictEqual(row.schedule_updates_push, true);
+      assert.ok(!Object.keys(H.notifPrefSaveRequest({ profileId: "p" }, {}, "2026-10-02T00:00:00Z").row).some(k => /_push$/.test(k)), "without opts.push no *_push key (the pre-migration body)");
+      const probe = "notification_preferences?select=" + MIG_COLS.join(",") + "&limit=1";
+      assert.ok(CFG.includes("/rest/v1/" + probe + "`"), "config.js pushColumns probes both columns");
+      assert.ok(VR.includes('"$URL/rest/v1/' + probe + '"'), "verify-rls 19e probes both columns");
+      assert.deepStrictEqual(Array.from(new Set(Array.from(SRC.matchAll(/\["([a-z_]+_push)","/g)).map(m => m[1]))).sort(), MIG_COLS.slice().sort(), "the Settings switches (surgeon and follower rows) name exactly the two columns");
+      assert.ok(/\/trade_updates_push\/\.test\(url\.searchParams\.get\("select"\)/.test(SMK), "the smoke answers the column probe locally");
+      assert.ok(EDGE.includes('rest("notification_preferences?select=*")'), "the edge reads every prefs column (select=*) - the push switches arrive with the e-mail flags");
+    });
+    check("P30 cross pins (integration): the endpoint rule is ONE regex - the migration's check constraint = save_push_subscription's test = helpers.js / the edge's PUSH_ENDPOINT_RE (2048 characters at most on every side); the key and label shapes the client produces satisfy the migration's checks; base64url is the same on both ends", () => {
+      const sqlEp = sqlRegex("push_subscriptions_endpoint_shape");
+      assert.ok(MIG.includes("p_endpoint !~ '" + sqlEp.replace(/'/g, "''") + "'"), "the function tests the same regex as the constraint");
+      assert.ok(MIG.includes("length(endpoint) <= 2048") && MIG.includes("length(p_endpoint) > 2048"), "2048 in both SQL places");
+      assert.strictEqual(H.PUSH_ENDPOINT_RE.source, PP.PUSH_ENDPOINT_RE.source, "helpers.js and the edge carry the same literal");
+      assert.strictEqual(H.PUSH_ENDPOINT_RE.source.replace(/\\\//g, "/"), sqlEp, "the JS literal = the SQL regex");
+      const ok = ["https://fcm.googleapis.com/fcm/send/abc", "https://web.push.apple.com/QOp", "https://updates.push.services.mozilla.com/wpush/v2/x", "https://wns2-par02p.notify.windows.com/w/?token=x", "https://android.googleapis.com/gcm/send/x"];
+      const no = ["http://fcm.googleapis.com/fcm/send/x", "https://evil.example/push/x", "https://fcm.googleapis.com.evil.example/x", "https://fcm.googleapis.com/a b", "https://fcm.googleapis.com/" + "x".repeat(2030)];
+      ok.forEach(e => { assert.ok(H.pushEndpointAllowed(e) && PP.pushEndpointAllowed(e), "allowed: " + e); });
+      no.forEach(e => { assert.ok(!H.pushEndpointAllowed(e) && !PP.pushEndpointAllowed(e), "refused: " + e.slice(0, 60)); });
+      const p256 = new RegExp(sqlRegex("push_subscriptions_p256dh_shape")), authRe = new RegExp(sqlRegex("push_subscriptions_auth_shape")), label = new RegExp(sqlRegex("push_subscriptions_label_shape"));
+      assert.strictEqual(label.source, "^[A-Za-z0-9 .()/-]{1,40}$", "the label check's regex");
+      for (let n = 0; n < 20; n++) {
+        const pt = new Uint8Array(require("crypto").randomBytes(65)); pt[0] = 4;
+        const au = new Uint8Array(require("crypto").randomBytes(16));
+        assert.ok(p256.test(H.pushB64u(pt)), "a 65-byte uncompressed point -> the p256dh shape");
+        assert.ok(authRe.test(H.pushB64u(au)), "a 16-byte auth secret -> the auth shape");
+        assert.strictEqual(H.pushB64u(pt), WP.wpB64uEncode(pt), "the client's base64url = the edge's");
+        assert.deepStrictEqual(Array.from(H.pushB64uDecode(WP.wpB64uEncode(pt))), Array.from(pt), "the client decodes the edge's public key (applicationServerKey) byte for byte");
+        assert.deepStrictEqual(Array.from(WP.wpB64uDecode(H.pushB64u(au))), Array.from(au), "the edge decodes the client's auth byte for byte");
+      }
+      const keyRe = /^B[A-Za-z0-9_-]{86}$/;
+      assert.ok(CFG.includes("if (!/^B[A-Za-z0-9_-]{86}$/.test(key)) return { state: \"failed\", error: \"the server's public key is malformed\" };"), "config.js accepts the web-push public key shape");
+      assert.ok(EDGE.includes("/^B[A-Za-z0-9_-]{86}$/.test(publicKey)") && VR.includes("^B[A-Za-z0-9_-]{86}"), "the edge's secret check and verify-rls 19i use the same shape");
+      assert.ok(keyRe.test(H.pushB64u(Object.assign(new Uint8Array(65), { 0: 4 }))));
+      const UAS = [["Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1", 5], ["Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15", 5], ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15", 5], ["Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36", 5], ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Edg/126.0", 0], ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0", 0], ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15", 0], ["Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36", 0], ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 OPR/111.0", 0], ["", 0], ["<script>alert(1)</script>", 0]];
+      UAS.forEach(([ua, t]) => { const l = H.pushDeviceLabel(ua, t); assert.ok(label.test(l), "pushDeviceLabel(" + ua.slice(0, 40) + ") = " + JSON.stringify(l) + " passes the DB label check"); });
+    });
+    check("P30 cross pins (integration): the routes - config.js GETs ?vapid=public with no auth (the edge's GET branch, before any auth) and POSTs ?push=test through authFetch (the edge's test branch: after the GoTrue check, BEFORE the role gate); verify-rls 19i calls the same two; the edge's columns and PATCH keys are the migration's", () => {
+      assert.strictEqual(C.EDGE_FN_BASE, C.SUPABASE_URL + "/functions/v1");
+      assert.ok(CFG.includes("const res = await fetch(`${EDGE_FN_BASE}/send-notification?vapid=public`, { cache: \"no-store\" });"), "the public-key GET: no headers");
+      assert.ok(CFG.includes("const res = await authFetch(`${EDGE_FN_BASE}/send-notification?push=test`, { method: \"POST\", body: \"{}\" });"), "the test POST");
+      const iGet = EDGE.indexOf('if (req.method === "GET" && new URL(req.url).searchParams.get("vapid") === "public") {');
+      const iAuth = EDGE.indexOf('const authz = req.headers.get("authorization") || "";');
+      const iUser = EDGE.indexOf('if (!userId) return json(401,');
+      const iTest = EDGE.indexOf('if (new URL(req.url).searchParams.get("push") === "test") {');
+      const iRole = EDGE.indexOf("const roleDenied = senderRole(caller);");
+      assert.ok(iGet > 0 && iGet < iAuth, "the GET branch runs before any auth");
+      assert.ok(iUser > 0 && iUser < iTest && iTest < iRole, "the test branch: after the verified user, before the role gate");
+      assert.ok(VR.includes('"$URL/functions/v1/send-notification?vapid=public"') && VR.includes('-X POST "$URL/functions/v1/send-notification?push=test"'), "verify-rls 19i");
+      const cols = between(MIG, "create table if not exists public.push_subscriptions (", "\n);").split("\n").map(l => (/^  ([a-z0-9_]+)\s/.exec(l) || [])[1]).filter(Boolean).filter(c => c !== "constraint");
+      assert.deepStrictEqual(cols, ["id", "profile_id", "endpoint", "p256dh", "auth", "device_label", "created_at", "last_ok_at", "last_error_at", "fail_count"]);
+      const sels = Array.from(EDGE.matchAll(/push_subscriptions\?select=([a-z0-9_,]+)&/g));
+      assert.strictEqual(sels.length, 2, "two device reads (the fan-out and the test route)");
+      sels.forEach(m => { assert.strictEqual(m[1], "id,profile_id,endpoint,p256dh,auth,fail_count"); m[1].split(",").forEach(c => assert.ok(cols.includes(c), "the edge selects " + c)); });
+      const patches = Array.from(EDGE.matchAll(/body: JSON\.stringify\(\{ (last_[a-z_]+: [^}]*)\}\)/g));
+      assert.strictEqual(patches.length, 2, "two bookkeeping PATCHes (sent rows, failed rows)");
+      patches.forEach(m => Array.from(m[1].matchAll(/\b([a-z0-9_]+): /g)).forEach(k => assert.ok(cols.includes(k[1]), "the edge patches " + k[1])));
+      assert.ok(MIG.includes("profile_id     uuid not null references public.user_profiles(id) on delete cascade"), "a device belongs to a user_profiles id (= auth.uid())");
+      assert.ok(EDGE.includes("&profile_id=in.(${ids.join(\",\")})") && EDGE.includes("&profile_id=eq.${encodeURIComponent(userId)}"), "the edge reads devices by account id (user_profiles.id / the verified user)");
+      assert.ok(EDGE.includes('rest("user_profiles?select=id,person_id,email&person_id=not.is.null")'), "a surgeon's devices: every account linked to his person id");
+    });
+    await acheckQ("P30 cross pins (integration): the test route's answers are worded by the client - 200 { push } -> the count words; 503 PUSH_NOT_SET_UP -> not set up; a pre-Prompt-30 function -> 'needs the next update' for a surgeon (400 unknown type) AND a viewer / follower / APP / office account or an unlinked surgeon (its role gate's 403, read before the body); the test route itself never answers 403", async () => {
+      const route = between(EDGE, 'if (new URL(req.url).searchParams.get("push") === "test") {', "\n    }\n");
+      assert.deepStrictEqual(Array.from(new Set(Array.from(route.matchAll(/json\((\d{3}),/g)).map(m => Number(m[1])))).sort(), [200, 401, 503], "the test route answers 200 / 401 / 503 only (a read failure goes to the outer catch: 502)");
+      assert.ok(route.includes("return json(503, { error: PUSH_NOT_SET_UP });") && route.includes("return json(200, { push: { ...p, skipped_pref_off: 0 } });"));
+      assert.ok(EDGE.includes("if (!cat) return json(400, { error: `unknown notification type \"${rawType}\"` });"), "the old flow's answer to an empty body");
+      assert.ok(EDGE.includes("return json(403, { error: `not allowed: ${roleDenied}` });"), "the role gate's 403 wording");
+      const pushDb = vm.runInContext("pushDb", sandbox);
+      const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "");
+      const savedLs = sandbox.localStorage._m;
+      sandbox.localStorage._m = { "silvis-auth-token": "h." + b64({ sub: "00000000-0000-4000-8000-0000000b0001", exp: Math.floor(Date.now() / 1000) + 3600 }) + ".s" };
+      const sendTest = async (status, body) => { const seen = []; sandbox.__fetch = async (url, init) => { seen.push({ url: String(url), init: init || {} }); return resp(status, body); }; const r = await pushDb.sendTest(); assert.strictEqual(seen.length, 1); assert.ok(seen[0].url.endsWith("/functions/v1/send-notification?push=test")); return r; };
+      try {
+        const summary = PP.pushSummary({ recipients: [{ key: "self", kind: "self", status: "sent" }], devices: { sent: 2, failed: 0, removed: 0 } }, [], false);
+        let r = await sendTest(200, { push: { ...summary, skipped_pref_off: 0 } });
+        assert.ok(r.ok && !r.notDeployed && !r.notConfigured);
+        assert.strictEqual(H.pushTestWords(r), "Test sent to 2 device(s) on your account - it should arrive in a few seconds.");
+        r = await sendTest(503, { error: PP.PUSH_NOT_SET_UP });
+        assert.ok(r.notConfigured); assert.strictEqual(H.pushTestWords(r), "Phone notifications are not set up on the server yet.");
+        const OLD = "The server does not send phone notifications yet (it needs the next update).";
+        r = await sendTest(400, { error: 'unknown notification type ""' });
+        assert.ok(r.notDeployed, "a surgeon on the old function"); assert.strictEqual(H.pushTestWords(r), OLD);
+        for (const caller of [{ role: "viewer", personId: null }, { role: "coordinator", personId: null }, { role: "surgeon", personId: null }, { role: null, personId: null }]) {
+          const why = SG.senderRole(caller);
+          assert.ok(why, "the old role gate refuses " + JSON.stringify(caller));
+          r = await sendTest(403, { error: "not allowed: " + why });
+          assert.ok(r.notDeployed, "403 '" + why + "' from the old function reads as not deployed");
+          assert.strictEqual(H.pushTestWords(r), OLD);
+        }
+        r = await sendTest(403, { error: "Forbidden" });
+        assert.ok(!r.notDeployed, "a 403 that is not the role gate's is not read as 'not deployed'");
+        r = await sendTest(401, { error: "authentication required - sign in again (a stale app build may need a reload)" });
+        assert.strictEqual(H.pushTestWords(r), "Sign in again, then try the test.");
+        assert.ok(/not configured/.test(PP.PUSH_NOT_CONFIGURED) && H.pushTestWords({ ok: true, status: 200, push: { error: PP.PUSH_NOT_CONFIGURED } }) === "Phone notifications are not set up on the server yet.", "a fan-out's push.error 'push not configured' words as not set up");
+        const keys = Object.keys(summary).sort();
+        const mockPush = Array.from(SMK.matchAll(/push: \{ (sent: [^\n]*?), error: null \} \}/g)).map(m => m[1].replace(/devices: \{[^}]*\}/, "devices: 0"));
+        assert.ok(mockPush.length >= 2, "the smoke mock answers ?push=test (shared route + the push step)");
+        mockPush.forEach(o => assert.deepStrictEqual(Array.from(o.matchAll(/\b([a-z_]+): /g)).map(m => m[1]).concat(["error"]).sort(), keys, "the smoke mock's push keys = pushSummary's"));
+      } finally {
+        sandbox.localStorage._m = savedLs;
+      }
+    });
+    await acheckQ("P30 cross pins (integration): the payload the edge builds is the payload sw.js shows - for every push category, a person / a follower (short and long names) and the test notice, with plain, long, address-carrying, emoji-heavy and empty messages: the title, body, tag, tab and day come through unchanged (never the generic notice); a tap opens ./?tab=..[&day=..] that pushDeepLink reads back to the same view, and an open window's message reads back through pushOpenMessage", async () => {
+      const SIL = "https://fkhan628.github.io/Silvis-Call-Schedule/";
+      const loadSw = (clients) => {
+        const listeners = {}, rec = { shown: [], opened: [], posted: [] };
+        const self = {
+          addEventListener: (t, fn) => { listeners[t] = fn; }, skipWaiting: () => Promise.resolve(),
+          registration: { scope: SIL, showNotification: async (title, opt) => { rec.shown.push({ title, opt }); } },
+          clients: { claim: async () => {}, matchAll: async () => (clients || []).map(url => ({ url, focus: async () => {}, postMessage: (m) => rec.posted.push(m) })), openWindow: async (u) => { rec.opened.push(u); } },
+        };
+        const box = { self, URL, console: { log() {}, warn() {}, error() {} } };
+        vm.createContext(box);
+        vm.runInContext(SW, box, { filename: "sw.js" });
+        const fire = async (type, ev) => { const w = []; ev.waitUntil = (p) => w.push(Promise.resolve(p)); listeners[type](ev); await Promise.all(w); };
+        return { rec, fire };
+      };
+      const tradeId = "abcdef12" + "-0000-4000-" + "8000-" + "0".repeat(12);
+      const MSGS = ["Fierce proposes a trade - you take Sat 10/10 primary, Fierce takes Sun 10/18 primary\nNote: thanks", "  \n\n10/12 P Philip -> Fierce (by Khan)", "x ".repeat(300), String.fromCodePoint(0x1F600).repeat(200), String.fromCodePoint(0x1F600) + " " + "y".repeat(400), "Write to someone@example.com about it", ""];
+      const WHO = [{ kind: "person" }, { kind: "follower", followedNames: ["Burchett"] }, { kind: "follower", followedNames: ["Abcdefghijklmnopqrstuvwxyz", "Bcdefghijklmnopqrstuvwxyz", "Cdefghijklmnop"] }];
+      const cases = [];
+      Object.keys(PP.PUSH_PREF_OF).forEach(type => MSGS.forEach(message => WHO.forEach(who => cases.push([type, { message, day: "2026-10-15", role: "backup", trade_id: tradeId }, who]))));
+      cases.push(["test", {}, { kind: "self" }]);
+      let n = 0;
+      for (const [type, data, who] of cases) {
+        const p = PP.pushPayload(type, data, who, "Frame title", Date.UTC(2026, 9, 2));
+        const label = type + " / " + who.kind + " / " + JSON.stringify(String(data.message || "").slice(0, 24));
+        assert.deepStrictEqual(Object.keys(p).filter(k => !["v", "title", "body", "tag", "tab", "params"].includes(k)), [], label + ": only the contract keys");
+        const w = loadSw([]);
+        await w.fire("push", { data: { json: () => JSON.parse(JSON.stringify(p)) } });
+        assert.strictEqual(w.rec.shown.length, 1, label);
+        const s = w.rec.shown[0];
+        assert.deepStrictEqual([s.title, s.opt.body, s.opt.tag], [p.title, p.body, p.tag], label + ": sw.js shows the edge's notification, not the generic one (body " + Array.from(p.body).length + " characters, " + p.body.length + " UTF-16 units)");
+        const day = p.params && p.params.day ? p.params.day : null;
+        assert.deepStrictEqual(plain(s.opt.data), { tab: p.tab, day }, label + ": the tap target rides in data");
+        await w.fire("notificationclick", { notification: { data: s.opt.data, close() {} } });
+        assert.strictEqual(w.rec.opened.length, 1, label + ": no window open -> one new window");
+        const u = new URL(w.rec.opened[0]);
+        assert.strictEqual(u.origin + u.pathname, SIL, label + ": the app folder, same origin");
+        const dl = H.pushDeepLink(u.search);
+        assert.deepStrictEqual([dl.tab, dl.day, dl.strip], [p.tab, day, true], label + ": the app reads the link back to the same view / day");
+        const w2 = loadSw([SIL + "?_v=x"]);
+        await w2.fire("notificationclick", { notification: { data: s.opt.data, close() {} } });
+        assert.deepStrictEqual(plain(H.pushOpenMessage(w2.rec.posted[0])), { tab: p.tab, day }, label + ": an open window is told the same view");
+        n++;
+      }
+      assert.ok(n >= 200, "covered " + n + " payloads");
+      assert.ok(SW.includes("Array.from(p.body).length <= 300"), "sw.js counts the body in characters, as the edge cuts it");
+    });
+  })();
+
   /* ---------------- XR. Cross-app update reset (Cowork 10/2 6:45 PM, Faraz's order: its own small ship) ---------------- */
   // caches.keys() and getRegistrations() are per ORIGIN, and fkhan628.github.io also serves the Davenport app, whose
   // OneSignal push worker sits at the origin root. The head script's nukeAndReload (every version change, and the Refresh
@@ -11811,7 +12071,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const reg = (id, scope, slots, rejects) => ({ id, scope, rejects: !!rejects, active: slots.active ? { scriptURL: slots.active } : null, waiting: slots.waiting ? { scriptURL: slots.waiting } : null, installing: slots.installing ? { scriptURL: slots.installing } : null });
     // Runs the head script once in a fresh sandbox; resolves when it reloads (location.replace / location.reload) or after 2 s.
     const runHead = async (o) => {
-      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], timers: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined };
+      const rec = { unregistered: [], deleted: [], replaced: [], reloads: 0, warns: [], timers: [], ls: new Map(Object.entries(o.stored || {})), hardReset: undefined, appBase: undefined };
       let settle; const settled = new Promise(r => { settle = r; });
       const sandbox = {
         URL,
@@ -11833,6 +12093,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       vm.createContext(sandbox);
       vm.runInContext(HEAD, sandbox, { filename: "index-source.html (head script)" });
       rec.hardReset = sandbox.__silvisHardReset;
+      rec.appBase = typeof sandbox.__silvisAppBase === "function" ? sandbox.__silvisAppBase() : sandbox.__silvisAppBase; // Prompt 30: config.js pushDevice.base()
       if (o.callHardReset) {
         if (typeof sandbox.__silvisHardReset !== "function") throw new Error("window.__silvisHardReset is not a function after a load with no version change");
         sandbox.__silvisHardReset();
@@ -11855,9 +12116,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const LIVE_REGS = [
       reg("root-onesignal", LIVE, { active: LIVE + "OneSignalSDKWorker.js" }), // Davenport's push worker, exactly as served
       reg("root-other", LIVE, { active: LIVE + "sw.js" }), // a root worker with some other script: not Silvis-scoped either
-      // Silvis's push worker as Prompt 30 will register it (scope = the folder, script sw.js): unregistered TODAY (Silvis
-      // registers no worker yet); Prompt 30's keepRegistration hook moves it to kept - this named fake is where that shows.
+      // Silvis's push worker as Prompt 30 registers it (scope = the folder, script <folder>sw.js): KEPT since Prompt 30 (the
+      // keep-predicate's sw.js rule, compared without the query / fragment - so sw.js?v=1 and sw.js#x are kept too); a sw.js
+      // in a SUBfolder scope, or one served from a subfolder, is not Silvis's worker and still goes.
       reg("silvis-push", SIL, { active: SIL + "sw.js" }),
+      reg("silvis-push-v", SIL, { waiting: SIL + "sw.js?v=1" }),
+      reg("silvis-push-frag", SIL, { installing: SIL + "sw.js#x" }),
+      reg("silvis-sub-sw", SIL + "x/", { active: SIL + "x/sw.js" }),
+      reg("silvis-sw-elsewhere", SIL + "y/", { active: SIL + "sw.jsx" }),
       reg("silvis", SIL + "legacy/", { active: SIL + "legacy/old-sw.js" }),
       reg("silvis-sub-installing", SIL + "sub/", { installing: SIL + "sub/w.js" }),
       reg("silvis-no-worker", SIL + "empty/", {}),
@@ -11867,7 +12133,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       reg("prefix-sibling", LIVE + "Silvis-Call-Schedule-old/", { active: LIVE + "Silvis-Call-Schedule-old/sw.js" }), // shares the prefix STRING only
       reg("davenport-folder", LIVE + "Call-Schedule-App/", { active: LIVE + "Call-Schedule-App/sw.js" }),
     ];
-    const LIVE_UNREG = ["silvis-push", "silvis", "silvis-sub-installing", "silvis-no-worker"]; // Prompt 30: silvis-push leaves this list
+    const LIVE_UNREG = ["silvis", "silvis-sub-installing", "silvis-no-worker", "silvis-sub-sw", "silvis-sw-elsewhere"]; // Prompt 30: silvis-push (and its ?v= / # variants) left this list - kept
     const CACHES = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "silvis-shell-v1", "dsg-silvis-mirror", "silvisX-cache"];
     const NOT_OURS = ["OneSignal-sdk-cache-v1", "dsg-app-v3", "workbox-precache-v2-https://fkhan628.github.io/", "dsg-silvis-mirror", "silvisX-cache"];
 
@@ -11876,7 +12142,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!rec.unregistered.includes("root-onesignal"), "Davenport's OneSignal worker at the origin root was unregistered");
       assert.ok(!rec.unregistered.includes("root-other"), "a worker scoped at the origin root (a PARENT of the Silvis folder) was unregistered");
       assert.ok(!rec.unregistered.includes("prefix-sibling"), "/Silvis-Call-Schedule-old/ only shares the prefix string - unregistered");
-      assert.deepStrictEqual(sorted(rec.unregistered), sorted(LIVE_UNREG), "exactly the Silvis-scoped, non-OneSignal registrations");
+      assert.deepStrictEqual(sorted(rec.unregistered), sorted(LIVE_UNREG), "exactly the Silvis-scoped, non-OneSignal registrations that are not the Silvis push worker");
+      ["silvis-push", "silvis-push-v", "silvis-push-frag"].forEach(id => assert.ok(!rec.unregistered.includes(id), "Prompt 30: Silvis's own push worker (" + id + ") was unregistered - every update would drop this device's phone notifications"));
+      assert.ok(rec.unregistered.includes("silvis-sub-sw"), "a sw.js in a SUBfolder scope of the app folder is not Silvis's push worker - it must still go");
     });
     await acheckX("XR caches: only a silvis- cache is deleted - OneSignal..., dsg-..., workbox-..., a name with silvis- inside it and silvisX- (no dash) are kept", async () => {
       const rec = await runHead({ href: SIL, stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, cacheNames: CACHES, callHardReset: true });
@@ -11925,7 +12193,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const bare = await runHead({ href: LIVE + "Silvis-Call-Schedule", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
       assert.deepStrictEqual(sorted(bare.unregistered), sorted(LIVE_UNREG), "no trailing slash: the base is still the Silvis folder, never the origin root");
       const idx = await runHead({ href: SIL + "index", stored: { "silvis-app-version": VERSION }, regs: LIVE_REGS, callHardReset: true });
-      assert.deepStrictEqual(sorted(idx.unregistered), sorted(LIVE_UNREG), ".../Silvis-Call-Schedule/index: the base is the Silvis folder (silvis-push at the folder scope is reached)");
+      assert.deepStrictEqual(sorted(idx.unregistered), sorted(LIVE_UNREG), ".../Silvis-Call-Schedule/index: the base is the Silvis folder (the folder-scoped workers are reached; silvis-push is kept by its sw.js rule)");
       assertReloadedWithV(idx, SIL + "index");
     });
     await acheckX("XR no serviceWorker and no caches (an old browser): the _v reload still runs", async () => {
@@ -11954,13 +12222,27 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(rec.unregistered, []);
       assert.deepStrictEqual(rec.deleted, ["silvis-shell-v1"]);
     });
-    check("XR source pins: one nukeAndReload, assigned once to window.__silvisHardReset; the keep-predicate and its Prompt 30 hook comment are in place", () => {
+    check("XR source pins: one nukeAndReload, assigned once to window.__silvisHardReset; the keep-predicate carries Prompt 30's sw.js rule (the hook comment is gone - done) and window.__silvisAppBase is exposed once", () => {
       const cnt = (needle) => SRC.split(needle).length - 1;
       assert.strictEqual(cnt("function nukeAndReload()"), 1);
       assert.strictEqual(cnt("window.__silvisHardReset = nukeAndReload;"), 1);
       assert.strictEqual(cnt("function keepRegistration(scriptURLs, silvisBase)"), 1);
-      assert.ok(HEAD.includes("// KEEP-PREDICATE:") && HEAD.includes("// PROMPT 30 HOOK: Silvis's own push worker (sw.js"), "the commented keep-predicate hook for Prompt 30's push worker");
-      assert.ok(HEAD.includes('//   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;'), "the hook's example compares the script URL without its query (sw.js?v=... must be kept too)");
+      assert.ok(HEAD.includes("// KEEP-PREDICATE:"), "the keep-predicate comment");
+      assert.ok(!HEAD.includes("// PROMPT 30 HOOK:"), "Prompt 30 is done: the hook comment must be replaced by the real rule");
+      assert.strictEqual(cnt(`if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker`), 1, "the keep-predicate's sw.js rule (query and fragment stripped)");
+      assert.strictEqual(cnt("window.__silvisAppBase = silvisResetBase;"), 1, "Prompt 30: the app folder is exposed once for config.js pushDevice");
+      const tail = HEAD.slice(HEAD.indexOf("function nukeAndReload()"));
+      assert.ok(tail.indexOf("window.__silvisAppBase = silvisResetBase;") < tail.indexOf("if (mismatch) {"), "__silvisAppBase is set before the version branch - both branches have it");
+    });
+    await acheckX("XR window.__silvisAppBase (Prompt 30): exposed in BOTH branches (a version change and a plain load) and answers the reset's own base - the folder, also for .../index and a folder URL without its slash", async () => {
+      const a = await runHead({ href: SIL + "?tab=timeoff", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(a.appBase, SIL, "plain load");
+      const b = await runHead({ href: SIL, stored: { "silvis-app-version": "2000.01.01a" }, regs: [] });
+      assert.strictEqual(b.appBase, SIL, "version change");
+      const c = await runHead({ href: SIL + "index", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(c.appBase, SIL, ".../index");
+      const d = await runHead({ href: LIVE + "Silvis-Call-Schedule", stored: { "silvis-app-version": VERSION }, regs: [], callHardReset: true });
+      assert.strictEqual(d.appBase, SIL, "no trailing slash");
     });
   })();
 

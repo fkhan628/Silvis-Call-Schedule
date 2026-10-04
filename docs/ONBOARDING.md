@@ -214,6 +214,29 @@ shifts board ignore APP days.
 2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
 3. Tap **Save** before leaving Mine (a tapped day shows "*" until then; switching tabs asks first, but closing the app does not always ask - an iPhone never does) - your days appear on the calendar of everyone signed in as "A <your last name>" (on a phone its first letters).
 
+## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)
+
+The app sends a phone notification for the same events it e-mails a person about (trades, open shifts, a shift taken, the
+schedule published, a manual edit that touches them, offers, vacations logged), to the same people - on every device that
+person turned on. It is Silvis's own Web Push (no OneSignal, nothing to install; Davenport's push is separate and unchanged).
+Everyone turns it on **once per device**: Settings > **Notification settings** > **Phone notifications** > **Enable**, then
+**Send test** (a real notification to that person's own devices). **Turn off** stops it on that device; **Reset
+subscription** starts that device over; **Diagnose** says, in one line, what the device and the server hold. Which events
+reach the phones is set under "Which events reach your phones" (two switches, independent of the e-mail ones).
+
+**Three lines to send (iPhone / iPad - iOS 16.4 or later):**
+1. Open the Silvis call schedule in Safari, tap **Share** > **Add to Home Screen**, then open **Silvis Call** from that new icon.
+2. Sign in there once with your email and password - the Home Screen app has its own sign-in, separate from Safari.
+3. Tap **Settings** > **Notification settings** > **Phone notifications** > **Enable**, allow notifications, then tap **Send test**.
+
+**Android / a computer (Chrome, Edge, Firefox):** open the app, sign in, Settings > Notification settings > Phone
+notifications > **Enable**, allow, **Send test**. If the card says "Blocked for fkhan628.github.io", notifications were
+blocked for the whole site - that also affects the Davenport app: open the site settings (the icon left of the address), set
+Notifications to Allow, reload, tap Enable.
+
+**Signing out** turns phone notifications off on that device (the next person to sign in there does not get them); a
+shared office PC hands the device over when another account turns it on.
+
 ## Removing or changing someone
 
 - Change role or roster link: Setup → Users (or the SQL above).

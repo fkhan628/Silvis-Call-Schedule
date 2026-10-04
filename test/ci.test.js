@@ -142,6 +142,9 @@ const RUNTIME_FILTER = [
   "index-source.html", "build.js", "bump-version.js", "package.json", "package-lock.json",
   "config.js", "helpers.js", "rules.js", "east-feed.js", "generator.js", "importer.js", "app-styles.js",
   "vendor/**", "manifest.json", "icon-512.png", "icon-192.png", "apple-touch-icon.png",
+  // Prompt 30: the phone-push worker Pages serves beside the page (registered by config.js pushDevice, scope = the app
+  // folder) - a worker-only push must run the gate and bump APP_VERSION.
+  "sw.js",
   // The CI-owned outputs Pages serves (merge review 10/2): build.yml writes them, but a hand-committed copy pushed to
   // main (with tests, say) must run the gate and be rebuilt over instead of going live unbuilt.
   "index.html", "version.json",

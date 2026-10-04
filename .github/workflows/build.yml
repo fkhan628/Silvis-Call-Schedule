@@ -74,6 +74,9 @@ on:
       - "icon-512.png"
       - "icon-192.png"
       - "apple-touch-icon.png"
+      # Prompt 30: the phone-push worker Pages serves beside the page (scope = the
+      # app folder) - a worker-only push must run the gate and bump APP_VERSION.
+      - "sw.js"
       # The CI-owned outputs Pages serves (merge review of Do first 10, 10/2):
       # this workflow writes them, but a hand-committed copy pushed to main (with
       # tests, say) must still run the gate and be rebuilt over - unwatched, a
@@ -251,6 +254,12 @@ jobs:
       # range. Reads the tracked file list with git; pure - no network.
       - name: Repo privacy pins
         run: node test/privacy.test.js
+
+      # Prompt 30 (phone push): sw.js in a sandbox (every push shows a notification, the tap opens only a whitelisted
+      # same-scope view), config.js pushDb / pushDevice against fake service workers / PushManager / Notification, and the
+      # pure helpers. Pure - no network.
+      - name: Phone push tests
+        run: node test/push.test.js
 
       # The water-filled share's November 2026 case (Faraz 9/23): the pre-publish
       # inputs in test/fixtures/water-fill-2026-10-07-to-2027-01-03.json, the two

@@ -403,11 +403,26 @@ const db = {
 // loadFollower(profileId): GET ?select=*&profile_id=eq.<id> with the user's JWT -> { state: "ok", row } (row null when
 // he has none yet: every flag on), { state: "unavailable" } for PostgREST's missing-column 400 (revision o not applied:
 // the card says so and writes nothing), { state: "failed", error } for anything else - never an empty "ok".
+// Prompt 30: save(owner, cur, opts) - opts.push true (the two push columns exist: pushColumns() read "ok") adds
+// trade_updates_push / schedule_updates_push to the row (helpers.notifPrefSaveRequest); without it the body is exactly
+// the pre-Prompt-30 one. pushColumns(): GET ?select=trade_updates_push,schedule_updates_push&limit=1 with the user's JWT ->
+// "ok" (PostgREST knows both columns; RLS may answer [] - a 200 is the proof), "unavailable" (400 42703: the migration is
+// not applied - the phone switches stay hidden and no save names them), "failed" (anything else). Never throws.
 const notifPrefsDb = {
-  async save(owner, cur) {
-    const req = notifPrefSaveRequest(owner, cur, new Date().toISOString());
+  async save(owner, cur, opts) {
+    const req = notifPrefSaveRequest(owner, cur, new Date().toISOString(), opts);
     if (!req) return { error: "notifPrefsDb.save: the owner must be exactly one of personId / profileId" };
     return db.upsert("notification_preferences", req.row, { onConflict: req.onConflict });
+  },
+  async pushColumns() {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1`, { headers: dbAuthHeaders() });
+      if (res.ok) return "ok";
+      const body = await res.text().catch(() => "");
+      return res.status === 400 && /42703|does not exist/.test(body) && /_push/.test(body) ? "unavailable" : "failed";
+    } catch (e) {
+      return "failed";
+    }
   },
   async loadFollower(profileId) {
     if (typeof profileId !== "string" || !profileId) return { state: "failed", error: "no profile id" };
@@ -423,6 +438,398 @@ const notifPrefsDb = {
     } catch (e) {
       return { state: "failed", error: String((e && e.message) || e) };
     }
+  },
+};
+
+// ---- Phone push (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push"; sql/migrations/2026-10-03-push-notifications.sql) ----
+// Web Push with VAPID through Silvis's OWN worker (sw.js, scope = the app folder) - no third-party push SDK (Davenport's push
+// app and its worker at the origin root stay untouched; two of them on one origin conflict). The ONLY client file that names
+// the three push RPCs and the edge function's two push routes:
+//   pushDb.publicKey()   GET  <functions>/send-notification?vapid=public (no auth: the key is public) -> { state: "ok", key } |
+//                        { state: "unavailable", status } (404 / 405 / 503 - the function is not deployed with push yet, or
+//                        its VAPID secrets are missing) | { state: "failed", error }
+//   pushDb.save(...)     POST rpc/save_push_subscription { p_endpoint, p_p256dh, p_auth, p_label } - the only write path
+//   pushDb.remove(ep)    POST rpc/delete_push_subscription { p_endpoint }
+//   pushDb.status(ep)    POST rpc/push_subscription_status { p_endpoint } -> { state: "ok", saved, devices } | { state: "unavailable" } | { state: "failed" }
+//   pushDb.sendTest()    POST <functions>/send-notification?push=test (the caller's own devices; every signed-in role)
+// The endpoint travels only in a POST body - never in a URL, a log line, localStorage or the page. Writes and RPCs go through
+// authFetch (the user's JWT, a refresh + one retry on a 401). A missing function (404 PGRST202 / 42883) is "unavailable" -
+// never "off" (the card then says "available after the next update").
+const pushRpcMissing = (status, text) => (Number(status) === 404 && /PGRST202/.test(String(text || ""))) || /42883/.test(String(text || ""));
+const pushDb = {
+  async publicKey() {
+    try {
+      const res = await fetch(`${EDGE_FN_BASE}/send-notification?vapid=public`, { cache: "no-store" });
+      if (res.status === 404 || res.status === 405 || res.status === 503) return { state: "unavailable", status: res.status };
+      if (!res.ok) return { state: "failed", error: `HTTP ${res.status}` };
+      let j = null;
+      try { j = await res.json(); } catch (e) { j = null; }
+      const key = j && typeof j.publicKey === "string" ? j.publicKey : "";
+      if (!/^B[A-Za-z0-9_-]{86}$/.test(key)) return { state: "failed", error: "the server's public key is malformed" };
+      return { state: "ok", key };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+  async _rpc(name, body) {
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, status: res.status, error: text || `HTTP ${res.status}`, unavailable: pushRpcMissing(res.status, text) };
+      let result = null;
+      try { result = JSON.parse(text); } catch (e) { result = null; }
+      if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from " + name, unavailable: false };
+      return { ok: true, result };
+    } catch (e) {
+      return { ok: false, status: 0, error: String((e && e.message) || e), unavailable: false };
+    }
+  },
+  save(endpoint, p256dh, auth, label) {
+    return pushDb._rpc("save_push_subscription", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_label: label || null });
+  },
+  remove(endpoint) {
+    return pushDb._rpc("delete_push_subscription", { p_endpoint: endpoint });
+  },
+  async status(endpoint) {
+    const r = await pushDb._rpc("push_subscription_status", { p_endpoint: endpoint });
+    if (r.ok) return { state: "ok", saved: r.result.saved === true, devices: Number(r.result.devices) || 0 };
+    return r.unavailable ? { state: "unavailable" } : { state: "failed", error: r.error, status: r.status };
+  },
+  async sendTest() {
+    try {
+      const res = await authFetch(`${EDGE_FN_BASE}/send-notification?push=test`, { method: "POST", body: "{}" });
+      const text = await res.text().catch(() => "");
+      let j = null;
+      try { j = JSON.parse(text); } catch (e) { j = null; }
+      const push = j && j.push && typeof j.push === "object" ? j.push : null;
+      const error = j && typeof j.error === "string" ? j.error : (res.ok ? null : `HTTP ${res.status}`);
+      // a function deployed before Prompt 30 reads ?push=test as an ordinary POST: 400 "unknown notification type" (an
+      // empty body) - or a 200 without the push key. Its role gate runs BEFORE the body, so a viewer / follower / APP /
+      // office caller gets 403 "not allowed: role ... may not send notifications" there; the Prompt 30 test route sits
+      // before that gate and never answers 403 (integration 10/2 - test/data-layer.test.js [P30] cross pins).
+      const notDeployed = res.status === 404 || res.status === 405 || (res.status === 400 && /unknown notification type/i.test(error || "")) || (res.status === 403 && /^not allowed: /.test(error || "")) || (res.ok && !push);
+      return { ok: res.ok && !!push, status: res.status, push, error, notDeployed, notConfigured: res.status === 503 };
+    } catch (e) {
+      return { ok: false, status: 0, push: null, error: String((e && e.message) || e), notDeployed: false, notConfigured: false };
+    }
+  },
+};
+// pushDevice - this device's side (the worker, the browser's PushSubscription, the on-device flag). Every method answers and
+// never throws. env() is injectable for tests: pushDevice.env = () => ({ nav, N, PM, ls, loc, mm, subtle, base, sleep, activeWaitMs }).
+// The Silvis worker is found ONLY through getRegistrations() filtered to scope === the app folder AND script === <folder>sw.js
+// (query stripped). NEVER navigator.serviceWorker.ready / getRegistration(url): on fkhan628.github.io both fall back to
+// Davenport's origin-root registration (its scope covers the Silvis folder too) and would subscribe the wrong worker.
+// The flag: localStorage["silvis-push-on-" + profileId] = { v: 1, ep: <first 16 hex of SHA-256(endpoint)>, at } - never the
+// endpoint. The flows (contract section 3.4):
+//   enable   - Davenport's requestPushPermission: Notification.requestPermission() is the FIRST await (Safari keeps the tap's
+//              user gesture only that long), then the public key, the worker (active within 10 s), subscribe, save, flag,
+//              and a read-back after 1.5 s ("Subscribed (as <name>)." or "granted, but not registered").
+//   disable  - Turn off: delete this device's row, unsubscribe, clear the flag (the worker stays).
+//   reset    - disable + unregister ONLY the Silvis push worker.
+//   rearm    - on each start, never a prompt (Cowork 10/2 7:25 PM: Davenport's own update reset unregisters every other
+//              worker on the origin, Silvis's included): permission granted + this account's flag + no worker / no
+//              subscription -> register, subscribe silently, save; a changed endpoint is re-saved; a subscription without
+//              this account's flag is asked about (status RPC) - ours: the flag comes back; not ours: unsubscribed locally.
+//   teardown - sign-out: delete the row with the still-valid token, THEN unsubscribe, clear the flag - capped (4 s).
+//   dropForeign - a different account signing in on the in-place card: the previous account's subscription is unsubscribed
+//              locally (its token is dead - the server drops the row on the next 404 / 410) and other accounts' flags go.
+const pushDevice = {
+  env() {
+    const w = typeof window !== "undefined" ? window : {};
+    let ls = null;
+    try { ls = typeof localStorage !== "undefined" ? localStorage : null; } catch (e) { ls = null; }
+    return {
+      nav: typeof navigator !== "undefined" ? navigator : null,
+      N: typeof Notification !== "undefined" ? Notification : null,
+      PM: w.PushManager || null,
+      ls,
+      loc: typeof location !== "undefined" ? location : null,
+      mm: typeof w.matchMedia === "function" ? (q) => w.matchMedia(q) : null,
+      subtle: typeof crypto !== "undefined" && crypto && crypto.subtle ? crypto.subtle : null,
+      base: null,
+      sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+      activeWaitMs: 10000, // how long registration(true) waits for the worker to activate
+    };
+  },
+  // The app folder (the head script's silvisResetBase, exposed as window.__silvisAppBase): the worker's scope.
+  base() {
+    const e = pushDevice.env();
+    if (e.base) return e.base;
+    try { if (typeof window !== "undefined" && typeof window.__silvisAppBase === "function") return window.__silvisAppBase(); } catch (x) { /* fall through */ }
+    return new URL("./", (e.loc && e.loc.href) || "").href;
+  },
+  _support(e) {
+    const nav = e.nav || {};
+    const ua = String(nav.userAgent || ""), mtp = nav.maxTouchPoints;
+    let dm = false;
+    try { dm = !!(e.mm && e.mm("(display-mode: standalone)").matches); } catch (x) { dm = false; }
+    return {
+      ios: pushIsIOS(ua, mtp),
+      standalone: pushIsStandalone(nav.standalone, dm),
+      supported: !!(nav.serviceWorker && typeof nav.serviceWorker.getRegistrations === "function" && e.PM && e.N && typeof e.N.requestPermission === "function"),
+      ua, mtp,
+    };
+  },
+  label() {
+    const s = pushDevice._support(pushDevice.env());
+    return pushDeviceLabel(s.ua, s.mtp);
+  },
+  _readFlag(pid) {
+    if (!pid) return null;
+    try {
+      const e = pushDevice.env();
+      const raw = e.ls ? e.ls.getItem(PUSH_FLAG_PREFIX + pid) : null;
+      const f = raw ? JSON.parse(raw) : null;
+      return f && f.v === 1 && typeof f.ep === "string" ? f : null;
+    } catch (x) { return null; }
+  },
+  _writeFlag(pid, ep) {
+    try { pushDevice.env().ls.setItem(PUSH_FLAG_PREFIX + pid, JSON.stringify({ v: 1, ep, at: new Date().toISOString() })); return true; } catch (x) { return false; }
+  },
+  _clearFlag(pid) {
+    try { if (pid) pushDevice.env().ls.removeItem(PUSH_FLAG_PREFIX + pid); } catch (x) { /* storage refused */ }
+  },
+  _clearOtherFlags(pid) {
+    try {
+      const ls = pushDevice.env().ls;
+      const keys = [];
+      for (let i = 0; i < ls.length; i++) { const k = ls.key(i); if (typeof k === "string" && k.indexOf(PUSH_FLAG_PREFIX) === 0 && k !== PUSH_FLAG_PREFIX + pid) keys.push(k); }
+      keys.forEach(k => ls.removeItem(k));
+    } catch (x) { /* storage refused */ }
+  },
+  async _hash(endpoint) {
+    const d = await pushDevice.env().subtle.digest("SHA-256", new TextEncoder().encode(String(endpoint || "")));
+    return Array.from(new Uint8Array(d)).slice(0, 8).map(b => b.toString(16).padStart(2, "0")).join("");
+  },
+  _keysOf(sub) {
+    return { endpoint: String((sub && sub.endpoint) || ""), p256dh: pushB64u(sub.getKey("p256dh")), auth: pushB64u(sub.getKey("auth")) };
+  },
+  async _sub(reg) {
+    try { return reg && reg.pushManager ? await reg.pushManager.getSubscription() : null; } catch (x) { return null; }
+  },
+  async _waitActive(reg, ms) {
+    const until = Date.now() + ms;
+    while (!reg.active && Date.now() < until) await new Promise(r => setTimeout(r, 100));
+    return !!reg.active;
+  },
+  // registration(create): the Silvis push worker's registration or null. create: register <folder>sw.js at the folder scope
+  // (updateViaCache "none": the browser re-checks sw.js on every navigation, bypassing the HTTP cache) and wait <= 10 s for it
+  // to activate. THROWS only when the browser refuses the registration (enable / rearm catch it).
+  async registration(create) {
+    const e = pushDevice.env();
+    const sw = e.nav && e.nav.serviceWorker;
+    if (!sw || typeof sw.getRegistrations !== "function") return null;
+    const base = pushDevice.base(), script = base + "sw.js";
+    const strip = (u) => String(u || "").split("#")[0].split("?")[0];
+    const ours = (r) => !!r && r.scope === base && [r.active, r.waiting, r.installing].some(w => !!w && strip(w.scriptURL) === script);
+    const regs = await sw.getRegistrations();
+    let reg = Array.from(regs || []).find(ours) || null;
+    if (!create) return reg;
+    if (!reg) {
+      reg = await sw.register(script, { scope: base, updateViaCache: "none" });
+      if (!reg || reg.scope !== base) throw new Error("the push worker registered at an unexpected scope");
+    }
+    if (!reg.active) await pushDevice._waitActive(reg, e.activeWaitMs || 10000);
+    return reg;
+  },
+  async _subscribe(reg, keyB64u) {
+    const pm = reg.pushManager;
+    const opts = { userVisibleOnly: true, applicationServerKey: pushB64uDecode(keyB64u) };
+    try { return await pm.subscribe(opts); }
+    catch (err) {
+      // a subscription made with an older server key (a rotation): drop it, subscribe again once
+      if (!err || err.name !== "InvalidStateError") throw err;
+      const old = await pm.getSubscription();
+      if (old) await old.unsubscribe();
+      return await pm.subscribe(opts);
+    }
+  },
+  // enable(profileId, label, opts) - the Enable tap. opts { key (prefetched public key), name (for "Subscribed (as <name>)."),
+  // readbackMs (default 1500) }. -> { ok, step, permission, message }.
+  async enable(profileId, label, opts) {
+    const o = opts || {};
+    const e = pushDevice.env();
+    const s = pushDevice._support(e);
+    if (s.ios && !s.standalone) return { ok: false, step: "ios", permission: null, message: pushStateWords("ios-home-screen").line };
+    if (!s.supported) return { ok: false, step: "unsupported", permission: null, message: "Not supported in this browser." };
+    if (!profileId) return { ok: false, step: "signed-out", permission: null, message: "Sign in first - phone notifications belong to an account." };
+    // (2) the permission FIRST - nothing is awaited before it
+    let perm;
+    try { perm = await e.N.requestPermission(); } catch (x) { perm = null; }
+    if (typeof perm !== "string") perm = e.N.permission;
+    if (perm !== "granted") return { ok: false, step: "permission", permission: perm, message: "Permission was not granted. If no question appeared, notifications are blocked for this site - see the line above." };
+    // (3) the server's public key
+    let key = typeof o.key === "string" && o.key ? o.key : null;
+    if (!key) {
+      const k = await pushDb.publicKey();
+      if (k.state !== "ok") return { ok: false, step: "key", permission: perm, message: k.state === "unavailable" ? PUSH_UNAVAILABLE_TEXT : "Couldn't reach the server - check your connection, then tap Enable again." };
+      key = k.key;
+    }
+    // (4) the Silvis worker, active
+    let reg = null;
+    try { reg = await pushDevice.registration(true); } catch (x) { reg = null; }
+    if (!reg || !reg.active || !reg.pushManager) return { ok: false, step: "worker", permission: perm, message: "Not ready yet - wait a few seconds and tap Enable again." };
+    // (5) subscribe
+    let sub;
+    try { sub = await pushDevice._subscribe(reg, key); }
+    catch (x) { return { ok: false, step: "subscribe", permission: perm, message: "This browser refused the subscription (" + ((x && x.name) || "error") + ") - tap Reset subscription, then Enable." }; }
+    let k;
+    try { k = pushDevice._keysOf(sub); } catch (x) { k = null; }
+    if (!k || !pushEndpointAllowed(k.endpoint)) {
+      try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
+      return { ok: false, step: "save", permission: perm, message: k ? "this browser's push address is not one the app sends to - nothing was saved" : "this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)" };
+    }
+    // (6) save - a refusal unsubscribes what (5) made and writes no flag
+    const saved = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
+    if (!saved.ok) {
+      try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
+      return { ok: false, step: "save", permission: perm, message: pushErrorWords(saved.error, saved.status) };
+    }
+    // (7) the flag - this account's; another account's flag on this device goes (the endpoint is this account's now)
+    try { pushDevice._writeFlag(profileId, await pushDevice._hash(k.endpoint)); } catch (x) { /* the read-back below says what is true */ }
+    pushDevice._clearOtherFlags(profileId);
+    // (8) read back after 1.5 s: the subscription is still there and the server holds it
+    await e.sleep(typeof o.readbackMs === "number" ? o.readbackMs : 1500);
+    const back = await pushDevice._sub(reg);
+    const st = back && back.endpoint === k.endpoint ? await pushDb.status(k.endpoint) : null;
+    const good = !!(st && st.state === "ok" && st.saved);
+    return { ok: good, step: "done", permission: perm, action: saved.result.action, message: good ? "Subscribed (as " + (o.name || "this account") + ")." : "Permission granted, but this device is not registered yet - reload the app and check again." };
+  },
+  async disable(profileId) {
+    let sub = null;
+    try { sub = await pushDevice._sub(await pushDevice.registration(false)); } catch (x) { sub = null; }
+    let error = null;
+    if (sub) {
+      const r = await pushDb.remove(String(sub.endpoint || ""));
+      if (!r.ok) error = pushErrorWords(r.error, r.status);
+      try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
+    }
+    pushDevice._clearFlag(profileId);
+    return { ok: !error, hadSub: !!sub, message: error ? "Phone notifications are off for this device, but the server's copy could not be removed (" + error + ") - it stops on its own." : "Phone notifications are off for this device." };
+  },
+  async reset(profileId) {
+    const d = await pushDevice.disable(profileId);
+    let unregistered = false;
+    try {
+      const reg = await pushDevice.registration(false); // ONLY the Silvis push worker - never another registration
+      if (reg) unregistered = !!(await reg.unregister());
+    } catch (x) { unregistered = false; }
+    return { ok: d.ok, unregistered, message: "Reset done. Reload the app, then tap Enable." + (d.ok ? "" : " (" + d.message + ")") };
+  },
+  async rearm(profileId, label) {
+    if (!profileId) return { action: "skipped" };
+    const e = pushDevice.env();
+    const s = pushDevice._support(e);
+    if (!s.supported || (s.ios && !s.standalone)) return { action: "skipped" };
+    if (e.N.permission !== "granted") return { action: "off-permission" }; // no call at all; the flag stays for a later re-allow
+    const flag = pushDevice._readFlag(profileId);
+    try {
+      let reg = await pushDevice.registration(false);
+      let sub = await pushDevice._sub(reg);
+      if (sub) {
+        const hash = await pushDevice._hash(sub.endpoint);
+        if (flag && flag.ep === hash) return { action: "none" };
+        if (flag) {
+          // the browser handed this subscription a new endpoint (pushsubscriptionchange while the app was closed): re-save it
+          const k = pushDevice._keysOf(sub);
+          const r = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
+          if (!r.ok) return { action: "skipped", error: pushErrorWords(r.error, r.status) };
+          pushDevice._writeFlag(profileId, hash);
+          return { action: "saved" };
+        }
+        // a subscription without this account's flag: ask the server whose it is
+        const st = await pushDb.status(String(sub.endpoint || ""));
+        if (st.state !== "ok") return { action: "skipped" };
+        if (st.saved) { pushDevice._writeFlag(profileId, hash); return { action: "flag-restored" }; }
+        try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
+        return { action: "dropped-foreign" };
+      }
+      if (!flag) return { action: "none" };
+      // the three conditions hold: this device turned push on for this account, permission is still "granted", and the Silvis
+      // worker or its subscription is gone - re-register and subscribe silently (permission is granted: no prompt)
+      const k0 = await pushDb.publicKey();
+      if (k0.state !== "ok") return { action: "needs-tap" };
+      reg = await pushDevice.registration(true);
+      if (!reg || !reg.active || !reg.pushManager) return { action: "needs-tap" };
+      sub = await pushDevice._subscribe(reg, k0.key);
+      const k = pushDevice._keysOf(sub);
+      if (!pushEndpointAllowed(k.endpoint)) { try { await sub.unsubscribe(); } catch (x) { /* best effort */ } return { action: "needs-tap" }; }
+      const r = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
+      if (!r.ok) { try { await sub.unsubscribe(); } catch (x) { /* best effort */ } return { action: "needs-tap" }; }
+      pushDevice._writeFlag(profileId, await pushDevice._hash(k.endpoint));
+      return { action: "resubscribed" };
+    } catch (x) {
+      return { action: "needs-tap" };
+    }
+  },
+  async teardown(profileId, timeoutMs) {
+    const work = (async () => {
+      let sub = null;
+      try { sub = await pushDevice._sub(await pushDevice.registration(false)); } catch (x) { sub = null; }
+      if (sub) {
+        // the row first, while the session is still valid; then the browser side
+        try { await pushDb.remove(String(sub.endpoint || "")); } catch (x) { /* never blocks the sign-out */ }
+        try { await sub.unsubscribe(); } catch (x) { /* never blocks the sign-out */ }
+      }
+      return { done: true, hadSub: !!sub };
+    })();
+    let timer = null;
+    const cap = new Promise(r => { timer = setTimeout(() => r({ done: false, timedOut: true }), timeoutMs > 0 ? timeoutMs : 4000); });
+    let out;
+    try { out = await Promise.race([work, cap]); } catch (x) { out = { done: false, error: true }; }
+    clearTimeout(timer);
+    pushDevice._clearFlag(profileId);
+    return out;
+  },
+  async dropForeign(profileId) {
+    pushDevice._clearOtherFlags(profileId);
+    try {
+      const sub = await pushDevice._sub(await pushDevice.registration(false));
+      if (!sub) return { action: "none" };
+      const flag = pushDevice._readFlag(profileId);
+      if (flag && flag.ep === await pushDevice._hash(sub.endpoint)) return { action: "kept" };
+      await sub.unsubscribe();
+      return { action: "unsubscribed" };
+    } catch (x) {
+      return { action: "failed" };
+    }
+  },
+  // state(profileId) - no network: { state, label, device, permission, worker, hasSub, flag, ios, standalone, hostname }.
+  async state(profileId) {
+    const e = pushDevice.env();
+    const s = pushDevice._support(e);
+    const permission = e.N && typeof e.N.permission === "string" ? e.N.permission : "unsupported";
+    let reg = null, sub = null;
+    if (s.supported && !(s.ios && !s.standalone)) {
+      try { reg = await pushDevice.registration(false); } catch (x) { reg = null; }
+      sub = await pushDevice._sub(reg);
+    }
+    const flag = !!pushDevice._readFlag(profileId);
+    const label = pushDeviceLabel(s.ua, s.mtp);
+    return {
+      state: pushStateOf({ supported: s.supported, ios: s.ios, standalone: s.standalone, permission, hasReg: !!reg, hasSub: !!sub, flag }),
+      label, device: label, permission, worker: reg ? (reg.active ? "active" : "installing") : "none", hasSub: !!sub, flag, ios: s.ios, standalone: s.standalone,
+      hostname: (e.loc && e.loc.hostname) || "",
+    };
+  },
+  // diagnose(profileId, signedInAs) -> Diagnose's one line (helpers.pushDiagLine): the status RPC for "saved on the server" and
+  // the public key for "server key changed". Never the endpoint or the keys.
+  async diagnose(profileId, signedInAs) {
+    const st = await pushDevice.state(profileId);
+    let sub = null;
+    try { sub = await pushDevice._sub(await pushDevice.registration(false)); } catch (x) { sub = null; }
+    let saved = false, savedWhy = null, devices = 0, keyChanged = false;
+    if (sub) {
+      const r = await pushDb.status(String(sub.endpoint || ""));
+      if (r.state === "ok") { saved = r.saved; devices = r.devices; }
+      else { saved = null; savedWhy = r.state === "unavailable" ? "the server is not updated yet" : "couldn't reach the server"; }
+      const k = await pushDb.publicKey();
+      try {
+        const ask = sub.options && sub.options.applicationServerKey;
+        if (k.state === "ok" && ask) keyChanged = pushB64u(ask) !== k.key;
+      } catch (x) { keyChanged = false; }
+    }
+    return pushDiagLine({ worker: st.worker, permission: st.permission, subscribed: !!sub, saved, savedWhy, devices, signedInAs, keyChanged });
   },
 };
 

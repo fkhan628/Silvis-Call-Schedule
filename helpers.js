@@ -5801,7 +5801,10 @@ function followedIdsOf(p, rosterIds) {
 //                          profile_id and carries NO person_id key (the row's person_id stays null - one_owner).
 //   neither, or both, or blank -> null.
 // The flags are the card's: a flag that is not explicitly false is on; the hour is a number or null (the default).
-function notifPrefSaveRequest(owner, cur, nowIso) {
+// Prompt 30 (phone push): opts.push === true - the two push columns exist (config.js notifPrefsDb.pushColumns() read "ok") -
+// adds trade_updates_push / schedule_updates_push (cur's value !== false, the e-mail flags' rule). Without it the row is
+// exactly the pre-Prompt-30 one (no *_push key): before the migration a body naming a missing column is refused (PGRST204).
+function notifPrefSaveRequest(owner, cur, nowIso, opts) {
   const o = owner && typeof owner === "object" ? owner : {};
   const personId = typeof o.personId === "string" && o.personId ? o.personId : "";
   const profileId = typeof o.profileId === "string" && o.profileId ? o.profileId : "";
@@ -5814,6 +5817,10 @@ function notifPrefSaveRequest(owner, cur, nowIso) {
     reminder_hour_central: typeof c.reminder_hour_central === "number" ? c.reminder_hour_central : null,
     updated_at: nowIso || new Date().toISOString(),
   };
+  if (opts && opts.push === true) {
+    flags.trade_updates_push = c.trade_updates_push !== false;
+    flags.schedule_updates_push = c.schedule_updates_push !== false;
+  }
   return personId
     ? { onConflict: "person_id", row: { person_id: personId, ...flags } }
     : { onConflict: "profile_id", row: { profile_id: profileId, ...flags } };
@@ -5825,6 +5832,220 @@ function notifPrefSaveRequest(owner, cur, nowIso) {
 function notifPrefReadFailureState(status, bodyText) {
   const t = String(bodyText || "");
   return Number(status) === 400 && /profile_id/.test(t) && /42703|does not exist/.test(t) ? "unavailable" : "failed";
+}
+
+/* === Phone push (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push") === */
+// Web Push with VAPID through Silvis's own worker (sw.js, scope = the app folder) and the send-notification fan-out - no
+// third-party push SDK (two of them on one origin conflict; Davenport's worker sits at the origin root). config.js pushDb /
+// pushDevice do the I/O; these are the pure pieces (none throws except pushB64uDecode on bad input, by contract). The
+// endpoint and keys of a subscription are capability secrets: nothing here logs, stores or words them.
+// The tab whitelist a push may open - the SAME literal in sw.js and in the edge function's @pushPlan block (test/push.test.js
+// pins all three against the contract list). A notification never carries a URL: sw.js builds ./?tab=<view>[&day=] itself.
+const PUSH_TABS = ["calendar", "openshifts", "myschedule", "timeoff", "settings", "setup"];
+// localStorage["silvis-push-on-" + profileId] = { v: 1, ep: <first 16 hex of SHA-256(endpoint)>, at: <ISO> } - "this device
+// turned phone notifications on for this account" (the re-arm's first condition). Never the endpoint itself.
+const PUSH_FLAG_PREFIX = "silvis-push-on-";
+// The push services the edge function may POST to - the DB's push_subscriptions_endpoint_shape check, byte for byte (https on a
+// known push service only: a free-form endpoint would be a server-side request forgery lever). 2048 characters at most.
+const PUSH_ENDPOINT_RE = /^https:\/\/([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)\/[!-~]*$/;
+const PUSH_UNAVAILABLE_TEXT = "Phone notifications are available after the next update.";
+const PUSH_B64U = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+// pushB64u(bytes): a Uint8Array / ArrayBuffer -> base64url without padding (what the DB's key checks and VAPID expect).
+function pushB64u(bytes) {
+  let b;
+  try { b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []); } catch (e) { b = new Uint8Array(0); }
+  let out = "";
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((i + 1 < b.length ? b[i + 1] : 0) << 8) | (i + 2 < b.length ? b[i + 2] : 0);
+    out += PUSH_B64U[(n >> 18) & 63] + PUSH_B64U[(n >> 12) & 63];
+    if (i + 1 < b.length) out += PUSH_B64U[(n >> 6) & 63];
+    if (i + 2 < b.length) out += PUSH_B64U[n & 63];
+  }
+  return out;
+}
+// pushB64uDecode(text): base64url (or base64; padding optional) -> Uint8Array; THROWS on any other character or a bad length.
+function pushB64uDecode(text) {
+  const t = String(text === null || text === undefined ? "" : text).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  if (!/^[A-Za-z0-9_-]*$/.test(t) || t.length % 4 === 1) throw new Error("pushB64uDecode: not base64url");
+  const out = new Uint8Array(Math.floor(t.length * 3 / 4));
+  let o = 0;
+  for (let i = 0; i < t.length; i += 4) {
+    const c = [0, 1, 2, 3].map(k => (i + k < t.length ? PUSH_B64U.indexOf(t[i + k]) : 0));
+    const n = (c[0] << 18) | (c[1] << 12) | (c[2] << 6) | c[3];
+    out[o++] = (n >> 16) & 255;
+    if (i + 2 < t.length) out[o++] = (n >> 8) & 255;
+    if (i + 3 < t.length) out[o++] = n & 255;
+  }
+  return out;
+}
+function pushEndpointAllowed(endpoint) {
+  return typeof endpoint === "string" && endpoint.length <= 2048 && PUSH_ENDPOINT_RE.test(endpoint);
+}
+// pushIsIOS(ua, maxTouchPoints): an iPhone / iPod / iPad, including iPadOS's desktop ("Macintosh") user agent on a touch screen.
+function pushIsIOS(ua, maxTouchPoints) {
+  const u = String(ua || "");
+  return /iPhone|iPad|iPod/.test(u) || (/Macintosh/.test(u) && Number(maxTouchPoints) > 1);
+}
+// pushIsStandalone(navigator.standalone, matchMedia("(display-mode: standalone)").matches): opened from the Home Screen icon.
+function pushIsStandalone(navStandalone, displayModeStandalone) {
+  return navStandalone === true || displayModeStandalone === true;
+}
+// pushDeviceLabel(ua, maxTouchPoints): the device_label saved with the subscription - no model, no version, no IP; always
+// matches the DB's label check (^[A-Za-z0-9 .()/-]{1,40}$).
+function pushDeviceLabel(ua, maxTouchPoints) {
+  const u = String(ua || "");
+  if (/iPhone|iPod/.test(u)) return "iPhone";
+  if (/iPad/.test(u) || (/Macintosh/.test(u) && Number(maxTouchPoints) > 1)) return "iPad";
+  if (/Android/.test(u)) return "Android";
+  const browser = /Edg(e|A|iOS)?\//.test(u) ? "Edge" : /Firefox\/|FxiOS/.test(u) ? "Firefox" : /OPR\/|Opera/.test(u) ? "Opera" : /Chrome\/|CriOS|Chromium/.test(u) ? "Chrome" : /Safari\//.test(u) ? "Safari" : "Browser";
+  const os = /Windows/.test(u) ? "Windows" : /Macintosh|Mac OS X/.test(u) ? "Mac" : /CrOS/.test(u) ? "ChromeOS" : /Linux/.test(u) ? "Linux" : "";
+  return os ? browser + " on " + os : "Browser";
+}
+// pushStateOf(...) -> the card's state: "ios-home-screen" (an iPhone / iPad outside the Home Screen app - wins over
+// "unsupported": Safari there has no PushManager), "unsupported", "blocked" (permission denied), "on" (granted + the Silvis
+// worker + a subscription + this account's flag), else "off".
+function pushStateOf(s) {
+  const o = s && typeof s === "object" ? s : {};
+  if (o.ios && !o.standalone) return "ios-home-screen";
+  if (!o.supported) return "unsupported";
+  if (o.permission === "denied") return "blocked";
+  if (o.permission === "granted" && o.hasReg && o.hasSub && o.flag) return "on";
+  return "off";
+}
+// pushStateWords(state, { hostname, label, ios, device, needsTap }) -> { badge, line } - the card's badge and state line.
+// Blocked on a computer / Android is per ORIGIN (fkhan628.github.io also serves the Davenport app, Cowork 10/2 7:25 PM);
+// an iPhone / iPad Home Screen app asks on its own.
+function pushStateWords(state, opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  if (state === "on") return { badge: "Subscribed on this device", line: o.label ? "On for this device (" + o.label + ")." : "On for this device." };
+  if (state === "blocked") {
+    if (o.ios) return { badge: "Blocked", line: "Blocked in your " + (o.device === "iPad" ? "iPad" : "iPhone") + "'s settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable." };
+    const host = String(o.hostname || "this site");
+    return { badge: "Blocked", line: "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable." };
+  }
+  if (state === "ios-home-screen") return { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable." };
+  if (state === "unsupported") return { badge: null, line: "Not supported in this browser." };
+  return { badge: null, line: o.needsTap ? "Off for this device - tap Enable to turn it back on." : "Off for this device." };
+}
+// A REAL calendar day "YYYY-MM-DD" - the edge's pushIsoDay round trip (review 10/3): 2026-02-31 or 2026-13-45 is refused, so
+// neither a crafted ?tab=calendar&day= link nor a sw message can open the day editor on a key the date column would refuse.
+const pushIsDay = (d) => {
+  const m = typeof d === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(d) : null;
+  if (!m) return false;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]);
+};
+// pushDeepLink(location.search) -> { tab, day, search, strip }: the tap target sw.js opens (./?tab=<view>[&day=]). tab only from
+// PUSH_TABS, day only ISO and only with tab calendar; search = the query without tab / day (others such as _v kept, in order);
+// strip true when either key was present (the app replaces the URL once so a refresh does not repeat it). Never throws.
+function pushDeepLink(search) {
+  let p;
+  try { p = new URLSearchParams(String(search || "")); } catch (e) { return { tab: null, day: null, search: "", strip: false }; }
+  const rawTab = p.get("tab"), rawDay = p.get("day");
+  const tab = PUSH_TABS.indexOf(rawTab) >= 0 ? rawTab : null;
+  const day = tab === "calendar" && pushIsDay(rawDay) ? rawDay : null;
+  const strip = p.has("tab") || p.has("day");
+  p.delete("tab"); p.delete("day");
+  const rest = p.toString();
+  return { tab, day, search: strip ? (rest ? "?" + rest : "") : String(search || ""), strip };
+}
+// pushOpenMessage(data): a message from sw.js ({ type: "silvis-push-open", tab, day }) -> { tab, day } or null - the same
+// whitelist as the deep link (an open app window is switched in place, no reload).
+function pushOpenMessage(data) {
+  if (!data || typeof data !== "object" || data.type !== "silvis-push-open") return null;
+  const tab = PUSH_TABS.indexOf(data.tab) >= 0 ? data.tab : null;
+  if (!tab) return null;
+  return { tab, day: tab === "calendar" && pushIsDay(data.day) ? data.day : null };
+}
+// pushTapLeavesDraft(editorDay, dirty, target) -> true when switching an OPEN window to a notification's target ({ tab, day }
+// from pushOpenMessage) would throw away the day editor's unsaved draft (review 10/3): the editor is open on editorDay with a
+// dirty draft AND the target leaves the two views the editor renders in (calendar / openshifts) or opens another day (the
+// editor is keyed by its day - another day is a fresh draft). The app then asks the editor's own question first.
+function pushTapLeavesDraft(editorDay, dirty, target) {
+  if (!editorDay || !dirty || !target || typeof target !== "object") return false;
+  if (target.tab !== "calendar" && target.tab !== "openshifts") return true;
+  return !!target.day && target.day !== editorDay;
+}
+// Periods > Remind (offers_reminder) by channel (review 10/3; addendum item 5: the channels are independent end to end).
+// E-mail off alone no longer blocks it: the heads-up still goes to the person's phones unless schedule_updates_push is off.
+// Only an explicit false is off - except that a prefs row WITHOUT the schedule_updates_push key means the column does not
+// exist yet (the Prompt 30 migration not applied; notifPrefs loads select=*), so there is no phone channel to fall back to.
+// channel: "both" | "email" | "push" | "none" (blocked = none).
+function remindChannels(pref) {
+  const mailOff = !!(pref && pref.schedule_updates_email === false);
+  const pushOff = !!(pref && (pref.schedule_updates_push === false || !Object.prototype.hasOwnProperty.call(pref, "schedule_updates_push")));
+  return { mailOff, pushOff, blocked: mailOff && pushOff, channel: mailOff ? (pushOff ? "none" : "push") : (pushOff ? "email" : "both") };
+}
+// remindButtonWords(channel, name, what) -> { label, title } of the Periods row's Remind button by channel; `what` is the
+// " the heads-up for <label>: enter vacations before <freeze>, ..." tail the row composes.
+function remindButtonWords(channel, name, what) {
+  const who = String(name || "this surgeon"), w = String(what || "");
+  if (channel === "none") return { label: "Remind", title: who + " has schedule-update e-mails and phone notifications turned off - no reminder can be sent" };
+  if (channel === "push") return { label: "Remind (phone)", title: "Phone only - " + who + " has schedule-update e-mails turned off. Push " + who + w };
+  if (channel === "email") return { label: "Remind", title: "E-mail " + who + w + " (phone notifications are off)" };
+  return { label: "Remind", title: "E-mail and push " + who + w };
+}
+// remindOutcome(r, name, stamp) -> { ok, kind, note, toast } for the row note and the toast after sendEmailNotif's answer
+// r = { ok, sent, skippedPrefOff, push } (push = the function's push summary, null when it sent none). An e-mail sent reads
+// "reminded <time>"; no e-mail but a push sent reads "pushed <time> (e-mail off)" - a success, not "No reminder went out";
+// nothing sent names why on each channel. A failed call (r.ok false) -> null: the caller words it (sendEmailNotif toasted).
+function remindOutcome(r, name, stamp) {
+  if (!r || !r.ok) return null;
+  const who = String(name || "this surgeon");
+  const push = r.push && typeof r.push === "object" ? r.push : null;
+  const pushed = !!(push && Number(push.sent) > 0);
+  if (Number(r.sent) > 0) return { ok: true, kind: "success", note: "reminded " + stamp, toast: pushed ? "Reminder e-mailed and pushed to " + who + "." : "Reminder e-mailed to " + who + "." };
+  const mailWhy = r.skippedPrefOff ? "e-mail off" : "no linked e-mail";
+  const mailLong = r.skippedPrefOff ? "has schedule-update e-mails turned off" : "has no linked account e-mail";
+  if (pushed) return { ok: true, kind: "success", note: "pushed " + stamp + " (" + mailWhy + ")", toast: "Reminder pushed to " + who + "'s phone (no e-mail: " + who + " " + mailLong + ")." };
+  const pushWhy = !push || push.error ? "" : Number(push.skipped_pref_off) > 0 ? "phone off" : Number(push.skipped_no_device) > 0 ? "no phone on" : Number(push.failed) > 0 ? "phone push failed" : "";
+  const pushLong = pushWhy === "phone off" ? " and phone notifications off" : pushWhy === "no phone on" ? " and no phone with notifications on" : pushWhy === "phone push failed" ? " and the phone push failed" : "";
+  return { ok: false, kind: "info", note: mailWhy + (pushWhy ? ", " + pushWhy : "") + " - not sent", toast: "No reminder went out: " + who + " " + mailLong + pushLong + "." };
+}
+// The refusal codes of save_push_subscription / delete_push_subscription / push_subscription_status (custom SQLSTATEs;
+// PostgREST answers 400 with the code and "<TOKEN>: <text>").
+const PUSH_CODES = { PS001: "PUSH_NOT_SIGNED_IN", PS002: "PUSH_NO_PROFILE", PS003: "PUSH_BAD_ENDPOINT", PS004: "PUSH_BAD_KEYS", PS005: "PUSH_BAD_LABEL", PS006: "PUSH_HELD", PS007: "PUSH_TOO_MANY" };
+// pushErrorWords(text, status) -> one plain line for a refused / failed push RPC: the function's own words (the text after
+// "PUSH_<TOKEN>: "); a missing function (404 PGRST202 / 42883 - the migration not applied) -> PUSH_UNAVAILABLE_TEXT; an
+// expired session; no connection; else a short generic line with the HTTP status (never the raw body).
+function pushErrorWords(text, status) {
+  const raw = text && typeof text === "object" ? JSON.stringify(text) : String(text === null || text === undefined ? "" : text);
+  let msg = raw;
+  try { const j = JSON.parse(raw); if (j && typeof j.message === "string") msg = j.message; } catch (e) { /* not JSON */ }
+  const m = /PUSH_[A-Z_]+: ([\s\S]*)$/.exec(msg);
+  if (m && m[1].trim()) return m[1].trim();
+  const s = Number(status);
+  if (/PGRST202|42883/.test(raw)) return PUSH_UNAVAILABLE_TEXT;
+  if (s === 401 || /PGRST301|JWT expired/.test(raw)) return "Your session expired - sign in again, then try again.";
+  if (s === 0 || /Failed to fetch|NetworkError|Load failed/i.test(raw)) return "Couldn't reach the server - check your connection.";
+  return "Couldn't save phone notifications for this device" + (s ? " (HTTP " + s + ")" : "") + " - try again.";
+}
+// pushTestWords(result) -> the "Send test" line. result = config.js pushDb.sendTest()'s answer.
+function pushTestWords(result) {
+  const r = result && typeof result === "object" ? result : {};
+  if (r.notDeployed) return "The server does not send phone notifications yet (it needs the next update).";
+  if (r.notConfigured) return "Phone notifications are not set up on the server yet.";
+  if (Number(r.status) === 401) return "Sign in again, then try the test.";
+  if (!r.ok) return Number(r.status) ? "Couldn't send the test (HTTP " + Number(r.status) + ") - try again." : "Couldn't reach the server - check your connection.";
+  const p = r.push && typeof r.push === "object" ? r.push : null;
+  if (!p) return "The server does not send phone notifications yet (it needs the next update).";
+  if (typeof p.error === "string" && p.error) return /not configured|not set up/i.test(p.error) ? "Phone notifications are not set up on the server yet." : "The server does not send phone notifications yet (it needs the next update).";
+  const d = p.devices && typeof p.devices === "object" ? p.devices : {};
+  const sent = Number(d.sent) || 0, refused = (Number(d.failed) || 0) + (Number(d.removed) || 0);
+  if (sent > 0) return "Test sent to " + sent + " device(s) on your account - it should arrive in a few seconds.";
+  if (refused > 0) return "The push service refused the test on " + refused + " device(s) - tap Reset subscription, then Enable.";
+  return "No device of yours has phone notifications on - tap Enable first.";
+}
+// pushDiagLine({ worker, permission, subscribed, saved, savedWhy, devices, signedInAs, keyChanged }) -> Diagnose's one line.
+// saved: true / false / null (unknown, savedWhy says why). Never an endpoint or a key.
+function pushDiagLine(d) {
+  const o = d && typeof d === "object" ? d : {};
+  const worker = o.worker === "active" || o.worker === "installing" ? o.worker : "none";
+  const perm = o.permission === "granted" || o.permission === "denied" ? o.permission : o.permission === "default" ? "not asked" : "unsupported";
+  const n = Number(o.devices) || 0;
+  const saved = o.saved === true ? "yes (" + n + " device(s) on this account)" : o.saved === false ? "no" : "unknown (" + (o.savedWhy || "not checked") + ")";
+  return "Worker: " + worker + " - Permission: " + perm + " - Subscribed: " + (o.subscribed ? "yes" : "no") + " - Saved on the server: " + saved +
+    " - Signed in as: " + (o.signedInAs || "unknown") + (o.keyChanged ? " - Server key changed: tap Reset subscription, then Enable" : "");
 }
 
 /* === APP call days (Prompt 29, Faraz 10/1) === */
@@ -6579,6 +6800,7 @@ if (typeof module !== "undefined" && module.exports) {
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
+    PUSH_TABS, PUSH_FLAG_PREFIX, PUSH_ENDPOINT_RE, PUSH_UNAVAILABLE_TEXT, PUSH_CODES, pushB64u, pushB64uDecode, pushEndpointAllowed, pushIsIOS, pushIsStandalone, pushDeviceLabel, pushStateOf, pushStateWords, pushDeepLink, pushOpenMessage, pushTapLeavesDraft, remindChannels, remindButtonWords, remindOutcome, pushErrorWords, pushTestWords, pushDiagLine,
     PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT, PAY_STIPEND_OFF_TEXT,
     payStipendOn, payStipendDelta, paySettingsHidden, payStipendKnown, payStipendPending, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,

@@ -787,7 +787,7 @@ buttons, the notification center, the refresh/version banner, and Settings → D
 All of these are **in scope and carried over from Davenport** (Faraz 9/21):
 
 - **In-app notifications** (`notifications` + per-user `notification_preferences`) — same center, same categories minus vacation approvals: schedule published, manual edit affecting you, trade proposed/accepted/declined/applied, vacation logged, shift reminder.
-  - **Browser pop-ups (review 9/27 Do first 6, 10/1).** While the app is open but not focused, a new Alerts row raises a browser `Notification` (`sendBrowserNotif`; no push). Which rows pop is decided by `helpers.notifPopupStep`, by **notification id**: the device keeps a set of seen ids for the signed-in account (`notifSeenRef`, `{ uid, ids }`, memory only). The set is seeded on that account's first *authenticated* read (`notifsRead` "ok" — not the skipped pass at the sign-in card, after which every row would look new) and pops nothing; after that every unseen row is marked seen and only the unseen rows of `myNotifications` (`notifVisibleTo`) pop — never the raw feed, so the office viewer gets no trade / vacation pop-ups its Alerts feed hides, and a row hidden now never pops later when a follow, a roster link or a promotion widens the feed. The step waits (nothing marked, nothing popped) while the profile is not this account's or `isScheduler` has not caught up with it; signed out it does nothing and keeps the set; a different account drops it and seeds at its own first read. `addNotification` marks this device's own inserted row seen before it enters the feed. The read and the insert keep the 50-row cap; by ids it no longer matters (the old check compared `notifications.length` and stopped for good once the feed reached 50 rows). No `created_at` watermark: the inserting device stamps it. Accepted edges (review 10/2): a row below the 50-row seed window that re-enters it after newer rows are deleted (only the scheduler can delete, in the SQL editor or a probe cleanup) pops once; and if this device's own insert comes back through Realtime before the POST answers (and the window lost focus meanwhile) it can pop once on the device that wrote it. Pins: `test/data-layer.test.js` [DF6] (the helper, the effect and `addNotification` lifted and run; an in-place account switch while the previous account's profile is still in state waits instead of popping by it); the E3 `newOnes.forEach` line stays pinned in `test/open-shifts.test.js`.
+  - **Browser pop-ups (review 9/27 Do first 6, 10/1).** While the app is open but not focused, a new Alerts row raises a browser `Notification` (`sendBrowserNotif`; the phone notification is the separate Web Push of §22). Which rows pop is decided by `helpers.notifPopupStep`, by **notification id**: the device keeps a set of seen ids for the signed-in account (`notifSeenRef`, `{ uid, ids }`, memory only). The set is seeded on that account's first *authenticated* read (`notifsRead` "ok" — not the skipped pass at the sign-in card, after which every row would look new) and pops nothing; after that every unseen row is marked seen and only the unseen rows of `myNotifications` (`notifVisibleTo`) pop — never the raw feed, so the office viewer gets no trade / vacation pop-ups its Alerts feed hides, and a row hidden now never pops later when a follow, a roster link or a promotion widens the feed. The step waits (nothing marked, nothing popped) while the profile is not this account's or `isScheduler` has not caught up with it; signed out it does nothing and keeps the set; a different account drops it and seeds at its own first read. `addNotification` marks this device's own inserted row seen before it enters the feed. The read and the insert keep the 50-row cap; by ids it no longer matters (the old check compared `notifications.length` and stopped for good once the feed reached 50 rows). No `created_at` watermark: the inserting device stamps it. Accepted edges (review 10/2): a row below the 50-row seed window that re-enters it after newer rows are deleted (only the scheduler can delete, in the SQL editor or a probe cleanup) pops once; and if this device's own insert comes back through Realtime before the POST answers (and the window lost focus meanwhile) it can pop once on the device that wrote it. Pins: `test/data-layer.test.js` [DF6] (the helper, the effect and `addNotification` lifted and run; an in-place account switch while the previous account's profile is still in state waits instead of popping by it); the E3 `newOnes.forEach` line stays pinned in `test/open-shifts.test.js`.
 - **Email** via the `send-notification` edge function pattern (per-user email prefs); recipients come from `user_profiles.email` / `office_contacts`, read server-side with the service-role key — never from the blob.
 - **Office notifications** — `office_contacts` (the office contact first) receive the schedule-change digest / publish notice through the `office-notifications` edge function pattern, retargeted to day + role.
 - **Calendar sync** — the `calendar-sync` edge function serves a per-surgeon ICS feed URL (`?surgeon=<CODE>`), matched on `code`, reading `schedule_days`; `verify_jwt` must stay OFF (clients send no auth header) — verify with an unauthenticated GET → 200 + `BEGIN:VCALENDAR`. Subscription instructions in Settings.
@@ -795,14 +795,14 @@ All of these are **in scope and carried over from Davenport** (Faraz 9/21):
   - **Combined Silvis + Davenport feed (Item D, 2026-09-24)** — `?surgeon=<CODE>&east=1` is the same per-surgeon feed plus one all-day event per run of consecutive Davenport busy days with the same reason since v5, one per busy day under `?timed=1` ("Khan – Davenport night / service week / weekend / holiday / day call", the reasons `east-feed.js deriveKhanBusyDays` derives, mirrored in the function's `@eastCalendar` block and pinned by `test/edge-functions.test.js`) and one per East vacation range reviewed as away, read from this project's `east_feed` cache and `east_vacation_reviews` (service role) — no new table, no write. It works for any roster surgeon whose East feature reads busy days (the app's `eastVacationPerson` predicate; today Khan); `east=1` without such a surgeon answers exactly like today, and an unresolvable Davenport id answers 502 rather than a feed without the East events (a subscription replaces its event set on refresh). Settings shows the scheduler the combined link with Copy for office staff at either site; the weekly office digest carries a "Khan at Davenport this week" section (next 14 days, same words) and the link in its footer. Note: the combined feed is an unauthenticated URL; it makes the away / not-away decision of each East vacation range visible to anyone holding the link (dates and last name only, no reason) although `east_vacation_reviews` itself stays authenticated-read (4.3) - the plain per-surgeon feed exposes nothing new.
 - **Shift reminders** — the `daily-reminder` edge function pattern (reminder hour per user, Central time).
 - **Refresh** — `client_versions` min-version check with the reload banner, plus the `reloadTrigger` second-pass load (its reads run in parallel since review 9/27 Do first 4 - §4.8).
-  - **The update reset touches only Silvis's own (cross-app fix, 2026-10-02).** `nukeAndReload` (the head script; every `APP_VERSION` change, and the Refresh buttons through `window.__silvisHardReset`) unregisters only service workers scoped inside the page's own folder (`new URL("./", location)`: `/Silvis-Call-Schedule/` live, the served folder on a local or preview host; a last path segment with no dot, other than `index`, is read as a folder missing its trailing slash, which can only narrow the base) and never one whose script (active / waiting / installing) is OneSignal's, and deletes only caches named `silvis-*` (none exist today); the `_v` reload and its plain-reload fallback are unchanged (review 10/2: a synchronous throw takes the fallback too, and a clear that never settles reloads with `_v` after 3 s). A page already open on 2026.10.02c or older still holds the old reset: its "Tap to reload" / "Reload now" banner or Settings > Refresh now runs it once more, so a device used for both apps should come onto the fixed build by closing and reopening Silvis, and re-enable Davenport push only after that. Why: `getRegistrations()` and `caches.keys()` cover the whole origin `fkhan628.github.io`, so the old reset removed Davenport's OneSignal worker (scope `/`) - and that browser's Davenport push subscription - on every Silvis update. `keepRegistration` is where Prompt 30 keeps Silvis's own push worker (`sw.js`). Pinned by data-layer section XR (the real head script against fake registrations and caches) and the smoke's cross-app reset step (real workers at the origin root, in the app folder and in a sibling folder).
+  - **The update reset touches only Silvis's own (cross-app fix, 2026-10-02).** `nukeAndReload` (the head script; every `APP_VERSION` change, and the Refresh buttons through `window.__silvisHardReset`) unregisters only service workers scoped inside the page's own folder (`new URL("./", location)`: `/Silvis-Call-Schedule/` live, the served folder on a local or preview host; a last path segment with no dot, other than `index`, is read as a folder missing its trailing slash, which can only narrow the base) and never one whose script (active / waiting / installing) is OneSignal's, and deletes only caches named `silvis-*` (none exist today); the `_v` reload and its plain-reload fallback are unchanged (review 10/2: a synchronous throw takes the fallback too, and a clear that never settles reloads with `_v` after 3 s). A page already open on 2026.10.02c or older still holds the old reset: its "Tap to reload" / "Reload now" banner or Settings > Refresh now runs it once more, so a device used for both apps should come onto the fixed build by closing and reopening Silvis, and re-enable Davenport push only after that. Why: `getRegistrations()` and `caches.keys()` cover the whole origin `fkhan628.github.io`, so the old reset removed Davenport's OneSignal worker (scope `/`) - and that browser's Davenport push subscription - on every Silvis update. `keepRegistration` also keeps Silvis's own push worker since Prompt 30 (`<folder>sw.js`, compared without its query / fragment; a `sw.js` in a subfolder scope still goes - §22). Pinned by data-layer section XR (the real head script against fake registrations and caches) and the smoke's cross-app reset step (real workers at the origin root, in the app folder and in a sibling folder).
 - **Data management** — Settings → JSON backup/restore, export, import, snapshots list + one-click restore, factory reset behind the wipe guards.
 - **Keepalive flush (RF2, 9/23)** — while a `syncScheduleDays` run is enqueued or in flight (`daySyncBusyRef`), a `visibilitychange` flush skips its `schedule_days` leg (keeps the blob leg), re-arms the pending payload and enqueues the pending days BEHIND the in-flight run (the chain serializes them; nothing is left to the debounce timer), so a long Accept & Publish with the phone locked mid-way never gets the same days PATCHed twice at the same versions. `pagehide` / `beforeunload` keep the keepalive days leg (review fix: the chain dies with the page there; a CAS duplicate matches zero rows). A never-settling fetch keeps the count > 0 for the session by design.
 
 Edge-function sources are **not in the Davenport repo**: Faraz will copy them from his OneDrive
 `...\Genesis\Schedules\Call Schedule App\edge-functions\` folder into `...\Silvis Call Schedule\edge-functions\` for
 Claude Code to retarget. Deploy convention is the same as Davenport (Supabase CLI, `--no-verify-jwt`, back up the
-deployed source before overwriting, byte-diff after). OneSignal push is not requested.
+deployed source before overwriting, byte-diff after). OneSignal is not used: phone push is Silvis's own Web Push since Prompt 30 (§22).
 
 ## 11. Build & deploy (identical to Davenport — follow its CLAUDE.md rules)
 
@@ -2313,3 +2313,126 @@ is A.1 of the Prompt 29 spec, kept with the build documents outside the repo; th
   UTC; the record step made section 18 strict and dropped `SILVIS_APP_DAYS_APPLIED`); the client push and the account switch
   follow, on Faraz's go.* A rollback after the client push only empties the APP features (the client
   reads a missing table / function as "unavailable").
+
+## 22. Phone push (Faraz 10/2; Prompt 30) - "Davenport's look, Silvis's own push"
+
+Trigger: Fierce's trade request reached his e-mail but nothing showed on his phone. Faraz chose (10/2 6:40 PM) Davenport's
+user-facing pattern on Silvis's own transport: **Web Push with VAPID** through Silvis's own service worker, the
+`push_subscriptions` table and a fan-out inside `send-notification` - **no OneSignal** (two OneSignal apps on one origin
+conflict; Davenport's OneSignal worker sits at the origin root `https://fkhan628.github.io/` and is never touched, nor its
+OneSignal app or the Davenport repo). The binding contract is `push-design.md` (gate folder `run-2026-10-01/push/`); the
+database half is `sql/migrations/2026-10-03-push-notifications.sql` (revision w, `docs/SCHEMA-REVIEW.md`), the server half
+`edge-functions/send-notification/index.ts` (its `@webPush` / `@pushPlan` blocks, `edge-functions/README.md`). Order:
+apply -> `setup-push-keys.sh` -> deploy send-notification -> the record step -> the client ship on Faraz's go -> each person
+taps Enable on each device. The first three ran on 2026-10-03 (the record step: `docs/SCHEMA-REVIEW.md`, `edge-functions/README.md`):
+the migration applied 16:30:43Z (probe AFTER 51 / 51, verify-rls 469 / 0 with section 19 graded strictly), the VAPID keys set by
+`setup-push-keys.sh --rotate` 16:35:42Z (replacing the pair the 03:29Z incident had set), send-notification v12 deployed 16:37:59 UTC
+(the re-download byte-identical to the repo file); since the record step section 19 of `scripts/verify-rls.sh` is strict and
+grades 19i with no flag. Phone push works from the build that ships this client.
+
+### 22.1 Transport and the worker
+
+- **`sw.js`** (repo root, served beside the page; registered with scope = the app folder, `/Silvis-Call-Schedule/` live,
+  `updateViaCache: "none"`). Two jobs only, no fetch handler, no cache: `push` ALWAYS shows a notification (title / body /
+  tag / tab / day from the payload `{ v: 1, title, body, tag, tab, params?: { day } }` when valid, else the generic
+  "Silvis Call - Open the app for details." - iOS drops subscriptions that receive silent pushes); `notificationclick`
+  builds `./?tab=<view>[&day=YYYY-MM-DD]` itself from the whitelist `PUSH_TABS` (calendar, openshifts, myschedule, timeoff,
+  settings, setup - the same literal in `helpers.js`, `sw.js` and the edge function), relative to its scope - never a URL
+  from the payload - and focuses an open app window + `postMessage({ type: "silvis-push-open", tab, day })` (no reload; a
+  dirty day edit is kept unless the person confirms discarding it - the app asks the editor's own question first, review
+  10/3), or opens a new window when none is open.
+- **Finding the worker:** `config.js` `pushDevice.registration()` filters `getRegistrations()` to scope === the app folder
+  AND script === `<folder>sw.js` (query stripped). Never `navigator.serviceWorker.ready` / `getRegistration(url)`: on
+  fkhan628.github.io both fall back to Davenport's root registration, whose scope covers the Silvis folder too.
+- **The folder** is the head script's `silvisResetBase()`, exposed once as `window.__silvisAppBase` (the reset and the push
+  worker agree on one base; a last segment without a dot, other than `index`, reads as a folder).
+- **The update reset keeps it:** `keepRegistration` (the head script) keeps `<folder>sw.js` - compared without its query /
+  fragment - beside any OneSignal script; a `sw.js` in a subfolder scope, or another Silvis-scoped script, still goes. Without
+  this every Silvis update would drop the device's phone notifications.
+- **Davenport's reset has the mirror bug** (its `nukeAndReload` unregisters every non-OneSignal registration on the origin,
+  Silvis's included). Davenport stays unchanged; Silvis **re-arms itself** on start (22.3).
+
+### 22.2 What the person sees (Settings > Notification settings > Phone notifications - every signed-in role)
+
+The first box of the card, above Email, in Davenport's layout (helpers `pushStateWords` / `pushTestWords` / `pushDiagLine`):
+a badge ("Subscribed on this device" green / "Blocked" red), the line "Turn this on once on each device you want alerts on.
+iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon.", the state line (on: "On for this device
+(<label>)."; off: "Off for this device." - after a failed re-arm "... - tap Enable to turn it back on."; iPhone / iPad Safari
+outside the Home Screen app: add to Home Screen, open from the icon, **sign in there once** (the Home Screen app has its own
+sign-in, separate from Safari), then Enable; blocked on a computer / Android: "Blocked for <host>" + " - this also affects
+the Davenport app" on fkhan628.github.io (permission is per origin) + the site-settings hint; blocked in an iPhone Home Screen
+app: Settings > Notifications > Silvis Call; unsupported), the buttons **Enable** (off / iOS), **Turn off** (on - a
+deliberate addition beside Davenport's four), **Diagnose**, **Reset subscription**, **Send test** (everyone, to his own
+devices), a monospace message box, and "Which events reach your phones": two switches (`schedule_updates_push`,
+`trade_updates_push` - a linked surgeon's own row, a follower's own row by profile_id, editable only once his row was read),
+shown only when `notifPrefsDb.pushColumns()` reads "ok" (else "Phone switches are available after the next update."); an
+unlinked account that follows nobody reads that only its own tests reach its phones. Nothing on `?public=1`.
+
+### 22.3 The flows (`config.js` `pushDevice`; contract 3.4)
+
+- **Enable** (Davenport's `requestPushPermission`): iPhone outside the Home Screen app -> the line, stop; unsupported -> stop;
+  `Notification.requestPermission()` is the FIRST await (Safari keeps the tap's gesture only that long); not granted -> "Permission
+  was not granted..."; the public key (prefetched when the card opened, else `GET send-notification?vapid=public`; 404 / 405 /
+  503 -> "available after the next update"); `registration(true)` active within 10 s (else "Not ready yet - wait a few seconds
+  and tap Enable again."); `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` (an InvalidStateError from
+  an old key: drop it, subscribe again); `rpc/save_push_subscription` with exactly `{ p_endpoint, p_p256dh, p_auth, p_label }`
+  (a refusal unsubscribes what was made, writes no flag and shows the function's words - PS001-PS007); the flag
+  `silvis-push-on-<profileId>` = `{ v: 1, ep: <first 16 hex of SHA-256(endpoint)>, at }`; after 1.5 s a read-back (the
+  subscription + the status RPC) -> "Subscribed (as <name>)." or "Permission granted, but this device is not registered yet -
+  reload the app and check again."
+- **Turn off:** `rpc/delete_push_subscription` (endpoint in the body) -> `unsubscribe()` -> the flag cleared; the worker stays.
+  **Reset subscription:** the same plus unregistering ONLY the Silvis worker -> "Reset done. Reload the app, then tap Enable."
+- **Re-arm on start** (once per account per page load, after this account's profile read; never on `?public=1`; never a
+  prompt): permission not "granted" -> no call at all (the card shows Off / Blocked; the flag stays for a later re-allow); a
+  subscription with this account's flag and the same hash -> nothing; another hash (the browser moved the endpoint) -> re-saved
+  silently; a subscription without the flag -> the status RPC decides (ours: the flag comes back; not ours: unsubscribed
+  locally - a shared PC); the flag + permission + no worker / no subscription (a Davenport update's reset) -> re-register,
+  subscribe silently, save, new flag; any failure -> "needs-tap" (the off line asks for a tap). The server drops the old
+  endpoint on its next 404 / 410.
+- **Sign-out** (`handleSignOut`, and `signOutForLink` before its sign-out): `pushDevice.teardown(id, 4000)` BEFORE
+  `auth.signOut()` - the row delete with the still-valid token, THEN `unsubscribe()`, the flag cleared; capped at 4 s, never
+  blocking. **An in-place account switch** (`adoptSignedInUser`'s different-account branch): `pushDevice.dropForeign(newId)` -
+  the previous account's subscription is unsubscribed locally (its token is dead; the server drops the row on 404 / 410) and
+  other accounts' flags go.
+- **Tap-to-open:** an effect reads `helpers.pushDeepLink(location.search)` ONCE when signed in, strips `tab` / `day` with
+  `history.replaceState` (`_v` and the rest kept - a refresh does not repeat it), `setView(tab)`, and a day opens through
+  `goToDay` once the data is loaded (its unread-schedule refusal applies). An open window gets the worker's
+  `silvis-push-open` message (`helpers.pushOpenMessage`, the same whitelist). A trade opens Time off (a follower's: his
+  Following view), a manual edit the calendar on the edited day (`saveDayEdit`'s manual_edit mail data carries `day`), open
+  shifts the board, offers Time off (closed: Setup).
+- **The e-mail switches** stay as they were; once the push columns exist a prefs save also names `trade_updates_push` /
+  `schedule_updates_push` (`notifPrefSaveRequest(owner, cur, now, { push: true })`), never before (a missing column would be
+  refused).
+
+### 22.4 Privacy and tests
+
+- The endpoint and keys are capability secrets: they travel only in POST bodies (save / delete / status), never in a URL, a
+  log line, localStorage (the flag holds a hash), a response the owner can read back (column grants) or the page; Diagnose
+  says worker / permission / subscribed / saved on the server / signed in as - never the endpoint or a key.
+- `test/push.test.js` (in the chain, build.yml step + paths with `sw.js`): the helpers, `sw.js` in a vm sandbox, `config.js`
+  `pushDb` / `pushDevice` against fake workers (a root OneSignal registration and a `ready` that resolves to it),
+  PushManager, Notification, localStorage and fetch, `handleSignOut` / `signOutForLink` lifted and run, source pins, and the
+  contract's mutants (each must turn its check red: no sw.js keep rule, a re-arm prompt, the unsubscribe before the delete, a
+  silent push on bad JSON, a click opening `data.url`, `ready` for the registration, an unstripped deep link, Blocked without
+  the host, ...). `test/data-layer.test.js` XR: `silvis-push` (and its `?v=` / `#` variants) kept, a subfolder `sw.js`
+  unregistered, `__silvisAppBase` in both branches; the DF4 lifts run `dropForeign`. `test/ui/smoke.mjs` "Prompt 30" (its own
+  contexts under `/Silvis-Call-Schedule/`, Supabase answered locally, Notification / pushManager faked by an init script, the
+  real `sw.js` registered): Enable -> the save body + badge + "Subscribed (as ...)", Diagnose, Send test, the phone switches,
+  the version-change reset keeps the worker, re-arm after a wiped registration with no prompt, the deep link + `?tab=evil` +
+  the open-window message, Turn off, Reset (the root dummy survives), the columns absent, sign-out order (delete ->
+  unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line; Enable asks nothing) and the
+  Home Screen app (Enable offered) at 390 px with screenshots. The shared route answers every push request on every other page
+  (never the live project).
+- **Integration cross pins** (`test/data-layer.test.js` [P30], like Prompt 29's): they read the migration, the edge function
+  (its `@pushPlan` / `@webPush` / `@sendGate` blocks, lifted) and `sw.js` (run in a sandbox) and hold the client to them - the
+  three RPCs' names and parameters = what `config.js` posts (and verify-rls 19b-19d); `PUSH_CODES` and every refusal sentence
+  = the migration's raises; the return keys the client reads (and the smoke mock answers); the two `*_push` columns on every
+  side; one endpoint regex (the constraint, the function, `helpers.js`, the edge); the key / label shapes; the two routes and
+  their order in the handler; and every payload the edge builds (each category, person / follower / the test, plain / long /
+  emoji / empty messages) shown by `sw.js` unchanged and read back to the same view by `pushDeepLink` / `pushOpenMessage`.
+  Integration fixed two seams there: `sw.js` counts the body in characters, as the edge cuts it (an emoji is two UTF-16 units,
+  so a legal 180-character body used to turn generic), and `pushDb.sendTest` reads a pre-Prompt-30 function's role-gate 403
+  ("not allowed: role viewer may not send notifications" - the test route never answers 403) as "needs the next update", like
+  its 400 for a surgeon.
+- Not in this prompt: the 6 AM / Monday reminder (daily-reminder) and its `shift_reminders_push` switch; suppressing the
+  duplicate desktop pop-up for the same event.

@@ -115,6 +115,19 @@
 -- before any write; it writes the appdays.save audit row itself). No existing function, trigger or anon surface changes. Letter t is
 -- Prompt 28's no-primary days (applied, merged ahead of this client); u is taken by prepared, unmerged work (independent - either
 -- apply order).
+-- Revision 2026-10-03 w (phone push, sql/migrations/2026-10-03-push-notifications.sql, applied 2026-10-03 16:30:43Z after the probe): Faraz 10/2 (Prompt 30) -
+-- Fierce's trade request reached his e-mail but not his phone; "Davenport's look, Silvis's own push" (Web Push with VAPID keys, the app's
+-- own sw.js, no OneSignal). One NEW table push_subscriptions (one row per device: profile_id -> user_profiles on delete cascade; endpoint
+-- unique and https on a known push service only; p256dh / auth shape-checked; device_label; last_ok_at / last_error_at / fail_count for
+-- the edge function's bookkeeping). RLS on; anon holds nothing (revoked, no policy); authenticated SELECTs the non-secret columns only
+-- (a column grant - never endpoint / p256dh / auth) and DELETEs its own rows (push_subscriptions_own_read / _own_delete: profile_id =
+-- auth.uid()), never INSERTs or UPDATEs. Three NEW functions (security definer, search_path public, pg_temp, volatile - POST only, so
+-- an endpoint never lands in a URL): save_push_subscription (the only write path: added / kept / refreshed / moved - only with the same
+-- keys - the 10-device cap, the push.save audit row), delete_push_subscription (the caller's own row, the push.delete audit row) and
+-- push_subscription_status; PS001-PS007 PUSH_* refuse before any write; EXECUTE for authenticated, never anon. notification_preferences
+-- gains trade_updates_push / schedule_updates_push (boolean not null default true; prefs_own unchanged). Not in the realtime publication,
+-- not in the read_all loop; no existing table, policy, function or trigger changes. Letter u stays taken by the weekend pair claim
+-- (prepared, unmerged on its own branch).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -1431,6 +1444,8 @@ create table if not exists public.notification_preferences (
   schedule_updates_email    boolean not null default true,
   trade_updates_email       boolean not null default true,
   shift_reminders_email     boolean not null default true,
+  trade_updates_push        boolean not null default true,                -- Prompt 30 (revision w): phone switches, independent of e-mail
+  schedule_updates_push     boolean not null default true,                -- Prompt 30 (revision w)
   reminder_hour_central     integer check (reminder_hour_central between 0 and 23),
   updated_at                timestamptz not null default now(),
   constraint notification_preferences_one_owner check (num_nonnulls(person_id, profile_id) = 1)
@@ -1450,6 +1465,12 @@ alter table public.notification_preferences add constraint notification_preferen
 alter table public.notification_preferences drop constraint if exists notification_preferences_one_owner;
 alter table public.notification_preferences add constraint notification_preferences_one_owner
   check (num_nonnulls(person_id, profile_id) = 1);   -- a surgeon's row (person_id) or a follower's row (profile_id), never both, never neither
+-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an
+-- EXISTING table (constant defaults: no rewrite; every existing row - a surgeon's or a follower's - reads on). prefs_own covers them.
+alter table public.notification_preferences add column if not exists trade_updates_push boolean not null default true;
+alter table public.notification_preferences add column if not exists schedule_updates_push boolean not null default true;
+comment on column public.notification_preferences.trade_updates_push is 'Prompt 30: phone notifications for trade proposed / accepted / declined / applied (a give included). Default on; only an explicit false opts out. Independent of trade_updates_email.';
+comment on column public.notification_preferences.schedule_updates_push is 'Prompt 30: phone notifications for schedule published, manual edit, open shifts, shift taken, vacation logged, offers heads-up / frozen. Default on; only an explicit false opts out. Independent of schedule_updates_email.';
 
 create table if not exists public.audit_log (
   id          uuid primary key default gen_random_uuid(),
@@ -1803,6 +1824,176 @@ revoke all on function public.save_app_days(uuid, date[], date[], boolean) from 
 grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;
 comment on function public.save_app_days(uuid, date[], date[], boolean) is 'Prompt 29: the only write path into app_call_days - an APP for its own profile, the scheduler (admin / scheduler) for any APP profile (adds) or any holder (clears; p_replace takes a day over). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
 
+-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)
+-- Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID keys and the app's own sw.js (no OneSignal). One row per
+-- device that turned phone notifications on. Own rows only: authenticated SELECTs the non-secret columns (a column grant - endpoint,
+-- p256dh and auth are capability secrets and never come back in a response) and DELETEs its own rows (the policies below); it never
+-- INSERTs or UPDATEs - save_push_subscription() (security definer, the table owner) is the only write path, and the edge function
+-- send-notification keeps last_ok_at / last_error_at / fail_count and removes 404 / 410 rows with the service role. Never anon: not in
+-- the read_all loop, anon's privileges revoked (an anon request is refused 401 / 403, never answered 200 + []); not in the realtime
+-- publication. The endpoint must be https on a known push service (the edge function POSTs to it - no server-side request forgery
+-- lever). Deleting the account removes its rows (on delete cascade); the audit_log keeps push.save / push.delete (profile id + device
+-- label only). Refusals of the three functions (all before any write; custom SQLSTATEs, HTTP 400 through PostgREST):
+--   PS001 PUSH_NOT_SIGNED_IN   no signed-in user (all three)
+--   PS002 PUSH_NO_PROFILE      the account has no user_profiles row
+--   PS003 PUSH_BAD_ENDPOINT    not https on fcm.googleapis.com / android.googleapis.com / push.apple.com / push.services.mozilla.com /
+--                              notify.windows.com (or a subdomain), or longer than 2048
+--   PS004 PUSH_BAD_KEYS        p256dh not B + 86 base64url characters, or auth not 22
+--   PS005 PUSH_BAD_LABEL       a device label outside 1-40 of letters, digits, spaces and . ( ) / -
+--   PS006 PUSH_HELD            the endpoint is held by another account and the keys differ (same keys = moved to the caller)
+--   PS007 PUSH_TOO_MANY        the caller already has 10 devices
+create table if not exists public.push_subscriptions (
+  id             uuid primary key default gen_random_uuid(),
+  profile_id     uuid not null references public.user_profiles(id) on delete cascade,
+  endpoint       text not null,
+  p256dh         text not null,
+  auth           text not null,
+  device_label   text,
+  created_at     timestamptz not null default now(),
+  last_ok_at     timestamptz,
+  last_error_at  timestamptz,
+  fail_count     integer not null default 0,
+  constraint push_subscriptions_endpoint_key unique (endpoint),
+  constraint push_subscriptions_endpoint_shape check (length(endpoint) <= 2048 and endpoint ~ '^https://([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)/[!-~]*$'),
+  constraint push_subscriptions_p256dh_shape check (p256dh ~ '^B[A-Za-z0-9_-]{86}$'),
+  constraint push_subscriptions_auth_shape check (auth ~ '^[A-Za-z0-9_-]{22}$'),
+  constraint push_subscriptions_label_shape check (device_label is null or device_label ~ '^[A-Za-z0-9 .()/-]{1,40}$'),
+  constraint push_subscriptions_fail_count_check check (fail_count >= 0)
+);
+create index if not exists push_subscriptions_profile_idx on public.push_subscriptions (profile_id);
+comment on table public.push_subscriptions is 'Prompt 30: one row per device that turned phone notifications on (Web Push, VAPID). Own rows only: authenticated SELECTs the non-secret columns and DELETEs its own rows; it never INSERTs or UPDATEs (save_push_subscription is the only write path; the edge function keeps last_ok_at / last_error_at / fail_count and removes 404 / 410 rows with the service role). endpoint / p256dh / auth are capability secrets: never in a response, a log, an anon-readable table or a URL. Not in the realtime publication. Deleting the account removes its rows (on delete cascade).';
+
+create or replace function public.save_push_subscription(p_endpoint text, p_p256dh text, p_auth text, p_label text default null) returns jsonb
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me        uuid := auth.uid();
+  v_label   text := nullif(btrim(coalesce(p_label, '')), '');
+  cur       record;
+  v_found   boolean := false;
+  v_action  text;
+  v_dev     text;
+  v_name    text;
+  n         integer;
+begin
+  if me is null then
+    raise exception 'PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account' using errcode = 'PS001';
+  end if;
+  if not exists (select 1 from public.user_profiles u where u.id = me) then
+    raise exception 'PUSH_NO_PROFILE: this account has no profile yet - ask the scheduler (nothing was saved)' using errcode = 'PS002';
+  end if;
+  if p_endpoint is null or length(p_endpoint) > 2048 or p_endpoint !~ '^https://([a-z0-9-]+\.)*(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)/[!-~]*$' then
+    raise exception 'PUSH_BAD_ENDPOINT: this browser''s push address is not one the app sends to - nothing was saved' using errcode = 'PS003';
+  end if;
+  if p_p256dh is null or p_p256dh !~ '^B[A-Za-z0-9_-]{86}$' or p_auth is null or p_auth !~ '^[A-Za-z0-9_-]{22}$' then
+    raise exception 'PUSH_BAD_KEYS: this browser''s push keys are malformed - tap Reset subscription, then Enable (nothing was saved)' using errcode = 'PS004';
+  end if;
+  if v_label is not null and v_label !~ '^[A-Za-z0-9 .()/-]{1,40}$' then
+    raise exception 'PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)' using errcode = 'PS005';
+  end if;
+  -- one save at a time (the cap and a move read other rows); the volume is a handful of devices
+  perform pg_advisory_xact_lock(hashtext('push_subscriptions:save'));
+  select s.id, s.profile_id, s.p256dh, s.auth, s.device_label into cur from public.push_subscriptions s where s.endpoint = p_endpoint;
+  v_found := found;
+  if v_found and cur.profile_id = me then
+    if cur.p256dh = p_p256dh and cur.auth = p_auth and (v_label is null or v_label = cur.device_label) then
+      v_action := 'kept';
+    else
+      update public.push_subscriptions
+         set p256dh = p_p256dh, auth = p_auth, device_label = coalesce(v_label, cur.device_label), fail_count = 0, last_error_at = null
+       where id = cur.id;
+      v_action := 'refreshed';
+    end if;
+    v_dev := coalesce(v_label, cur.device_label);
+  elsif v_found then
+    if cur.p256dh <> p_p256dh or cur.auth <> p_auth then
+      raise exception 'PUSH_HELD: this browser''s push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)' using errcode = 'PS006';
+    end if;
+    select count(*) into n from public.push_subscriptions s where s.profile_id = me;
+    if n >= 10 then
+      raise exception 'PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)' using errcode = 'PS007';
+    end if;
+    update public.push_subscriptions
+       set profile_id = me, device_label = coalesce(v_label, cur.device_label), created_at = now(), last_ok_at = null, last_error_at = null, fail_count = 0
+     where id = cur.id;
+    v_action := 'moved';
+    v_dev := coalesce(v_label, cur.device_label);
+  else
+    select count(*) into n from public.push_subscriptions s where s.profile_id = me;
+    if n >= 10 then
+      raise exception 'PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)' using errcode = 'PS007';
+    end if;
+    insert into public.push_subscriptions (profile_id, endpoint, p256dh, auth, device_label) values (me, p_endpoint, p_p256dh, p_auth, v_label);
+    v_action := 'added';
+    v_dev := v_label;
+  end if;
+  if v_action in ('added', 'moved') then
+    v_name := coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                       (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                         where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                       'Unknown');
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (coalesce(public.silvis_person_id(), me::text), v_name, 'push.save',
+            jsonb_build_object('summary', v_name || ': phone notifications on (' || coalesce(v_dev, 'a device') || ')' || case when v_action = 'moved' then ' - moved from another account' else '' end,
+                               'profile_id', me, 'device_label', v_dev, 'action', v_action));
+  end if;
+  select count(*) into n from public.push_subscriptions s where s.profile_id = me;
+  return jsonb_build_object('ok', true, 'action', v_action, 'devices', n, 'audit', v_action in ('added', 'moved'));
+end $$;
+revoke all on function public.save_push_subscription(text, text, text, text) from public;
+revoke all on function public.save_push_subscription(text, text, text, text) from anon;
+grant execute on function public.save_push_subscription(text, text, text, text) to authenticated;
+comment on function public.save_push_subscription(text, text, text, text) is 'Prompt 30: the only write path into push_subscriptions - the caller''s own device (auth.uid()). added / kept (no write) / refreshed (keys or label changed) / moved (an endpoint held by another account, only with the same p256dh and auth). Refusals before any write: PS001 PUSH_NOT_SIGNED_IN, PS002 PUSH_NO_PROFILE, PS003 PUSH_BAD_ENDPOINT, PS004 PUSH_BAD_KEYS, PS005 PUSH_BAD_LABEL, PS006 PUSH_HELD, PS007 PUSH_TOO_MANY (10 devices). One push.save audit row on added / moved (profile id + device label only). Never returns the endpoint or the keys.';
+
+create or replace function public.delete_push_subscription(p_endpoint text) returns jsonb
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me      uuid := auth.uid();
+  v_n     integer := 0;
+  v_label text;
+  v_name  text;
+  n       integer;
+begin
+  if me is null then
+    raise exception 'PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account' using errcode = 'PS001';
+  end if;
+  with del as (
+    delete from public.push_subscriptions s where s.endpoint = p_endpoint and s.profile_id = me returning s.device_label
+  ) select count(*), max(del.device_label) into v_n, v_label from del;
+  if v_n > 0 then
+    v_name := coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                       (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                         where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                       'Unknown');
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (coalesce(public.silvis_person_id(), me::text), v_name, 'push.delete',
+            jsonb_build_object('summary', v_name || ': phone notifications off (' || coalesce(v_label, 'a device') || ')',
+                               'profile_id', me, 'device_label', v_label, 'action', 'removed'));
+  end if;
+  select count(*) into n from public.push_subscriptions s where s.profile_id = me;
+  return jsonb_build_object('ok', true, 'removed', v_n, 'devices', n, 'audit', v_n > 0);
+end $$;
+revoke all on function public.delete_push_subscription(text) from public;
+revoke all on function public.delete_push_subscription(text) from anon;
+grant execute on function public.delete_push_subscription(text) to authenticated;
+comment on function public.delete_push_subscription(text) is 'Prompt 30: removes the caller''s own row for this endpoint (another account''s row is never touched and answers removed 0, like an absent one). POST only (volatile): the endpoint travels in the body, never in a URL. One push.delete audit row when a row went. PS001 PUSH_NOT_SIGNED_IN.';
+
+create or replace function public.push_subscription_status(p_endpoint text) returns jsonb
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me uuid := auth.uid();
+begin
+  if me is null then
+    raise exception 'PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account' using errcode = 'PS001';
+  end if;
+  return jsonb_build_object('ok', true,
+    'saved', exists (select 1 from public.push_subscriptions s where s.profile_id = me and s.endpoint = p_endpoint),
+    'devices', (select count(*) from public.push_subscriptions s where s.profile_id = me));
+end $$;
+revoke all on function public.push_subscription_status(text) from public;
+revoke all on function public.push_subscription_status(text) from anon;
+grant execute on function public.push_subscription_status(text) to authenticated;
+comment on function public.push_subscription_status(text) is 'Prompt 30: whether THIS endpoint is saved for the caller, and how many devices the caller has (Settings > Diagnose, the start-up ownership check). Volatile on purpose: PostgREST refuses GET, so the endpoint never lands in a URL. PS001 PUSH_NOT_SIGNED_IN.';
+
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
@@ -1828,6 +2019,7 @@ alter table public.call_periods            enable row level security;
 alter table public.call_pay_settings       enable row level security;
 alter table public.call_pay_logs           enable row level security;
 alter table public.app_call_days           enable row level security;
+alter table public.push_subscriptions      enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
 do $$ declare t text; begin
@@ -2042,6 +2234,21 @@ create policy call_pay_logs_delete on public.call_pay_logs for delete to authent
 -- policy and no write privilege for authenticated: save_app_days() is the door (an APP for its own days, the scheduler for any APP).
 drop policy if exists app_call_days_read on public.app_call_days;
 create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
+
+-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only. anon holds nothing (every privilege
+-- revoked, no policy); authenticated SELECTs the non-secret columns of its own rows and DELETEs its own rows (the sign-out cleanup,
+-- Settings > Turn off); no INSERT / UPDATE privilege - save_push_subscription() is the door; the service role (the edge function) reads
+-- the keys and keeps the bookkeeping.
+revoke all on table public.push_subscriptions from public;
+revoke all on table public.push_subscriptions from anon;
+revoke all on table public.push_subscriptions from authenticated;
+grant select (id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count) on table public.push_subscriptions to authenticated;
+grant delete on table public.push_subscriptions to authenticated;
+grant select, insert, update, delete on table public.push_subscriptions to service_role;
+drop policy if exists push_subscriptions_own_read on public.push_subscriptions;
+create policy push_subscriptions_own_read on public.push_subscriptions for select to authenticated using (profile_id = auth.uid());
+drop policy if exists push_subscriptions_own_delete on public.push_subscriptions;
+create policy push_subscriptions_own_delete on public.push_subscriptions for delete to authenticated using (profile_id = auth.uid());
 
 -- ============================================================================
 -- Seed rows
