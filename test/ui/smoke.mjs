@@ -11495,6 +11495,37 @@ try {
               else if (nOkR !== 2 || askedR[1] !== wantR || accepted.resets !== 1 || accepted.bu) fail(`${EP} F reload: OK should run ONE hard reset and switch the card's beforeunload question off (no second question on a desktop): asked ${askedR.length}, ${JSON.stringify(accepted)}`);
               else ok(`${EP} F reload (BEHAVIOUR): the update banner's Tap to reload asked '${askedR[0].split("\n")[0]}' - Cancel cleared nothing (0 hard resets, 2 changes kept, beforeunload armed), OK ran one hard reset with the card's beforeunload question off`);
             } catch (e) { fail(`${EP} F reload: ` + errLine(e)); } finally { R.off("dialog", onDlgR); await R.close().catch(() => {}); }
+            // F x Prompt 30 (merge of origin/main 488f777, 10/3): a notification tap on this OPEN window while the APP holds 2
+            //    unsaved taps. sw.js's silvis-push-open message (here dispatched on navigator.serviceWorker, as the P30 steps do)
+            //    goes through spec F's setView: Cancel = one question, still on Mine with the taps, no day opened; OK = one more
+            //    question only (none from the queued day), the Calendar with the tapped day's editor open, no reload.
+            const T = await A.ctx.newPage();
+            watchPage(T, "p29-app-a-push-tap");
+            const askedT = []; let answerT = "dismiss";
+            const onDlgT = (d) => { askedT.push(d.message()); (answerT === "accept" ? d.accept() : d.dismiss()).catch(() => {}); };
+            try {
+              await T.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(APP_A_PROFILE));
+              await T.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+              await loadApp(T, "P29 APP A push-tap page");
+              await toMineM(T);
+              await T.click(`[data-testid=appdays-cell][data-day="${D12}"]`); await T.click(`[data-testid=appdays-cell][data-day="${D10}"]`); await T.waitForTimeout(120);
+              await T.evaluate(() => { window.__pdTapNoReload = 1; });
+              T.on("dialog", onDlgT);
+              const tap = () => T.evaluate((day) => { navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type: "silvis-push-open", tab: "calendar", day } })); }, D12);
+              const probeT = () => T.evaluate(() => { const c = document.querySelector("[data-testid=appdays-count]"); return { card: !!document.querySelector("[data-testid=appdays-card]"), count: c ? c.textContent.trim() : null, grid: !!document.querySelector("[data-testid=cal-grid]"), editor: !!document.querySelector("[data-testid=day-editor]"), title: ((document.querySelector("[data-testid=editor-title]") || {}).textContent || "").trim(), noReload: window.__pdTapNoReload === 1 }; });
+              const beforeT = await probeT();
+              await tap(); await T.waitForTimeout(400);
+              const nCancelT = askedT.length, cancelledT = await probeT();
+              answerT = "accept";
+              await tap();
+              await waitFor(async () => (await probeT()).editor, 8000, 150);
+              await T.waitForTimeout(300);
+              const nOkT = askedT.length, acceptedT = await probeT();
+              if (beforeT.count !== "2 changes" || !beforeT.card) fail(`${EP} F x P30: the setup should hold 2 unsaved taps on Mine: ${JSON.stringify(beforeT)}`);
+              else if (nCancelT !== 1 || askedT[0] !== wantAsk || !cancelledT.card || cancelledT.count !== "2 changes" || cancelledT.editor || cancelledT.grid || !cancelledT.noReload) fail(`${EP} F x P30: a notification tap with 2 unsaved taps should ask '${wantAsk.split("\n")[0]}' once and, on Cancel, stay on Mine with the taps and open no day: asked ${JSON.stringify(askedT)}, ${JSON.stringify(cancelledT)}`);
+              else if (nOkT !== 2 || askedT[1] !== wantAsk || acceptedT.card || !acceptedT.grid || !acceptedT.editor || !acceptedT.title || !acceptedT.noReload) fail(`${EP} F x P30: OK should ask nothing more (the queued day included) and land on the Calendar with ${D12}'s editor open, no reload: asked ${JSON.stringify(askedT)}, ${JSON.stringify(acceptedT)}`);
+              else ok(`${EP} F x P30 (BEHAVIOUR): a notification tap (silvis-push-open, calendar ${D12}) with 2 unsaved taps asked '${wantAsk.split("\n")[0]}' - Cancel stayed on Mine (2 changes kept, no day opened); OK asked nothing more and opened the Calendar with the day editor ('${acceptedT.title}'), no reload`);
+            } catch (e) { fail(`${EP} F x P30: ` + errLine(e)); } finally { T.off("dialog", onDlgT); await T.close().catch(() => {}); }
           }
         }
         await showM(A.pg);

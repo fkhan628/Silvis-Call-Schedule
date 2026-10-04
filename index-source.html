@@ -5640,14 +5640,18 @@ function CallSchedule() {
     pushLinkDoneRef.current = true;
     const r = pushDeepLink(window.location.search);
     if (r.strip) { try { window.history.replaceState(null, "", window.location.pathname + r.search + window.location.hash); } catch (e) { console.warn("could not drop the notification link from the URL:", e); } }
-    if (r.tab) setView(r.tab);
+    if (r.tab && !setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question stays on Mine - no day queued
     if (r.day) setPushDay({ day: r.day, at: Date.now() });
   }, [isPublicMode, pushLinkReady]);
   // A tap must not silently drop the day editor's unsaved draft (Prompt 30 review 10/3): the editor reports its dirty flag
   // (onDirtyChange -> editorDirtyRef) and its day is mirrored in editorDayRef (refs: the message listener below is created once
   // per account, so state would be stale there). When the target would unmount the editor or open another day
   // (helpers.pushTapLeavesDraft), the editor's own question is asked first: Cancel keeps the draft and the view (a toast says
-  // why nothing moved), OK closes the editor and the tap goes on. true = stop here.
+  // why nothing moved) - true = stop here; OK answers false and the tap goes on. The two guards compose (fix/painter-dark-mode
+  // merge, 10/3): an OK drops nothing yet - spec F's question (setView / goToDay) may still keep an APP on Mine, and then both
+  // drafts stay. The draft goes only once the view has really moved: onMsg calls pushTapDropDraft after setView answered true;
+  // the queued day needs no drop - goToDay asks before it sets anything, and its setEditorDay(d) replaces the answered draft.
+  // Each guard asks at most once per tap: the queued day finds the editor clean and the view already moved.
   const editorDayRef = useRef(null);
   const editorDirtyRef = useRef(false);
   editorDayRef.current = editorDay;
@@ -5657,13 +5661,17 @@ function CallSchedule() {
       showToast("The notification was not opened - save or cancel the day you are editing, then tap it again.", "info");
       return true;
     }
+    return false;
+  };
+  const pushTapDropDraft = (r) => {
+    if (!pushTapLeavesDraft(editorDayRef.current, editorDirtyRef.current, r)) return;
     editorDirtyRef.current = false;
     editorDayRef.current = null;
     setEditorDay(null);
-    return false;
   };
   // An app window that is already open: sw.js focuses it and posts { type: "silvis-push-open", tab, day } - switched in place,
-  // no reload; a dirty day edit is kept unless the person confirms discarding it (pushTapKeepsDraft).
+  // no reload; a dirty day edit is kept unless the person confirms discarding it (pushTapKeepsDraft), and unsaved My APP day
+  // taps unless the APP confirms leaving Mine (setView answers false on Cancel: nothing moves, no day is queued).
   useEffect(() => {
     if (isPublicMode || !pushUid) return;
     const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : null;
@@ -5672,7 +5680,8 @@ function CallSchedule() {
       const r = pushOpenMessage(e && e.data);
       if (!r) return;
       if (pushTapKeepsDraft(r)) return;
-      setView(r.tab);
+      if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched
+      pushTapDropDraft(r);
       if (r.day) setPushDay({ day: r.day, at: Date.now() });
     };
     sw.addEventListener("message", onMsg);
@@ -5683,7 +5692,7 @@ function CallSchedule() {
     const d = pushDay.day;
     setPushDay(null);
     if (pushTapKeepsDraft({ tab: "calendar", day: d })) return;
-    goToDay(d);
+    goToDay(d); // its own refusals (an unread schedule, spec F's question) come before it moves anything
   }, [loaded, pushDay]);
   // The account's name as the Account card says it ("Subscribed (as <name>).", Diagnose's "Signed in as")
   const pushName = () => {

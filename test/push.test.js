@@ -871,6 +871,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
   const draftGuardCheck = (S) => {
     const H = loadHelpers(S.helpers);
     const keep = liftConst(S, "  const pushTapKeepsDraft = ");
+    const drop = liftConst(S, "  const pushTapDropDraft = "); // fix/painter-dark-mode merge (10/3): the drop waits for spec F's setView
     const a = S.index.indexOf("    const onMsg = (e) => {"), b = S.index.indexOf("\n    };\n", a);
     assert.ok(a > 0 && b > a, "the sw message handler onMsg");
     const msgSrc = S.index.slice(a + "    const onMsg = ".length, b + 6);
@@ -883,18 +884,23 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
         setEditorDay: (v) => log.push("setEditorDay " + v), setView: (v) => log.push("setView " + v), setPushDay: (v) => log.push("setPushDay " + (v && v.day)),
       };
       scope.pushTapKeepsDraft = runLifted(keep, scope);
+      scope.pushTapDropDraft = runLifted(drop, scope);
       return { onMsg: runLifted(msgSrc, scope), log, scope };
     };
     const ev = (tab, day) => ({ data: { type: "silvis-push-open", tab, day } });
     let m = mk("2026-10-04", true, false); m.onMsg(ev("timeoff", null));
     assert.deepStrictEqual(m.log, [Q, "toast info"], "dirty draft + a tap to Time off + Cancel: the editor's question, nothing switches");
+    assert.strictEqual(m.scope.editorDirtyRef.current, true, "Cancel keeps the dirty flag");
+    // pin moved deliberately 10/3 (fix/painter-dark-mode merge): on OK the view switches first and the editor closes right after
+    // it, in the same handler (one React batch - the same render as before); the drop waits for setView's answer, so spec F's
+    // Cancel (an APP's unsaved My APP days) keeps the day draft as well - test/data-layer.test.js [PD] "PD F x P30" runs both
     m = mk("2026-10-04", true, true); m.onMsg(ev("timeoff", null));
-    assert.deepStrictEqual(m.log, [Q, "setEditorDay null", "setView timeoff"], "OK: the editor closes first, then the view switches");
+    assert.deepStrictEqual(m.log, [Q, "setView timeoff", "setEditorDay null"], "OK: the view switches, then the editor closes");
     assert.strictEqual(m.scope.editorDirtyRef.current, false, "the dirty flag is cleared with the discard");
     m = mk("2026-10-04", true, false); m.onMsg(ev("calendar", "2026-10-07"));
     assert.deepStrictEqual(m.log, [Q, "toast info"], "another day + Cancel: nothing moves");
     m = mk("2026-10-04", true, true); m.onMsg(ev("calendar", "2026-10-07"));
-    assert.deepStrictEqual(m.log, [Q, "setEditorDay null", "setView calendar", "setPushDay 2026-10-07"], "another day + OK: closed, then the day is queued");
+    assert.deepStrictEqual(m.log, [Q, "setView calendar", "setEditorDay null", "setPushDay 2026-10-07"], "another day + OK: switched, closed, then the day is queued");
     [["calendar", "2026-10-04", ["setView calendar", "setPushDay 2026-10-04"]], ["calendar", null, ["setView calendar"]], ["openshifts", null, ["setView openshifts"]]].forEach(([tab, day, want]) => {
       const n = mk("2026-10-04", true, false); n.onMsg(ev(tab, day));
       assert.deepStrictEqual(n.log, want, "no question when the draft stays (" + tab + " " + day + ")");
@@ -977,9 +983,13 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
   await mutant("sendEmailNotif dropping the push summary (a pushed reminder would read 'No reminder went out')", "index",
     ", push: result && result.push && typeof result.push === \"object\" ? result.push : null };", " };", remindRunCheck);
   await mutant("onMsg without the draft guard", "index",
-    "      if (pushTapKeepsDraft(r)) return;\n      setView(r.tab);", "      setView(r.tab);", draftGuardCheck);
-  await mutant("pushTapKeepsDraft switching before it closes the editor", "index",
-    "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n    return false;", "    return false;", draftGuardCheck);
+    "      if (pushTapKeepsDraft(r)) return;\n      if (!setView(r.tab)) return;", "      if (!setView(r.tab)) return;", draftGuardCheck);
+  // retargeted 10/3 (fix/painter-dark-mode merge): the close moved out of pushTapKeepsDraft into pushTapDropDraft (after setView)
+  await mutant("the tap switching without closing the editor (pushTapDropDraft dropping nothing)", "index",
+    "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n  };", "  };", draftGuardCheck);
+  await mutant("onMsg without the drop after the switch", "index",
+    "      if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched\n      pushTapDropDraft(r);\n",
+    "      if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched\n", draftGuardCheck);
   await mutant("pushTapLeavesDraft ignoring another day", "helpers",
     "  return !!target.day && target.day !== editorDay;", "  return false;", tapDraftCheck);
   await mutant("pushIsDay regex-only (an impossible date opens)", "helpers",

@@ -12444,6 +12444,159 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const bgLines = bg.split("\n").filter(l => /beforeunload/.test(l) && /APP/.test(l));
       assert.ok(bgLines.length >= 2 && bgLines.every(l => /desktop browser/.test(l) && /iOS never/.test(l)), "every build-guide line on the APP draft's beforeunload names the platforms (a desktop browser; iOS never)");
     });
+    // fix/painter-dark-mode x Prompt 30 (merge of origin/main 488f777, 10/3): a notification tap - the service worker's message
+    // to an open window (onMsg, created ONCE per account, so it holds an old render's setView), the queued day (the pushDay
+    // effect -> goToDay) and the deep link - goes through spec F's setView and stops when it answers false: no day queued,
+    // nothing moved, the APP's taps kept. The day editor's guard (pushTapKeepsDraft) composes with it: each asks at most once per
+    // tap and a Cancel on EITHER keeps both drafts (the editor's draft goes only once the view moved - pushTapDropDraft after
+    // setView; the queued day lets goToDay replace it after its own question). The real code is lifted and run in a stand-in
+    // component instance (shared refs as React's; a re-render remirrors viewRef / editorDayRef and models the unmount reports:
+    // the card's onDirty(0) off Mine, the editor's onDirtyChange(false) when its day changes or it leaves calendar / openshifts);
+    // mutants of the lifted text prove each scenario binds (each must fail an assertion, not crash).
+    check("PD F x P30 (BEHAVIOUR): a notification tap while an APP holds unsaved My APP day taps asks spec F's question once - Cancel queues no day, moves nothing and keeps the taps; OK navigates once with no second question; with a dirty day draft too each guard asks at most once and a Cancel on either keeps both; the queued day and the deep link stop the same way; mutants bind", () => {
+      const EDQ = "Discard your unsaved changes to this day?";
+      const SRC0 = {
+        guard: sliceP("  const viewRef = useRef(view); viewRef.current = view;", "\n  const reloadForUpdate = "),
+        keep: sliceP("  const pushTapKeepsDraft = (r) => {", "\n  };\n") + "\n  };",
+        drop: sliceP("  const pushTapDropDraft = (r) => {", "\n  };\n") + "\n  };",
+        msg: sliceP("    const onMsg = (e) => {", "\n    };\n") + "\n    };",
+        queued: sliceP("    if (!loaded || !pushDay) return;", "\n  }, [loaded, pushDay]);"),
+        link: sliceP("    if (isPublicMode || !pushLinkReady || pushLinkDoneRef.current) return;", "\n  }, [isPublicMode, pushLinkReady]);"),
+        go: sliceP("  const goToDay = (day) => {", "\n  };\n") + "\n  };",
+      };
+      // the wiring this stand-in relies on: one listener per account, the queued day after the data loads, goToDay asks first
+      assert.ok(PSRC.includes("    sw.addEventListener(\"message\", onMsg);\n    return () => sw.removeEventListener(\"message\", onMsg);\n  }, [isPublicMode, pushUid]);"), "onMsg is created once per account (an old render's closures)");
+      assert.ok(SRC0.msg.includes("      if (pushTapKeepsDraft(r)) return;\n      if (!setView(r.tab)) return;") && SRC0.msg.indexOf("pushTapDropDraft(r);") > SRC0.msg.indexOf("if (!setView(r.tab)) return;") && SRC0.msg.indexOf("pushTapDropDraft(r);") < SRC0.msg.indexOf("setPushDay("), "onMsg: the editor's question, spec F's, then the drop, then the queue");
+      assert.ok(SRC0.link.includes("    if (r.tab && !setView(r.tab)) return;") && SRC0.link.indexOf("if (r.tab && !setView(r.tab)) return;") < SRC0.link.indexOf("setPushDay("), "the deep link stops on false before it queues a day");
+      // instance(S, o): o = { view, appTaps, editorDay, editorDirty, answers } - answers are the person's replies in order
+      const instance = (S, o) => {
+        const st = { view: o.view, editorDay: o.editorDay || null, pushDay: null, calMonth: null };
+        const ev = [], answers = (o.answers || []).slice(), refs = {};
+        const appDaysDirtyRef = { current: o.appTaps || 0 };
+        const editorDayRef = { current: st.editorDay }, editorDirtyRef = { current: !!o.editorDirty };
+        const confirm = (q) => {
+          const who = q === EDQ ? "editor" : q === H.appDaysLeaveWords(appDaysDirtyRef.current, "leave") ? "app" : "other: " + q;
+          ev.push("ask " + who);
+          if (!answers.length) throw new assert.AssertionError({ message: "an unexpected question (" + who + ") after " + JSON.stringify(ev) });
+          return answers.shift();
+        };
+        const setViewState = (v) => { st.view = v; ev.push("view " + v); };
+        const setEditorDay = (v) => { st.editorDay = v; ev.push("editor " + v); };
+        const setPushDay = (v) => { st.pushDay = v; ev.push("queue " + (v ? v.day : null)); };
+        const showToast = (m, k) => ev.push("toast " + k);
+        const useRef = (init) => refs.view || (refs.view = { current: init });
+        let prev = null, cur = null;
+        const render = () => {
+          if (prev) {
+            if (prev.view === "myschedule" && st.view !== "myschedule") appDaysDirtyRef.current = 0;
+            const shown = (v) => v === "calendar" || v === "openshifts";
+            if (st.editorDay !== prev.editorDay || (shown(prev.view) && !shown(st.view))) editorDirtyRef.current = false;
+          }
+          prev = { view: st.view, editorDay: st.editorDay };
+          editorDayRef.current = st.editorDay;
+          const g = new Function("view", "useRef", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", S.guard + "\nreturn { setView, leaveMineOk };")(st.view, useRef, appDaysDirtyRef, confirm, H.appDaysLeaveWords, setViewState);
+          const k = new Function("pushTapLeavesDraft", "editorDayRef", "editorDirtyRef", "confirm", "showToast", "setEditorDay", S.keep + "\n" + S.drop + "\nreturn { pushTapKeepsDraft, pushTapDropDraft };")(H.pushTapLeavesDraft, editorDayRef, editorDirtyRef, confirm, showToast, setEditorDay);
+          const goToDay = new Function("suIsIso", "refuseUnreadDay", "setView", "parse", "setCalMonth", "setCalYear", "setEditorDay", S.go + "\nreturn goToDay;")(H.suIsIso, () => false, g.setView, H.parse, (m) => { st.calMonth = m; }, () => {}, setEditorDay);
+          const onMsg = new Function("pushOpenMessage", "pushTapKeepsDraft", "pushTapDropDraft", "setView", "setPushDay", S.msg + "\nreturn onMsg;")(H.pushOpenMessage, k.pushTapKeepsDraft, k.pushTapDropDraft, g.setView, setPushDay);
+          const queued = new Function("loaded", "pushDay", "setPushDay", "pushTapKeepsDraft", "goToDay", S.queued);
+          const link = new Function("isPublicMode", "pushLinkReady", "pushLinkDoneRef", "pushDeepLink", "window", "console", "setView", "setPushDay", S.link);
+          cur = { onMsg, runQueued: () => queued(true, st.pushDay, setPushDay, k.pushTapKeepsDraft, goToDay),
+            runLink: (search) => link(false, true, { current: false }, H.pushDeepLink, { location: { search, pathname: "/Silvis-Call-Schedule/", hash: "" }, history: { replaceState() {} } }, { warn() {} }, g.setView, setPushDay) };
+          return cur;
+        };
+        // React after a handler: re-render, run the queued-day effect if a day is queued, re-render again
+        const settle = () => { render(); if (st.pushDay) { cur.runQueued(); render(); } };
+        const out = () => ({ asks: ev.filter(e => e.startsWith("ask ")).map(e => e.slice(4)), ev: ev.slice(), view: st.view, editorDay: st.editorDay, editorDirty: editorDirtyRef.current, appTaps: appDaysDirtyRef.current, queued: st.pushDay, calMonth: st.calMonth, left: answers.length });
+        return { st, ev, appDaysDirtyRef, render, settle, out, cur: () => cur };
+      };
+      const msg = (tab, day) => ({ data: { type: "silvis-push-open", tab, day: day || null } });
+      const D = "2026-10-15", D0 = "2026-10-04", D7 = "2026-10-07";
+      const scenarios = (S) => {
+        // (a) the APP: the listener was made while the view was the calendar (once per account); the APP then opened Mine and
+        //     tapped two days; the tap arrives through that OLD onMsg
+        const appTap = (target, answers) => {
+          const I = instance(S, { view: "calendar", appTaps: 0, answers });
+          const stale = I.render().onMsg;
+          I.st.view = "myschedule"; I.render(); I.appDaysDirtyRef.current = 2;
+          I.ev.length = 0;
+          stale(target); I.settle();
+          return I.out();
+        };
+        let x = appTap(msg("calendar", D), [false]);
+        assert.deepStrictEqual([x.asks, x.ev, x.view, x.appTaps, x.queued, x.editorDay], [["app"], ["ask app"], "myschedule", 2, null, null], "(a) Cancel: one question, no day queued, the view unchanged, the 2 taps kept: " + JSON.stringify(x));
+        x = appTap(msg("calendar", D), [true]);
+        assert.deepStrictEqual(x.asks, ["app"], "(a) OK: one question for the whole tap (the queued day asks nothing more): " + JSON.stringify(x));
+        assert.deepStrictEqual(x.ev.filter(e => e.startsWith("view ")).filter((e, i, a) => i === 0 || a[i - 1] !== e), ["view calendar"], "(a) OK: it navigates once (to the calendar)");
+        assert.ok(x.ev.indexOf("queue " + D) > x.ev.indexOf("view calendar") && x.view === "calendar" && x.editorDay === D && x.calMonth === 9 && x.queued === null && x.appTaps === 0, "(a) OK: the day is queued after the switch and opens through goToDay (October); the card reported 0 when it went: " + JSON.stringify(x));
+        x = appTap(msg("openshifts"), [false]);
+        assert.deepStrictEqual([x.ev, x.view, x.appTaps], [["ask app"], "myschedule", 2], "(a) a tap to Open shifts, Cancel: stays");
+        x = appTap(msg("openshifts"), [true]);
+        assert.deepStrictEqual([x.asks, x.view, x.queued, x.ev.some(e => e.startsWith("queue "))], [["app"], "openshifts", null, false], "(a) a tap to Open shifts, OK: switched, no day");
+        x = appTap(msg("myschedule"), []);
+        assert.deepStrictEqual([x.asks, x.view, x.appTaps], [[], "myschedule", 2], "(a) a tap to Mine itself asks nothing and keeps the taps");
+        x = appTap({ data: { type: "silvis-push-open", tab: "evil" } }, []);
+        assert.deepStrictEqual([x.ev, x.appTaps], [[], 2], "(a) a non-whitelisted message does nothing");
+        // (b) both guards: unsaved APP taps AND a dirty day draft (the editor is open on D0) - each asks at most once, a Cancel on
+        //     either keeps both
+        const both = (fire, answers) => {
+          const I = instance(S, { view: "myschedule", appTaps: 2, editorDay: D0, editorDirty: true, answers });
+          const c = I.render();
+          fire(c, I); I.settle();
+          return I.out();
+        };
+        const tapB = (target) => (c) => c.onMsg(target);
+        const kept = (x, label) => {
+          assert.ok(x.view === "myschedule" && x.appTaps === 2 && !x.ev.some(e => e.startsWith("view ")), label + ": the APP's taps kept (still on Mine, 2 changes): " + JSON.stringify(x));
+          assert.ok(x.editorDay === D0 && x.editorDirty === true && !x.ev.some(e => e.startsWith("editor ")), label + ": the day draft kept (editor on " + D0 + ", dirty): " + JSON.stringify(x));
+          assert.ok(x.queued === null && !x.ev.some(e => e.startsWith("queue ") && e !== "queue null"), label + ": no day queued (the queued-day effect's own setPushDay(null) aside)");
+        };
+        x = both(tapB(msg("calendar", D7)), [false]);
+        assert.deepStrictEqual(x.asks, ["editor"], "(b) editor Cancel: only the editor's question"); assert.ok(x.ev.includes("toast info"), "(b) the toast says why nothing moved"); kept(x, "(b) editor Cancel");
+        x = both(tapB(msg("calendar", D7)), [true, false]);
+        assert.deepStrictEqual(x.asks, ["editor", "app"], "(b) editor OK + APP Cancel: each guard asked once"); kept(x, "(b) editor OK + APP Cancel");
+        x = both(tapB(msg("timeoff")), [true, false]);
+        assert.deepStrictEqual(x.asks, ["editor", "app"]); kept(x, "(b) a tap to Time off, editor OK + APP Cancel");
+        x = both(tapB(msg("calendar", D7)), [true, true]);
+        assert.deepStrictEqual([x.asks, x.left], [["editor", "app"], 0], "(b) OK + OK: two questions in all, one per guard - none from the queued day: " + JSON.stringify(x));
+        assert.ok(x.view === "calendar" && x.editorDay === D7 && x.appTaps === 0 && x.editorDirty === false && x.ev.indexOf("editor null") > x.ev.indexOf("view calendar"), "(b) OK + OK: the editor closes after the switch, then the day opens: " + JSON.stringify(x));
+        x = both(tapB(msg("timeoff")), [true, true]);
+        assert.deepStrictEqual([x.asks, x.view, x.editorDay, x.editorDirty], [["editor", "app"], "timeoff", null, false], "(b) a tap to Time off, OK + OK: switched, the editor closed");
+        // the queued day itself (a day queued before both drafts existed - e.g. the deep link while the data loaded)
+        const queuedB = (c, I) => { I.st.pushDay = { day: D7, at: 1 }; c.runQueued(); };
+        x = both(queuedB, [false]);
+        assert.deepStrictEqual(x.asks, ["editor"]); kept(x, "(b) queued day, editor Cancel");
+        x = both(queuedB, [true, false]);
+        assert.deepStrictEqual(x.asks, ["editor", "app"], "(b) queued day, editor OK + APP Cancel (goToDay's own question)"); kept(x, "(b) queued day, editor OK + APP Cancel");
+        x = both(queuedB, [true, true]);
+        assert.deepStrictEqual([x.asks, x.view, x.editorDay, x.appTaps], [["editor", "app"], "calendar", D7, 0], "(b) queued day, OK + OK: goToDay opens the day (the answered draft replaced)");
+        // (c) the deep link: on Mine with 2 unsaved taps, ?tab=calendar&day=D
+        const linkC = (answers) => { const I = instance(S, { view: "myschedule", appTaps: 2, answers }); I.render().runLink("?tab=calendar&day=" + D + "&_v=x"); I.settle(); return I.out(); };
+        x = linkC([false]);
+        assert.deepStrictEqual([x.ev, x.view, x.appTaps, x.queued], [["ask app"], "myschedule", 2, null], "(c) the deep link, Cancel: no day queued, the taps kept");
+        x = linkC([true]);
+        assert.deepStrictEqual([x.asks, x.view, x.editorDay], [["app"], "calendar", D], "(c) the deep link, OK: one question, the day opens");
+      };
+      scenarios(SRC0);
+      // mutants: each must turn a scenario red with an assertion (a crash would prove nothing)
+      const mutants = [
+        ["onMsg ignoring setView's answer (the pre-merge Prompt 30 line)", "msg", "      if (!setView(r.tab)) return;", "      setView(r.tab);"],
+        ["onMsg dropping the day draft before spec F's question", "msg", "      if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched\n      pushTapDropDraft(r);", "      pushTapDropDraft(r);\n      if (!setView(r.tab)) return;"],
+        ["onMsg without the day editor's guard", "msg", "      if (pushTapKeepsDraft(r)) return;\n", ""],
+        ["pushTapKeepsDraft closing the editor on OK (Prompt 30's pre-merge body)", "keep", "    return false;\n  };", "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n    return false;\n  };"],
+        ["the deep link ignoring setView's answer", "link", "    if (r.tab && !setView(r.tab)) return;", "    if (r.tab) setView(r.tab);"],
+        ["goToDay ignoring setView's answer", "go", "    if (!setView(\"calendar\")) return;", "    setView(\"calendar\");"],
+        ["the queued day without the editor's guard", "queued", "    if (pushTapKeepsDraft({ tab: \"calendar\", day: d })) return;\n", ""],
+        ["leaveMineOk reading the render's view (an old listener would not ask)", "guard", "return !n || viewRef.current !== \"myschedule\" ||", "return !n || view !== \"myschedule\" ||"],
+      ];
+      for (const [name, part, from, to] of mutants) {
+        assert.strictEqual(cntP(SRC0[part], from), 1, "mutant '" + name + "': its anchor must be in the lifted " + part + " exactly once");
+        let err = null;
+        try { scenarios(Object.assign({}, SRC0, { [part]: SRC0[part].split(from).join(to) })); } catch (e) { err = e; }
+        assert.ok(err, "mutant '" + name + "' passes every scenario - the check does not bind");
+        assert.ok(err instanceof assert.AssertionError, "mutant '" + name + "' crashed instead of failing an assertion: " + (err && err.stack ? err.stack.split("\n").slice(0, 2).join(" | ") : err));
+        if (process.env.PD_VERBOSE) console.log("     (mutant '" + name + "' failed: " + String(err.message).split("\n")[0].slice(0, 220) + ")");
+      }
+    });
     check("PD G: a drafted My APP day (add / remove) carries the unsaved mark - appdays-unsaved, '*', T.paintText, aria-hidden, the cell's title says unsaved - and a key line under the grid while the draft holds changes", () => {
       assert.ok(card.includes('const unsaved = st === "add" || st === "remove";'));
       assert.ok(card.includes('{unsaved && <span data-testid="appdays-unsaved" aria-hidden="true" style={{position: "absolute", top: 1, right: 3, fontSize: 13, fontWeight: 800, lineHeight: 1, color: T.paintText, fontFamily: font}}>*</span>}'));
@@ -12510,6 +12663,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "accepted.resets !== 1 || accepted.bu",
         "A.pg.on(\"dialog\", onDlgF);",
         "appDayStore = appDayStore.filter(r => r.profile_id !== APP_C_UID); appProfiles = appProfiles.filter(p => p.id !== APP_C_UID);",
+        // the Prompt 30 merge (10/3): a notification tap on an open window with 2 unsaved APP taps - Cancel stays, OK opens once
+        "const tap = () => T.evaluate((day) => { navigator.serviceWorker.dispatchEvent(new MessageEvent(\"message\", { data: { type: \"silvis-push-open\", tab: \"calendar\", day } })); }, D12);",
+        "else if (nCancelT !== 1 || askedT[0] !== wantAsk || !cancelledT.card || cancelledT.count !== \"2 changes\" || cancelledT.editor || cancelledT.grid || !cancelledT.noReload) fail(",
+        "else if (nOkT !== 2 || askedT[1] !== wantAsk || acceptedT.card || !acceptedT.grid || !acceptedT.editor || !acceptedT.title || !acceptedT.noReload) fail(",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
     });
   }
