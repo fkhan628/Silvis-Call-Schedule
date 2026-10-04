@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-8dmtA/kv7aEbia/lboW32v0uVoimSDe18PnXYfQBaLA=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-C1bMOBez6Wxfwaxd1+WnX0NSMRJZBuorQiigay0YAWs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-h5meq6XVu+naa0gKMXZN1IMVMnN795J+tTT7IvJW3LU=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-QCFUogKS0Z6hHxBuoc2/Y+wpeyYwY2dwDPfWhuf9guI=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -174,7 +174,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.02d";
+    var APP_VERSION = "2026.10.03a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -207,16 +207,16 @@
         if (last && last.indexOf(".") < 0 && last !== "index") here.pathname += "/";
         return new URL("./", here.href).href;
       }
-      // KEEP-PREDICATE: a registration inside the Silvis folder that the reset must still keep. Today: one whose
-      // script (active, waiting or installing) is OneSignal's - unregistering it kills that push subscription.
-      // PROMPT 30 HOOK: Silvis's own push worker (sw.js, scope = the Silvis folder) must be kept here too, e.g.
-      //   if (scriptURLs[i].split("?")[0] === silvisBase + "sw.js") return true;
-      // comparing WITHOUT the query (sw.js?v=<APP_VERSION> must match too), or every update would drop this device's
-      // Silvis push subscription - and the planned silent re-arm would hide the loss. Silvis registers no worker
-      // today; data-layer XR's "silvis-push" fake (unregistered today) turns to kept with that change.
+      // KEEP-PREDICATE: a registration inside the Silvis folder that the reset must still keep. One whose script
+      // (active, waiting or installing) is OneSignal's - unregistering it kills that push subscription - and, since
+      // Prompt 30 (DONE, 10/2), Silvis's own push worker: <the Silvis folder>sw.js, compared WITHOUT the query or the
+      // fragment (sw.js?v=... is the same worker), or every update would drop this device's phone notifications (and
+      // the silent re-arm on start would only hide the loss). A sw.js in a SUBfolder of the app folder is not ours and
+      // still goes. data-layer XR's "silvis-push" fake is kept now.
       function keepRegistration(scriptURLs, silvisBase) {
         for (var i = 0; i < scriptURLs.length; i++) {
           if (/OneSignalSDK/i.test(scriptURLs[i])) return true;
+          if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker
         }
         return false;
       }
@@ -260,6 +260,9 @@
         }).catch(function(e) { console.warn("nukeAndReload: cache/service-worker clear failed - plain reload:", e); window.location.reload(true); });
       }
 
+      // Prompt 30: the app folder, for config.js pushDevice (the push worker's scope) - the same base the reset uses, exposed
+      // once and unconditionally (both branches below).
+      window.__silvisAppBase = silvisResetBase;
       if (mismatch) {
         localStorage.setItem("silvis-app-version", APP_VERSION);
         localStorage.removeItem("silvis_app_version");
@@ -754,6 +757,16 @@ function CallSchedule() {
   const followerSaveTimerRef = useRef(null);
   const followerPrefsEditable = followerPrefState === "ok";
   const [notifTestSent, setNotifTestSent] = useState("");
+  const [pushInfo, setPushInfo] = useState(null);
+  const [pushMsg, setPushMsg] = useState("");
+  const [pushBusy, setPushBusy] = useState("");
+  const [pushNeedsTap, setPushNeedsTap] = useState(false);
+  const [pushCols, setPushCols] = useState("unknown");
+  const pushColsRef = useRef("unknown");
+  const pushKeyRef = useRef(null);
+  const pushArmedRef = useRef("");
+  const pushLinkDoneRef = useRef(false);
+  const [pushDay, setPushDay] = useState(null);
   const notifSeenRef = useRef(null);
   const mySurgeon = (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || "";
   useEffect(() => {
@@ -855,6 +868,10 @@ function CallSchedule() {
       setNotifsRead("unread");
       setErrorLog([]);
       setShowErrorLog(false);
+      pushDevice.dropForeign(user.id).catch(e => console.warn("push: dropping the previous account's subscription failed:", e));
+      setPushInfo(null);
+      setPushMsg("");
+      setPushNeedsTap(false);
       showToast("Signed in as a different account - the unsaved change from the previous session was discarded.");
     }
     if (user) lastAuthUidRef.current = user.id;
@@ -1040,6 +1057,17 @@ function CallSchedule() {
   };
   const handleSignOut = async () => {
     clearWriteRetryTimers();
+    if (authUser && authUser.id) {
+      try {
+        await pushDevice.teardown(authUser.id, 4000);
+      } catch (e) {
+        console.warn("push teardown at sign-out failed (signing out anyway):", e);
+      }
+    }
+    setPushInfo(null);
+    setPushMsg("");
+    setPushNeedsTap(false);
+    pushArmedRef.current = "";
     await auth.signOut();
     biometric.unenroll();
     setAuthUser(null);
@@ -1102,6 +1130,18 @@ function CallSchedule() {
     setAuthError("");
     setErrorLog([]);
     setShowErrorLog(false);
+    const pushUid = authUser && authUser.id || (jwtClaims((auth.getSession() || {}).access_token || "") || {}).sub || "";
+    if (pushUid) {
+      try {
+        await pushDevice.teardown(pushUid, 4000);
+      } catch (e) {
+        console.warn("push teardown before the link sign-out failed (signing out anyway):", e);
+      }
+    }
+    setPushInfo(null);
+    setPushMsg("");
+    setPushNeedsTap(false);
+    pushArmedRef.current = "";
     try {
       await auth.signOut();
       biometric.unenroll();
@@ -3611,7 +3651,8 @@ function CallSchedule() {
       });
       sendEmailNotif("manual_edit", {
         message: msg,
-        subject: "Schedule changed - " + fmtMD(day)
+        subject: "Schedule changed - " + fmtMD(day),
+        day
       }, affected);
     }
     return true;
@@ -5190,7 +5231,8 @@ function CallSchedule() {
         ok: true,
         sent: result && Number(result.sent) || 0,
         failed: 0,
-        skippedPrefOff: result && Number(result.skipped_pref_off) || 0
+        skippedPrefOff: result && Number(result.skipped_pref_off) || 0,
+        push: result && result.push && typeof result.push === "object" ? result.push : null
       };
     } catch (e) {
       console.warn("Email notification error:", e);
@@ -6098,7 +6140,9 @@ function CallSchedule() {
           error: prefErr
         } = await notifPrefsDb.save({
           personId
-        }, notifPrefsRef.current[personId] || {});
+        }, notifPrefsRef.current[personId] || {}, {
+          push: pushColsRef.current === "ok"
+        });
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, {
           person_id: personId
@@ -6125,7 +6169,9 @@ function CallSchedule() {
           error
         } = await notifPrefsDb.save({
           profileId: pid
-        }, followerPrefRef.current);
+        }, followerPrefRef.current, {
+          push: pushColsRef.current === "ok"
+        });
         if (error) throw new Error(`follower notif pref save failed: ${String(error).slice(0, 200)}`);
       } catch (e) {
         console.warn("Save follower notif pref error:", e);
@@ -6793,13 +6839,13 @@ function CallSchedule() {
       ok: false
     };
     const key = p.id + ":" + personId;
-    const pref = notifPrefs && notifPrefs[personId];
-    if (pref && pref.schedule_updates_email === false) {
-      showToast(`${nameOf(personId)} has schedule-update e-mails turned off - no reminder can be sent; ask in person.`, "info");
+    const ch = remindChannels(notifPrefs && notifPrefs[personId]);
+    if (ch.blocked) {
+      showToast(`${nameOf(personId)} has schedule-update e-mails and phone notifications turned off - no reminder can be sent; ask in person.`, "info");
       setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
         [key]: {
           ok: false,
-          note: "e-mail off - not sent"
+          note: "e-mail and phone off - not sent"
         }
       }));
       return {
@@ -6837,22 +6883,15 @@ function CallSchedule() {
       hour: "numeric",
       minute: "2-digit"
     });
-    if (r && r.ok && r.sent > 0) {
+    const out = remindOutcome(r, nameOf(personId), stamp);
+    if (out) {
       setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
         [key]: {
-          ok: true,
-          note: `reminded ${stamp}`
+          ok: out.ok,
+          note: out.note
         }
       }));
-      showToast(`Reminder e-mailed to ${nameOf(personId)}.`, "success");
-    } else if (r && r.ok) {
-      setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
-        [key]: {
-          ok: false,
-          note: r.skippedPrefOff ? "e-mail off - not sent" : "no linked e-mail - not sent"
-        }
-      }));
-      showToast(`No reminder went out: ${nameOf(personId)} ${r.skippedPrefOff ? "has schedule-update e-mails turned off" : "has no linked account e-mail"}.`, "info");
+      showToast(out.toast, out.kind);
     } else setPrdRemind(s => _objectSpread(_objectSpread({}, s), {}, {
       [key]: {
         ok: false,
@@ -6889,6 +6928,158 @@ function CallSchedule() {
   const toggleSettingsCard = key => setOpenSettingsCards(p => _objectSpread(_objectSpread({}, p), {}, {
     [key]: !p[key]
   }));
+  const pushUid = authUser && authUser.id ? String(authUser.id) : "";
+  const refreshPushState = useCallback(async uid => {
+    if (!uid) {
+      setPushInfo(null);
+      return null;
+    }
+    const s = await pushDevice.state(uid);
+    setPushInfo(s);
+    if (s.state === "on") setPushNeedsTap(false);
+    return s;
+  }, []);
+  useEffect(() => {
+    if (isPublicMode || !pushUid || !userProfile || String(userProfile.id) !== pushUid) return;
+    if (pushArmedRef.current === pushUid) return;
+    pushArmedRef.current = pushUid;
+    const uid = pushUid;
+    pushDevice.rearm(uid, pushDevice.label()).then(r => {
+      if (pushArmedRef.current !== uid) return;
+      if (r && r.action === "needs-tap") setPushNeedsTap(true);
+      if (r && r.action && r.action !== "none" && r.action !== "skipped" && r.action !== "off-permission") console.info("phone notifications on start:", r.action);
+      refreshPushState(uid);
+    }).catch(e => console.warn("phone notifications: the start-up check failed:", e));
+  }, [isPublicMode, pushUid, userProfile, refreshPushState]);
+  useEffect(() => {
+    pushColsRef.current = "unknown";
+    setPushCols("unknown");
+  }, [pushUid]);
+  const pushCardOpen = view === "settings" && !isPublicMode && !!pushUid && !!openSettingsCards.notifSettings;
+  useEffect(() => {
+    if (!pushCardOpen) return;
+    const uid = pushUid;
+    refreshPushState(uid);
+    if (!pushKeyRef.current || pushKeyRef.current.uid !== uid) {
+      pushKeyRef.current = {
+        uid,
+        key: null
+      };
+      pushDb.publicKey().then(k => {
+        if (pushKeyRef.current && pushKeyRef.current.uid === uid) pushKeyRef.current.key = k.state === "ok" ? k.key : null;
+      });
+    }
+    if (pushColsRef.current !== "ok" && pushColsRef.current !== "unavailable") {
+      notifPrefsDb.pushColumns().then(c => {
+        pushColsRef.current = c;
+        setPushCols(c);
+      });
+    }
+  }, [pushCardOpen, pushUid, refreshPushState]);
+  const pushLinkReady = !!pushUid && !!userProfile && String(userProfile.id) === pushUid && isScheduler === (userProfile.role === "scheduler" || userProfile.role === "admin");
+  useEffect(() => {
+    if (isPublicMode || !pushLinkReady || pushLinkDoneRef.current) return;
+    pushLinkDoneRef.current = true;
+    const r = pushDeepLink(window.location.search);
+    if (r.strip) {
+      try {
+        window.history.replaceState(null, "", window.location.pathname + r.search + window.location.hash);
+      } catch (e) {
+        console.warn("could not drop the notification link from the URL:", e);
+      }
+    }
+    if (r.tab) setView(r.tab);
+    if (r.day) setPushDay({
+      day: r.day,
+      at: Date.now()
+    });
+  }, [isPublicMode, pushLinkReady]);
+  const editorDayRef = useRef(null);
+  const editorDirtyRef = useRef(false);
+  editorDayRef.current = editorDay;
+  const pushTapKeepsDraft = r => {
+    if (!pushTapLeavesDraft(editorDayRef.current, editorDirtyRef.current, r)) return false;
+    if (!confirm("Discard your unsaved changes to this day?")) {
+      showToast("The notification was not opened - save or cancel the day you are editing, then tap it again.", "info");
+      return true;
+    }
+    editorDirtyRef.current = false;
+    editorDayRef.current = null;
+    setEditorDay(null);
+    return false;
+  };
+  useEffect(() => {
+    if (isPublicMode || !pushUid) return;
+    const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : null;
+    if (!sw || typeof sw.addEventListener !== "function") return;
+    const onMsg = e => {
+      const r = pushOpenMessage(e && e.data);
+      if (!r) return;
+      if (pushTapKeepsDraft(r)) return;
+      setView(r.tab);
+      if (r.day) setPushDay({
+        day: r.day,
+        at: Date.now()
+      });
+    };
+    sw.addEventListener("message", onMsg);
+    return () => sw.removeEventListener("message", onMsg);
+  }, [isPublicMode, pushUid]);
+  useEffect(() => {
+    if (!loaded || !pushDay) return;
+    const d = pushDay.day;
+    setPushDay(null);
+    if (pushTapKeepsDraft({
+      tab: "calendar",
+      day: d
+    })) return;
+    goToDay(d);
+  }, [loaded, pushDay]);
+  const pushName = () => {
+    if (mySurgeon) return nameOf(mySurgeon);
+    if (userProfile && userProfile.display_name) return userProfile.display_name;
+    return isApp ? "an APP account" : isViewer ? "a read-only account" : "an unlinked account";
+  };
+  const pushRun = async (name, fn) => {
+    if (pushBusy || !pushUid) return;
+    setPushBusy(name);
+    try {
+      await fn(pushUid);
+    } catch (e) {
+      console.warn("phone notifications:", e);
+      setPushMsg("Something went wrong - reload the app and try again.");
+    } finally {
+      setPushBusy("");
+      refreshPushState(pushUid);
+    }
+  };
+  const pushEnable = () => pushRun("enable", async uid => {
+    setPushMsg("Asking for permission...");
+    const k = pushKeyRef.current && pushKeyRef.current.uid === uid ? pushKeyRef.current.key : null;
+    const r = await pushDevice.enable(uid, pushDevice.label(), {
+      key: k,
+      name: pushName()
+    });
+    if (r.permission) setBrowserNotifPermission(r.permission);
+    if (r.step === "done") setPushNeedsTap(false);
+    setPushMsg(r.message);
+  });
+  const pushTurnOff = () => pushRun("disable", async uid => {
+    const r = await pushDevice.disable(uid);
+    setPushNeedsTap(false);
+    setPushMsg(r.message);
+  });
+  const pushReset = () => pushRun("reset", async uid => {
+    const r = await pushDevice.reset(uid);
+    setPushNeedsTap(false);
+    setPushMsg(r.message);
+  });
+  const pushDiagnose = () => pushRun("diagnose", async uid => {
+    setPushMsg(await pushDevice.diagnose(uid, pushName()));
+  });
+  const pushSendTest = () => pushRun("test", async () => {
+    setPushMsg(pushTestWords(await pushDb.sendTest()));
+  });
   const loadSnapshots = async () => {
     setSnapshotsLoading(true);
     try {
@@ -8911,6 +9102,25 @@ function CallSchedule() {
       border: "1px solid #e8c0c0"
     }
   }, msg) : null;
+  const signOutAfterPasswordUpdate = async () => {
+    const uid = authUser && authUser.id || (jwtClaims((auth.getSession() || {}).access_token || "") || {}).sub || "";
+    if (uid) {
+      try {
+        await pushDevice.teardown(uid, 4000);
+      } catch (e) {
+        console.warn("push teardown after the password update failed (signing out anyway):", e);
+      }
+    }
+    setPushInfo(null);
+    setPushMsg("");
+    setPushNeedsTap(false);
+    pushArmedRef.current = "";
+    try {
+      await auth.signOut();
+    } catch (e) {
+      console.warn("sign out after the password update failed:", e);
+    }
+  };
   const submitNewPassword = () => {
     if (!newPassword || newPassword.length < 6) {
       setAuthError("Password must be at least 6 characters");
@@ -8933,7 +9143,7 @@ function CallSchedule() {
         setNewPassword("");
         setNewPasswordConfirm("");
         alert("Password updated. Please sign in with your new password.");
-        auth.signOut();
+        signOutAfterPasswordUpdate();
       }
     }).catch(e => {
       setAuthBusy(false);
@@ -11927,6 +12137,9 @@ function CallSchedule() {
     onCancel: () => setEditorDay(null),
     onNav: editorNav,
     onTrade: proposeTradeForDay,
+    onDirtyChange: d => {
+      editorDirtyRef.current = !!d;
+    },
     suggestTrade: (d, r) => {
       const from = schedule[d] ? schedule[d][r] : null;
       return from && poolSurgeons.some(s => s.id === from) ? tradePickOf(from, tradeSuggestionsFor(d, r, from)[0] || null) : null;
@@ -13531,7 +13744,169 @@ function CallSchedule() {
     className: "cardtoggle",
     onClick: () => toggleSettingsCard("notifSettings"),
     style: settingsToggleRow(openSettingsCards.notifSettings)
-  }, settingsChevron(openSettingsCards.notifSettings), React.createElement("span", null, "Notification settings")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, React.createElement("div", {
+  }, settingsChevron(openSettingsCards.notifSettings), React.createElement("span", null, "Notification settings")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, (() => {
+    const info = pushInfo;
+    const st = info ? info.state : null;
+    const words = st ? pushStateWords(st, {
+      hostname: info.hostname,
+      label: info.label,
+      ios: info.ios,
+      device: info.device,
+      needsTap: pushNeedsTap
+    }) : null;
+    const pbtn = (testid, name, label, onClick, primary) => React.createElement("button", {
+      "data-testid": testid,
+      onClick: onClick,
+      disabled: !!pushBusy,
+      style: _objectSpread(_objectSpread({}, css.btn(!!primary)), {}, {
+        padding: "5px 12px",
+        fontSize: 11,
+        opacity: pushBusy && pushBusy !== name ? 0.6 : 1
+      })
+    }, pushBusy === name ? "Working..." : label);
+    const pushRows = (rows, cur, editable, onSave) => rows.map(([key, text]) => React.createElement("label", {
+      key: key,
+      "data-testid": "push-pref",
+      "data-key": key,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        cursor: editable ? "pointer" : "default",
+        fontSize: 12,
+        color: T.text,
+        opacity: editable ? 1 : 0.6
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: (cur || {})[key] !== false,
+      disabled: !editable,
+      onChange: e => onSave({
+        [key]: e.target.checked
+      })
+    }), " ", text));
+    return React.createElement("div", {
+      "data-testid": "push-card",
+      style: {
+        background: dk ? "#1a2a3e" : "#f8f9fb",
+        border: `1px solid ${dkCardBorder}`,
+        borderRadius: 8,
+        padding: "12px 14px",
+        marginBottom: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: dkText
+      }
+    }, "Phone notifications"), words && words.badge && React.createElement("span", {
+      "data-testid": "push-badge",
+      "data-state": st,
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: st === "on" ? T.success : T.open
+      }
+    }, words.badge)), React.createElement("p", {
+      "data-testid": "push-line",
+      style: {
+        fontSize: 11,
+        color: dkSubtext,
+        margin: "0 0 6px",
+        lineHeight: 1.5
+      }
+    }, "Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."), React.createElement("p", {
+      "data-testid": "push-state",
+      "data-state": st || "loading",
+      style: {
+        fontSize: 12,
+        color: st === "blocked" ? T.open : T.text,
+        margin: "0 0 8px",
+        lineHeight: 1.5
+      }
+    }, words ? words.line : "Checking this device..."), React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        alignItems: "center"
+      }
+    }, (st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable", pushEnable, true), st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false), pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false), pbtn("push-reset", "reset", "Reset subscription", pushReset, false), pbtn("push-test", "test", "Send test", pushSendTest, false)), pushMsg && React.createElement("div", {
+      "data-testid": "push-msg",
+      role: "status",
+      style: {
+        marginTop: 8,
+        padding: "6px 10px",
+        background: dk ? "#0f1e30" : "#eef3f8",
+        border: `1px solid ${dkCardBorder}`,
+        borderRadius: 6,
+        fontSize: 11,
+        color: dkText,
+        lineHeight: 1.5,
+        fontFamily: mono,
+        wordBreak: "break-word"
+      }
+    }, pushMsg), React.createElement("div", {
+      style: {
+        marginTop: 10,
+        paddingTop: 8,
+        borderTop: `1px solid ${dkCardBorder}`
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: dkText,
+        marginBottom: 6
+      }
+    }, "Which events reach your phones"), pushCols === "unknown" ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: T.muted
+      }
+    }, "Checking...") : pushCols !== "ok" ? React.createElement("div", {
+      "data-testid": "push-prefs-unavailable",
+      "data-state": pushCols,
+      style: {
+        fontSize: 11,
+        color: dkSubtext,
+        lineHeight: 1.5
+      }
+    }, pushCols === "unavailable" ? "Phone switches are available after the next update." : "Couldn't check the phone switches - reload the app to try again.") : mySurgeon || isFollowing ? React.createElement(React.Fragment, null, React.createElement("div", {
+      "data-testid": "push-prefs",
+      "data-owner": mySurgeon ? "person" : "follower",
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 6
+      }
+    }, mySurgeon ? pushRows([["schedule_updates_push", "Schedule published, open shifts, changes affecting me"], ["trade_updates_push", "Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, u => saveNotifPref(mySurgeon, u)) : pushRows([["schedule_updates_push", "Schedule published, open shifts, shifts taken"], ["trade_updates_push", "Trade proposed / accepted / declined"]], followerPref, followerPrefsEditable, saveFollowerPref)), React.createElement("p", {
+      style: {
+        fontSize: 10,
+        color: dkSubtext,
+        margin: "6px 0 0",
+        lineHeight: 1.5
+      }
+    }, "These cover every device you turned on. Reminders stay e-mail only for now.")) : React.createElement("p", {
+      "data-testid": "push-prefs-none",
+      style: {
+        fontSize: 11,
+        color: dkSubtext,
+        margin: 0,
+        lineHeight: 1.5
+      }
+    }, "Only your own tests reach this account's phones - phone notifications follow a roster link or the surgeons you follow.")));
+  })(), React.createElement("div", {
     style: {
       background: dk ? "#1a2a3e" : "#f8f9fb",
       border: `1px solid ${dkCardBorder}`,
@@ -17523,6 +17898,13 @@ function DayEditor(props) {
   const extInfo = name => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = a => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
+  const onDirtyChange = props.onDirtyChange;
+  React.useEffect(() => {
+    if (typeof onDirtyChange === "function") onDirtyChange(dirty);
+  }, [dirty]);
+  React.useEffect(() => () => {
+    if (typeof onDirtyChange === "function") onDirtyChange(false);
+  }, []);
   const requestClose = () => {
     if (dirty && !confirm("Discard your unsaved changes to this day?")) return;
     onCancel();
@@ -25151,8 +25533,8 @@ function PeriodsSection({
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Status"), React.createElement("th", null, "Mode"), React.createElement("th", null, "Action"))), React.createElement("tbody", null, roll.map(r => {
       const key = (p.id || day(p.start_day)) + ":" + r.id;
       const rs = remindState && remindState[key];
-      const pref = notifPrefs && notifPrefs[r.id];
-      const mailOff = !!(pref && pref.schedule_updates_email === false);
+      const ch = remindChannels(notifPrefs && notifPrefs[r.id]);
+      const rw = remindButtonWords(ch.channel, nameOf(r.id), " the heads-up for " + (p.label || "this period") + ": enter vacations before " + offerFreezeDay(close) + ", painting days is optional (the morning run's first reminder)");
       return React.createElement("tr", {
         key: r.id,
         "data-testid": "prd-row",
@@ -25193,13 +25575,14 @@ function PeriodsSection({
         type: "button",
         "data-testid": "prd-remind",
         onClick: () => onRemind(p, r.id),
-        disabled: busy || mailOff || rs && rs.note === "sending",
-        title: mailOff ? nameOf(r.id) + " has schedule-update e-mails turned off - no reminder can be sent" : "E-mail " + nameOf(r.id) + " the heads-up for " + (p.label || "this period") + ": enter vacations before " + offerFreezeDay(close) + ", painting days is optional (the morning run's first reminder)",
+        disabled: busy || ch.blocked || rs && rs.note === "sending",
+        "data-channel": ch.channel,
+        title: rw.title,
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           padding: "5px 9px",
-          opacity: mailOff ? 0.5 : 1
+          opacity: ch.blocked ? 0.5 : 1
         })
-      }, rs && rs.note === "sending" ? "Sending" : "Remind"), React.createElement("button", {
+      }, rs && rs.note === "sending" ? "Sending" : rw.label), React.createElement("button", {
         type: "button",
         "data-testid": "prd-enter-for",
         onClick: () => onEnterFor(p, r.id),
