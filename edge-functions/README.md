@@ -229,8 +229,8 @@ deploy-day reading that neither run changed any listed version (it compared the 
 
 Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID straight from `send-notification`, no OneSignal (the
 Davenport app's OneSignal app, its repo and the user-site root worker are never touched). One function changes:
-`send-notification` (the live v9 code - `functions list` has read v10 since the 2026-10-03 03:29Z `secrets set` re-versioned
-every function, v11 after a `--rotate`; this deploy is one above whatever it reads then; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
+`send-notification` (the live v9 code - `functions list` would read v10 after the 2026-10-03 03:29Z `secrets set` re-versioned
+every function (inferred, never listed), v11 after a `--rotate`; this deploy is one above whatever it reads then; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
 redeployed - the 6 AM / Monday reminders stay e-mail only, a follow-up). What changes: every send that has a push switch
 (`schedule_updates_push` - publish, manual edit, vacation logged, open shifts, shift taken, offers heads-up / frozen;
 `trade_updates_push` - trade proposed / accepted / declined / applied, a give included) also pushes to the devices

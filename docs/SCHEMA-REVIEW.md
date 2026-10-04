@@ -2948,7 +2948,7 @@ strictly with no flag.
 
 ## 2026-10-03 - phone push: push_subscriptions + save_push_subscription / delete_push_subscription / push_subscription_status + notification_preferences *_push (Faraz 10/2, Prompt 30; `sql/migrations/2026-10-03-push-notifications.sql`)
 
-**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - `apply-push-notifications.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then. The VAPID keys were set (rotated) at 16:35:42Z and send-notification v12 deployed at 16:37:59 UTC (`edge-functions/README.md`, "Deploy record - Prompt 30"); the client ships on Faraz's go.
+**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - `apply-push-notifications.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then. The VAPID keys were rotated by `setup-push-keys.sh --rotate` (started 16:35:42Z) and send-notification v12 deployed at 16:37:59 UTC (`edge-functions/README.md`, "Deploy record - Prompt 30"); phone push works from the build that ships Prompt 30's client.
 
 Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the
 send-notification deploy (edge-functions/README.md) - in that order, each pasted back; the client ships after all three, on his go.

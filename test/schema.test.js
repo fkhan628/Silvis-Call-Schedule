@@ -371,6 +371,22 @@ const vr = read(VERIFY);
 ok(!/\r/.test(vr), "verify-rls.sh has CRLF line endings");
 ok(/s\/;END\.\*\$\/\//.test(vr), "verify-rls.sh must cut the PROBE_RESULTS message at the ;END sentinel (s/;END.*$//)");
 ok(!/PROBE_RESULTS \[\^"\]\*/.test(vr), "verify-rls.sh must not end the PROBE_RESULTS message at a double quote (CLI wrapper shape is not guaranteed)");
+// the 10/3 lesson (an agent's fake CLI fell through to the real one on PATH): every faked verify-rls run below (sections 13, 14d,
+// 15, 16, 18, 19) starts the section's code only after proving its fakes are bash functions - never the supabase / curl on PATH -
+// and aborts otherwise (ABORT-FAKES, exit 99, before any line of the section runs); and no line of verify-rls.sh reaches past a
+// function to the real CLI (`command supabase`, `env supabase`, `\supabase`, SUPABASE_BIN ...), which a function cannot shadow
+const fakesGuard = (names) => names.map((n) => "[ \"$(type -t " + n + ")\" = function ]").join(" && ") + " || { echo ABORT-FAKES; exit 99; }\n";
+const VR_REAL_CLI = /\bcommand +(-p +)?supabase\b|\benv +([A-Za-z_]+=\S* +)*supabase\b|\bbuiltin +supabase\b|SUPABASE_BIN|\\supabase\b|\$\(which supabase|type -P supabase/;
+{
+  const guardRun = (defs) => require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: "set -u\n" + defs + fakesGuard(["supabase", "q"]) + "echo REACHED\n" });
+  const g1 = guardRun("supabase() { echo FAKE; }\n");
+  ok(!g1.error && g1.status === 99 && /^ABORT-FAKES$/m.test(g1.stdout || "") && !/REACHED/.test(g1.stdout || ""), "the fakes guard must stop a faked run (ABORT-FAKES, exit 99, nothing after it runs) when one fake is not a bash function (here q)");
+  const g2 = guardRun("supabase() { echo FAKE; }\nq() { :; }\n");
+  ok(!g2.error && g2.status === 0 && /^REACHED$/m.test(g2.stdout || "") && !/ABORT-FAKES/.test(g2.stdout || ""), "the fakes guard lets a run through when every fake is a bash function");
+  const vrCode = vr.split("\n").filter((l) => !/^\s*#/.test(l));
+  const reach = vrCode.filter((l) => VR_REAL_CLI.test(l));
+  ok(reach.length === 0, "verify-rls.sh must call the CLI as plain `supabase` (a function shadows it in every faked run), never past a function: " + reach.join(" | "));
+}
 ok(/status=pending from=s2 decided=null/.test(vr), "verify-rls.sh probe A expectation must include decided=null");
 ok(/as leftover/.test(vr) && /email like 'probe-%@example\.test'/.test(vr) && /detail like 'probe %'/.test(vr) && /note = 'probe'/.test(vr),
   "verify-rls.sh must count probe leftovers (schedule_days 2030-03 / trades / time_off / auth.users) after the probe and fail on non-zero");
@@ -2429,11 +2445,12 @@ ok(!/a surgeon still reads no audit row/.test(s11) && !/no read policy for him\)
     const res = Object.keys(m).sort().map((k) => k + "=" + m[k]).join(";");
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
       "linked() { true; }\nq() { echo '{\"rows\":[{\"leftover\":0}]}'; }\nsupabase() { echo 'Initialising login role...'; echo '{\"message\": \"ERROR: P0001: PROBE_RESULTS " + res + ";END\"}'; }\n" +
-      code13 + "\necho \"RESULT $pass $fail\"\n";
+      fakesGuard(["linked", "q", "supabase"]) + code13 + "\necho \"RESULT $pass $fail\"\n";
     // the script goes in on stdin, not as `bash -c <arg>`: on Windows the command-line quoting of the escaped \" in the faked
     // CLI output does not survive the trip into Git Bash
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 13: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 13's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", failed: Array.from((r.stdout || "").matchAll(/^FAIL  audit read-back probe ([A-Z][0-9]):/gm)).map((x) => x[1]).sort(), result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const ra = run13(after);
@@ -2757,9 +2774,10 @@ ok(!/SILVIS_CALL_PAY_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-r
       "OFFVAL='" + (off.before || "[]") + "'; OFFVAL2='" + (off.after || "") + "'\n" +
       "OFFMARK=" + (off.after !== undefined ? "$(mktemp -u)" : "") + "\ntrap 'rm -f \"$OFFMARK\"' EXIT\n" +
       "linked() { true; }\n" + PAY_FAKE_Q + "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" +
-      code14d + "\necho \"RESULT $pass $fail\"\n";
+      fakesGuard(["linked", "q", "supabase"]) + code14d + "\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 14d: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 14d's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
@@ -3062,9 +3080,10 @@ ok(s15code.includes("email like 'probe-vacguard-%@example.test'") && s15code.inc
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0\nok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
       (pre ? pre + "\n" : "") + "linked() { true; }\n" +
       "q() { printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + (leftover || 0) + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"; }\n" +
-      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code15 + "\necho \"RESULT $pass $fail\"\n";
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + fakesGuard(["linked", "q", "supabase"]) + code15 + "\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 15: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 15's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
@@ -3551,9 +3570,10 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
       (o.pre ? o.pre + "\n" : "") + "CURL16A='" + o.a + "'; CURL16B='" + o.b + "'\nlinked() { true; }\n" +
       "q() { " + qBody + "; }\n" +
       "curl() { local of='' prev='' code='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in *rpc/save_no_primary*) code=\"$CURL16A\";; *rpc/save_offers*) code=\"$CURL16B\";; esac; prev=\"$a\"; done; [ -n \"$of\" ] && : > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
-      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code16 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + fakesGuard(["linked", "q", "curl", "supabase"]) + code16 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 16: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 16's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
@@ -4146,9 +4166,10 @@ ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)
       "curl() { local of='' prev='' code='' post='' sur='' u='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$a\" = POST ] && post=1; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; [ -n \"$of\" ] && : > \"$of\"; " +
       "if [ -n \"$sur\" ]; then if [ -n \"$post\" ]; then code=400; [ -n \"$of\" ] && echo '{\"code\":\"AP001\",\"message\":\"APP_DAY_NOT_ALLOWED: ...\"}' > \"$of\"; else code=200; fi; " +
       "else case \"$u\" in *rpc/save_app_days*) code=" + o.c + ";; *rpc/app_call_names*) code=" + o.b + ";; *rest/v1/app_call_days*) if [ -n \"$post\" ]; then code=" + o.d + "; else code=" + o.a + "; fi;; esac; fi; printf 'HTTP %s' \"$code\"; }\n" +
-      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + code18 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + fakesGuard(["linked", "q", "curl", "supabase"]) + code18 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 18: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 18's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
@@ -4334,6 +4355,8 @@ const PS_PRECHECK = path.join(ROOT, "sql", "probes", "push-notifications-prechec
 const PUSH_APPLIED_SHA256 = "cfac281e51d365ac5b702829028d9b4cd763ea61348c9a6d6f0f57e6e37f4df0";
 // The repo copy carries ONE trailer line after the applied body; the body (everything before it) is what is hashed.
 const PUSH_TRAILER = "\n-- applied 2026-10-03 16:30:43Z by Faraz";
+// the whole trailer line, pinned exactly (review 10/3): written once by the record step, frozen like the body it annotates
+const PUSH_TRAILER_LINE = '-- applied 2026-10-03 16:30:43Z by Faraz (apply-push-notifications.sh, the script exports AI_AGENT; repo HEAD 04c2245; an earlier --dry-run (20261003T163001Z) stopped after the probe BEFORE and applied nothing); the body above this line is the applied file, sha256 ' + PUSH_APPLIED_SHA256 + ' - its header is the text as it ran (its "REPORT-FIRST, NOT APPLIED", "NOT yet applied", SILVIS_PUSH_APPLIED=1 and SILVIS_PUSH_DEPLOYED=1 predate the record step, which made verify-rls section 19 strict, grades 19i on every run and dropped both flags; the "backed-up send-notification v9" is the code deployed as v9 on 2026-10-01, listed v11 on 2026-10-03 and replaced by v12 at 16:37:59 UTC - edge-functions/README.md; test/schema.test.js pins it; docs/SCHEMA-REVIEW.md "2026-10-03 - phone push" quotes the probe observed right after)';
 // the endpoint rule (https on a known push service; the edge function POSTs to it - no server-side request forgery lever)
 const PS_ENDPOINT_RE_SQL = "'^https://([a-z0-9-]+\\.)*(fcm\\.googleapis\\.com|android\\.googleapis\\.com|push\\.apple\\.com|push\\.services\\.mozilla\\.com|notify\\.windows\\.com)/[!-~]*$'";
 const PS_COLUMN_LINES = [
@@ -4467,6 +4490,7 @@ let psBody = psMig;
   const tail = at > 0 ? psBuf.slice(at + 1).toString("utf8") : "";
   ok(tail.split("\n").length === 2 && tail.endsWith("\n") && tail.indexOf("\n") === tail.length - 1, "phone push migration: exactly ONE trailer line (and its LF) after the applied body, nothing after it");
   ok(tail.includes("the body above this line is the applied file, sha256 " + PUSH_APPLIED_SHA256) && tail.includes("apply-push-notifications.sh") && tail.includes("AI_AGENT") && tail.includes("repo HEAD 04c2245") && tail.includes("an earlier --dry-run (20261003T163001Z) stopped after the probe BEFORE and applied nothing") && tail.includes("SILVIS_PUSH_APPLIED=1 and SILVIS_PUSH_DEPLOYED=1 predate the record step, which made verify-rls section 19 strict, grades 19i on every run and dropped both flags") && tail.includes("the \"backed-up send-notification v9\" is the code deployed as v9 on 2026-10-01, listed v11 on 2026-10-03 and replaced by v12 at 16:37:59 UTC") && tail.includes("docs/SCHEMA-REVIEW.md \"2026-10-03 - phone push\""), "the trailer names the applied sha256, the script, the agent mode, the HEAD it ran at, the dry run, the as-ran header wording (both flags), the v9 backup's versions and the record");
+  eq(tail, PUSH_TRAILER_LINE + "\n", "the phone push migration's trailer line must read exactly as the record step wrote it (frozen - review 10/3);");
   eq(crypto.createHash("sha256").update(at > 0 ? psBuf.slice(0, at + 1) : psBuf).digest("hex"), PUSH_APPLIED_SHA256,
     "phone push migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
   if (at > 0) psBody = psBuf.slice(0, at + 1).toString("utf8");
@@ -4658,9 +4682,16 @@ psProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+[as
 eq(Object.keys(PS_AFTER).sort(), PS_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
 PS_CASES.forEach((k) => ok(PS_AFTER[k] === psFull(k), "the probe header's AFTER for " + k + " (" + PS_AFTER[k] + ") must be " + psFull(k)));
 // the record step (10/3): the 51 probe AFTER lines of the live run as Faraz's log printed them (apply-push-notifications-20261003T163024Z.log,
-// step 6 = verify-rls section 19 = the paste-back block - machine-compared): the header strings sorted by case (no case carries a
-// double quote, so the CLI escaped nothing). The faked section-19 run uses them; SCHEMA-REVIEW's observed block is frozen by sha256.
-const PS_LIVE_LINES = PS_CASES.slice().sort().map((k) => k + "=" + (PS_AFTER[k] || "?").replace(/"/g, '\\"'));
+// step 6 = verify-rls section 19 = the paste-back block - machine-compared). Since the record review (10/3) they are read from
+// SCHEMA-REVIEW's observed block itself (frozen by sha256 in the docs step below), not rebuilt from the probe header's strings, so the
+// faked live run replays what ran (sorted by case as printed; no line carries a double quote, so the CLI escaped nothing).
+const PS_OBSERVED_BLOCK = (() => {
+  const at = review.indexOf("## 2026-10-03 - phone push:"), ob = at < 0 ? -1 : review.indexOf("observed (apply, 2026-10-03):", at);
+  const b = ob < 0 ? -1 : review.indexOf("```text\nB1=", ob);
+  return b < 0 ? "" : review.slice(b + 8, review.indexOf("\n```", b + 8));
+})();
+const PS_LIVE_LINES = PS_OBSERVED_BLOCK ? PS_OBSERVED_BLOCK.split("\n").map((l) => l.replace(/"/g, '\\"')) : [];
+eq(PS_LIVE_LINES.length, 51, "the faked live run replays SCHEMA-REVIEW's observed probe AFTER block - 51 lines;");
 
 step("Prompt 30: the pre-check - ONE read-only SELECT (the objects gate, profiles per role, prefs rows by key, the push.% audit rows, the realtime publication facts - counts only)");
 const psPre = read(PS_PRECHECK);
@@ -4762,9 +4793,10 @@ ok(/\nline=\$\(curl -s -o \$T\/vr19i\.json -w 'HTTP %\{http_code\}' "\$URL\/func
       "*rest/v1/push_subscriptions*) if [ -n \"$sur\" ]; then code=200; body='[]'; else code=" + o.a + "; fi;; " +
       "*rest/v1/notification_preferences*) code=" + o.e + "; body=" + sq(o.eBody) + ";; " +
       "esac; [ -n \"$of\" ] && printf '%s' \"$body\" > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
-      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + code19 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + fakesGuard(["linked", "q", "curl", "supabase"]) + code19 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 19: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 19's faked run: a fake did not resolve to a bash function - aborted before the section ran");
     return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
@@ -4777,15 +4809,32 @@ ok(/\nline=\$\(curl -s -o \$T\/vr19i\.json -w 'HTTP %\{http_code\}' "\$URL\/func
   const ra = run19(msgOf(after));
   eq(ra.result, [N19, 0], "section 19 against the AFTER picture (19a-19d 401, 19e 200 [], every case, leftover 0, 19i the public key and the 401): every check PASS (" + fails(ra) + ");");
   ok(/SKIP 19f/.test(ra.out) && !/INFO 19i/.test(ra.out) && /PASS  send-notification GET \?vapid=public answers exactly/.test(ra.out) && /PASS  send-notification refuses an unauthenticated test push/.test(ra.out), "... 19f skipped without a surgeon token; 19i graded with no flag (no INFO line)");
+  // review 10/3: 19i prints the GET body with the public key cut to its first 8 characters (as setup-push-keys.sh and the records
+  // show it) - a plain run's output, and any log an apply script keeps of it, never carries the whole key
+  ok(s19code.includes("$(sed -E 's/(\"publicKey\" *: *\"[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/\\1.../g' $T/vr19i.json | head -c 120)") && !/head -c [0-9]+ \$T\/vr19i\.json/.test(s19code), "19i's echo cuts the public key to its first 8 characters before printing the body (never `head -c` of the raw body)");
+  {
+    const PK2 = "B" + "Q7x9".repeat(21) + "Zk";   // a well-formed fake: B + 86 base64url characters
+    const ri = run19(msgOf(after), { iBody: '{"publicKey":"' + PK2 + '"}' });
+    eq(ri.result, [N19, 0], "19i passes any well-formed public key;");
+    ok(ri.out.includes('body: {"publicKey":"' + PK2.slice(0, 8) + '..."}') && !ri.out.includes(PK2.slice(0, 12)) && !ri.out.includes(PK2.slice(8)), "19i prints the body as {\"publicKey\":\"<first 8 characters>...\"} - never the whole key (" + (ri.out.match(/^ +19i GET[^\n]*/m) || ["no 19i GET line"])[0] + ")");
+    const rx = run19(msgOf(after), { iBody: '{"publicKey":"' + PK2 + '","privateKey":"x"}' });
+    ok(!rx.out.includes(PK2.slice(8)), "... nor when the body carries another key (19i FAILs that, and still prints only the prefix)");
+  }
   eq(run19(msgOf(after), { surgeon: true }).result, [N19 + 2, 0], "with SILVIS_SURGEON_JWT 19f adds two PASSes (the read 200, the status saved false);");
-  // the record step (10/3): the 2026-10-03 live picture exactly as Faraz's log printed it (the 51 lines of step 6 of
-  // apply-push-notifications-20261003T163024Z.log inside the CLI's 400 envelope; 19a-19d 401, 19e 200 []), 19i answered as the deploy
-  // record observed it (the public key, the 401), both flags left in the environment ignored. The log's section 19 graded 57 / 0 with
-  // 19i one INFO line (the deploy came after); since the record step 19i adds its two PASSes - 59 / 0
+  // the record step (10/3): the 2026-10-03 live picture exactly as Faraz's log printed it (SCHEMA-REVIEW's observed block - the 51 lines
+  // of step 6 of apply-push-notifications-20261003T163024Z.log - inside the CLI's 400 envelope; 19a-19d 401, 19e 200 []), 19i answered
+  // as the deploy record observed it (the public key, the 401), both flags left in the environment ignored. The log's section 19 graded
+  // 57 / 0 with 19i one INFO line (the deploy came after); since the record step 19i adds its two PASSes - 59 / 0
   const liveMsg = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + PS_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
   const rlive = run19(liveMsg, { pre: "export SILVIS_PUSH_APPLIED=1 SILVIS_PUSH_DEPLOYED=" });
   eq(rlive.result, [N19, 0], "section 19 against the 2026-10-03 AFTER picture as the log printed it (19a-19d 401, 19e 200 [], the 51 lines, leftover 0) plus 19i as deployed, leftover flags ignored - 59 / 0 (" + fails(rlive) + ");");
-  eq(N19 - 2, 57, "section 19's count in the apply log was 57 (19a-19e, the 51 cases, the leftover check; 19i not graded then) - the log's section 19: 57 PASS, 0 FAIL;");
+  // review 10/3: the count is read from the record, not restated - today's section 19 less 19i's two calls (graded since the record
+  // step) must be the apply log's section 19 as SCHEMA-REVIEW's observed apply paragraph quotes it
+  {
+    const obApply = review.slice(review.indexOf("observed (apply, 2026-10-03):")).replace(/\s+/g, " ");
+    const logged = (obApply.match(/`RESULT: 469 passed, 0 failed` - section 19 (\d+) \/ (\d+):/) || []).slice(1).map(Number);
+    eq(logged, [N19 - 2, 0], "section 19's count less 19i's two must equal the apply log's section 19 as the observed apply paragraph quotes it (57 / 0);");
+  }
   // pins moved deliberately 10/3 (the record step): the not-applied picture is a FAIL with no flag (it passed before; strict was the flag's)
   const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: push_subscriptions is absent - sql/migrations/2026-10-03-push-notifications.sql is not applied\\nCONTEXT:  ..."}';
   const beforePic = { a: "404", b: "404", c: "404", d: "404", e: "400", eBody: COL42703 };
@@ -4830,8 +4879,10 @@ ok(/^## 2026-10-03 - phone push: push_subscriptions \+ save_push_subscription \/
   const at = review.indexOf("## 2026-10-03 - phone push:"), end = review.indexOf("\n## ", at + 1);
   const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const flat = sec.replace(/\s+/g, " ");
-  // pin moved deliberately 10/3 (the record step): the status reads APPLIED (it read `**Status: PREPARED - report-first, NOT APPLIED.**` before)
-  ok(/^\*\*Status: APPLIED 2026-10-03 16:30:43Z\*\* \(Faraz - `apply-push-notifications\.sh`, which exports `AI_AGENT`; the observed lines at the end\)\. Was PREPARED - report-first, NOT APPLIED until then\. The VAPID keys were set \(rotated\) at 16:35:42Z and send-notification v12 deployed at 16:37:59 UTC \(`edge-functions\/README\.md`, "Deploy record - Prompt 30"\); the client ships on Faraz's go\.$/m.test(sec) && !/^\*\*Status: PREPARED/m.test(sec), "the section's status line must read `**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - apply-push-notifications.sh ...)` with the keys and the deploy since the record step");
+  // pin moved deliberately 10/3 (the record step): the status reads APPLIED (it read `**Status: PREPARED - report-first, NOT APPLIED.**` before);
+  // moved again by the record review (10/3): 16:35:42Z is when setup-push-keys.sh started (its log carries no time for the set itself),
+  // and the client clause holds before and after the client push (it read "the client ships on Faraz's go")
+  ok(/^\*\*Status: APPLIED 2026-10-03 16:30:43Z\*\* \(Faraz - `apply-push-notifications\.sh`, which exports `AI_AGENT`; the observed lines at the end\)\. Was PREPARED - report-first, NOT APPLIED until then\. The VAPID keys were rotated by `setup-push-keys\.sh --rotate` \(started 16:35:42Z\) and send-notification v12 deployed at 16:37:59 UTC \(`edge-functions\/README\.md`, "Deploy record - Prompt 30"\); phone push works from the build that ships Prompt 30's client\.$/m.test(sec) && !/^\*\*Status: PREPARED/m.test(sec) && !/keys were set \(rotated\) at|the client ships on Faraz's go/.test(sec), "the section's status line must read `**Status: APPLIED 2026-10-03 16:30:43Z** (Faraz - apply-push-notifications.sh ...)` with the key rotation (the script's start time) and the deploy since the record step, true before and after the client push");
   ok(flat.includes("Faraz runs `apply-push-notifications.sh` (the migration, graded), then `setup-push-keys.sh` (the three VAPID secrets), then the send-notification deploy"), "the section gives Faraz's order: the apply script, the key script, the deploy");
   ok(flat.includes("**\"Davenport's look, Silvis's own push\"**") && /Fierce's trade request/.test(flat) && /No OneSignal/.test(flat), "the section states why (Fierce's trade) and the decision");
   ok(sec.includes("```sql\n" + [PS_TABLE, PS_INDEX, PS_ENABLE, PS_PRIVS, PS_POLICIES].join("\n") + "\n```"), "the section carries the table and its RLS verbatim");
@@ -4872,6 +4923,19 @@ ok(/^## 2026-10-03 - phone push: push_subscriptions \+ save_push_subscription \/
   // the deploy, and that nothing live ran after the record step
   ok(obFlat.includes("observed (deploy, 2026-10-03): send-notification v11 -> v12 at 2026-10-03 16:37:59 UTC by Faraz, `--no-verify-jwt --use-api`") && obFlat.includes("`{\"publicKey\":\"BA2H3T2V...\"}` (the key 87 characters, the rotate's prefix); an unauthenticated `POST ?push=test` -> `401`") && obFlat.includes("byte-identical to `edge-functions/send-notification/index.ts` at `04c2245` (sha256 `ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa`)"), "the observed deploy records v11 -> v12, the public key, the 401 and the byte-compare");
   ok(obFlat.includes("Not re-run against the live project after the record step") && obFlat.includes("the next plain `bash scripts/verify-rls.sh` grades section 19 strictly, 19i included, with no flag"), "the observed paragraphs say nothing live was re-run by the record step");
+  // review 10/3: the three observed paragraphs are a frozen record copied from the logs (checked against
+  // apply-push-notifications-20261003T163024Z.log, setup-push-keys-20261003T163542Z.log and the deploy paste-back at the review), so
+  // each is frozen whole by sha256 - the probe block's own sha above stays, so a justified probe header edit never forces a rewrite here;
+  // any later edit of these paragraphs is deliberate (a new sha with its reason), never silent
+  {
+    const para = (start, stop) => { const a = sec.indexOf(start); if (a < 0) return ""; const b = stop ? sec.indexOf(stop, a) : sec.indexOf("\n\n", a); return sec.slice(a, b < 0 ? sec.length : b).replace(/\n+$/, ""); };
+    const OBS_SHA = {
+      apply: [para("observed (apply, 2026-10-03):", "\n\nobserved (keys, 2026-10-03):"), "71ab8069d6d3a7f309801aaf930c0c8cf7f77db98d75351ede0f25078fcb73b5"],
+      keys: [para("observed (keys, 2026-10-03):", "\n\nobserved (deploy, 2026-10-03):"), "b5842ed4a661a344e1da8409b1ea64c2184c48d7f61b9f72e49e0a40c6bec719"],
+      deploy: [para("observed (deploy, 2026-10-03):", null), "8982119eb330f59ed35890bdc56552a514df22525da724f4abcd7be8a1930898"],
+    };
+    Object.keys(OBS_SHA).forEach((k) => eq(crypto.createHash("sha256").update(OBS_SHA[k][0]).digest("hex"), OBS_SHA[k][1], "the observed (" + k + ", 2026-10-03) paragraph must read exactly as the record step copied it from the log (frozen sha256 - review 10/3);"));
+  }
   ok(flat.includes("*As run (2026-10-03): the live probe AFTER (the 20261003T163024Z run - the second script run; the first, at 16:30:01Z, was a `--dry-run` that stopped after the probe BEFORE, as designed) read all 51 cases exactly as their header strings") && flat.includes("no case reads the owner itself") && flat.includes("section 19 graded 57 / 0.*"), "what could break carries its as-run note (the second run's probe AFTER; no case reads the owner)");
   ok(flat.includes("*As run (the record step, 2026-10-03): `SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist - section 19 is strict by default") && flat.includes("grades 19i on every run"), "the verify-rls table carries its as-run note (both flags gone)");
   ok(flat.includes("*As run (2026-10-03): items 1-7 by `apply-push-notifications.sh`") && flat.includes("kept byte for byte as it ran (sha256 `" + PUSH_APPLIED_SHA256 + "`") && flat.includes("the deploy made it v12, not v10") && flat.includes("`SILVIS_PUSH_APPLIED` and `SILVIS_PUSH_DEPLOYED` no longer exist (section 19 is strict by default and grades 19i on every run).") && flat.includes("The record step changed all four sha256s the apply script checks (the migration's through its trailer line - the body's is unchanged) - the script is one-shot; a re-apply after a rollback (or a `--dry-run`) needs its pins refreshed first, or it stops at step 0. Item 11 follows, on Faraz's go.*") && !/Item 11 waits/.test(flat), "the apply order carries its as-run note (the script's steps, the keys, the v11 -> v12 deploy, the file kept as it ran with its sha256, both flags gone, the apply script one-shot since the record step)");
@@ -4899,13 +4963,44 @@ ok(!/^\|[^\n]*(push_subscriptions|Prompt 30|push\.save)[^\n]*NOT APPLIED/m.test(
   // "re-versions every function" stands; the deploy-day reading "no version changed" is what the listings contradict
   ok(recFlat.includes("**What a `secrets set` does to `functions list` (observed 10/3):** the version number moves, the update time does not.") && recFlat.includes("`send-notification` v9 -> v11 and `daily-reminder` v7 -> v9") && recFlat.includes("`calendar-sync` v5 -> v7 and `office-notifications` v4 -> v6") && recFlat.includes("every `secrets set` re-versions all four, one version each, no code change"), "README's Prompt 30 record states what a secrets set does to the list (+1 version each, the update time unchanged), from the listings before and after");
   ok(readmeAll.includes("each `secrets set`\nraises every function's listed VERSION by one and leaves its listed UPDATED_AT\nalone"), "README section 1 says exactly what a secrets set moves (the version, never the update time)");
-  ok(!/neither (run|`secrets set`) changed any listed version[^\n]*\.$/m.test(readmeAll.replace("the\ndeploy-day reading that neither run changed any listed version (it compared the update times only) is not what the listings show.", "")), "README never claims a secrets set leaves the version alone (only quotes that reading as contradicted)");
+  // review 10/3 (widened): the raw listings settle it (10/1 v9 / v7 and 9/27 v5 / v4 -> 10/3 v11 / v9 / v7 / v6, the update times
+  // unchanged, no deploy between, the two known sets of 10/3), so every sentence that says a secrets set re-versions all four is pinned
+  // where it stands - README sections 1 (twice), 3 (the record, the plan, the order, the deploy table) and the Prompt 16 B5 record;
+  // SCHEMA-REVIEW's as-run note and the keys paragraph - and the opposite claim fails anywhere in the docs, in any wording, except the
+  // one sentence that quotes the deploy-day reading as contradicted
+  const readmeFlat = readmeAll.replace(/\s+/g, " "), reviewFlat = review.replace(/\s+/g, " ");
+  [
+    "numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set` re-versions all four, so always read `supabase functions list` before a redeploy",
+    "`supabase secrets set` re-versions EVERY deployed function (Davenport lesson: the version number jumps without a code change).",
+    "a rotation re-versions all four again.",
+    "the two `secrets set` runs of 10/3 had moved the listed version from v9 to v11",
+    "`functions list` would read v10 after the 2026-10-03 03:29Z `secrets set` re-versioned every function (inferred, never listed), v11 after a `--rotate`",
+    "like every `secrets set` it re-versions all four functions, no code change",
+    "v11 / v12 because every `secrets set` re-versions",
+    "Read `supabase functions list` first (a `secrets set` re-versions all four)",
+  ].forEach((s) => ok(readmeFlat.includes(s), "edge-functions/README.md must still say: " + s));
+  [
+    "the v9 code of 2026-10-01, which `functions list` read as v11 after the two `secrets set` runs of the day (the incident's and the rotate)",
+    "row or schema changed (the functions' listed versions rose by one, as on every `secrets set`;",
+  ].forEach((s) => ok(reviewFlat.includes(s), "docs/SCHEMA-REVIEW.md must still say: " + s));
+  {
+    const QUOTED = "the deploy-day reading that neither run changed any listed version (it compared the update times only) is not what the listings show.";
+    ok(readmeFlat.split(QUOTED).length === 2, "README quotes the deploy-day reading exactly once, as contradicted");
+    const NOT_REVERSION = [
+      /secrets set`?[^.]*\b(does not|doesn't|do not|don't|never|did not|didn't|no longer|not)\b[^.]*\bre-?version/i,
+      /\b(no|neither|none of the|nor)\b[^.]*secrets set`?[^.]*\b(changed|moved|raised|bumped|touched)\b[^.]*\bversion/i,
+      /\bversions?\b[^.]*\b(did not|didn't|never|does not|doesn't|do not|don't)\b (move|change|rise|go up)[^.]*secrets set/i,
+      /secrets set`?[^.]*\bleaves?\b((?!UPDATED_AT|update time)[^.])*\balone\b/i,
+    ];
+    [["edge-functions/README.md", readmeFlat.split(QUOTED).join(" ")], ["docs/SCHEMA-REVIEW.md", reviewFlat], ["docs/SILVIS-BUILD-GUIDE.md", guideAll.replace(/\s+/g, " ")], ["docs/ONBOARDING.md", onboarding.replace(/\s+/g, " ")], ["CLAUDE.md", claudeMd.replace(/\s+/g, " ")], ["sql/migrations/" + PS_FILE, psMig.replace(/\s+/g, " ")], ["scripts/verify-rls.sh", vr.replace(/\s+/g, " ")]].forEach(([f, t]) =>
+      NOT_REVERSION.forEach((re) => { const m = t.match(re); ok(!m, f + " must never say a secrets set leaves the listed version alone (the 10/3 listings show +1 per set): " + (m ? m[0].slice(0, 160) : "")); }));
+  }
   ok(readmeAll.includes("since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3)") && readmeAll.includes("Prompt 30 (phone push, v12 - deployed 2026-10-03 16:37:59 UTC)") && !/once v10 is deployed/.test(readmeAll), "README's function table and gate row say v12 deployed (no 'once v10 is deployed' left)");
   ok(guideAll.includes("The first three ran on 2026-10-03") && guideAll.includes("the migration applied 16:30:43Z (probe AFTER 51 / 51, verify-rls 469 / 0 with section 19 graded strictly)") && guideAll.includes("send-notification v12 deployed 16:37:59 UTC") && guideAll.includes("Phone push works from the build that ships this client."), "guide 22 says the database, the keys and the function are live since 2026-10-03, the client from its build");
   ok(onboarding.includes("## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)") && !/live once Faraz has applied the migration/.test(onboarding), "ONBOARDING's phone section header says the server side is live since 2026-10-03 (true before and after the client push)");
   ok(/Its database part was applied, the VAPID keys set and\nsend-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client\./.test(claudeMd), "CLAUDE.md: Prompt 30's server side is live since 2026-10-03; phone push from the client build");
   [readmeAll, guideAll, onboarding, claudeMd].forEach((t, i) => ok(!/not live yet|Not live yet|not pushed yet/i.test(t.split("\n").filter((l) => /Prompt 30|phone push|Phone notifications|send-notification v1[0-2]/i.test(l)).join("\n")), ["README", "guide", "ONBOARDING", "CLAUDE.md"][i] + ": no Prompt 30 line says 'not live yet' / 'not pushed yet' (Prompt 29's rule: true before and after the client push)"));
 }
-console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, applied 2026-10-03 16:30:43Z; the file kept as it ran, sha256-pinned; keys rotated 16:35:42Z; send-notification v12 16:37:59 UTC), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 (strict, 19i every run) graded against a faked CLI, apply scripts kept outside the repo, docs pinned");
+console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, applied 2026-10-03 16:30:43Z; the file kept as it ran, sha256-pinned; keys rotated by setup-push-keys.sh --rotate, started 16:35:42Z; send-notification v12 16:37:59 UTC), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 (strict, 19i every run, the key printed as its 8-character prefix) graded against a faked CLI (the fakes proven first), apply scripts kept outside the repo, docs pinned (the observed paragraphs frozen)");
 
 console.log("schema.test.js: " + N + " assertions passed");

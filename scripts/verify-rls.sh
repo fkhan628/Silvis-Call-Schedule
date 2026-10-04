@@ -1570,7 +1570,8 @@ fi
 # and nothing else on GET ?vapid=public (no auth); an unauthenticated POST ?push=test is refused 401 (the function's own caller check)
 line=$(curl -s -o $T/vr19i.json -w 'HTTP %{http_code}' "$URL/functions/v1/send-notification?vapid=public")
 body19i=$(tr -d ' \r\n' < $T/vr19i.json)
-echo "   19i GET send-notification?vapid=public: $line  body: $(head -c 120 $T/vr19i.json)"
+# the body is printed with the key cut to its first 8 characters (like setup-push-keys.sh and the records), never the whole key
+echo "   19i GET send-notification?vapid=public: $line  body: $(sed -E 's/("publicKey" *: *"[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/\1.../g' $T/vr19i.json | head -c 120)"
 if [ "$line" = "HTTP 200" ] && echo "$body19i" | grep -qE '^\{"publicKey":"B[A-Za-z0-9_-]{86}"\}$'; then
   ok "send-notification GET ?vapid=public answers exactly {\"publicKey\": <a 65-byte P-256 point in base64url>} (no other key)"
 else
