@@ -5919,13 +5919,13 @@ function pushStateWords(state, opts) {
   const o = opts && typeof opts === "object" ? opts : {};
   if (state === "on") return { badge: "Subscribed on this device", line: o.label ? "On for this device (" + o.label + ")." : "On for this device." };
   if (state === "blocked") {
-    if (o.ios) return { badge: "Blocked", line: "Blocked in your " + (o.device === "iPad" ? "iPad" : "iPhone") + "'s settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable." };
+    if (o.ios) return { badge: "Blocked", line: "Blocked in your " + (o.device === "iPad" ? "iPad" : "iPhone") + "'s settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications." };
     const host = String(o.hostname || "this site");
-    return { badge: "Blocked", line: "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable." };
+    return { badge: "Blocked", line: "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications." };
   }
-  if (state === "ios-home-screen") return { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable." };
+  if (state === "ios-home-screen") return { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications." };
   if (state === "unsupported") return { badge: null, line: "Not supported in this browser." };
-  return { badge: null, line: o.needsTap ? "Off for this device - tap Enable to turn it back on." : "Off for this device." };
+  return { badge: null, line: o.needsTap ? "Off for this device - tap Enable phone notifications to turn it back on." : "Off for this device." };
 }
 // A REAL calendar day "YYYY-MM-DD" - the edge's pushIsoDay round trip (review 10/3): 2026-02-31 or 2026-13-45 is refused, so
 // neither a crafted ?tab=calendar&day= link nor a sw message can open the day editor on a key the date column would refuse.
@@ -6034,7 +6034,7 @@ function pushTestWords(result) {
   const sent = Number(d.sent) || 0, refused = (Number(d.failed) || 0) + (Number(d.removed) || 0);
   if (sent > 0) return "Test sent to " + sent + " device(s) on your account - it should arrive in a few seconds.";
   if (refused > 0) return "The push service refused the test on " + refused + " device(s) - tap Reset subscription, then Enable.";
-  return "No device of yours has phone notifications on - tap Enable first.";
+  return "No device of yours has phone notifications on - tap Enable phone notifications first.";
 }
 // pushDiagLine({ worker, permission, subscribed, saved, savedWhy, devices, signedInAs, keyChanged }) -> Diagnose's one line.
 // saved: true / false / null (unknown, savedWhy says why). Never an endpoint or a key.

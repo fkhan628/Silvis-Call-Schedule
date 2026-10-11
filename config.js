@@ -662,13 +662,13 @@ const pushDevice = {
     let key = typeof o.key === "string" && o.key ? o.key : null;
     if (!key) {
       const k = await pushDb.publicKey();
-      if (k.state !== "ok") return { ok: false, step: "key", permission: perm, message: k.state === "unavailable" ? PUSH_UNAVAILABLE_TEXT : "Couldn't reach the server - check your connection, then tap Enable again." };
+      if (k.state !== "ok") return { ok: false, step: "key", permission: perm, message: k.state === "unavailable" ? PUSH_UNAVAILABLE_TEXT : "Couldn't reach the server - check your connection, then tap Enable phone notifications again." };
       key = k.key;
     }
     // (4) the Silvis worker, active
     let reg = null;
     try { reg = await pushDevice.registration(true); } catch (x) { reg = null; }
-    if (!reg || !reg.active || !reg.pushManager) return { ok: false, step: "worker", permission: perm, message: "Not ready yet - wait a few seconds and tap Enable again." };
+    if (!reg || !reg.active || !reg.pushManager) return { ok: false, step: "worker", permission: perm, message: "Not ready yet - wait a few seconds and tap Enable phone notifications again." };
     // (5) subscribe
     let sub;
     try { sub = await pushDevice._subscribe(reg, key); }
@@ -714,7 +714,7 @@ const pushDevice = {
       const reg = await pushDevice.registration(false); // ONLY the Silvis push worker - never another registration
       if (reg) unregistered = !!(await reg.unregister());
     } catch (x) { unregistered = false; }
-    return { ok: d.ok, unregistered, message: "Reset done. Reload the app, then tap Enable." + (d.ok ? "" : " (" + d.message + ")") };
+    return { ok: d.ok, unregistered, message: "Reset done. Reload the app, then tap Enable phone notifications." + (d.ok ? "" : " (" + d.message + ")") };
   },
   async rearm(profileId, label) {
     if (!profileId) return { action: "skipped" };

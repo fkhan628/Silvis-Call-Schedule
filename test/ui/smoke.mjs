@@ -1960,6 +1960,17 @@ const waitFor = async (predicate, timeoutMs, stepMs) => {
   while (Date.now() < until) { if (await predicate()) return true; await new Promise(r => setTimeout(r, stepMs || 100)); }
   return false;
 };
+// Push UX 1(a) (10/10): Settings opens Notification settings by itself while this device's push is off (once per account
+// per page load, never after a tap on its header), so a blind tap could close it. Open it only when closed; re-read after.
+const openNotifSettings = async (pg) => {
+  for (let i = 0; i < 3; i++) {
+    const t = await pg.$("[data-testid=notif-settings-toggle]");
+    if (!t) return false;
+    if ((await t.getAttribute("aria-expanded")) === "true") return true;
+    await t.click(); await pg.waitForTimeout(250);
+  }
+  return (await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded").catch(() => null)) === "true";
+};
 
 try {
   const attempts = await loadWithRetry(page, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "main page");
@@ -2056,10 +2067,11 @@ try {
   }
   // Settings: open the collapsible cards so their render paths run too.
   await page.click('button[data-tab="settings"]');
-  for (const title of ["Activity log", "Client versions", "Office notifications", "Notification settings", "Restore from snapshot"]) {
+  for (const title of ["Activity log", "Client versions", "Office notifications", "Restore from snapshot"]) {
     const el = await page.$(`text=${title}`);
     if (el) { await el.click(); await page.waitForTimeout(200); }
   }
+  if (!(await openNotifSettings(page))) fail("Settings: Notification settings did not open");
   await page.screenshot({ path: path.join(OUT, "settings-open.png"), fullPage: true });
   ok("settings cards expanded without error");
 
@@ -10663,7 +10675,7 @@ try {
         await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
         await page.setViewportSize({ width: 390, height: 844 });
         await page.waitForTimeout(300);
-        await expandSettings("Notification settings", "[data-testid=notif-pref], [data-testid=notif-prefs-load-failed]");
+        await openNotifSettings(page);
         await expandSettings("Restore from snapshot", "[data-testid=snapshot-row], [data-testid=snapshot-empty]");
         await page.waitForTimeout(300);
         judge(`${theme} 390 notification settings`, await measure("[data-testid=notif-pref], [data-testid=notif-hour-label]"));
@@ -12453,7 +12465,7 @@ try {
     };
     const openCard = async (pg) => {
       await pg.click("button[data-tab=settings]");
-      if (!(await pg.$("[data-testid=push-card]"))) { await pg.click("text=Notification settings"); }
+      await openNotifSettings(pg);
       await pg.waitForSelector("[data-testid=push-card] [data-testid=push-state]:not([data-state=loading])", { timeout: 15000 });
     };
     const stateOf = (pg) => pg.$eval("[data-testid=push-card]", (el) => ({
@@ -12477,9 +12489,24 @@ try {
       await loadApp(pg, P30_BASE);
       // a dummy worker at the origin root (Davenport's place) - Reset and the update reset must leave it alone
       await pg.evaluate(async () => { await navigator.serviceWorker.register("/xr-sw.js", { scope: "/" }); });
+      // Push UX 1(a) (10/10): push off -> Settings opens Notification settings by itself, with no tap on its header; a
+      // close sticks (calendar and back); the push button and the Biometric one never share a bare "Enable"
+      await pg.click("button[data-tab=settings]");
+      const autoOpened = await pg.waitForSelector("[data-testid=push-card] [data-testid=push-enable]", { timeout: 15000 }).then(() => true).catch(() => false);
+      const enableTexts = await pg.$$eval("button", (bs) => bs.map(b => b.textContent.trim()).filter(t => /^Enable\b/.test(t)));
+      if (!autoOpened) fail("P30 auto-open: with push off, Settings did not open Notification settings by itself");
+      else if (enableTexts.includes("Enable")) fail("P30 auto-open: a bare 'Enable' button is still on Settings: " + JSON.stringify(enableTexts));
+      else {
+        await pg.click("[data-testid=notif-settings-toggle]");
+        await pg.click("button[data-tab=calendar]"); await pg.waitForTimeout(300);
+        await pg.click("button[data-tab=settings]"); await pg.waitForTimeout(1500);
+        const exp = await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded");
+        if (exp !== "false" || (await pg.$("[data-testid=push-card]"))) fail("P30 auto-open: a closed Notification settings card reopened on the next Settings visit (aria-expanded " + exp + ")");
+        else ok("P30 auto-open: push off -> Notification settings opened by itself on Settings, button '" + enableTexts.join("' / '") + "'; closed, it stays closed on the next visit");
+      }
       await openCard(pg);
       let s = await stateOf(pg);
-      if (s.state !== "off" || s.line !== "Off for this device." || s.badge !== null || !s.buttons.includes("Enable")) fail("P30 card (desktop, before Enable): " + JSON.stringify(s));
+      if (s.state !== "off" || s.line !== "Off for this device." || s.badge !== null || !s.buttons.includes("Enable phone notifications")) fail("P30 card (desktop, before Enable): " + JSON.stringify(s));
       else ok(`P30 card (desktop): Phone notifications box first in Notification settings - 'Off for this device.', buttons ${s.buttons.join(" / ")}, no badge`);
       // (1) Enable: the permission is asked once, the real sw.js active at the folder scope, the save body, the badge, "Subscribed (as ...)"
       let c0 = p30.calls.length;
@@ -12495,7 +12522,7 @@ try {
       else if (asks !== "1") fail("P30 Enable: requestPermission ran " + asks + " time(s), want 1");
       else if (!regs.includes(SIL_REG) || !regs.includes(ROOT_REG)) fail("P30 Enable: registrations " + JSON.stringify(regs) + " - want the real sw.js at the folder scope beside the root dummy");
       else if (saves.length !== 1 || !saveBody || JSON.stringify(Object.keys(saveBody).sort()) !== JSON.stringify(["p_auth", "p_endpoint", "p_label", "p_p256dh"]) || saveBody.p_endpoint !== P30_EP1 || saveBody.p_p256dh !== P30_P256DH || saveBody.p_auth !== P30_AUTH || !/^[A-Za-z0-9 .()/-]{1,40}$/.test(saveBody.p_label || "")) fail("P30 Enable: save requests " + JSON.stringify(saves.map(x => x.path + " " + x.body)));
-      else if (s.state !== "on" || s.badge !== "Subscribed on this device" || !/^On for this device \(.+\)\.$/.test(s.line) || !s.buttons.includes("Turn off") || s.buttons.includes("Enable")) fail("P30 Enable: the card after Enable " + JSON.stringify(s));
+      else if (s.state !== "on" || s.badge !== "Subscribed on this device" || !/^On for this device \(.+\)\.$/.test(s.line) || !s.buttons.includes("Turn off") || s.buttons.includes("Enable phone notifications")) fail("P30 Enable: the card after Enable " + JSON.stringify(s));
       else ok(`P30 Enable: requestPermission once, sw.js active at /Silvis-Call-Schedule/ (root dummy kept), ONE save with exactly p_endpoint / p_p256dh / p_auth / p_label ('${saveBody.p_label}'), badge 'Subscribed on this device', '${s.line}', message '${s.msg}'`);
       const flag1 = await lsGet(pg, "silvis-push-on-" + P30_UID);
       if (!/^\{"v":1,"ep":"[0-9a-f]{16}","at":"/.test(flag1 || "") || /fcm|smoke-device/.test(flag1 || "")) fail("P30 Enable: the on-device flag " + flag1);
@@ -12552,6 +12579,11 @@ try {
       let reBody = null; try { reBody = JSON.parse(reSaves[0].body); } catch (e) {}
       if (!regs.includes(SIL_REG) || reSaves.length !== 1 || !reBody || reBody.p_endpoint !== P30_EP2 || asks2 !== "0") fail("P30 re-arm: registrations " + JSON.stringify(regs) + ", saves " + JSON.stringify(reSaves.map(x => x.body)) + ", permission asks " + asks2);
       else ok("P30 re-arm on start: the wiped registration came back (sw.js at the folder scope), the new subscription was saved (smoke-device-2) - no permission prompt");
+      // Push UX 1(a): push on (a fresh page load) -> Settings leaves Notification settings closed
+      await pg.click("button[data-tab=settings]"); await pg.waitForTimeout(1500);
+      const expOn = await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded").catch(() => null);
+      if (expOn !== "false") fail("P30 auto-open: with push on, Settings opened Notification settings (aria-expanded " + expOn + ")");
+      else ok("P30 auto-open: with push on, Notification settings stays closed on Settings");
       await openCard(pg);
       s = await stateOf(pg);
       if (s.state !== "on") fail("P30 re-arm: the card reads " + JSON.stringify(s)); else ok("P30 re-arm: the card reads 'On for this device' again");
@@ -12605,8 +12637,8 @@ try {
       await pg.waitForFunction(() => /^Reset done/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
       s = await stateOf(pg);
       regs = await swRegs(pg);
-      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Reload the app, then tap Enable." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
-      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Reload the app, then tap Enable.'");
+      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Reload the app, then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
+      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Reload the app, then tap Enable phone notifications.'");
       // (11) the columns probe answering 400 42703 (the migration not applied): the switches hidden, the e-mail upsert names no *_push key
       p30.cols = "unavailable";
       await loadApp(pg, P30_BASE);
@@ -12642,7 +12674,7 @@ try {
       await openCard(pg);
       s = await stateOf(pg);
       const host = new URL(BASE).hostname;
-      if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable.` || s.buttons.includes("Enable")) fail("P30 blocked: " + JSON.stringify(s));
+      if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.` || s.buttons.includes("Enable phone notifications")) fail("P30 blocked: " + JSON.stringify(s));
       else ok(`P30 blocked: badge 'Blocked', '${s.line.slice(0, 60)}...' (no Davenport clause on ${host}), no Enable`);
       await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "granted"));
       // (14) ?public=1: no card, no registration, no push request
@@ -12734,8 +12766,8 @@ try {
         await openCard(ip);
         let s = await stateOf(ip);
         if (!standalone) {
-          const want = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable.";
-          if (s.state !== "ios-home-screen" || s.line !== want || !s.buttons.includes("Enable")) fail(`P30 ${label}: ` + JSON.stringify(s));
+          const want = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications.";
+          if (s.state !== "ios-home-screen" || s.line !== want || !s.buttons.includes("Enable phone notifications")) fail(`P30 ${label}: ` + JSON.stringify(s));
           else {
             await ip.click("[data-testid=push-enable]");
             await ip.waitForTimeout(800);
@@ -12746,7 +12778,7 @@ try {
             else ok(`P30 ${label}: the Home Screen line (add to Home Screen, open from the icon, sign in there once, then Enable); Enable asks nothing and registers nothing`);
           }
         } else {
-          if (s.state !== "off" || !s.buttons.includes("Enable") || s.line !== "Off for this device.") fail(`P30 ${label}: ` + JSON.stringify(s));
+          if (s.state !== "off" || !s.buttons.includes("Enable phone notifications") || s.line !== "Off for this device.") fail(`P30 ${label}: ` + JSON.stringify(s));
           else ok(`P30 ${label} (navigator.standalone): 'Off for this device.' with Enable offered`);
         }
         await ip.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();
@@ -13689,9 +13721,9 @@ try {
         else if (coordFollows) console.log(`     (coordinator: the harness profile follows ${coordFollows} surgeon(s) - the no-URL calendar-sync case is not exercised this run)`);
         else if (sdC.sync) fail("coordinator: the calendar-sync card renders with no URL to offer (no roster link, no follow, not scheduler / viewer)");
         else ok("coordinator: Settings has no group heading and no empty calendar-sync card");
-        const nt = await pc.$("text=Notification settings");
+        const nt = await pc.$("[data-testid=notif-settings-toggle]");
         if (nt) {
-          await nt.click(); await pc.waitForTimeout(250);
+          await openNotifSettings(pc);
           const em = await pc.evaluate(() => document.body.innerText || "");
           const linked = (em.match(/Available once your account is linked to a roster entry\./g) || []).length, addr = /E-?mails? go to your sign-in address/i.test(em);
           if (linked !== 1 || addr) fail(`coordinator: the Email box should read one 'Available once ...' line and no sign-in-address sentence (count ${linked}, sentence ${addr})`);
@@ -13974,7 +14006,7 @@ try {
         //      toggle sends ONE POST ?on_conflict=profile_id whose body names his profile_id and no person_id
         {
           const R2 = `R2 follower prefs (${theme})`;
-          if (!(await pf.$("[data-testid=notif-follower-prefs]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
+          await openNotifSettings(pf);
           try {
             await pf.waitForSelector("[data-testid=notif-follower-prefs][data-state=ok]", { timeout: 8000 });
             const want = followPrefRow ? { ...followPrefRow } : {};
@@ -14122,7 +14154,7 @@ try {
             await loadWithRetry(pf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "follower page, prefs column absent (" + theme + ")");
             await pf.waitForSelector("text=Synced", { timeout: 30000 });
             await pf.click('button[data-tab="settings"]');
-            if (!(await pf.$("[data-testid=notif-follower-prefs]"))) { const t = await pf.$("text=Notification settings"); if (t) { await t.click(); await pf.waitForTimeout(250); } }
+            await openNotifSettings(pf);
             await pf.waitForSelector("[data-testid=notif-follower-prefs][data-state=unavailable]", { timeout: 8000 });
             const st = await pf.$eval("[data-testid=notif-follower-prefs]", (el) => ({
               msg: ((el.querySelector("[data-testid=notif-follower-unavailable]") || {}).textContent || "").trim(),

@@ -2358,7 +2358,7 @@ grades 19i with no flag. Phone push works from the build that ships this client.
 The first box of the card, above Email, in Davenport's layout (helpers `pushStateWords` / `pushTestWords` / `pushDiagLine`):
 a badge ("Subscribed on this device" green / "Blocked" red), the line "Turn this on once on each device you want alerts on.
 iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon.", the state line (on: "On for this device
-(<label>)."; off: "Off for this device." - after a failed re-arm "... - tap Enable to turn it back on."; iPhone / iPad Safari
+(<label>)."; off: "Off for this device." - after a failed re-arm "... - tap Enable phone notifications to turn it back on."; iPhone / iPad Safari
 outside the Home Screen app: add to Home Screen, open from the icon, **sign in there once** (the Home Screen app has its own
 sign-in, separate from Safari), then Enable; blocked on a computer / Android: "Blocked for <host>" + " - this also affects
 the Davenport app" on fkhan628.github.io (permission is per origin) + the site-settings hint; blocked in an iPhone Home Screen
@@ -2375,14 +2375,14 @@ unlinked account that follows nobody reads that only its own tests reach its pho
   `Notification.requestPermission()` is the FIRST await (Safari keeps the tap's gesture only that long); not granted -> "Permission
   was not granted..."; the public key (prefetched when the card opened, else `GET send-notification?vapid=public`; 404 / 405 /
   503 -> "available after the next update"); `registration(true)` active within 10 s (else "Not ready yet - wait a few seconds
-  and tap Enable again."); `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` (an InvalidStateError from
+  and tap Enable phone notifications again."); `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` (an InvalidStateError from
   an old key: drop it, subscribe again); `rpc/save_push_subscription` with exactly `{ p_endpoint, p_p256dh, p_auth, p_label }`
   (a refusal unsubscribes what was made, writes no flag and shows the function's words - PS001-PS007); the flag
   `silvis-push-on-<profileId>` = `{ v: 1, ep: <first 16 hex of SHA-256(endpoint)>, at }`; after 1.5 s a read-back (the
   subscription + the status RPC) -> "Subscribed (as <name>)." or "Permission granted, but this device is not registered yet -
   reload the app and check again."
 - **Turn off:** `rpc/delete_push_subscription` (endpoint in the body) -> `unsubscribe()` -> the flag cleared; the worker stays.
-  **Reset subscription:** the same plus unregistering ONLY the Silvis worker -> "Reset done. Reload the app, then tap Enable."
+  **Reset subscription:** the same plus unregistering ONLY the Silvis worker -> "Reset done. Reload the app, then tap Enable phone notifications."
 - **Re-arm on start** (once per account per page load, after this account's profile read; never on `?public=1`; never a
   prompt): permission not "granted" -> no call at all (the card shows Off / Blocked; the flag stays for a later re-allow); a
   subscription with this account's flag and the same hash -> nothing; another hash (the browser moved the endpoint) -> re-saved

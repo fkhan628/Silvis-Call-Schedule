@@ -6720,12 +6720,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("SD2: one collapse look - the three in-memory toggles (officeNotif, notifSettings, restoreSnap) carry Collapsible's left chevron and the cardtoggle tap-target class, never the old +/- glyph; they stay in openSettingsCards (not persisted)", () => {
       for (const k of ["officeNotif", "notifSettings", "restoreSnap"]) {
-        assert.strictEqual(SDcount(`<div className="cardtoggle" onClick={()=>toggleSettingsCard("${k}")} style={settingsToggleRow(openSettingsCards.${k})}>\n`), 1, k + ": the toggle row");
+        // push UX 1(a) (10/10): Notification settings' header also says whether it is open (the smoke reads it - the card can open by itself)
+        const extra = k === "notifSettings" ? ` data-testid="notif-settings-toggle" aria-expanded={!!openSettingsCards.notifSettings}` : "";
+        assert.strictEqual(SDcount(`<div className="cardtoggle"${extra} onClick={()=>toggleSettingsCard("${k}")} style={settingsToggleRow(openSettingsCards.${k})}>\n`), 1, k + ": the toggle row");
         assert.strictEqual(SDcount(`{settingsChevron(openSettingsCards.${k})}`), 1, k + ": the chevron");
         assert.ok(!SD.includes(`{openSettingsCards.${k} ? "-" : "+"}`), k + ": the +/- glyph is gone");
       }
       assert.strictEqual(SDcount("  const [openSettingsCards, setOpenSettingsCards] = useState({});\n"), 1, "in-memory state (a reload closes them)");
-      assert.strictEqual(SDcount("  const toggleSettingsCard = (key) => setOpenSettingsCards(p => ({ ...p, [key]: !p[key] }));\n"), 1, "the toggle writes no localStorage");
+      assert.strictEqual(SDcount('  const toggleSettingsCard = (key) => { if (key === "notifSettings") pushAutoOpenRef.current = pushUid; setOpenSettingsCards(p => ({ ...p, [key]: !p[key] })); };\n'), 1, "the toggle writes no localStorage (it only records a Notification settings tap for the push auto-open, push UX 1(a))");
       assert.ok(!/writeCollapseFlag\((officeNotif|notifSettings|restoreSnap|"officeNotif"|"notifSettings"|"restoreSnap")/.test(SD), "never a persisted flag");
       const chev = SD.slice(SD.indexOf("  const settingsChevron = "), SD.indexOf("  const moreToggle = "));
       assert.ok(chev.includes("&#9654;") && chev.includes("color:T.muted") && chev.includes('rotate(90deg)'), "the same right-pointing chevron, turned when open, in T.muted");
@@ -6759,7 +6761,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const det = bio.slice(bio.indexOf("{openSettingsCards.bioDetails && "));
       assert.ok(det.includes(">Re-check</button>") && det.includes(">Try enable anyway</button>") && det.includes("Diagnostic:</strong> {biometricReason}") && det.includes("Add to Home Screen"), "the diagnostic box, Re-check and Try enable anyway sit behind Details");
       assert.ok(!/color:(dk\?)?"#/.test(bio), "the moved block reads tokens (T.muted / T.text)");
-      assert.ok(SD.includes(": <button onClick={handleBiometricEnroll} style={{...css.btn(true),padding:\"6px 14px\",fontSize:12}}>Enable</button>}"), "the available branch keeps Enable / Disable");
+      assert.ok(SD.includes(": <button data-testid=\"biometric-enable\" onClick={handleBiometricEnroll} style={{...css.btn(true),padding:\"6px 14px\",fontSize:12}}>Enable Face ID / Touch ID</button>}") && !SD.includes(">Enable</button>"), "the available branch keeps Enable / Disable - Enable named for what it turns on (push UX 1(a): never a bare Enable beside phone notifications)");
       assert.ok(SD.includes("Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>") && !SD.includes("Permission: <span style={{fontFamily:mono}}>{browserNotifPermission}</span>"), "plain words, not the raw Notification.permission token");
       assert.strictEqual(H.notifPermissionText("granted"), "Allowed on this device.");
       assert.ok(/^Blocked/.test(H.notifPermissionText("denied")) && /Allow notifications/.test(H.notifPermissionText("default")) && /can't show pop-ups/.test(H.notifPermissionText("unsupported")) && /can't show pop-ups/.test(H.notifPermissionText(undefined)));

@@ -5585,7 +5585,9 @@ function CallSchedule() {
   const [snapshotLoadFailed, setSnapshotLoadFailed] = useState(false); // couldn't load != none exist
   const [restoreBusyId, setRestoreBusyId] = useState(null);
   const [openSettingsCards, setOpenSettingsCards] = useState({});
-  const toggleSettingsCard = (key) => setOpenSettingsCards(p => ({ ...p, [key]: !p[key] }));
+  // A tap on Notification settings is the user's choice: the push auto-open below never overrides it (pushAutoOpenRef).
+  const toggleSettingsCard = (key) => { if (key === "notifSettings") pushAutoOpenRef.current = pushUid; setOpenSettingsCards(p => ({ ...p, [key]: !p[key] })); };
+  const pushAutoOpenRef = useRef("");
   // --- Phone notifications (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push") ---
   // Web Push with VAPID through Silvis's own worker (sw.js, the app folder) and send-notification's server-side fan-out
   // (same events, same people as the e-mails; each person's *_push switches decide for every device he turned on).
@@ -5616,6 +5618,15 @@ function CallSchedule() {
   useEffect(() => { pushColsRef.current = "unknown"; setPushCols("unknown"); }, [pushUid]);
   // The card: its state on every open, the server's public key prefetched (the Enable tap then awaits nothing before the
   // permission prompt but what it must), and whether the two *_push columns exist (once per account; a failed probe retries).
+  // Push UX 1(a) (10/10): while this device's push is off, the first Settings visit per account and page load opens the
+  // Notification settings card - collapsed, the Account card's Biometric button was the only "Enable" in sight. Once per
+  // account per page load (a close sticks), never over a tap on the card, never when on / blocked / unsupported.
+  useEffect(() => {
+    if (view !== "settings" || isPublicMode || !pushUid || !pushInfo) return;
+    if (pushAutoOpenRef.current === pushUid) return;
+    pushAutoOpenRef.current = pushUid;
+    if (pushInfo.state === "off" || pushInfo.state === "ios-home-screen") setOpenSettingsCards(p => p.notifSettings ? p : { ...p, notifSettings: true });
+  }, [view, isPublicMode, pushUid, pushInfo]);
   const pushCardOpen = view === "settings" && !isPublicMode && !!pushUid && !!openSettingsCards.notifSettings;
   useEffect(() => {
     if (!pushCardOpen) return;
@@ -8374,7 +8385,7 @@ function CallSchedule() {
           </div>
 
           <div style={css.card}>
-            <div className="cardtoggle" onClick={()=>toggleSettingsCard("notifSettings")} style={settingsToggleRow(openSettingsCards.notifSettings)}>
+            <div className="cardtoggle" data-testid="notif-settings-toggle" aria-expanded={!!openSettingsCards.notifSettings} onClick={()=>toggleSettingsCard("notifSettings")} style={settingsToggleRow(openSettingsCards.notifSettings)}>
               {settingsChevron(openSettingsCards.notifSettings)}
               <span>Notification settings</span>
             </div>
@@ -8404,7 +8415,7 @@ function CallSchedule() {
                     <p data-testid="push-line" style={{fontSize:11,color:dkSubtext,margin:"0 0 6px",lineHeight:1.5}}>{"Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."}</p>
                     <p data-testid="push-state" data-state={st || "loading"} style={{fontSize:12,color:st === "blocked" ? T.open : T.text,margin:"0 0 8px",lineHeight:1.5}}>{words ? words.line : "Checking this device..."}</p>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                      {(st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable", pushEnable, true)}
+                      {(st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true)}
                       {st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false)}
                       {pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false)}
                       {pbtn("push-reset", "reset", "Reset subscription", pushReset, false)}
@@ -8509,7 +8520,7 @@ function CallSchedule() {
                   </div>
                   {biometricEnrolled
                     ? <button onClick={handleBiometricUnenroll} style={{...css.btn(false),padding:"6px 14px",fontSize:12}}>Disable</button>
-                    : <button onClick={handleBiometricEnroll} style={{...css.btn(true),padding:"6px 14px",fontSize:12}}>Enable</button>}
+                    : <button data-testid="biometric-enable" onClick={handleBiometricEnroll} style={{...css.btn(true),padding:"6px 14px",fontSize:12}}>Enable Face ID / Touch ID</button>}
                 </div>
               </div>
             ) : (

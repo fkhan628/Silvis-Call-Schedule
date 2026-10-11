@@ -328,14 +328,14 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.deepStrictEqual(H.pushStateWords("on", { label: "Chrome on Windows" }), { badge: "Subscribed on this device", line: "On for this device (Chrome on Windows)." });
     const live = H.pushStateWords("blocked", { hostname: "fkhan628.github.io" });
     assert.strictEqual(live.badge, "Blocked");
-    assert.strictEqual(live.line, "Blocked for fkhan628.github.io - this also affects the Davenport app. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable.");
-    assert.strictEqual(H.pushStateWords("blocked", { hostname: "localhost" }).line, "Blocked for localhost. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable.");
-    assert.strictEqual(H.pushStateWords("blocked", { ios: true, device: "iPhone" }).line, "Blocked in your iPhone's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable.");
-    assert.strictEqual(H.pushStateWords("blocked", { ios: true, device: "iPad" }).line, "Blocked in your iPad's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable.");
-    assert.deepStrictEqual(H.pushStateWords("ios-home-screen", {}), { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable." });
+    assert.strictEqual(live.line, "Blocked for fkhan628.github.io - this also affects the Davenport app. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.");
+    assert.strictEqual(H.pushStateWords("blocked", { hostname: "localhost" }).line, "Blocked for localhost. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.");
+    assert.strictEqual(H.pushStateWords("blocked", { ios: true, device: "iPhone" }).line, "Blocked in your iPhone's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications.");
+    assert.strictEqual(H.pushStateWords("blocked", { ios: true, device: "iPad" }).line, "Blocked in your iPad's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications.");
+    assert.deepStrictEqual(H.pushStateWords("ios-home-screen", {}), { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications." });
     assert.deepStrictEqual(H.pushStateWords("unsupported", {}), { badge: null, line: "Not supported in this browser." });
     assert.deepStrictEqual(H.pushStateWords("off", {}), { badge: null, line: "Off for this device." });
-    assert.deepStrictEqual(H.pushStateWords("off", { needsTap: true }), { badge: null, line: "Off for this device - tap Enable to turn it back on." });
+    assert.deepStrictEqual(H.pushStateWords("off", { needsTap: true }), { badge: null, line: "Off for this device - tap Enable phone notifications to turn it back on." });
   };
   await check("pushStateWords: the contract's badge + line per state - Blocked names the host (+ the Davenport clause on fkhan628.github.io only), the iPhone / iPad Home Screen wording, the iOS line with its own sign-in", wordsCheck);
   await check("pushDeviceLabel / pushIsIOS / pushIsStandalone: iPhone, iPad (incl. iPadOS's Macintosh UA with touch), Android, <browser> on <os>, Browser - every label matches the DB's label check", (S) => {
@@ -410,7 +410,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const H = loadHelpers(S.helpers);
     const P = (d, extra) => ({ ok: true, status: 200, push: Object.assign({ sent: 0, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: d, error: null }, extra || {}) });
     assert.strictEqual(H.pushTestWords(P({ sent: 2, failed: 0, removed: 0 })), "Test sent to 2 device(s) on your account - it should arrive in a few seconds.");
-    assert.strictEqual(H.pushTestWords(P({ sent: 0, failed: 0, removed: 0 }, { skipped_no_device: 1 })), "No device of yours has phone notifications on - tap Enable first.");
+    assert.strictEqual(H.pushTestWords(P({ sent: 0, failed: 0, removed: 0 }, { skipped_no_device: 1 })), "No device of yours has phone notifications on - tap Enable phone notifications first.");
     assert.strictEqual(H.pushTestWords(P({ sent: 0, failed: 1, removed: 1 })), "The push service refused the test on 2 device(s) - tap Reset subscription, then Enable.");
     assert.strictEqual(H.pushTestWords({ ok: false, status: 400, notDeployed: true }), "The server does not send phone notifications yet (it needs the next update).");
     assert.strictEqual(H.pushTestWords({ ok: false, status: 503, notConfigured: true }), "Phone notifications are not set up on the server yet.");
@@ -615,7 +615,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.deepStrictEqual([r.step, r.message], ["key", "Phone notifications are available after the next update."]);
     b = mkBrowser({ answer: "granted", neverActive: true });
     r = await loadClient(S, b).pushDevice.enable(UID, "x", { readbackMs: 0 });
-    assert.deepStrictEqual([r.step, r.message], ["worker", "Not ready yet - wait a few seconds and tap Enable again."]);
+    assert.deepStrictEqual([r.step, r.message], ["worker", "Not ready yet - wait a few seconds and tap Enable phone notifications again."]);
     b = mkBrowser({ answer: "granted", answers: (p) => (/save_push/.test(p) ? { status: 400, body: { code: "PS006", details: null, hint: null, message: "PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)" } } : undefined) });
     r = await loadClient(S, b).pushDevice.enable(UID, "x", { readbackMs: 0 });
     assert.deepStrictEqual([r.ok, r.message], [false, "this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)"]);
@@ -709,7 +709,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!b.log.some(l => /^unregister/.test(l)) && b.ls.getItem("silvis-push-on-" + UID) === null);
     b = mkBrowser({ permission: "granted", silvisSub: EP1, regs: [[SIL + "x/", { active: SIL + "x/sw.js" }]], lsInit: { ["silvis-push-on-" + UID]: "{\"v\":1,\"ep\":\"x\",\"at\":\"t\"}" } });
     r = await loadClient(S, b).pushDevice.reset(UID);
-    assert.strictEqual(r.message, "Reset done. Reload the app, then tap Enable.");
+    assert.strictEqual(r.message, "Reset done. Reload the app, then tap Enable phone notifications.");
     assert.deepStrictEqual(b.log.filter(l => /^unregister/.test(l)), ["unregister /Silvis-Call-Schedule/"], "only the Silvis push worker");
     assert.ok(b.sw.regs.some(x => x.scope === LIVE) && b.sw.regs.some(x => x.scope === SIL + "x/"), "the root (Davenport) and the sub-scope registration remain");
     assert.ok(fetches(b, /delete_push/).length === 1 && b.ls.getItem("silvis-push-on-" + UID) === null);
@@ -937,8 +937,67 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!idx.includes("No device push in this app"), "the addNotification comment is corrected");
     assert.ok(/^[\x00-\x7F]*$/.test(idx), "index-source.html stays pure ASCII");
   });
+  // Push UX 1(a) (10/10): collapsed, Notification settings left the Account card's Biometric button as the only "Enable"
+  // in sight. The effect and the header's toggle, lifted and run: push off (or the iPhone Home Screen state) opens the card
+  // on the first Settings visit per account and page load; a close sticks; a tap on the header is never overridden.
+  const autoOpenCheck = (S) => {
+    const idx = S.index;
+    const tl = idx.match(/\n  const toggleSettingsCard = \(key\) => (\{[^\n]*\});\n/);
+    assert.ok(tl, "could not lift toggleSettingsCard");
+    const b = idx.indexOf("  }, [view, isPublicMode, pushUid, pushInfo]);");
+    const a = idx.lastIndexOf("  useEffect(() => {\n", b);
+    assert.ok(a > 0 && b > a && idx.indexOf("  }, [view, isPublicMode, pushUid, pushInfo]);", b + 1) < 0 && idx.slice(a, b).includes("pushAutoOpenRef"), "could not lift the auto-open effect");
+    const effectBody = idx.slice(a + "  useEffect(() => ".length, b + 3);
+    const mk = () => {
+      const w = { cards: {}, ref: { current: "" } };
+      const set = (f) => { w.cards = typeof f === "function" ? f(w.cards) : f; };
+      const effect = new Function("pushAutoOpenRef", "setOpenSettingsCards", "view", "isPublicMode", "pushUid", "pushInfo", effectBody);
+      const toggle = new Function("pushAutoOpenRef", "setOpenSettingsCards", "pushUid", "key", tl[1]);
+      w.run = (view, pub, uid, state) => effect(w.ref, set, view, pub, uid, state ? { state } : null);
+      w.tap = (uid) => toggle(w.ref, set, uid, "notifSettings");
+      w.open = () => !!w.cards.notifSettings;
+      return w;
+    };
+    let w = mk(); w.run("settings", false, "u1", "off");
+    assert.ok(w.open(), "push off: the first Settings visit opens the card");
+    w.tap("u1"); w.run("calendar", false, "u1", "off"); w.run("settings", false, "u1", "off");
+    assert.ok(!w.open(), "closed by a tap, it stays closed on the next Settings visit");
+    w = mk(); w.run("settings", false, "u1", "ios-home-screen");
+    assert.ok(w.open(), "the iPhone Home Screen state opens it too (the instruction is in the card)");
+    for (const st of ["on", "blocked", "unsupported"]) {
+      w = mk(); w.run("settings", false, "u1", st);
+      assert.ok(!w.open(), st + ": stays closed");
+      w.run("settings", false, "u1", "off");
+      assert.ok(!w.open(), st + " then off in the same page load: decided once, stays closed");
+    }
+    w = mk();
+    w.run("settings", false, "u1", null); w.run("calendar", false, "u1", "off"); w.run("settings", true, "u1", "off"); w.run("settings", false, "", "off");
+    assert.ok(!w.open() && w.ref.current === "", "not yet known / another view / ?public=1 / signed out: nothing opens and nothing is decided");
+    w.run("settings", false, "u1", "off");
+    assert.ok(w.open(), "then known and on Settings: it opens");
+    w = mk(); w.tap("u1"); w.tap("u1"); w.run("settings", false, "u1", "off");
+    assert.ok(!w.open(), "the header tapped open and closed before the state was known: the auto-open never overrides it");
+    w = mk(); w.tap("u1"); w.run("settings", false, "u1", "off");
+    assert.ok(w.open(), "tapped open: stays open");
+    w = mk(); w.run("settings", false, "u1", "off"); w.tap("u1"); w.run("settings", false, "u2", "off");
+    assert.ok(w.open(), "a different account decides again");
+    w = mk(); w.cards = { notifSettings: true, other: 1 }; const before = w.cards; w.run("settings", false, "u1", "off");
+    assert.ok(w.cards === before, "already open: the same state object (no re-render)");
+    assert.ok(idx.includes('pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true)'), "the push button says what it turns on");
+    assert.ok(idx.includes('data-testid="notif-settings-toggle" aria-expanded={!!openSettingsCards.notifSettings} onClick={()=>toggleSettingsCard("notifSettings")}'), "the header says whether it is open");
+    assert.ok(!/>Enable<\/button>/.test(idx) && !/"Enable", push/.test(idx), "no bare Enable button anywhere");
+  };
+  await check("push UX 1(a): Notification settings opens by itself on Settings while push is off (once per account and page load, a close sticks, never over a tap on its header); the push button reads 'Enable phone notifications'", autoOpenCheck);
 
   /* ================================ [M] mutants ================================ */
+  await mutant("the header tap not recorded (the auto-open overrides a close)", "index",
+    'if (key === "notifSettings") pushAutoOpenRef.current = pushUid; ', "", autoOpenCheck);
+  await mutant("the auto-open without its once-per-account guard", "index",
+    "    if (pushAutoOpenRef.current === pushUid) return;\n", "", autoOpenCheck);
+  await mutant("the auto-open on every state but on", "index",
+    'if (pushInfo.state === "off" || pushInfo.state === "ios-home-screen") setOpenSettingsCards', 'if (pushInfo.state !== "on") setOpenSettingsCards', autoOpenCheck);
+  await mutant("the auto-open on any view", "index",
+    '    if (view !== "settings" || isPublicMode || !pushUid || !pushInfo) return;', '    if (isPublicMode || !pushUid || !pushInfo) return;', autoOpenCheck);
   console.log("\n[M] mutants (contract section 5) - each must turn its check red");
   await mutant("keepRegistration without the sw.js rule", "index",
     `          if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker\n`, "", keepCheck);
