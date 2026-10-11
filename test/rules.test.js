@@ -176,13 +176,17 @@ step("buildContext basics");
 eq(ctx.activeIds, [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR]);
 // 9/22 (Prompt 12 K): the cap is on PRIMARY days (monthlyCap.primary); monthlyCapFor
 // also returns total = primary for one release so UI callers mid-edit keep working.
-eq(R.monthlyCapFor(ctx, KHAN).primary, null, "explicit null = no cap");
-eq(R.monthlyCapFor(ctx, ACTON).primary, null, "explicit null = no cap");
-eq(R.monthlyCapFor(ctx, PHILIP).primary, 8, "absent = group default (defaultMonthlyCap.primary)");
-eq(R.monthlyCapFor(ctx, SARKAR).primary, 8, "absent = group default");
-eq(R.monthlyCapFor(ctx, BURCHETT), { primary: 8, preferred: 7, total: 8 }, "Burchett { primary: 8, preferred: 7 } plus the one-release total alias");
-eq(R.monthlyCapFor(ctx, FIERCE).primary, 14);
-eq(R.monthlyCapFor(ctx, FIERCE).total, 14, "total alias = primary");
+// Prompt 32 (Faraz 10/11): an absent key and an explicit null both read the group default; the seed's group default is
+// the SOFT limit 7 (defaultMonthlyCap { preferred: 7 } - no hard group cap); "none" is the explicit no-limit; Burchett's
+// own cap is a hard 7 with no soft limit (an own hard cap never inherits the group's soft limit).
+// pin moved deliberately 10/11: Prompt 32 null = the group default (was "explicit null = no cap"), the group default is the soft 7 (was a hard 8), Burchett { primary: 7 } (was { primary: 8, preferred: 7 })
+eq([ctx.defaultCap, ctx.defaultPreferred], [null, 7], "Prompt 32: the seed's group default = no hard cap, soft limit 7 (ctx.defaultCap / ctx.defaultPreferred)");
+eq(R.monthlyCapFor(ctx, KHAN), { primary: null, preferred: 7, total: null }, "Prompt 32: Khan's explicit null = the group default (soft 7, no hard cap)");
+eq(R.monthlyCapFor(ctx, ACTON), { primary: null, preferred: 7, total: null }, "Prompt 32: Acton's explicit null = the group default (soft 7, no hard cap)");
+eq(R.monthlyCapFor(ctx, PHILIP), { primary: null, preferred: 7, total: null }, "absent = the group default (Prompt 32: the soft 7)");
+eq(R.monthlyCapFor(ctx, SARKAR), { primary: null, preferred: 7, total: null }, "absent = the group default (Prompt 32: the soft 7)");
+eq(R.monthlyCapFor(ctx, BURCHETT), { primary: 7, preferred: null, total: 7 }, "Prompt 32: Burchett { primary: 7 } = a hard 7 and no soft limit, plus the one-release total alias");
+eq(R.monthlyCapFor(ctx, FIERCE), { primary: 14, preferred: null, total: 14 }, "Fierce 14 hard, total alias = primary, no soft limit (Prompt 32: his own hard cap does not inherit the group's 7)");
 ok(ctx.per[FIERCE].countsEastDays === true, "seed: Fierce countsEastDays is boolean true");
 eq(ctx.per[FIERCE].eastPrimaryDays.size, 7, "K: eastPrimaryDays = the 7 days of his East PRIMARY week (derived Silvis backup 11/9-11/15) only");
 ok(ctx.per[FIERCE].eastPrimaryDays.has("2026-11-09") && ctx.per[FIERCE].eastPrimaryDays.has("2026-11-15") && !ctx.per[FIERCE].eastPrimaryDays.has("2026-12-09"), "K: the East BACKUP week (12/7-12/13, Silvis primary) is not an East primary-week day");
@@ -356,23 +360,27 @@ okElig(R.eligibility(clean, "2026-10-12", B, BURCHETT));
 blocked(R.eligibility(clean, "2026-10-18", P, BURCHETT), "unavailable-row");
 blocked(R.eligibility(clean, "2026-10-18", B, BURCHETT), "unavailable-row");
 blocked(R.eligibility(clean, "2026-10-13", P, BURCHETT), "whitelist-month");
-step("Burchett max consecutive 2 and preferred cap");
+step("Burchett max consecutive 2 and his hard cap 7");
 const bk = makeCtx({ schedule: { "2026-12-12": { primary: BURCHETT }, "2026-12-13": { primary: BURCHETT } } });
 blocked(R.eligibility(bk, "2026-12-14", P, BURCHETT), "max-consecutive:2");
 const bk14 = R.eligibility(bk, "2026-12-14", B, BURCHETT);
 okElig(bk14, "backup is not counted toward consecutive");
 hasSoft(bk14, "backup-after-primary");
-const bk7 = {};
-["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13", "2026-12-14"].forEach(d => { bk7[d] = { primary: BURCHETT }; });
+// pin moved deliberately 10/11: Prompt 32 Burchett's cap is { primary: 7 } (Faraz 10/11: a hard 7 for him, no preferred) -
+// was { primary: 8, preferred: 7 }: the 8th primary was eligible with over-preferred-cap:7 and the 9th blocked monthly-cap:8.
+const bk6 = {};
+["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13"].forEach(d => { bk6[d] = { primary: BURCHETT }; });
+const b7 = R.eligibility(makeCtx({ schedule: bk6 }), "2026-12-19", P, BURCHETT);
+okElig(b7, "Prompt 32: 6 primaries held, the 7th is within his hard 7");
+lacksSoft(b7, "over-preferred-cap", "Prompt 32: ...and carries no soft-limit term (his own hard cap has no soft limit and never inherits the group's 7)");
+const bk7 = Object.assign({}, bk6, { "2026-12-14": { primary: BURCHETT } });
 const bkc = makeCtx({ schedule: bk7 });
 const b8 = R.eligibility(bkc, "2026-12-19", P, BURCHETT);
-okElig(b8, "8th primary is within the cap");
-hasSoft(b8, "over-preferred-cap:7", "but above the preferred 7");
+blocked(b8, "monthly-cap:7", "Prompt 32: 7 primaries held, an 8th primary is over his hard 7");
+lacksSoft(b8, "over-preferred-cap", "Prompt 32: the hard block is the only cap reason (no soft limit of his own)");
 // 9/22 (Prompt 12 K): caps count PRIMARY days only - a backup never trips the cap or the preferred cap.
 lacksSoft(R.eligibility(bkc, "2026-12-19", B, BURCHETT), "over-preferred-cap", "K: 7 primaries held, a backup does not carry over-preferred-cap");
-bk7["2026-12-19"] = { primary: BURCHETT };
-blocked(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", P, BURCHETT), "monthly-cap:8", "8 primaries held, a 9th primary");
-okElig(R.eligibility(makeCtx({ schedule: bk7 }), "2026-12-20", B, BURCHETT), "K: 8 primaries held, a backup that month is still eligible (was monthly-cap:8 - caps counted both roles)");
+okElig(R.eligibility(bkc, "2026-12-19", B, BURCHETT), "K: 7 primaries held (his cap), a backup that month is still eligible (was monthly-cap - caps counted both roles)");
 step("K: backup days never count toward the monthly cap");
 const bkB = {};
 ["2026-12-01", "2026-12-05", "2026-12-06", "2026-12-09", "2026-12-12", "2026-12-13", "2026-12-14", "2026-12-19"].forEach(d => { bkB[d] = { backup: BURCHETT }; });
@@ -434,15 +442,27 @@ const tue10 = R.eligibility(clean, "2027-01-12", P, ACTON);
 // Tuesday a hard PRIMARY rule (surgeonRules.s3.hardNeverWeekdays ["Tue"], roles ["primary"]); the soft avoid left the seed.
 blocked(tue10, "hard-never-weekday:Tue", "X: Acton PRIMARY on an ungoverned Tuesday is hard");
 lacksSoft(R.eligibility(clean, "2027-01-17", P, ACTON), "recurring-avoid", "Sunday before the 3rd Monday is not avoided");
-okElig(R.eligibility(clean, "2027-01-04", B, ACTON), "no cap for Acton");
+okElig(R.eligibility(clean, "2027-01-04", B, ACTON), "a 1st Monday backup (nothing held: no cap or limit reached)");
 blocked(R.eligibility(clean, "2026-11-23", P, ACTON), "recurring-unavailable:Mon", "T then Y: a November 4th Monday carries the recurring reason");
 // Prompt 12 Y FLIP (9/22 evening): under T this line read has(..., "whitelist-month") (November governed for both roles by the
 // relayed list); Faraz ruled that list preferences, so the recurring reason now stands alone.
 lacks(R.eligibility(clean, "2026-11-23", P, ACTON).hard, "whitelist-month", "Y: ...and nothing else - November is his recurring rules again");
-step("Acton no cap (explicit null)");
+// pin moved deliberately 10/11: Prompt 32 Acton's explicit null now reads the group default - the soft 7 - instead of no cap
+step("Acton: explicit null = the group default (Prompt 32: the soft 7)");
 const ak = {};
 ["2026-11-02", "2026-11-03", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-16"].forEach(d => { ak[d] = { backup: ACTON }; });
-okElig(R.eligibility(makeCtx({ schedule: ak }), "2026-11-17", B, ACTON), "10th day: no monthly cap for Acton");
+okElig(R.eligibility(makeCtx({ schedule: ak }), "2026-11-17", B, ACTON), "10th backup day: backup days never count toward a monthly cap or limit");
+lacksSoft(R.eligibility(makeCtx({ schedule: ak }), "2026-11-17", B, ACTON), "over-preferred-cap", "...nor toward the soft limit");
+// January 2027 (ungoverned for him): six / seven assumed primaries on days his rules allow, then Thu 1/28
+const actJan6 = ["2027-01-04", "2027-01-06", "2027-01-08", "2027-01-14", "2027-01-18", "2027-01-21"].map(d => ({ date: d, role: P }));
+const actJan7 = actJan6.concat([{ date: "2027-01-25", role: P }]);
+const a7th = R.eligibility(clean, "2027-01-28", P, ACTON, { assume: actJan6 });
+okElig(a7th, "Prompt 32: Acton's 7th January primary is eligible");
+lacksSoft(a7th, "over-preferred-cap", "Prompt 32: 6 + 1 = 7 is at the group's soft limit, not over it");
+const a8th = R.eligibility(clean, "2027-01-28", P, ACTON, { assume: actJan7 });
+okElig(a8th, "Prompt 32: Acton's 8th January primary is still eligible - the group's 7 is soft (Faraz 10/11: no hard rule at 7)");
+eq(a8th.soft.filter(s => s.reason.indexOf("over-preferred-cap") === 0), [{ reason: "over-preferred-cap:7", weight: 3 }], "Prompt 32: ...with the soft over-preferred-cap:7 at medium (3)");
+eq(a8th.hard, [], "Prompt 32: no hard reason at 8 (no hard group cap)");
 
 /* ------------------------------------------------ Khan */
 step("Khan weekdays and East");
@@ -539,7 +559,8 @@ step("Philip backup caps");
 const pb = {};
 ["2026-12-07", "2026-12-08", "2026-12-09", "2026-12-10", "2026-12-11", "2026-12-12", "2026-12-13"].forEach(d => { pb[d] = { backup: PHILIP }; });
 blocked(R.eligibility(makeCtx({ schedule: pb }), "2026-12-21", B, PHILIP), "backup-cap:7");
-okElig(R.eligibility(makeCtx({ schedule: pb }), "2026-12-21", P, PHILIP), "the backup cap does not touch primary (8th day is within the group cap)");
+okElig(R.eligibility(makeCtx({ schedule: pb }), "2026-12-21", P, PHILIP), "the backup cap does not touch primary (no primary held - Prompt 32: far under the group's soft 7)");
+lacksSoft(R.eligibility(makeCtx({ schedule: pb }), "2026-12-21", P, PHILIP), "over-preferred-cap", "Prompt 32: 7 backups never count toward the soft limit");
 const pw = makeCtx({ schedule: { "2026-12-12": { backup: PHILIP } } });
 blocked(R.eligibility(pw, "2026-12-26", B, PHILIP), "backup-weekend-cap:1", "second backup weekend in the month");
 okElig(R.eligibility(pw, "2026-12-13", B, PHILIP), "same weekend counts once");
@@ -625,6 +646,70 @@ eq(R.monthlyCapFor(grCtx, PHILIP).primary, 8, "K: groupRules.defaultMonthlyCap {
 ok(grCtx.warnings.some(w => /defaultMonthlyCap\.total/.test(w)), "K: and warns about the legacy group key: " + JSON.stringify(grCtx.warnings));
 const legStr = clone(seed.surgeonRules); legStr[FIERCE].monthlyCap = { primary: 14, countsEastDays: "distinct-days" };
 ok(makeCtx({ schedule: {}, surgeonRules: legStr }).per[FIERCE].countsEastDays === true, "K: the legacy countsEastDays string 'distinct-days' still reads as true");
+
+step("Prompt 32 (Faraz 10/11): the cap reading - absent / null = the group default, \"none\" = no limit, a number = hard, an object = own hard + own soft, anything else = a warning and the default");
+// Every value on Acton (s3) against a group default; capRead = what monthlyCapFor reports without the total alias.
+const capRead = (c, id) => { const m = R.monthlyCapFor(c, id); return { primary: m.primary, preferred: m.preferred }; };
+const capCtx = (mc, dmc) => {
+  const sr = clone(SA.seedToSurgeonRules(seed));
+  if (mc === undefined) delete sr[ACTON].monthlyCap; else sr[ACTON].monthlyCap = mc;
+  const gr = clone(seed.groupRules);
+  if (dmc === undefined) delete gr.defaultMonthlyCap; else gr.defaultMonthlyCap = dmc;
+  return makeCtx({ schedule: {}, surgeonRules: sr, groupRules: gr });
+};
+const capWarn = (c) => c.warnings.filter(w => /monthlyCap/.test(w));
+// (a) under the seed's group default { preferred: 7 } (soft 7, no hard group cap)
+const G7 = { preferred: 7 };
+[
+  [undefined, { primary: null, preferred: 7 }, "absent key = the group default"],
+  [null, { primary: null, preferred: 7 }, "explicit null = the group default (was: no cap)"],
+  ["none", { primary: null, preferred: null }, "\"none\" = no limit at all (the explicit no-limit)"],
+  [5, { primary: 5, preferred: null }, "a number = that hard cap, no soft limit"],
+  [{ primary: 6 }, { primary: 6, preferred: null }, "an object with its own hard cap and no preferred: no soft limit (the group's 7 is not inherited)"],
+  [{ primary: 6, preferred: 4 }, { primary: 6, preferred: 4 }, "own hard + own soft"],
+  [{ preferred: 5 }, { primary: null, preferred: 5 }, "own soft only: the group's hard default (none) + the own soft 5"],
+  [{}, { primary: null, preferred: 7 }, "an empty object = the group default, soft limit included"],
+  [{ countsEastDays: true }, { primary: null, preferred: 7 }, "an object with neither number = the group default, soft limit included"],
+  [{ total: 6 }, { primary: 6, preferred: null }, "the legacy total is an own hard cap (warned): no soft limit inherited"],
+].forEach(([mc, want, msg]) => {
+  const c = capCtx(mc, G7);
+  eq(capRead(c, ACTON), want, "Prompt 32: monthlyCap " + JSON.stringify(mc) + " - " + msg);
+  if (!(mc && typeof mc === "object" && "total" in mc)) eq(capWarn(c), [], "Prompt 32: monthlyCap " + JSON.stringify(mc) + " is well formed - no warning");
+});
+eq(capCtx({}, G7).per[ACTON].countsEastDays, false, "an empty object counts no East days");
+eq(capCtx({ countsEastDays: true }, G7).per[ACTON].countsEastDays, true, "an object without numbers still carries countsEastDays");
+// anything else: a buildContext warning and the group default - never the silently-uncapped hole of the pre-32 reading
+["8", true, false, [], [8], "None", "no limit"].forEach((bad) => {
+  const c = capCtx(bad, G7);
+  eq(capRead(c, ACTON), { primary: null, preferred: 7 }, "Prompt 32: an unreadable monthlyCap " + JSON.stringify(bad) + " reads as the group default (was: silently uncapped)");
+  const w = capWarn(c);
+  ok(w.length === 1 && w[0].indexOf("surgeonRules." + ACTON + ".monthlyCap") === 0 && w[0].indexOf(JSON.stringify(bad)) >= 0 && /group default/.test(w[0]), "Prompt 32: ...with one warning naming the key and the value: " + JSON.stringify(w));
+});
+// the soft limit and the hard cap in eligibility(): soft over the group's 7, nothing for "none", hard at an own number
+const a7 = (c) => R.eligibility(c, "2027-01-28", P, ACTON, { assume: actJan7 });
+eq(a7(capCtx(null, G7)).soft.filter(s => /^over-preferred-cap/.test(s.reason)), [{ reason: "over-preferred-cap:7", weight: 3 }], "Prompt 32: null - the 8th primary carries the group's soft over-preferred-cap:7");
+okElig(a7(capCtx("none", G7)), "Prompt 32: \"none\" - the 8th primary is eligible");
+lacksSoft(a7(capCtx("none", G7)), "over-preferred-cap", "Prompt 32: \"none\" - ...with no soft-limit term");
+blocked(a7(capCtx(7, G7)), "monthly-cap:7", "Prompt 32: a number 7 - the 8th primary is hard-blocked");
+lacksSoft(a7(capCtx({ primary: 7 }, G7)), "over-preferred-cap", "Prompt 32: { primary: 7 } - no soft term besides the hard block");
+blocked(a7(capCtx({ primary: 7 }, G7)), "monthly-cap:7", "Prompt 32: { primary: 7 } - the 8th primary is hard-blocked");
+// (b) group default variants: hard + soft, the legacy hard-only shape, the legacy total, none at all, a malformed soft value
+const G97 = { primary: 9, preferred: 7 };
+eq([capRead(capCtx(null, G97), ACTON), capRead(capCtx(null, G97), PHILIP), capRead(capCtx(null, G97), BURCHETT), capRead(capCtx({ preferred: 5 }, G97), ACTON), capRead(capCtx({ countsEastDays: true }, G97), ACTON), capRead(capCtx("none", G97), ACTON)],
+  [{ primary: 9, preferred: 7 }, { primary: 9, preferred: 7 }, { primary: 7, preferred: null }, { primary: 9, preferred: 5 }, { primary: 9, preferred: 7 }, { primary: null, preferred: null }],
+  "Prompt 32: group { primary: 9, preferred: 7 } - null / absent take both, an own hard cap neither soft, an own soft keeps the group's hard, \"none\" neither");
+eq([capCtx(null, G97).defaultCap, capCtx(null, G97).defaultPreferred], [9, 7], "Prompt 32: ctx.defaultCap 9 / ctx.defaultPreferred 7");
+blocked(R.eligibility(capCtx(null, G97), "2027-01-28", P, ACTON, { assume: actJan7.concat(["2027-01-01", "2027-01-11"].map(d => ({ date: d, role: P }))) }), "monthly-cap:9", "Prompt 32: null under a group hard 9 - the 10th primary is hard-blocked");
+eq(capRead(capCtx(null, { primary: 8 }), ACTON), { primary: 8, preferred: null }, "Prompt 32: under the pre-32 group default { primary: 8 } an explicit null is capped at 8 (it was uncapped)");
+eq(capRead(capCtx(null, { total: 8 }), ACTON), { primary: 8, preferred: null }, "Prompt 32: the legacy group total still reads as the hard default");
+eq([capRead(capCtx(null, undefined), ACTON), capRead(capCtx(undefined, undefined), PHILIP), capCtx(null, undefined).defaultPreferred], [{ primary: null, preferred: null }, { primary: null, preferred: null }, null], "Prompt 32: no group default at all - null and absent mean no limit");
+eq(capWarn(capCtx(null, undefined)), [], "...and no warning");
+[0, -1, "7", true].forEach((badP) => {
+  const c = capCtx(null, { preferred: badP });
+  eq([c.defaultPreferred, capRead(c, ACTON)], [null, { primary: null, preferred: null }], "Prompt 32: a group soft limit " + JSON.stringify(badP) + " is not a positive number - no group soft limit");
+  ok(c.warnings.some(w => w.indexOf("groupRules.defaultMonthlyCap.preferred") === 0 && w.indexOf(JSON.stringify(badP)) >= 0), "Prompt 32: ...and buildContext warns about it: " + JSON.stringify(c.warnings));
+});
+eq(capWarn(capCtx(null, { preferred: null })), [], "Prompt 32: an explicit null group soft limit = none, no warning");
 
 /* ------------------------------------------------ holidays */
 /* ------------------------------------------------ Prompt 12 A (9/22): consecutive-day rules */
@@ -820,17 +905,23 @@ ok(xmasP.indexOf(SARKAR) < 0, "Sarkar is outside her window at Christmas");
 // both on his list) is still his to take.
 ok(xmasP.indexOf(BURCHETT) < 0, "Burchett is NOT a Christmas primary candidate (12/24 is off his explicit list): " + xmasP);
 ok(R.holidayUnitCandidates(clean, units[2], P).indexOf(BURCHETT) >= 0, "...but he is a New Year's primary candidate (12/31 and 1/1 are on it)");
-// unit-wide counting: Philip (group cap 8 primary days; the week of 12/21 is on his list) with 7 December PRIMARY days
-// already cannot take the 2-day Christmas unit as primary
+// unit-wide counting: Philip (the week of 12/21 is on his list) with 7 December PRIMARY days under a HARD cap of 8
+// cannot take the 2-day Christmas unit as primary.
+// pin moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 (no hard group cap), so the hard cap 8 the
+// unit is counted against is set on Philip here (monthlyCap: 8 - was the group default 8); under the seed's soft 7 he stays
+// a candidate and each unit day carries the soft term instead.
+const srPh8 = clone(SA.seedToSurgeonRules(seed)); srPh8[PHILIP].monthlyCap = 8;
 const bx = {};
 ["2026-12-07", "2026-12-08", "2026-12-09", "2026-12-10", "2026-12-21", "2026-12-22", "2026-12-28"].forEach(d => { bx[d] = { primary: PHILIP }; });
-ok(R.holidayUnitCandidates(makeCtx({ schedule: bx }), units[1], P).indexOf(PHILIP) < 0, "a 2-day unit is counted as a whole against the cap");
-ok(R.eligibility(makeCtx({ schedule: bx }), "2026-12-25", P, PHILIP).ok, "...even though each day alone would fit");
+ok(R.holidayUnitCandidates(makeCtx({ schedule: bx, surgeonRules: srPh8 }), units[1], P).indexOf(PHILIP) < 0, "a 2-day unit is counted as a whole against the (hard) cap");
+ok(R.eligibility(makeCtx({ schedule: bx, surgeonRules: srPh8 }), "2026-12-25", P, PHILIP).ok, "...even though each day alone would fit");
+ok(R.holidayUnitCandidates(makeCtx({ schedule: bx }), units[1], P).indexOf(PHILIP) >= 0, "Prompt 32: under the seed's soft 7 the same 7 days leave him a Christmas primary candidate (the group's limit is soft)");
+hasSoft(R.eligibility(makeCtx({ schedule: bx }), "2026-12-25", P, PHILIP, { assume: [{ date: "2026-12-24", role: P }] }), "over-preferred-cap:7", "Prompt 32: ...and the unit's second day carries the soft over-preferred-cap:7 (7 + 2 = 9)");
 // 9/22 (Prompt 12 K): the same 7 days held as BACKUP do not count - his candidacy for the primary unit is whatever it is with an empty December
 const bxB = {};
 Object.keys(bx).forEach(d => { bxB[d] = { backup: PHILIP }; });
-eq(R.holidayUnitCandidates(makeCtx({ schedule: bxB }), units[1], P).indexOf(PHILIP) >= 0, R.holidayUnitCandidates(clean, units[1], P).indexOf(PHILIP) >= 0, "K: 7 backup days held do not cost him the 2-day primary unit (was excluded by monthly-cap:8)");
-ok(R.holidayUnitCandidates(clean, units[1], P).indexOf(PHILIP) >= 0, "fixture: Philip is a Christmas primary candidate with an empty December (so the line above is a real check)");
+eq(R.holidayUnitCandidates(makeCtx({ schedule: bxB, surgeonRules: srPh8 }), units[1], P).indexOf(PHILIP) >= 0, R.holidayUnitCandidates(makeCtx({ schedule: {}, surgeonRules: srPh8 }), units[1], P).indexOf(PHILIP) >= 0, "K: 7 backup days held do not cost him the 2-day primary unit (was excluded by monthly-cap:8)");
+ok(R.holidayUnitCandidates(makeCtx({ schedule: {}, surgeonRules: srPh8 }), units[1], P).indexOf(PHILIP) >= 0, "fixture: Philip is a Christmas primary candidate with an empty December (so the line above is a real check)");
 
 /* ------------------------------------------------ external cover and locks */
 step("externalCover 2026-09-30");

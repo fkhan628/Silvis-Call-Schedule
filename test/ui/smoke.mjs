@@ -8626,20 +8626,28 @@ try {
           else if (diffWrites.length) fail(`${P24} group JSON: applying the group rules unchanged must not change them - ${diffWrites.length} blob write(s) carried other groupRules`);
           else ok(`${P24} group JSON: applied unchanged and saved -> no diff (${blobPatches(b0).length} blob write(s), none with other group rules)`);
           // (g2) an edit through the JSON editor shows in the form and is what Save writes
-          const capWas = g0.defaultMonthlyCap && typeof g0.defaultMonthlyCap.primary === "number" ? g0.defaultMonthlyCap.primary : 8;
-          const g1 = JSON.parse(JSON.stringify(g0)); g1.defaultMonthlyCap = Object.assign({}, g1.defaultMonthlyCap || {}, { primary: capWas + 1 }); delete g1.defaultMonthlyCap.total;
+          // pin moved deliberately 10/11: Prompt 32 the group default is the SOFT limit (defaultMonthlyCap.preferred, the seed's 7)
+          // plus an optional HARD cap (defaultMonthlyCap.primary, none in the seed) - two fields; the round trip moves both (it
+          // moved the hard cap alone and fell back to 8, a hard-coded value, when the blob had none)
+          const dmc0 = (g0.defaultMonthlyCap && typeof g0.defaultMonthlyCap === "object") ? g0.defaultMonthlyCap : {};
+          const prefWas = typeof dmc0.preferred === "number" ? dmc0.preferred : null;
+          const hardWas = typeof dmc0.primary === "number" ? dmc0.primary : (typeof dmc0.total === "number" ? dmc0.total : null);
+          const prefNew = (prefWas === null ? 7 : prefWas) + 1, hardNew = Math.max(hardWas === null ? 0 : hardWas, prefNew) + 1;
+          const shownCaps = async () => [await page.inputValue("[data-testid=group-default-cap-preferred]"), await page.inputValue("[data-testid=group-default-cap-primary]")];
+          const g1 = JSON.parse(JSON.stringify(g0)); g1.defaultMonthlyCap = Object.assign({}, dmc0, { preferred: prefNew, primary: hardNew }); delete g1.defaultMonthlyCap.total;
           await applyGroup(g1);
-          const capShown = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const capShown = await shownCaps();
           const s1r = await saveGroupAndFind(g1);
-          if (capShown !== String(capWas + 1)) fail(`${P24} group JSON: Apply JSON should put the default monthly cap ${capWas + 1} into the form, it shows '${capShown}'`);
+          if (JSON.stringify(capShown) !== JSON.stringify([String(prefNew), String(hardNew)])) fail(`${P24} group JSON: Apply JSON should put the group soft limit ${prefNew} and hard cap ${hardNew} into the form, it shows ${JSON.stringify(capShown)}`);
           else if (!s1r.hit) fail(`${P24} group JSON: Save group rules after the JSON edit should write groupRules = the edited JSON - ${s1r.n} write(s), last ${canon(s1r.last).slice(0, 300)}`);
-          else ok(`${P24} group JSON: an edit applied through the group JSON editor shows in the form (default cap ${capWas} -> ${capShown}) and Save writes exactly that groupRules`);
+          else ok(`${P24} group JSON: an edit applied through the group JSON editor shows in the form (soft limit ${prefWas} -> ${capShown[0]}, hard cap ${hardWas === null ? "none" : hardWas} -> ${capShown[1]}) and Save writes exactly that groupRules`);
           // (g3) the original back the same way
           await applyGroup(g0);
-          const capBack = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const capBack = await shownCaps();
           const s0r = await saveGroupAndFind(g0);
-          if (!s0r.hit || capBack !== String(capWas)) fail(`${P24} group JSON (restore): the original group rules should be back in the form (cap '${capBack}') and written unchanged - ${s0r.n} write(s), last ${canon(s0r.last).slice(0, 300)}`);
-          else ok(`${P24} group JSON (restore): the original group rules applied back (cap ${capBack}) and written unchanged`);
+          const wantBack = [prefWas === null ? "" : String(prefWas), hardWas === null ? "" : String(hardWas)];
+          if (!s0r.hit || JSON.stringify(capBack) !== JSON.stringify(wantBack)) fail(`${P24} group JSON (restore): the original group rules should be back in the form (soft / hard ${JSON.stringify(capBack)}, want ${JSON.stringify(wantBack)}) and written unchanged - ${s0r.n} write(s), last ${canon(s0r.last).slice(0, 300)}`);
+          else ok(`${P24} group JSON (restore): the original group rules applied back (soft / hard ${JSON.stringify(capBack)}) and written unchanged`);
           await page.click("[data-testid=rules-advanced-toggle]");
         } catch (e) { fail(`${P24} group JSON: ` + errLine(e)); }
       }

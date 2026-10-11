@@ -599,10 +599,16 @@ function buildContext(input) {
   // 9/22 (Prompt 12 K): the group default cap is on PRIMARY days per month
   // (groupRules.defaultMonthlyCap.primary). The pre-K key 'total' is read as an
   // alias (one warning) so an older blob keeps its cap until Setup rewrites it.
+  // Prompt 32 (Faraz 10/11): the group default is { primary (HARD, optional),
+  // preferred (SOFT, optional) } - the seed's is { preferred: 7 }: 7 is the group's
+  // soft monthly primary limit, not a hard rule. A preferred that is not a positive
+  // number is ignored with one warning (no group soft limit).
   var dmc = groupRules.defaultMonthlyCap;
-  var defaultCap = null, defaultCapLegacy = false;
+  var defaultCap = null, defaultCapLegacy = false, defaultPreferred = null, defaultPreferredBad = false;
   if (dmc && typeof dmc.primary === "number") defaultCap = dmc.primary;
   else if (dmc && typeof dmc.total === "number") { defaultCap = dmc.total; defaultCapLegacy = true; }
+  if (dmc && typeof dmc.preferred === "number" && isFinite(dmc.preferred) && dmc.preferred > 0) defaultPreferred = dmc.preferred;
+  else if (dmc && typeof dmc === "object" && dmc.preferred !== undefined && dmc.preferred !== null) defaultPreferredBad = true;
   // Prompt 23 B4: the day the placement is made (the hardNeverWeekdays notice is measured from it) -
   // input.today, else the Central date now (the one clock read; see the header). A malformed value
   // warns below and falls back the same way.
@@ -634,7 +640,8 @@ function buildContext(input) {
     aledoDayBeforeRoles: dayBefore.aledoDayBeforeRoles || ["primary"],
     countBackupInConsecutive: !!groupRules.countBackupInConsecutive,
     defaultMaxConsecutive: typeof groupRules.defaultMaxConsecutiveDays === "number" ? groupRules.defaultMaxConsecutiveDays : 2,
-    defaultCap: defaultCap,        // PRIMARY days per month for a surgeon without a monthlyCap key (null = none)
+    defaultCap: defaultCap,        // HARD cap on PRIMARY days per month for a surgeon on the group default - no key or null (null = none)
+    defaultPreferred: defaultPreferred, // Prompt 32: the group's SOFT limit on the same count (null = none; the seed's 7)
     backupDistinct: groupRules.backupDistinctFromPrimary !== false,
     backupOpen: backupOpen,
     rangeStart: input.rangeStart || null,
@@ -656,6 +663,7 @@ function buildContext(input) {
   if (heldBad) ctx.warnings.push("heldSchedule is not a { 'YYYY-MM-DD': row } object (review 2, 10/1): read as nothing held - every Tue/Thu inside a hardNeverWeekdays notice is judged as a new placement");
   if (todayIn !== undefined && todayIn !== null && !todayOk) ctx.warnings.push("today " + JSON.stringify(todayIn) + " is not a 'YYYY-MM-DD' date (Prompt 23): read as the Central date " + today + " - the hardNeverWeekdays notice is measured from it");
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
+  if (defaultPreferredBad) ctx.warnings.push("groupRules.defaultMonthlyCap.preferred = " + JSON.stringify(dmc.preferred) + " is not a positive number (Prompt 32): ignored - the group has no soft monthly limit; set it in Setup -> Rules");
   // audit RG-1 (9/23): "anyone not opted out may cover a holiday" is fixed behaviour - the opt-out is
   // surgeonRules.<id>.holidayRules.holidaysOff (hard holiday-opt-out:<name>), the waiver family is
   // holidays.ignoreWeekdayRules; eligibility() never read the former group key. Warn so the blob can drop it.
@@ -751,8 +759,8 @@ function buildContext(input) {
       // backup, silvisRole "backup") - the East days a countsEastDays cap adds.
       // A busy-day set (Khan's) is never added to anyone's cap.
       eastPrimaryDays: new Set(),
-      capPrimary: null,             // cap on PRIMARY days per calendar month (null = none)
-      capPreferred: null,           // soft ceiling on the same count
+      capPrimary: null,             // HARD cap on PRIMARY days per calendar month (null = none)
+      capPreferred: null,           // SOFT limit on the same count (null = none; Prompt 32: the group's 7 for a surgeon on the default)
       countsEastDays: false,        // add eastPrimaryDays of the month to the primary count
       maxConsec: typeof rules.maxConsecutiveDays === "number" ? rules.maxConsecutiveDays : ctx.defaultMaxConsecutive,
       // 9/22 (Prompt 12 A): the any-role SOFT limit (null = no soft check; there is no
@@ -884,27 +892,39 @@ function buildContext(input) {
     if (typeof hr.maxMajorHolidays === "number") P.maxMajor = hr.maxMajorHolidays;
     else if (rules.preferences && typeof rules.preferences.maxMajorHolidays === "number") P.maxMajor = rules.preferences.maxMajorHolidays;
 
-    // monthlyCap semantics (9/22, Prompt 12 K - caps count PRIMARY days only):
-    // explicit null = no cap; absent = group default; a number = that many primary
-    // days; an object = { primary, preferred, countsEastDays }. The pre-K key
-    // 'total' is an alias of 'primary' (one warning per surgeon); the pre-K
-    // countsEastDays string "distinct-days" reads as true.
-    if (Object.prototype.hasOwnProperty.call(rules, "monthlyCap")) {
-      var mc = rules.monthlyCap;
-      if (mc === null) P.capPrimary = null;
-      else if (typeof mc === "number") P.capPrimary = mc;
-      else if (mc && typeof mc === "object") {
-        if (typeof mc.primary === "number") P.capPrimary = mc.primary;
-        else if (typeof mc.total === "number") {
-          P.capPrimary = mc.total;
-          ctx.warnings.push("surgeonRules." + id + ".monthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as monthlyCap.primary = " + mc.total + " (a cap on PRIMARY days per month) - rename it in Setup");
-        } else P.capPrimary = ctx.defaultCap;
-        P.capPreferred = typeof mc.preferred === "number" ? mc.preferred : null;
-        P.countsEastDays = mc.countsEastDays === true || mc.countsEastDays === "distinct-days";
-        if (mc.countsEastDays && !P.countsEastDays) ctx.warnings.push("surgeonRules." + id + ".monthlyCap.countsEastDays = " + JSON.stringify(mc.countsEastDays) + " is not true - ignored (use true)");
+    // monthlyCap semantics (9/22, Prompt 12 K - caps count PRIMARY days only;
+    // Prompt 32, Faraz 10/11 - null is the group default, "none" the explicit no-limit):
+    //   absent or null -> the group default: capPrimary = ctx.defaultCap (hard),
+    //                     capPreferred = ctx.defaultPreferred (soft)
+    //   "none"         -> no limit at all (both null)
+    //   a number N     -> a hard N, no soft limit
+    //   an object      -> { primary, preferred, countsEastDays }: an own hard cap
+    //                     (primary; the pre-K key 'total' is its alias, one warning
+    //                     per surgeon) or else the group's hard default; an own soft
+    //                     limit (preferred), else the group's soft limit ONLY when the
+    //                     object has no hard cap of its own (Fierce's 14 and
+    //                     Burchett's 7 have no soft limit). The pre-K countsEastDays
+    //                     string "distinct-days" reads as true.
+    //   anything else  -> one warning and the group default (a string, a boolean or
+    //                     an array was silently uncapped before Prompt 32)
+    var mc = Object.prototype.hasOwnProperty.call(rules, "monthlyCap") ? rules.monthlyCap : undefined;
+    if (mc === undefined || mc === null) { P.capPrimary = ctx.defaultCap; P.capPreferred = ctx.defaultPreferred; }
+    else if (mc === "none") { P.capPrimary = null; P.capPreferred = null; }
+    else if (typeof mc === "number") { P.capPrimary = mc; P.capPreferred = null; }
+    else if (typeof mc === "object" && !Array.isArray(mc)) {
+      var ownCap = null;
+      if (typeof mc.primary === "number") ownCap = mc.primary;
+      else if (typeof mc.total === "number") {
+        ownCap = mc.total;
+        ctx.warnings.push("surgeonRules." + id + ".monthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as monthlyCap.primary = " + mc.total + " (a cap on PRIMARY days per month) - rename it in Setup");
       }
+      P.capPrimary = ownCap !== null ? ownCap : ctx.defaultCap;
+      P.capPreferred = typeof mc.preferred === "number" ? mc.preferred : (ownCap === null ? ctx.defaultPreferred : null);
+      P.countsEastDays = mc.countsEastDays === true || mc.countsEastDays === "distinct-days";
+      if (mc.countsEastDays && !P.countsEastDays) ctx.warnings.push("surgeonRules." + id + ".monthlyCap.countsEastDays = " + JSON.stringify(mc.countsEastDays) + " is not true - ignored (use true)");
     } else {
-      P.capPrimary = ctx.defaultCap;
+      P.capPrimary = ctx.defaultCap; P.capPreferred = ctx.defaultPreferred;
+      ctx.warnings.push("surgeonRules." + id + ".monthlyCap = " + JSON.stringify(mc) + " is not a number, an object or \"none\" (Prompt 32): read as the group default (" + (ctx.defaultCap !== null ? "hard " + ctx.defaultCap : "no hard cap") + ", " + (ctx.defaultPreferred !== null ? "soft " + ctx.defaultPreferred : "no soft limit") + " primary days a month) - fix it in Setup -> Rules");
     }
 
     // Whitelist of weeks (Philip): governs from the first day of the month of the
@@ -1782,6 +1802,10 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // The check applies to a PRIMARY placement only: a backup placement never trips
   // monthly-cap or over-preferred-cap, and backup days never count. An explicit
   // backup cap (rules.backupCap, Philip) is the separate block below.
+  // Prompt 32 (10/11): over the HARD cap (P.capPrimary) -> hard monthly-cap:N; else
+  // over the SOFT limit (P.capPreferred - the group's 7 for a surgeon on the default)
+  // -> soft over-preferred-cap:N at medium. The shape is unchanged; only buildContext's
+  // reading of monthlyCap moved (null = the group default, "none" = no limit).
   // A numeric surgeonRules.<id>.monthlyTarget is a PRIMARY target (Prompt 12 J,
   // small items 9/22): its soft over/under-target term below measures the same
   // monthPrimary count as the cap and applies to a primary placement only - a
@@ -2320,6 +2344,9 @@ function talliesFor(ctx, surgeonId, month) {
 // 9/22 (Prompt 12 K): the cap is on PRIMARY days per month. 'total' is kept equal
 // to 'primary' for ONE release so a UI caller mid-edit does not break; new code
 // reads .primary. Remove 'total' with the next release.
+// Prompt 32 (10/11): primary = the HARD cap, preferred = the SOFT limit, each as
+// buildContext resolved it (a surgeon on the group default - no key or null - gets
+// the group's: the seed's { preferred: 7 } reads { primary: null, preferred: 7 }).
 function monthlyCapFor(ctx, surgeonId) {
   var P = ctx.per[surgeonId];
   var primary = P ? P.capPrimary : null;

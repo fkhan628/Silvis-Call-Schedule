@@ -333,7 +333,7 @@ function project(ctx) {
   Object.keys(ctx.schedule).sort().forEach((d) => { const s = ctx.schedule[d]; sched[d] = { p: s.primary, b: s.backup, pl: s.primaryLocked, bl: s.backupLocked, x: s.externalCover }; });
   // ctx.weights is groupRules.weights copied wholesale (rules.js buildContext); the seed's copy carries a documentation
   // `note` string the importer drops from the blob and rules.js never reads - compared minus note-like keys.
-  return { per, sched, units: ctx.holidayUnitsAll, active: ctx.activeIds, weights: stripNoteKeys(ctx.weights), defaultCap: ctx.defaultCap };
+  return { per, sched, units: ctx.holidayUnitsAll, active: ctx.activeIds, weights: stripNoteKeys(ctx.weights), defaultCap: ctx.defaultCap, defaultPreferred: ctx.defaultPreferred };
 }
 // Prompt 23 B4 (9/30): the app passes no today (rules.js reads the Central date); the comparison pins the adapter's fixed
 // today on both sides so the hardNeverWeekdays notice never makes the two ctx differ with the calendar
@@ -343,8 +343,12 @@ const testCtx = R.buildContext(SA.seedToContextInput(seed));
 eq(IMP.impCanon(project(appCtx)), IMP.impCanon(project(testCtx)), "same per-surgeon precompute, schedule and holiday units");
 // the cap pin is not vacuous: the projected fields carry the seed's real values (never undefined on both sides)
 // and a perturbed copy of one side no longer compares equal
-eq([project(appCtx).per[FIERCE].capPrimary, project(appCtx).per[FIERCE].countsEastDays, project(appCtx).per[BURCHETT].capPrimary, project(appCtx).per[BURCHETT].capPreferred, project(appCtx).per[KHAN].capPrimary],
-  [14, true, 8, 7, null], "projection carries capPrimary / capPreferred / countsEastDays from the imported rules (K)");
+// pin moved deliberately 10/11: Prompt 32 Burchett { primary: 7 } (was 8 / 7); Khan's null = the group default - no hard cap,
+// the soft 7 (his capPreferred was null); the group default itself rides in the projection (defaultCap null, defaultPreferred 7)
+eq([project(appCtx).per[FIERCE].capPrimary, project(appCtx).per[FIERCE].countsEastDays, project(appCtx).per[BURCHETT].capPrimary, project(appCtx).per[BURCHETT].capPreferred, project(appCtx).per[KHAN].capPrimary, project(appCtx).per[KHAN].capPreferred, project(appCtx).defaultCap, project(appCtx).defaultPreferred],
+  [14, true, 7, null, null, 7, null, 7], "projection carries capPrimary / capPreferred / countsEastDays and the group default from the imported rules (K; Prompt 32)");
+const perturbedPref = project(appCtx); perturbedPref.per[KHAN].capPreferred = null;
+ok(IMP.impCanon(perturbedPref) !== IMP.impCanon(project(testCtx)), "a perturbed capPreferred on one side breaks the round-trip pin (non-vacuous, Prompt 32)");
 ok(Object.keys(project(appCtx).per).every((id) => typeof project(appCtx).per[id].eastPrimaryDays === "number"), "projection carries eastPrimaryDays.size");
 const perturbedProj = project(appCtx); perturbedProj.per[FIERCE].capPrimary = 13;
 ok(IMP.impCanon(perturbedProj) !== IMP.impCanon(project(testCtx)), "a perturbed capPrimary on one side breaks the round-trip pin (non-vacuous)");
@@ -1823,7 +1827,10 @@ step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule
   const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/fold-jan-jun/.test(t));
   const revVg930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
   eq([revAfter929.length, revVg930.length], [1, 1], "9/29: one 9/30 fold entry and one 9/30 vacation-guard entry");
-  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0]), seed._meta.revisions.indexOf(revVg930[0])], [seed._meta.revisions.length - 5, seed._meta.revisions.length - 4, seed._meta.revisions.length - 3], "9/29: the 9/29 entry sits right before the 9/30 fold entry, which sits right before the 9/30 vacation-guard entry (then Prompt 23's, then Prompt 25's - the last)");
+  // pin moved deliberately 10/11 (Prompt 32, the caps): the seed's 10/11 entry (feat/backup-weight-cap) is appended last, so
+  // the three entries move one place up. Kept intent: the 9/29, fold and vacation-guard entries in order, then Prompt 23's,
+  // Prompt 25's and the 10/11 entry - nothing appended between them, none moved.
+  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0]), seed._meta.revisions.indexOf(revVg930[0])], [seed._meta.revisions.length - 6, seed._meta.revisions.length - 5, seed._meta.revisions.length - 4], "9/29: the 9/29 entry sits right before the 9/30 fold entry, which sits right before the 9/30 vacation-guard entry (then Prompt 23's, Prompt 25's, then the 10/11 entry - the last)");
   // pin moved deliberately 10/1 (Prompt 23 merged after Prompt 27): a THIRD 9/30 entry (feat/khan-weekdays) follows the
   // vacation-guard entry, so the three entries pinned above move one place up. Kept intent: the 9/29, fold and vacation-guard
   // entries still sit back to back (nothing appended between them, none moved); the step for Prompt 23 pins its entry as the last.
@@ -1872,14 +1879,16 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   // kept intent - one fold entry, the vacation-guard entry right after it, seedLastRevision 2026-09-30
   // pin moved deliberately 10/1 (Prompt 25 merged after Prompt 23): a fourth entry dated 2026-09-30 (feat/holiday-plan) is the last
   eq(seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t)).length, 4, "9/30: four entries dated 2026-09-30 - the fold, the vacation guard (Prompt 27), Prompt 23 and Prompt 25 (the holiday plan)");
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 4]], ["2026-09-30", rev930[0]], "9/30: it is three entries before the last (the vacation-guard entry, Prompt 23's, then Prompt 25's), and seedLastRevision reads 2026-09-30");
-  eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
+  // pin moved deliberately 10/11 (Prompt 32, the caps): the 10/11 entry is appended last - the fold entry is four before it
+  // and seedLastRevision reads 2026-10-11
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 5]], ["2026-10-11", rev930[0]], "9/30: it is four entries before the last (the vacation-guard entry, Prompt 23's, Prompt 25's, then the 10/11 entry), and seedLastRevision reads 2026-10-11");
+  eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-10-11", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev930[0]) && IMP.impFindContactValues(rev930[0]).length === 0, "9/30: the entry carries no amount and no contact-like value");
   ok(/Jan 2027 - Jun 2027/.test(rev930[0]) && /Feb 2027 - Apr 2027/.test(rev930[0]) && /lengthMonths 3 -> 6/.test(rev930[0]) && /remindDaysBeforeClose \[42, 14, 3\] -> \[14, 3\]/.test(rev930[0]) && /noticeDaysBeforeClose 42 -> 14/.test(rev930[0]) && /seedCoreHash moves/.test(rev930[0]), "9/30: the entry names the fold, the three moved keys and the core-hash move");
   // groupRules is a core key: the block moves the seed's core hash (against the 9/27 block, without the 9/30 entry)
   const seedPre930 = clone(seed);
   seedPre930.groupRules.offerPeriods = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [42, 14, 3], noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 };
-  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-09-30 /.test(t));   // both 9/30 entries (the fold, the vacation guard)
+  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-(09-30|10-11) /.test(t));   // the 9/30 entries (the fold, the vacation guard, ...) and the later 10/11 entry (pin moved deliberately 10/11: Prompt 32, the caps)
   delete seedPre930.groupRules.vacations;   // Prompt 27: the pre-9/30 seed has no vacations block either (the step below pins that block on its own)
   const planPre930 = IMP.importPlan(seedPre930, { now: NOW });
   ok(plan.blob.settings.seedCoreHash !== planPre930.blob.settings.seedCoreHash, "9/30: the block moves the seed's core hash (groupRules is a core key)");
@@ -1905,13 +1914,13 @@ step("9/30 (Prompt 27): groupRules.vacations reaches the blob as data - the rule
   const revVg = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
   eq(revVg.length, 1, "Prompt 27: one _meta.revisions entry for the vacation guard, dated 2026-09-30");
   // pin moved deliberately 10/1 (Prompt 23 merged after Prompt 27): Prompt 23's 9/30 entry follows this one and is the last
-  eq([seed._meta.revisions.indexOf(revVg[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 3, "2026-09-30", seed._meta.revisions.length], "Prompt 27: it is two entries before the last (Prompt 23's, then Prompt 25's - pin moved deliberately 10/1); seedLastRevision reads 2026-09-30 and seedRevisionCount counts it");
+  eq([seed._meta.revisions.indexOf(revVg[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 4, "2026-10-11", seed._meta.revisions.length], "Prompt 27: it is three entries before the last (Prompt 23's, Prompt 25's - pin moved deliberately 10/1 - then the 10/11 entry, pin moved deliberately 10/11: Prompt 32, the caps); seedLastRevision reads 2026-10-11 and seedRevisionCount counts it");
   ok(/groupRules\.vacations/.test(revVg[0]) && /minSurgeonsAround: 2/.test(revVg[0]) && /VACATION_GUARD_DEFAULTS/.test(revVg[0]) && /time_off_vacation_guard/.test(revVg[0]) && /seedCoreHash moves/.test(revVg[0]), "Prompt 27: the entry names the block, the code default, the trigger and the core-hash move");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(revVg[0]) && IMP.impFindContactValues(revVg[0]).length === 0, "Prompt 27: the entry carries no amount and no contact-like value");
   const seedNoVg = clone(seed); delete seedNoVg.groupRules.vacations; seedNoVg._meta.revisions = seedNoVg._meta.revisions.filter((t) => t !== revVg[0]);
   const planNoVg = IMP.importPlan(seedNoVg, { now: NOW });
   ok(plan.blob.settings.seedCoreHash !== planNoVg.blob.settings.seedCoreHash, "Prompt 27: the block moves the seed's core hash (groupRules is a core key)");
-  eq([planNoVg.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount - planNoVg.blob.settings.seedRevisionCount], ["2026-09-30", 1], "Prompt 27: without the entry the last revision is still 2026-09-30 (the fold) and the count is one less");
+  eq([planNoVg.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount - planNoVg.blob.settings.seedRevisionCount], ["2026-10-11", 1], "Prompt 27: without the entry the last revision is still 2026-10-11 (the 10/11 entry - pin moved deliberately 10/11: Prompt 32, the caps) and the count is one less");
   eq(H.vacationRules(planNoVg.blob.groupRules), { minSurgeonsAround: 2 }, "Prompt 27: a blob without the block reads the same minimum (the code default)");
   eq(IMP.planDiff(plan, { blob: clone(planNoVg.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) }).tables.call_schedule_data.keys,
     { roster: "unchanged", surgeonRules: "unchanged", groupRules: "update", holidays: "unchanged", settings: "update" }, "Prompt 27: against the blob without the block only groupRules (the block) and settings update");
@@ -1930,8 +1939,9 @@ step("9/30 (Prompt 23): Khan's new call preferences + Acton's 2027 outreach days
   const rev23 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/khan-weekdays/.test(t));
   eq(rev23.length, 1, "Prompt 23: one _meta.revisions entry (branch feat/khan-weekdays)");
   // pin moved deliberately 10/1 (Prompt 25 merged after Prompt 23): the holiday-plan entry follows this one and is the last
-  eq([seed._meta.revisions[seed._meta.revisions.length - 2], /feat\/holiday-plan/.test(seed._meta.revisions[seed._meta.revisions.length - 1])], [rev23[0], true], "Prompt 23: it is the entry right before the last (Prompt 25's holiday plan)");
-  eq([plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], ["2026-09-30", seed._meta.revisions.length], "Prompt 23: seedLastRevision stays 2026-09-30, the count includes the entry");
+  // pin moved deliberately 10/11 (Prompt 32, the caps): the 10/11 entry follows Prompt 25's and is the last
+  eq([seed._meta.revisions[seed._meta.revisions.length - 3], /feat\/holiday-plan/.test(seed._meta.revisions[seed._meta.revisions.length - 2]), /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap/.test(seed._meta.revisions[seed._meta.revisions.length - 1])], [rev23[0], true, true], "Prompt 23: it is the entry right before Prompt 25's holiday plan, which is right before the last (the 10/11 entry)");
+  eq([plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], ["2026-10-11", seed._meta.revisions.length], "Prompt 23: seedLastRevision reads 2026-10-11 (the 10/11 entry, pin moved deliberately 10/11: Prompt 32, the caps), the count includes the entry");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev23[0]) && IMP.impFindContactValues(rev23[0]).length === 0 && !DENY.test(rev23[0]), "Prompt 23: the entry carries no amount, no contact-like value and no denylist word");
   ok(/primaryContribution weekends -> weekdays/.test(rev23[0]) && /standaloneFriday/.test(rev23[0]) && /noLoneWeekendDay/.test(rev23[0]) && /weekendCap/.test(rev23[0]) && /hardNeverWeekdaysNoticeDays 56/.test(rev23[0]) && /recurringUnavailable dated/.test(rev23[0]) && /seedCoreHash moves/.test(rev23[0]), "Prompt 23: the entry names the five Khan keys, Acton's dated patterns and the core-hash move");
   // surgeonRules is a core key: against the pre-Prompt-23 rules only surgeonRules and settings update
@@ -1947,6 +1957,36 @@ step("9/30 (Prompt 23): Khan's new call preferences + Acton's 2027 outreach days
     { roster: "unchanged", surgeonRules: "update", groupRules: "unchanged", holidays: "unchanged", settings: "update" }, "Prompt 23: against the pre-Prompt-23 blob only surgeonRules and settings update - no row of any table");
   const dRows = IMP.planDiff(plan, { blob: clone(planPre23.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) });
   eq([dRows.tables.schedule_days.insert + dRows.tables.schedule_days.update, dRows.tables.availability.insert, dRows.tables.time_off.insert, dRows.totalDeletes], [0, 0, 0, 0], "Prompt 23: no schedule_days / availability / time_off row moves (future generation only)");
+}
+
+step("10/11 (Prompt 32 step 3): the caps reach the blob as rules only - group default { preferred: 7 } (soft), Burchett { primary: 7 }, Khan / Acton null = the group default; the 2026-10-11 entry, the last");
+{
+  // Faraz 10/11: 7 is the group's SOFT monthly primary limit, not a hard rule; monthlyCap null and an absent key both mean the
+  // group default; "none" is the explicit no-limit; Burchett's own cap is a hard 7. Data only - no schedule, lock or period row.
+  const S = plan.blob.surgeonRules;
+  eq(plan.blob.groupRules.defaultMonthlyCap, { preferred: 7 }, "Prompt 32: blob groupRules.defaultMonthlyCap = { preferred: 7 } (soft, no hard group cap)");
+  ok(!("defaultMonthlyCapNote" in plan.blob.groupRules), "Prompt 32: the group note stays out of the blob");
+  eq([S[KHAN].monthlyCap, S[BURCHETT].monthlyCap, S[ACTON].monthlyCap, "monthlyCap" in S[PHILIP], S[FIERCE].monthlyCap, "monthlyCap" in S.s6], [null, { primary: 7 }, null, false, { primary: 14, countsEastDays: true }, false], "Prompt 32: blob caps - Khan null, Burchett { primary: 7 }, Acton null, Philip / Sarkar no key, Fierce unchanged (notes dropped)");
+  ok(![KHAN, BURCHETT, ACTON, PHILIP].some((id) => "monthlyCapNote" in S[id]), "Prompt 32: no monthlyCapNote reaches the blob");
+  const rev1011 = seed._meta.revisions.filter((t) => /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap/.test(t));
+  eq(rev1011.length, 1, "Prompt 32: one _meta.revisions entry dated 2026-10-11 (branch feat/backup-weight-cap)");
+  eq([seed._meta.revisions.indexOf(rev1011[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 1, "2026-10-11", seed._meta.revisions.length], "Prompt 32: it is the last entry; seedLastRevision reads 2026-10-11 and seedRevisionCount counts it");
+  ok(/defaultMonthlyCap \{ primary: 8 \} -> \{ preferred: 7 \}/.test(rev1011[0]) && /s2\.monthlyCap \{ primary: 8, preferred: 7 \} -> \{ primary: 7 \}/.test(rev1011[0]) && /null = the group default/.test(rev1011[0]) && /"none"/.test(rev1011[0]) && /seedCoreHash moves/.test(rev1011[0]), "Prompt 32: the entry names the group default, Burchett's cap, the null reading, \"none\" and the core-hash move");
+  ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev1011[0]) && IMP.impFindContactValues(rev1011[0]).length === 0 && !DENY.test(rev1011[0]), "Prompt 32: the entry carries no amount, no contact-like value and no denylist word");
+  ok(!DENY.test(JSON.stringify([seed.groupRules.defaultMonthlyCapNote, seed.surgeonRules[KHAN].monthlyCapNote, seed.surgeonRules[BURCHETT].monthlyCapNote, seed.surgeonRules[ACTON].monthlyCapNote, seed.surgeonRules[PHILIP].monthlyCapNote])), "Prompt 32: the cap notes carry no denylist word");
+  ok(seed.openQuestions.some((t) => /^5\. Philip's monthly cap/.test(t) && /soft limit of 7/.test(t) && !/\b8 PRIMARY\b/.test(t)), "Prompt 32: open question 5 (Philip's cap) reads the group's soft 7, not the old hard 8");
+  ok(seed.answeredQuestions.some((t) => /Prompt 32/.test(t) && /Faraz 10\/11/.test(t) && /soft/.test(t)), "Prompt 32: answeredQuestions records the 10/11 decision");
+  // surgeonRules and groupRules are core keys: against the pre-Prompt-32 caps only those two and settings update - no row of any table
+  const seedPre32 = clone(seed);
+  seedPre32.groupRules.defaultMonthlyCap = { primary: 8 };
+  seedPre32.surgeonRules[BURCHETT].monthlyCap = { primary: 8, preferred: 7 };
+  seedPre32._meta.revisions = seedPre32._meta.revisions.filter((t) => t !== rev1011[0]);
+  const planPre32 = IMP.importPlan(seedPre32, { now: NOW });
+  ok(plan.blob.settings.seedCoreHash !== planPre32.blob.settings.seedCoreHash, "Prompt 32: the caps move the seed's core hash");
+  eq(planPre32.blob.settings.seedLastRevision, "2026-09-30", "Prompt 32: without the entry the last revision is 9/30's (Prompt 25)");
+  const d32 = IMP.planDiff(plan, { blob: clone(planPre32.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) });
+  eq(d32.tables.call_schedule_data.keys, { roster: "unchanged", surgeonRules: "update", groupRules: "update", holidays: "unchanged", settings: "update" }, "Prompt 32: against the pre-32 blob only surgeonRules, groupRules and settings update");
+  eq([d32.tables.schedule_days.insert + d32.tables.schedule_days.update, d32.tables.availability.insert, d32.tables.time_off.insert, d32.totalDeletes], [0, 0, 0, 0], "Prompt 32: no schedule_days / availability / time_off row moves");
 }
 
 console.log("ok " + n + " assertions");

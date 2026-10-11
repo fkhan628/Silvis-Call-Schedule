@@ -2985,6 +2985,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // the fallback: a softTag-only code reads its tag through reasonLabel; an unknown code and "not available" pass through
     assert.strictEqual(L.reasonLabel("back-to-back-weekend", nameOf), "back-to-back weekend");
     assert.strictEqual(L.reasonLabel("over-target:2", nameOf), "over target +2");
+    // Prompt 32 (Faraz 10/11): the preferred cap is the SOFT limit (the group's 7) - the tag and the label say so
+    assert.strictEqual(L.softTag({ reason: "over-preferred-cap:7", weight: 3 }), "over soft limit 7", "over-preferred-cap tag (was 'over preferred cap 7')");
+    assert.strictEqual(L.reasonLabel("over-preferred-cap:7", nameOf), "over soft limit 7", "over-preferred-cap label");
     assert.strictEqual(L.reasonLabel("no-such-code:x", nameOf), "no-such-code:x");
     assert.strictEqual(L.reasonLabel("not available", nameOf), "not available");
     // words that were there stay as they were (REASON_WORDS and the explicit cases win over the fallback)
@@ -4373,14 +4376,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
     const words = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules);
     const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."), JSON.stringify(k)); /* Prompt 23 B4 (9/30): was "Never primary on Tue, Thu." - the notice key says how far ahead the rule is hard. Prompt 24 review 2 (10/1): was "...; further ahead only as a last resort." - wrong vs the engine (beyond the notice the soft +3 cancels the -3 weekday bonus: a far Tue/Thu competes with a colleague on equal terms, behind his own Mon/Wed) */ assert.ok(H.offerRulesWords(seed.surgeonRules.s1, Object.assign({}, seed.groupRules, { weights: Object.assign({}, seed.groupRules.weights, { hardNeverBeyondNotice: 0 }) })).some(s => s === "Never primary on Tue, Thu within 56 days; allowed further ahead."), "a 0 weight names no penalty (rules.js adds none)"); assert.ok(!k.some(s => /last resort/.test(s)), "no 'last resort'"); assert.ok(k.some(s => s === "Preferred: weekday primary (Mon-Thu, or a Friday on its own).") && k.some(s => s === "Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun - never a Saturday or Sunday alone.") && k.some(s => s === "At most 2 weekends a month, East weekends included (preferred, not a hard limit)."), "Prompt 23 B1-B3 in his words: " + JSON.stringify(k)); /* Prompt 23 review (10/1): was "A Friday may stand alone; Saturday and Sunday come as a pair (never one alone as primary)." beside "Weekends: Fri-Sun as one block." - one primary-shapes sentence, and his block style speaks of backup weekends only */ assert.ok(k.some(s => s === "Backup weekends: Fri-Sun as one block.") && !k.some(s => /^Weekends: /.test(s)), "the block style is his backup weekends': " + JSON.stringify(k)); assert.deepStrictEqual(H.offerRulesWords({ noLoneWeekendDay: true, weekendStyle: "block" }, {}).filter(s => /eekend|Saturday/.test(s)), ["Saturday and Sunday come as a pair (never one alone as primary).", "Weekends: Fri-Sun as one block."], "generic: the pair key alone keeps the style line for both roles"); assert.deepStrictEqual(H.offerRulesWords({ standaloneFriday: true, weekendStyle: "split" }, {}).filter(s => /eekend/.test(s)), ["Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun.", "Backup weekends: split with a partner."], "generic: standaloneFriday alone"); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
-    const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 8 primary days a month (7 preferred)."));
-    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
+    const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 7 primary days a month."), "Prompt 32: Burchett's own hard 7, no soft limit (pin moved deliberately 10/11: was 'Cap: 8 primary days a month (7 preferred).'): " + JSON.stringify(b));
+    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "Soft limit: 7 primary days a month (the group's)."), "Prompt 32: Acton's null = the group default, the soft 7 (pin moved deliberately 10/11: was 'No monthly cap of your own.'): " + JSON.stringify(a));
     const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));
     const f = words("s5"); assert.ok(f.some(s => s === "Outside your East weeks: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f)); assert.ok(f.some(s => /East weeks derive your Silvis week/.test(s))); assert.ok(f.some(s => s === "Cap: 14 primary days a month, East primary-week days included."));
     const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15 (about 2 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
     assert.deepStrictEqual(H.offerRulesWords(null, seed.groupRules), ["No rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({}, {}), ["No recurring rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({ name: "X" }, { defaultMonthlyCap: { primary: 8 } }), ["Cap: the group default of 8 primary days a month."]);
+    // Prompt 32 (Faraz 10/11): absent and null both read the group default (soft and / or hard); "none" = no limit; an own
+    // hard cap carries no soft limit; an own soft limit keeps the group's hard cap; an unreadable value reads as the default
+    const G7 = { defaultMonthlyCap: { preferred: 7 } }, G97 = { defaultMonthlyCap: { primary: 9, preferred: 7 } };
+    const capLine = (r, g) => H.offerRulesWords(Object.assign({ name: "X" }, r), g).filter(s => /^(Cap|Soft limit|No monthly)/.test(s));
+    assert.deepStrictEqual(capLine({}, G7), ["Soft limit: 7 primary days a month (the group's)."], "absent under the soft group default");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, G7), ["Soft limit: 7 primary days a month (the group's)."], "null = the group default (was 'No monthly cap of your own.')");
+    assert.deepStrictEqual(capLine({ monthlyCap: "none" }, G7), ["No monthly limit."], "\"none\" = no limit");
+    assert.deepStrictEqual(capLine({ monthlyCap: 6 }, G7), ["Cap: 6 primary days a month."], "an own number: hard, no soft limit");
+    assert.deepStrictEqual(capLine({ monthlyCap: { primary: 6, preferred: 5 } }, G7), ["Cap: 6 primary days a month (soft limit 5)."], "own hard + own soft");
+    assert.deepStrictEqual(capLine({ monthlyCap: { preferred: 5 } }, G7), ["Soft limit: 5 primary days a month."], "an own soft limit, no hard cap anywhere");
+    assert.deepStrictEqual(capLine({ monthlyCap: { preferred: 5 } }, G97), ["Cap: the group default of 9 primary days a month (soft limit 5)."], "an own soft limit keeps the group's hard cap");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, G97), ["Cap: the group default of 9 primary days a month (soft limit 7, the group's)."], "null under a group hard + soft default");
+    assert.deepStrictEqual(capLine({ monthlyCap: { countsEastDays: true } }, G7), ["Soft limit: 7 primary days a month (the group's), East primary-week days included."], "an object with neither number = the group default");
+    assert.deepStrictEqual(capLine({ monthlyCap: "8" }, G7), ["Soft limit: 7 primary days a month (the group's)."], "an unreadable value reads as the group default (rules.js warns)");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, {}), [], "null with no group default at all: nothing to say");
     const all = ["s1", "s2", "s3", "s4", "s5", "s6"].flatMap(words).join(" ");
     assert.strictEqual(/@|\b\d{3}[-.]\d{3}[-.]\d{4}\b/.test(all), false, "rules words must never carry an address or phone");
   });
@@ -10274,7 +10292,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       "Primary: Mon/Wed and Fri-Sun; never Tue/Thu within 8 weeks (further out allowed, soft); not on East call days; prefers weekdays - Mon-Thu or a Friday on its own (soft).",
       "Backup: Any day.",
       "Weekends: Prefers one Fri-Sun block (backup, soft); a Friday may stand alone (primary); never a lone Saturday or Sunday (primary); at most 2 weekends a month, East weekends included (soft).",
-      "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); no monthly cap; equal share.",
+      // pin moved deliberately 10/11: Prompt 32 his monthlyCap null reads the group default, the soft 7 (was "no monthly cap")
+      "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
       "East / Davenport: East call days block primary (shifts in East backup weeks count); the East forecast stands in while Davenport is unpublished; on East call every year: Christmas (12/24, 12/25).",
       "Holidays: No Christmas primary (standing East call).",
     ];
@@ -10286,7 +10305,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only the 2nd/4th Mon, the 1st Tue, the 2nd/4th Wed and Fri-Sun.",
         "Backup: Only the listed days in Nov-Dec 2026.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
-        "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 8 primary days a month, 7 preferred; equal share.",
+        // pin moved deliberately 10/11: Prompt 32 Burchett { primary: 7 } (was "cap 8 primary days a month, 7 preferred")
+        "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 7 primary days a month; equal share.",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 5 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
       ],
       s3: [
@@ -10294,7 +10314,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Any day; never Tue, the 2nd/4th Mon until 12/31/2026, the 2nd Mon from 1/1/2027, the 2nd/4th Wed, the 3rd Wed from 1/1/2027; avoids the Sun before the 2nd/4th Mon until 12/31/2026 (medium), the Sun before the 2nd Mon from 1/1/2027 (medium).",
         "Backup: Any day.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
-        "Limits: At most 3 primary days in a row, 4 in any role (soft); no monthly cap; equal share.",
+        // pin moved deliberately 10/11: Prompt 32 Acton's null reads the group default, the soft 7 (was "no monthly cap")
+        "Limits: At most 3 primary days in a row, 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
         "Holidays: Never covers Thanksgiving (primary or backup).",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026), 2 vacations; with offer periods on, the offered days of Nov 2026 become offers.",
       ],
@@ -10303,7 +10324,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only in the listed weeks; not the day before a clinic day (the 1st/3rd Wed, the Fri in the week of the 3rd Wed); avoids clinic weeks (strong).",
         "Backup: Any day; at most 7 days and 1 weekend a month.",
         "Weekends: Prefers one Fri-Sun block (soft).",
-        "Limits: At most 4 primary days in a row, 4 in any role (soft); cap 8 primary days a month (group default); equal share.",
+        // pin moved deliberately 10/11: Prompt 32 the group default is the soft 7 (was "cap 8 primary days a month (group default)")
+        "Limits: At most 4 primary days in a row, 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
         "Holidays: At most 1 major holiday in 12 months.",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026), 1 vacation; with offer periods on, the listed weeks become offers.",
       ],
@@ -10319,7 +10341,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only inside the date windows.",
         "Backup: Only inside the date windows.",
         "Weekends: A lone weekend day is fine; blocks and splits discouraged (strong).",
-        "Limits: At most 2 primary days in a row, 2 in any role (soft); cap 8 primary days a month (group default); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
+        // pin moved deliberately 10/11: Prompt 32 the group default is the soft 7 (was "cap 8 primary days a month (group default)")
+        "Limits: At most 2 primary days in a row, 2 in any role (soft); soft limit 7 primary days a month (the group's); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
       ],
     };
     const expectFor = (id) => SEED_LINES[id];
@@ -10362,7 +10385,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P24 summary: the engine defaults - an empty entry, the hardNeverWeekdays roles (primary while backup is open, both when it is closed, an empty list = the default), weekdays.autoOffer, aledo.hardAvoidDayBefore, eastBackupCountsAsBusy, neverThanksgiving, the group cap / run defaults", () => {
       assert.deepStrictEqual(lines({}, { groupRules: {} }), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); no monthly cap; equal share."]);
-      assert.deepStrictEqual(lines({}), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); equal share."]);
+      // pin moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7, no hard cap (was "cap 8 primary days a month (group default)")
+      assert.deepStrictEqual(lines({}), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); equal share."]);
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"] }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: Any day."]);
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: [] }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: Any day."], "an empty roles list is the default");
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"] }).slice(0, 2), ["Primary: Any day.", "Backup: Never Tue."]);
@@ -10380,9 +10404,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(lines({ holidayRules: { neverThanksgiving: true } }).find(l => l.startsWith("Holidays")), "Holidays: Never covers Thanksgiving (primary or backup).", "neverThanksgiving alone reads as a Thanksgiving opt-out (rules.js), both roles");
       assert.deepStrictEqual(lines({ preferences: { maxMajorHolidays: 2 } }).find(l => l.startsWith("Holidays")), "Holidays: At most 2 major holidays in 12 months.", "the preferences fallback");
       assert.deepStrictEqual(lines({ maxConsecutiveDays: 5 }, { groupRules: { countBackupInConsecutive: true, defaultMonthlyCap: { total: 6 } } }).find(l => l.startsWith("Limits")), "Limits: At most 5 days on call in a row; cap 6 primary days a month (group default); equal share.", "a legacy group 'total' is the cap");
-      assert.deepStrictEqual(lines({ monthlyCap: { preferred: 5 } }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default), 5 preferred; equal share.");
-      assert.deepStrictEqual(lines({ monthlyTarget: 4, poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); target 4 primary days a month.");
-      assert.deepStrictEqual(lines({ poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); no share target.");
+      // pins moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 with no hard cap (these read "cap 8 ... (group default)")
+      assert.deepStrictEqual(lines({ monthlyCap: { preferred: 5 } }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 5 primary days a month; equal share.", "an own soft limit replaces the group's; no hard cap anywhere");
+      assert.deepStrictEqual(lines({ monthlyTarget: 4, poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 4 primary days a month.");
+      assert.deepStrictEqual(lines({ poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); no share target.");
+      // Prompt 32 (Faraz 10/11): every cap shape in words - null = the group default, "none" = no limit, an own hard cap has
+      // no soft limit, an own soft limit keeps the group's hard cap, an object with neither number = the group default
+      const capFam = (r, g) => lines(r, g ? { names, holidayNames: HOL, groupRules: g } : undefined).find(l => l.startsWith("Limits")).split("; ")[1];
+      const G97 = { defaultMonthlyCap: { primary: 9, preferred: 7 } };
+      assert.strictEqual(capFam({ monthlyCap: null }), "soft limit 7 primary days a month (the group's)", "null = the group default (was 'no monthly cap')");
+      assert.strictEqual(capFam({ monthlyCap: "none" }), "no monthly cap (none - the group default does not apply)", "\"none\" = the explicit no-limit");
+      assert.strictEqual(capFam({ monthlyCap: 6 }), "cap 6 primary days a month", "an own number: hard, no soft limit");
+      assert.strictEqual(capFam({ monthlyCap: { primary: 6 } }), "cap 6 primary days a month", "an own hard cap does not inherit the group's soft limit");
+      assert.strictEqual(capFam({ monthlyCap: { primary: 6, preferred: 4 } }), "cap 6 primary days a month, soft limit 4", "own hard + own soft");
+      assert.strictEqual(capFam({ monthlyCap: {} }), "soft limit 7 primary days a month (the group's)", "an empty object = the group default");
+      assert.strictEqual(capFam({ monthlyCap: null }, G97), "cap 9 primary days a month (group default), soft limit 7 (the group's)", "null under a group hard + soft default");
+      assert.strictEqual(capFam({ monthlyCap: { preferred: 5 } }, G97), "cap 9 primary days a month (group default), soft limit 5", "an own soft limit keeps the group's hard cap");
+      assert.strictEqual(capFam({ monthlyCap: { countsEastDays: true } }, G97), "cap 9 primary days a month (group default), soft limit 7 (the group's), East primary-week days count");
+      assert.strictEqual(capFam({ monthlyCap: null }, { defaultMonthlyCap: { primary: 8 } }), "cap 8 primary days a month (group default)", "the pre-32 hard-only group default still reads");
     });
     check("P24 summary: the weekend cap's parts and a malformed one; the mode named only when nothing backs it; dated pattern bounds; split partner by name", () => {
       assert.deepStrictEqual(lines({ weekendCap: { perMonth: 1, roles: ["primary", "backup"], days: ["Fri", "Sat", "Sun"], weight: "medium" } }).find(l => l.startsWith("Weekends")), "Weekends: At most 1 weekend a month (primary or backup), counting Fri-Sun (soft, medium).");
@@ -10528,10 +10567,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(fam(H.suRuleFieldAdd(H.suRuleField("aledo"), {}), "Primary"), "Any day; a clinic-day rule with no clinic day set (no effect).");
       assert.strictEqual((H.suRulesSummary({ aledo: { weekdays: [] } }, { groupRules: { dayBeforeRules: { aledoDayBeforeRoles: ["primary", "backup"] } } }).find(l => l.family === "Backup") || {}).text, "Any day.", "no clinic day: nothing for backup either");
       assert.strictEqual(fam({ availableWeeks: ["2026-11-23"], availableWeeksFrom: "2026-11-15" }, "Availability"), "Primary only in 1 listed week, 11/23/2026 to the week of 11/23/2026 (from 11/15/2026; none after).");
-      assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); a monthly target without a number (ignored); equal share.");
-      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); target 3 backup days a month.");
-      assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - no cap applied); equal share.");
-      assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - no cap applied)");
+      // pins moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 (was "cap 8 ... (group default)"), and an
+      // unreadable cap reads as the group default with a buildContext warning (was "invalid - no cap applied": the silently-uncapped hole)
+      assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); a monthly target without a number (ignored); equal share.");
+      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 3 backup days a month.");
+      assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's)); equal share.");
+      assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))");
+      assert.strictEqual(fam({ monthlyCap: [8] }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))", "an array is not a cap object (rules.js warns)");
       assert.strictEqual(fam({ offeredDays: { "2026-11": ["2026-11-02"] }, timeOff: [{ start: "2026-11-01" }] }, "Seed lists"), "Read by the seed import, not the scheduler: 1 vacation; offered days of Nov 2026 (not imported - no offer tag).");
       assert.strictEqual(fam({ explicitAvailable: { "2026-10": ["2026-10-01"] }, explicitBackupUnavailable: { "2026-10": ["2026-10-02"] } }, "Seed lists"), "Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026).");
       assert.strictEqual(fam({ eastFeed: { enabled: true, eastBlocksPrimary: true }, eastStanding: [{ name: "Christmas", days: ["12-24", "12-25"] }] }, "Holidays"), "No Christmas primary (standing East call).");
@@ -10722,9 +10764,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       };
       // the merged seed (review fixes 10/1): Khan with Prompt 23's keys and Prompt 25's Christmas opt-out; backup fields last
       want.s1 = ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed", "holidaysOff"];
+      // pin moved deliberately 10/11: Prompt 32 Khan's and Acton's monthlyCap null reads the group default - the same as no key -
+      // so the Monthly cap field counts as unused for them (Burchett's { primary: 7 } and Fierce's 14 still use it)
+      want.s1 = want.s1.filter(id => id !== "monthlyCap"); want.s3 = want.s3.filter(id => id !== "monthlyCap");
       for (const id of Object.keys(want)) assert.deepStrictEqual(H.suRuleFieldsUsed(seed.surgeonRules[id]), want[id], id);
       assert.deepStrictEqual(H.suRuleFieldsUsed({ backupOptOut: false, holidayUnitCountsAsOneDay: false, preferAlternateDays: false, monthlyTarget: null, primaryContribution: "", weekendStyle: "", standaloneFriday: false, hardNeverWeekdaysRoles: ["primary"], hardNeverWeekdays: [] }), [], "explicit defaults are unused");
-      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: null }), ["monthlyCap"], "monthlyCap null (no cap) differs from no key (the group default)");
+      // pin moved deliberately 10/11: Prompt 32 monthlyCap null = no key = the group default (was "null (no cap) differs from no key");
+      // the explicit no-limit is the string "none", which the field does use
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: null }), [], "monthlyCap null is the same as no key (the group default, Prompt 32)");
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: "none" }), ["monthlyCap"], "monthlyCap \"none\" (no limit) differs from no key");
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: { primary: 7 } }), ["monthlyCap"]);
       assert.deepStrictEqual(H.suRuleFieldsUsed(P23_S1).filter(id => ["standaloneFriday", "noLoneWeekendDay", "weekendCap", "hardNeverWeekdays", "primaryContribution"].includes(id)), ["hardNeverWeekdays", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap"]);
       assert.deepStrictEqual(H.suRuleFieldsUsed({ hardNeverWeekdaysNoticeDays: 56 }), ["hardNeverWeekdays"], "a notice alone shows the never-on field");
       assert.deepStrictEqual(H.suRulesJsonOnly(seed.surgeonRules.s2), ["months a dated list governs", "seed list: available days", "seed list: backup-only days", "seed list: unavailable days", "offer sources", "seed vacations"]);
@@ -10770,7 +10819,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suRuleRemoveConfirm(f("hardNeverWeekdays"), S.s1, "Khan"), 'Remove the rule "Never on (weekdays)" for Khan? This deletes: Tue/Thu; applies to primary; hard only within (days) 56.');
       assert.strictEqual(H.suRuleRemoveConfirm(f("weekendCap"), S.s1, "Khan"), 'Remove the rule "Weekends per month" for Khan? This deletes: East weekends count; counts primary; weight strong.', "the start's perMonth 2 is not news; the rest is");
       assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), S.s4, "Philip"), 'Remove the rule "Most major holidays in 12 months" for Philip? This deletes: the setting "1"; most major holidays (older place) 1.');
-      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s3, "Acton"), 'Remove the rule "Monthly cap" for Acton? This deletes: the setting "none".', "a lone null never reads as 'deletes: none'");
+      // pin moved deliberately 10/11: Prompt 32 Acton's null is the group default (= no key) - removing it loses nothing, so nothing is asked
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s3, "Acton"), null, "Prompt 32: Acton's monthlyCap null = the group default - nothing to lose");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s2, "Burchett"), 'Remove the rule "Monthly cap" for Burchett? This deletes: primary 7.', "Prompt 32: Burchett's own hard 7 is named");
       assert.ok(H.suRuleRemoveConfirm(f("aledo"), S.s4, "Philip").includes("clinic days the 1st/3rd Wed, the Fri in the week of the 3rd Wed"), "Philip's clinic days are named");
       assert.ok(H.suRuleRemoveConfirm(f("outsideDerivedWeeks"), S.s5, "Fierce").includes("weekday pattern for Mon-Sun"), "a per-weekday table reads as one item");
       const many = { availableWindows: Array.from({ length: 12 }, (_, i) => ({ start: "2027-0" + (1 + (i % 9)) + "-01", end: "2027-0" + (1 + (i % 9)) + "-05" })) };
@@ -10795,7 +10846,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyTarget"), S.s1, "Khan"), null, "Khan's monthlyTarget: null");
       assert.strictEqual(H.suRuleRemoveConfirm(f("weekendBlockPenalty"), { weekendBlockPenalty: null }, "X"), null, "rules.js reads a null penalty as none");
       assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), { holidayRules: { maxMajorHolidays: null }, preferences: { maxMajorHolidays: 2 } }, "X"), 'Remove the rule "Most major holidays in 12 months" for X? This deletes: most major holidays (older place) 2.', "the unread null is not an item; the older place still is");
-      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: null }, "X"), 'Remove the rule "Monthly cap" for X? This deletes: the setting "none".', "monthlyCap: null = no cap over the group default - still asks");
+      // pin moved deliberately 10/11: Prompt 32 monthlyCap null = the group default = no key (was "no cap over the group default - still
+      // asks"); the explicit no-limit "none" still asks, in the menu's own words
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: null }, "X"), null, "Prompt 32: monthlyCap null is the same as no key");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: "none" }, "X"), 'Remove the rule "Monthly cap" for X? This deletes: the setting "no limit".', "Prompt 32: \"none\" still asks, in the cap menu's words");
+      for (const [v, w] of Object.entries(H.SU_RULE_VALUE_WORDS.monthlyCap)) assert.ok(SRC.includes('<option value="' + v + '">' + w + "</option>"), "the Monthly cap menu does not read '" + w + "' for " + v);
       assert.deepStrictEqual(H.suRuleFieldHeld(f("backupOptOut"), { backupOptOut: false }), ['the setting "off"'], "an explicit default is still a key Remove deletes");
     });
     check("P24 PatternListEditor kind switch (helpers.suPatternWithKind): keeps start / end, weight, note and any other key; the new kind's keys only; 'dates' drops the weekday", () => {
@@ -10854,7 +10909,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RE.includes("const [advOpen, setAdvOpen] = React.useState(false);") && RE.includes("const [weightsOpen, setWeightsOpen] = React.useState(false);"), "both collapsed by default");
       const adv = RE.indexOf('data-testid="rules-advanced"');
       assert.ok(adv > RE.indexOf('data-testid="rules-save"'), "Advanced sits below the surgeon's Save row");
-      for (const t of ['data-testid="rules-raw-toggle"', 'data-testid="rules-raw"', 'data-testid="rules-raw-apply"', 'data-testid="group-default-cap-primary"', 'data-testid="rules-weights"', 'data-testid="group-save"', 'data-testid="group-raw-toggle"', 'data-testid="group-raw"', 'data-testid="group-raw-apply"']) {
+      for (const t of ['data-testid="rules-raw-toggle"', 'data-testid="rules-raw"', 'data-testid="rules-raw-apply"', 'data-testid="group-default-cap-primary"', 'data-testid="group-default-cap-preferred"', 'data-testid="rules-weights"', 'data-testid="group-save"', 'data-testid="group-raw-toggle"', 'data-testid="group-raw"', 'data-testid="group-raw-apply"']) {
         assert.strictEqual(reCount(t), 1, t + " once");
         assert.ok(RE.indexOf(t) > adv && RE.indexOf(t) > RE.indexOf("{advOpen && <div"), t + " is not inside Advanced");
       }
@@ -10883,6 +10938,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(SRC.includes('data-testid="' + t + '"') || SRC.includes('testid="' + t + '"'), "testid " + t + " is gone");
       }
       for (const t of ["pattern-row", "pattern-preview", "pattern-error"]) assert.ok(SRC.includes('data-testid="' + t + '"'), t);
+      // Prompt 32 (Faraz 10/11): the cap editor - "group default" deletes the key, "no limit" writes "none" (never null, which is
+      // the group default now), "a number" writes { primary: N } from the group's soft limit (else 7) - no hard-coded 8; the
+      // group box edits the soft limit (preferred) and the optional hard cap (primary)
+      assert.ok(SRC.includes('data-testid="group-default-cap-preferred"'), "the group soft-limit field");
+      const capCase = SRC.slice(SRC.indexOf('case "monthlyCap": return ('), SRC.indexOf('case "preferAlternateDays":'));
+      assert.ok(capCase.length > 200, "the Monthly cap renderer");
+      assert.ok(capCase.includes('<option value="default">group default</option>') && capCase.includes('<option value="none">no limit</option>') && capCase.includes('<option value="number">a number</option>'), "the three cap modes");
+      assert.ok(capCase.includes('set("monthlyCap", "none")') && !capCase.includes('set("monthlyCap", null)'), "\"no limit\" writes the string none, never null");
+      assert.ok(!/\|\| 8\b/.test(capCase), "no hard-coded 8 in the cap editor");
+      assert.ok(SRC.includes("const capRaw = draft.monthlyCap;") && /const capMode = capRaw === undefined \|\| capRaw === null \? "default" : capRaw === "none" \? "none"/.test(SRC), "capMode reads absent / null as the group default and \"none\" as the no-limit mode");
       const ws = RE.indexOf('case "weekendStyle":'), pc = RE.indexOf('case "primaryContribution":'), mcd = RE.indexOf('case "maxConsecutiveDays":'), mca = RE.indexOf('case "maxConsecutiveAnyRole":');
       assert.ok(ws > 0 && pc > ws && mca > mcd, "renderer order");
       assert.ok(FIELD_IDS.indexOf("primaryContribution") === FIELD_IDS.indexOf("weekendStyle") + 1, "Prefers renders right after Weekend style");

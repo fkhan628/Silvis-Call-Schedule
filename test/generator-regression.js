@@ -318,16 +318,34 @@ const sarkarWeeksInMonth = (m, range) => Object.keys(SARKAR_WEEKS).filter((mon) 
 // Weekend styles.
 const BLOCK_STYLE = IDS.filter((id) => SR[id].weekendStyle === "block");
 eq(BLOCK_STYLE.sort(), [KHAN, PHILIP, FIERCE].sort(), "seed: block-style surgeons are Khan, Philip, Fierce");
-// Caps (an explicit null never falls back to the default). 9/22 (Prompt 12 K): a cap
-// is on PRIMARY days per month (monthlyCap.primary; defaultMonthlyCap.primary).
-eq(SR[ACTON].monthlyCap, null, "seed: Acton uncapped"); eq(SR[KHAN].monthlyCap, null, "seed: Khan uncapped");
-const DEFAULT_CAP = seed.groupRules.defaultMonthlyCap.primary; // 8 primary days: Philip (no key) falls back to it
-eq(DEFAULT_CAP, 8, "seed: groupRules.defaultMonthlyCap.primary = 8 (K: not the legacy total key)");
+// Caps. 9/22 (Prompt 12 K): a cap is on PRIMARY days per month (monthlyCap.primary; defaultMonthlyCap.primary).
+// Prompt 32 (Faraz 10/11): an absent key AND an explicit null read the group default; "none" is the explicit no-limit;
+// the group default is { primary (hard, optional), preferred (soft, optional) } - the seed's is the SOFT 7 with no hard
+// group cap; an own number / own hard cap carries no soft limit; an own object with neither number takes the group's both.
+// pin moved deliberately 10/11: Prompt 32 Acton / Khan null = the group default (was "uncapped"), the group default is the
+// soft 7 (was DEFAULT_CAP 8, hard), Burchett { primary: 7 } (was { primary: 8, preferred: 7 })
+eq(SR[ACTON].monthlyCap, null, "seed: Acton null = the group default (Prompt 32)"); eq(SR[KHAN].monthlyCap, null, "seed: Khan null = the group default (Prompt 32)");
+eq(seed.groupRules.defaultMonthlyCap, { preferred: 7 }, "seed: groupRules.defaultMonthlyCap = { preferred: 7 } - the group's SOFT limit, no hard group cap (Prompt 32, Faraz 10/11: 7 is not a hard rule)");
+const DEFAULT_CAP = typeof seed.groupRules.defaultMonthlyCap.primary === "number" ? seed.groupRules.defaultMonthlyCap.primary : null; // the hard group default: none in the seed
+const DEFAULT_PREFERRED = seed.groupRules.defaultMonthlyCap.preferred; // the soft group default: 7
 ok(!("total" in seed.groupRules.defaultMonthlyCap), "seed: no legacy defaultMonthlyCap.total");
-eq(SR[BURCHETT].monthlyCap, { primary: 8, preferred: 7 }, "seed: Burchett cap 8 primary / preferred 7");
+eq(SR[BURCHETT].monthlyCap, { primary: 7 }, "seed: Burchett's own cap is a hard 7, no preferred (Prompt 32, Faraz 10/11)");
 eq(SR[FIERCE].monthlyCap.primary, 14, "seed: Fierce cap 14 primary"); eq(SR[FIERCE].monthlyCap.countsEastDays, true, "seed: Fierce countsEastDays is boolean true");
+ok(!("preferred" in SR[FIERCE].monthlyCap), "seed: Fierce has no soft limit of his own");
 ok(!("total" in SR[BURCHETT].monthlyCap) && !("total" in SR[FIERCE].monthlyCap), "seed: no legacy monthlyCap.total keys");
 ok(!("monthlyCap" in SR[PHILIP]), "seed: Philip has no cap key");
+// the cap reading restated from the seed (not from rules.js): { primary: hard or null, preferred: soft or null }
+const capOf = (id) => {
+  const has = Object.prototype.hasOwnProperty.call(SR[id], "monthlyCap"), mc = SR[id].monthlyCap;
+  if (!has || mc === null) return { primary: DEFAULT_CAP, preferred: DEFAULT_PREFERRED };
+  if (mc === "none") return { primary: null, preferred: null };
+  if (typeof mc === "number") return { primary: mc, preferred: null };
+  const own = typeof mc.primary === "number" ? mc.primary : null;
+  return { primary: own !== null ? own : DEFAULT_CAP, preferred: typeof mc.preferred === "number" ? mc.preferred : (own === null ? DEFAULT_PREFERRED : null) };
+};
+eq(IDS.map((id) => CODE[id] + " " + JSON.stringify(capOf(id))), ["FAK {\"primary\":null,\"preferred\":7}", "MAB {\"primary\":7,\"preferred\":null}", "BDA {\"primary\":null,\"preferred\":7}", "AFP {\"primary\":null,\"preferred\":7}", "NF {\"primary\":14,\"preferred\":null}", "SRK {\"primary\":null,\"preferred\":7}"],
+  "seed caps restated (Prompt 32): Khan / Acton / Philip / Sarkar the group's soft 7, Burchett a hard 7, Fierce a hard 14");
+eq(IDS.map((id) => { const c = R.monthlyCapFor(ctx, id); return { primary: c.primary, preferred: c.preferred }; }), IDS.map(capOf), "rules.js monthlyCapFor reads every seed cap as restated");
 // Targets (9/22, Prompt 12 J - equal-share fairness): nobody has a numeric target; Khan and Sarkar carry an
 // explicit null, which since J reads "equal share" for a pool member (Khan) and "window target" for the
 // windows surgeon (Sarkar) - never a neutral term and never "no target".
@@ -415,27 +433,36 @@ function khanOpenWeekends(days) {
 // (locks are facts the generator keeps; the conflicts must be REPORTED):
 //   R1  Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23:
 //       10/22's backup is Burchett's locked manual edit, mirrored in the seed). Since
-//       9/22 (Prompt 12 K) the monthly cap counts PRIMARY days only, so his 7 primaries
-//       sit under the default cap of 8 and his 7 locked backups sit AT backup-cap 7
-//       (the explicit backup cap, unchanged) - no locked Philip slot breaks a rule now
-//       (before BK his 8 backups broke backup-cap 7; the expectation below is computed
-//       from the inputs, so it follows the seed). Plus Fierce's single locked Monday
-//       primary 10/12 outside any derived week (weekday-pattern:Mon - October is not
-//       derived).
+//       9/22 (Prompt 12 K) the monthly cap counts PRIMARY days only; since Prompt 32
+//       (10/11) his cap is the group's SOFT 7 (no hard cap), and his 7 locked backups
+//       sit AT backup-cap 7 (the explicit backup cap, unchanged) - no locked Philip slot
+//       breaks a rule now (before BK his 8 backups broke backup-cap 7; the expectation
+//       below is computed from the inputs, so it follows the seed). Plus Fierce's single
+//       locked Monday primary 10/12 outside any derived week (weekday-pattern:Mon -
+//       October is not derived). A locked primary over a HARD cap is restated for every
+//       holder (Prompt 32; was Philip's October only); a soft limit never makes a lock
+//       violation, so Acton's 10 locked October / 8 locked November primaries (over the
+//       group's soft 7) are expected as nothing.
 //   R2  Khan's import-locked Thanksgiving primaries on the synthetic East-busy days
 //       11/26, 11/27, 11/28 (east-busy); 11/29 is not East-busy.
 //   R3  nothing is locked -> empty.
 function expectedLockViolations(range) {
   const out = [];
-  const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: under the primary cap of 8 (K)
+  const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: at the group's soft 7, no hard cap (Prompt 32; was under the hard default 8, K)
   const philipOctB = monthDays("2026-10").filter((d) => holder(INPUT, d, B) === PHILIP).length; // 7: at his explicit backup cap of 7 (8 until BK 9/23 - 10/22 went to Burchett)
   eq([philipOctP, philipOctB], [7, 7], "seed: Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23: 10/22 is Burchett's) (fixture drift?)");
+  // Prompt 32: a holder's locked primaries of the calendar month (+ his East primary-week days under a countsEastDays cap)
+  // against his restated HARD cap; the generator never places past a hard cap, so only locks alone can break it
+  const lockedPrimaries = (id, m) => monthDays(m).filter((d) => (INPUT[d] && INPUT[d].primaryLocked && INPUT[d].primary === id) || (SR[id].monthlyCap && SR[id].monthlyCap.countsEastDays === true && id === FIERCE && FIERCE_EAST_PRIMARY_DAYS.has(d))).length;
+  const overHardCap = (id, m) => capOf(id).primary !== null && lockedPrimaries(id, m) > capOf(id).primary;
+  eq(["2026-10", "2026-11"].map((m) => IDS.filter((id) => lockedPrimaries(id, m) > 7).map((id) => CODE[id] + " " + lockedPrimaries(id, m))), [["BDA 10"], ["BDA 8"]], "seed: only Acton's locks pass 7 (10 October, 8 November primaries) - over the group's soft 7, never a hard cap (fixture drift?)");
   Object.keys(INPUT).sort().forEach((d) => {
     if (d < range.start || d > range.end) return;
     ROLES.forEach((role) => {
       const e = INPUT[d];
       if (!e[role + "Locked"] || !e[role]) return;
-      if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === P && philipOctP > DEFAULT_CAP) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "monthly-cap:" });
+      // pin moved deliberately 10/11: Prompt 32 generic over every holder's restated HARD cap (was Philip's October against DEFAULT_CAP 8)
+      if (role === P && overHardCap(e[role], monthOf(d))) out.push({ day: d, role, id: e[role], lock: "import", prefix: "monthly-cap:" });
       if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === B && philipOctB > SR[PHILIP].backupCap.perMonthDays) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "backup-cap:" });
       if (e[role] === FIERCE && role === P && weekday(d) === "Mon" && !DERIVED_ROLE[d]) out.push({ day: d, role, id: FIERCE, lock: "import", prefix: "weekday-pattern:Mon" });
       if (e[role] === KHAN && role === P && KHAN_BUSY.includes(d)) out.push({ day: d, role, id: KHAN, lock: "import", prefix: "east-busy" });
@@ -444,7 +471,10 @@ function expectedLockViolations(range) {
       else if (role === P && DAY_BEFORE_VAC[e[role]] && DAY_BEFORE_VAC[e[role]].has(d)) out.push({ day: d, role, id: e[role], lock: "import", prefix: "day-before-vacation" });
     });
   });
-  return out.sort((a, b) => (a.day + a.role).localeCompare(b.day + b.role));
+  // one entry per locked slot (the engine reports a slot once, with every reason): with the generic cap line a slot could
+  // match two restated rules - the first one stays and its prefix is checked against the reported reasons
+  const seenLV = new Set();
+  return out.filter((x) => { const k = x.day + " " + x.role; if (seenLV.has(k)) return false; seenLV.add(k); return true; }).sort((a, b) => (a.day + a.role).localeCompare(b.day + b.role));
 }
 function makeView(out) {
   // merged view: generated range from the output, everything else from the published input
@@ -741,11 +771,18 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     const openWindow = mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P)).length;
     const reserved = Math.min(SARKAR_TARGET * nW, openWindow);
     eq([I.primaryOpen, I.backupOpen, I.poolSize, I.reservedForWindows], [primaryOpen, backupOpen, POOL.length, reserved], "impliedTargets " + m + " primaryOpen / backupOpen / poolSize / reservedForWindows");
-    // clips (K, per role since J): Burchett preferred 7; Philip default 8 - 1; Acton / Khan uncapped; Fierce 13 minus the
-    // East primary-week days of the month he does not hold as Silvis PRIMARY - the cap adds those days to his primary
-    // count whether or not he holds the derived Silvis backup, so November (derived week held) reads 6, not 13.
+    // clips (K, per role since J): the K clip reads the HARD cap - min(preferred, cap - 1), or cap - 1, minus the East
+    // primary-week days of the month a countsEastDays surgeon does not hold as Silvis PRIMARY (the cap adds those days to
+    // his primary count whether or not he holds the derived Silvis backup, so Fierce's November reads 6, not 13); no hard
+    // cap = unclipped. Restated from capOf (the seed's caps as Prompt 32 reads them).
+    // pin moved deliberately 10/11: Prompt 32 Burchett's hard 7 with no soft limit clips at 7 - 1 = 6 (was his preferred 7);
+    // Philip's default is the group's soft 7 with no hard cap, so the K clip - which reads the hard cap until Prompt 32 step 2
+    // moves it to the soft limit - leaves him unclipped (was the hard default 8 - 1 = 7); Acton / Khan stay unclipped (now as
+    // the group default, not as "uncapped"); Fierce 13 - East days unchanged
     const fierceEastP = monthDays(m).filter((d) => FIERCE_EAST_PRIMARY_DAYS.has(d) && baseHolder(d, P) !== FIERCE).length;
-    const CLIP_P = { [BURCHETT]: 7, [PHILIP]: DEFAULT_CAP - 1, [ACTON]: null, [KHAN]: null, [FIERCE]: 14 - 1 - fierceEastP };
+    const kClip = (id) => { const c = capOf(id); if (c.primary === null) return null; return Math.max(0, (c.preferred !== null ? Math.min(c.preferred, c.primary - 1) : c.primary - 1) - (id === FIERCE ? fierceEastP : 0)); };
+    const CLIP_P = { [BURCHETT]: kClip(BURCHETT), [PHILIP]: kClip(PHILIP), [ACTON]: kClip(ACTON), [KHAN]: kClip(KHAN), [FIERCE]: kClip(FIERCE) };
+    eq([CLIP_P[BURCHETT], CLIP_P[PHILIP], CLIP_P[ACTON], CLIP_P[KHAN], CLIP_P[FIERCE]], [6, null, null, null, 14 - 1 - fierceEastP], "restated K clips in " + m + " (Prompt 32 seed caps): MAB 7 - 1 / AFP, BDA, FAK no hard cap / NF 13 - East days");
     const clipB = (id) => (SR[id].backupCap && typeof SR[id].backupCap.perMonthDays === "number" ? SR[id].backupCap.perMonthDays : null);
     const HELD = {}; POOL.forEach((id) => { HELD[id] = { primary: monthDays(m).filter((d) => baseHolder(d, P) === id).length, backup: monthDays(m).filter((d) => baseHolder(d, B) === id).length }; });
     const heldByPool = { primary: POOL.reduce((s, id) => s + HELD[id].primary, 0), backup: POOL.reduce((s, id) => s + HELD[id].backup, 0) };
@@ -767,7 +804,8 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       ok(typeof M.allowedPrimary === "number" && typeof M.allowedBackup === "number" && M.allowedPrimary >= 0 && M.allowedPrimary <= primaryOpen && M.allowedBackup >= 0 && M.allowedBackup <= backupOpen, CODE[id] + " allowedPrimary / allowedBackup out of range in " + m + ": " + JSON.stringify(M));
       eq(D.tallies[id].months[m].target, { primary: M.primaryTarget, backup: M.backupTarget }, CODE[id] + " tallies target = { primary, backup } in " + m);
     });
-    eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [7, DEFAULT_CAP - 1, null, null, 14 - 1 - fierceEastP], "clipPrimary MAB 7 / AFP 7 / BDA null / FAK null / NF 13 - East primary-week days in " + m);
+    // pin moved deliberately 10/11: Prompt 32 Burchett { primary: 7 } -> 6 (was 7 = his preferred); Philip on the group's soft 7 -> null (was 8 - 1 = 7)
+    eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [6, null, null, null, 14 - 1 - fierceEastP], "clipPrimary MAB 6 / AFP null / BDA null / FAK null / NF 13 - East primary-week days in " + m);
     eq(I.members[FIERCE].eastPrimaryDays, fierceEastP, "Fierce members.eastPrimaryDays in " + m);
     // Khan's allowed backup count exactly: since 9/22 backup is open to him on every open in-range backup slot of the
     // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block.
@@ -895,15 +933,26 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     CUR.day = m;
     const mdays = monthDays(m);
     const placedIn = (id, role) => mdays.some((d) => out.schedule[d] && isPlaced(out, d, role) && out.schedule[d][role] === id);
-    // item 7 (9/22, Prompt 12 K): Burchett <= 8 PRIMARY days per month; his backups are
+    // item 7 (9/22, Prompt 12 K): Burchett <= his hard cap in PRIMARY days per month; his backups are
     // unbounded by the cap (no assertion on the backup count or the primary+backup total)
+    // pin moved deliberately 10/11: Prompt 32 Burchett's own cap is a hard 7 (was 8)
     const burPrimary = mdays.filter((d) => holder(view, d, P) === BURCHETT).length;
-    if (placedIn(BURCHETT, P)) ok(burPrimary <= 8, "Burchett " + burPrimary + " primary days in " + m);
-    // K: Philip <= 8 PRIMARY days per month (the group default; his backups fall under item 8 only)
-    const phPrimary = mdays.filter((d) => holder(view, d, P) === PHILIP).length;
-    if (placedIn(PHILIP, P)) ok(phPrimary <= DEFAULT_CAP, "Philip " + phPrimary + " primary days in " + m + " (default cap " + DEFAULT_CAP + ")");
-    // item 7: Acton / Khan uncapped -> the generator never cites a monthly cap for them
-    D.uncovered.forEach((u) => { if (monthOf(u.day) === m) [ACTON, KHAN].forEach((id) => ok(!u.reasons[id].some((r) => String(r).indexOf("monthly-cap") === 0), CODE[id] + " blocked by a monthly cap on " + u.day)); });
+    eq(capOf(BURCHETT).primary, 7, "Burchett's restated hard cap");
+    if (placedIn(BURCHETT, P)) ok(burPrimary <= 7, "Burchett " + burPrimary + " primary days in " + m + " (his hard 7)");
+    // Prompt 32: every member with a restated HARD cap stays at or under it in a month the generator placed one of his
+    // primaries (a countsEastDays cap adds his East primary-week days); a soft limit is never checked here - it is soft
+    IDS.forEach((id) => {
+      const cap = capOf(id).primary;
+      if (cap === null || !placedIn(id, P)) return;
+      const c = mdays.filter((d) => holder(view, d, P) === id || (id === FIERCE && SR[FIERCE].monthlyCap.countsEastDays === true && FIERCE_EAST_PRIMARY_DAYS.has(d))).length;
+      ok(c <= cap, CODE[id] + " " + c + " primary days (East primary-week days included where his cap counts them) in " + m + " - over his hard cap " + cap);
+    });
+    // item 7: a member with no HARD cap is never blocked by one - the generator never cites a monthly cap for him.
+    // pin moved deliberately 10/11: Prompt 32 the members without a hard cap are Khan / Acton / Philip / Sarkar (the group's
+    // soft 7; was Acton / Khan "uncapped", and Philip <= DEFAULT_CAP 8 above)
+    const NO_HARD_CAP = IDS.filter((id) => capOf(id).primary === null);
+    eq(NO_HARD_CAP, [KHAN, ACTON, PHILIP, SARKAR], "members without a hard monthly cap (Prompt 32)");
+    D.uncovered.forEach((u) => { if (monthOf(u.day) === m) NO_HARD_CAP.forEach((id) => ok(!(u.reasons[id] || []).some((r) => String(r).indexOf("monthly-cap") === 0), CODE[id] + " blocked by a monthly cap on " + u.day + " (he has no hard cap - the group's 7 is soft)")); });
     // item 8: Philip backup <= 7 days and <= 1 weekend per month
     const phBackups = mdays.filter((d) => holder(view, d, B) === PHILIP);
     const phWeekends = new Set(phBackups.filter(isWeekend).map(fridayOf));
@@ -1321,7 +1370,7 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
 CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
 Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosened backup rule is not in force, or the runs changed - counts " + JSON.stringify(SAW) + ")"));
 // 9/22 opt-out with real data: the shipped seed opts nobody out, so run Nov-Dec once
-// with Acton (uncapped, a frequent backup filler) opted out - never placed as backup,
+// with Acton (no hard cap - the group's soft 7 since Prompt 32 - a frequent backup filler) opted out - never placed as backup,
 // still placed as primary, and every open backup slot names the opt-out for him.
 {
   const srOpt = JSON.parse(JSON.stringify(SA.seedToSurgeonRules(seed))); srOpt[ACTON].backupOptOut = true;
@@ -1955,7 +2004,13 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   const NOV = daysList("2026-11-02", "2026-11-30");
   const tol = seed.groupRules.weights.smoothingTolerance;
   eq(seed.groupRules.weights.offerBonusOverShare, 0, "seed: weights.offerBonusOverShare = 0 (the offered bonus stops at the share)");
-  const seedCtl = JSON.parse(JSON.stringify(seed)); seedCtl.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
+  // pin moved deliberately 10/11: Prompt 32 Acton's null now reads the group's SOFT 7, and his 8 locked November primaries
+  // already stand over it, so the soft over-preferred-cap term alone keeps the untapered control from buying him a ninth
+  // primary (measured on the seed: taper and control both 8 / 8 / 8 primary and 5 / 5 / 6 backup - no cell differs). To
+  // keep measuring what this block is for - the TAPER, not the cap - the taper / control pair runs with Acton's cap set to
+  // the explicit no-limit "none" (the uncapped reading it was built under); the seed's own reading is pinned after the loop.
+  const seedNoCap = JSON.parse(JSON.stringify(seed)); seedNoCap.surgeonRules[ACTON].monthlyCap = "none";
+  const seedCtl = JSON.parse(JSON.stringify(seedNoCap)); seedCtl.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
   const allActon = NOV.map((d) => ({ person_id: ACTON, day: d, role_pref: "either", source: "app", entered_by: ACTON, note: null }));
   const allOffers = FIXP.offers.filter((o) => o.person_id !== ACTON).concat(allActon);
   const countOf = (out, id, role) => NOV.filter((d) => out.schedule[d][role] === id).length;
@@ -1967,7 +2022,9 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   // when nobody under-share could take it), his backup count is within tolerance of his target, the taper never places
   // him above the untapered control in TOTAL (both roles: the control buys him a ninth primary with the untapered bonus,
   // which costs him a backup day the taper run keeps - so the per-role reading may cross while the total may not) and
-  // places him below the control in at least one cell (measured on seeds 1-3 with the water-filled share: primary
+  // places him below the control in at least one cell (measured on seeds 1-3 with Acton at "none" and the Prompt 32 seed
+  // caps for the others, 10/11: primary 8 / 8 / 8 against the control's 8 / 9 / 9, backup 5 / 5 / 6 against 5 / 5 / 5;
+  // with the water-filled share before Prompt 32: primary
   // 8 / 8 / 8 against the control's 9 / 9 / 9, backup 5 / 5 / 6 against 4 / 5 / 5; before WF, with the locked floor
   // T = 8, it read primary 11 / 10 / 9 against 12 / 12 / 12 and backup 3 / 3 / 3 against 5 / 5 / 5; before the review
   // the untapered reading was the product).
@@ -1975,8 +2032,9 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   const lines = [];
   [1, 2, 3].forEach((sd) => {
     CUR.range = "P2 review: Acton offers every November day"; CUR.seed = sd; CUR.day = "-";
-    const ctxA = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    const ctxA = R.buildContext(mkInputS(seedNoCap, { periods: [FIXP.period], offers: allOffers }));
     if (ctxA.warnings.length) fail("buildContext warnings (all-days offers): " + JSON.stringify(ctxA.warnings));
+    eq([R.monthlyCapFor(ctxA, ACTON).primary, R.monthlyCapFor(ctxA, ACTON).preferred], [null, null], "fixture: Acton has no cap or soft limit in the taper / control pair (\"none\")");
     const outA = GEN.generate(ctxA, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
     const outC = GEN.generate(R.buildContext(mkInputS(seedCtl, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
     eq(outA.diagnostics.hardViolations, [], "all-days offers: no hard violation");
@@ -1997,7 +2055,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
       gen.slice(cap).forEach((d) => {
         CUR.day = d;
         const view = makeView(outA); view[d] = Object.assign({}, view[d]); view[d][role] = null; // the slot read as open on the final schedule
-        const fin = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers, schedule: view }));
+        const fin = R.buildContext(mkInputS(seedNoCap, { periods: [FIXP.period], offers: allOffers, schedule: view }));
         const under = IDS.filter((id) => id !== ACTON && R.eligibility(fin, d, role, id).ok).filter((id) => { const t = mm[id][role + "Target"]; return typeof t === "number" && countOf(outA, id, role) < Math.ceil(t - 0.5); });
         eq(under, [], "an offer is not a demand: Acton's over-share " + d + " " + role + " is his only because no colleague below his own share was eligible for it");
       });
@@ -2014,6 +2072,20 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   console.log("P2 review (Acton offers all of November as 'either', bestOf 2): " + lines.join("; "));
   ok(overCtl > 0, "control: with offerBonusOverShare = offerBonus (the pre-review reading) Acton ends over his share + tolerance in at least one role and seed (" + overCtl + " of 6 role/seed cells over)");
   ok(fewer > 0, "the taper places Acton below the control in at least one role and seed (" + fewer + " of 6 cells) - it is the taper that holds him, not the seed");
+  // Prompt 32 (10/11): under the seed's own reading (Acton on the group's soft 7) the soft limit holds him in November with
+  // or without the taper - the untapered control places no primary of his beyond his 8 locked days, and neither run gives
+  // him a generated primary at all
+  {
+    CUR.range = "P2 review: Acton offers every November day, the seed's soft 7"; CUR.seed = 1; CUR.day = "-";
+    const seedCtl7 = JSON.parse(JSON.stringify(seed)); seedCtl7.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
+    const ctx7 = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    eq([R.monthlyCapFor(ctx7, ACTON).primary, R.monthlyCapFor(ctx7, ACTON).preferred], [null, 7], "seed: Acton on the group's soft 7 (Prompt 32)");
+    const out7 = GEN.generate(ctx7, "2026-11-02", "2026-11-30", { seed: 1, bestOf: 2 });
+    const outC7 = GEN.generate(R.buildContext(mkInputS(seedCtl7, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: 1, bestOf: 2 });
+    const genP = (out) => NOV.filter((d) => out.schedule[d].primary === ACTON && !out.schedule[d].primaryLocked);
+    eq([genP(out7), genP(outC7)], [[], []], "Prompt 32: on the seed neither the taper nor the untapered control gives Acton a generated November primary (his 8 locks are over the soft 7)");
+    eq(out7.diagnostics.hardViolations, [], "Prompt 32: the soft 7 makes no hard violation");
+  }
   // (2) holiday-unit unplaced reason
   CUR.range = "P2 review: Christmas unit 2026-12-21..2026-12-27"; CUR.seed = 1; CUR.day = "2026-12-25";
   const decOffers = SR[BURCHETT].explicitAvailable["2026-12"].map((d) => ({ person_id: BURCHETT, day: d, role_pref: "either", source: "email-relay", entered_by: "scheduler", note: null }));

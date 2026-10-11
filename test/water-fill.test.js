@@ -11,7 +11,9 @@
 // November backups beyond his 8 locked days go only to days where no other pool member eligible
 // for the slot ends the month below share; (3) the per-surgeon tallies and the slot count that
 // differs from the published rows are the what-if of docs/REPORT-WATER-FILL-2026-09-23.md, pinned
-// as observed (seed 7, bestOf 200, convexity 2). The fixture holds ids, dates, lock flags and
+// as observed (seed 7, bestOf 200, convexity 2). Since Prompt 32 (10/11) rules.js reads the frozen
+// blob's Khan / Acton monthlyCap null as its group default (a hard 8), so the run differs from that
+// report on 13 slots (re-pinned from a real run; each moved number is explained at its pin). The fixture holds ids, dates, lock flags and
 // sources only - never a note, never contact data (asserted).
 //
 // Wall clock: SILVIS_GEN_BUDGET_MS (shared with the regression and the holidays suite) overrides
@@ -56,6 +58,10 @@ function run(h) {
   const isDeadKeyW = (w) => /groupRules.holidays.anyoneMayCoverUnlessOptedOut|groupRules.eastFeed.unknownIsBusy|groupRules\.(generationHorizons\.presets|eastFeed\.forecast\.penaltyBelowThreshold|locks\.nullSlotIsNeverLocked) is not read|^surgeonRules\.s[1-5]: ignored key/.test(w);
   eq(ctxW.warnings.filter(isDeadKeyW).length, 10, "buildContext warnings (WF fixture): the dead-key notices the pre-publish blob earns (RG-1, RG-2 + B10's 3 group + 5 surgeon notices): " + JSON.stringify(ctxW.warnings.filter(isDeadKeyW)));
   eq(ctxW.warnings.filter((w) => !isDeadKeyW(w)), [], "buildContext warnings (WF fixture)");
+  // Prompt 32 (Faraz 10/11): monthlyCap null reads the group default. The fixture is the frozen pre-publish blob - Khan and
+  // Acton null, defaultMonthlyCap { primary: 8 } - so rules.js now caps both at a HARD 8 inside it (they were uncapped).
+  eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map((id) => { const c = R.monthlyCapFor(ctxW, id); return [c.primary, c.preferred]; }), [[8, null], [8, 7], [8, null], [8, null], [14, null], [8, null]],
+    "WF fixture caps as Prompt 32 reads the frozen blob: Khan / Acton null = the fixture's group default 8 (hard), Burchett 8 / 7, Philip / Sarkar absent = 8, Fierce 14");
   const tw0 = Date.now();
   const outM = GEN.generate(ctxW, MS.start, MS.end, { seed: FXW._meta.seed, bestOf: FXW._meta.bestOf, respectLocks: true });
   const outB = GEN.generate(ctxW, BFW.start, BFW.end, { seed: FXW._meta.seed, bestOf: FXW._meta.bestOf, respectLocks: true, fillOpenOnly: true });
@@ -68,8 +74,18 @@ function run(h) {
   const mergedW = {}; Object.keys(FXW.input.schedule).forEach((d) => { mergedW[d] = FXW.input.schedule[d]; }); Object.keys(outB.schedule).forEach((d) => { mergedW[d] = outB.schedule[d]; }); Object.keys(outM.schedule).forEach((d) => { mergedW[d] = outM.schedule[d]; });
   const tallyW = (from, to) => { const t = {}; IDS.forEach((id) => { t[id] = { primary: 0, backup: 0 }; }); daysList(from, to).forEach((d) => { const e = mergedW[d]; if (!e) return; if (e.primary && t[e.primary]) t[e.primary].primary++; if (e.backup && t[e.backup]) t[e.backup].backup++; }); return t; };
   const novW = tallyW("2026-11-01", "2026-11-30"), decW = tallyW("2026-12-01", "2026-12-31");
-  const NOV_PIN = { [KHAN]: { primary: 7, backup: 5 }, [BURCHETT]: { primary: 6, backup: 4 }, [ACTON]: { primary: 9, backup: 4 }, [PHILIP]: { primary: 6, backup: 5 }, [FIERCE]: { primary: 0, backup: 11 }, [SARKAR]: { primary: 2, backup: 1 } };
-  const DEC_PIN = { [KHAN]: { primary: 6, backup: 6 }, [BURCHETT]: { primary: 5, backup: 7 }, [ACTON]: { primary: 6, backup: 6 }, [PHILIP]: { primary: 5, backup: 6 }, [FIERCE]: { primary: 7, backup: 6 }, [SARKAR]: { primary: 2, backup: 0 } };
+  // Prompt 32: no fixture member ends a month over the hard 8 the frozen blob now gives Khan and Acton (Acton held 9 November
+  // primaries when his null read "uncapped": his 8 locked days plus one generated)
+  ok([KHAN, ACTON].every((id) => novW[id].primary <= 8 && decW[id].primary <= 8), "WF (Prompt 32): Khan / Acton at most 8 primaries in November and December under the fixture's default 8: " + JSON.stringify([novW[KHAN], novW[ACTON], decW[KHAN], decW[ACTON]]));
+  // pin moved deliberately 10/11: Prompt 32 rules.js reads the frozen blob's Khan / Acton null as its group default 8 (hard),
+  // re-derived from a real run (seed 7, bestOf 200). November: Acton 9 -> 8 primaries - his 9th (the generated 11/30, on top
+  // of his 8 locked days) is over the hard 8, so 11/30 primary goes to Khan (7 -> 8, at his own 8) and Khan's 11/30 backup to
+  // Acton (4 -> 5 backups); 11/19 backup Philip -> Khan keeps Khan at 5 backups, Philip 5 -> 4. December primaries are
+  // unchanged; the new best candidate reshuffles nine December backup slots, net Burchett 7 -> 6 and Philip 6 -> 7 backups.
+  // Was NOV Khan 7/5, Acton 9/4, Philip 6/5 and DEC Burchett 5/7, Philip 5/6.
+  const NOV_PIN = { [KHAN]: { primary: 8, backup: 5 }, [BURCHETT]: { primary: 6, backup: 4 }, [ACTON]: { primary: 8, backup: 5 }, [PHILIP]: { primary: 6, backup: 4 }, [FIERCE]: { primary: 0, backup: 11 }, [SARKAR]: { primary: 2, backup: 1 } };
+  const DEC_PIN = { [KHAN]: { primary: 6, backup: 6 }, [BURCHETT]: { primary: 5, backup: 6 }, [ACTON]: { primary: 6, backup: 6 }, [PHILIP]: { primary: 5, backup: 7 }, [FIERCE]: { primary: 7, backup: 6 }, [SARKAR]: { primary: 2, backup: 0 } };
+  eq([outM.schedule["2026-11-30"].primary, outM.schedule["2026-11-30"].backup], [KHAN, ACTON], "WF (Prompt 32): 11/30 primary is Khan's, its backup Acton's - Acton's 9th November primary (over the fixture's hard 8) moved off him");
   eq(novW, NOV_PIN, "WF: November tallies (merged backfill + milestone) = the what-if (published: Fierce 16 backups, Khan 3)");
   eq(decW, DEC_PIN, "WF: December tallies (merged) = the what-if");
   const novI = outM.diagnostics.impliedTargets.months["2026-11"], novLevelB = novI.backupShare;
@@ -92,8 +108,14 @@ function run(h) {
   const pubW = FXW._meta.published, diffW = [];
   Object.keys(pubW).sort().forEach((d) => ROLES.forEach((role) => { const x = pubW[d][role] || null, y = (mergedW[d] && mergedW[d][role]) || null; if (x !== y) diffW.push(d + " " + role[0].toUpperCase()); }));
   eq(Object.keys(pubW).length * 2, 224, "WF: the published state has 112 rows = 224 slots");
-  eq(diffW.length, 34, "WF: 34 of the 224 slots differ from the published rows (got " + diffW.length + ": " + diffW.join(", ") + ")");
-  eq([outM.diagnostics.score.total, outM.diagnostics.candidateScores.indexOf(outM.diagnostics.score.total)], [115551, 20], "WF: milestone best-of-200 score / candidate as observed");
+  // pin moved deliberately 10/11: Prompt 32 (the frozen blob's Khan / Acton null = its hard 8) - 34 -> 32: 11/30 P now differs
+  // from the published rows (Khan, published Acton) while 12/10 B, 12/17 B and 12/29 B now match them
+  eq(diffW.length, 32, "WF: 32 of the 224 slots differ from the published rows (got " + diffW.length + ": " + diffW.join(", ") + ")");
+  // pin moved deliberately 10/11: Prompt 32 - 115551 at candidate 20 -> 116951 at candidate 59: softSum 96 -> 98 (+2000) and
+  // primaryDeviation 51.2 -> 49.2 (-600: Acton (9 - 5.6)^2 -> (8 - 5.6)^2 = -5.8, Khan (7 - 5.6)^2 -> (8 - 5.6)^2 = +3.8);
+  // backupDeviation 41.4, weekendSpread 5 and holidaySpread 1 unchanged
+  eq([outM.diagnostics.score.total, outM.diagnostics.candidateScores.indexOf(outM.diagnostics.score.total)], [116951, 59], "WF: milestone best-of-200 score / candidate as observed");
+  eq([outM.diagnostics.score.softSum, outM.diagnostics.score.primaryDeviation, outM.diagnostics.score.backupDeviation], [98, 49.2, 41.4], "WF (Prompt 32): the score parts behind 116951");
   const line = "WF November fixture: " + wfMs + " ms for the two bestOf-200 runs; Nov backups " + POOL.concat([SARKAR]).map((id) => CODE[id] + " " + novW[id].backup).join(", ") + "; " + diffW.length + " of 224 slots differ from the publish";
   log(line);
   return { line: line, wfMs: wfMs };
