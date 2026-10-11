@@ -10279,6 +10279,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       "Holidays: No Christmas primary (standing East call).",
     ];
     // Per seed surgeon, verbatim.
+    // pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 (withdrawn 10/10) - s2's seed vacations 5 -> 3.
     const SEED_LINES = {
       s1: P23_S1_LINES.slice(0, 5).concat(["Holidays: Never covers Christmas (primary or backup); the standing East call also rules out Christmas primary."]),
       s2: [
@@ -10287,7 +10288,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Backup: Only the listed days in Nov-Dec 2026.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
         "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 8 primary days a month, 7 preferred; equal share.",
-        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 5 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
+        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 3 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
       ],
       s3: [
         "Availability: Only the listed days in Oct 2026 (primary).",
