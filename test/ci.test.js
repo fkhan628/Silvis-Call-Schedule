@@ -351,6 +351,10 @@ function yamlScalarList(node) {
 function buildOnRead(y) {
   const problems = [];
   const lines = yamlLinesOf(y);
+  // review 10/11: any tab-led line fails closed first - a tab at column 0 reads as indent 0, so the block reader alone ended
+  // there silently (GitHub's parser refuses tab indentation, i.e. the workflow would stop running while this passed)
+  const tabLine = lines.find(l => l.tab || /^\t/.test(l.text));
+  if (tabLine) return { problems: ["build.yml has a tab-indented line: `" + tabLine.text + "`"], paths: null };
   const onTops = lines.filter(l => l.ind === 0 && /^["']?on["']?\s*:/i.test(l.text));
   if (onTops.length !== 1) return { problems: ["build.yml must have exactly ONE top-level `on:` key, found " + onTops.length], paths: null };
   if (onTops[0].text !== "on:") return { problems: ["build.yml's trigger must be the block mapping `on:` (no string / flow / inline form), found `" + onTops[0].text + "`"], paths: null };
@@ -413,6 +417,9 @@ const onMustFail = [
   ["the flow form of on", mutate("the flow form of on", "\non:\n", "\non: [push, workflow_dispatch]\nx_was_on:\n"), /block mapping `on:`/],
   ["a second top-level on", yml + "\n\"on\":\n  pull_request: {}\n", /exactly ONE top-level `on:`/],
   ["a line indented past its block", mutate("a line indented past its block", WD_LINE, "\n   release: {}\n  workflow_dispatch: {}"), /does not read as a block mapping/],
+  // review 10/11: a tab at column 0 counted as indent 0 and ended the block silently (GitHub refuses tab indents outright)
+  ["a tab-led line at column 0 after the block", mutate("a tab-led line at column 0 after the block", WD_LINE, "\n  workflow_dispatch: {}\n\tpull_request: {}"), /tab-indented line/],
+  ["a tab-led line at column 0 inside the block", mutate("a tab-led line at column 0 inside the block", WD_LINE, "\n\tpull_request: {}\n  workflow_dispatch: {}"), /tab-indented line/],
 ];
 onMustFail.forEach(([label, y, want]) => { const r = buildOnRead(y); ok(r.problems.some(p => want.test(p)), "the `on:` reader must refuse `" + label + "` with a problem matching " + want + ", got " + JSON.stringify(r.problems)); });
 flush("build.yml on: block");
