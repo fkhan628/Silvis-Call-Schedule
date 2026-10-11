@@ -65,6 +65,11 @@ const THEME = {
     // Light 5.75:1 on the card, 5.12 on the weekend tint, 5.13 on a drafted row, 4.77 on the range-start row, 5.40 / 5.00 on the
     // vacation painter's weekend / painted rows; dark (= accentText) 6.22 / 6.85 / 5.66 / 4.97 / 6.85 / 5.66 (contrast.mjs).
     paintText: "#A05010",
+    // The offer painter's "OPEN" (P / B with no holder, today or later; 10.5 px / 800 on the day rows - the text class), 10/4.
+    // Light = T.open (#B91C1C, the look is unchanged): 6.47:1 on a free row, 5.76 on the weekend tint, 5.41 on the range-start
+    // row, 5.77 on a drafted row, 5.82 on the blocked row's tint. Dark #FF8A8A (the header's error red) - T.open's #F06060 read
+    // 4.12:1 on a drafted row and 3.62:1 on the range-start row: 6.40 / 7.05 / 5.11 / 5.83 / 7.56 (contrast.mjs, unrounded >= 4.5).
+    paintOpen: "#B91C1C",
   },
   dark: {
     bg: "#0B1A33", surface: "#13294B", raised: "#0F2140", text: "#E6ECF5", muted: "#9FB0C8", border: "#24406B",
@@ -79,6 +84,7 @@ const THEME = {
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
     appText: "#DDAFC2", appTint: "#3A2232",
     paintText: "#FF8A4C",
+    paintOpen: "#FF8A8A",
   },
 };
 const LIGHT = THEME.light;
@@ -87,9 +93,9 @@ const LIGHT = THEME.light;
 // row, the range-start row, a drafted row (offer painter), and the vacation painter's painted / weekend rows (the offer
 // painter's weekend row is T.weekend). A free row is T.surface. Every day row carries data-surface, so the dark sheet's
 // active-navy rule never lifts a dark T.surface row to #2E5090. contrast.mjs measures the text tokens on each tint (the
-// greyed row is a disabled control at 0.6 opacity - not measured; T.open on the dark drafted / range-start rows is a known
-// gap, 4.12 / 3.62:1, not measured yet). The light range-start row is #DEEDF8 (review 10/3: the literal #DCECF8 put T.muted at
-// 4.495:1, which only a rounded comparison passed).
+// greyed row is a disabled control at 0.6 opacity - not measured, apart from T.paintOpen on its tint). The offer painter's
+// "OPEN" is T.paintOpen since 10/4: T.open's dark red read 4.12 / 3.62:1 on the drafted / range-start rows. The light range-start
+// row is #DEEDF8 (review 10/3: the literal #DCECF8 put T.muted at 4.495:1, which only a rounded comparison passed).
 const PAINT_ROWS = {
   light: { blocked: "#F1F3F6", pending: "#DEEDF8", draft: "#EAF3FB", vacDraft: "#E6F2EA", vacWeekend: "#F6F8FA" },
   dark:  { blocked: "#0F1B33", pending: "#1A3A5E", draft: "#1C3050", vacDraft: "#1C3050", vacWeekend: "#0F2140" },

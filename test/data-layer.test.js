@@ -12351,6 +12351,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const cm = fs.readFileSync(path.join(ROOT, "test", "ui", "contrast.mjs"), "utf8");
       assert.ok(cm.includes("for (const r of rows) r.ok = r.exact >= r.min;") && cm.includes("ok: contrastRatioExact(fg, bg) >= min });"), "both tables compare contrastRatioExact");
     });
+    check("PD OPEN (10/4): the offer painter's \"OPEN\" reads T.paintOpen - light = T.open (unchanged), dark #FF8A8A >= 4.5:1 unrounded on every day-row background it can sit on (contrast.mjs measures the five pairs per theme; T.open's dark #F06060 fails the drafted 4.12 and range-start 3.62 rows)", () => {
+      assert.strictEqual(L.paintOpen, L.open, "light: the painter's OPEN stays T.open (the look is unchanged)");
+      assert.strictEqual(D.paintOpen, "#FF8A8A", "dark: the painter's own red");
+      assert.ok(offer.includes("const openRed = T.paintOpen;") && cntP(offer, "openRed") === 3, "openRed = T.paintOpen, read by the two holder spans only");
+      assert.ok(offer.includes('<span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>') && offer.includes('<span>B <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span></span>'), "both holder spans paint OPEN with openRed");
+      assert.ok(offer.includes("const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;"), "the five backgrounds a day row can take (the pairs below)");
+      assert.ok(!/"OPEN"/.test(vac), "the vacation painter shows no OPEN");
+      const { pathToFileURL } = require("url");
+      const cmUrl = pathToFileURL(path.join(ROOT, "test", "ui", "contrast.mjs")).href;
+      const script = `import { createRequire } from "node:module"; import { contrastTable } from ${JSON.stringify(cmUrl)};
+        const m = createRequire(${JSON.stringify(cmUrl)})(${JSON.stringify(path.join(ROOT, "app-styles.js"))});
+        const old = { ...m, THEME: { ...m.THEME, dark: { ...m.THEME.dark, paintOpen: m.THEME.dark.open } } };
+        const pick = (rows) => rows.filter(r => /^painter OPEN red /.test(r.pair)).map(r => ({ theme: r.theme, pair: r.pair, bg: r.bg, exact: r.exact, ok: r.ok }));
+        console.log(JSON.stringify({ now: pick(contrastTable(m)), old: pick(contrastTable(old)).filter(r => !r.ok).map(r => [r.theme, r.pair, Math.round(r.exact * 100) / 100]) }));`;
+      const r = require("child_process").spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", cwd: ROOT, maxBuffer: 16 * 1024 * 1024 });
+      assert.strictEqual(r.status, 0, "contrast probe crashed: " + String(r.stderr || "").slice(0, 400));
+      const out = JSON.parse(String(r.stdout || "").trim().split("\n").pop());
+      const PRL = STY.PAINT_ROWS.light, PRD = STY.PAINT_ROWS.dark;
+      const want = (theme, T, PR) => [["painter OPEN red on a free row (card)", T.surface], ["painter OPEN red on the weekend tint", T.weekend], ["painter OPEN red on the pending row", PR.pending], ["painter OPEN red on the draft row", PR.draft], ["painter OPEN red on the blocked row (its tint)", PR.blocked]].map(([pair, bg]) => [theme, pair, bg]);
+      assert.deepStrictEqual(out.now.map(x => [x.theme, x.pair, x.bg]), want("light", L, PRL).concat(want("dark", D, PRD)), "contrast.mjs measures OPEN on every row background, both themes");
+      assert.deepStrictEqual(out.now.filter(x => !(x.ok && x.exact >= 4.5)).map(x => x.theme + " " + x.pair + " " + x.exact), [], "every pair >= 4.5:1 unrounded");
+      assert.deepStrictEqual(out.old, [["dark", "painter OPEN red on the pending row", 3.62], ["dark", "painter OPEN red on the draft row", 4.12]], "T.open's dark red would fail exactly the range-start and drafted rows (the pairs catch a regression)");
+    });
     check("PD A: the No primary legend's ending names the read-only range, no pronoun (both variants)", () => {
       assert.strictEqual(cntP(offer, 'A \\"No primary (set by the scheduler)\\" range only the scheduler can change."'), 2);
       assert.ok(!/only he can change/.test(PSRC), "no 'only he can change' left");
