@@ -2374,10 +2374,11 @@ card's Biometric "Enable" as the only Enable in sight, so a surgeon told "tap En
 button reads **Enable phone notifications** (every "tap Enable" hint follows; the "tap Reset subscription, then Enable" family
 stays word for word, because PS004 / PS006 raise it from the database), the Biometric button reads **Enable Face ID / Touch
 ID**, and Settings opens Notification settings by itself while this device's push state is `off` or `ios-home-screen`: once per
-account per page load (the first Settings visit once the state is known, `pushAutoOpenRef`), a close sticks, a tap on the header
-is never overridden (`toggleSettingsCard` records it), and never when on / blocked / unsupported or on `?public=1`. The card
-stays in memory (`openSettingsCards`, a reload starts closed again). Its header carries `data-testid="notif-settings-toggle"`
-and `aria-expanded`.
+account per page load (decided on Settings once the state is known - a visit after it arrived, or its arrival during a visit;
+`pushAutoOpenRef`), a close sticks, a tap on the header is never overridden (`toggleSettingsCard` records it), and never when on
+/ blocked / unsupported or on `?public=1`. The open / closed state stays in memory (`openSettingsCards`): a reload starts it
+closed, and with push still off the first Settings visit after the reload opens it again. Its header carries
+`data-testid="notif-settings-toggle"` and `aria-expanded`.
 
 ### 22.3 The flows (`config.js` `pushDevice`; contract 3.4)
 
@@ -2432,7 +2433,7 @@ and `aria-expanded`.
   the version-change reset keeps the worker, re-arm after a wiped registration with no prompt, the deep link + `?tab=evil` +
   the open-window message, Turn off, Reset (the root dummy survives), the columns absent, sign-out order (delete ->
   unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line; Enable asks nothing) and the
-  Home Screen app (Enable offered) at 390 px with screenshots. The shared route answers every push request on every other page
+  Home Screen app (Enable phone notifications offered) at 390 px with screenshots. The shared route answers every push request on every other page
   (never the live project).
 - Push UX 1(a): `test/push.test.js` lifts the auto-open effect and the header's toggle out of `index-source.html` and runs them
   (off / iOS open; on / blocked / unsupported stay closed and are decided once; not yet known, another view, `?public=1` and
