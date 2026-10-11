@@ -10322,6 +10322,13 @@ try {
       const havePlanAv = new Set(PLAN_P.availabilityRows.map(avKey0)), haveLiveAv = new Set(liveAv0.map(avKey0));
       const avIns0 = PLAN_P.availabilityRows.filter(r => !haveLiveAv.has(avKey0(r)));
       const avDel0 = liveAv0.filter(r => r.source === "seed" && !havePlanAv.has(avKey0(r)));
+      // 10/10: the seed's time_off rows the live table lacks are inserts in 'Total changes' too (the importer's toT.insert),
+      // restated the way the Import apply pin below restates expToIns - Burchett's two January 2027 ranges left the live
+      // table between 10/4 and 10/10, and the dry-run pins (which never counted time_off) failed on every branch.
+      const toKey0 = (r) => [r.person_id, String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)].join("|");
+      const liveTo0 = fixture ? fixture.time_off : await anonRowsOf("time_off", "person_id,start_date,end_date");
+      const haveLiveTo = new Set(liveTo0.map(toKey0));
+      const toInsOf = (plan) => plan.timeOffRows.filter(r => !haveLiveTo.has(toKey0(r))).length;
       const offerUpserts = PLAN_P.periodRows.length + PLAN_P.offerRows.length;
       const offersWords = Object.keys(PLAN_P.stats.offersByPerson).map(id => `${nm(id)} ${PLAN_P.stats.offersByPerson[id]}`).join(", ");
       // IP fix (9/23, review): the blob keys the plan would change, restated from the plan's blob against the blob the
@@ -10339,7 +10346,7 @@ try {
         return canonJ(mine) !== canonJ(theirs);
       });
       const blobDelta = blobDeltaOf(PLAN_P.blob);
-      const expChanges = blobDelta.length + offerUpserts + avIns0.length + avDel0.length;
+      const expChanges = blobDelta.length + offerUpserts + avIns0.length + avDel0.length + toInsOf(PLAN_P);
       const expDryTotal = `Total changes: ${expChanges}` + blockedSuffix;
       const expDryTail = `Total changes: ${expChanges}` + (avDel0.length ? ` (incl. ${avDel0.length} delete(s) of seed-owned rows)` : "") + (planBlockedLines ? ` (+${planBlockedLines} blocked)` : "");
       const legs0 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
@@ -10360,7 +10367,7 @@ try {
       else if (!legs0.includes(perLabel) || !Object.keys(PLAN_P.stats.offersByPerson).every(id => legs0.includes(`${nm(id)} ${PLAN_P.stats.offersByPerson[id]}`)) || !/applied by the CLI only/.test(legs0)) fail(`Import dry run: the seed-period-legs panel must name the period '${perLabel}', the offers per surgeon (${offersWords}) and say the legs are applied by the CLI only: ` + legs0.slice(0, 300));
       else if (!applyDisabled) fail("Import dry run: Apply must be disabled for a plan that carries offer periods (the legs are the CLI's)");
       else if (impWrites.length) fail("Import dry run wrote something: " + JSON.stringify(impWrites.map(w => w.method + " " + w.path)));
-      else ok(`Import seed dry run (docs/silvis-seed.json): period-aware like the CLI - ${expChanges} change(s) = ${PLAN_P.periodRows.length} call_periods + ${PLAN_P.offerRows.length} call_offers upserts (authenticated-read tables, unknown to this dry run as to the CLI's; ${offersWords}) + ${avIns0.length} availability insert(s) + ${avDel0.length} retired-row delete(s) + ${blobDelta.length} blob key(s)${blobDelta.length ? " (" + blobDelta.join(", ") + " - the " + (fixture ? "fixture blob is the legacy plan's" : "live blob differs") + ")" : ""}; time_off / schedule_days 0 change(s)${planBlocked.length ? ` (+${planBlockedLines} blocked slot lines on ${planBlocked.length} plan days the app published since the import, kept as they are; ${planUnchanged.length} unchanged)` : ""}; the legs panel names '${perLabel}' and the offers per surgeon; Apply refused, no writes`);
+      else ok(`Import seed dry run (docs/silvis-seed.json): period-aware like the CLI - ${expChanges} change(s) = ${PLAN_P.periodRows.length} call_periods + ${PLAN_P.offerRows.length} call_offers upserts (authenticated-read tables, unknown to this dry run as to the CLI's; ${offersWords}) + ${avIns0.length} availability insert(s) + ${avDel0.length} retired-row delete(s) + ${toInsOf(PLAN_P)} time_off insert(s) (seed ranges the live table lacks) + ${blobDelta.length} blob key(s)${blobDelta.length ? " (" + blobDelta.join(", ") + " - the " + (fixture ? "fixture blob is the legacy plan's" : "live blob differs") + ")" : ""}; schedule_days 0 change(s)${planBlocked.length ? ` (+${planBlockedLines} blocked slot lines on ${planBlocked.length} plan days the app published since the import, kept as they are; ${planUnchanged.length} unchanged)` : ""}; the legs panel names '${perLabel}' and the offers per surgeon; Apply refused, no writes`);
       diffText.split("\n").filter(l => /^(call_schedule_data|schedule_days|availability|time_off|call_periods|call_offers|offers status|Total changes)/.test(l)).forEach(l => console.log("     " + l));
       await page.locator("[data-testid=card-setup_import]").screenshot({ path: path.join(OUT, "import-dryrun.png") });
       ok("screenshot test/ui/out/import-dryrun.png");
@@ -10405,11 +10412,11 @@ try {
         // the legacy plan's), so the blob's share is the union - restated from plan3P's blob, as the first pin restates PLAN_P's
         const blobDelta3 = blobDeltaOf(plan3P.blob);
         if (!blobDelta3.includes("surgeonRules") || !blobDelta3.includes("settings")) fail(`Import apply dry run (extra ${extra}) premise: the extra date must move surgeonRules and settings in the restatement (blob keys differing: ${blobDelta3.join(", ") || "none"})`);
-        const expTotal3 = blobDelta3.length + plan3P.periodRows.length + plan3P.offerRows.length + avDel0.length;
+        const expTotal3 = blobDelta3.length + plan3P.periodRows.length + plan3P.offerRows.length + avDel0.length + toInsOf(plan3P);
         const legs3 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
         if (plan3P.offerRows.length !== PLAN_P.offerRows.length + 1 || plan3P.availabilityRows.length !== PLAN_P.availabilityRows.length) fail(`Import apply dry run (extra ${extra}) premise: the period-aware plan of the seed plus one Burchett December date must carry one more offer row and the same availability rows (offers ${PLAN_P.offerRows.length} -> ${plan3P.offerRows.length}, availability ${PLAN_P.availabilityRows.length} -> ${plan3P.availabilityRows.length})`);
         else if (total3.trim() !== `Total changes: ${expTotal3}` + blockedSuffix || !/settings=update/.test(diff3) || !/surgeonRules=update/.test(diff3) || new RegExp("insert s2 available/any " + extra).test(diff3) || !new RegExp("call_offers: plan " + plan3P.offerRows.length + " row\\(s\\)").test(diff3) || !legs3.includes(`${nm("s2")} ${plan3P.stats.offersByPerson.s2}`)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: ${expTotal3}${blockedSuffix}' (surgeonRules + settings + ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts${avDel0.length ? " + " + avDel0.length + " retired-row delete(s)" : ""}, NO 'insert s2 available/any ${extra}' - the date is an offer - and the legs naming ${nm("s2")} ${plan3P.stats.offersByPerson.s2}${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules|call_offers: plan/.test(l)).join(" | ")} | legs: ${legs3.slice(0, 200)}`);
-        else ok(`Import apply dry run: extra Burchett date ${extra} -> ${expTotal3} changes as the CLI counts them (surgeonRules=update, settings=update - the seedCoreHash stamp, ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts - the date is one more offer of ${nm("s2")}'s, not an available row)${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
+        else ok(`Import apply dry run: extra Burchett date ${extra} -> ${expTotal3} changes as the CLI counts them (surgeonRules=update, settings=update - the seedCoreHash stamp, ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts - the date is one more offer of ${nm("s2")}'s, not an available row; ${toInsOf(plan3P)} time_off insert(s))${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
         // Prompt 14 IP (9/23): the in-app plan is period-aware, but the app has no writer for call_periods / call_offers and
         // never deletes the rows a period retires, so a seed that carries periods is dry-run only in the app - the block note
         // and the legs panel show, Apply is disabled although the diff has changes, the importer's period-aware status table
@@ -10448,11 +10455,11 @@ try {
           const avIns3L = plan3L.availabilityRows.filter(r => !haveLiveAv.has(avKey0(r)));
           const avDel3L = liveAv0.filter(r => r.source === "seed" && !plan3LKeys.has(avKey0(r)));
           const blobDelta3L = blobDeltaOf(plan3L.blob); // surgeonRules + settings (the extra date) - the legacy plan's blob, restated like the pins above
-          const expTotal3b = blobDelta3L.length + avIns3L.length + avDel3L.length;
+          const expTotal3b = blobDelta3L.length + avIns3L.length + avDel3L.length + toInsOf(plan3L);
           if (total3b.trim() !== `Total changes: ${expTotal3b}` + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3b) || !/call_periods: plan 0 row\(s\)/.test(diff3b) || !/call_offers: plan 0 row\(s\)/.test(diff3b) || /offers status \(/.test(diff3b)) fail(`Import apply dry run (no periods): the plan of the same seed without offerPeriods must read 'Total changes: ${expTotal3b}${blockedSuffix}' (surgeonRules + settings + ${avIns3L.length} availability insert(s) incl. 'insert s2 available/any ${extra}'${avDel3L.length ? " + " + avDel3L.length + " delete(s)" : ""}; the CLI's 'call_periods: plan 0 row(s)' / 'call_offers: plan 0 row(s)' lines, no status table) - got '${total3b.trim()}' | ${diff3b.split("\n").filter(l => /^availability|insert s2 available\/any 2026-12|^call_(periods|offers)|^offers status/.test(l)).slice(0, 6).join(" | ")}`);
           else if (await page.$("[data-testid=seed-period-block]") || await page.$("[data-testid=seed-period-legs]")) fail("Import apply dry run (no periods): neither the period block note nor the legs panel may show for a period-free seed");
           else if (await page.$eval("[data-testid=seed-apply]", el => el.disabled)) fail(`Import apply dry run (no periods): Apply must be enabled (${expTotal3b} changes, no periods)`);
-          else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()} (= the legacy plan: ${avIns3L.length} availability insert(s) = the extra date${avIns3L.length > 1 ? " + the " + (avIns3L.length - 1) + " rows the period retired, which a period-free seed would re-add - the reason a period-carrying seed is refused" : ""}; the CLI's 'plan 0 row(s)' lines for the two offer tables), no block note, no legs, Apply enabled`);
+          else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()} (= the legacy plan: ${avIns3L.length} availability insert(s) = the extra date${avIns3L.length > 1 ? " + the " + (avIns3L.length - 1) + " rows the period retired, which a period-free seed would re-add - the reason a period-carrying seed is refused" : ""}; ${toInsOf(plan3L)} time_off insert(s); the CLI's 'plan 0 row(s)' lines for the two offer tables), no block note, no legs, Apply enabled`);
 
         }
         // Prompt 12 SM2: the result panel's counts are restated from the harness's own data, never from
