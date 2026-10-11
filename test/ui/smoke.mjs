@@ -216,8 +216,10 @@
 //     the save body + badge, Diagnose, Send test, the phone switches, the
 //     version-change reset keeps sw.js, the silent re-arm, the ?tab= deep
 //     link, the open-window message, Turn off, Reset, the columns absent,
-//     sign-out order, Blocked, ?public=1, iPhone Safari / Home Screen at
-//     390 px); a
+//     sign-out order, Blocked (no Send test, the switches editable with
+//     their note), ?public=1, iPhone Safari (one instruction, no push
+//     button) / Home Screen at 390 px, an installed Android app's Blocked
+//     line); a
 //     third page runs data management end to end with recorded writes: JSON
 //     export shape/counts = live anon data, malformed imports refused with no
 //     write, factory reset needs the typed RESET, records the snapshot BEFORE
@@ -2090,6 +2092,8 @@ try {
         lightTop: pos(light), refreshTop: pos(titleEl("Refresh app")), auditTop: pos(document.querySelector("[data-testid=card-settings_audit]")), restoreTop: pos(titleEl("Restore from snapshot")),
         plusMinus: Array.from(document.querySelectorAll("span")).filter(s => s.children.length === 0 && /^[+-]$/.test(s.textContent.trim()) && s.parentElement && /Office notifications|Notification settings|Restore from snapshot/i.test(s.parentElement.textContent)).length,
         permText: perm ? perm.textContent.trim() : null, permRaw: perm ? perm.getAttribute("data-permission") : null,
+        popupButtons: Array.from(document.querySelectorAll("[data-testid=popup-allow], [data-testid=popup-test]")).map(b => [b.getAttribute("data-testid"), b.textContent.trim()]),
+        oldPopupNames: Array.from(document.querySelectorAll("button")).map(b => b.textContent.trim()).filter(t => t === "Allow notifications" || t === "Send test notification"),
         bioLine: !!document.querySelector("[data-testid=biometric-unavailable]"), bioDetails: !!document.querySelector("[data-testid=biometric-details]") };
     });
     const groups = sd.heads.map(h => h.group).join(",");
@@ -2101,6 +2105,10 @@ try {
     if (sd.permText === null) fail("Settings declutter: the Pop-ups box has no [data-testid=notif-permission] line (Notification settings was expanded above)");
     else if (/\b(granted|denied|default|unsupported)\b/.test(sd.permText)) fail("Settings declutter: the Pop-ups box still prints the raw permission token: " + sd.permText);
     else ok(`Settings declutter: Pop-ups permission '${sd.permRaw}' reads '${sd.permText}'`);
+    // push UX (b) (10/11): the Pop-ups box's buttons say what they do (they were confusable with the push box's Enable / Send test)
+    const wantPopups = (sd.permRaw === "default" ? [["popup-allow", "Allow pop-ups"]] : []).concat([["popup-test", "Show a test pop-up"]]);
+    if (JSON.stringify(sd.popupButtons) !== JSON.stringify(wantPopups) || sd.oldPopupNames.length) fail("Settings declutter: the Pop-ups box's buttons " + JSON.stringify(sd.popupButtons) + " (want " + JSON.stringify(wantPopups) + "), old names on screen " + JSON.stringify(sd.oldPopupNames));
+    else ok(`Settings declutter: the Pop-ups box's buttons read ${wantPopups.map(x => "'" + x[1] + "'").join(" / ")} - never 'Allow notifications' / 'Send test notification'`);
     if (!sd.bioLine) console.log("     (Settings declutter: biometrics report available in this browser - the Account 'Details' disclosure is not exercised this run)");
     else if (sd.bioDetails) fail("Settings declutter: the biometric Details (Re-check / Try enable anyway) are open on entry - they belong behind Details");
     else {
@@ -12407,6 +12415,14 @@ try {
       const fromB64u = (s) => { const t = atob(String(s).replace(/-/g, "+").replace(/_/g, "/")); const u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u.buffer; };
       const toB64u = (buf) => { const u = new Uint8Array(buf); let s = ""; for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
       if (cfg.standalone) { try { Object.defineProperty(Navigator.prototype, "standalone", { get: () => true, configurable: true }); } catch (e) {} }
+      // an installed app on Android / a computer: matchMedia("(display-mode: standalone)") matches (navigator.standalone is iOS only)
+      if (cfg.displayStandalone) {
+        try {
+          const mm0 = window.matchMedia.bind(window);
+          window.matchMedia = (q) => (/display-mode:\s*standalone/.test(String(q)) ? { matches: true, media: String(q), onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } } : mm0(q));
+        } catch (e) {}
+      }
+      if (cfg.perm) { try { if (localStorage.getItem("smoke-p30-perm") === null) localStorage.setItem("smoke-p30-perm", cfg.perm); } catch (e) {} }
       const N = function Notification() {};
       Object.defineProperty(N, "permission", { get: () => LS("smoke-p30-perm", "default") });
       N.requestPermission = async () => {
@@ -12644,8 +12660,9 @@ try {
       await pg.waitForFunction(() => /^Reset done/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
       s = await stateOf(pg);
       regs = await swRegs(pg);
-      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Reload the app, then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
-      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Reload the app, then tap Enable phone notifications.'");
+      // push UX (d) (10/11): a Home Screen app has no reload - the message says close and reopen first
+      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
+      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications.'");
       // (11) the columns probe answering 400 42703 (the migration not applied): the switches hidden, the e-mail upsert names no *_push key
       p30.cols = "unavailable";
       await loadApp(pg, P30_BASE);
@@ -12675,14 +12692,32 @@ try {
       const subAfter = await pg.evaluate(() => Object.keys(localStorage).filter(k => /^smoke-p30-sub:|^silvis-push-on-/.test(k)));
       if (JSON.stringify(seq) !== JSON.stringify(["POST rpc/delete_push_subscription", "unsubscribe smoke-device-1", "POST logout"]) || subAfter.length) fail("P30 sign-out: order " + JSON.stringify(seq) + ", left on the device " + JSON.stringify(subAfter));
       else ok("P30 sign-out: the device's row deleted (still signed in), THEN unsubscribed, THEN /auth/v1/logout - no subscription or flag left on the device");
-      // (13) denied: 'Blocked for 127.0.0.1' (no Davenport clause off fkhan628.github.io), no Enable
+      // (13) denied: 'Blocked for 127.0.0.1' (no Davenport clause off fkhan628.github.io), no Enable. Push UX (e) (10/11): no
+      // Send test (it cannot reach this device); the phone switches stay EDITABLE (they cover the account's other devices too)
+      // with the blocked note - a tap still saves
       await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "denied"));
       await loadApp(pg, P30_BASE);
       await openCard(pg);
+      await pg.waitForSelector("[data-testid=push-card] [data-testid=push-prefs]", { timeout: 10000 }).catch(() => {});
       s = await stateOf(pg);
       const host = new URL(BASE).hostname;
+      const bp = await pg.$eval("[data-testid=push-card]", (el) => ({
+        note: el.querySelector("[data-testid=push-prefs-blocked]") ? el.querySelector("[data-testid=push-prefs-blocked]").textContent.trim() : null,
+        disabled: Array.from(el.querySelectorAll("[data-testid=push-pref] input[type=checkbox]")).map(i => i.disabled),
+      }));
       if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.` || s.buttons.includes("Enable phone notifications")) fail("P30 blocked: " + JSON.stringify(s));
       else ok(`P30 blocked: badge 'Blocked', '${s.line.slice(0, 60)}...' (no Davenport clause on ${host}), no Enable`);
+      if (JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail("P30 blocked: the buttons " + JSON.stringify(s.buttons) + " - want Diagnose / Reset subscription only (no Send test)");
+      else if (bp.note !== "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on." || bp.disabled.length !== 2 || bp.disabled.some(Boolean)) fail("P30 blocked: the phone switches " + JSON.stringify(bp));
+      else {
+        c0 = p30.calls.length;
+        await pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=trade_updates_push] input[type=checkbox]").click();
+        await pg.waitForTimeout(1200);
+        const bPosts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+        let bRow = null; try { bRow = JSON.parse(bPosts.length ? bPosts[0].body : "null"); } catch (e) {}
+        if (bPosts.length !== 1 || !bRow || bRow.person_id !== "s2" || !("trade_updates_push" in bRow)) fail("P30 blocked: a tap on a phone switch did not save: " + JSON.stringify(bPosts.map(x => x.body)));
+        else ok("P30 blocked: buttons Diagnose / Reset subscription (no Send test); the phone switches stay editable with the note '" + bp.note + "' - a tap saved (one POST notification_preferences)");
+      }
       await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "granted"));
       // (14) ?public=1: no card, no registration, no push request
       c0 = p30.calls.length;
@@ -12757,8 +12792,10 @@ try {
       p30.profile = null;
       if (sctx) await sctx.close();
     }
-    // (15) iPhone: Safari outside the Home Screen app -> the iOS line, Enable asks nothing and registers nothing; the Home Screen
-    // app (navigator.standalone) -> Enable offered; 390 px screenshots of both for the report
+    // (15) iPhone: Safari outside the Home Screen app -> the iOS line as the ONE instruction, no push button (push UX c, 10/11:
+    // none of Enable / Diagnose / Reset subscription / Send test works there; the generic line is hidden), the phone switches
+    // stay; nothing asked, nothing registered. The Home Screen app (navigator.standalone) -> Enable offered; 390 px screenshots
+    // of both for the report
     const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
     for (const standalone of [false, true]) {
       let ictx = null, ip = null;
@@ -12774,16 +12811,16 @@ try {
         let s = await stateOf(ip);
         if (!standalone) {
           const want = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications.";
-          if (s.state !== "ios-home-screen" || s.line !== want || !s.buttons.includes("Enable phone notifications")) fail(`P30 ${label}: ` + JSON.stringify(s));
-          else {
-            await ip.click("[data-testid=push-enable]");
-            await ip.waitForTimeout(800);
-            s = await stateOf(ip);
-            const asks = await lsGet(ip, "smoke-p30-asks");
-            const regs = await swRegs(ip);
-            if (s.msg !== want || asks !== null || regs.length) fail(`P30 ${label} Enable: msg ${JSON.stringify(s.msg)}, permission asks ${asks}, registrations ${JSON.stringify(regs)}`);
-            else ok(`P30 ${label}: the Home Screen line (add to Home Screen, open from the icon, sign in there once, then Enable); Enable asks nothing and registers nothing`);
-          }
+          await ip.waitForSelector("[data-testid=push-card] [data-testid=push-prefs]", { timeout: 10000 }).catch(() => {});
+          await ip.waitForTimeout(800);
+          s = await stateOf(ip);
+          const sv = await ip.$eval("[data-testid=push-card]", (el) => ({ intro: !!el.querySelector("[data-testid=push-line]"), homeScreen: el.textContent.split("Add to Home Screen").length - 1, prefs: !!el.querySelector("[data-testid=push-prefs]") }));
+          const asks = await lsGet(ip, "smoke-p30-asks");
+          const regs = await swRegs(ip);
+          if (s.state !== "ios-home-screen" || s.line !== want || s.buttons.length || s.msg !== null) fail(`P30 ${label}: ` + JSON.stringify(s) + " - want the Home Screen line and no push button");
+          else if (sv.intro || sv.homeScreen !== 1 || !sv.prefs) fail(`P30 ${label}: the card ` + JSON.stringify(sv) + " - want no generic line, the Home Screen instruction once, the phone switches kept");
+          else if (asks !== null || regs.length) fail(`P30 ${label}: permission asks ${asks}, registrations ${JSON.stringify(regs)} - want none`);
+          else ok(`P30 ${label}: ONE instruction (the Home Screen line: add to Home Screen, open from the icon, sign in there once, then Enable), no push button and no generic line; the phone switches kept; nothing asked, nothing registered`);
         } else {
           if (s.state !== "off" || !s.buttons.includes("Enable phone notifications") || s.line !== "Off for this device.") fail(`P30 ${label}: ` + JSON.stringify(s));
           else ok(`P30 ${label} (navigator.standalone): 'Off for this device.' with Enable offered`);
@@ -12796,6 +12833,29 @@ try {
         if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));
       } catch (e) { fail(`P30 ${label}: ` + errLine(e)); try { if (ip) await ip.screenshot({ path: path.join(OUT, "failure-p30-iphone.png"), fullPage: true }); } catch (e2) {} }
       if (ictx) await ictx.close();
+    }
+    // (16) push UX (f) (10/11): Blocked in an installed Android app (display-mode standalone - opened from its icon, no address
+    // bar): the line points at the phone's Settings > Apps > Chrome > Notifications and says reopen the app; no Send test (e)
+    {
+      let actx = null, ap = null;
+      const label = "Android installed app, Blocked";
+      try {
+        p30.errors = [];
+        actx = await mkP30Ctx({ viewport: { width: 412, height: 915 }, userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36" });
+        await actx.addInitScript(p30Init, Object.assign({}, P30_CFG, { displayStandalone: true, perm: "denied" }));
+        ap = await actx.newPage();
+        watch(ap, label);
+        await loadApp(ap, P30_BASE);
+        await openCard(ap);
+        const s = await stateOf(ap);
+        const want = `Blocked for ${new URL(BASE).hostname}. To allow it, open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications.`;
+        if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== want || JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail(`P30 ${label}: ` + JSON.stringify(s));
+        else ok(`P30 ${label}: '${s.line}' (the phone's own settings - no address-bar hint); buttons Diagnose / Reset subscription (no Send test)`);
+        await ap.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();
+        await ap.locator("[data-testid=push-card]").screenshot({ path: path.join(OUT, "p30-push-card-android-app-blocked-412.png") });
+        if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail(`P30 ${label}: ` + errLine(e)); try { if (ap) await ap.screenshot({ path: path.join(OUT, "failure-p30-android.png"), fullPage: true }); } catch (e2) {} }
+      if (actx) await actx.close();
     }
   }
   // @p30-smoke-end

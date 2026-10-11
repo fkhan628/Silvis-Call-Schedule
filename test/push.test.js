@@ -37,6 +37,12 @@ const EDGE_PATH = "edge-functions/send-notification/index.ts";
 const EDGE = fs.existsSync(path.join(ROOT, EDGE_PATH)) ? read(EDGE_PATH) : "";
 // The contract's whitelist (push-design.md 2.4 / 3.1 / 3.2) - restated here on purpose
 const CONTRACT_TABS = ["calendar", "openshifts", "myschedule", "timeoff", "settings", "setup"];
+// Push UX (b)-(f) (10/11): the words the card, its Blocked lines and the Pop-ups box must show - restated here on purpose
+const IOS_HOME_LINE = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications.";
+const ANDROID_APP_TAIL = ". To allow it, open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications.";
+const BROWSER_TAIL = ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.";
+const BLOCKED_PREFS_NOTE = "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on.";
+const RESET_DONE = "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications.";
 
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -84,6 +90,7 @@ const b64u = (u8) => Buffer.from(u8).toString("base64url");
 let KEY = "", KEY2 = "";
 const UA_WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 const UA_IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const UA_ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
 const fakeJwt = (sub) => [{ alg: "HS256", typ: "JWT" }, { sub, role: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600 }].map(o => Buffer.from(JSON.stringify(o)).toString("base64url")).join(".") + ".c2ln";
 const sha16 = async (s) => Buffer.from(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex").slice(0, 16);
 
@@ -100,7 +107,8 @@ function mkStorage(init) {
 }
 
 // One fake browser: service worker container, PushManager per registration, Notification, the network.
-// o: { ua, standalone, permission, answer (requestPermission's answer), regs: [[scope, slots]], silvisSub (endpoint or null),
+// o: { ua, standalone (navigator.standalone - iOS), displayMode (matchMedia("(display-mode: standalone)") - an installed app on
+//      Android / a computer), permission, answer (requestPermission's answer), regs: [[scope, slots]], silvisSub (endpoint or null),
 //      lsInit, neverActive, saved (status RPC), answers: (path, method, body) => { status, body } | undefined,
 //      endpoint (what subscribe hands out), invalidStateOnce, subscribeThrows, removeHangs }
 function mkBrowser(o) {
@@ -200,7 +208,7 @@ function loadClient(srcs, b) {
   vm.runInContext(srcs.config, sb, { filename: "config.js" });
   vm.runInContext(srcs.helpers, sb, { filename: "helpers.js" });
   const api = vm.runInContext("({ pushDb, pushDevice, notifPrefsDb, jwtClaims, auth })", sb);
-  api.pushDevice.env = () => ({ nav: b.nav, N: b.N, PM: b.PM, ls: b.ls, loc: b.loc, mm: (q) => ({ matches: false, media: q }), subtle: webcrypto.subtle, base: SIL, sleep: async () => {}, activeWaitMs: 300 });
+  api.pushDevice.env = () => ({ nav: b.nav, N: b.N, PM: b.PM, ls: b.ls, loc: b.loc, mm: (q) => ({ matches: !!(b.o.displayMode && q === "(display-mode: standalone)"), media: q }), subtle: webcrypto.subtle, base: SIL, sleep: async () => {}, activeWaitMs: 300 });
   return api;
 }
 const silvisReg = (b) => b.sw.regs.find(r => r.scope === SIL) || null;
@@ -338,6 +346,33 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.deepStrictEqual(H.pushStateWords("off", { needsTap: true }), { badge: null, line: "Off for this device - tap Enable phone notifications to turn it back on." });
   };
   await check("pushStateWords: the contract's badge + line per state - Blocked names the host (+ the Davenport clause on fkhan628.github.io only), the iPhone / iPad Home Screen wording, the iOS line with its own sign-in", wordsCheck);
+  // Push UX (f) (10/11): an installed app (standalone) has no address bar, so on Android the Blocked line points at the phone's
+  // own settings; a browser tab and an installed computer app keep the address-bar wording; iOS keeps its own line
+  const androidAppBlockedCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const W = (o) => H.pushStateWords("blocked", o);
+    assert.deepStrictEqual(W({ hostname: "fkhan628.github.io", device: "Android", label: "Android", standalone: true }), { badge: "Blocked", line: "Blocked for fkhan628.github.io - this also affects the Davenport app" + ANDROID_APP_TAIL });
+    assert.strictEqual(W({ hostname: "localhost", device: "Android", standalone: true }).line, "Blocked for localhost" + ANDROID_APP_TAIL, "no Davenport clause off fkhan628.github.io");
+    assert.strictEqual(W({ hostname: "localhost", device: "Android", standalone: false }).line, "Blocked for localhost" + BROWSER_TAIL, "Android in a browser tab: the address-bar wording stays");
+    assert.strictEqual(W({ hostname: "localhost", device: "Android" }).line, "Blocked for localhost" + BROWSER_TAIL, "standalone not known: the browser wording");
+    assert.strictEqual(W({ hostname: "localhost", device: "Chrome on Windows", standalone: true }).line, "Blocked for localhost" + BROWSER_TAIL, "an installed computer app keeps the browser wording");
+    assert.strictEqual(W({ ios: true, device: "iPhone", standalone: true }).line, "Blocked in your iPhone's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications.", "an iPhone Home Screen app keeps its own line");
+  };
+  await check("pushStateWords (push UX f): Blocked in an installed Android app (standalone) points at the phone's Settings > Apps > Chrome > Notifications, then reopen the app - the browser tab, an installed computer app and iOS keep their own lines", androidAppBlockedCheck);
+  // Push UX (c) / (e) (10/11): which parts of the card show per state. Safari on an iPhone / iPad (ios-home-screen): only the
+  // state line (none of the buttons can work outside the Home Screen app); Blocked: no Send test, the switches' note
+  const cardPartsCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const P = (st) => H.pushCardParts(st);
+    const none = { intro: false, enable: false, disable: false, diagnose: false, reset: false, test: false, prefsBlocked: false };
+    assert.deepStrictEqual(P("ios-home-screen"), none, "Safari on an iPhone / iPad: no generic line, no button");
+    assert.deepStrictEqual(P("off"), { ...none, intro: true, enable: true, diagnose: true, reset: true, test: true }, "off (also the iPhone Home Screen app): Enable offered");
+    assert.deepStrictEqual(P("on"), { ...none, intro: true, disable: true, diagnose: true, reset: true, test: true });
+    assert.deepStrictEqual(P("blocked"), { ...none, intro: true, diagnose: true, reset: true, prefsBlocked: true }, "blocked: no Send test, the switches' note");
+    assert.deepStrictEqual(P("unsupported"), { ...none, intro: true, diagnose: true, reset: true, test: true });
+    assert.deepStrictEqual(P(null), { ...none, intro: true, diagnose: true, reset: true, test: true }, "still checking: as before");
+  };
+  await check("pushCardParts (push UX c / e): ios-home-screen shows no generic line and no button; off offers Enable, on Turn off; blocked hides Send test and flags the switches' note; still checking / unsupported as before", cardPartsCheck);
   await check("pushDeviceLabel / pushIsIOS / pushIsStandalone: iPhone, iPad (incl. iPadOS's Macintosh UA with touch), Android, <browser> on <os>, Browser - every label matches the DB's label check", (S) => {
     const H = loadHelpers(S.helpers);
     const T = [
@@ -700,7 +735,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const r2 = await loadClient(S, b2).pushDevice.teardown(UID, 4000);
     assert.ok(r2.done && b2.calls.length === 0, "no Silvis subscription: nothing to delete");
   });
-  await check("disable (Turn off): delete { p_endpoint } + unsubscribe + clear the flag - the worker stays; reset: the same plus unregistering ONLY the Silvis push worker (root and sub-scope registrations kept)", async (S) => {
+  const turnOffResetCheck = async (S) => {
     let b = mkBrowser({ permission: "granted", silvisSub: EP1, lsInit: { ["silvis-push-on-" + UID]: "{\"v\":1,\"ep\":\"x\",\"at\":\"t\"}" } });
     let r = await loadClient(S, b).pushDevice.disable(UID);
     assert.strictEqual(r.message, "Phone notifications are off for this device.");
@@ -709,11 +744,13 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!b.log.some(l => /^unregister/.test(l)) && b.ls.getItem("silvis-push-on-" + UID) === null);
     b = mkBrowser({ permission: "granted", silvisSub: EP1, regs: [[SIL + "x/", { active: SIL + "x/sw.js" }]], lsInit: { ["silvis-push-on-" + UID]: "{\"v\":1,\"ep\":\"x\",\"at\":\"t\"}" } });
     r = await loadClient(S, b).pushDevice.reset(UID);
-    assert.strictEqual(r.message, "Reset done. Reload the app, then tap Enable phone notifications.");
+    // push UX (d) (10/11): a Home Screen app has no reload - the message says close and reopen first
+    assert.strictEqual(r.message, RESET_DONE);
     assert.deepStrictEqual(b.log.filter(l => /^unregister/.test(l)), ["unregister /Silvis-Call-Schedule/"], "only the Silvis push worker");
     assert.ok(b.sw.regs.some(x => x.scope === LIVE) && b.sw.regs.some(x => x.scope === SIL + "x/"), "the root (Davenport) and the sub-scope registration remain");
     assert.ok(fetches(b, /delete_push/).length === 1 && b.ls.getItem("silvis-push-on-" + UID) === null);
-  });
+  };
+  await check("disable (Turn off): delete { p_endpoint } + unsubscribe + clear the flag - the worker stays; reset: the same plus unregistering ONLY the Silvis push worker (root and sub-scope registrations kept) -> 'Reset done. Close and reopen the app (or reload the page), ...' (push UX d)", turnOffResetCheck);
   await check("dropForeign (a different account on the in-place card): other accounts' flags go; a subscription without the new account's flag is unsubscribed locally (no request - the old token is dead); one with it is kept", async (S) => {
     let b = mkBrowser({ permission: "granted", silvisSub: EP1, lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }), "silvis-dark-mode": "true" } });
     let r = await loadClient(S, b).pushDevice.dropForeign(UID2);
@@ -722,7 +759,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     r = await loadClient(S, b).pushDevice.dropForeign(UID2);
     assert.deepStrictEqual([r.action, !!silvisReg(b).pushManager.sub, b.ls.getItem("silvis-push-on-" + UID), !!b.ls.getItem("silvis-push-on-" + UID2)], ["kept", true, null, true]);
   });
-  await check("state(): on / off / blocked / unsupported / ios-home-screen from the fakes, with no network; diagnose: one line with no URL, no endpoint, no key - and 'Server key changed' when the subscription's key is not the server's", async (S) => {
+  const stateCheck = async (S) => {
     const flagOf = async (ep) => ({ ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(ep), at: "t" }) });
     const st = async (o) => { const b = mkBrowser(o); const s = await loadClient(S, b).pushDevice.state(UID); assert.strictEqual(b.calls.length, 0, "state() reads no network"); return s; };
     let s = await st({ permission: "granted", silvisSub: EP1, lsInit: await flagOf(EP1) });
@@ -733,6 +770,12 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const ios = await st({ ua: UA_IPHONE });
     assert.deepStrictEqual([ios.state, ios.device], ["ios-home-screen", "iPhone"]);
     assert.strictEqual((await st({ ua: UA_IPHONE, standalone: true, permission: "default" })).state, "off", "iPhone Home Screen app: Enable is offered");
+    // push UX (f): an installed Android app (display-mode standalone) hands standalone + device to the card's Blocked words
+    const andApp = await st({ ua: UA_ANDROID, displayMode: true, permission: "denied" });
+    assert.deepStrictEqual([andApp.state, andApp.device, andApp.ios, andApp.standalone, andApp.hostname], ["blocked", "Android", false, true, "fkhan628.github.io"], "an installed Android app: " + JSON.stringify(andApp));
+    assert.strictEqual(loadHelpers(S.helpers).pushStateWords(andApp.state, andApp).line, "Blocked for fkhan628.github.io - this also affects the Davenport app" + ANDROID_APP_TAIL);
+    const andTab = await st({ ua: UA_ANDROID, permission: "denied" });
+    assert.deepStrictEqual([andTab.state, andTab.standalone], ["blocked", false], "Android in a browser tab");
     let b = mkBrowser({ permission: "granted", silvisSub: EP1, silvisSubKey: KEY, lsInit: await flagOf(EP1) });
     let line = await loadClient(S, b).pushDevice.diagnose(UID, "Khan");
     assert.strictEqual(line, "Worker: active - Permission: granted - Subscribed: yes - Saved on the server: yes (1 device(s) on this account) - Signed in as: Khan");
@@ -743,7 +786,8 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     b = mkBrowser({ permission: "default" });
     line = await loadClient(S, b).pushDevice.diagnose(UID, "a read-only account");
     assert.strictEqual(line, "Worker: none - Permission: not asked - Subscribed: no - Saved on the server: no - Signed in as: a read-only account");
-  });
+  };
+  await check("state(): on / off / blocked / unsupported / ios-home-screen from the fakes, with no network (an installed Android app hands standalone + device - push UX f); diagnose: one line with no URL, no endpoint, no key - and 'Server key changed' when the subscription's key is not the server's", stateCheck);
   await check("config.js names the push RPCs and routes in one place, never `serviceWorker.ready` / getRegistration( in code, and never logs or stores an endpoint", (S) => {
     const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/.*$/gm, "$1");
     [S.config, S.helpers, S.index].forEach((t, i) => {
@@ -988,6 +1032,107 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!/>Enable<\/button>/.test(idx) && !/"Enable", push/.test(idx), "no bare Enable button anywhere");
   };
   await check("push UX 1(a): Notification settings opens by itself on Settings while push is off (once per account and page load, a close sticks, never over a tap on its header); the push button reads 'Enable phone notifications'", autoOpenCheck);
+  // Push UX (b)-(f) (10/11): the Phone notifications card (the IIFE in Settings > Notification settings) and the Pop-ups box
+  // lifted out of index-source.html, compiled by Babel (classic runtime, as build.js does) and run on a React.createElement
+  // stub - the element tree they render, per state.
+  const babelJsx = (src, file) => require("@babel/core").transformSync(src, { babelrc: false, configFile: false, filename: file, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+  const ReactStub = { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" };
+  const kidsOf = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true && c !== "");
+  const allOf = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kidsOf(n).forEach(c => allOf(c, pred, out)); } return out; };
+  const byTestId = (n, id) => allOf(n, x => x.props && x.props["data-testid"] === id);
+  const textOf = (n) => (typeof n === "string" || typeof n === "number" ? String(n) : kidsOf(n).map(textOf).join(""));
+  const buttonsOf = (n) => allOf(n, x => x.type === "button").map(x => x.props["data-testid"]);
+  const noop = () => {};
+  const renderPushCard = (S, info, extra) => {
+    const a = S.index.indexOf("              {(() => {\n                const info = pushInfo;");
+    const b = S.index.indexOf("\n              })()}\n", a);
+    assert.ok(a > 0 && b > a, "could not lift the Phone notifications card");
+    const code = babelJsx(S.index.slice(a + "              {".length, b + "\n              })()".length), "push-card.jsx");
+    const H = loadHelpers(S.helpers);
+    const scope = Object.assign({
+      React: ReactStub, pushInfo: info, pushNeedsTap: false, pushBusy: "", pushMsg: "", pushCols: "ok",
+      pushStateWords: H.pushStateWords, pushCardParts: H.pushCardParts,
+      css: { btn: (p) => ({ primary: !!p }) }, T: { text: "#text", success: "#success", open: "#open", muted: "#muted" },
+      dk: false, dkCardBorder: "#border", dkText: "#title", dkSubtext: "#muted", mono: "monospace",
+      mySurgeon: "s2", isFollowing: false, notifPrefs: {}, followerPref: null, followerPrefsEditable: false,
+      saveNotifPref: noop, saveFollowerPref: noop, pushEnable: noop, pushTurnOff: noop, pushDiagnose: noop, pushReset: noop, pushSendTest: noop,
+    }, extra || {});
+    vm.createContext(scope);
+    return vm.runInContext(code, scope, { filename: "push-card.jsx" });
+  };
+  const DESKTOP = { ios: false, standalone: false, device: "Chrome on Windows", label: "Chrome on Windows", hostname: "localhost" };
+  const cardRenderCheck = (S) => {
+    // (c) Safari on an iPhone / iPad: ONE instruction (the state line), no push button at all; the phone switches stay
+    let t = renderPushCard(S, { state: "ios-home-screen", ios: true, standalone: false, device: "iPhone", label: "iPhone", hostname: "fkhan628.github.io" });
+    assert.deepStrictEqual(buttonsOf(t), [], "Safari: no Enable / Diagnose / Reset subscription / Send test");
+    assert.strictEqual(byTestId(t, "push-line").length, 0, "Safari: the generic line is hidden (the state line says it)");
+    assert.strictEqual(textOf(byTestId(t, "push-state")[0]), IOS_HOME_LINE);
+    assert.strictEqual(textOf(t).split("Add to Home Screen").length - 1, 1, "Safari: the Home Screen instruction appears once: " + textOf(t));
+    assert.strictEqual(byTestId(t, "push-prefs").length, 1, "Safari: the phone switches stay (they cover every device)");
+    // the iPhone Home Screen app (standalone -> off): nothing changes, Enable offered
+    t = renderPushCard(S, { state: "off", ios: true, standalone: true, device: "iPhone", label: "iPhone", hostname: "fkhan628.github.io" });
+    assert.deepStrictEqual(buttonsOf(t), ["push-enable", "push-diagnose", "push-reset", "push-test"], "the Home Screen app: Enable offered");
+    assert.strictEqual(byTestId(t, "push-line").length, 1);
+    t = renderPushCard(S, { state: "on", ...DESKTOP });
+    assert.deepStrictEqual(buttonsOf(t), ["push-disable", "push-diagnose", "push-reset", "push-test"], "on: Turn off, Diagnose, Reset subscription, Send test");
+    assert.strictEqual(byTestId(t, "push-prefs-blocked").length, 0, "on: no blocked note");
+    byTestId(t, "push-pref").forEach(l => assert.strictEqual(l.props.style.color, "#text", "on: the switches in the normal text colour"));
+    // (e) Blocked: no Send test; the switches stay EDITABLE (they cover the account's other devices too - the card cannot know
+    // whether there are any), greyed on this card, with the note saying both halves
+    t = renderPushCard(S, { state: "blocked", ...DESKTOP });
+    assert.deepStrictEqual(buttonsOf(t), ["push-diagnose", "push-reset"], "blocked: no Send test (and no Enable)");
+    assert.strictEqual(textOf(byTestId(t, "push-state")[0]), "Blocked for localhost" + BROWSER_TAIL);
+    let note = byTestId(t, "push-prefs-blocked");
+    assert.strictEqual(note.length, 1, "blocked: the switches' note");
+    assert.strictEqual(textOf(note[0]), BLOCKED_PREFS_NOTE);
+    let inputs = allOf(byTestId(t, "push-prefs")[0], x => x.type === "input");
+    assert.strictEqual(inputs.length, 2, "two phone switches");
+    inputs.forEach(i => assert.strictEqual(i.props.disabled, false, "blocked: a surgeon's switch stays editable"));
+    byTestId(t, "push-pref").forEach(l => { assert.strictEqual(l.props.style.color, "#muted", "blocked: greyed"); assert.strictEqual(l.props.style.cursor, "pointer", "blocked: still clickable"); });
+    // a follower, his row read: editable, greyed, the note; his row not read yet: disabled as before
+    t = renderPushCard(S, { state: "blocked", ...DESKTOP }, { mySurgeon: null, isFollowing: true, followerPref: {}, followerPrefsEditable: true });
+    assert.strictEqual(byTestId(t, "push-prefs-blocked").length, 1, "a follower's card: the note");
+    allOf(byTestId(t, "push-prefs")[0], x => x.type === "input").forEach(i => assert.strictEqual(i.props.disabled, false, "a follower's switch stays editable"));
+    t = renderPushCard(S, { state: "blocked", ...DESKTOP }, { mySurgeon: null, isFollowing: true, followerPref: null, followerPrefsEditable: false });
+    allOf(byTestId(t, "push-prefs")[0], x => x.type === "input").forEach(i => assert.strictEqual(i.props.disabled, true, "a follower's switch before his row was read: disabled, as before"));
+    t = renderPushCard(S, { state: "blocked", ...DESKTOP }, { mySurgeon: null, isFollowing: false });
+    assert.strictEqual(byTestId(t, "push-prefs-blocked").length, 0, "no switches (an unlinked account following nobody): no note");
+    // (f) Blocked in an installed Android app: the card hands standalone to the words
+    t = renderPushCard(S, { state: "blocked", ios: false, standalone: true, device: "Android", label: "Android", hostname: "fkhan628.github.io" });
+    assert.strictEqual(textOf(byTestId(t, "push-state")[0]), "Blocked for fkhan628.github.io - this also affects the Davenport app" + ANDROID_APP_TAIL);
+    assert.deepStrictEqual(buttonsOf(t), ["push-diagnose", "push-reset"]);
+    // still checking this device: as before
+    t = renderPushCard(S, null);
+    assert.strictEqual(textOf(byTestId(t, "push-state")[0]), "Checking this device...");
+    assert.deepStrictEqual(buttonsOf(t), ["push-diagnose", "push-reset", "push-test"]);
+    assert.strictEqual(byTestId(t, "push-line").length, 1);
+  };
+  await check("push UX (c) / (e) / (f) - the card lifted and run per state: Safari on an iPhone shows ONE instruction (the state line) and no push button, the switches stay; the Home Screen app offers Enable; Blocked hides Send test, keeps the switches editable (greyed) with the note; an installed Android app's Blocked line; still checking as before", cardRenderCheck);
+  // (b) the Pop-ups box: its buttons say what they do (they were confusable with the push box's Enable / Send test)
+  const popupsCheck = (S) => {
+    const H = loadHelpers(S.helpers);
+    const i = S.index.indexOf(">Pop-ups on this device</div>");
+    const a = S.index.lastIndexOf("<div style={{background:dk?", i), b = S.index.indexOf("\n              </div>\n            </>}", i);
+    assert.ok(i > 0 && a > 0 && b > i, "could not lift the Pop-ups box");
+    const code = babelJsx("(" + S.index.slice(a, b + "\n              </div>".length) + ")", "popups.jsx");
+    const render = (perm) => {
+      const sc = { React: ReactStub, dk: false, dkCardBorder: "#border", dkText: "#title", dkSubtext: "#muted", T: { success: "#success" }, css: { btn: (p) => ({ primary: !!p }) },
+        browserNotifPermission: perm, notifPermissionText: H.notifPermissionText, requestBrowserNotifPermission: noop, sendTestNotification: noop, notifTestSent: "" };
+      vm.createContext(sc);
+      return vm.runInContext(code, sc, { filename: "popups.jsx" });
+    };
+    const named = (t) => allOf(t, x => x.type === "button").map(x => [x.props["data-testid"], textOf(x)]);
+    let t = render("default");
+    assert.ok(textOf(t).startsWith("Pop-ups on this device"), "the box title stays");
+    assert.deepStrictEqual(named(t), [["popup-allow", "Allow pop-ups"], ["popup-test", "Show a test pop-up"]], "not asked yet: Allow pop-ups + Show a test pop-up");
+    assert.strictEqual(textOf(byTestId(t, "notif-permission")[0]), "Shown while the app is open. Not allowed yet - tap Allow pop-ups.");
+    assert.deepStrictEqual(named(render("granted")), [["popup-test", "Show a test pop-up"]]);
+    assert.deepStrictEqual(named(render("denied")), [["popup-test", "Show a test pop-up"]]);
+    assert.strictEqual(H.notifTestMessage(false, "default"), "Browser notifications are not allowed yet - tap Allow pop-ups first.");
+    assert.ok(!/>Allow notifications<|>Send test notification<|tap Allow notifications/.test(S.index + S.helpers), "no old Pop-ups button name is left in the app");
+    assert.ok(S.index.includes('pbtn("push-test", "test", "Send test", pushSendTest, false)'), "the push box's Send test keeps its name (ONBOARDING names it)");
+  };
+  await check("push UX (b): the Pop-ups box (lifted and run) reads 'Allow pop-ups' / 'Show a test pop-up' and its lines name them; the push box's Send test is unchanged", popupsCheck);
 
   /* ================================ [M] mutants ================================ */
   await mutant("the header tap not recorded (the auto-open overrides a close)", "index",
@@ -998,6 +1143,43 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     'if (pushInfo.state === "off" || pushInfo.state === "ios-home-screen") setOpenSettingsCards', 'if (pushInfo.state !== "on") setOpenSettingsCards', autoOpenCheck);
   await mutant("the auto-open on any view", "index",
     '    if (view !== "settings" || isPublicMode || !pushUid || !pushInfo) return;', '    if (isPublicMode || !pushUid || !pushInfo) return;', autoOpenCheck);
+  // Push UX (b)-(f) (10/11): one mutant per behaviour
+  await mutant("(b) the Pop-ups Allow button back to 'Allow notifications'", "index",
+    ">Allow pop-ups</button>", ">Allow notifications</button>", popupsCheck);
+  await mutant("(b) the Pop-ups test button back to 'Send test notification'", "index",
+    ">Show a test pop-up</button>", ">Send test notification</button>", popupsCheck);
+  await mutant("(b) the Pop-ups line still naming 'Allow notifications'", "helpers",
+    '"Not allowed yet - tap Allow pop-ups."', '"Not allowed yet - tap Allow notifications."', popupsCheck);
+  await mutant("(c) the generic push line shown in Safari (pushCardParts)", "helpers",
+    "    intro: !ios,", "    intro: true,", cardPartsCheck);
+  await mutant("(c) the generic push line unguarded on the card", "index",
+    '{parts.intro && <p data-testid="push-line"', '{<p data-testid="push-line"', cardRenderCheck);
+  await mutant("(c) Enable offered in Safari again (pushCardParts)", "helpers",
+    '    enable: state === "off",', '    enable: state === "off" || ios,', cardPartsCheck);
+  await mutant("(c) Enable unguarded on the card", "index",
+    '{parts.enable && pbtn("push-enable"', '{(parts.enable || st === "ios-home-screen") && pbtn("push-enable"', cardRenderCheck);
+  await mutant("(c) Diagnose unguarded on the card", "index",
+    '{parts.diagnose && pbtn("push-diagnose"', '{pbtn("push-diagnose"', cardRenderCheck);
+  await mutant("(c) Reset subscription unguarded on the card", "index",
+    '{parts.reset && pbtn("push-reset"', '{pbtn("push-reset"', cardRenderCheck);
+  await mutant("(e) Send test offered while Blocked (pushCardParts)", "helpers",
+    "    test: !ios && !blocked,", "    test: !ios,", cardPartsCheck);
+  await mutant("(e) Send test unguarded on the card", "index",
+    '{parts.test && pbtn("push-test"', '{pbtn("push-test"', cardRenderCheck);
+  await mutant("(e) the switches disabled while this device is blocked (a user with another working device could not change them)", "index",
+    "notifPrefs[mySurgeon], true,", "notifPrefs[mySurgeon], !parts.prefsBlocked,", cardRenderCheck);
+  await mutant("(e) the switches' blocked note missing", "index",
+    '{parts.prefsBlocked && <p data-testid="push-prefs-blocked"', '{false && <p data-testid="push-prefs-blocked"', cardRenderCheck);
+  await mutant("(e) the switches not greyed while blocked", "index",
+    "color:parts.prefsBlocked?dkSubtext:T.text", "color:T.text", cardRenderCheck);
+  await mutant("(d) the Reset message without close-and-reopen (a Home Screen app has no reload)", "config",
+    '"Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications."', '"Reset done. Reload the app, then tap Enable phone notifications."', turnOffResetCheck);
+  await mutant("(f) the installed-Android Blocked line dropped (the address-bar hint again)", "helpers",
+    '    if (o.standalone && o.device === "Android") return {', "    if (false) return {", androidAppBlockedCheck);
+  await mutant("(f) the card not passing standalone to pushStateWords", "index",
+    "standalone: info.standalone, ", "", cardRenderCheck);
+  await mutant("(f) state() not handing standalone back", "config",
+    "hasSub: !!sub, flag, ios: s.ios, standalone: s.standalone,", "hasSub: !!sub, flag, ios: s.ios,", stateCheck);
   console.log("\n[M] mutants (contract section 5) - each must turn its check red");
   await mutant("keepRegistration without the sw.js rule", "index",
     `          if (scriptURLs[i].split("#")[0].split("?")[0] === silvisBase + "sw.js") return true; // Prompt 30: Silvis's own push worker\n`, "", keepCheck);
@@ -1023,9 +1205,10 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     "    let reg = await sw.ready;", regCheck);
   await mutant("the deep link not stripped", "helpers",
     `  const strip = p.has("tab") || p.has("day");`, `  const strip = false;`, deepLinkCheck);
+  // retargeted 10/11 (push UX f): the "Blocked for <host>" head is now shared by the browser line and the installed-Android one
   await mutant("the blocked words without the hostname", "helpers",
-    `    return { badge: "Blocked", line: "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow`,
-    `    return { badge: "Blocked", line: "Blocked" + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow`, wordsCheck);
+    `    const head = "Blocked for " + host + (host === "fkhan628.github.io"`,
+    `    const head = "Blocked" + (host === "fkhan628.github.io"`, wordsCheck);
   await mutant("enable asking the server before the permission prompt", "config",
     "    // (2) the permission FIRST - nothing is awaited before it\n    let perm;",
     "    // (2) the permission FIRST - nothing is awaited before it\n    await pushDb.publicKey();\n    let perm;", enableCheck);

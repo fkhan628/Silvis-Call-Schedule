@@ -221,18 +221,27 @@ schedule published, a manual edit that touches them, offers, vacations logged), 
 person turned on. It is Silvis's own Web Push (no OneSignal, nothing to install; Davenport's push is separate and unchanged).
 Everyone turns it on **once per device**: Settings > **Notification settings** > **Phone notifications** > **Enable phone notifications**, then
 **Send test** (a real notification to that person's own devices). **Turn off** stops it on that device; **Reset
-subscription** starts that device over; **Diagnose** says, in one line, what the device and the server hold. Which events
-reach the phones is set under "Which events reach your phones" (two switches, independent of the e-mail ones).
+subscription** starts that device over (then close and reopen the app - or reload the page in a browser - and tap **Enable
+phone notifications**); **Diagnose** says, in one line, what the device and the server hold. Which events reach the phones is
+set under "Which events reach your phones" (two switches, independent of the e-mail ones; they cover every device the person
+turned on, so they stay editable even on a device that is blocked). The **Pop-ups on this device** box below is a different
+thing (pop-ups while the app is open): its buttons read **Allow pop-ups** and **Show a test pop-up**.
 
 **Three lines to send (iPhone / iPad - iOS 16.4 or later):**
 1. Open the Silvis call schedule in Safari, tap **Share** > **Add to Home Screen**, then open **Silvis Call** from that new icon.
 2. Sign in there once with your email and password - the Home Screen app has its own sign-in, separate from Safari.
 3. Tap **Settings** > **Notification settings** > **Phone notifications** > **Enable phone notifications**, allow notifications, then tap **Send test**.
 
+In Safari itself (not the Home Screen app) the card shows only that instruction - no buttons, since none of them works
+outside the Home Screen app.
+
 **Android / a computer (Chrome, Edge, Firefox):** open the app, sign in, Settings > Notification settings > Phone
 notifications > **Enable phone notifications**, allow, **Send test**. If the card says "Blocked for fkhan628.github.io", notifications were
 blocked for the whole site - that also affects the Davenport app: open the site settings (the icon left of the address), set
-Notifications to Allow, reload, tap Enable phone notifications.
+Notifications to Allow, reload, tap Enable phone notifications. In the app installed on an Android phone (opened from its
+icon - no address bar) the card says instead: phone **Settings > Apps > Chrome** (or the browser it was installed from) **>
+Notifications**, allow them, reopen the app, tap Enable phone notifications. While blocked, **Send test** is hidden (it
+cannot reach that device).
 
 **Signing out** turns phone notifications off on that device (the next person to sign in there does not get them); a
 shared office PC hands the device over when another account turns it on.

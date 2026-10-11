@@ -5912,20 +5912,44 @@ function pushStateOf(s) {
   if (o.permission === "granted" && o.hasReg && o.hasSub && o.flag) return "on";
   return "off";
 }
-// pushStateWords(state, { hostname, label, ios, device, needsTap }) -> { badge, line } - the card's badge and state line.
-// Blocked on a computer / Android is per ORIGIN (fkhan628.github.io also serves the Davenport app, Cowork 10/2 7:25 PM);
-// an iPhone / iPad Home Screen app asks on its own.
+// pushStateWords(state, { hostname, label, ios, device, standalone, needsTap }) -> { badge, line } - the card's badge and state
+// line. Blocked on a computer / Android is per ORIGIN (fkhan628.github.io also serves the Davenport app, Cowork 10/2 7:25 PM);
+// an iPhone / iPad Home Screen app asks on its own. An installed Android app (standalone - opened from its icon) has no address
+// bar, so its Blocked line points at the phone's own settings instead (push UX f, 10/11); an installed computer app keeps the
+// browser wording.
 function pushStateWords(state, opts) {
   const o = opts && typeof opts === "object" ? opts : {};
   if (state === "on") return { badge: "Subscribed on this device", line: o.label ? "On for this device (" + o.label + ")." : "On for this device." };
   if (state === "blocked") {
     if (o.ios) return { badge: "Blocked", line: "Blocked in your " + (o.device === "iPad" ? "iPad" : "iPhone") + "'s settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications." };
     const host = String(o.hostname || "this site");
-    return { badge: "Blocked", line: "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications." };
+    const head = "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, ";
+    if (o.standalone && o.device === "Android") return { badge: "Blocked", line: head + "open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications." };
+    return { badge: "Blocked", line: head + "open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications." };
   }
   if (state === "ios-home-screen") return { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications." };
   if (state === "unsupported") return { badge: null, line: "Not supported in this browser." };
   return { badge: null, line: o.needsTap ? "Off for this device - tap Enable phone notifications to turn it back on." : "Off for this device." };
+}
+// pushCardParts(state) -> which parts of the Phone notifications card show for this device's state (push UX c / e, 10/11):
+// { intro (the generic "Turn this on once on each device..." line), enable, disable, diagnose, reset, test, prefsBlocked (the
+// phone switches' note) }. Safari on an iPhone / iPad (ios-home-screen): the state line is the ONE instruction - no generic
+// line (it repeated the Home Screen steps) and no button (none of them can work outside the Home Screen app); the phone
+// switches stay (they cover every device). Blocked: no Send test (it cannot reach this device), and the switches get a note -
+// they stay editable, because they also cover the account's other devices and the card cannot know whether there are any.
+// The Home Screen app reads "off" and offers Enable. null (still checking) and unsupported: as before.
+function pushCardParts(state) {
+  const ios = state === "ios-home-screen";
+  const blocked = state === "blocked";
+  return {
+    intro: !ios,
+    enable: state === "off",
+    disable: state === "on",
+    diagnose: !ios,
+    reset: !ios,
+    test: !ios && !blocked,
+    prefsBlocked: blocked,
+  };
 }
 // A REAL calendar day "YYYY-MM-DD" - the edge's pushIsoDay round trip (review 10/3): 2026-02-31 or 2026-13-45 is refused, so
 // neither a crafted ?tab=calendar&day= link nor a sw message can open the day editor on a key the date column would refuse.
@@ -6352,11 +6376,13 @@ function focusTrapNext(shiftKey, focusable, active) {
   return null;
 }
 
-// (d) The line under "Send test notification": "sent" only when new Notification() really showed one.
+// (d) The line under "Show a test pop-up": "sent" only when new Notification() really showed one. Push UX (b) (10/11): the
+// Pop-ups box's buttons read "Allow pop-ups" / "Show a test pop-up" (they were confusable with the push box's Enable / Send
+// test), and the lines that name them follow.
 function notifTestMessage(shown, permission) {
   if (shown) return "Browser notification sent.";
   if (permission === "denied") return "Browser notifications are blocked in this browser's settings - nothing was shown.";
-  if (permission !== "granted") return "Browser notifications are not allowed yet - tap Allow notifications first.";
+  if (permission !== "granted") return "Browser notifications are not allowed yet - tap Allow pop-ups first.";
   return "This browser could not show a notification from the page (on an iPhone the app has to be installed to the Home Screen) - nothing was shown.";
 }
 
@@ -6365,7 +6391,7 @@ function notifTestMessage(shown, permission) {
 function notifPermissionText(permission) {
   if (permission === "granted") return "Allowed on this device.";
   if (permission === "denied") return "Blocked in this browser - allow them in the browser's site settings to get pop-ups.";
-  if (permission === "default") return "Not allowed yet - tap Allow notifications.";
+  if (permission === "default") return "Not allowed yet - tap Allow pop-ups.";
   return "This browser can't show pop-ups (on an iPhone, add the app to the Home Screen first).";
 }
 
@@ -6800,7 +6826,7 @@ if (typeof module !== "undefined" && module.exports) {
     profilePollMerge, PROFILE_POLL_KEYS,
     FOLLOWER_ROLES, followsOf, followsColumnState, followsToggle, followsAuditText, followsPatch, followedIdsOf,
     notifPrefSaveRequest, notifPrefReadFailureState,
-    PUSH_TABS, PUSH_FLAG_PREFIX, PUSH_ENDPOINT_RE, PUSH_UNAVAILABLE_TEXT, PUSH_CODES, pushB64u, pushB64uDecode, pushEndpointAllowed, pushIsIOS, pushIsStandalone, pushDeviceLabel, pushStateOf, pushStateWords, pushDeepLink, pushOpenMessage, pushTapLeavesDraft, remindChannels, remindButtonWords, remindOutcome, pushErrorWords, pushTestWords, pushDiagLine,
+    PUSH_TABS, PUSH_FLAG_PREFIX, PUSH_ENDPOINT_RE, PUSH_UNAVAILABLE_TEXT, PUSH_CODES, pushB64u, pushB64uDecode, pushEndpointAllowed, pushIsIOS, pushIsStandalone, pushDeviceLabel, pushStateOf, pushStateWords, pushCardParts, pushDeepLink, pushOpenMessage, pushTapLeavesDraft, remindChannels, remindButtonWords, remindOutcome, pushErrorWords, pushTestWords, pushDiagLine,
     PAY_FLAG_DEFAULTS, PAY_WEEK_ORDER, PAY_RATE_KEYS, PAY_RATE_COLUMNS, PAY_FLAG_COLUMNS, PAY_RATE_LABELS, PAY_UNAVAILABLE_TEXT, PAY_RATES_UNSET_TEXT, PAY_STIPEND_OFF_TEXT,
     payStipendOn, payStipendDelta, paySettingsHidden, payStipendKnown, payStipendPending, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,

@@ -8393,16 +8393,21 @@ function CallSchedule() {
               {/* Prompt 30 (Faraz 10/2: "Davenport's look, Silvis's own push"): Phone notifications - every signed-in role.
                   Davenport's card (a badge, one line, Enable / Diagnose / Reset subscription / Send test, a monospace message
                   box) plus Turn off, the per-origin Blocked wording and the per-category phone switches. Web Push through
-                  Silvis's own sw.js; the words are helpers.pushStateWords / pushTestWords / pushDiagLine's. */}
+                  Silvis's own sw.js; the words are helpers.pushStateWords / pushTestWords / pushDiagLine's.
+                  Push UX (b)-(f) (10/11): which lines and buttons show per state is helpers.pushCardParts - Safari on an iPhone /
+                  iPad shows only the state line (one instruction, no button: none works outside the Home Screen app); Blocked
+                  hides Send test and keeps the phone switches editable (they cover the account's other devices too), greyed,
+                  with a note; the state line gets standalone (an installed Android app's Blocked wording). */}
               {(() => {
                 const info = pushInfo;
                 const st = info ? info.state : null;
-                const words = st ? pushStateWords(st, { hostname: info.hostname, label: info.label, ios: info.ios, device: info.device, needsTap: pushNeedsTap }) : null;
+                const words = st ? pushStateWords(st, { hostname: info.hostname, label: info.label, ios: info.ios, device: info.device, standalone: info.standalone, needsTap: pushNeedsTap }) : null;
+                const parts = pushCardParts(st);
                 const pbtn = (testid, name, label, onClick, primary) => (
                   <button data-testid={testid} onClick={onClick} disabled={!!pushBusy} style={{...css.btn(!!primary),padding:"5px 12px",fontSize:11,opacity:pushBusy && pushBusy !== name ? 0.6 : 1}}>{pushBusy === name ? "Working..." : label}</button>
                 );
                 const pushRows = (rows, cur, editable, onSave) => rows.map(([key, text]) => (
-                  <label key={key} data-testid="push-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:editable?"pointer":"default",fontSize:12,color:T.text,opacity:editable?1:0.6}}>
+                  <label key={key} data-testid="push-pref" data-key={key} style={{display:"flex",alignItems:"center",gap:8,cursor:editable?"pointer":"default",fontSize:12,color:parts.prefsBlocked?dkSubtext:T.text,opacity:editable?1:0.6}}>
                     <input type="checkbox" checked={(cur || {})[key] !== false} disabled={!editable} onChange={e=>onSave({[key]:e.target.checked})}/> {text}
                   </label>
                 ));
@@ -8412,14 +8417,14 @@ function CallSchedule() {
                       <span style={{fontSize:12,fontWeight:600,color:dkText}}>Phone notifications</span>
                       {words && words.badge && <span data-testid="push-badge" data-state={st} style={{fontSize:11,fontWeight:600,color:st === "on" ? T.success : T.open}}>{words.badge}</span>}
                     </div>
-                    <p data-testid="push-line" style={{fontSize:11,color:dkSubtext,margin:"0 0 6px",lineHeight:1.5}}>{"Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."}</p>
+                    {parts.intro && <p data-testid="push-line" style={{fontSize:11,color:dkSubtext,margin:"0 0 6px",lineHeight:1.5}}>{"Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."}</p>}
                     <p data-testid="push-state" data-state={st || "loading"} style={{fontSize:12,color:st === "blocked" ? T.open : T.text,margin:"0 0 8px",lineHeight:1.5}}>{words ? words.line : "Checking this device..."}</p>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                      {(st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true)}
-                      {st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false)}
-                      {pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false)}
-                      {pbtn("push-reset", "reset", "Reset subscription", pushReset, false)}
-                      {pbtn("push-test", "test", "Send test", pushSendTest, false)}
+                      {parts.enable && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true)}
+                      {parts.disable && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false)}
+                      {parts.diagnose && pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false)}
+                      {parts.reset && pbtn("push-reset", "reset", "Reset subscription", pushReset, false)}
+                      {parts.test && pbtn("push-test", "test", "Send test", pushSendTest, false)}
                     </div>
                     {pushMsg && <div data-testid="push-msg" role="status" style={{marginTop:8,padding:"6px 10px",background:dk?"#0f1e30":"#eef3f8",border:`1px solid ${dkCardBorder}`,borderRadius:6,fontSize:11,color:dkText,lineHeight:1.5,fontFamily:mono,wordBreak:"break-word"}}>{pushMsg}</div>}
                     <div style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${dkCardBorder}`}}>
@@ -8427,6 +8432,7 @@ function CallSchedule() {
                       {pushCols === "unknown" ? <span style={{fontSize:11,color:T.muted}}>Checking...</span>
                         : pushCols !== "ok" ? <div data-testid="push-prefs-unavailable" data-state={pushCols} style={{fontSize:11,color:dkSubtext,lineHeight:1.5}}>{pushCols === "unavailable" ? "Phone switches are available after the next update." : "Couldn't check the phone switches - reload the app to try again."}</div>
                         : (mySurgeon || isFollowing) ? <>
+                          {parts.prefsBlocked && <p data-testid="push-prefs-blocked" style={{fontSize:11,color:dkSubtext,margin:"0 0 6px",lineHeight:1.5}}>{"This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on."}</p>}
                           <div data-testid="push-prefs" data-owner={mySurgeon ? "person" : "follower"} style={{display:"flex",flexDirection:"column",gap:6}}>
                             {mySurgeon
                               ? pushRows([["schedule_updates_push","Schedule published, open shifts, changes affecting me"],["trade_updates_push","Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, (u) => saveNotifPref(mySurgeon, u))
@@ -8491,8 +8497,9 @@ function CallSchedule() {
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Pop-ups on this device</div>
                 <p data-testid="notif-permission" data-permission={browserNotifPermission} style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {browserNotifPermission === "default" && <button onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow notifications</button>}
-                  <button onClick={sendTestNotification} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send test notification</button>
+                  {/* push UX (b) (10/11): named for what they do - they were confusable with the push box's Enable / Send test */}
+                  {browserNotifPermission === "default" && <button data-testid="popup-allow" onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow pop-ups</button>}
+                  <button data-testid="popup-test" onClick={sendTestNotification} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Show a test pop-up</button>
                   {notifTestSent && <span style={{fontSize:11,color:T.success,fontWeight:600}}>{notifTestSent}</span>}
                 </div>
               </div>
