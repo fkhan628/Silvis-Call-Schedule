@@ -2324,7 +2324,7 @@ OneSignal app or the Davenport repo). The binding contract is `push-design.md` (
 database half is `sql/migrations/2026-10-03-push-notifications.sql` (revision w, `docs/SCHEMA-REVIEW.md`), the server half
 `edge-functions/send-notification/index.ts` (its `@webPush` / `@pushPlan` blocks, `edge-functions/README.md`). Order:
 apply -> `setup-push-keys.sh` -> deploy send-notification -> the record step -> the client ship on Faraz's go -> each person
-taps Enable on each device. The first three ran on 2026-10-03 (the record step: `docs/SCHEMA-REVIEW.md`, `edge-functions/README.md`):
+taps Enable phone notifications on each device. The first three ran on 2026-10-03 (the record step: `docs/SCHEMA-REVIEW.md`, `edge-functions/README.md`):
 the migration applied 16:30:43Z (probe AFTER 51 / 51, verify-rls 469 / 0 with section 19 graded strictly), the VAPID keys set by
 `setup-push-keys.sh --rotate` 16:35:42Z (replacing the pair the 03:29Z incident had set), send-notification v12 deployed 16:37:59 UTC
 (the re-download byte-identical to the repo file); since the record step section 19 of `scripts/verify-rls.sh` is strict and
@@ -2360,14 +2360,24 @@ a badge ("Subscribed on this device" green / "Blocked" red), the line "Turn this
 iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon.", the state line (on: "On for this device
 (<label>)."; off: "Off for this device." - after a failed re-arm "... - tap Enable phone notifications to turn it back on."; iPhone / iPad Safari
 outside the Home Screen app: add to Home Screen, open from the icon, **sign in there once** (the Home Screen app has its own
-sign-in, separate from Safari), then Enable; blocked on a computer / Android: "Blocked for <host>" + " - this also affects
+sign-in, separate from Safari), then tap Enable phone notifications; blocked on a computer / Android: "Blocked for <host>" + " - this also affects
 the Davenport app" on fkhan628.github.io (permission is per origin) + the site-settings hint; blocked in an iPhone Home Screen
-app: Settings > Notifications > Silvis Call; unsupported), the buttons **Enable** (off / iOS), **Turn off** (on - a
+app: Settings > Notifications > Silvis Call; unsupported), the buttons **Enable phone notifications** (off / iOS), **Turn off** (on - a
 deliberate addition beside Davenport's four), **Diagnose**, **Reset subscription**, **Send test** (everyone, to his own
 devices), a monospace message box, and "Which events reach your phones": two switches (`schedule_updates_push`,
 `trade_updates_push` - a linked surgeon's own row, a follower's own row by profile_id, editable only once his row was read),
 shown only when `notifPrefsDb.pushColumns()` reads "ok" (else "Phone switches are available after the next update."); an
 unlinked account that follows nobody reads that only its own tests reach its phones. Nothing on `?public=1`.
+
+**Push UX 1(a) (10/10) - one "Enable" per thing it turns on.** Collapsed, Notification settings used to leave the Account
+card's Biometric "Enable" as the only Enable in sight, so a surgeon told "tap Enable" could enrol Face ID instead. Now the push
+button reads **Enable phone notifications** (every "tap Enable" hint follows; the "tap Reset subscription, then Enable" family
+stays word for word, because PS004 / PS006 raise it from the database), the Biometric button reads **Enable Face ID / Touch
+ID**, and Settings opens Notification settings by itself while this device's push state is `off` or `ios-home-screen`: once per
+account per page load (the first Settings visit once the state is known, `pushAutoOpenRef`), a close sticks, a tap on the header
+is never overridden (`toggleSettingsCard` records it), and never when on / blocked / unsupported or on `?public=1`. The card
+stays in memory (`openSettingsCards`, a reload starts closed again). Its header carries `data-testid="notif-settings-toggle"`
+and `aria-expanded`.
 
 ### 22.3 The flows (`config.js` `pushDevice`; contract 3.4)
 
@@ -2424,6 +2434,13 @@ unlinked account that follows nobody reads that only its own tests reach its pho
   unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line; Enable asks nothing) and the
   Home Screen app (Enable offered) at 390 px with screenshots. The shared route answers every push request on every other page
   (never the live project).
+- Push UX 1(a): `test/push.test.js` lifts the auto-open effect and the header's toggle out of `index-source.html` and runs them
+  (off / iOS open; on / blocked / unsupported stay closed and are decided once; not yet known, another view, `?public=1` and
+  signed out decide nothing; a header tap before the state is known wins; a different account decides again; an open card
+  keeps the same state object), with four mutants (the tap not recorded, no once-per-account guard, every state but on, any
+  view). The smoke opens the card only through `openNotifSettings` (it reads `aria-expanded`, so a tap never closes a card that
+  opened by itself) and checks the auto-open with no header tap, no bare "Enable" button on Settings, the sticky close across a
+  tab switch, and the card left closed after a reload with push on.
 - **Integration cross pins** (`test/data-layer.test.js` [P30], like Prompt 29's): they read the migration, the edge function
   (its `@pushPlan` / `@webPush` / `@sendGate` blocks, lifted) and `sw.js` (run in a sandbox) and hold the client to them - the
   three RPCs' names and parameters = what `config.js` posts (and verify-rls 19b-19d); `PUSH_CODES` and every refusal sentence
