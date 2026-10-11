@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-tP63dsHpsTPWqkpKenoDwlcHGoFdz34tV3UiSliPIyg=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-LlBXr73W1pAZqyaXWEbZtGoyIJ2ojcWhDdXc9V00Gt4=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-FGBN3xMpaTMPxCRwl1V77FXqbSJK4yUs7LXiqFW1CSM=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-q5ciUW9FUBVOBq42o/EBfh9uJxagCEDI5eHSwnTjLzM=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -182,7 +182,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.03b";
+    var APP_VERSION = "2026.10.10a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -6956,9 +6956,13 @@ function CallSchedule() {
   const [snapshotLoadFailed, setSnapshotLoadFailed] = useState(false);
   const [restoreBusyId, setRestoreBusyId] = useState(null);
   const [openSettingsCards, setOpenSettingsCards] = useState({});
-  const toggleSettingsCard = key => setOpenSettingsCards(p => _objectSpread(_objectSpread({}, p), {}, {
-    [key]: !p[key]
-  }));
+  const toggleSettingsCard = key => {
+    if (key === "notifSettings") pushAutoOpenRef.current = pushUid;
+    setOpenSettingsCards(p => _objectSpread(_objectSpread({}, p), {}, {
+      [key]: !p[key]
+    }));
+  };
+  const pushAutoOpenRef = useRef("");
   const pushUid = authUser && authUser.id ? String(authUser.id) : "";
   const refreshPushState = useCallback(async uid => {
     if (!uid) {
@@ -6986,6 +6990,14 @@ function CallSchedule() {
     pushColsRef.current = "unknown";
     setPushCols("unknown");
   }, [pushUid]);
+  useEffect(() => {
+    if (view !== "settings" || isPublicMode || !pushUid || !pushInfo) return;
+    if (pushAutoOpenRef.current === pushUid) return;
+    pushAutoOpenRef.current = pushUid;
+    if (pushInfo.state === "off" || pushInfo.state === "ios-home-screen") setOpenSettingsCards(p => p.notifSettings ? p : _objectSpread(_objectSpread({}, p), {}, {
+      notifSettings: true
+    }));
+  }, [view, isPublicMode, pushUid, pushInfo]);
   const pushCardOpen = view === "settings" && !isPublicMode && !!pushUid && !!openSettingsCards.notifSettings;
   useEffect(() => {
     if (!pushCardOpen) return;
@@ -13783,6 +13795,8 @@ function CallSchedule() {
     style: css.card
   }, React.createElement("div", {
     className: "cardtoggle",
+    "data-testid": "notif-settings-toggle",
+    "aria-expanded": !!openSettingsCards.notifSettings,
     onClick: () => toggleSettingsCard("notifSettings"),
     style: settingsToggleRow(openSettingsCards.notifSettings)
   }, settingsChevron(openSettingsCards.notifSettings), React.createElement("span", null, "Notification settings")), openSettingsCards.notifSettings && React.createElement(React.Fragment, null, (() => {
@@ -13882,7 +13896,7 @@ function CallSchedule() {
         flexWrap: "wrap",
         alignItems: "center"
       }
-    }, (st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable", pushEnable, true), st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false), pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false), pbtn("push-reset", "reset", "Reset subscription", pushReset, false), pbtn("push-test", "test", "Send test", pushSendTest, false)), pushMsg && React.createElement("div", {
+    }, (st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true), st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false), pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false), pbtn("push-reset", "reset", "Reset subscription", pushReset, false), pbtn("push-test", "test", "Send test", pushSendTest, false)), pushMsg && React.createElement("div", {
       "data-testid": "push-msg",
       role: "status",
       style: {
@@ -14253,12 +14267,13 @@ function CallSchedule() {
       fontSize: 12
     })
   }, "Disable") : React.createElement("button", {
+    "data-testid": "biometric-enable",
     onClick: handleBiometricEnroll,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "6px 14px",
       fontSize: 12
     })
-  }, "Enable"))) : React.createElement("div", {
+  }, "Enable Face ID / Touch ID"))) : React.createElement("div", {
     "data-testid": "biometric-unavailable",
     style: {
       paddingTop: 12,
