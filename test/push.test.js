@@ -1124,9 +1124,9 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const a = S.index.lastIndexOf("<div style={{background:dk?", i), b = S.index.indexOf("\n              </div>\n            </>}", i);
     assert.ok(i > 0 && a > 0 && b > i, "could not lift the Pop-ups box");
     const code = babelJsx("(" + S.index.slice(a, b + "\n              </div>".length) + ")", "popups.jsx");
-    const render = (perm) => {
+    const render = (perm, pushInfo) => {
       const sc = { React: ReactStub, dk: false, dkCardBorder: "#border", dkText: "#title", dkSubtext: "#muted", T: { success: "#success" }, css: { btn: (p) => ({ primary: !!p }) },
-        browserNotifPermission: perm, notifPermissionText: H.notifPermissionText, requestBrowserNotifPermission: noop, sendTestNotification: noop, notifTestSent: "" };
+        browserNotifPermission: perm, notifPermissionText: H.notifPermissionText, requestBrowserNotifPermission: noop, sendTestNotification: noop, notifTestSent: "", pushInfo: pushInfo || null };
       vm.createContext(sc);
       return vm.runInContext(code, sc, { filename: "popups.jsx" });
     };
@@ -1137,6 +1137,11 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.strictEqual(textOf(byTestId(t, "notif-permission")[0]), "Shown while the app is open. Not allowed yet - tap Allow pop-ups.");
     assert.deepStrictEqual(named(render("granted")), [["popup-test", "Show a test pop-up"]]);
     assert.deepStrictEqual(named(render("denied")), [["popup-test", "Show a test pop-up"]]);
+    // push UX follow-up (10/11): the box hands the push card's pushInfo to the line - Blocked in an installed Android app names
+    // the phone's Settings > Apps entry (as the push card does), a browser tab keeps the site-settings words
+    assert.strictEqual(textOf(byTestId(render("denied", { state: "blocked", standalone: true, device: "Android", ios: false }), "notif-permission")[0]), "Shown while the app is open. " + H.notifPermissionText("denied", { standalone: true, device: "Android" }));
+    assert.ok(/Settings > Apps > Silvis Call/.test(textOf(byTestId(render("denied", { state: "blocked", standalone: true, device: "Android", ios: false }), "notif-permission")[0])), "the installed-Android words reach the box");
+    assert.ok(/site settings/.test(textOf(byTestId(render("denied", { state: "blocked", standalone: false, device: "Android", ios: false }), "notif-permission")[0])), "a browser tab keeps the site-settings words");
     assert.strictEqual(H.notifTestMessage(false, "default"), "Browser notifications are not allowed yet - tap Allow pop-ups first.");
     assert.ok(!/>Allow notifications<|>Send test notification<|tap Allow notifications/.test(S.index + S.helpers), "no old Pop-ups button name is left in the app");
     assert.ok(S.index.includes('pbtn("push-test", "test", "Send test", pushSendTest, false)'), "the push box's Send test keeps its name (ONBOARDING names it)");
@@ -1157,6 +1162,10 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     ">Allow pop-ups</button>", ">Allow notifications</button>", popupsCheck);
   await mutant("(b) the Pop-ups test button back to 'Send test notification'", "index",
     ">Show a test pop-up</button>", ">Send test notification</button>", popupsCheck);
+  await mutant("the Pop-ups line not handed the push card's pushInfo (an installed app told to use browser site settings)", "index",
+    "{notifPermissionText(browserNotifPermission, pushInfo)}", "{notifPermissionText(browserNotifPermission)}", popupsCheck);
+  await mutant("notifPermissionText's installed-Android Blocked branch dropped", "helpers",
+    '    if (e.standalone && e.device === "Android") return "Blocked on this phone', '    if (false) return "Blocked on this phone', popupsCheck);
   await mutant("(b) the Pop-ups line still naming 'Allow notifications'", "helpers",
     '"Not allowed yet - tap Allow pop-ups."', '"Not allowed yet - tap Allow notifications."', popupsCheck);
   await mutant("(c) the generic push line shown in Safari (pushCardParts)", "helpers",

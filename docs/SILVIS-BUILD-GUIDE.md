@@ -2381,7 +2381,10 @@ pop-up** (`popup-test`); its lines follow ("Not allowed yet - tap Allow pop-ups.
 title stays and the push box's **Send test** keeps its name. Review fix (10/11): **Show a test pop-up** shows a pop-up and
 nothing else - the test e-mail it used to send a linked surgeon behind the button's back moved to its own **Send a test
 e-mail** button in the Email box (`email-test`, a linked surgeon only; its line `email-test-state` comes from
-`helpers.emailTestMessage` and says "sent" only for an ok answer with a delivery). (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
+`helpers.emailTestMessage` and says "sent" only for an ok answer with a delivery). Follow-up (10/11): the box's Blocked line
+(`notifPermissionText(permission, pushInfo)`) names the same place as the push card's - an iPhone / iPad Home Screen app's
+Settings > Notifications > Silvis Call, an installed Android app's Settings > Apps > Silvis Call (the browser as the fallback) -
+and only a browser tab keeps "the browser's site settings". (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
 line is the ONE instruction - the generic "Turn this on once..." line and all four buttons (Enable phone notifications,
 Diagnose, Reset subscription, Send test) are hidden, since none works outside the Home Screen app; the phone switches stay
 (they cover every device); in the Home Screen app (standalone -> `off`) nothing changes and Enable is offered. (The Account

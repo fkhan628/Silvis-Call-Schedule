@@ -12919,6 +12919,10 @@ try {
         const want = `Blocked for ${new URL(BASE).hostname}. To allow it, open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications.`;
         if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== want || JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail(`P30 ${label}: ` + JSON.stringify(s));
         else ok(`P30 ${label}: '${s.line}' (the phone's own settings - no address-bar hint); buttons Diagnose / Reset subscription (no Send test)`);
+        // push UX follow-up (10/11): the Pop-ups box below names the same place, never the browser's site settings
+        const popLine = await ap.$eval("[data-testid=notif-permission]", el => el.textContent.trim()).catch(() => "");
+        if (!/Settings > Apps > Silvis Call/.test(popLine) || /site settings/.test(popLine)) fail(`P30 ${label}: the Pop-ups line should name the phone's Settings > Apps > Silvis Call, got ` + JSON.stringify(popLine));
+        else ok(`P30 ${label}: the Pop-ups line names the same place - '${popLine}'`);
         await ap.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();
         await ap.locator("[data-testid=push-card]").screenshot({ path: path.join(OUT, "p30-push-card-android-app-blocked-412.png") });
         if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));

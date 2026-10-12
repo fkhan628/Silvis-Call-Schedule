@@ -8509,7 +8509,7 @@ function CallSchedule() {
               </div>
               <div style={{background:dk?"#1a2a3e":"#f8f9fb",border:`1px solid ${dkCardBorder}`,borderRadius:8,padding:"12px 14px"}}>
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Pop-ups on this device</div>
-                <p data-testid="notif-permission" data-permission={browserNotifPermission} style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>
+                <p data-testid="notif-permission" data-permission={browserNotifPermission} style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>Shown while the app is open. {notifPermissionText(browserNotifPermission, pushInfo)}</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {/* push UX (b) (10/11): named for what they do - they were confusable with the push box's Enable / Send test */}
                   {browserNotifPermission === "default" && <button data-testid="popup-allow" onClick={requestBrowserNotifPermission} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>Allow pop-ups</button>}

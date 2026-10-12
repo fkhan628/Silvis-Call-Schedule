@@ -6402,9 +6402,18 @@ function emailTestMessage(r) {
 
 // Settings > Pop-ups on this device: Notification.permission ("granted" / "denied" / "default", or the app's own
 // "unsupported" when the browser has no Notification API) in plain words - never the raw token.
-function notifPermissionText(permission) {
+// env (optional, the push card's pushInfo: { ios, standalone, device }): Blocked in an installed app has no browser site
+// settings to point at (push UX follow-up, 10/11) - the same place the push card's Blocked line names: an iPhone / iPad Home
+// Screen app's Settings > Notifications > Silvis Call, an installed Android app's Settings > Apps > Silvis Call (the browser
+// as the fallback, as in pushStateWords). A browser tab, a computer and an unknown env keep the site-settings wording.
+function notifPermissionText(permission, env) {
+  const e = env && typeof env === "object" ? env : {};
   if (permission === "granted") return "Allowed on this device.";
-  if (permission === "denied") return "Blocked in this browser - allow them in the browser's site settings to get pop-ups.";
+  if (permission === "denied") {
+    if (e.ios && e.standalone) return "Blocked on this " + (e.device === "iPad" ? "iPad" : "iPhone") + " - allow them in Settings > Notifications > Silvis Call to get pop-ups.";
+    if (e.standalone && e.device === "Android") return "Blocked on this phone - allow them in your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications to get pop-ups.";
+    return "Blocked in this browser - allow them in the browser's site settings to get pop-ups.";
+  }
   if (permission === "default") return "Not allowed yet - tap Allow pop-ups.";
   return "This browser can't show pop-ups (on an iPhone, add the app to the Home Screen first).";
 }
