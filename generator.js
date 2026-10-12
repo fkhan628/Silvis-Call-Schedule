@@ -73,7 +73,10 @@
 //                     change (genTargetDelta / genDevCost) against the per-role
 //                     water-filled share of genTargets (J 9/22, WF 9/23; no
 //                     neutral term, no explicit-null branch).
-//   4 backup pass     same with primary fixed, against the backup targets.
+//   4 backup pass     same with primary fixed, against the backup targets
+//                     (Prompt 32 step 2: the WEIGHTED backup share - a member
+//                     short of primaries is targeted at wP / wB more backups
+//                     per missing primary; genWeightedShares).
 //   5 repair          open slots: unit retry (holidays), direct fill, then
 //                     1-hop and 2-hop swaps of non-locked generator-placed
 //                     day-unit slots, each move re-verified via eligibility().
@@ -202,7 +205,8 @@ function genRulesApi() {
       standingEastDays: standingEastDays,
       eastConflicts: eastConflicts,
       eastVacationConflicts: eastVacationConflicts,
-      offerState: offerState, offeredOn: offeredOn // Prompt 14 P2
+      offerState: offerState, offeredOn: offeredOn, // Prompt 14 P2
+      shiftWeightsOf: shiftWeightsOf // Prompt 32 step 2: the ONE reader of groupRules.shiftAccounting.weights
     };
   }
   return genRulesCache;
@@ -739,7 +743,8 @@ function genOfferedUnits(G) {
 /* ----------------------------------------------------------- targets */
 
 // Monthly targets - Prompt 12 J (9/22) restated by WF (Faraz 9/23): the WATER-FILLED
-// SHARE, per role (rules doc section 6, guide section 15).
+// SHARE, per role (rules doc section 6, guide section 15); Prompt 32 step 2 (Faraz
+// 10/11): the backup share is WEIGHTED across the roles (genWeightedShares).
 //   pool                     -> active roster ids with rules.poolMember !== false, no
 //                               availableWindows and no roster type "external"
 //                               (genPoolIds). Everyone in it carries BOTH targets.
@@ -755,43 +760,78 @@ function genOfferedUnits(G) {
 //                               poolSlots.backup likewise = backupOpen + held backups.
 //                               A slot held by a non-pool holder (the windows surgeon,
 //                               an outside surgeon, externalCover) is not a pool slot.
-//   water fill (genWaterFill)-> the pool's slots are poured over its members up to
-//                               each member's CLIP: a member whose clip is below the
-//                               level takes the clip and the remainder is shared by
-//                               the others; the level L is the share of everyone the
-//                               clip does not bind (sum over members of min(L, clip)
-//                               = poolSlots). primaryShare / backupShare = L (rounded
-//                               to 0.1) - the share an unclipped member carries; null
-//                               when every member sits on his clip (no level exists;
-//                               the slots beyond the clips carry no target pressure).
-//   pool member              -> primaryTarget = min(L.primary, clipPrimary); clipPrimary
-//                               = min(capPreferred, capPrimary - 1) minus the East
-//                               PRIMARY-week days of the month he does not hold as
-//                               Silvis primary (a countsEastDays cap adds those days
-//                               to his primary count whether or not he holds the
-//                               derived Silvis backup - K, per role); null when
-//                               uncapped, so an implied target never sits on the cap.
-//                               backupTarget = min(L.backup, backupCap.perMonthDays
-//                               when set). NEVER floored at lockedHeld: a member whose
-//                               fixed days exceed his share stands ABOVE target and the
+//   clips (Prompt 32 step 2) -> clipPrimary (the CAP clip) = the soft limit
+//                               (capPreferred) when set, else the hard cap
+//                               (capPrimary) - the smaller when both are set - minus
+//                               the East PRIMARY-week days of the month he does not
+//                               hold as Silvis primary (a countsEastDays cap adds
+//                               those days to his primary count whether or not he
+//                               holds the derived Silvis backup - K); no "- 1" any
+//                               more (Faraz 10/11: 7 is the group's soft limit and a
+//                               target may sit on it); null with neither. The FILL
+//                               clips add what the rules allow: fillClip.primary =
+//                               min(clipPrimary, allowedPrimary + lockedHeld.primary),
+//                               fillClip.backup = min(backupCap.perMonthDays,
+//                               allowedBackup + lockedHeld.backup) - a member who
+//                               cannot reach his share because of a rule or his
+//                               availability takes what he can and the others share
+//                               the rest.
+//   primary (genWaterFill)   -> the pool's primary slots are poured over its members
+//                               up to each member's fill clip: a member whose clip is
+//                               below the level takes the clip and the remainder is
+//                               shared by the others; the level L is the share of
+//                               everyone the clip does not bind (sum over members of
+//                               min(L, clip) = poolSlots). primaryShare = L (rounded
+//                               to 0.1); null when every member sits on his clip (no
+//                               level exists; the slots beyond the clips carry no
+//                               target pressure).
+//   backup (genWeightedFill) -> WEIGHTED across the roles (groupRules.shiftAccounting.
+//                               weights through rules.shiftWeightsOf - primary 1 /
+//                               backup 0.5 by default; Silvis days only): a common
+//                               weighted level W* with b = clamp((W* - wP x p) / wB,
+//                               0, fillClip.backup) summing to the pool's backup slots
+//                               (bisection on W*, then solved exactly on the members
+//                               it leaves unclamped, snapped to 1e-9). A member short
+//                               of primaries carries wP / wB (= 2) backups per missing
+//                               primary; when every p is equal it IS the plain equal
+//                               backup share. backupShare = the backup share of a
+//                               member on the primary level, (W* - wP x L) / wB;
+//                               weightedShare = W*; null when every member sits on
+//                               his backup clip.
+//   reverse makeup           -> a member at his backup fill clip whose weighted load is
+//                               below W* is held at min(fillClip.primary, (W* - wB x
+//                               clipB) / wP) primaries when that is more than 0.05
+//                               over his plain share - taken from the unclipped
+//                               primary pool (the others re-fill around the hold) -
+//                               and the backup fill re-runs; at most 3 rounds,
+//                               deterministic, stop when no hold moves by more than
+//                               0.05 (makeupRounds; members.makeupPrimary).
+//   pool member              -> primaryTarget = round1(p), backupTarget = round1(b).
+//                               NEVER floored at lockedHeld: a member whose fixed
+//                               days exceed his share stands ABOVE target and the
 //                               convex deviation keeps every further slot of the role
 //                               away from him while anyone eligible is below share.
 //                               lockedHeld stays in impliedTargets for display.
+//                               weightedShare = round1(wP x primaryTarget + wB x
+//                               backupTarget) beside the two (a missing role target
+//                               reads 0, null without any).
 //   numeric monthlyTarget    -> a NUMBER is the primary target (the backup target
 //                               stays the share); an OBJECT { primary, backup } sets
 //                               each numeric member. An overridden member is taken out
 //                               of the fill for that role and his number comes off the
-//                               pool's slots before the fill. An explicit null means
-//                               "equal share" - there is no neutral term and no
-//                               "explicit null = no target" branch any more.
+//                               pool's slots before the fill; he takes no makeup, and
+//                               a primary-overridden member's backup is weighed at the
+//                               primary level (today's handling: the plain share). An
+//                               explicit null means "equal share" - there is no
+//                               neutral term and no "explicit null = no target" branch.
 //   availability windows +   -> (Prompt 12 N, 9/22 evening) primaryTarget = target x
 //   daysPerWindowWeek.target    the window weeks whose window days fall in that month
 //                               AND touch the generated range (a week counts once, in
 //                               the month of its first window day); NO backup target;
 //                               a month without a window week gives her no target at
 //                               all (null, tallies "-"), never a numeric 0 (N review).
-//                               She is outside the pool; her reserved primaries come
-//                               off the pool's primaryOpen.
+//                               She is outside the pool (and the weighted fill); her
+//                               reserved primaries come off the pool's primaryOpen.
 //   everyone else            -> no targets (poolMember false, external, windows
 //                               without a target), unless a numeric override says so.
 //   allowedPrimary / allowedBackup -> the month's in-range open slots of the role
@@ -802,7 +842,8 @@ function genOfferedUnits(G) {
 //                               weekend day of a full Fri-Sat-Sun unit counts when
 //                               he may take it as a BLOCK MEMBER - so a
 //                               weekend-block-only surgeon's weekend days count),
-//                               so a shortfall caused by availability is visible.
+//                               so a shortfall caused by availability is visible -
+//                               and, since Prompt 32 step 2, bounds the fill clips.
 //   month scope              -> lockedHeld, poolSlots and the targets are whole-
 //                               calendar-month figures (the deviation counts the
 //                               merged month); a month the range only touches
@@ -818,16 +859,18 @@ function genOfferedUnits(G) {
 //   heldAboveShare           -> sum over the pool of max(0, lockedHeld - target) per
 //                               role: the fixed days above share the generator can
 //                               only balance by placing nothing more on their holders.
-// diagnostics.impliedTargets = { rule, pool, convexity, months: { m: { primaryOpen,
-// backupOpen, poolSize, reservedForWindows, poolSlots: { primary, backup },
-// heldByPool: { primary, backup }, primaryShare, backupShare, rangeDays,
-// placeableAtTarget: { primary, backup }, heldAboveShare: { primary, backup },
-// windowTarget, windowWeeks, members: { id: { primaryTarget, backupTarget,
-// lockedHeld: { primary, backup }, clipPrimary, eastPrimaryDays, allowedPrimary,
-// allowedBackup } } } } };
+// diagnostics.impliedTargets = { rule, pool, convexity, weights: { primary, backup },
+// months: { m: { primaryOpen, backupOpen, poolSize, reservedForWindows, poolSlots:
+// { primary, backup }, heldByPool: { primary, backup }, primaryShare, backupShare,
+// weightedShare, makeupRounds, weights, rangeDays, placeableAtTarget: { primary,
+// backup }, heldAboveShare: { primary, backup }, windowTarget, windowWeeks, members:
+// { id: { primaryTarget, backupTarget, weightedShare, lockedHeld: { primary, backup },
+// clipPrimary, fillClip: { primary, backup } | null, makeupPrimary, eastPrimaryDays,
+// allowedPrimary, allowedBackup } } } } };
 // diagnostics.targets (= scoreTargets) is the per-month { id: { primary, backup } }
-// table the unit scoring, smoothing and the deviation terms use.
-var GEN_TARGET_RULE = "water-filled share per role (J 9/22, WF 9/23): pool = active, poolMember !== false, no availableWindows, not external; poolSlots.primary = (open in-range primary slots - the windows surgeons' reserved primaries) + every primary day of the calendar month a pool member already holds (import, manual, derived, claimed, published outside the range), poolSlots.backup likewise; each role's slots are water-filled over the members up to their clips (clipPrimary = min(capPreferred, capPrimary - 1) - East primary-week days not held as Silvis primary (K; null when uncapped); backupCap.perMonthDays for backup): a member whose clip is below the level takes the clip and the rest is shared by the others; primaryShare / backupShare = the level (null when every member sits on his clip); pool member primaryTarget = min(level, clipPrimary), backupTarget = min(level, backupCap) - NEVER floored at lockedHeld, so fixed days count against the share; a numeric monthlyTarget sets the primary target, { primary, backup } sets each (the member leaves the fill for that role and his number comes off the pool's slots), explicit null = equal share; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, primary only, no backup target, no target in a month without a window week (N); everyone else: no targets; the deviation term is |count - target| ^ deviationConvexity (2: convex, each slot above share costs more than the last and the member furthest below share wins); allowedPrimary / allowedBackup = open in-range slots where eligibility passes on the lock-only schedule (a weekend day of a full unit as a block member, a holiday day as a unit candidate); lockedHeld, poolSlots and the targets are whole-calendar-month figures even where the range only touches the month (rangeDays); placeableAtTarget = sum of max(0, target - lockedHeld) per role (the room below the targets; above the open slots by heldAboveShare = sum of max(0, lockedHeld - target), the fixed days already over share)";
+// table the unit scoring, smoothing and the deviation terms use (the weighted view
+// rides beside it in impliedTargets and the tallies, never inside it).
+var GEN_TARGET_RULE = "water-filled share per role (J 9/22, WF 9/23) with the backup weighted across the roles (Prompt 32 step 2, 10/11): pool = active, poolMember !== false, no availableWindows, not external; poolSlots.primary = (open in-range primary slots - the windows surgeons' reserved primaries) + every primary day of the calendar month a pool member already holds (import, manual, derived, claimed, published outside the range), poolSlots.backup likewise; clipPrimary = the soft limit when set, else the hard cap (the smaller when both are set) - East primary-week days not held as Silvis primary (K; null with neither; no cap - 1); the fill clips add what the rules allow: fillClip.primary = min(clipPrimary, allowedPrimary + lockedHeld.primary), fillClip.backup = min(backupCap.perMonthDays, allowedBackup + lockedHeld.backup); primary: the slots are water-filled over the members up to their fill clips (a member whose clip is below the level takes the clip and the rest is shared by the others; primaryShare = the level, null when every member sits on his clip); backup: the weighted fill - a common weighted level W* (weights = groupRules.shiftAccounting.weights, primary 1 / backup 0.5 by default, Silvis days only) with backup = clamp((W* - wP x primary) / wB, 0, fillClip.backup) summing to the backup slots, so a member short of primaries carries wP / wB backups per missing primary and equal primaries give the plain equal backup share (backupShare = the backup share at the primary level, weightedShare = W*); reverse makeup: a member at his backup clip below W* is held at min(fillClip.primary, (W* - wB x clipB) / wP) primaries taken from the unclipped pool, at most 3 deterministic rounds (stop when no hold moves by more than 0.05); pool member primaryTarget / backupTarget = the two shares rounded to 0.1, weightedShare = wP x primaryTarget + wB x backupTarget - NEVER floored at lockedHeld, so fixed days count against the share; a numeric monthlyTarget sets the primary target, { primary, backup } sets each (the member leaves the fill for that role and his number comes off the pool's slots; no makeup), explicit null = equal share; windows + daysPerWindowWeek.target = target x window weeks of the month the range touches, primary only, no backup target, no target in a month without a window week (N); everyone else: no targets; the deviation term is |count - target| ^ deviationConvexity (2: convex, each slot above share costs more than the last and the member furthest below share wins); allowedPrimary / allowedBackup = open in-range slots where eligibility passes on the lock-only schedule (a weekend day of a full unit as a block member, a holiday day as a unit candidate); lockedHeld, poolSlots and the targets are whole-calendar-month figures even where the range only touches the month (rangeDays); placeableAtTarget = sum of max(0, target - lockedHeld) per role (the room below the targets; above the open slots by heldAboveShare = sum of max(0, lockedHeld - target), the fixed days already over share)";
 // monthlyTarget override -> { primary: number|null, backup: number|null }
 function genTargetOverride(v) {
   if (typeof v === "number" && isFinite(v)) return { primary: v, backup: null };
@@ -835,6 +878,10 @@ function genTargetOverride(v) {
   return { primary: null, backup: null };
 }
 function genRound1(v) { return Math.round(v * 10) / 10; }
+// Prompt 32 step 2: shares are snapped to 1e-9 so float noise never tips a round1 at an x.x5 edge
+function genSnap9(v) { return Math.round(v * 1e9) / 1e9; }
+// null-safe min (null = no limit)
+function genMinNull(a, b) { return a === null || a === undefined ? (b === undefined ? null : b) : (b === null || b === undefined ? a : Math.min(a, b)); }
 // WF 9/23 - the water fill. members: [{ id, clip }] (clip null = unclipped), slots: the
 // pool's slots of the role in the month. Pours the slots over the members up to each
 // clip: while the lowest clip is below an equal share of what is left, that member
@@ -844,8 +891,8 @@ function genRound1(v) { return Math.round(v * 10) / 10; }
 // else every member sits on his clip and level is NULL (review fix 9/23: nobody is
 // left in the fill, so there is no level to report - it used to read 0 while every
 // share sat at its clip; the slots beyond the sum of the clips carry no target
-// pressure, today's clip semantics). Kept exact: the deviation counts whole days
-// against a target rounded to 0.1 only when it is written out (genRound1).
+// pressure, today's clip semantics). The raw values are rounded to 0.1 only when
+// they are written out as targets (genRound1).
 function genWaterFill(members, slots) {
   var remaining = Math.max(0, slots), share = {}, inFill = members.slice();
   inFill.sort(function (a, b) { return (a.clip === null ? Infinity : a.clip) - (b.clip === null ? Infinity : b.clip); });
@@ -858,9 +905,112 @@ function genWaterFill(members, slots) {
   inFill.forEach(function (m) { share[m.id] = m.clip === null ? level : Math.min(level, m.clip); });
   return { level: level, share: share };
 }
+function genByIdOrder(a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; }
+// Prompt 32 step 2 (Faraz 10/11, DESIGN "Generator" 4) - the WEIGHTED backup fill.
+// members: [{ id, p (his primary share), clip (backup fill clip, null = none) }],
+// slots: the pool's backup slots, w: { primary, backup } (rules.shiftWeightsOf).
+// Finds the common weighted level W* with sum over members of b = clamp((W* - w.primary
+// x p) / w.backup, 0, clip) = slots: bisection on W* (60 iterations or 1e-9; f(W) is
+// non-decreasing), then solved exactly on the members the level leaves unclamped
+// (W = (w.backup x (slots - the clamped clips) + w.primary x their p) / their count).
+// Returns { level: W* (null when every member sits on his clip, or no member), share:
+// { id: b } }, both snapped to 1e-9. Equal p for everyone -> exactly the plain equal
+// share of genWaterFill over the same clips (test/generator-regression.js pins it).
+function genWeightedFill(members, slots, w) {
+  var mem = members.slice().sort(genByIdOrder), share = {}, T = Math.max(0, slots);
+  if (!mem.length) return { level: null, share: share };
+  var bAt = function (m, W) { var b = (W - w.primary * m.p) / w.backup; if (b < 0) b = 0; if (m.clip !== null && b > m.clip) b = m.clip; return b; };
+  var sumAt = function (W) { var s = 0; for (var i = 0; i < mem.length; i++) s += bAt(mem[i], W); return s; };
+  var capSum = 0, open = false;
+  mem.forEach(function (m) { if (m.clip === null) open = true; else capSum += m.clip; });
+  if (!open && capSum < T - 1e-9) { mem.forEach(function (m) { share[m.id] = m.clip; }); return { level: null, share: share }; }
+  var lo = Infinity, hi = -Infinity;
+  mem.forEach(function (m) {
+    var a = w.primary * m.p;
+    if (a < lo) lo = a;
+    var top = a + w.backup * (m.clip === null ? T : m.clip);
+    if (top > hi) hi = top;
+  });
+  var W = lo; // f(lo) = 0: every b is 0 at the lowest primary load
+  if (T > 0) {
+    for (var it = 0; it < 60 && hi - lo > 1e-9; it++) { var mid = (lo + hi) / 2; if (sumAt(mid) >= T) hi = mid; else lo = mid; }
+    W = hi;
+    // exact on the active set: the members strictly between 0 and their clip at W
+    var fixed = 0, act = 0, actP = 0;
+    mem.forEach(function (m) {
+      var b = (W - w.primary * m.p) / w.backup;
+      if (b <= 0) return;
+      if (m.clip !== null && b >= m.clip) { fixed += m.clip; return; }
+      act++; actP += m.p;
+    });
+    if (act) { var Wx = (w.backup * (T - fixed) + w.primary * actP) / act; if (Math.abs(Wx - W) < 1e-6) W = Wx; }
+  }
+  mem.forEach(function (m) { share[m.id] = genSnap9(bAt(m, W)); });
+  return { level: genSnap9(W), share: share };
+}
+// Prompt 32 step 2 (DESIGN "Generator" 3-6) - per-role shares + the weighted cross-role
+// balance for one month. fm: [{ id, clipP, clipB (fill clips, null = none), ovP, ovB
+// (monthlyTarget overrides, null = none) }], slots: { primary, backup } (the pool's
+// slots, overrides included), w: the shift weights.
+//   3 primary: genWaterFill over the members without a primary override (their numbers
+//     come off the slots first) -> p;
+//   4 backup: genWeightedFill over the members without a backup override, each weighed
+//     at his p (a primary-overridden member at the primary level - today's plain share);
+//   5 reverse makeup: a member in both fills at his backup clip whose weighted load is
+//     below W* wants min(clipP, (W* - w.backup x clipB) / w.primary) primaries; when that
+//     is more than 0.05 over his plain share (min(level, clipP)) he is HELD there, the
+//     others re-fill the remaining primaries (the unclipped pool gives them up) and the
+//     backup fill re-runs; at most 3 rounds, stop when no hold moves by more than 0.05
+//     (a hold may also come back down when the level it read moved). Deterministic: no
+//     rng, members in id order.
+// Returns { primary: { level, share }, backup: { level: the backup share at the primary
+// level ((W* - w.primary x level) / w.backup, null without W*), share }, weightedLevel:
+// W*, makeup: { id: hold - plain share }, rounds }.
+function genWeightedShares(fm, slots, w) {
+  var mem = fm.slice().sort(genByIdOrder), pSlots = slots.primary, bSlots = slots.backup, pm = [], bm = [];
+  mem.forEach(function (m) {
+    if (m.ovP !== null && m.ovP !== undefined) pSlots -= m.ovP; else pm.push(m);
+    if (m.ovB !== null && m.ovB !== undefined) bSlots -= m.ovB; else bm.push(m);
+  });
+  var holds = {}, rounds = 0;
+  var solve = function () {
+    var free = [], heldSum = 0;
+    pm.forEach(function (m) { if (holds[m.id] !== undefined) heldSum += holds[m.id]; else free.push({ id: m.id, clip: m.clipP }); });
+    var fp = genWaterFill(free, pSlots - heldSum), p = {}, pMax = null;
+    pm.forEach(function (m) { p[m.id] = holds[m.id] !== undefined ? holds[m.id] : fp.share[m.id]; if (pMax === null || p[m.id] > pMax) pMax = p[m.id]; });
+    var lref = fp.level !== null ? fp.level : pMax;
+    var fb = genWeightedFill(bm.map(function (m) {
+      var pp = m.ovP !== null && m.ovP !== undefined ? (lref !== null ? lref : m.ovP) : p[m.id];
+      return { id: m.id, p: pp, clip: m.clipB };
+    }), bSlots, w);
+    return { p: p, pLevel: fp.level, lref: lref, b: fb.share, wLevel: fb.level };
+  };
+  var plainOf = function (st, m) { var c = m.clipP === null ? Infinity : m.clipP; return st.pLevel === null ? c : Math.min(st.pLevel, c); };
+  var st = solve();
+  while (rounds < 3 && st.wLevel !== null) {
+    var next = {}, sum = 0;
+    pm.forEach(function (m) {
+      if ((m.ovB !== null && m.ovB !== undefined) || m.clipB === null) return; // out of the weighted fill / no backup clip to hit
+      var want = genSnap9(Math.min(m.clipP === null ? Infinity : m.clipP, (st.wLevel - w.backup * m.clipB) / w.primary));
+      if (want > plainOf(st, m) + 0.05) { next[m.id] = want; sum += want; }
+    });
+    var moved = Object.keys(next).some(function (id) { return holds[id] === undefined || Math.abs(next[id] - holds[id]) > 0.05; }) || Object.keys(holds).some(function (id) { return next[id] === undefined; });
+    if (!moved || sum > pSlots) break; // nothing moves, or the holds would not leave the others a non-negative pool
+    holds = next; rounds++; st = solve();
+  }
+  var makeup = {};
+  pm.forEach(function (m) { if (holds[m.id] !== undefined) makeup[m.id] = genSnap9(holds[m.id] - plainOf(st, m)); });
+  var bLevel = st.wLevel === null || st.lref === null ? null : Math.max(0, genSnap9((st.wLevel - w.primary * st.lref) / w.backup));
+  return { primary: { level: st.pLevel, share: st.p }, backup: { level: bLevel, share: st.b }, weightedLevel: st.wLevel, makeup: makeup, rounds: rounds };
+}
+// weighted share of a role pair (Prompt 32 step 2): a missing role target reads 0; null without any
+function genWeightedOf(tP, tB, w) {
+  if (typeof tP !== "number" && typeof tB !== "number") return null;
+  return genRound1(w.primary * (typeof tP === "number" ? tP : 0) + w.backup * (typeof tB === "number" ? tB : 0));
+}
 function genTargets(G) {
-  var ctx = G.ctx, base = ctx.schedule, ids = ctx.activeIds, pool = genPoolIds(G);
-  var byMonth = {}, implied = { rule: GEN_TARGET_RULE, pool: pool.slice(), convexity: G.convexity, months: {} };
+  var ctx = G.ctx, base = ctx.schedule, ids = ctx.activeIds, pool = genPoolIds(G), sw = G.shiftWeights;
+  var byMonth = {}, implied = { rule: GEN_TARGET_RULE, pool: pool.slice(), convexity: G.convexity, weights: { primary: sw.primary, backup: sw.backup }, months: {} };
   var poolSet = {};
   pool.forEach(function (id) { poolSet[id] = true; });
   G.months.forEach(function (month) {
@@ -883,7 +1033,9 @@ function genTargets(G) {
       reserved += Math.min(wt, openWindow);
     });
     var poolN = pool.length;
-    // per surgeon: whole-month held days per role, the K clip, the backup cap, the override
+    // per surgeon: whole-month held days per role, the cap clip, the backup cap, the override,
+    // static availability (counted by buildUnits on the same lock-only schedule - one eligibility walk)
+    // and - pool members - the fill clips (Prompt 32 step 2)
     var facts = {};
     ids.forEach(function (id) {
       var P = ctx.per[id], r = P.rules, ov = genTargetOverride(r.monthlyTarget);
@@ -896,48 +1048,46 @@ function genTargets(G) {
         // he does not already hold as Silvis primary (held or not as the derived Silvis backup)
         if (P.countsEastDays && P.eastPrimaryDays.has(d) && !(e && e.primary === id)) eastP++;
       });
+      // Prompt 32 step 2 (Faraz 10/11 decision 3): the soft limit when set, else the hard cap - no "- 1"
       var clip = null;
-      if (poolSet[id] && P.capPrimary !== null) {
-        var ceiling = P.capPreferred !== null ? Math.min(P.capPreferred, P.capPrimary - 1) : P.capPrimary - 1;
-        clip = Math.max(0, ceiling - eastP);
+      if (poolSet[id]) {
+        var lim = genMinNull(P.capPreferred, P.capPrimary);
+        if (lim !== null) clip = Math.max(0, lim - eastP);
       }
       var bCap = r.backupCap && typeof r.backupCap.perMonthDays === "number" ? r.backupCap.perMonthDays : null;
-      facts[id] = { heldP: heldP, heldB: heldB, eastP: eastP, clip: clip, bCap: bCap, ov: ov };
+      var al = (G.units.allowed[month] && G.units.allowed[month][id]) || { primary: 0, backup: 0 };
+      var fillClip = poolSet[id] ? { primary: genMinNull(clip, al.primary + heldP), backup: genMinNull(bCap, al.backup + heldB) } : null;
+      facts[id] = { heldP: heldP, heldB: heldB, eastP: eastP, clip: clip, bCap: bCap, ov: ov, al: al, fillClip: fillClip };
     });
     // WF: the pool's slots of the month = the open in-range slots (primary: after the windows surgeons'
     // reserved primaries) + every day of the calendar month a pool member already holds. An overridden
-    // member leaves the fill for that role and his number comes off the slots first.
+    // member leaves the fill for that role and his number comes off the slots first (genWeightedShares).
     var heldByPool = { primary: 0, backup: 0 };
     pool.forEach(function (id) { heldByPool.primary += facts[id].heldP; heldByPool.backup += facts[id].heldB; });
     var poolSlots = { primary: Math.max(0, primaryOpen - reserved) + heldByPool.primary, backup: backupOpen + heldByPool.backup };
-    var fill = {};
-    GEN_ROLES.forEach(function (role) {
-      var slots = poolSlots[role], members = [];
-      pool.forEach(function (id) {
-        var f = facts[id];
-        if (f.ov[role] !== null) { slots -= f.ov[role]; return; }
-        members.push({ id: id, clip: role === "primary" ? f.clip : f.bCap });
-      });
-      fill[role] = genWaterFill(members, slots);
-    });
-    // the level = the share of an unclipped member; null when every member sits on his clip (or the pool is empty)
-    var primaryShare = fill.primary.level === null ? null : genRound1(fill.primary.level);
-    var backupShare = fill.backup.level === null ? null : genRound1(fill.backup.level);
-    var I = implied.months[month] = { primaryOpen: primaryOpen, backupOpen: backupOpen, poolSize: poolN, reservedForWindows: reserved, poolSlots: poolSlots, heldByPool: heldByPool, primaryShare: primaryShare, backupShare: backupShare, rangeDays: inMonth.length, placeableAtTarget: { primary: 0, backup: 0 }, heldAboveShare: { primary: 0, backup: 0 }, windowTarget: windowTarget, windowWeeks: windowWeeks, members: {} };
+    var shares = genWeightedShares(pool.map(function (id) {
+      var f = facts[id];
+      return { id: id, clipP: f.fillClip.primary, clipB: f.fillClip.backup, ovP: f.ov.primary, ovB: f.ov.backup };
+    }), poolSlots, sw);
+    // the levels: primary = the share of an unclipped member; backup = the backup share of a member on that level;
+    // weighted = W*; each null when every member sits on his clip (or the pool is empty)
+    var primaryShare = shares.primary.level === null ? null : genRound1(shares.primary.level);
+    var backupShare = shares.backup.level === null ? null : genRound1(shares.backup.level);
+    var weightedShare = shares.weightedLevel === null ? null : genRound1(shares.weightedLevel);
+    var I = implied.months[month] = { primaryOpen: primaryOpen, backupOpen: backupOpen, poolSize: poolN, reservedForWindows: reserved, poolSlots: poolSlots, heldByPool: heldByPool, primaryShare: primaryShare, backupShare: backupShare, weightedShare: weightedShare, makeupRounds: shares.rounds, weights: { primary: sw.primary, backup: sw.backup }, rangeDays: inMonth.length, placeableAtTarget: { primary: 0, backup: 0 }, heldAboveShare: { primary: 0, backup: 0 }, windowTarget: windowTarget, windowWeeks: windowWeeks, members: {} };
     byMonth[month] = {};
     ids.forEach(function (id) {
       var f = facts[id], tP = f.ov.primary, tB = f.ov.backup;
       if (poolSet[id]) {
-        // the water-filled share, clipped by the K clip / the backup cap; NEVER floored at the held days
-        if (tP === null) tP = genRound1(fill.primary.share[id]);
-        if (tB === null) tB = genRound1(fill.backup.share[id]);
+        // the water-filled primary / the weighted backup share; NEVER floored at the held days
+        if (tP === null) tP = genRound1(shares.primary.share[id]);
+        if (tB === null) tB = genRound1(shares.backup.share[id]);
       } else if (windowIds[id]) {
         // (N review) no window week in this month -> no target (tallies "-"), never a numeric 0
         if (tP === null) tP = windowWeeks[id] ? windowTarget[id] : null;
       }
-      // static availability, counted by buildUnits on the same lock-only schedule (one eligibility walk)
-      var al = (G.units.allowed[month] && G.units.allowed[month][id]) || { primary: 0, backup: 0 };
-      I.members[id] = { primaryTarget: tP, backupTarget: tB, lockedHeld: { primary: f.heldP, backup: f.heldB }, clipPrimary: f.clip, eastPrimaryDays: f.eastP, allowedPrimary: al.primary, allowedBackup: al.backup };
+      var makeupP = poolSet[id] ? (shares.makeup[id] !== undefined ? genRound1(shares.makeup[id]) : 0) : null;
+      I.members[id] = { primaryTarget: tP, backupTarget: tB, weightedShare: genWeightedOf(tP, tB, sw), lockedHeld: { primary: f.heldP, backup: f.heldB }, clipPrimary: f.clip, fillClip: f.fillClip, makeupPrimary: makeupP, eastPrimaryDays: f.eastP, allowedPrimary: f.al.primary, allowedBackup: f.al.backup };
       byMonth[month][id] = { primary: tP, backup: tB };
       // the room below the targets, and the fixed days already above share (see the header)
       if (typeof tP === "number") { I.placeableAtTarget.primary += Math.max(0, tP - f.heldP); I.heldAboveShare.primary += Math.max(0, f.heldP - tP); }
@@ -1633,7 +1783,10 @@ function genDiagnostics(G, best, meta) {
     var eastPIn = function (list) { return P.countsEastDays ? list.filter(function (d) { return P.eastPrimaryDays.has(d); }).length : 0; };
     // J: target = { primary, backup } per month (null where the surgeon has none for the role);
     // the range row carries the per-role sums (null when no month has one).
-    var sumP = null, sumB = null;
+    // Prompt 32 step 2 (DESIGN "Generator" 7): the weighted view rides BESIDE .target (which stays exactly
+    // { primary, backup }): weighted = P x wP + B x wB (Silvis days only), weightedShare = impliedTargets'
+    // member weightedShare (null without a target); the range row sums the monthly weighted shares.
+    var sumP = null, sumB = null, sumW = null, sw = G.shiftWeights;
     G.months.forEach(function (month) {
       var t = R.talliesFor(ctx, id, month);
       t.cap = R.monthlyCapFor(ctx, id).primary; // K: the cap is on PRIMARY days (preview column "Cap (P)")
@@ -1641,12 +1794,18 @@ function genDiagnostics(G, best, meta) {
       t.target = { primary: genTargetFor(G, month, id, "primary"), backup: genTargetFor(G, month, id, "backup") };
       if (t.target.primary !== null) sumP = (sumP || 0) + t.target.primary;
       if (t.target.backup !== null) sumB = (sumB || 0) + t.target.backup;
+      var im = G.targets.implied.months[month] && G.targets.implied.months[month].members[id];
+      t.weighted = genRound1(sw.primary * t.primary + sw.backup * t.backup);
+      t.weightedShare = im ? im.weightedShare : null;
+      if (typeof t.weightedShare === "number") sumW = (sumW || 0) + t.weightedShare;
       months[month] = t;
     });
     var range = genRunStats(G, id, G.days);
     range.cap = R.monthlyCapFor(ctx, id).primary;
     range.eastP = eastPIn(G.days);
     range.target = { primary: sumP === null ? null : genRound1(sumP), backup: sumB === null ? null : genRound1(sumB) };
+    range.weighted = genRound1(sw.primary * range.primary + sw.backup * range.backup);
+    range.weightedShare = sumW === null ? null : genRound1(sumW);
     tallies[id] = { code: ctx.rosterById[id].code, name: ctx.rosterById[id].name, months: months, range: range };
   });
   // East feed snapshot / forecast / unknown days.
@@ -1784,9 +1943,29 @@ function genDiagnostics(G, best, meta) {
     // locked / fixed ones may. Diagnostics only; rules.js owns the rule.
     eastVacations: genEastVacations(G, ctx),
     offers: offersDiag, // Prompt 14 P2: { periods, byPerson, outsideOffers }
+    // Prompt 32 step 2 (DESIGN "Generator" 9): the in-range primary days over the holder's soft limit (genOverSoftLimit)
+    overSoftLimit: genOverSoftLimit(G, W),
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };
+}
+
+// diagnostics.overSoftLimit (Prompt 32 step 2, DESIGN "Generator" 9; Faraz 10/11 decision 5): every in-range primary day
+// that is the (L+1)th or later primary of its holder's calendar month in date order - every day of the month counts toward
+// the ordinal (locked, published and out-of-range days included) - L = his SOFT limit (ctx.per[id].capPreferred; a surgeon
+// without one, a hard cap only or no limit, is never listed). Derived from the final schedule, never stored: plain
+// [{ day, id, month, count, limit }] in date order (structured-clone safe). The tie-break that picks who takes such a day
+// is Prompt 32 step 4.
+function genOverSoftLimit(G, W) {
+  var out = [];
+  G.days.forEach(function (d) {
+    var e = W[d], id = e && e.primary, P = id ? G.ctx.per[id] : null;
+    if (!P || P.capPreferred === null || P.capPreferred === undefined) return;
+    var month = genMonthOf(d), n = 0;
+    genMonthDays(month).forEach(function (x) { if (x <= d && W[x] && W[x].primary === id) n++; });
+    if (n > P.capPreferred) out.push({ day: d, id: id, month: month, count: n, limit: P.capPreferred });
+  });
+  return out;
 }
 
 // diagnostics.eastVacations (Prompt 15 part 2): { [id]: { ranges, vacationDays, clearDays, feedBusyOnHome, conflicts } }
@@ -1840,6 +2019,10 @@ function generate(ctx, startDate, endDate, opts) {
     respectLocks: opts.respectLocks !== false, jitter: typeof W.jitter === "number" ? W.jitter : 1, warnings: [],
     // WF 9/23: the exponent of the deviation term (data: groupRules.weights.deviationConvexity; 1 = the old flat term)
     convexity: typeof W.deviationConvexity === "number" && isFinite(W.deviationConvexity) && W.deviationConvexity >= 1 ? W.deviationConvexity : GEN_DEVIATION_CONVEXITY,
+    // Prompt 32 step 2: the shift weights of the weighted backup fill and the weighted view (data:
+    // groupRules.shiftAccounting.weights through rules.shiftWeightsOf, the ONE reader - primary 1 / backup 0.5
+    // when null / absent / unreadable; never groupRules.weights, the soft-penalty table)
+    shiftWeights: R.shiftWeightsOf(ctx.groupRules),
     fillOpenOnly: opts.fillOpenOnly === true, // T: fill only the open slots, every held slot is fixed
     unitKeyOf: {}, unitKindOf: {},
     // N: window weeks per windows surgeon (her monthly primary target = target x these weeks; J counts per role,
@@ -1918,6 +2101,8 @@ if (typeof module !== "undefined") {
     GEN_SCORE_WEIGHTS: GEN_SCORE_WEIGHTS,
     GEN_DEVIATION_CONVEXITY: GEN_DEVIATION_CONVEXITY,
     genWaterFill: genWaterFill,
+    genWeightedFill: genWeightedFill, // Prompt 32 step 2: the weighted backup fill
+    genWeightedShares: genWeightedShares, // Prompt 32 step 2: per-role shares + the weighted cross-role balance (one month)
     genStyleMismatch: genStyleMismatch, // Prompt 23 review (10/1): test/rules.test.js pins it beside the unit choice and per-day eligibility
     genAddDays: genAddDays,
     genWeekday: genWeekday,

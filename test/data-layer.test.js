@@ -3520,10 +3520,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("Implied shares (equal-share fairness"), 0, "the Implied shares heading still says equal-share fairness");
     assert.strictEqual(count("equal share of the month's open primary slots"), 0, "the shares paragraph / Totals titles still describe the flat open-slot share");
     assert.strictEqual(count("implied equal share of the open"), 0, "a Totals title (TotalsCard Target / Target B) still describes the flat open-slot share");
-    assert.ok(count("Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap)") === 1 && count("Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap)") === 1, "the Totals table's Target / Target B titles do not name min(level, cap)");
+    // pin moved deliberately 10/11: Prompt 32 step 2 - the Target title names min(level, clip) with the clip = the soft limit
+    // (else the hard cap) or what the rules allow (was min(level, cap)); the Target B title names the WEIGHTED share (was
+    // min(level, backup cap)) - the generator's backup target is no longer the plain per-role level
+    assert.ok(count("Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview") === 1 && count("Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview") === 1, "the Totals table's Target / Target B titles do not name min(level, clip) / the weighted share");
+    assert.strictEqual(count("else min(level, backup cap) from the last Generate preview"), 0, "the Totals Target B title still states the plain per-role backup level");
     const sharesHead = src.slice(src.indexOf('data-testid={"gen-shares-" + m}'), src.indexOf("</tr></thead>", src.indexOf('data-testid={"gen-shares-" + m}')));
     assert.ok(sharesHead.includes(">Held P</th>") && sharesHead.includes(">Held B</th>") && !sharesHead.includes("Locked P") && !sharesHead.includes("Locked B"), "the shares table still heads its held-day columns 'Locked P' / 'Locked B'");
     assert.ok(count("water-filled") >= 3, "the Generate panel and Totals name the water-filled share fewer than 3 times");
+  });
+  check("Generate panel (Prompt 32 step 2): the diagnostics show both views - the per-role targets and the weighted load / share beside them (tallies Weighted / W share for month and range, the shares head's weighted level, the shares table's fill clips, makeup and W share)", () => {
+    const gd = src.slice(src.indexOf("function GenDiagnostics("), src.indexOf("function GeneratePanel("));
+    assert.ok(gd.length > 0, "no GenDiagnostics");
+    const tallyHead = gd.slice(gd.indexOf('data-testid="gen-tallies"'), gd.indexOf("</tr></thead>", gd.indexOf('data-testid="gen-tallies"')));
+    assert.ok(tallyHead.includes(">Target B</th>") && tallyHead.indexOf(">Weighted</th>") > tallyHead.indexOf(">Target B</th>") && tallyHead.indexOf(">W share</th>") > tallyHead.indexOf(">Weighted</th>"), "the tallies table does not head Weighted / W share after Target B");
+    assert.ok(gd.includes('<td data-col="weighted">{num(x.weighted)}</td><td data-col="weighted-share">{num(x.weightedShare)}</td>') && gd.includes('<td data-col="weighted">{num(r.weighted)}</td><td data-col="weighted-share">{num(r.weightedShare)}</td>'), "the tallies month / range rows do not print weighted / weightedShare");
+    const head = gd.slice(gd.indexOf('data-testid={"gen-shares-head-" + m}'), gd.indexOf("</div>", gd.indexOf('data-testid={"gen-shares-head-" + m}')));
+    assert.ok(head.includes("I.weightedShare") && head.includes("weighted level"), "the shares head line does not print the weighted level");
+    const sharesHead = gd.slice(gd.indexOf('data-testid={"gen-shares-" + m}'), gd.indexOf("</tr></thead>", gd.indexOf('data-testid={"gen-shares-" + m}')));
+    assert.ok(sharesHead.includes(">Fill clip P / B</th>") && sharesHead.includes(">W share</th>"), "the shares table does not head Fill clip P / B and W share");
+    assert.ok(gd.includes("M.fillClip") && gd.includes("M.makeupPrimary") && gd.includes("num(M.weightedShare)"), "the shares rows do not print the fill clips, the makeup and the weighted share");
+    assert.ok(!/Clip P<\/th>/.test(sharesHead) || sharesHead.includes("soft limit"), "the Clip P title still describes min(preferred cap, cap - 1)");
+    assert.strictEqual(count("min(preferred cap, cap - 1)"), 0, "a title still states the cap - 1 clip");
   });
   // pin moved deliberately 10/1 (Prompt 24, Setup > Rules trimmed): the rules editor's fields are RuField (theme tokens) instead
   // of SuField; the select's label reads "Prefers" (was "Primary contribution") and offers Prompt 23's "weekdays" beside
