@@ -5187,14 +5187,22 @@ function CallSchedule() {
   // --- Test Notification ---
   const sendTestNotification = useCallback(async () => {
     // Prompt 16 B9 (d): the line says "sent" only when the pop-up was really shown (helpers.notifTestMessage).
+    // Push UX review fix (10/11): "Show a test pop-up" shows a pop-up and nothing else - the test e-mail it used to send a
+    // linked surgeon behind the button's back has its own button in the Email box (sendTestEmail).
     const shown = sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
     setNotifTestSent(notifTestMessage(shown, browserNotifPermission));
-    if (mySurgeon) {
-      await sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon]);
-      setNotifTestSent((shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent (email requires the deployed function).");
-    }
     setTimeout(() => setNotifTestSent(""), 6000);
-  }, [sendBrowserNotif, sendEmailNotif, mySurgeon, browserNotifPermission]);
+  }, [sendBrowserNotif, browserNotifPermission]);
+  // The Email box's "Send a test e-mail" (a linked surgeon only - the deployed function sends "test" to the caller alone). The
+  // line says "sent" only when the function answered ok with a delivery (helpers.emailTestMessage).
+  const [emailTestState, setEmailTestState] = useState("");
+  const sendTestEmail = useCallback(async () => {
+    if (!mySurgeon) return;
+    setEmailTestState("Sending...");
+    const r = await sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon]);
+    setEmailTestState(emailTestMessage(r));
+    setTimeout(() => setEmailTestState(""), 8000);
+  }, [sendEmailNotif, mySurgeon]);
 
 
   // --- Office Contact Handlers (office_contacts: name, email, role, active) ---
@@ -8449,6 +8457,10 @@ function CallSchedule() {
                 {/* Only a linked surgeon gets this line; a follower's intro says where his e-mails go, and an unlinked
                     coordinator / viewer reads the one 'Available once ...' line (9/27: the two used to contradict). */}
                 {mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time).</p>}
+                {mySurgeon && <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
+                  <button data-testid="email-test" onClick={sendTestEmail} disabled={emailTestState === "Sending..."} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send a test e-mail</button>
+                  {emailTestState && <span data-testid="email-test-state" role="status" style={{fontSize:11,color:/^Test e-mail sent/.test(emailTestState) ? T.success : dkSubtext,fontWeight:600}}>{emailTestState}</span>}
+                </div>}
                 {notifPrefsLoadFailed && mySurgeon && <div data-testid="notif-prefs-load-failed" style={{...css.errBox,marginBottom:8}}>Couldn't load your saved notification settings - the switches below show the DEFAULTS, not what is saved. Reload before changing anything here.</div>}
                 {/* Prompt 20 R2 (Faraz 9/25): a follower's OWN switches - his row by profile_id (saveFollowerPref). Enabled
                     only after his row was read; before revision o the card says so, a failed read says so. */}

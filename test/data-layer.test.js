@@ -7246,12 +7246,23 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(/could not show/i.test(H.notifTestMessage(false, "granted")) && /Home Screen/.test(H.notifTestMessage(false, "granted")), H.notifTestMessage(false, "granted"));
         assert.ok(!/sent/i.test(H.notifTestMessage(false, "granted")));
       });
-      check("B9d pins: sendTestNotification reads the boolean and shows notifTestMessage(shown, browserNotifPermission); the unconditional 'Browser notification sent.' is gone; the e-mail line says the pop-up state truthfully", () => {
-        const st = B9slice("  const sendTestNotification = useCallback(async () => {", "  }, [sendBrowserNotif, sendEmailNotif, mySurgeon");
+      // pin moved deliberately 10/11: push UX review fix - "Show a test pop-up" no longer sends a linked surgeon a test e-mail
+      // behind the button's back; the e-mail has its own button in the Email box (sendTestEmail + helpers.emailTestMessage).
+      check("B9d pins: sendTestNotification reads the boolean and shows notifTestMessage(shown, browserNotifPermission) and sends NO e-mail; the unconditional 'Browser notification sent.' is gone", () => {
+        const st = B9slice("  const sendTestNotification = useCallback(async () => {", "  }, [sendBrowserNotif, browserNotifPermission]);");
         assert.ok(st.includes("const shown = sendBrowserNotif("), "reads the answer");
         assert.ok(st.includes("notifTestMessage(shown, browserNotifPermission)"), "the helper picks the line");
         assert.strictEqual(B9count('setNotifTestSent("Browser notification sent.")'), 0, "no unconditional sent line");
-        assert.ok(st.includes('(shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent'), "the e-mail line carries the pop-up truth: " + st);
+        assert.ok(!/sendEmailNotif|email test sent/i.test(st), "the pop-up test sends no e-mail: " + st);
+      });
+      check("push UX review fix (10/11): the Email box's 'Send a test e-mail' - a linked surgeon only, the deployed function's answer read by emailTestMessage; 'sent' only for ok + a delivery", () => {
+        const se = B9slice("  const sendTestEmail = useCallback(async () => {", "  }, [sendEmailNotif, mySurgeon]);");
+        assert.ok(se.includes("if (!mySurgeon) return;") && se.includes('sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon])') && se.includes("setEmailTestState(emailTestMessage(r))"), se);
+        assert.strictEqual(B9count('{mySurgeon && <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>\n                  <button data-testid="email-test" onClick={sendTestEmail}'), 1, "the button sits in the Email box for a linked surgeon only");
+        assert.strictEqual(H.emailTestMessage({ ok: true, sent: 1 }), "Test e-mail sent to your sign-in address.");
+        for (const r of [{ ok: true, sent: 0 }, { ok: false, notEnabled: true, status: 404 }, { ok: false, status: 0 }, { ok: false, status: 500 }, null, undefined])
+          assert.ok(!/sent to your/i.test(H.emailTestMessage(r)), "no 'sent' for " + JSON.stringify(r) + ": " + H.emailTestMessage(r));
+        assert.ok(/HTTP 500/.test(H.emailTestMessage({ ok: false, status: 500 })) && /not set up/.test(H.emailTestMessage({ ok: false, notEnabled: true })) && /connection/.test(H.emailTestMessage({ ok: false, status: 0 })));
       });
     })();
 

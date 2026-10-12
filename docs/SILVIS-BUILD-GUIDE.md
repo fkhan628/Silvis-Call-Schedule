@@ -2362,9 +2362,12 @@ iPhone / iPad: first Share > Add to Home Screen, then open the app from that ico
 outside the Home Screen app: add to Home Screen, open from the icon, **sign in there once** (the Home Screen app has its own
 sign-in, separate from Safari), then tap Enable phone notifications; blocked on a computer / Android: "Blocked for <host>" + " - this also affects
 the Davenport app" on fkhan628.github.io (permission is per origin) + the site-settings hint - in an installed Android app
-(standalone, no address bar) instead "open your phone's Settings > Apps > Chrome (or the browser you installed it from) >
-Notifications, allow them, then reopen the app and tap Enable phone notifications."; blocked in an iPhone Home Screen
-app: Settings > Notifications > Silvis Call; unsupported), the buttons **Enable phone notifications** (off), **Turn off** (on - a
+(standalone, no address bar) instead "open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it
+from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications." (review
+fix 10/11: the installed app's own entry first - an app installed from Chrome is most likely its own Android app (a WebAPK, named
+after the manifest's short_name) that holds the site's notification switch on Android 13+; the browser's entry is the fallback
+for a shortcut-style install. Not yet checked on a real phone, including whether Settings lists it as Silvis Call or by its full name);
+blocked in an iPhone Home Screen app: Settings > Notifications > Silvis Call; unsupported), the buttons **Enable phone notifications** (off), **Turn off** (on - a
 deliberate addition beside Davenport's four), **Diagnose**, **Reset subscription**, **Send test** (everyone, to his own
 devices; hidden while Blocked), a monospace message box, and "Which events reach your phones": two switches (`schedule_updates_push`,
 `trade_updates_push` - a linked surgeon's own row, a follower's own row by profile_id, editable only once his row was read),
@@ -2375,7 +2378,10 @@ unlinked account that follows nobody reads that only its own tests reach its pho
 reads it). (b) The **Pop-ups on this device** box below (pop-ups while the app is open - not phone push) names its buttons for
 what they do: **Allow pop-ups** (`data-testid="popup-allow"`, only while the permission is not asked yet) and **Show a test
 pop-up** (`popup-test`); its lines follow ("Not allowed yet - tap Allow pop-ups.", "... tap Allow pop-ups first."); the box
-title stays and the push box's **Send test** keeps its name. (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
+title stays and the push box's **Send test** keeps its name. Review fix (10/11): **Show a test pop-up** shows a pop-up and
+nothing else - the test e-mail it used to send a linked surgeon behind the button's back moved to its own **Send a test
+e-mail** button in the Email box (`email-test`, a linked surgeon only; its line `email-test-state` comes from
+`helpers.emailTestMessage` and says "sent" only for an ok answer with a delivery). (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
 line is the ONE instruction - the generic "Turn this on once..." line and all four buttons (Enable phone notifications,
 Diagnose, Reset subscription, Send test) are hidden, since none works outside the Home Screen app; the phone switches stay
 (they cover every device); in the Home Screen app (standalone -> `off`) nothing changes and Enable is offered. (The Account
@@ -2452,7 +2458,7 @@ closed, and with push still off the first Settings visit after the reload opens 
   real `sw.js` registered): Enable -> the save body + badge + "Subscribed (as ...)", Diagnose, Send test, the phone switches,
   the version-change reset keeps the worker, re-arm after a wiped registration with no prompt, the deep link + `?tab=evil` +
   the open-window message, Turn off, Reset (the root dummy survives), the columns absent, sign-out order (delete ->
-  unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line; Enable asks nothing) and the
+  unsubscribe -> logout), Blocked for the host, `?public=1`, iPhone Safari (the Home Screen line once, no push button - push UX (c)) and the
   Home Screen app (Enable phone notifications offered) at 390 px with screenshots. The shared route answers every push request on every other page
   (never the live project).
 - Push UX 1(a): `test/push.test.js` lifts the auto-open effect and the header's toggle out of `index-source.html` and runs them
@@ -2462,17 +2468,18 @@ closed, and with push still off the first Settings visit after the reload opens 
   view). The smoke opens the card only through `openNotifSettings` (it reads `aria-expanded`, so a tap never closes a card that
   opened by itself) and checks the auto-open with no header tap, no bare "Enable" button on Settings, the sticky close across a
   tab switch, and the card left closed after a reload with push on.
-- Push UX (b)-(f) (10/11): `test/push.test.js` checks `pushCardParts` per state, the installed-Android Blocked line (and that
-  a browser tab, an installed computer app and iOS keep theirs), `pushDevice.state()` handing `standalone` back for a
-  display-mode-standalone Android fake, and Reset's close-and-reopen message; it lifts the card's IIFE and the Pop-ups box out
+- Push UX (b)-(f) (10/11): `test/push.test.js` checks `pushCardParts` per state, the installed-Android Blocked line (it names
+  the installed app's own Settings > Apps entry - `manifest.json`'s `short_name` - first and the browser only as the fallback,
+  review fix 10/11; and that a browser tab, an installed computer app and iOS keep theirs), `pushDevice.state()` handing
+  `standalone` back for a display-mode-standalone Android fake, and Reset's close-and-reopen message; it lifts the card's IIFE and the Pop-ups box out
   of `index-source.html`, compiles them with Babel (classic runtime) and runs them on a `React.createElement` stub (Safari: no
   push button, no generic line, "Add to Home Screen" once, the switches kept; the Home Screen app: Enable; Blocked: Diagnose /
   Reset subscription only, the switches enabled and greyed with the note - for a surgeon and a follower whose row was read; an
   installed Android app's Blocked line through the card; the Pop-ups buttons per permission), with a mutant per behaviour
   (the old Pop-ups names, the generic line / Enable / Diagnose / Reset / Send test unguarded or offered in Safari, Send test
-  while Blocked, the switches disabled / not greyed / without the note, the old Reset message, the Android branch dropped, the
-  card or `state()` not passing `standalone`). `test/data-layer.test.js` SD4 pins the Pop-ups names. The smoke's "Prompt 30"
-  section: Reset's message; Blocked shows only Diagnose / Reset subscription and the note, and a tap on a phone switch still
+  while Blocked, the switches disabled / not greyed / without the note, the old Reset message, the Android branch dropped or
+  naming Chrome's entry first, the card or `state()` not passing `standalone`). `test/data-layer.test.js` SD4 pins the Pop-ups
+  names. The smoke's "Prompt 30" section: Reset's message; Blocked shows only Diagnose / Reset subscription and the note, and a tap on a phone switch still
   saves; iPhone Safari shows the Home Screen line once, no push button, no generic line, the switches; a new step opens an
   installed Android app (Android UA, `matchMedia("(display-mode: standalone)")` faked) with permission denied and reads the
   phone's-Settings line with no Send test (screenshot `p30-push-card-android-app-blocked-412.png`); Settings declutter reads

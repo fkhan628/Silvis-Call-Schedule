@@ -2109,6 +2109,27 @@ try {
     const wantPopups = (sd.permRaw === "default" ? [["popup-allow", "Allow pop-ups"]] : []).concat([["popup-test", "Show a test pop-up"]]);
     if (JSON.stringify(sd.popupButtons) !== JSON.stringify(wantPopups) || sd.oldPopupNames.length) fail("Settings declutter: the Pop-ups box's buttons " + JSON.stringify(sd.popupButtons) + " (want " + JSON.stringify(wantPopups) + "), old names on screen " + JSON.stringify(sd.oldPopupNames));
     else ok(`Settings declutter: the Pop-ups box's buttons read ${wantPopups.map(x => "'" + x[1] + "'").join(" / ")} - never 'Allow notifications' / 'Send test notification'`);
+    // push UX review fix (10/11): "Show a test pop-up" sends NO e-mail; the Email box's "Send a test e-mail" (a linked surgeon
+    // only) sends exactly one { type: "test" } to his own id and shows a line
+    {
+      const mailsSince = (b) => writes.slice(b).filter(w => w.method === "POST" && w.path.startsWith("/functions/v1/send-notification")).map(w => { try { return JSON.parse(w.body || "{}"); } catch (e) { return {}; } });
+      const bP = writes.length;
+      await page.click("[data-testid=popup-test]");
+      await page.waitForTimeout(1200);
+      const popMails = mailsSince(bP);
+      if (popMails.length) fail("Show a test pop-up: it POSTed send-notification " + JSON.stringify(popMails) + " - the pop-up test must send no e-mail");
+      else ok("Show a test pop-up: no send-notification POST (the test e-mail has its own button)");
+      if (!(await page.$("[data-testid=email-test]"))) console.log("     (Send a test e-mail: this harness account is not linked to a roster entry - the button is a linked surgeon's only; not exercised)");
+      else {
+        const bE = writes.length;
+        await page.click("[data-testid=email-test]");
+        await waitFor(async () => !!(await page.$("[data-testid=email-test-state]")) && (await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim())) !== "Sending...", 10000, 200);
+        const eMails = mailsSince(bE), line = await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim()).catch(() => "");
+        if (eMails.length !== 1 || eMails[0].type !== "test" || !Array.isArray(eMails[0].targetIds) || eMails[0].targetIds.length !== 1) fail("Send a test e-mail: want exactly one POST { type: 'test', targetIds: [own id] }, got " + JSON.stringify(eMails));
+        else if (!line || line === "Sending...") fail("Send a test e-mail: no result line after the POST (got " + JSON.stringify(line) + ")");
+        else ok(`Send a test e-mail: one POST { type: 'test', targetIds: [${eMails[0].targetIds[0]}] }, line '${line}'`);
+      }
+    }
     if (!sd.bioLine) console.log("     (Settings declutter: biometrics report available in this browser - the Account 'Details' disclosure is not exercised this run)");
     else if (sd.bioDetails) fail("Settings declutter: the biometric Details (Re-check / Try enable anyway) are open on entry - they belong behind Details");
     else {
@@ -12835,7 +12856,8 @@ try {
       if (ictx) await ictx.close();
     }
     // (16) push UX (f) (10/11): Blocked in an installed Android app (display-mode standalone - opened from its icon, no address
-    // bar): the line points at the phone's Settings > Apps > Chrome > Notifications and says reopen the app; no Send test (e)
+    // bar): the line points at the phone's Settings > Apps > Silvis Call (the installed app's own entry; the browser if it is
+    // not listed - review fix 10/11) > Notifications and says reopen the app; no Send test (e)
     {
       let actx = null, ap = null;
       const label = "Android installed app, Blocked";
@@ -12848,7 +12870,7 @@ try {
         await loadApp(ap, P30_BASE);
         await openCard(ap);
         const s = await stateOf(ap);
-        const want = `Blocked for ${new URL(BASE).hostname}. To allow it, open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications.`;
+        const want = `Blocked for ${new URL(BASE).hostname}. To allow it, open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications.`;
         if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== want || JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail(`P30 ${label}: ` + JSON.stringify(s));
         else ok(`P30 ${label}: '${s.line}' (the phone's own settings - no address-bar hint); buttons Diagnose / Reset subscription (no Send test)`);
         await ap.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();

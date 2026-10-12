@@ -39,7 +39,10 @@ const EDGE = fs.existsSync(path.join(ROOT, EDGE_PATH)) ? read(EDGE_PATH) : "";
 const CONTRACT_TABS = ["calendar", "openshifts", "myschedule", "timeoff", "settings", "setup"];
 // Push UX (b)-(f) (10/11): the words the card, its Blocked lines and the Pop-ups box must show - restated here on purpose
 const IOS_HOME_LINE = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications.";
-const ANDROID_APP_TAIL = ". To allow it, open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications.";
+// An app installed from Chrome on Android 13+ is most likely its own Android app (a WebAPK, named after the manifest's
+// short_name) holding the site's notification permission itself; a shortcut-style install (another browser) leaves it with the
+// browser. Review fix 10/11 (not yet checked on a real phone): name the app's own entry first, the browser as the fallback.
+const ANDROID_APP_TAIL = ". To allow it, open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications.";
 const BROWSER_TAIL = ". To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.";
 const BLOCKED_PREFS_NOTE = "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on.";
 const RESET_DONE = "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications.";
@@ -357,8 +360,14 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.strictEqual(W({ hostname: "localhost", device: "Android" }).line, "Blocked for localhost" + BROWSER_TAIL, "standalone not known: the browser wording");
     assert.strictEqual(W({ hostname: "localhost", device: "Chrome on Windows", standalone: true }).line, "Blocked for localhost" + BROWSER_TAIL, "an installed computer app keeps the browser wording");
     assert.strictEqual(W({ ios: true, device: "iPhone", standalone: true }).line, "Blocked in your iPhone's settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications.", "an iPhone Home Screen app keeps its own line");
+    // review fix (10/11): the entry it names first is the installed app's own (named after the manifest's short_name), the
+    // browser only as the fallback - not Chrome first (Chrome's notifications are usually on already)
+    const shortName = JSON.parse(read("manifest.json")).short_name;
+    const andLine = W({ hostname: "localhost", device: "Android", standalone: true }).line;
+    assert.ok(andLine.includes("Settings > Apps > " + shortName + " (or Chrome / the browser you installed it from, if " + shortName + " is not listed) > Notifications"), "the installed app's own entry (manifest short_name '" + shortName + "') first, the browser as the fallback: " + andLine);
+    assert.ok(!/Settings > Apps > Chrome/.test(andLine), "Chrome is not the first entry named: " + andLine);
   };
-  await check("pushStateWords (push UX f): Blocked in an installed Android app (standalone) points at the phone's Settings > Apps > Chrome > Notifications, then reopen the app - the browser tab, an installed computer app and iOS keep their own lines", androidAppBlockedCheck);
+  await check("pushStateWords (push UX f): Blocked in an installed Android app (standalone) points at the phone's Settings > Apps > Silvis Call (the browser if it is not listed) > Notifications, then reopen the app - the browser tab, an installed computer app and iOS keep their own lines", androidAppBlockedCheck);
   // Push UX (c) / (e) (10/11): which parts of the card show per state. Safari on an iPhone / iPad (ios-home-screen): only the
   // state line (none of the buttons can work outside the Home Screen app); Blocked: no Send test, the switches' note
   const cardPartsCheck = (S) => {
@@ -1176,6 +1185,8 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     '"Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications."', '"Reset done. Reload the app, then tap Enable phone notifications."', turnOffResetCheck);
   await mutant("(f) the installed-Android Blocked line dropped (the address-bar hint again)", "helpers",
     '    if (o.standalone && o.device === "Android") return {', "    if (false) return {", androidAppBlockedCheck);
+  await mutant("(f) the installed-Android Blocked line sending the user to Chrome's entry first (review fix 10/11: the switch is on the installed app's own entry)", "helpers",
+    "open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications,", "open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications,", androidAppBlockedCheck);
   await mutant("(f) the card not passing standalone to pushStateWords", "index",
     "standalone: info.standalone, ", "", cardRenderCheck);
   await mutant("(f) state() not handing standalone back", "config",

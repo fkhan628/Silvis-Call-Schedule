@@ -5916,7 +5916,10 @@ function pushStateOf(s) {
 // line. Blocked on a computer / Android is per ORIGIN (fkhan628.github.io also serves the Davenport app, Cowork 10/2 7:25 PM);
 // an iPhone / iPad Home Screen app asks on its own. An installed Android app (standalone - opened from its icon) has no address
 // bar, so its Blocked line points at the phone's own settings instead (push UX f, 10/11); an installed computer app keeps the
-// browser wording.
+// browser wording. Which entry (review fix 10/11, not yet checked on a real phone): an app installed from Chrome is most likely
+// its own Android app (a WebAPK, most likely listed under the manifest's short_name "Silvis Call" - also unchecked) that holds
+// the site's notification switch on Android 13+; a shortcut-style install (another browser) leaves it with the browser - so
+// the app's entry first, the browser as the fallback.
 function pushStateWords(state, opts) {
   const o = opts && typeof opts === "object" ? opts : {};
   if (state === "on") return { badge: "Subscribed on this device", line: o.label ? "On for this device (" + o.label + ")." : "On for this device." };
@@ -5924,7 +5927,7 @@ function pushStateWords(state, opts) {
     if (o.ios) return { badge: "Blocked", line: "Blocked in your " + (o.device === "iPad" ? "iPad" : "iPhone") + "'s settings: Settings > Notifications > Silvis Call > Allow Notifications, then reopen the app and tap Enable phone notifications." };
     const host = String(o.hostname || "this site");
     const head = "Blocked for " + host + (host === "fkhan628.github.io" ? " - this also affects the Davenport app" : "") + ". To allow it, ";
-    if (o.standalone && o.device === "Android") return { badge: "Blocked", line: head + "open your phone's Settings > Apps > Chrome (or the browser you installed it from) > Notifications, allow them, then reopen the app and tap Enable phone notifications." };
+    if (o.standalone && o.device === "Android") return { badge: "Blocked", line: head + "open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications." };
     return { badge: "Blocked", line: head + "open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications." };
   }
   if (state === "ios-home-screen") return { badge: null, line: "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications." };
@@ -6385,6 +6388,16 @@ function notifTestMessage(shown, permission) {
   if (permission !== "granted") return "Browser notifications are not allowed yet - tap Allow pop-ups first.";
   return "This browser could not show a notification from the page (on an iPhone the app has to be installed to the Home Screen) - nothing was shown.";
 }
+// The line beside the Email box's "Send a test e-mail" (push UX review fix, 10/11 - the test e-mail left "Show a test
+// pop-up"): r = sendEmailNotif's answer. "sent" only when the function answered ok AND delivered to at least one address.
+function emailTestMessage(r) {
+  const o = r && typeof r === "object" ? r : {};
+  if (o.ok && Number(o.sent) > 0) return "Test e-mail sent to your sign-in address.";
+  if (o.ok) return "The server answered but sent no e-mail - check that your account has a sign-in address.";
+  if (o.notEnabled) return "E-mail is not set up on the server yet - no e-mail was sent.";
+  if (o.status === 0) return "Couldn't reach the server - check your connection; no e-mail was sent.";
+  return "The test e-mail did not go out (" + (o.status ? "HTTP " + o.status : "error") + ").";
+}
 
 // Settings > Pop-ups on this device: Notification.permission ("granted" / "denied" / "default", or the app's own
 // "unsupported" when the browser has no Notification API) in plain words - never the raw token.
@@ -6818,7 +6831,7 @@ function payLogAuditText(verb, name, row) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appGridLabels, appDaysLeaveWords, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
-    GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
+    GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, emailTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,
     authLinkError, AUTH_LINK_ERROR_MESSAGE, SESSION_UNREACHED_MESSAGE, SESSION_STILL_UNREACHED_MESSAGE,
