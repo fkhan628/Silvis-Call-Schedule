@@ -3090,7 +3090,7 @@ try {
   //    the last was drawn for the scheduler and the person with the East code only, so KHAN AS A SURGEON (person s1, role
   //    surgeon) is the role that proves its gate - the other roles never saw it;
   //  - Totals for November 2026, month and fairness views + EVERY line of the CSV (signed-in roles; ?public=1 has no
-  //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 22-field CSV lines; 21 fields
+  //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 23-field CSV lines; 22 fields
   //    on every line for the others (a header that lost its East column over rows that kept it would shift every value).
   // "No East text" = no match of E3_RE (case-insensitive: innerText returns CSS-uppercased text as shown) in the
   // surface's visible text or in any title / aria-label inside it, and no [data-eastvac] element. A day's NOTE is data,
@@ -3278,11 +3278,12 @@ try {
         else ok(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): '${eS.source}' (the served row's own source)`);
       }
       const tS = await e3Totals(page, "e3-scheduler-totals.png");
-      const badS = tS.csvRows.filter(r => r.length !== 22);
-      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 22) fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (22 columns): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
-      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 22 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+      // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
+      const badS = tS.csvRows.filter(r => r.length !== 23);
+      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
+      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
       else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals Nov 2026): the 'East days: days on Davenport call ...' footnote is gone`);
-      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 22 fields each, unchanged)`);
+      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
       sched.fierceEastP = /East P-week/.test(tS.fierce);
       if (factsS.countsEast.includes("s5")) {
         if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness Nov 2026): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
@@ -3533,14 +3534,15 @@ try {
         // Totals (signed-in roles): screen, fairness and EVERY CSV line
         if (R.totals) {
           const tt = await e3Totals(rp, "e3-" + R.file + "-totals.png");
-          const badRows = tt.csvRows.filter(r => r.length !== 21);
+          // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 21 -> 22 fields for everyone else
+          const badRows = tt.csvRows.filter(r => r.length !== 22);
           if (tt.rows < 6) fail(`${T}, Totals Nov 2026: ${tt.rows} row(s) - the table never loaded`);
           else if (tt.month.hits.length || tt.fair.hits.length || tt.hdr.includes("East days")) fail(`${T}, Totals Nov 2026: East detail shown - month ${hitsText(tt.month.hits) || "none"}; fairness ${hitsText(tt.fair.hits) || "none"}; header ${tt.hdr.join(" | ")}`);
           else ok(`${T}, Totals Nov 2026: ${tt.rows} rows, no East column / tooltip / footnote; fairness view without East text (Fierce: '${tt.fierce.slice(0, 90)}')${sched.fierceEastP ? " while the scheduler's reads 'East P-week'" : ""}`);
-          if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 21 || !tt.csvHeader.includes("Counted vs cap")) fail(`${T}, Totals CSV: the header must follow the screen (21 columns, no East column, 'Counted vs cap'): ${tt.csvHeader.join(" | ")}`);
-          else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 21 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+          if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 22 || !tt.csvHeader.includes("Counted vs cap") || tt.csvHeader[21] !== "Weighted") fail(`${T}, Totals CSV: the header must follow the screen (22 columns, no East column, 'Counted vs cap', Weighted the last): ${tt.csvHeader.join(" | ")}`);
+          else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 22 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
-          else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
+          else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 22 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
         }
         // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' on the harness's forced 404 - the missing-table
         // guard; the live tables exist since 2026-09-28 and are never read here) and no Totals > Pay; the
@@ -5454,7 +5456,9 @@ try {
     return {
       id: e.getAttribute("data-testid").replace("totals-row-", ""), source: e.getAttribute("data-source"),
       primary: Number(e.getAttribute("data-primary")), backup: Number(e.getAttribute("data-backup")), total: Number(e.getAttribute("data-total")), weekend: Number(e.getAttribute("data-weekend")), maxconsec: Number(e.getAttribute("data-maxconsec")), major: Number(e.getAttribute("data-major")), minor: Number(e.getAttribute("data-minor")),
-      visible: { primary: tds[1], backup: tds[2], total: tds[3], weekend: tds[4], maxconsec: col("maxconsec"), cap: col("cap"), target: col("target"), deviation: col("deviation") },
+      weighted: e.getAttribute("data-weighted"), // Prompt 32 step 1: primary x 1 + backup x 0.5 (a string as the attribute carries it)
+      // Prompt 32 step 1: the Weighted column sits right after Total, so the weekend cell is read by its data-col (tds[4] is Weighted now)
+      visible: { primary: tds[1], backup: tds[2], total: tds[3], weekend: col("weekend"), weighted: col("weighted"), maxconsec: col("maxconsec"), cap: col("cap"), target: col("target"), deviation: col("deviation") },
       flags: { cap: flag("cap"), maxconsec: flag("maxconsec"), deviation: flag("deviation") },
       text: e.innerText.replace(/\s+/g, " "),
     };
@@ -5486,6 +5490,13 @@ try {
       });
       if (mismatches.length) fail("Totals Oct 2026 disagrees with the independent recount (visible cells and/or data-* attributes): " + mismatches.join("; "));
       else ok("Totals Oct 2026: 6 rows; the VISIBLE primary / backup / total / weekend-day / max-consecutive cells and the data-* attributes all equal the independent recount (" + published.map(r => `${r.id} ${r.visible.primary}+${r.visible.backup}=${r.visible.total} w${r.visible.weekend} c${r.visible.maxconsec}`).join(", ") + ")");
+      // Prompt 32 step 1 (Faraz 10/11): the Weighted column = primary x 1 + backup x 0.5 (Silvis days only; the live blob's
+      // groupRules.shiftAccounting.weights is null or { primary: 1, backup: 0.5 } - rules.js shiftWeightsOf reads both as that) -
+      // the cell the surgeon sees AND data-weighted, against the independent recount
+      const wBad = [];
+      published.forEach(r => { const x = recount[r.id]; const wantW = x.primary + 0.5 * x.backup; if (Number(r.weighted) !== wantW || r.visible.weighted !== String(wantW)) wBad.push(`${r.id}: data-weighted ${r.weighted} / visible '${r.visible.weighted}' vs ${x.primary} + 0.5 x ${x.backup} = ${wantW}`); });
+      if (wBad.length) fail("Totals Oct 2026 (Prompt 32): the Weighted column is not primary + 0.5 x backup: " + wBad.join("; "));
+      else ok("Totals Oct 2026 (Prompt 32): the Weighted column reads primary + 0.5 x backup for all six, visible cell and data-weighted (" + published.map(r => `${r.id} ${r.visible.primary}+0.5x${r.visible.backup}=${r.visible.weighted}`).join(", ") + ")");
       const octTotal = published.reduce((s, r) => s + r.total, 0);
       console.log(`     (October: ${octTotal} tallied shifts across the six; ${octExternal} externally covered primary day(s) excluded; holiday units in October: ${octHoliday ? "yes" : "none"})`);
       const acton = published.find(r => r.id === "s3");
@@ -5575,15 +5586,17 @@ try {
         const csv = await saveDownload(() => page.click("[data-testid=totals-csv]"));
         const lines = csv.text.split("\r\n").filter(Boolean);
         if (csv.name !== "silvis-totals-month-2026-10-01-2026-10-31.csv") fail("Totals CSV filename: " + csv.name);
-        else if (!/^Period,From,To,Source,Surgeon,Code,Primary,Backup,Total,Weekend days/.test(lines[0]) || lines.length !== 7) fail(`Totals CSV shape wrong: ${lines.length} line(s), header "${lines[0]}"`);
+        else if (!/^Period,From,To,Source,Surgeon,Code,Primary,Backup,Total,Weekend days/.test(lines[0]) || !/,Type,Weighted$/.test(lines[0]) || lines.length !== 7) fail(`Totals CSV shape wrong (Prompt 32: Weighted appended after Type): ${lines.length} line(s), header "${lines[0]}"`);
         else if (/\$/.test(csv.text)) fail("Totals CSV contains a '$'");
         else {
           const khan = lines.find(l => /,Khan,FAK,/.test(l)) || "";
           const cols = khan.split(",");
           const actonCsv = (lines.find(l => /,Acton,BDA,/.test(l)) || "").split(",");
+          const khanW = cols[cols.length - 1]; // Prompt 32 step 1: the appended Weighted column
           if (Number(cols[6]) !== recount.s1.primary || Number(cols[7]) !== recount.s1.backup) fail("Totals CSV: Khan's primary/backup differ from the recount: " + khan);
           else if (actonCsv[15] !== String(ACTON_TARGET) || actonCsv[16] !== expDev) fail(`Totals CSV: Acton's Target / Deviation columns should read ${ACTON_TARGET} / ${expDev}, got '${actonCsv[15]}' / '${actonCsv[16]}'`);
-          else ok(`Totals CSV: ${csv.name} - header + 6 rows, Khan ${cols[6]} P / ${cols[7]} B matches the recount, Acton Target ${actonCsv[15]} / Deviation ${actonCsv[16]}, no '$'`);
+          else if (khanW !== String(recount.s1.primary + 0.5 * recount.s1.backup)) fail(`Totals CSV (Prompt 32): Khan's Weighted (the last column) should read ${recount.s1.primary} + 0.5 x ${recount.s1.backup} = ${recount.s1.primary + 0.5 * recount.s1.backup}, got '${khanW}'`);
+          else ok(`Totals CSV: ${csv.name} - header + 6 rows, Khan ${cols[6]} P / ${cols[7]} B matches the recount, Weighted ${khanW} = P + 0.5 B, Acton Target ${actonCsv[15]} / Deviation ${actonCsv[16]}, no '$'`);
         }
       } catch (e) { fail("Totals CSV download: " + errLine(e)); }
     }

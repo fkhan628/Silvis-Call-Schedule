@@ -2564,7 +2564,9 @@ function suFmtTs(iso) {
 
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
 /* === TOTALS (Prompt 6 Slice F) - pure tally helpers ===
-   One 24-h day = one shift; nothing weighted or split; counts only (no $).
+   One 24-h day = one shift; nothing split; counts only (no $). The raw counts stay unweighted (trade
+   suggestions read them); Prompt 32 step 1 (10/11) adds the WEIGHTED view beside them - ttWeightedLoad /
+   ttWeightedShare below, with the weights handed in from rules.js shiftWeightsOf (primary 1, backup 0.5).
    tt-prefixed so nothing collides with rules.js / generator.js globals.
    ttTotalsFor(schedule, surgeonId, from, to, opts) ->
      { primary, backup, total, weekendDays, majorHolidays, minorHolidays, maxConsecutive, holidayUnits: [names] }
@@ -2679,11 +2681,34 @@ function ttRangeFor(mode, year, month0, opts) {
   for (var c = parse(from); fmt(c) <= to; c = new Date(c.getFullYear(), c.getMonth() + 1, 1)) months.push(c.getFullYear() + "-" + String(c.getMonth() + 1).padStart(2, "0"));
   return { from: from, to: to, label: label, months: months };
 }
-// Signed deviation text: "+2", "-1", "0", or "-" without a target.
+// Signed deviation text: "+2", "-1", "0", or "-" without a target. Prompt 32 step 1 (10/11): a non-integer
+// difference is rounded to one decimal for display (7 - 5.6 printed "+1.4000000000000004"); a difference that
+// rounds to zero reads "0", never "-0"; integer outputs are unchanged.
 function ttDeviation(total, target) {
   if (typeof target !== "number" || isNaN(target)) return "-";
-  var d = Number(total || 0) - target;
+  var d = ttRound1(Number(total || 0) - target);
+  if (d === 0) return "0";
   return d > 0 ? "+" + d : String(d);
+}
+// One decimal for display (the GenDiagnostics num() rule); 0 for -0.
+function ttRound1(x) { var r = Math.round(Number(x) * 10) / 10; return r === 0 ? 0 : r; }
+// Prompt 32 step 1 (Faraz 10/11): the WEIGHTED LOAD of a tally - primary x weights.primary + backup x
+// weights.backup, one decimal. `weights` comes from rules.js shiftWeightsOf(groupRules) - the ONE reader of
+// groupRules.shiftAccounting.weights and its default; this helper never supplies a default of its own (null
+// when weights is not { primary: number, backup: number }). Silvis days only: the caller passes ttTotalsFor's
+// counts, which never include East days.
+function ttWeightedLoad(primary, backup, weights) {
+  if (!weights || typeof weights.primary !== "number" || typeof weights.backup !== "number") return null;
+  return ttRound1(Number(primary || 0) * weights.primary + Number(backup || 0) * weights.backup);
+}
+// The WEIGHTED SHARE beside it: targetP x weights.primary + targetB x weights.backup, one decimal. A missing
+// role target reads 0 (as the fairness view's green mark summed P + B before); null without any target or
+// without weights.
+function ttWeightedShare(targetP, targetB, weights) {
+  if (!weights || typeof weights.primary !== "number" || typeof weights.backup !== "number") return null;
+  var p = typeof targetP === "number" && !isNaN(targetP) ? targetP : null, b = typeof targetB === "number" && !isNaN(targetB) ? targetB : null;
+  if (p === null && b === null) return null;
+  return ttRound1((p || 0) * weights.primary + (b || 0) * weights.backup);
 }
 // ttOutsideSurgeons(roster, schedule, from, to, opts) -> [{ id, name, code, active, primary, backup, total }]
 // The Totals view's "Outside surgeons" section (Prompt 12 M, 9/22): every roster
@@ -6854,7 +6879,7 @@ if (typeof module !== "undefined" && module.exports) {
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
-    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
+    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, ttCsvText, ttIsIso, ttOutsideSurgeons,
     buildWeekRows, exportColorsFor,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,

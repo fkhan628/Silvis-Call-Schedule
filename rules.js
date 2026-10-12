@@ -449,6 +449,37 @@ function defaultWeights() {
   };
 }
 
+/* ------------------------------------------------------- shift weights */
+// Prompt 32 step 1 (Faraz 10/11, decision 9): the WEIGHTED LOAD counts Silvis days only - a primary day
+// weighs `primary`, a backup day `backup`. The weights are data, groupRules.shiftAccounting.weights; this
+// is the ONE reader (Totals, the fairness view and - Prompt 32 step 2 - the generator all call it; rules.js
+// holds it because the generator under Node requires rules.js only and the page / worker see it as a
+// global). Each key falls back to SHIFT_WEIGHT_DEFAULTS on its own when it is not a positive finite
+// number; null / an absent block read as the defaults (the live blob's null included). NOT
+// groupRules.weights - that is the soft-penalty table (defaultWeights above). A present but unreadable
+// value warns once in buildContext. Fresh copies; the blob's own object is never handed out.
+var SHIFT_WEIGHT_DEFAULTS = Object.freeze({ primary: 1, backup: 0.5 });
+function rdShiftWeightOk(v) { return typeof v === "number" && isFinite(v) && v > 0; }
+function shiftWeightsOf(groupRules) {
+  var sa = groupRules && typeof groupRules === "object" ? groupRules.shiftAccounting : null;
+  var w = sa && typeof sa === "object" ? sa.weights : null;
+  var obj = w && typeof w === "object" && !Array.isArray(w) ? w : {};
+  return {
+    primary: rdShiftWeightOk(obj.primary) ? obj.primary : SHIFT_WEIGHT_DEFAULTS.primary,
+    backup: rdShiftWeightOk(obj.backup) ? obj.backup : SHIFT_WEIGHT_DEFAULTS.backup
+  };
+}
+// The parts of a PRESENT shiftAccounting.weights that shiftWeightsOf cannot read: [] when it is null /
+// absent / readable (a missing key is not junk - it reads the default quietly), ["weights"] when it is
+// not an object at all - buildContext's warning.
+function rdShiftWeightsBad(groupRules) {
+  var sa = groupRules && typeof groupRules === "object" ? groupRules.shiftAccounting : null;
+  var w = sa && typeof sa === "object" ? sa.weights : undefined;
+  if (w === undefined || w === null) return [];
+  if (typeof w !== "object" || Array.isArray(w)) return ["weights"];
+  return ["primary", "backup"].filter(function (k) { return w[k] !== undefined && !rdShiftWeightOk(w[k]); });
+}
+
 // Prompt 23 B4: the Central date - the same expression as helpers.js todayCentral and
 // generator.js genTodayStr. Read ONCE by buildContext when the input carries no today;
 // eligibility() never reads a clock.
@@ -664,6 +695,12 @@ function buildContext(input) {
   if (todayIn !== undefined && todayIn !== null && !todayOk) ctx.warnings.push("today " + JSON.stringify(todayIn) + " is not a 'YYYY-MM-DD' date (Prompt 23): read as the Central date " + today + " - the hardNeverWeekdays notice is measured from it");
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
   if (defaultPreferredBad) ctx.warnings.push("groupRules.defaultMonthlyCap.preferred = " + JSON.stringify(dmc.preferred) + " is not a positive number (Prompt 32): ignored - the group has no soft monthly limit; set it in Setup -> Rules");
+  // Prompt 32 step 1: an unreadable shift weight would fall back silently - say so once, with what is read instead
+  var swBad = rdShiftWeightsBad(groupRules);
+  if (swBad.length) {
+    var swRead = shiftWeightsOf(groupRules);
+    ctx.warnings.push("groupRules.shiftAccounting.weights = " + JSON.stringify(groupRules.shiftAccounting.weights) + ": " + swBad.join(" / ") + " is not a positive number (Prompt 32) - read as { primary: " + swRead.primary + ", backup: " + swRead.backup + " } (an unreadable key takes the default { primary: " + SHIFT_WEIGHT_DEFAULTS.primary + ", backup: " + SHIFT_WEIGHT_DEFAULTS.backup + " }); fix it in Setup -> Rules -> Edit group rules as JSON");
+  }
   // audit RG-1 (9/23): "anyone not opted out may cover a holiday" is fixed behaviour - the opt-out is
   // surgeonRules.<id>.holidayRules.holidaysOff (hard holiday-opt-out:<name>), the waiver family is
   // holidays.ignoreWeekdayRules; eligibility() never read the former group key. Warn so the blob can drop it.
@@ -2469,6 +2506,8 @@ if (typeof module !== "undefined") {
     isHolidayDay: isHolidayDay,
     resolveWeight: resolveWeight,
     defaultWeights: defaultWeights,
+    SHIFT_WEIGHT_DEFAULTS: SHIFT_WEIGHT_DEFAULTS,
+    shiftWeightsOf: shiftWeightsOf,
     talliesFor: talliesFor,
     runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,

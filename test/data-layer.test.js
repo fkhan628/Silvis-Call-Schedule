@@ -2541,15 +2541,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(tcLines.every(l => /showEast|eastDetailsVisible/.test(l)), "a Totals line with East text outside showEast / eastDetailsVisible: " + tcLines.filter(l => !/showEast|eastDetailsVisible/.test(l)).join(" | ").slice(0, 300));
     // behaviour: the component's OWN transform block (lifted verbatim, review 9/25 - not a re-implementation) over a
     // header and two rows (a pool row, an outside row), with and without the flag
-    const H0 = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
-    assert.ok(tc.includes('const headers = ["' + H0.join('", "') + '"];'), "the scheduler's CSV header is unchanged, column for column");
+    // pin moved deliberately 10/11: Prompt 32 step 1 APPENDS a "Weighted" column (primary x 1 + backup x 0.5, rules.js
+    // shiftWeightsOf) after "Type" - the 22 older columns keep their positions (the "new columns are APPENDED" rule), so the
+    // scheduler's file has 23 columns and everyone else's 22; the East transform is unchanged.
+    const H0 = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type", "Weighted"];
+    assert.ok(tc.includes('const headers = ["' + H0.join('", "') + '"];'), "the scheduler's CSV header is the 22 older columns, column for column, plus Weighted appended (Prompt 32)");
     const txAt = tc.indexOf("if (!eastDetailsVisible) {"), txEnd = tc.indexOf("\n      }\n", txAt);
     assert.ok(txAt > 0 && txEnd > txAt, "the CSV transform block is where the pin expects it");
     const csvTx = new Function("headers", "data", "eastDetailsVisible", tc.slice(txAt, txEnd + 8));
     const mkCsv = () => ({ hd: H0.slice(), data: [H0.map((_, i) => "p" + i), H0.map((_, i) => "o" + i)] });
     const off = mkCsv(); csvTx(off.hd, off.data, false);
-    assert.ok(off.hd.length === 21 && !off.hd.some(h => /East/.test(h)) && off.hd[17] === "Counted vs cap", "non-scheduler CSV header: 21 columns, no East word, 'Counted vs cap': " + off.hd.join(" | "));
-    assert.ok(off.data.every(r => r.length === 21 && r.indexOf(r[0][0] + "13") < 0 && r[13] === r[0][0] + "14"), "non-scheduler CSV rows: the East cell is gone from EVERY row, so no value shifts under the wrong header: " + JSON.stringify(off.data));
+    assert.ok(off.hd.length === 22 && !off.hd.some(h => /East/.test(h)) && off.hd[17] === "Counted vs cap" && off.hd[21] === "Weighted", "non-scheduler CSV header: 22 columns (Prompt 32: + Weighted, the last), no East word, 'Counted vs cap': " + off.hd.join(" | "));
+    assert.ok(off.data.every(r => r.length === 22 && r.indexOf(r[0][0] + "13") < 0 && r[13] === r[0][0] + "14" && r[21] === r[0][0] + "22"), "non-scheduler CSV rows: the East cell is gone from EVERY row, so no value shifts under the wrong header (the Weighted cell stays under Weighted): " + JSON.stringify(off.data));
     const on = mkCsv(); csvTx(on.hd, on.data, true);
     assert.deepStrictEqual(on, mkCsv(), "the scheduler's CSV is untouched by the transform");
     // (6) overrides: no tag written; the strip regex and the audit rows stay
@@ -3724,7 +3727,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const tc = src.slice(src.indexOf("function TotalsCard("), src.indexOf("function TotalsCard(") + 600);
     assert.ok(tc.includes('const T = THEME[dk ? "dark" : "light"];'), "TotalsCard resolves T from dk");
     assert.ok(src.includes('data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack'), "track uses T.barTrack");
-    assert.ok(src.includes('data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`'), "fill uses T.barStart -> T.barEnd");
+    // pin moved deliberately 10/11: Prompt 32 step 1 - the fill is the weighted load's PRIMARY part (pct(barP(r)), primary days
+    // x the primary weight; it was the raw total) and a striped backup part follows it in T.barEnd (the same token, so each stripe
+    // clears 3:1 on the track like the fill - checked below). Kept intent: theme tokens only, never a hard-wired light colour.
+    assert.ok(src.includes('data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(barP(r)) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`'), "fill uses T.barStart -> T.barEnd");
+    assert.ok(src.includes('data-testid="fairness-fill-b" style={{ position: "absolute", left: pct(barP(r)) + "%", top: 0, bottom: 0, width: Math.max(0, pct(barPB(r)) - pct(barP(r))) + "%", background: `repeating-linear-gradient(45deg,${T.barEnd} 0 3px,transparent 3px 6px)`'), "the backup part's stripes use T.barEnd");
     for (const th of ["light", "dark"]) { const T = styles.THEME[th]; for (const k of ["barTrack", "barStart", "barEnd"]) assert.match(T[k] || "", /^#[0-9A-F]{6}$/, th + "." + k);
       assert.ok(ratio(T.barStart, T.barTrack) >= 3, `${th} bar start ${T.barStart} on track ${T.barTrack} = ${ratio(T.barStart, T.barTrack).toFixed(2)}:1`);
       assert.ok(ratio(T.barEnd, T.barTrack) >= 3, `${th} bar end ${T.barEnd} on track ${T.barTrack} = ${ratio(T.barEnd, T.barTrack).toFixed(2)}:1`); }
@@ -12734,6 +12741,212 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "const tap = () => T.evaluate((day) => { navigator.serviceWorker.dispatchEvent(new MessageEvent(\"message\", { data: { type: \"silvis-push-open\", tab: \"calendar\", day } })); }, D12);",
         "else if (nCancelT !== 1 || askedT[0] !== wantAsk || !cancelledT.card || cancelledT.count !== \"2 changes\" || cancelledT.editor || cancelledT.grid || !cancelledT.noReload) fail(",
         "else if (nOkT !== 2 || askedT[1] !== wantAsk || acceptedT.card || !acceptedT.grid || !acceptedT.editor || !acceptedT.title || !acceptedT.noReload) fail(",
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+  }
+
+  /* ---------------- P32-1. Prompt 32 step 1 (Faraz 10/11): weighted accounting in Totals ---------------- */
+  // Faraz 10/11 decision 9: the weighted load counts Silvis days only, primary 1, backup 0.5 - read through ONE helper,
+  // rules.js shiftWeightsOf(groupRules) (groupRules.shiftAccounting.weights; the default when null / absent / junk), never
+  // groupRules.weights (the soft-penalty table). TotalsCard is lifted verbatim (TOTALS_MON .. the card's end), transpiled
+  // by the build's own Babel (preset-react, classic runtime) and RUN against a stand-in React whose createElement returns
+  // plain nodes, in a vm realm holding the real helpers.js, rules.js and app-styles.js (the rules context is a real
+  // buildContext). The table, the CSV and the fairness view are asserted as what they render.
+  console.log("\n[P32-1] Prompt 32 step 1 - Totals: the Weighted column (P x 1 + B x 0.5 through rules.js shiftWeightsOf), the CSV column, the fairness view's weighted load vs weighted share, the rounding fix");
+  {
+    const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const babel = require("@babel/core");
+    const t0 = SRC.indexOf("const TOTALS_MON = ["), t1 = SRC.indexOf("function SuField(");
+    const tcSrc = SRC.slice(SRC.indexOf("function TotalsCard({"), t1);
+    const stripComments = (s) => s.split("\n").map(l => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+    const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+    const byId = (n, id) => all(n, x => x.props && x.props["data-testid"] === id);
+    const byCol = (n, c) => all(n, x => x.props && x.props["data-col"] === c);
+    const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+    // November 2026: Khan 7 P (11/1-11/7) + 3 B (11/8-11/10) -> 8.5; Burchett 6 P (11/8-11/13) + 4 B (11/1-11/4) -> 8; Acton
+    // 3 P (11/14-11/16) + 1 B (11/11) -> 3.5; an outside locum 1 P (11/17). October: one more Khan primary (10/20) for the
+    // year-to-date / rolling ranges (8 P + 3 B -> 9.5).
+    const row = (p, b) => ({ primary: p, backup: b, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
+    const SCHED = { "2026-10-20": row("s1", null) };
+    const nov = (d) => "2026-11-" + String(d).padStart(2, "0");
+    for (let d = 1; d <= 7; d++) SCHED[nov(d)] = row("s1", d <= 4 ? "s2" : null);
+    for (let d = 8; d <= 13; d++) SCHED[nov(d)] = row("s2", d <= 10 ? "s1" : d === 11 ? "s3" : null);
+    for (let d = 14; d <= 16; d++) SCHED[nov(d)] = row("s3", null);
+    SCHED[nov(17)] = row("x1", null);
+    const ROSTER = [
+      { id: "s1", name: "Khan", code: "FAK", active: true }, { id: "s2", name: "Burchett", code: "MAB", active: true },
+      { id: "s3", name: "Acton", code: "BDA", active: true }, { id: "x1", name: "Locum", code: "LOC", active: true, type: "external" },
+    ];
+    // the last Generate preview's implied targets (diagnostics.tallies[id].months[m].target = { primary, backup }); Acton has none
+    const PREVIEW = { respectLocks: true, schedule: {}, diagnostics: { tallies: { s1: { months: { "2026-11": { target: { primary: 5.6, backup: 5.8 } } } }, s2: { months: { "2026-11": { target: { primary: 6.2, backup: 4.4 } } } } } } };
+    const lift = () => {
+      assert.ok(t0 > 0 && t1 > t0, "TOTALS_MON .. TotalsCard is one block before SuField");
+      const code = babel.transformSync(SRC.slice(t0, t1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = {
+        console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout, isNaN, isFinite,
+        atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+        localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+        fetch: () => Promise.reject(new Error("no network in this test")),
+        document: { activeElement: null, contains: () => false }, confirm: () => true,
+      };
+      box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+      vm.createContext(box);
+      for (const f of ["config.js", "helpers.js", "rules.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      const downloads = [], toasts = [];
+      let states = [];
+      Object.assign(box, {
+        React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" },
+        useState: (v) => { const o = states.shift(); return [o === undefined ? v : o, () => {}]; },
+        useEffect: () => {},
+        downloadTextFile: (txt, name) => { downloads.push({ text: txt, name }); return true; },
+      });
+      const TotalsCard = vm.runInContext(code + "\n;TotalsCard", box, { filename: "TotalsCard.jsx" });
+      const buildContext = vm.runInContext("buildContext", box);
+      const css = vm.runInContext("css", box);
+      const render = (o) => {
+        states = [o.mode || "month"]; // useState order: mode, year, month0, withPreview (year / month from today)
+        const ctx = o.noCtx ? null : buildContext({ roster: ROSTER, surgeonRules: {}, groupRules: o.groupRules || {}, schedule: SCHED, today: "2026-11-15" });
+        return TotalsCard({
+          css, dk: false, roster: ROSTER, schedule: SCHED, ctx, surgeonRules: {}, preview: o.preview === undefined ? PREVIEW : o.preview, today: "2026-11-15",
+          nameOf: (id) => (ROSTER.find(r => r.id === id) || {}).name || id, Badge: function Badge() { return null; }, showToast: (m, k) => toasts.push([m, k]),
+          ytdFloors: { "2026": "2026-09-14" }, payVisible: false, payTotalsRole: null, payData: null, holidays: {}, payYear: 2026, onPayYear: () => {}, onPayRefresh: () => {},
+          loaded: true, daysUnread: false, eastDetailsVisible: o.east !== false,
+        });
+      };
+      const csvOf = (tree) => {
+        const btn = byId(tree, "totals-csv")[0];
+        assert.ok(btn && typeof btn.props.onClick === "function", "the Export CSV button");
+        downloads.length = 0; btn.props.onClick();
+        assert.strictEqual(downloads.length, 1, "one CSV download: " + JSON.stringify(toasts.slice(-1)));
+        return downloads[0].text.split("\r\n").filter(Boolean).map(l => l.split(","));
+      };
+      return { render, csvOf, box };
+    };
+    const SEEDW = { shiftAccounting: { weights: { primary: 1, backup: 0.5 } } };
+
+    check("P32-1 table (TotalsCard lifted and run): a 'Weighted' column right after Total, before Weekend days; each row's cell and data-weighted = P x 1 + B x 0.5 (Khan 7 + 3 -> 8.5, Burchett 6 + 4 -> 8, Acton 3 + 1 -> 3.5); the header names the weights; raw Primary / Backup / Total unchanged", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SEEDW });
+      const ths = all(byId(tree, "totals-table")[0], x => x.type === "th");
+      const heads = ths.map(text);
+      const iT = heads.indexOf("Total"), iW = heads.indexOf("Weighted");
+      assert.ok(iT > 0 && iW === iT + 1 && heads[iW + 1] === "Weekend days", "Weighted sits right after Total and before Weekend days: " + heads.join(" | "));
+      assert.deepStrictEqual(heads.slice(1, 4), ["Primary", "Backup", "Total"], "the raw columns keep their places");
+      const th = ths[iW];
+      assert.strictEqual(th.props["data-testid"], "totals-th-weighted");
+      assert.ok(/primary days x 1 \+ backup days x 0\.5/.test(th.props.title || "") && /Silvis days only/.test(th.props.title || ""), "the header's title names the weights and Silvis days only: " + th.props.title);
+      const want = { s1: [7, 3, 10, 8.5], s2: [6, 4, 10, 8], s3: [3, 1, 4, 3.5] };
+      Object.keys(want).forEach(id => {
+        const r = byId(tree, "totals-row-" + id)[0];
+        assert.ok(r, "row " + id);
+        const [p, b, tot, w] = want[id];
+        assert.deepStrictEqual([r.props["data-primary"], r.props["data-backup"], r.props["data-total"], r.props["data-weighted"]], [p, b, tot, w], id + " data-*");
+        const cell = byCol(r, "weighted");
+        assert.ok(cell.length === 1 && text(cell[0]) === String(w), id + " Weighted cell reads " + w + ": " + (cell[0] && text(cell[0])));
+        const tds = kids(r).filter(c => c.type === "td").map(text);
+        assert.deepStrictEqual(tds.slice(1, 5), [String(p), String(b), String(tot), String(w)], id + " visible Primary | Backup | Total | Weighted");
+      });
+      assert.ok(!/\$/.test(text(tree)), "no $ anywhere in the card");
+    });
+    check("P32-1 the weights are data through the ONE helper: { primary: 2, backup: 1 } -> Khan 17 and the header says so; a primary / backup key in groupRules.weights (the soft-penalty table) is never read; null / absent -> the default", () => {
+      const { render } = lift();
+      const t2 = render({ groupRules: { shiftAccounting: { weights: { primary: 2, backup: 1 } } } });
+      assert.strictEqual(byId(t2, "totals-row-s1")[0].props["data-weighted"], 17, "7 x 2 + 3 x 1");
+      assert.ok(/primary days x 2 \+ backup days x 1\b/.test(byId(t2, "totals-th-weighted")[0].props.title), "the title follows the data");
+      const tSoft = render({ groupRules: { weights: { primary: 9, backup: 9 } } });
+      assert.strictEqual(byId(tSoft, "totals-row-s1")[0].props["data-weighted"], 8.5, "groupRules.weights is not the shift weights");
+      assert.strictEqual(byId(render({ groupRules: { shiftAccounting: { weights: null } } }), "totals-row-s1")[0].props["data-weighted"], 8.5, "null -> the default");
+      assert.strictEqual(byId(render({ groupRules: {}, noCtx: true }), "totals-row-s1")[0].props["data-weighted"], 8.5, "no rules context -> the helper's default (Totals still counts)");
+    });
+    check("P32-1 the period line no longer says 'nothing weighted' - it states the weights (Weighted = primary x 1 + backup x 0.5, Silvis days only)", () => {
+      const { render } = lift();
+      const line = text(byId(render({ groupRules: SEEDW }), "totals-period")[0]);
+      assert.ok(!/nothing weighted/.test(line), line);
+      assert.ok(/Weighted = primary x 1 \+ backup x 0\.5 \(Silvis days only\)/.test(line), line);
+    });
+    check("P32-1 the rounding fix: Khan's implied primary target 5.6 -> Deviation '+1.4' (was +1.4000000000000004), backup 5.8 -> Deviation B '-2.8'; targets show one decimal with the '*'", () => {
+      const { render } = lift();
+      const r = byId(render({ groupRules: SEEDW }), "totals-row-s1")[0];
+      assert.deepStrictEqual(["target", "deviation", "targetb", "deviationb"].map(c => text(byCol(r, c)[0])), ["5.6*", "+1.4", "5.8*", "-2.8"]);
+    });
+    check("P32-1 year to date / rolling 12: the Weighted column follows the range (Khan 8 P + 3 B from 9/14 -> 9.5); the month view stays 8.5", () => {
+      const { render } = lift();
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "ytd" }), "totals-row-s1")[0].props["data-weighted"], 9.5, "ytd");
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "rolling" }), "totals-row-s1")[0].props["data-weighted"], 9.5, "rolling 12");
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "month" }), "totals-row-s1")[0].props["data-weighted"], 8.5, "month");
+    });
+    check("P32-1 CSV: 'Weighted' APPENDED as the last column (scheduler 23 columns, everyone else 22 - the East column dropped as before); Khan 8.5 / Burchett 8 / Acton 3.5; the outside surgeon's cell blank; the older columns where they were", () => {
+      const { render, csvOf } = lift();
+      const sch = csvOf(render({ groupRules: SEEDW }));
+      assert.strictEqual(sch[0].length, 23, "scheduler header: " + sch[0].join(" | "));
+      assert.strictEqual(sch[0][22], "Weighted");
+      assert.deepStrictEqual([sch[0][6], sch[0][7], sch[0][8], sch[0][9], sch[0][21]], ["Primary", "Backup", "Total", "Weekend days", "Type"], "the older columns keep their positions");
+      const line = (rows, name) => rows.find(r => r[4] === name);
+      assert.deepStrictEqual(["Khan", "Burchett", "Acton"].map(n => line(sch, n)[22]), ["8.5", "8", "3.5"]);
+      assert.deepStrictEqual(["Khan", "Burchett", "Acton"].map(n => [line(sch, n)[6], line(sch, n)[7]]), [["7", "3"], ["6", "4"], ["3", "1"]], "raw P / B unchanged");
+      const loc = line(sch, "Locum");
+      assert.ok(loc && loc.length === 23 && loc[21] === "outside" && loc[22] === "", "the outside row: counts only, the Weighted cell blank: " + JSON.stringify(loc));
+      assert.ok(sch.every(r => r.length === 23), "every line carries 23 fields");
+      const off = csvOf(render({ groupRules: SEEDW, east: false }));
+      assert.ok(off[0].length === 22 && off[0][21] === "Weighted" && !off[0].some(h => /East/.test(h)), "non-scheduler header: 22 columns, Weighted last: " + off[0].join(" | "));
+      assert.ok(off.every(r => r.length === 22) && line(off, "Khan")[21] === "8.5", "non-scheduler rows: 22 fields, Khan's Weighted 8.5");
+      assert.ok(sch.every(r => !r.some(c => /\$/.test(c))), "no $ in the CSV");
+    });
+    check("P32-1 fairness view: each row carries data-weighted (load) and data-weighted-share (primary target x 1 + backup target x 0.5) with the weighted deviation; the bar is the weighted load (solid primary part + lighter backup part), the green mark the weighted share; the raw text prefix stays", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SEEDW, mode: "fairness" });
+      const s1 = byId(tree, "fairness-row-s1")[0], s2 = byId(tree, "fairness-row-s2")[0], s3 = byId(tree, "fairness-row-s3")[0];
+      assert.deepStrictEqual([s1.props["data-total"], s1.props["data-weighted"], s1.props["data-weighted-share"], s1.props["data-deviation"], s1.props["data-deviation-b"], s1.props["data-deviation-w"]], [10, 8.5, 8.5, "+1.4", "-2.8", "0"], "Khan: 8.5 vs 5.6 + 0.5 x 5.8 = 8.5");
+      assert.deepStrictEqual([s2.props["data-weighted"], s2.props["data-weighted-share"], s2.props["data-deviation-w"]], [8, 8.4, "-0.4"], "Burchett: 8 vs 6.2 + 0.5 x 4.4 = 8.4");
+      assert.deepStrictEqual([s3.props["data-weighted"], s3.props["data-weighted-share"], s3.props["data-deviation-w"]], [3.5, undefined, "-"], "Acton: no target -> no weighted share");
+      const t1 = text(s1).replace(/\s+/g, " ");
+      assert.ok(/^10 total \(7 P \+ 3 B\) - weighted 8\.5 \/ share 8\.5\* \(0\) - target 5\.6\* - target B 5\.8\* /.test(t1), "Khan's row text: " + t1);
+      assert.ok(/^4 total \(3 P \+ 1 B\) - weighted 3\.5 - target - - target B - /.test(text(s3).replace(/\s+/g, " ")) && /no target/.test(text(s3)), "Acton's row text: " + text(s3));
+      // scale = the largest of (weighted load, weighted share, cap) = 8.5 (no cap in this context); pct = round(v / 8.5 x 100)
+      const pct = (v) => Math.min(100, Math.round((v / 8.5) * 100)) + "%";
+      const fill = (r) => byId(r, "fairness-fill")[0].props.style, fillB = (r) => byId(r, "fairness-fill-b")[0].props.style;
+      assert.deepStrictEqual([fill(s1).width, fillB(s1).left, fillB(s1).width], [pct(7), pct(7), (Math.round(8.5 / 8.5 * 100) - Math.round(7 / 8.5 * 100)) + "%"], "Khan: the solid part is the primary days x 1, the lighter part the backup days x 0.5");
+      assert.deepStrictEqual([fill(s2).width, fillB(s2).width], [pct(6), (Math.round(8 / 8.5 * 100) - Math.round(6 / 8.5 * 100)) + "%"], "Burchett: 6 + 2");
+      assert.deepStrictEqual([byId(s1, "fairness-target-mark")[0].props.style.left, byId(s2, "fairness-target-mark")[0].props.style.left], [pct(8.5), pct(8.4)], "the green mark sits at the weighted share");
+      assert.strictEqual(byId(s3, "fairness-target-mark").length, 0, "no share, no mark");
+      assert.ok(/primary target x 1 \+ backup target x 0\.5/.test(byId(s1, "fairness-target-mark")[0].props.title), "the mark's title says how the share is built: " + byId(s1, "fairness-target-mark")[0].props.title);
+      const intro = text(byId(tree, "fairness-view")[0].children[0]);
+      assert.ok(/Weighted load/.test(intro) && /primary days x 1 \+ backup days x 0\.5/.test(intro) && /weighted share/.test(intro), "the intro names the weighted view: " + intro.slice(0, 200));
+      assert.ok(!/\$/.test(text(tree)), "no $ in the fairness view");
+    });
+    check("P32-1 weights unreadable (rules.js not loaded): the card still renders - Weighted '-', the CSV cell blank, the fairness bar falls back to the raw days - never a guessed default", () => {
+      const { render, csvOf, box } = lift();
+      box.shiftWeightsOf = undefined;
+      const tree = render({ groupRules: SEEDW });
+      const r = byId(tree, "totals-row-s1")[0];
+      assert.strictEqual(r.props["data-weighted"], undefined);
+      assert.strictEqual(text(byCol(r, "weighted")[0]), "-");
+      assert.strictEqual(csvOf(tree).find(l => l[4] === "Khan")[22], "");
+      const f = byId(render({ groupRules: SEEDW, mode: "fairness" }), "fairness-row-s1")[0];
+      assert.strictEqual(f.props["data-weighted"], undefined);
+    });
+    check("P32-1 source pins: TotalsCard reads the shift weights ONLY through shiftWeightsOf(ctx ? ctx.groupRules : null) (no second default, never ctx.weights / groupRules.weights); its props are unchanged; PayTotalsPanel reads no weight", () => {
+      const code = stripComments(tcSrc);
+      assert.strictEqual((code.match(/shiftWeightsOf\(/g) || []).length, 1, "one helper call");
+      assert.ok(code.includes('const sw = typeof shiftWeightsOf === "function" ? shiftWeightsOf(ctx ? ctx.groupRules : null) : null;'), "the call");
+      // the code, minus its string literals (a tooltip may NAME the key so the scheduler can find it) - never a read of it
+      const codeOnly = code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+      assert.ok(!/ctx\.weights|groupRules\.weights|\.shiftAccounting\b/.test(codeOnly), "TotalsCard reads the soft-penalty table or the raw key");
+      assert.ok(!/\*\s*0?\.5\b|\b0?\.5\s*\*|backup:\s*0?\.5/.test(code), "TotalsCard hard-codes a 0.5 weight");
+      assert.ok(tcSrc.includes("function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, payTotalsRole, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, daysUnread, eastDetailsVisible })"), "the props are unchanged");
+      const pt = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("\n}\n", SRC.indexOf("function PayTotalsPanel(")));
+      assert.ok(pt.length > 100 && !/\bweights?\b|weighted|shiftWeightsOf|ttWeighted/i.test(pt), "PayTotalsPanel reads a weight"); // (fontWeight is style, not a weight)
+    });
+    check("P32-1 smoke pins: the smoke reads the Weighted cell and data-weighted against P + 0.5 B and the CSV's last column, and counts 23 / 22 CSV fields", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      for (const t of [
+        "weighted: e.getAttribute(\"data-weighted\")",
+        "const wantW = x.primary + 0.5 * x.backup;",
+        "Totals Oct 2026 (Prompt 32): the Weighted column",
+        "const khanW = cols[cols.length - 1];",
+        "tS.csvHeader.length !== 23",
+        "tt.csvHeader.length !== 22",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
     });
   }
