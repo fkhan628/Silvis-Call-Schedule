@@ -6396,6 +6396,7 @@ function emailTestMessage(r) {
   if (o.ok) return "The server answered but sent no e-mail - check that your account has a sign-in address.";
   if (o.notEnabled) return "E-mail is not set up on the server yet - no e-mail was sent.";
   if (o.status === 0) return "Couldn't reach the server - check your connection; no e-mail was sent.";
+  if (o.status >= 200 && o.status < 300) return "The server could not deliver the test e-mail.";
   return "The test e-mail did not go out (" + (o.status ? "HTTP " + o.status : "error") + ").";
 }
 

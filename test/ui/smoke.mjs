@@ -2119,13 +2119,14 @@ try {
       const popMails = mailsSince(bP);
       if (popMails.length) fail("Show a test pop-up: it POSTed send-notification " + JSON.stringify(popMails) + " - the pop-up test must send no e-mail");
       else ok("Show a test pop-up: no send-notification POST (the test e-mail has its own button)");
-      if (!(await page.$("[data-testid=email-test]"))) console.log("     (Send a test e-mail: this harness account is not linked to a roster entry - the button is a linked surgeon's only; not exercised)");
+      // re-check 10/11: the harness account (FAKE_PROFILE) is always linked to s1, so a missing button is a FAIL, not a skip
+      if (!(await page.$("[data-testid=email-test]"))) fail("Send a test e-mail: no [data-testid=email-test] button for the harness account linked to " + FAKE_PROFILE.person_id + " - it is a linked surgeon's button");
       else {
         const bE = writes.length;
         await page.click("[data-testid=email-test]");
         await waitFor(async () => !!(await page.$("[data-testid=email-test-state]")) && (await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim())) !== "Sending...", 10000, 200);
         const eMails = mailsSince(bE), line = await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim()).catch(() => "");
-        if (eMails.length !== 1 || eMails[0].type !== "test" || !Array.isArray(eMails[0].targetIds) || eMails[0].targetIds.length !== 1) fail("Send a test e-mail: want exactly one POST { type: 'test', targetIds: [own id] }, got " + JSON.stringify(eMails));
+        if (eMails.length !== 1 || eMails[0].type !== "test" || JSON.stringify(eMails[0].targetIds) !== JSON.stringify([FAKE_PROFILE.person_id])) fail("Send a test e-mail: want exactly one POST { type: 'test', targetIds: [own id] }, got " + JSON.stringify(eMails));
         else if (!line || line === "Sending...") fail("Send a test e-mail: no result line after the POST (got " + JSON.stringify(line) + ")");
         else ok(`Send a test e-mail: one POST { type: 'test', targetIds: [${eMails[0].targetIds[0]}] }, line '${line}'`);
       }

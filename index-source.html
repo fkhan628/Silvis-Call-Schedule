@@ -5196,12 +5196,14 @@ function CallSchedule() {
   // The Email box's "Send a test e-mail" (a linked surgeon only - the deployed function sends "test" to the caller alone). The
   // line says "sent" only when the function answered ok with a delivery (helpers.emailTestMessage).
   const [emailTestState, setEmailTestState] = useState("");
+  const emailTestTimerRef = useRef(null); // re-check 10/11: a new tap cancels the old clear, so it cannot blank a later "Sending..."
   const sendTestEmail = useCallback(async () => {
     if (!mySurgeon) return;
+    clearTimeout(emailTestTimerRef.current);
     setEmailTestState("Sending...");
     const r = await sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon]);
     setEmailTestState(emailTestMessage(r));
-    setTimeout(() => setEmailTestState(""), 8000);
+    emailTestTimerRef.current = setTimeout(() => setEmailTestState(""), 8000);
   }, [sendEmailNotif, mySurgeon]);
 
 

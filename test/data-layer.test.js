@@ -7263,6 +7263,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         for (const r of [{ ok: true, sent: 0 }, { ok: false, notEnabled: true, status: 404 }, { ok: false, status: 0 }, { ok: false, status: 500 }, null, undefined])
           assert.ok(!/sent to your/i.test(H.emailTestMessage(r)), "no 'sent' for " + JSON.stringify(r) + ": " + H.emailTestMessage(r));
         assert.ok(/HTTP 500/.test(H.emailTestMessage({ ok: false, status: 500 })) && /not set up/.test(H.emailTestMessage({ ok: false, notEnabled: true })) && /connection/.test(H.emailTestMessage({ ok: false, status: 0 })));
+        assert.strictEqual(H.emailTestMessage({ ok: false, status: 200, sent: 0, failed: 1 }), "The server could not deliver the test e-mail.", "re-check 10/11: a 200 that reports a failed delivery reads plainly, never 'HTTP 200'");
+        assert.ok(se.includes("clearTimeout(emailTestTimerRef.current);") && se.includes("emailTestTimerRef.current = setTimeout("), "re-check 10/11: a new tap cancels the old clear timer");
       });
     })();
 
