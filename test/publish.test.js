@@ -278,6 +278,17 @@ const sql = PUB.publishSql(plan, FX.preview, { previewFile: "test/fixtures/publi
   ok(/published from the command line on Faraz's authorisation of 2026-09-22 evening/.test(detail.note), "the authorisation note");
   eq(detail.backfill && detail.backfill.start, "2026-10-05");
   eq(detail.refused, 3);
+  // Prompt 32 step 4 (DESIGN "Totals" - the Accept audit row): the command-line accept names the preview's over-soft-limit
+  // days like the app's acceptMerged - diagnostics.overSoftLimit as [{ day, id }], ids and days only (never a name, the
+  // ordinal or the limit); an older preview file without the list writes []
+  eq(detail.overSoftLimit, [], "the synthetic preview lists no over-soft-limit day -> overSoftLimit []");
+  {
+    const pvO = clone(FX.preview);
+    pvO.diagnostics = Object.assign({}, pvO.diagnostics, { overSoftLimit: [{ day: "2026-10-14", id: "s3", month: "2026-10", count: 8, limit: 7 }, { day: "2026-10-16", id: "s3", month: "2026-10", count: 9, limit: 7 }] });
+    const dO = PUB.auditDetail(plan, pvO, {});
+    eq(dO.overSoftLimit, [{ day: "2026-10-14", id: "s3" }, { day: "2026-10-16", id: "s3" }], "the over-soft-limit days reach the command-line audit detail as { day, id }");
+    ok(!/count|limit|month|Acton/.test(JSON.stringify(dO.overSoftLimit)), "ids and days only: " + JSON.stringify(dO.overSoftLimit));
+  }
   // never any mail: no notifications table, no edge function, no email
   ok(!/notification/i.test(sql), "the SQL never names a notifications table");
   ok(!/send-notification|office-notifications|functions\/v1|@/.test(sql), "no edge function call, no address");

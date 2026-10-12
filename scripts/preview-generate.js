@@ -220,6 +220,13 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   if (overrideApplied.length) { L.push(""); L.push(`**Rules override (in memory only - nothing saved): ${md(ARGS.rulesOverride)}** - ${md(overrideApplied.join(", "))}.`); }
   L.push("");
   if (dg.score) { L.push("## Score"); L.push(""); L.push("```"); L.push(JSON.stringify(dg.score, null, 2)); L.push("```"); L.push(""); }
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the over-soft-limit days, listed first - before the calendar and the tallies
+  if (Array.isArray(dg.overSoftLimit)) {
+    L.push("## Over the soft limit (" + dg.overSoftLimit.length + ")"); L.push("");
+    if (!dg.overSoftLimit.length) L.push("None - no primary day in the range is past its holder's soft monthly limit.");
+    else dg.overSoftLimit.forEach((o) => L.push("- " + md(H.overSoftLimitLine(o, nameOf))));
+    L.push("");
+  }
 
   // calendar as week rows over the merged schedule (locks + generated)
   const merged = Object.assign({}, schedule, sched);

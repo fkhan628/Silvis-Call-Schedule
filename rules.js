@@ -2390,6 +2390,68 @@ function monthlyCapFor(ctx, surgeonId) {
   return { primary: primary, preferred: P ? P.capPreferred : null, total: primary };
 }
 
+/* ------------------------------------------------------ over the soft limit */
+// overSoftLimitDays(ctx, schedule?, from?, to?)   -> [{ day, id, month, count, limit }]
+// overSoftLimitMonths(ctx, schedule?, from?, to?) -> [{ id, month, count, limit }]
+// Prompt 32 step 4 (Faraz 10/11 decision 5): a primary day is "over the soft limit" when it is the (L+1)th or later
+// primary of its holder's calendar month in date order, L = his SOFT limit (P.capPreferred - the group's 7 for a surgeon
+// on the default). Derived from `schedule` (default ctx.schedule), never stored - the ONE reading behind the generator's
+// diagnostics.overSoftLimit, the calendar / day-summary / day-editor badge, the Generate preview, the Publish dialog and
+// the Accept audit row; overSoftLimitMonths is Totals' per-month flag (the month's own count over L, never cap x months).
+// - Every day of the calendar month counts toward the ordinal (days outside from..to included); only days inside
+//   from..to are listed (each bound optional; both absent = every month the schedule touches; to < from = nothing).
+// - A cap that counts East days (countsEastDays) counts his East primary-week days not held as Silvis primary FIRST, as
+//   the cap's count does (eligibility's monthPrimary) - the Silvis days then follow in date order.
+// - No soft limit (a hard cap only, "none") -> never listed; an outside surgeon (roster type external) carries no cap
+//   rule -> never listed. A day over his HARD cap (P.capPrimary) is a hard-cap breach and keeps its own wording
+//   (monthly-cap:N, the Totals cap cell) - it is not a soft-limit day; the month entry still carries the whole count.
+// Plain data in date order (structured-clone safe: the Generate worker posts it); junk input reads as nothing.
+function rdOverSoftEastBase(P, id, month, sched) {
+  if (!P.countsEastDays || !P.eastPrimaryDays || typeof P.eastPrimaryDays.forEach !== "function") return 0;
+  var b = 0;
+  P.eastPrimaryDays.forEach(function (d) { if (String(d).slice(0, 7) === month) { var e = sched[d]; if (!(e && e.primary === id)) b++; } });
+  return b;
+}
+function rdOverSoftWalk(ctx, schedule, from, to) {
+  var out = { days: [], months: [] };
+  if (!ctx || !ctx.per) return out;
+  var sched = schedule && typeof schedule === "object" ? schedule : (ctx.schedule || {});
+  var lo = rdIsDateStr(from) ? from : null, hi = rdIsDateStr(to) ? to : null;
+  if (lo && hi && hi < lo) return out;
+  var months = [];
+  if (lo && hi) {
+    var y = +lo.slice(0, 4), m = +lo.slice(5, 7), last = hi.slice(0, 7);
+    for (var key = rdMonthKey(y, m); key <= last; key = rdMonthKey(y, m)) { months.push(key); m++; if (m > 12) { m = 1; y++; } }
+  } else {
+    Object.keys(sched).forEach(function (d) {
+      if (!rdIsDateStr(d) || (lo && d < lo) || (hi && d > hi)) return;
+      var k = d.slice(0, 7);
+      if (months.indexOf(k) < 0) months.push(k);
+    });
+    months.sort();
+  }
+  var softIds = (ctx.allIds || Object.keys(ctx.per)).filter(function (id) { var P = ctx.per[id]; return !!P && !P.external && typeof P.capPreferred === "number"; });
+  months.forEach(function (month) {
+    var n = Object.create(null);
+    softIds.forEach(function (id) { n[id] = rdOverSoftEastBase(ctx.per[id], id, month, sched); });
+    var mdays = rdMonthDays(month);
+    for (var i = 0; i < mdays.length; i++) {
+      var d = mdays[i], e = sched[d], id = e && typeof e === "object" ? e.primary : null;
+      if (!id || n[id] === undefined) continue;
+      var P = ctx.per[id];
+      n[id]++;
+      if (n[id] <= P.capPreferred) continue;
+      if (typeof P.capPrimary === "number" && n[id] > P.capPrimary) continue; // a hard-cap breach keeps its own wording
+      if ((lo && d < lo) || (hi && d > hi)) continue;
+      out.days.push({ day: d, id: id, month: month, count: n[id], limit: P.capPreferred });
+    }
+    softIds.forEach(function (id) { if (n[id] > ctx.per[id].capPreferred) out.months.push({ id: id, month: month, count: n[id], limit: ctx.per[id].capPreferred }); });
+  });
+  return out;
+}
+function overSoftLimitDays(ctx, schedule, from, to) { return rdOverSoftWalk(ctx, schedule, from, to).days; }
+function overSoftLimitMonths(ctx, schedule, from, to) { return rdOverSoftWalk(ctx, schedule, from, to).months; }
+
 /* ------------------------------------------------------ East conflict report */
 // eastConflicts(ctx, days) -> [{ day, role, id, reasons }]   (Prompt 12 C.4, 9/22)
 // For every day in `days` whose ctx.schedule row holds a surgeon in a role, the
@@ -2511,6 +2573,8 @@ if (typeof module !== "undefined") {
     talliesFor: talliesFor,
     runThrough: rdRunThrough,
     monthlyCapFor: monthlyCapFor,
+    overSoftLimitDays: overSoftLimitDays,     // Prompt 32 step 4: the ONE reading of the over-soft-limit primary days
+    overSoftLimitMonths: overSoftLimitMonths, // Prompt 32 step 4: the months over the soft limit (Totals)
     standingEastDays: standingEastDays,
     weekendCapCounts: weekendCapCounts,
     eastBusyOn: function (ctx, id, d) { var P = ctx && ctx.per ? ctx.per[id] : null; return !!P && rdEastBusyOn(ctx, P, d); },

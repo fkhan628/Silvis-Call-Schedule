@@ -70,6 +70,8 @@
     .cal-skel { display: inline-block; width: 58%; height: 9px; border-radius: 4px; background: #e4e8ee; opacity: 0.9; }
     .cal-mobile-note { display: none; }
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
+    /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
+    .cal-os-short { display: none; }
     .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
     /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
        "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
@@ -130,6 +132,8 @@
       .cal-hol, .cal-wk-label, .cal-note { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
+      .cal-os-long { display: none; }
+      .cal-os-short { display: inline; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -732,6 +736,7 @@ function CallSchedule() {
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [publishLabel, setPublishLabel] = useState("");
   const [publishChanges, setPublishChanges] = useState([]); // diffScheduleDays output (primary/backup only)
+  const [publishOverSoft, setPublishOverSoft] = useState([]); // Prompt 32 step 4: the over-soft-limit days this publish gave a primary (listed first)
 
   // --- Shift Trade Requests (by day + role) ---
   const [tradeRequests, setTradeRequests] = useState([]);
@@ -3358,6 +3363,16 @@ function CallSchedule() {
     try { return eastConflicts(rulesCtx, Object.keys(schedule || {}).sort()); }
     catch (e) { console.warn("East conflict report failed", e); return []; }
   }, [rulesCtx, schedule]);
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the primary days over their holder's soft limit - the (L+1)th and later
+  // primary of his calendar month, L = his soft limit (the group's 7) - through the ONE helper, rules.js overSoftLimitDays
+  // (derived, never stored), over the schedule the grid shows (a Generate preview overlaid, as the cells draw it), indexed
+  // by day for the cell's "over 7" badge. Signed-in roles only: on ?public=1 nothing is computed and nothing is drawn.
+  const overSoftByDay = useMemo(() => {
+    if (isPublicMode || !authUser || !rulesCtx || typeof overSoftLimitDays !== "function") return {};
+    const shown = previewGen && previewGen.schedule ? { ...(schedule || {}), ...previewGen.schedule } : (schedule || {});
+    try { return overSoftLimitIndex(overSoftLimitDays(rulesCtx, shown)); }
+    catch (e) { console.warn("over-soft-limit days could not be derived (no badge drawn):", e); return {}; }
+  }, [isPublicMode, authUser, rulesCtx, schedule, previewGen]);
   // The warnings are logged once per distinct set, not on every context rebuild (each poll rebuilds it): a blob that
   // still carries an ignored key would otherwise flood the console (seen on build 2026.09.23p).
   const lastRulesWarnRef = useRef("");
@@ -4035,7 +4050,7 @@ function CallSchedule() {
     // Audited AFTER the CAS sync with its outcome (Prompt 11): a wipe-blocked
     // or failed write must not leave a row saying the schedule was accepted.
     const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
-    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, fillOpenOnly: pv.fillOpenOnly === true, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
+    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, fillOpenOnly: pv.fillOpenOnly === true, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, overSoftLimit: overSoftLimitAudit(pv.diagnostics.overSoftLimit), snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) {
       setSaveStatus("Generated days saved"); setTimeout(() => setSaveStatus(""), 2000);
       // WHY IS IT OPEN (Prompt 13 part 4): the generator's reasons, rendered to
@@ -5277,6 +5292,9 @@ function CallSchedule() {
     // so helpers.labelGiveChanges finds the latest applied shift_trade_requests leg that put the holder there.
     const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);
     setPublishChanges(changes);
+    // Prompt 32 step 4 (Faraz 10/11 decision 5): the days this publish puts over a holder's soft limit - the ONE helper over the
+    // schedule, trimmed to the (holder, month) pairs these changes gave a primary - listed FIRST in the dialog
+    setPublishOverSoft(overSoftLimitForChanges(rulesCtx && typeof overSoftLimitDays === "function" ? overSoftLimitDays(rulesCtx, schedule) : [], changes));
     setPublishLabel(computePeriodLabel());
     setShowPublishDialog(true);
   };
@@ -7057,6 +7075,13 @@ function CallSchedule() {
             <p style={{fontSize:13,color:T.muted,margin:"0 0 12px",lineHeight:1.5}}>
               {publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished?.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`}
             </p>
+            {/* Prompt 32 step 4 (Faraz 10/11 decision 5): the days this publish puts over a holder's soft limit, listed FIRST */}
+            {publishChanges.length > 0 && publishOverSoft.length > 0 && (
+              <div data-testid="publish-over-soft" style={{border:"1px solid " + T.accentText,borderRadius:6,padding:"8px 10px",marginBottom:10,background:T.accentTint}}>
+                <div style={{fontSize:11,fontWeight:700,color:T.accentText,textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>Over the soft limit ({publishOverSoft.length})</div>
+                {publishOverSoft.map(o => <div key={o.day + o.id} data-over-soft={o.day + ":" + o.id} style={{fontSize:12,fontFamily:mono,color:T.text,lineHeight:1.5}}>{overSoftLimitLine(o, nameOf)}</div>)}
+              </div>
+            )}
             {publishChanges.length > 0 && (
               <div style={{maxHeight:260,overflowY:"auto",border:"1px solid " + T.border,borderRadius:6,padding:"8px 10px",marginBottom:12}}>
                 {describePublishDiff(publishChanges, nameOf).map(g => (
@@ -7562,6 +7587,9 @@ function CallSchedule() {
           };
           const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
             background: solid ? color : "transparent", color: solid ? "#fff" : color, border: "1px solid " + color });
+          // Prompt 32 step 4: the over-soft-limit badge ("over 7"; ">7" on a phone) - outlined in the confirm badge's orange
+          // in the accent text token (#C2410C light / #FF8A4C dark), about two badge widths wide
+          const overSoftBadgeStyle = { display:"inline-flex",alignItems:"center",height:13,borderRadius:3,padding:"0 3px",fontSize:8,fontWeight:800,lineHeight:1,whiteSpace:"nowrap",background:"transparent",color:T.accentText,border:"1px solid " + T.accentText };
           // Week-row text sits directly on the page background, so dark mode
           // uses the lightened per-code text palette (vis-003), not the pill's tx.
           const entryStyle = (e) => e.kind === "open" ? { color:T.open, fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
@@ -7715,12 +7743,15 @@ function CallSchedule() {
                 // Prompt 29: the APP on call that day (signed-in sessions only - appByDay is {} on ?public=1)
                 const appE = !isPublicMode ? appByDay[d] || null : null;
                 if (appE) titleBits.push("APP " + appE.name);
+                // Prompt 32 step 4: the day's primary is over its holder's soft limit this month (overSoftByDay is {} on ?public=1)
+                const ovS = overSoftByDay[d] || null;
+                if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
                 // Item E3 (9/25): eastVacByDay is empty unless eastDetailsVisible, so this bit (and the dots row's) is the scheduler's only
                 if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
                 // The header reserves 15px per 13px badge shown, at least 30px, so a badge never covers the holiday label. Since
                 // Item E2 (9/25) the confirm "?" is the grid's only badge (the E / F / f badges are gone), so nBadges counts just
-                // that one; a future cell badge adds its own term here.
-                const nBadges = awaitingConfirmation(a) ? 1 : 0;
+                // that one; a future cell badge adds its own term here. Prompt 32 step 4: the over-soft-limit "over 7" takes two.
+                const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>openCellDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCellDay(d); } }}
@@ -7732,6 +7763,7 @@ function CallSchedule() {
                     </div>
                     <div className="cal-badges">
                       {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
+                      {ovS && <span data-badge="over-soft" data-testid="over-soft-badge" data-over-soft-id={ovS.id} title={overSoftLimitTitle(ovS, nameOf)} style={overSoftBadgeStyle}><span className="cal-os-long">{overSoftLimitWords(ovS.limit)}</span><span className="cal-os-short">{">" + ovS.limit}</span></span>}
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
@@ -7764,6 +7796,9 @@ function CallSchedule() {
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
+              {/* Prompt 32 step 4: the over-soft-limit badge's legend - only when a day of this grid carries one (signed-in; never ?public=1);
+                  its words name the limits the grid's badges carry (overSoftLimitLegend: "over 7", "over 7 / over 9") - never a hard-coded 7 */}
+              {gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft"><span style={{color:T.accentText,fontWeight:800}}>{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}</span> = the primary is past his soft limit of primary days this month (the group's, or his own)</span>}
               {/* Prompt 29: the APP line's legend - only when a day of this grid has an APP (signed-in sessions; nothing on ?public=1) */}
               {/* the merge with main (10/2): a failed APP-day read is said in place while it lasts (the load's toast goes; the poll stays quiet) */}
               {!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn't be loaded - the A lines may be missing</span>}
@@ -10144,6 +10179,16 @@ function DayEditor(props) {
   const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } }, heldSchedule: ctxInputs.schedule }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the day's primary is the (L+1)th or later of his calendar month (L = his soft
+  // limit, the group's 7) - rules.js overSoftLimitDays, the ONE helper, on THIS editor's ctx (the draft swapped in, so a pick
+  // that goes over shows it before Save), this day only. The summary (every signed-in role) and the scheduler's editor show
+  // it on the primary row; ?public=1 never computes it.
+  const overSoft = React.useMemo(() => {
+    if (isPublicMode || !ctx || typeof overSoftLimitDays !== "function") return null;
+    try { return overSoftLimitDays(ctx, ctx.schedule, day, day)[0] || null; }
+    catch (e) { console.warn("over-soft-limit check failed for", day, e); return null; }
+  }, [ctx, day, isPublicMode]);
+  const overSoftTag = overSoft ? <span data-testid="editor-over-soft" title={overSoftLimitTitle(overSoft, nameOf)} style={{color:T.accentText,border:"1px solid " + T.accentText,borderRadius:4,padding:"0 6px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{overSoftLimitWords(overSoft.limit)}</span> : null;
   // Item E3 (Faraz 9/25): the East lines - the East-vacation review state and its diamond included - are the
   // scheduler's only (the App's eastDetailsVisible = isScheduler && !isPublicMode); nobody else gets them built, let
   // alone drawn. The rest of the editor (holders, locks, holiday unit, vacations, offers, note) is the same for everyone.
@@ -10332,6 +10377,7 @@ function DayEditor(props) {
         {mine && <span data-testid="editor-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
         {confirmBadge}
         {confirmBadge && <span data-testid="editor-not-final" style={{color:T.muted,fontSize:11}}>(not final yet)</span>}
+        {role === "primary" && overSoftTag}
       </div>
     );
     return (
@@ -10341,6 +10387,7 @@ function DayEditor(props) {
           {holderView(role)}
           {locked && <Padlock title={role + " locked"} size={11}/>}
           {confirmBadge}
+          {role === "primary" && overSoftTag}
           {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
           {/* Item E3 (Faraz 9/25): which rule a locked holder breaks (East reasons among them, the raw codes in the hover) is
               override detail - the scheduler's only, like the Override panel's reason list */}
@@ -10693,6 +10740,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   // still compares primary + East primary-week days with the cap, and flags over it the same way - the other roles read
   // that count with neutral wording ("other days this cap counts").
   const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  // Prompt 32 step 4 (Faraz 10/11 decision 5; DESIGN "Totals" Over-7): the MONTHS of the period whose primary count is over
+  // the holder's soft limit (the group's 7) - rules.js overSoftLimitMonths, each month's own count (never cap x months; a
+  // hard cap keeps its red cap cell) - per source schedule; flagged on the cap cell and the fairness row. Counts only.
+  const osMonths = {};
+  sources.forEach(src => { osMonths[src.key] = ctx && typeof overSoftLimitMonths === "function" ? overSoftLimitMonths(ctx, src.sched, range.from, range.to) : []; });
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
@@ -10703,7 +10755,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     // Prompt 32 step 1: the weighted load (ttWeightedLoad) and the weighted share = primary target x 1 + backup target x 0.5
     // (ttWeightedShare; a missing role target reads 0, null without any target) with their deviation - one decimal each
     const weighted = ttWeightedLoad(t.primary, t.backup, sw), weightedShare = ttWeightedShare(tg.primary.value, tg.backup.value, sw);
-    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value), weighted, weightedShare, weightedImplied: tg.primary.kind === "implied" || tg.backup.kind === "implied", deviationW: weighted === null ? "-" : ttDeviation(weighted, weightedShare) });
+    const overSoft = osMonths[src.key].filter(x => x.id === s.id); // Prompt 32 step 4: his months over the soft limit
+    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value), weighted, weightedShare, weightedImplied: tg.primary.kind === "implied" || tg.backup.kind === "implied", deviationW: weighted === null ? "-" : ttDeviation(weighted, weightedShare), overSoft, overSoftText: overSoft.length && typeof overSoftLimitMonthsText === "function" ? overSoftLimitMonthsText(overSoft, nMonths) : null });
   }));
   const capText = (r) => r.cap === null ? "-" : (nMonths > 1 ? r.cap + "/mo" : String(r.cap));
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
@@ -10785,19 +10838,19 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
                 <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th} data-testid="totals-th-weighted" title={swText ? "Weighted load: " + swText + " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "Weighted load: unavailable until the rules engine loads"}>Weighted</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title={eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
+                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={showEast ? r.east : undefined} data-weighted={r.weighted === null ? undefined : r.weighted} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
+                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={showEast ? r.east : undefined} data-weighted={r.weighted === null ? undefined : r.weighted} data-over-soft={r.overSoft.length ? r.overSoft.map(x => x.month).join(",") : undefined} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
                   <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#5B6B82" }}>{r.srcLabel}</td>}
                   <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td data-col="weighted" style={td} title={sw ? r.t.primary + " x " + sw.primary + " + " + r.t.backup + " x " + sw.backup : undefined}>{r.weighted === null ? "-" : r.weighted}</td><td data-col="weekend" style={td}>{r.t.weekendDays}</td>
                   <td style={td} title={r.t.holidayUnits.join(", ") || "none"}>{r.t.majorHolidays} / {r.t.minorHolidays}</td>
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
                   <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
-                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
+                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}{r.overSoftText && <span data-testid="totals-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" (" + r.overSoftText.text + ")"}</span>}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
                   <td data-col="targetb" style={td}>{targetBText(r)}</td>
@@ -10830,7 +10883,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                   {r.cap !== null && <div title={"cap (P) " + r.cap * nMonths + " primary days - read against the solid part"} style={{ position: "absolute", left: pct(r.cap * nMonths * barW.primary) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
                 <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#E6ECF5" : "#1F2A3A", minWidth: 250 }}>
-                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - weighted {r.weighted === null ? "-" : r.weighted}{r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : ""}{r.weightedShare !== null && <span data-flag={devFlagW(r)} style={{ color: devColorW(r), fontWeight: 700 }}> ({r.deviationW})</span>} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}
+                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - weighted {r.weighted === null ? "-" : r.weighted}{r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : ""}{r.weightedShare !== null && <span data-flag={devFlagW(r)} style={{ color: devColorW(r), fontWeight: 700 }}> ({r.deviationW})</span>} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}{r.overSoftText && <span data-testid="fairness-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" - " + r.overSoftText.text}</span>}
                 </div>
               </div>
             ));
@@ -12413,7 +12466,18 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   const scoreKeys = dg.score ? Object.keys(dg.score) : [];
   const box = { border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 };
   return (
-    <div data-testid="gen-diagnostics" data-uncovered-count={(dg.uncovered || []).length}>
+    <div data-testid="gen-diagnostics" data-uncovered-count={(dg.uncovered || []).length} data-over-soft-count={Array.isArray(dg.overSoftLimit) ? dg.overSoftLimit.length : undefined}>
+      {/* Prompt 32 step 4 (Faraz 10/11 decision 5): the preview's days over a holder's soft limit, listed FIRST (diagnostics.overSoftLimit -
+          rules.js overSoftLimitDays, derived from the preview, never stored); a preview without the list shows no box */}
+      {Array.isArray(dg.overSoftLimit) && (
+        <div style={dg.overSoftLimit.length ? { ...box, borderColor: LIGHT.accentText } : box} data-testid="gen-over-soft">
+          <div style={{ ...css.subT, margin: "0 0 4px", color: dg.overSoftLimit.length ? LIGHT.accentText : undefined }}>Over the soft limit ({dg.overSoftLimit.length})</div>
+          {dg.overSoftLimit.length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None - no primary day in the range is past its holder's soft monthly limit.</p> : <>
+            <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>The (L+1)th and later primary day of a holder's calendar month, L = his soft limit (the group's 7, or his own): the generator fills such a day itself under the soft over-limit term, and among the candidates already at their limit the lowest weighted load that month takes it. A hard cap is never passed here.</p>
+            {dg.overSoftLimit.map(o => <div key={o.day + o.id} data-over-soft={o.day + ":" + o.id} style={{ fontSize: 12, fontFamily: mono }}>{overSoftLimitLine(o, nameOf)}</div>)}
+          </>}
+        </div>
+      )}
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Score (lower is better)</div>
         <div data-testid="gen-score" style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, fontFamily: mono }}>

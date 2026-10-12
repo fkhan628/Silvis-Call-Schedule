@@ -492,6 +492,8 @@ function auditDetail(plan, preview, opts) {
     summary,
     start: preview.start, end: preview.end, seed: String(preview.seed), bestOf: preview.bestOf, respectLocks: true,
     changes: plan.changes.length, uncovered, outcome: "ok", error: null,
+    // Prompt 32 step 4: the preview's over-soft-limit days as the app's Accept row names them - [{ day, id }], ids and days only
+    overSoftLimit: H.overSoftLimitAudit((preview.diagnostics && preview.diagnostics.overSoftLimit) || []),
     mode: "command-line", note: AUTH_NOTE, tool: "scripts/publish-preview.js", authorisedBy: "s1",
     previewFile: (opts && opts.previewFile) || null, previewGeneratedAt: preview.generatedAt || null,
     inserted: plan.rows.filter((r) => r.action === "insert").length, updated: plan.rows.filter((r) => r.action === "update").length,

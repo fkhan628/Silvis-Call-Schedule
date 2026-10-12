@@ -2740,6 +2740,73 @@ function ttCsvText(headers, rows) {
   return lines.join("\r\n") + "\r\n";
 }
 
+/* === OVER THE SOFT LIMIT (Prompt 32 step 4; Faraz 10/11 decision 5) ===
+   A primary day is "over the soft limit" when it is the (L+1)th or later primary of its holder's calendar month in date
+   order, L = his soft limit (the group's 7). The DAYS come from ONE helper, rules.js overSoftLimitDays(ctx, schedule,
+   from, to) -> [{ day, id, month, count, limit }], and the months from overSoftLimitMonths -> [{ id, month, count, limit }]
+   - derived from the schedule, never stored. These helpers only word, index and trim those plain lists (they read no
+   rules). Words: "over 7" for the group's 7, "over <L>" for an own soft limit - the limit is always named; a hard-cap
+   breach is not on these lists (it keeps its own wording). Signed-in surfaces only - the callers gate ?public=1. No $. */
+const OSL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const OSL_WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function oslOk(o) { return !!(o && typeof o === "object" && typeof o.id === "string" && o.id && /^\d{4}-\d{2}-\d{2}$/.test(String(o.day || ""))); }
+function oslOrdinal(n) {
+  const v = Math.abs(Math.trunc(Number(n) || 0)), t = v % 100;
+  return v + (t >= 11 && t <= 13 ? "th" : v % 10 === 1 ? "st" : v % 10 === 2 ? "nd" : v % 10 === 3 ? "rd" : "th");
+}
+// "over 7" (the badge / flag words); "over the soft limit" without a number
+function overSoftLimitWords(limit) { return typeof limit === "number" && isFinite(limit) ? "over " + limit : "over the soft limit"; }
+// "Wed 11/18 P Acton - 8th primary day of November (over 7)" - the Generate preview's and the Publish dialog's line
+function overSoftLimitLine(o, nameOf) {
+  const d = String(o && o.day || ""), m = Number(d.slice(5, 7));
+  const wd = OSL_WD[new Date(Date.UTC(Number(d.slice(0, 4)), m - 1, Number(d.slice(8, 10)))).getUTCDay()] || "";
+  const who = typeof nameOf === "function" ? nameOf(o.id) : o.id;
+  return wd + " " + fmtMD(d) + " P " + who + " - " + oslOrdinal(o.count) + " primary day of " + (OSL_MONTHS[m - 1] || d.slice(0, 7)) + " (" + overSoftLimitWords(o.limit) + ")";
+}
+// "Khan: 8th primary day of November 2026 - over the soft limit of 7 primary days a month" - the badge's hover
+function overSoftLimitTitle(o, nameOf) {
+  const d = String(o && o.day || ""), m = Number(d.slice(5, 7));
+  const who = typeof nameOf === "function" ? nameOf(o.id) : o.id;
+  return who + ": " + oslOrdinal(o.count) + " primary day of " + (OSL_MONTHS[m - 1] || d.slice(0, 7)) + " " + d.slice(0, 4) + " - over the soft limit" + (typeof o.limit === "number" ? " of " + o.limit + " primary days a month" : "");
+}
+// { day: entry } (a day has one primary, so one entry) - the calendar badge's lookup; junk -> {}
+function overSoftLimitIndex(list) {
+  const out = {};
+  (Array.isArray(list) ? list : []).forEach(o => { if (oslOk(o) && !out[o.day]) out[o.day] = o; });
+  return out;
+}
+// The Publish dialog's list: the days of a (holder, month) to which this publish's changes GAVE a primary - his new day
+// itself when it is over, or a later unchanged day an earlier new one moved up past the limit. A backup change, a primary
+// taken away from him, a lock or note change gives him nothing. List order (date order) kept; junk -> [].
+function overSoftLimitForChanges(list, changes) {
+  if (!Array.isArray(list) || !Array.isArray(changes)) return [];
+  const gained = new Set();
+  changes.forEach(c => { if (c && c.role === "primary" && typeof c.to === "string" && c.to && c.to !== c.from && /^\d{4}-\d{2}/.test(String(c.day || ""))) gained.add(c.to + "|" + String(c.day).slice(0, 7)); });
+  return list.filter(o => oslOk(o) && gained.has(o.id + "|" + o.day.slice(0, 7)));
+}
+// The Accept audit row's detail.overSoftLimit: [{ day, id }] - ids and days only (never a name, the ordinal or the limit)
+function overSoftLimitAudit(list) { return (Array.isArray(list) ? list : []).filter(oslOk).map(o => ({ day: o.day, id: o.id })); }
+// The calendar legend's words for the badges a grid draws (never a hard-coded 7): "over 7", or "over 7 / over 9" when the
+// holders shown carry different soft limits - ascending, each once; entries without a number -> "over the soft limit";
+// nothing valid -> "" (the caller shows no legend line)
+function overSoftLimitLegend(list) {
+  const ok = (Array.isArray(list) ? list : []).filter(oslOk), lim = [];
+  ok.forEach(o => { if (typeof o.limit === "number" && isFinite(o.limit) && lim.indexOf(o.limit) < 0) lim.push(o.limit); });
+  if (!ok.length) return "";
+  return lim.length ? lim.sort((a, b) => a - b).map(overSoftLimitWords).join(" / ") : overSoftLimitWords(null);
+}
+// Totals' month flag: { text: "over 7" (one month) | "over 7: Oct, Nov" (a longer period), title } or null when no month is
+// over. `list` = one holder's overSoftLimitMonths entries; nMonths = the months of the period on screen.
+function overSoftLimitMonthsText(list, nMonths) {
+  const ok = (Array.isArray(list) ? list : []).filter(x => x && /^\d{4}-\d{2}$/.test(String(x.month || ""))).slice().sort((a, b) => a.month < b.month ? -1 : a.month > b.month ? 1 : 0);
+  if (!ok.length) return null;
+  const L = ok[0].limit, mon = (k) => VAC_MON[Number(k.slice(5, 7)) - 1];
+  return {
+    text: overSoftLimitWords(L) + (nMonths > 1 ? ": " + ok.map(x => mon(x.month)).join(", ") : ""),
+    title: "Primary days over the soft limit" + (typeof L === "number" ? " of " + L + " a month" : "") + ": " + ok.map(x => mon(x.month) + " " + x.month.slice(0, 4) + " (" + x.count + ")").join(", ")
+  };
+}
+
 /* === NOTIFICATION MESSAGE COMPOSERS (Prompt 6 Slice G) ===
    The send-notification function renders data.message verbatim inside a
    per-category frame and REJECTS a payload without it; the same strings feed
@@ -6880,6 +6947,7 @@ if (typeof module !== "undefined" && module.exports) {
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, ttCsvText, ttIsIso, ttOutsideSurgeons,
+    overSoftLimitWords, overSoftLimitLine, overSoftLimitTitle, overSoftLimitIndex, overSoftLimitForChanges, overSoftLimitAudit, overSoftLimitLegend, overSoftLimitMonthsText,
     buildWeekRows, exportColorsFor,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,

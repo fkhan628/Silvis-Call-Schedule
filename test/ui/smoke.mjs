@@ -3382,6 +3382,32 @@ try {
         if (!strip.ids.includes("cov-open-primary") || !strip.textLen) fail(`${T}: the coverage strip did not render (${strip.ids.join(",")})`);
         else if (strip.hits.length || eastIds.length) fail(`${T}: the coverage strip still shows East detail - ${eastIds.join(", ")}${eastIds.length && strip.hits.length ? "; " : ""}${hitsText(strip.hits)}`);
         else ok(`${T}: coverage strip without East items - '${strip.text.slice(0, 120)}'${R.eastPerson ? (facts.eastVac[E3_VAC_DAY] ? " (before E3 this page drew 'unreviewed East vacations': the rules here hold " + facts.eastVac[E3_VAC_DAY] + " East vacation on " + E3_VAC_DAY + ")" : " (NOTE: the rules here hold no East vacation on " + E3_VAC_DAY + " - the strip gate is not exercised)") : ""}`);
+        // Prompt 32 step 4: the over-soft-limit badge ("over 7") on the November 2026 grid (the 9/23 record gave Acton 10
+        // primaries there) - the page's OWN rules context (found as e3Facts finds it) and rules.overSoftLimitDays derive the
+        // expected days; a signed-in page draws exactly those, ?public=1 none (the badge is for signed-in roles only)
+        {
+          await e3Month(rp, 2026, 10);
+          const os = await rp.evaluate(() => {
+            const rootEl = document.getElementById("root");
+            const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+            if (!ck) return { error: "no React container key on #root" };
+            const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+            let ctx = null, n = 0; const stack = [current];
+            while (stack.length && !ctx && n++ < 500000) {
+              const f = stack.pop(); if (!f) continue;
+              if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+              if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+            }
+            const want = ctx && typeof overSoftLimitDays === "function" ? overSoftLimitDays(ctx, ctx.schedule, "2026-11-01", "2026-11-30").map(o => o.day + ":" + o.id) : null;
+            const drawn = Array.from(document.querySelectorAll("[data-testid=cal-grid] .cal-cell [data-testid=over-soft-badge]")).map(b => b.closest(".cal-cell").getAttribute("data-day") + ":" + b.getAttribute("data-over-soft-id")).filter(x => x >= "2026-11-01" && x < "2026-12");
+            return { want, drawn, legend: !!document.querySelector("[data-testid=legend-over-soft]") };
+          });
+          if (os.error) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge - ${os.error}`);
+          else if (R.kind === "public") { if (os.drawn.length || os.legend) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge shows on ?public=1 (${os.drawn.join(", ")}${os.legend ? "; legend line" : ""}) - it is for signed-in roles only`); else ok(`${T}, Prompt 32 step 4: the over-soft-limit badge - none on ?public=1 (the page's rules derive ${os.want ? os.want.length : "?"} such November day(s))`); }
+          else if (!os.want) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge - no rules context / overSoftLimitDays on this page`);
+          else if (os.drawn.slice().sort().join() !== os.want.slice().sort().join() || os.legend !== os.want.length > 0) fail(`${T}, Prompt 32 step 4: the November 2026 grid draws the over-soft-limit badge on ${os.drawn.join(", ") || "no day"} (legend ${os.legend}), the page's rules derive ${os.want.join(", ") || "none"}`);
+          else ok(`${T}, Prompt 32 step 4: the over-soft-limit badge on exactly the November days the page's rules derive (${os.want.join(", ") || "none - nothing to show"})`);
+        }
         // the grid + legend: November 2026 and the East-vacation month
         const gN = await e3Grid(rp, 2026, 10);
         const vacM = [Number(E3_VAC_DAY.slice(0, 4)), Number(E3_VAC_DAY.slice(5, 7)) - 1];
@@ -9906,6 +9932,15 @@ try {
     const tallyRows = await page.$$eval("[data-testid=gen-tallies] tr[data-tally]", els => els.map(e => e.innerText.replace(/\t/g, " | ")));
     if (tallyRange !== 6 || tallyRows.length !== 6) fail(`Generate tallies: expected 6 month rows + 6 range rows, got ${tallyRows.length} + ${tallyRange}`); else ok(`Generate tallies: 6 surgeons x (${genStart.slice(0, 7)} + range) rows vs cap/target`);
     tallyRows.forEach(r => console.log("     " + r));
+    // Prompt 32 step 4 (Faraz 10/11 decision 5): the preview's over-soft-limit days are listed FIRST - their own box is the
+    // diagnostics' first child, one line per day (data-over-soft "day:id"), the count on the root; kept for the Accept audit check
+    const genOverSoft = await page.evaluate(() => {
+      const root = document.querySelector("[data-testid=gen-diagnostics]"), first = root ? root.firstElementChild : null;
+      return { count: root ? root.getAttribute("data-over-soft-count") : null, firstId: first ? first.getAttribute("data-testid") : null, lines: Array.from(document.querySelectorAll("[data-testid=gen-over-soft] [data-over-soft]")).map(e => e.getAttribute("data-over-soft")) };
+    });
+    if (genOverSoft.firstId !== "gen-over-soft") fail("Prompt 32 step 4: the Generate preview does not list the over-soft-limit days first (the diagnostics' first box is " + genOverSoft.firstId + ")");
+    else if (Number(genOverSoft.count) !== genOverSoft.lines.length) fail(`Prompt 32 step 4: the over-soft-limit box lists ${genOverSoft.lines.length} line(s), the root counts ${genOverSoft.count}`);
+    else ok(`Prompt 32 step 4: the Generate preview lists its over-soft-limit days first - ${genOverSoft.lines.length ? genOverSoft.lines.join(", ") : "none in this range"}`);
     const unc = Number(await page.$eval("[data-testid=gen-diagnostics]", el => el.getAttribute("data-uncovered-count")));
     const uncRows = await page.$$eval("[data-testid=gen-uncovered] tr[data-uncovered]", els => els.map(e => e.getAttribute("data-uncovered"))).catch(() => []);
     if (unc > 0 && uncRows.length !== unc) fail(`Generate uncovered: ${unc} open slot(s) but ${uncRows.length} row(s) rendered`); else ok(`Generate uncovered: ${unc} open slot(s)${unc ? " rendered with per-surgeon reasons: " + uncRows.join(", ") : ""}`);
@@ -10072,6 +10107,9 @@ try {
     else if (idleWrites.length) fail(`Accept & Publish: ${idleWrites.length} write(s) inside the preview range change nothing the harness can name (holders, lock flags, source and note all equal the live row): ${JSON.stringify(idleWrites.slice(0, 3))}`);
     else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_accept'");
     else if (auditChanges !== expectedSlots.length) fail(`Accept & Publish: the audit row 'schedule.generate_accept' reports ${auditChanges} slot change(s), the harness derived ${expectedSlots.length} (${expectedSlots.slice(0, 8).join(", ")}${expectedSlots.length > 8 ? ", ..." : ""})`);
+    // Prompt 32 step 4: the Accept audit row names the preview's over-soft-limit days - ids and days only, exactly the lines
+    // the Generate preview listed (genOverSoft above); [] when it listed none
+    else if (!genAudit.detail || !Array.isArray(genAudit.detail.overSoftLimit) || !genAudit.detail.overSoftLimit.every(o => o && Object.keys(o).join() === "day,id") || genAudit.detail.overSoftLimit.map(o => o.day + ":" + o.id).join() !== genOverSoft.lines.join()) fail(`Accept & Publish (Prompt 32 step 4): genAudit.detail.overSoftLimit ${JSON.stringify(genAudit.detail && genAudit.detail.overSoftLimit)} is not the preview's over-soft-limit days as { day, id } (${genOverSoft.lines.join(", ") || "none"})`);
     else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version) = the ${expectedDays.size} grid-changed day(s) derived from the live rows${metaNamed.length ? " + " + metaNamed.length + " holders-unchanged write(s) each naming a lock / source / note change: " + metaNamed.join(", ") : " and no holders-unchanged write"}, all inside the preview range with the preview's holders; audit schedule.generate_accept changes=${auditChanges} = derived ${expectedSlots.length}; publish dialog opened`);
     const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
     if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");

@@ -72,7 +72,13 @@
 //                     none -> open. The target delta is the CONVEX deviation
 //                     change (genTargetDelta / genDevCost) against the per-role
 //                     water-filled share of genTargets (J 9/22, WF 9/23; no
-//                     neutral term, no explicit-null branch).
+//                     neutral term, no explicit-null branch). Prompt 32 step 4:
+//                     a PRIMARY candidate this placement takes over his soft
+//                     limit (already at / over it) carries the deterministic
+//                     tie-break W.low x 0.1 x his weighted load that month
+//                     per day it puts over his limit, INSTEAD of the jitter
+//                     (genSoftLimitTie), so the lowest
+//                     weighted load takes an unavoidable over-limit day.
 //   4 backup pass     same with primary fixed, against the backup targets
 //                     (Prompt 32 step 2: the WEIGHTED backup share - a member
 //                     short of primaries is targeted at wP / wB more backups
@@ -206,7 +212,8 @@ function genRulesApi() {
       eastConflicts: eastConflicts,
       eastVacationConflicts: eastVacationConflicts,
       offerState: offerState, offeredOn: offeredOn, // Prompt 14 P2
-      shiftWeightsOf: shiftWeightsOf // Prompt 32 step 2: the ONE reader of groupRules.shiftAccounting.weights
+      shiftWeightsOf: shiftWeightsOf, // Prompt 32 step 2: the ONE reader of groupRules.shiftAccounting.weights
+      overSoftLimitDays: overSoftLimitDays // Prompt 32 step 4: the ONE reading of the over-soft-limit primary days
     };
   }
   return genRulesCache;
@@ -405,6 +412,43 @@ function genTargetDeltaForDays(G, S, id, days, role) {
   days.forEach(function (d) { var m = genMonthOf(d); perMonth[m] = (perMonth[m] || 0) + 1; });
   var t = 0;
   Object.keys(perMonth).forEach(function (m) { t += genTargetDelta(G, S, id, m, perMonth[m], null, role); });
+  return t;
+}
+// Prompt 32 step 4 (DESIGN "Generator" 8; Faraz 10/11 decision 5: "the generator fills them itself (soft penalty), giving
+// the extra day to the eligible surgeon with the lowest weighted load"). When a placement takes a PRIMARY candidate over
+// his soft limit (P.capPreferred; he is already at / over it - the placement's days make his month's count, counted as
+// the cap counts it, exceed it), rules.js already adds the soft over-preferred-cap at W.medium to every such candidate;
+// this adds the tie-break among them: W.low x GEN_SOFT_LIMIT_TIE (0.1) x his WEIGHTED load that month before the placement
+// (Silvis days only: primary x w.primary + backup x w.backup from the running counts - Faraz's decision 9), once per day
+// of the placement that lands over the limit, per month concerned - one day (a day unit, the repair) is one term; a weekend
+// / holiday unit that puts two of his days over carries two, so between two shapes of one unit the lower load takes the
+// larger share of the over-limit days (one term per member would score "a 1 day + b 2 days" = "a 2 days + b 1 day" and
+// leave it to the enumeration order). Small (about 1 per day for a full month), and deterministic: the scorer adds it INSTEAD of the jitter for such
+// a candidate (the rng is still drawn for him, so the stream is unchanged) - the jitter (uniform 0..1) would otherwise
+// decide between two over-limit candidates a 0.1 x load apart about as often as the load does. null = the term does not
+// apply (a backup placement, no soft limit, or he stays within it): the scorer keeps its jitter as before, so a run with no
+// soft limit anywhere is byte-identical. The score structure is otherwise unchanged (no new score part).
+var GEN_SOFT_LIMIT_TIE = 0.1;
+function genSoftLimitEastBase(G, P, id, month) {
+  if (!P.countsEastDays || !P.eastPrimaryDays) return 0;
+  var W = G.ctx.schedule, b = 0;
+  P.eastPrimaryDays.forEach(function (d) { if (genMonthOf(d) === month) { var e = W[d]; if (!(e && e.primary === id)) b++; } });
+  return b;
+}
+function genSoftLimitTie(G, S, id, days, role) {
+  if (role !== "primary" || !days || !days.length) return null;
+  var P = G.ctx.per[id];
+  if (!P || typeof P.capPreferred !== "number") return null;
+  var perMonth = {}, months = [], t = null;
+  for (var i = 0; i < days.length; i++) { var m = genMonthOf(days[i]); if (!perMonth[m]) { perMonth[m] = 0; months.push(m); } perMonth[m]++; }
+  for (var k = 0; k < months.length; k++) {
+    var month = months[k], cp = genMonthCount(G, S, id, month, "primary");
+    var after = cp + genSoftLimitEastBase(G, P, id, month) + perMonth[month];
+    if (after <= P.capPreferred) continue;
+    var over = Math.min(perMonth[month], after - P.capPreferred); // the placement's days of this month past his limit (>= 1)
+    var load = G.shiftWeights.primary * cp + G.shiftWeights.backup * genMonthCount(G, S, id, month, "backup");
+    t = (t === null ? 0 : t) + G.W.low * GEN_SOFT_LIMIT_TIE * load * over;
+  }
   return t;
 }
 // Prompt 14 P2 review (9/23): the offered bonus stops at the share - "an offer is
@@ -1138,7 +1182,10 @@ function genFillDay(G, S, day, role, rng) {
   for (var i = 0; i < ids.length; i++) {
     var r = R.eligibility(ctx, day, role, ids[i]);
     if (!r.ok) continue;
-    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], month, 1, day, role) + (rng ? rng() * G.jitter : 0);
+    // Prompt 32 step 4: the jitter is drawn for every eligible candidate as before; one the day takes over his soft limit
+    // carries the deterministic tie-break (genSoftLimitTie) instead of it
+    var j = rng ? rng() * G.jitter : 0, tie = genSoftLimitTie(G, S, ids[i], [day], role);
+    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], month, 1, day, role) + (tie === null ? j : tie);
     if (best === null || s < bestScore) { best = ids[i]; bestScore = s; }
   }
   if (best === null) return false;
@@ -1237,14 +1284,22 @@ function genFillWeekend(G, S, unit, role, rng) {
   var best = null, bestScore = 0;
   for (var p = 0; p < patterns.length; p++) {
     var pat = patterns[p], perId = null;
-    var s = pat.penalty + (rng ? rng() * G.jitter : 0);
+    // Prompt 32 step 4: the pattern's jitter is drawn as before; a pattern that takes a member over his soft limit carries
+    // the members' deterministic tie-breaks (genSoftLimitTie) instead of it
+    var jit = rng ? rng() * G.jitter : 0, tie = null;
+    var s = pat.penalty;
     for (var j = 0; j < slotDay.length; j++) {
       var mid = pat.members[slotKey[j]];
       if (!mid) continue;
       if (!perId) perId = {};
       (perId[mid] = perId[mid] || []).push(slotDay[j]);
     }
-    if (perId) for (var pid in perId) s += genTargetDeltaForDays(G, S, pid, perId[pid], role) + genOfferTaper(G, S, pid, perId[pid], role, null);
+    if (perId) for (var pid in perId) {
+      s += genTargetDeltaForDays(G, S, pid, perId[pid], role) + genOfferTaper(G, S, pid, perId[pid], role, null);
+      var tb = genSoftLimitTie(G, S, pid, perId[pid], role);
+      if (tb !== null) tie = (tie === null ? 0 : tie) + tb;
+    }
+    s += tie === null ? jit : tie;
     if (best === null || s < bestScore) { best = pat; bestScore = s; }
   }
   ["fri", "sat", "sun"].forEach(function (k, i) {
@@ -1318,7 +1373,9 @@ function genFillHoliday(G, S, unit, role, rng) {
       var r = R.eligibility(ctx, d, role, id, { assume: unit.inRange.filter(function (x) { return x !== d; }).map(function (x) { return { date: x, role: role }; }) });
       soft += genSoftSum(r);
     }
-    var s = soft + genOfferTaper(G, S, id, open, role, null) + genTargetDeltaForDays(G, S, id, open, role) + genHolidayLoad(G, id, unit.tier) * G.W.medium + (rng ? rng() * G.jitter : 0);
+    // Prompt 32 step 4: a candidate the unit takes over his soft limit carries the deterministic tie-break instead of the jitter (still drawn)
+    var jh = rng ? rng() * G.jitter : 0, tieH = genSoftLimitTie(G, S, id, open, role);
+    var s = soft + genOfferTaper(G, S, id, open, role, null) + genTargetDeltaForDays(G, S, id, open, role) + genHolidayLoad(G, id, unit.tier) * G.W.medium + (tieH === null ? jh : tieH);
     if (best === null || s < bestScore) { best = id; bestScore = s; }
   }
   open.forEach(function (d) { genSet(G, S, d, role, best); });
@@ -1341,7 +1398,8 @@ function genBestFor(G, S, day, role, exclude) {
     if (exclude.indexOf(ids[i]) >= 0) continue;
     var r = R.eligibility(ctx, day, role, ids[i]);
     if (!r.ok) continue;
-    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], genMonthOf(day), 1, day, role);
+    var tie = genSoftLimitTie(G, S, ids[i], [day], role); // Prompt 32 step 4 (no jitter here; the term alone)
+    var s = genSoftSum(r) + genOfferTaper(G, S, ids[i], [day], role, day) + genTargetDelta(G, S, ids[i], genMonthOf(day), 1, day, role) + (tie === null ? 0 : tie);
     if (best === null || s < bestScore) { best = ids[i]; bestScore = s; }
   }
   return best;
@@ -1954,18 +2012,12 @@ function genDiagnostics(G, best, meta) {
 // that is the (L+1)th or later primary of its holder's calendar month in date order - every day of the month counts toward
 // the ordinal (locked, published and out-of-range days included) - L = his SOFT limit (ctx.per[id].capPreferred; a surgeon
 // without one, a hard cap only or no limit, is never listed). Derived from the final schedule, never stored: plain
-// [{ day, id, month, count, limit }] in date order (structured-clone safe). The tie-break that picks who takes such a day
-// is Prompt 32 step 4.
+// [{ day, id, month, count, limit }] in date order (structured-clone safe). Prompt 32 step 4: read through the ONE helper,
+// rules.js overSoftLimitDays (the calendar badge, the Publish dialog and the Accept audit row read the same), which also
+// leaves out a day over the holder's hard cap (a hard-cap breach keeps its own wording) and an outside surgeon, and counts
+// a countsEastDays cap's East primary-week days first; the tie-break that picks who takes such a day is genSoftLimitTie.
 function genOverSoftLimit(G, W) {
-  var out = [];
-  G.days.forEach(function (d) {
-    var e = W[d], id = e && e.primary, P = id ? G.ctx.per[id] : null;
-    if (!P || P.capPreferred === null || P.capPreferred === undefined) return;
-    var month = genMonthOf(d), n = 0;
-    genMonthDays(month).forEach(function (x) { if (x <= d && W[x] && W[x].primary === id) n++; });
-    if (n > P.capPreferred) out.push({ day: d, id: id, month: month, count: n, limit: P.capPreferred });
-  });
-  return out;
+  return G.R.overSoftLimitDays(G.ctx, W, G.start, G.end);
 }
 
 // diagnostics.eastVacations (Prompt 15 part 2): { [id]: { ranges, vacationDays, clearDays, feedBusyOnHome, conflicts } }

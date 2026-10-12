@@ -2415,7 +2415,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // Fix round (review 9/25): not a list of the old E / F expressions - the grid's ONLY badge is the confirm '?', so a
     // re-added E / F / f in any spelling (a literal data-badge="F", a scheduler-only data-badge="f", a badge() square
     // without a data-badge attribute) fails here.
-    assert.ok(!/data-badge=(?!"confirm")/.test(grid), "the grid cell renders a badge other than the confirm '?' (E / F / f are gone since Item E2, 9/25)");
+    // pin moved deliberately 10/11: Prompt 32 step 4 - the grid gains ONE more badge, the over-soft-limit "over 7"
+    // (data-badge="over-soft"; Faraz 10/11 decision 5 - flagged on the day, signed-in only), which is not an East marking;
+    // every other value - E / F / f in any spelling - still fails here, exactly as before
+    assert.ok(!/data-badge=(?!"confirm"|"over-soft")/.test(grid), "the grid cell renders a badge other than the confirm '?' and the over-soft-limit 'over 7' (E / F / f are gone since Item E2, 9/25)");
+    assert.strictEqual((grid.match(/data-badge="over-soft"/g) || []).length, 1, "exactly one over-soft-limit badge in the grid cell (Prompt 32 step 4)");
     assert.strictEqual((grid.match(/[^.\w]badge\(/g) || []).length, 1, "the grid cell calls badge() for something other than the confirm '?' (the only grid badge since Item E2, 9/25)");
     assert.ok(!/East-derived|East forecast/.test(grid), "the grid cell still carries 'East-derived' / 'East forecast' text (badge title or the 'East-derived: ...' hover bit)");
     // (2) the legend: no E / F line; the East-vacation line and the ordinary lines stay
@@ -2431,7 +2435,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('titleBits.push("East-derived: "'), 0, "the 'East-derived: ...' hover bit is still pushed");
     // (4) kept: the confirm badge, the gutter, the East-vacation diamonds and their hover
     assert.strictEqual(count('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), 1, "the grid's confirm badge must stay");
-    assert.ok(grid.includes("const nBadges = awaitingConfirmation(a) ? 1 : 0;"), "nBadges counts the confirm badge (the only grid badge since Item E2)");
+    // pin moved deliberately 10/11: Prompt 32 step 4 - nBadges also counts the over-soft-limit badge, as two 15px widths
+    // ("over 7" at 8px is ~26px; the header keeps the holiday label clear of it); the confirm '?' still counts one
+    assert.ok(grid.includes("const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);"), "nBadges counts the confirm badge (one width) and the over-soft-limit badge (two widths, Prompt 32 step 4)");
     assert.ok(grid.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the header still reserves the holiday-label gutter from nBadges");
     assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of E2's scope; the scheduler's only since Item E3, 9/25) must stay");
     // (5) the day editor's East status and Setup > East feed are unchanged
@@ -12966,6 +12972,231 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "tS.csvHeader.length !== 23",
         "tt.csvHeader.length !== 22",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+    // ---- P32-4 (Prompt 32 step 4; Faraz 10/11 decision 5 / DESIGN "Totals" Over-7): Totals flags each MONTH whose primary
+    // count is over the holder's soft limit - rules.overSoftLimitMonths (the month's count; never cap x months) - on the cap
+    // cell ("over <L>", "over <L>: Oct, Nov" over a longer range) and at the end of the fairness row. Same lifted card as P32-1.
+    const SOFT6 = { defaultMonthlyCap: { preferred: 6 } }; // Khan's 7 November primaries are over a soft 6; Burchett's 6 are not
+    const flagOf = (tree, id) => byId(byId(tree, "totals-row-" + id)[0], "totals-over-soft");
+    check("P32-4 Totals: a month over the soft limit is flagged on the cap cell ('(over 6)', the title names the month and its count) and the row carries data-over-soft; at the limit or below - no flag", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SOFT6 });
+      const k = flagOf(tree, "s1");
+      assert.strictEqual(k.length, 1, "Khan's November (7 primaries) is over the soft 6: one flag");
+      assert.strictEqual(text(k[0]), " (over 6)", "the words: 'over <L>' (the soft limit), in brackets after the cap");
+      assert.ok(/Nov 2026 \(7\)/.test(k[0].props.title || "") && /soft limit of 6/.test(k[0].props.title || ""), "the title names the month, its count and the limit: " + k[0].props.title);
+      const capCell = byCol(byId(tree, "totals-row-s1")[0], "cap")[0];
+      assert.ok(capCell && byId(capCell, "totals-over-soft").length === 1 && text(capCell) === "- (over 6)", "the flag sits in the cap cell after the hard cap ('-' = none): " + (capCell && text(capCell)));
+      assert.strictEqual(capCell.props["data-flag"], undefined, "a soft-limit month is NOT the red hard-cap flag (no data-flag over on the cap cell)");
+      assert.strictEqual(byId(tree, "totals-row-s1")[0].props["data-over-soft"], "2026-11", "the row names the months over in data-over-soft");
+      ["s2", "s3"].forEach(id => { assert.strictEqual(flagOf(tree, id).length, 0, id + " (6 / 3 primaries) is not over the soft 6"); assert.strictEqual(byId(tree, "totals-row-" + id)[0].props["data-over-soft"], undefined); });
+    });
+    check("P32-4 Totals: year to date / rolling 12 name the MONTHS over (the month's own count - October holds 1, so only Nov), never cap x months", () => {
+      const { render } = lift();
+      ["ytd", "rolling"].forEach(mode => {
+        const k = flagOf(render({ groupRules: SOFT6, mode }), "s1");
+        assert.ok(k.length === 1 && text(k[0]) === " (over 6: Nov)", mode + ": " + (k[0] && text(k[0])));
+      });
+      // 8 primaries over Oct + Nov against a soft 6 is NOT 6 x 2 months: only the month whose own count is over it is named
+      const ytd = render({ groupRules: { defaultMonthlyCap: { preferred: 7 } }, mode: "ytd" });
+      assert.strictEqual(flagOf(ytd, "s1").length, 0, "soft 7: November holds exactly 7 - not over, whatever the range total (8)");
+    });
+    check("P32-4 Totals: no soft limit -> no flag; a hard cap only keeps its own red cap cell (the hard-cap wording), never 'over N'; no rules context -> no flag; the CSV is unchanged", () => {
+      const { render, csvOf } = lift();
+      assert.strictEqual(flagOf(render({ groupRules: {} }), "s1").length, 0, "no soft limit");
+      const hard = render({ groupRules: { defaultMonthlyCap: { primary: 6 } } });
+      const capCell = byCol(byId(hard, "totals-row-s1")[0], "cap")[0];
+      assert.ok(flagOf(hard, "s1").length === 0 && capCell.props["data-flag"] === "over" && text(capCell) === "6", "a hard 6: the existing red cap cell, no soft flag: " + text(capCell));
+      assert.strictEqual(flagOf(render({ groupRules: SOFT6, noCtx: true }), "s1").length, 0, "no rules context");
+      const csv = csvOf(render({ groupRules: SOFT6 }));
+      assert.ok(csv[0].length === 23 && csv[0][22] === "Weighted" && !csv.some(r => r.some(c => /over 6/.test(c))), "the CSV keeps its 23 columns and carries no flag text");
+    });
+    check("P32-4 fairness view: the row ends with ' - over 6' after the deviation (the text prefix unchanged)", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SOFT6, mode: "fairness" });
+      const s1 = byId(tree, "fairness-row-s1")[0];
+      const f = byId(s1, "fairness-over-soft");
+      assert.ok(f.length === 1 && text(f[0]) === " - over 6", "Khan's fairness row: " + (f[0] && text(f[0])));
+      assert.ok(/^10 total \(7 P \+ 3 B\) - weighted 8\.5/.test(text(s1).replace(/\s+/g, " ")), "the row text still starts as the smoke reads it: " + text(s1));
+      assert.ok(/ - over 6$/.test(text(s1)), "...and ends with the flag: " + text(s1));
+      assert.strictEqual(byId(byId(tree, "fairness-row-s2")[0], "fairness-over-soft").length, 0, "Burchett: none");
+    });
+  }
+
+  /* ---------------- P32-4. Prompt 32 step 4 (Faraz 10/11 decision 5): over the soft limit ---------------- */
+  // A primary day is "over the soft limit" when it is the (L+1)th or later primary of its holder's calendar month in date order
+  // (L = his soft limit; the group's 7). The DAYS come from ONE helper, rules.js overSoftLimitDays (generator diagnostics, the
+  // badge, the Generate preview, the Publish dialog, the Accept audit row) - derived, never stored; helpers.js only words,
+  // indexes and trims the plain list. Signed-in roles only: never on ?public=1.
+  console.log("\n[P32-4] Prompt 32 step 4 - over the soft limit: the helpers' words, the day badge (calendar / day summary / day editor, signed-in only), Totals' month flag (above), the Generate preview and the Publish dialog listing the days first, the Accept audit row");
+  {
+    const O1 = { day: "2026-11-18", id: "s3", month: "2026-11", count: 8, limit: 7 };
+    const O2 = { day: "2026-11-30", id: "s1", month: "2026-11", count: 8, limit: 7 };
+    const O3 = { day: "2026-12-05", id: "s3", month: "2026-12", count: 9, limit: 7 };
+    check("P32-4 helpers: the words - 'over 7' / 'over <L>'; the line 'Wed 11/18 P Acton - 8th primary day of November (over 7)'; the title; the ordinals", () => {
+      ["overSoftLimitWords", "overSoftLimitLine", "overSoftLimitTitle", "overSoftLimitIndex", "overSoftLimitForChanges", "overSoftLimitAudit", "overSoftLimitLegend", "overSoftLimitMonthsText"].forEach(f => assert.strictEqual(typeof H[f], "function", "helpers." + f + " is not exported (Prompt 32 step 4)"));
+      assert.strictEqual(H.overSoftLimitWords(7), "over 7", "the group's 7");
+      assert.strictEqual(H.overSoftLimitWords(9), "over 9", "an own soft limit");
+      assert.strictEqual(H.overSoftLimitWords(null), "over the soft limit", "no number");
+      assert.strictEqual(H.overSoftLimitLine(O1, nameOf), "Wed 11/18 P Acton - 8th primary day of November (over 7)");
+      assert.strictEqual(H.overSoftLimitLine(O3, nameOf), "Sat 12/5 P Acton - 9th primary day of December (over 7)");
+      assert.strictEqual(H.overSoftLimitTitle(O2, nameOf), "Khan: 8th primary day of November 2026 - over the soft limit of 7 primary days a month");
+      assert.deepStrictEqual([1, 2, 3, 4, 8, 11, 12, 13, 21, 22, 23, 31].map(n => H.overSoftLimitLine(Object.assign({}, O1, { count: n }), nameOf).split(" - ")[1].split(" ")[0]), ["1st", "2nd", "3rd", "4th", "8th", "11th", "12th", "13th", "21st", "22nd", "23rd", "31st"], "ordinals");
+      assert.ok(!/\$/.test(H.overSoftLimitLine(O1, nameOf) + H.overSoftLimitTitle(O1, nameOf)), "no $");
+    });
+    check("P32-4 helpers: overSoftLimitIndex (day -> entry), overSoftLimitAudit ([{ day, id }] only), overSoftLimitMonthsText; junk never throws", () => {
+      assert.deepStrictEqual(H.overSoftLimitIndex([O1, O2]), { "2026-11-18": O1, "2026-11-30": O2 });
+      assert.deepStrictEqual([H.overSoftLimitIndex(null), H.overSoftLimitIndex("x"), H.overSoftLimitIndex([null, { id: "s1" }])], [{}, {}, {}], "junk -> {}");
+      assert.deepStrictEqual(H.overSoftLimitAudit([O1, O2]), [{ day: "2026-11-18", id: "s3" }, { day: "2026-11-30", id: "s1" }], "ids and days only");
+      assert.ok(H.overSoftLimitAudit([O1]).every(o => Object.keys(o).join() === "day,id"), "never the count, the limit, the month or a name");
+      assert.deepStrictEqual([H.overSoftLimitAudit(undefined), H.overSoftLimitAudit([null])], [[], []]);
+      const m10 = { id: "s3", month: "2026-10", count: 10, limit: 7 }, m11 = { id: "s3", month: "2026-11", count: 10, limit: 7 };
+      assert.deepStrictEqual(H.overSoftLimitMonthsText([m11], 1), { text: "over 7", title: "Primary days over the soft limit of 7 a month: Nov 2026 (10)" }, "one month");
+      assert.deepStrictEqual(H.overSoftLimitMonthsText([m10, m11], 3), { text: "over 7: Oct, Nov", title: "Primary days over the soft limit of 7 a month: Oct 2026 (10), Nov 2026 (10)" }, "a longer range names the months");
+      assert.strictEqual(H.overSoftLimitMonthsText([], 1), null, "nothing over -> null");
+      // the calendar legend names the limits the grid's badges carry - never a hard-coded 7
+      assert.strictEqual(H.overSoftLimitLegend([O1, O2]), "over 7", "two badges on the group's 7: 'over 7' once");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: 9 }), O2, Object.assign({}, O3, { limit: 6 })]), "over 6 / over 7 / over 9", "different soft limits: ascending, each once");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: 6 })]), "over 6", "a group soft 6: 'over 6', not 'over 7'");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: null })]), "over the soft limit", "no number");
+      assert.deepStrictEqual([H.overSoftLimitLegend([]), H.overSoftLimitLegend(null), H.overSoftLimitLegend([null, { id: "s1" }])], ["", "", ""], "nothing valid -> ''");
+    });
+    check("P32-4 helpers: overSoftLimitForChanges - the Publish dialog's list: the days of a (holder, month) this publish GAVE a primary to (a later day moved up to #8 by an earlier new one included); a backup change, or a primary taken away, does not count", () => {
+      const ch = (day, role, from, to) => ({ day, role, from, to });
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-30", "primary", null, "s1")]), [O2], "the new 11/30 primary of Khan is his #8");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-02", "primary", "s2", "s3")]), [O1], "a NEW earlier November primary of Acton pushes his unchanged 11/18 to #8 - listed");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-10", "backup", null, "s3"), ch("2026-12-01", "primary", "s3", "s2"), ch("2026-11-30", "lock", "", "P")]), [], "a backup change, a primary taken FROM him and a lock change give him no primary");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-12-20", "primary", null, "s3"), ch("2026-11-30", "primary", "s2", "s1")]), [O2, O3], "date order kept; two holders");
+      assert.deepStrictEqual([H.overSoftLimitForChanges(null, []), H.overSoftLimitForChanges([O1], null)], [[], []], "junk -> []");
+    });
+    check("P32-4 GenDiagnostics (lifted and run): the over-soft-limit days are listed FIRST - their own box above the score, one line each in date order; 'None' when the run lists none; absent from an older preview -> no box", () => {
+      const babel = require("@babel/core");
+      const g0 = src.indexOf("function GenDiagnostics({"), g1 = src.indexOf("// RF2 a (9/23): the merged map's");
+      assert.ok(g0 > 0 && g1 > g0, "GenDiagnostics is where the test expects it");
+      const code = babel.transformSync(src.slice(g0, g1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = { console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Set, Map, isNaN, isFinite };
+      box.window = box;
+      vm.createContext(box);
+      vm.runInContext(fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), box, { filename: "helpers.js" });
+      Object.assign(box, { React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" }, mono: "monospace", LIGHT: { warnText: "#7a4a10", accentText: "#C2410C" }, reasonLabel: (c) => String(c), softTag: () => null });
+      const GD = vm.runInContext(code + "\n;GenDiagnostics", box, { filename: "GenDiagnostics.jsx" });
+      const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+      const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+      const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+      const css = { subT: {}, tableWrap: {} };
+      const dg = { range: { months: ["2026-11", "2026-12"] }, tallies: {}, score: { total: 1 }, uncovered: [], softPenalties: [], candidatesTried: 1, bestOf: 1, overSoftLimit: [O1, O2, O3] };
+      const tree = GD({ css, dg, nameOf, roster: [] });
+      assert.strictEqual(tree.props["data-over-soft-count"], 3, "the root says how many");
+      const boxes = kids(tree);
+      assert.strictEqual(boxes[0].props["data-testid"], "gen-over-soft", "the over-soft-limit box is the FIRST thing in the diagnostics (above the score)");
+      assert.ok(/Over the soft limit \(3\)/.test(text(boxes[0])), "its heading counts them: " + text(boxes[0]).slice(0, 80));
+      const lines = all(boxes[0], n => n.props && n.props["data-over-soft"]).map(n => [n.props["data-over-soft"], text(n)]);
+      assert.deepStrictEqual(lines, [["2026-11-18:s3", H.overSoftLimitLine(O1, nameOf)], ["2026-11-30:s1", H.overSoftLimitLine(O2, nameOf)], ["2026-12-05:s3", H.overSoftLimitLine(O3, nameOf)]], "one line per day, date order, the helper's words");
+      const none = GD({ css, dg: Object.assign({}, dg, { overSoftLimit: [] }), nameOf, roster: [] });
+      assert.ok(kids(none)[0].props["data-testid"] === "gen-over-soft" && /None/.test(text(kids(none)[0])), "no day over -> the box says None");
+      const old = GD({ css, dg: Object.assign({}, dg, { overSoftLimit: undefined }), nameOf, roster: [] });
+      assert.strictEqual(all(old, n => n.props && n.props["data-testid"] === "gen-over-soft").length, 0, "a preview without the list shows no box");
+    });
+    check("P32-4 DayEditor (lifted and run): the 'over 7' badge on the primary row - the summary (every signed-in role) and the scheduler's editor; never on ?public=1 (not even computed); never on a day the helper does not list", () => {
+      const babel = require("@babel/core");
+      const a0 = src.lastIndexOf("const AWAITING_CONFIRMATION_MARKER = ");
+      const a1 = src.indexOf("// --- Client versions", a0);
+      const d0 = src.indexOf("function DayEditor(props) {"), d1 = src.indexOf("// ===================== SETUP VIEW COMPONENTS");
+      const code = babel.transformSync(src.slice(a0, a1) + "\n" + src.slice(d0, d1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = {
+        console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout,
+        atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+        localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+        fetch: () => Promise.reject(new Error("no network in this test")), document: { activeElement: null, contains: () => false }, confirm: () => true,
+      };
+      box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+      vm.createContext(box);
+      for (const f of ["config.js", "helpers.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      const OVER_DAY = "2099-01-06";
+      const FAKECTX = { holidayByDay: {}, schedule: { [OVER_DAY]: { primary: "s2" } } };
+      const calls = [];
+      Object.assign(box, {
+        React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment", useMemo: (f) => f(), useState: (v) => [typeof v === "function" ? v() : v, () => {}], useRef: (v) => ({ current: v === undefined ? null : v }), useEffect: () => {} },
+        safeBuildContext: () => ({ ctx: FAKECTX, error: null }), isHolidayDay: () => null, eastStatusLines: () => [],
+        eligibility: () => ({ ok: true, hard: [], soft: [] }), offerState: () => null, offerCandidateWords: () => null, reasonLabel: (c) => String(c), softTag: () => null,
+        overSoftLimitDays: (ctx, sched, from, to) => { calls.push([ctx, sched, from, to]); return from === OVER_DAY && to === OVER_DAY ? [{ day: OVER_DAY, id: "s2", month: "2099-01", count: 8, limit: 7 }] : []; },
+      });
+      const DayEditor = vm.runInContext(code + "\n;DayEditor", box, { filename: "DayEditor.jsx" });
+      const roster = [{ id: "s1", name: "Khan", code: "FAK", fullName: "Faraz Khan", active: true }, { id: "s2", name: "Burchett", code: "MAB", fullName: "Michael Burchett", active: true }];
+      const colorOf = vm.runInContext("(roster) => (id) => rosterColors(roster.find(r => r.id === id), 0)", box)(roster);
+      const render = (o) => DayEditor({
+        day: o.day || OVER_DAY, entry: { primary: "s2", backup: "s1", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null },
+        roster, ctxInputs: { schedule: {} }, ctxError: null, canEdit: !!o.canEdit, eastDetailsVisible: !!o.canEdit, rulesImported: true, isPublicMode: !!o.pub,
+        nameOf: (id) => (roster.find(r => r.id === id) || {}).name || id, codeOf: (id) => id, colorOf, mySurgeon: o.me || "", vacationNames: [],
+        onSave: () => {}, onCancel: () => {}, onNav: () => {}, onTrade: () => {}, suggestTrade: () => null, css: vm.runInContext("css", box), dk: false, focusExternal: false,
+        onGive: () => {}, onOpenShifts: () => {}, openOnBoard: () => false,
+      });
+      const kids = (n) => (n && typeof n === "object" && !Array.isArray(n) ? n.children : Array.isArray(n) ? n : []).flat(Infinity);
+      const all = (n, out = []) => { if (Array.isArray(n)) { n.forEach(c => all(c, out)); return out; } if (n && typeof n === "object") { out.push(n); if (typeof n.type !== "function") kids(n).forEach(c => all(c, out)); } return out; };
+      const text = (n) => Array.isArray(n) ? n.map(text).join("") : n === null || n === undefined || n === false || n === true ? "" : typeof n === "object" ? (typeof n.type === "function" ? "" : kids(n).map(text).join("")) : String(n);
+      const by = (tree, id) => all(tree).filter(n => n.props["data-testid"] === id);
+      [["the summary (a viewer)", {}], ["the summary (a surgeon on another's day)", { me: "s1" }], ["the scheduler's editor", { canEdit: true }]].forEach(([who, o]) => {
+        calls.length = 0;
+        const tree = render(o);
+        const pBlock = by(tree, "editor-primary-block")[0], bBlock = by(tree, "editor-backup-block")[0];
+        const b = by(pBlock, "editor-over-soft");
+        assert.ok(b.length === 1 && text(b[0]) === "over 7", who + ": one 'over 7' badge on the primary row: " + (b[0] && text(b[0])));
+        assert.ok(/8th primary day/.test(b[0].props.title || "") && /soft limit of 7/.test(b[0].props.title || ""), who + ": the title explains it: " + b[0].props.title);
+        assert.strictEqual(by(bBlock, "editor-over-soft").length, 0, who + ": never on the backup row");
+        assert.ok(calls.length >= 1 && calls.every(c => c[0] === FAKECTX && c[1] === FAKECTX.schedule && c[2] === OVER_DAY && c[3] === OVER_DAY), who + ": the helper reads the editor's own (draft) ctx and its schedule, for this day only: " + JSON.stringify(calls.map(c => c.slice(2))));
+      });
+      calls.length = 0;
+      const pub = render({ pub: true });
+      assert.strictEqual(by(pub, "editor-over-soft").length, 0, "?public=1: no badge");
+      assert.strictEqual(calls.length, 0, "?public=1: the helper is never even called");
+      assert.strictEqual(by(render({ day: "2099-01-07" }), "editor-over-soft").length, 0, "a day the helper does not list: no badge");
+    });
+    check("P32-4 source pins: the App derives the over-soft-limit days ONCE for the calendar (signed-in only - never ?public=1 - over the displayed schedule, the preview overlaid), the grid cell draws the 'over N' badge (data-badge over-soft) with its title, the gutter counts it, the legend explains it", () => {
+      const at = src.indexOf("const overSoftByDay = useMemo(");
+      assert.ok(at > 0, "the App's overSoftByDay memo");
+      const memo = src.slice(at, src.indexOf("}, [", at) + 120);
+      assert.ok(/if \(isPublicMode \|\| !authUser \|\| !rulesCtx \|\| typeof overSoftLimitDays !== "function"\) return \{\};/.test(memo), "gated: never on ?public=1, never without a signed-in user / the rules engine: " + memo.slice(0, 300));
+      assert.ok(memo.includes("overSoftLimitIndex(overSoftLimitDays(rulesCtx, shown))") && memo.includes("previewGen && previewGen.schedule ? { ...(schedule || {}), ...previewGen.schedule } : (schedule || {})"), "ONE helper over the displayed schedule (the preview overlaid like the cells)");
+      const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), legendAt = src.indexOf('<div className="cal-legend"');
+      const grid = src.slice(gridAt, legendAt);
+      assert.ok(grid.includes("const ovS = overSoftByDay[d] || null;"), "the cell reads the memo");
+      assert.ok(grid.includes('{ovS && <span data-badge="over-soft" data-testid="over-soft-badge" data-over-soft-id={ovS.id} title={overSoftLimitTitle(ovS, nameOf)} style={overSoftBadgeStyle}><span className="cal-os-long">{overSoftLimitWords(ovS.limit)}</span><span className="cal-os-short">{">" + ovS.limit}</span></span>}'), "the badge: 'over 7' (a phone: '>7'), the helper's title");
+      assert.ok(grid.includes("const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);"), "the header's gutter makes room for it (two badge widths)");
+      assert.ok(grid.includes("if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));"), "the cell's hover names it");
+      const legend = src.slice(legendAt, src.indexOf('<Collapsible css={css} ck="cal_weekrows"'));
+      assert.ok(legend.includes('{gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft">'), "the legend explains the badge when one shows");
+      const legLine = legend.slice(legend.indexOf('<span data-testid="legend-over-soft">'));
+      assert.ok(legLine.includes("{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}") && !/>over \d/.test(legLine.slice(0, legLine.indexOf("</span>}"))), "the legend's words name the limits the grid's badges carry (overSoftLimitLegend) - never a hard-coded 'over 7'");
+      assert.ok(src.includes(".cal-os-short { display: none; }") && /@media \(max-width: 600px\) \{[\s\S]*?\.cal-os-long \{ display: none; \}[\s\S]*?\.cal-os-short \{ display: inline; \}/.test(src), "phone: the short '>7' stands in for 'over 7'");
+    });
+    check("P32-4 source pins: the Publish dialog lists the over-soft-limit days FIRST (a short section above the month groups) from the ONE helper trimmed to this publish's changes; the Accept audit row names them as [{ day, id }]", () => {
+      const op = src.slice(src.indexOf("const openPublishDialog = () => {"), src.indexOf("publishRef.current = openPublishDialog;"));
+      assert.ok(op.includes("setPublishOverSoft(overSoftLimitForChanges(rulesCtx && typeof overSoftLimitDays === \"function\" ? overSoftLimitDays(rulesCtx, schedule) : [], changes));"), "openPublishDialog derives the list from the helper and this publish's changes");
+      const dlgAt = src.indexOf('{showPublishDialog && !isPublicMode && (');
+      const dlg = src.slice(dlgAt, src.indexOf('data-testid="publish-skip"', dlgAt));
+      const osAt = dlg.indexOf('data-testid="publish-over-soft"'), grpAt = dlg.indexOf("describePublishDiff(publishChanges, nameOf).map");
+      assert.ok(osAt > 0 && grpAt > osAt, "the over-soft-limit section comes BEFORE the month groups");
+      assert.ok(dlg.includes("{publishOverSoft.map(o => <div key={o.day + o.id} data-over-soft={o.day + \":\" + o.id}"), "one line per day");
+      assert.ok(dlg.includes("overSoftLimitLine(o, nameOf)"), "in the helper's words");
+      const acc = src.slice(src.indexOf("const acceptMerged = async (pv, cur, next, snap) => {"), src.indexOf("// --- Holiday plan (Prompt 25 steps 3-5"));
+      assert.ok(acc.includes("overSoftLimit: overSoftLimitAudit(pv.diagnostics.overSoftLimit)"), "the Accept audit detail gains overSoftLimit: [{ day, id }]");
+      assert.ok(acc.indexOf("overSoftLimit: overSoftLimitAudit(") > acc.indexOf('logAudit("schedule.generate_accept"'), "...inside the schedule.generate_accept row");
+    });
+    check("P32-4 smoke pins: the smoke checks the badge is absent on ?public=1, the Accept audit row's overSoftLimit = the preview's days as { day, id }", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      for (const t of [
+        "Prompt 32 step 4: the over-soft-limit badge",
+        "[data-testid=over-soft-badge]",
+        "genAudit.detail.overSoftLimit",
+        'genOverSoft.firstId !== "gen-over-soft"',
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+    check("P32-4 the CLI preview (scripts/preview-generate.js) lists the over-soft-limit days FIRST - its own section after the score, before the calendar, in the helper's words", () => {
+      const pg = fs.readFileSync(path.join(ROOT, "scripts", "preview-generate.js"), "utf8");
+      const osAt = pg.indexOf('L.push("## Over the soft limit (" + dg.overSoftLimit.length + ")")'), calAt = pg.indexOf("// calendar as week rows over the merged schedule");
+      assert.ok(osAt > 0 && calAt > osAt, "the section comes before the calendar");
+      assert.ok(pg.indexOf('L.push("## Score")') < osAt, "...and after the score");
+      assert.ok(pg.includes('dg.overSoftLimit.forEach((o) => L.push("- " + md(H.overSoftLimitLine(o, nameOf))))'), "one line per day in the helper's words");
     });
   }
 

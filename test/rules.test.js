@@ -2947,6 +2947,81 @@ eq(R.weekendCapCounts(makeCtx({ schedule: {}, surgeonRules: srCapNoE, eastBusyDa
 const srCapPh = clone(SA.seedToSurgeonRules(seed)); srCapPh[PHILIP].weekendCap = { perMonth: 0, roles: ["primary", "backup"], weight: 4 };
 eq(capOf(R.eligibility(makeCtx({ schedule: {}, surgeonRules: srCapPh }), "2027-01-23", B, PHILIP)), [{ reason: "weekend-cap:0", weight: 4 }], "generic: on Philip with perMonth 0, both roles and weight 4 - his first backup weekend pays 4");
 
+/* ------------------------------------------------ Prompt 32 step 4: over the soft limit */
+// Faraz 10/11 decision 5: a primary day is "over the soft limit" when it is the (L+1)th or later primary of its holder's
+// calendar month in date order, L = his SOFT limit (ctx.per[id].capPreferred - the group's 7 for a surgeon on the default).
+// Derived from the schedule, never stored: rules.overSoftLimitDays(ctx, schedule?, from?, to?) -> [{ day, id, month, count,
+// limit }] (the generator's diagnostics.overSoftLimit, the calendar / day badge, the Generate preview, the Publish dialog and
+// the Accept audit row all read it) and rules.overSoftLimitMonths(...) -> [{ id, month, count, limit }] (Totals' per-month
+// flag: the month's count over the soft limit). Every day of the calendar month counts toward the ordinal, the days outside
+// from..to included; only days inside from..to are listed. No soft limit (a hard cap only, "none") -> never listed; a day
+// over his HARD cap is a hard-cap breach and keeps its own wording (monthly-cap:N), so it is not a soft-limit day; an outside
+// surgeon carries no cap rule; a countsEastDays limit counts his East primary-week days (not held as Silvis primary) first,
+// as the cap does.
+step("Prompt 32 step 4: overSoftLimitDays / overSoftLimitMonths - the (L+1)th and later primary days of a holder's calendar month");
+{
+  ok(typeof R.overSoftLimitDays === "function" && typeof R.overSoftLimitMonths === "function", "rules.overSoftLimitDays / rules.overSoftLimitMonths are not exported (Prompt 32 step 4)");
+  const row = (p, b) => ({ primary: p, backup: b || null, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
+  const dayOf = (m, d) => m + "-" + String(d).padStart(2, "0");
+  const JAN = "2027-01", FEB = "2027-02";
+  const S = {};
+  // Acton (null = the group default: soft 7, no hard cap) - 9 January primaries on the odd days 1..17: #8 = 1/15, #9 = 1/17
+  [1, 3, 5, 7, 9, 11, 13, 15, 17].forEach(d => { S[dayOf(JAN, d)] = row(ACTON, KHAN); });
+  // Burchett (his own hard 7, no soft limit) - 9 primaries on the even days 2..18: a hard-cap breach, never a soft-limit day
+  [2, 4, 6, 8, 10, 12, 14, 16, 18].forEach(d => { S[dayOf(JAN, d)] = row(BURCHETT, PHILIP); });
+  // Khan (the group default) - exactly 7 (19..25): AT his soft limit, not over it
+  [19, 20, 21, 22, 23, 24, 25].forEach(d => { S[dayOf(JAN, d)] = row(KHAN, ACTON); });
+  const c = makeCtx({ schedule: S });
+  eq([c.per[ACTON].capPreferred, c.per[ACTON].capPrimary, c.per[BURCHETT].capPreferred, c.per[BURCHETT].capPrimary, c.per[KHAN].capPreferred], [7, null, null, 7, 7], "the seed's soft / hard limits the cases read");
+  const want = [
+    { day: "2027-01-15", id: ACTON, month: JAN, count: 8, limit: 7 },
+    { day: "2027-01-17", id: ACTON, month: JAN, count: 9, limit: 7 }
+  ];
+  eq(R.overSoftLimitDays(c, S), want, "Acton's 8th and 9th January primaries (1/15, 1/17) are over the group's soft 7; Khan at 7 is not; Burchett's 8th and 9th are hard-cap breaches (his own hard 7), never soft-limit days");
+  eq(R.overSoftLimitDays(c), want, "the schedule defaults to ctx.schedule");
+  eq(R.overSoftLimitDays(c, S, "2027-01-16", "2027-01-31"), [want[1]], "only days inside from..to are listed - the ordinal still counts the month's earlier days (1/17 is still #9)");
+  eq(R.overSoftLimitDays(c, S, "2027-01-01", "2027-01-14"), [], "nothing over the limit inside 1/1..1/14");
+  eq(R.overSoftLimitDays(c, S, "2027-01-20", "2027-01-10"), [], "a reversed range lists nothing");
+  ok(JSON.stringify(R.overSoftLimitDays(c, S)) === JSON.stringify(want) && R.overSoftLimitDays(c, S).every(o => Object.keys(o).join() === "day,id,month,count,limit"), "plain { day, id, month, count, limit } entries (structured-clone safe)");
+  eq(R.overSoftLimitMonths(c, S), [{ id: ACTON, month: JAN, count: 9, limit: 7 }], "per month: Acton's January count 9 is over his soft 7 (Khan's 7 is not; Burchett has no soft limit)");
+  eq(R.overSoftLimitMonths(c, S, "2027-01-20", "2027-01-20"), [{ id: ACTON, month: JAN, count: 9, limit: 7 }], "a range inside the month reads the WHOLE calendar month's count");
+  eq(R.overSoftLimitMonths(c, S, "2027-02-01", "2027-02-28"), [], "February holds nothing");
+  // the derived day agrees with the engine: with his first 7 January days held, the 8th (1/15) carries the soft term, the 7th does not
+  const first7 = {}; [1, 3, 5, 7, 9, 11, 13].forEach(d => { first7[dayOf(JAN, d)] = row(ACTON, KHAN); });
+  const c7 = makeCtx({ schedule: first7 });
+  hasSoft(R.eligibility(c7, "2027-01-15", P, ACTON), "over-preferred-cap:7", "the engine's soft term on the day the helper lists as #8");
+  const first6 = {}; [1, 3, 5, 7, 9, 11].forEach(d => { first6[dayOf(JAN, d)] = row(ACTON, KHAN); });
+  const a7 = R.eligibility(makeCtx({ schedule: first6 }), "2027-01-15", P, ACTON);
+  okElig(a7, "with 6 held, 1/15 would be his #7 - eligible");
+  lacksSoft(a7, "over-preferred-cap", "...and carries no soft-limit term (#7 is at the limit, not over it)");
+  // "none" = no limit: never listed
+  const srNone = clone(SA.seedToSurgeonRules(seed)); srNone[ACTON].monthlyCap = "none";
+  const cNone = makeCtx({ schedule: S, surgeonRules: srNone });
+  eq([R.overSoftLimitDays(cNone, S), R.overSoftLimitMonths(cNone, S)], [[], []], "monthlyCap \"none\" (no limit): nothing is over a soft limit");
+  // a soft AND a hard limit: the soft-limit days run from L + 1 to the hard cap; past it is a hard-cap breach (its own wording)
+  const srBoth = clone(SA.seedToSurgeonRules(seed)); srBoth[PHILIP].monthlyCap = { primary: 9, preferred: 7 };
+  const SB = {}; for (let d = 1; d <= 10; d++) SB[dayOf(FEB, d)] = row(PHILIP, KHAN);
+  const cBoth = makeCtx({ schedule: SB, surgeonRules: srBoth });
+  eq(R.overSoftLimitDays(cBoth, SB), [{ day: "2027-02-08", id: PHILIP, month: FEB, count: 8, limit: 7 }, { day: "2027-02-09", id: PHILIP, month: FEB, count: 9, limit: 7 }], "soft 7 + hard 9, ten February primaries: #8 and #9 are soft-limit days; #10 (2/10) is over the hard 9 and is not listed");
+  blocked(R.eligibility(makeCtx({ schedule: Object.assign({}, SB, { "2027-02-10": row(null, KHAN) }), surgeonRules: srBoth }), "2027-02-10", P, PHILIP), "monthly-cap:9", "...the engine words that 10th day as the hard monthly-cap:9");
+  eq(R.overSoftLimitMonths(cBoth, SB), [{ id: PHILIP, month: FEB, count: 10, limit: 7 }], "the month's count (10) is over his soft 7");
+  // a cap that counts East days: his East primary-week days not held as Silvis primary count first (the cap counts them)
+  const srEast = clone(SA.seedToSurgeonRules(seed)); srEast[FIERCE].monthlyCap = { primary: 14, preferred: 8, countsEastDays: true };
+  const SE = { "2026-11-02": row(FIERCE, KHAN), "2026-11-10": row(FIERCE, KHAN), "2026-11-20": row(FIERCE, KHAN) };
+  const cEast = makeCtx({ schedule: SE, surgeonRules: srEast });
+  eq(cEast.per[FIERCE].eastPrimaryDays.size, 7, "Fierce's East primary week 11/9-11/15 (the DERIVED fixture)");
+  eq(R.overSoftLimitDays(cEast, SE), [{ day: "2026-11-20", id: FIERCE, month: "2026-11", count: 9, limit: 8 }], "6 East primary-week days (11/10 is also his Silvis primary, counted once) + 11/2 (#7) + 11/10 (#8) + 11/20 (#9) - only 11/20 is over his soft 8");
+  eq(R.overSoftLimitMonths(cEast, SE), [{ id: FIERCE, month: "2026-11", count: 9, limit: 8 }], "the month's count = the cap's count: 3 Silvis + 6 other East primary-week days");
+  // an outside surgeon (roster type external) carries no cap rule: never listed
+  const xRoster = seed.roster.concat([{ id: "x1", name: "Locum", code: "LOC", active: true, roles: ["surgeon"], type: "external" }]);
+  const SX = {}; for (let d = 1; d <= 9; d++) SX[dayOf("2027-03", d)] = row("x1", KHAN);
+  const cX = makeCtx({ roster: xRoster, schedule: SX });
+  eq([R.overSoftLimitDays(cX, SX), R.overSoftLimitMonths(cX, SX)], [[], []], "an outside surgeon's 9 March primaries are nobody's soft-limit days");
+  // junk never throws
+  eq([R.overSoftLimitDays(null), R.overSoftLimitDays({}), R.overSoftLimitMonths(null, S)], [[], [], []], "no ctx -> nothing");
+  eq(R.overSoftLimitDays(c, { "not-a-day": row(ACTON), "2027-01-15": null }), [], "a junk key / a null row are skipped");
+}
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

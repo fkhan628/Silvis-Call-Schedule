@@ -945,15 +945,21 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   // is the (L+1)th or later primary of its holder's calendar month in date order (the merged month: locked, published and
   // out-of-range days count toward the ordinal), L = his soft limit (capOf(id).preferred - a surgeon without one, Burchett's hard
   // 7 or Fierce's 14, is never listed), as plain { day, id, month, count, limit } in date order. Derived from the schedule.
+  // Prompt 32 step 4 (the ONE helper, rules.overSoftLimitDays, now behind it): restated in full - a day over the holder's
+  // HARD cap as well is a hard-cap breach that keeps its own wording (not listed), and a cap that counts East days counts his
+  // East primary-week days not held as Silvis primary first (no seed member has both a soft limit and either - Fierce's
+  // countsEastDays cap is a hard 14 - so on the seed these two clauses never fire; the rules suite pins them on variants).
   {
     const expOver = [];
     days.forEach((d) => {
       const id = holder(view, d, P);
       if (!id || !SR[id]) return;
-      const L = capOf(id).preferred;
+      const L = capOf(id).preferred, H = capOf(id).primary;
       if (L === null) return;
-      const count = monthDays(monthOf(d)).filter((x) => x <= d && holder(view, x, P) === id).length;
-      if (count > L) expOver.push({ day: d, id, month: monthOf(d), count, limit: L });
+      const mc = SR[id].monthlyCap, countsE = !!(mc && typeof mc === "object" && (mc.countsEastDays === true || mc.countsEastDays === "distinct-days"));
+      const eastBase = countsE && id === FIERCE ? [...FIERCE_EAST_PRIMARY_DAYS].filter((x) => monthOf(x) === monthOf(d) && holder(view, x, P) !== id).length : 0;
+      const count = eastBase + monthDays(monthOf(d)).filter((x) => x <= d && holder(view, x, P) === id).length;
+      if (count > L && (H === null || count <= H)) expOver.push({ day: d, id, month: monthOf(d), count, limit: L });
     });
     ok(Array.isArray(D.overSoftLimit), "diagnostics.overSoftLimit is missing (Prompt 32 step 2): " + JSON.stringify(D.overSoftLimit));
     eq(D.overSoftLimit, expOver, "diagnostics.overSoftLimit = the restated over-soft-limit primary days (Prompt 32 step 2)");
@@ -1855,6 +1861,93 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
+// ---- Prompt 32 step 4 (DESIGN "Generator" 8; Faraz 10/11 decision 5): who takes an unavoidable over-soft-limit day ----
+// "The generator fills them itself (soft penalty), giving the extra day to the eligible surgeon with the lowest weighted
+// load." Synthetic, independent of the seed: June 2026, a pool of a, b, c plus z (poolMember false, the backup filler).
+// Every slot is locked but the PRIMARY of Tue 6/30: c is unavailable for it (a dated row) and z holds its backup, so only a
+// and b can take it. Both carry the group's soft 7 (defaultMonthlyCap { preferred: 7 }) and the same explicit target
+// ({ primary: 7, backup: 3 }: the share term reads the same for both; no makeup), every bare-pool soft weight is 0 - so the
+// existing soft over-preferred-cap:7 (3) applies to BOTH and nothing else tells them apart but the tie-break: W.low x 0.1 x
+// his weighted load this month (P x 1 + B x 0.5, Silvis days), for a candidate at / over his soft limit ONLY, and
+// deterministic - such a candidate's score carries the term instead of the jitter (the rng is still drawn for him, so the
+// stream is unchanged). Restated outcomes:
+//   S1  a 7 P + 4 B (load 9), b 7 P + 2 B (load 8): b takes 6/30 (the lower load), on every seed with the default jitter 1
+//       too; diagnostics.overSoftLimit = [6/30 b #8 / 7].
+//   S1m the loads swapped: a takes it (the term follows the load, not the id order).
+//   S2  both BELOW the limit (5 P each, loads 7 / 6): no term - equal scores, the first id (a) takes it.
+//   S3  no soft limit (no defaultMonthlyCap): no term - the first id (a) takes it.
+//   S4  a WEEKEND unit (Fri 6/26 - Sun 6/28) open instead, c unavailable on it, a (load 9) and b (load 8) both at 7: every
+//       shape costs the same soft over-preferred-cap (three days over, 3 each) and the convex share term prefers a 1 + 2
+//       split of the days over a block; the term counts once per day a shape puts over his limit, so b (the lower load) takes
+//       TWO of the three days and a one - on every seed with the jitter 1 too. S4m: the loads swapped - a takes two.
+// Without the term (the code before step 4) S1 reads a with the jitter 0 and a coin flip per seed with the jitter 1; S4 reads
+// a on two days with the jitter 0 (the first 1 + 2 shape enumerated, the split a Fri + Sun / b Sat) - as it would with one
+// term per member instead of one per over-limit day ("a 1 + b 2" and "a 2 + b 1" would score the same).
+const TB_RUNS = { n: 0 };
+{
+  CUR.range = "Prompt 32 step 4 tie-break fixture"; CUR.seed = "-"; CUR.day = "2026-06-30";
+  const MONTH = "2026-06", D = "2026-06-30";
+  const tbCtx = (o) => {
+    const roster = ["a", "b", "c", "z"].map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase() + id.toUpperCase() + id.toUpperCase(), active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    ["a", "b"].forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31, monthlyTarget: { primary: 7, backup: 3 } }; });
+    surgeonRules.c = { poolMember: true, maxConsecutiveDays: 31, monthlyCap: "none" };
+    surgeonRules.z = { poolMember: false, maxConsecutiveDays: 31, monthlyCap: "none" };
+    const weights = { low: 1, medium: 3, strong: 10, preferred: -1, patternDaily: 0, patternMismatch: 0, backToBackWeekend: 0, backupAfterPrimary: 0, weekendContribution: 0, longRunPerDay: 0, smoothingTolerance: 2 };
+    if (o.jitter !== undefined) weights.jitter = o.jitter;
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, weights };
+    if (o.soft !== false) groupRules.defaultMonthlyCap = { preferred: 7 };
+    const schedule = {}, open = o.open || [D];
+    monthDays(MONTH).forEach((d) => {
+      const n = +d.slice(8, 10);
+      const e = { primary: null, backup: null, primaryLocked: false, backupLocked: true, source: "import", externalCover: null, note: null };
+      if (!open.includes(d)) { e.primary = o.pA.includes(n) ? "a" : o.pB.includes(n) ? "b" : "c"; e.primaryLocked = true; }
+      e.backup = o.bA.includes(n) ? "a" : o.bB.includes(n) ? "b" : "z";
+      schedule[d] = e;
+    });
+    const availabilityRows = open.map((d) => ({ person_id: "c", start_date: d, end_date: d, kind: "unavailable", role: P }));
+    return R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows, schedule, rangeStart: MONTH + "-01", rangeEnd: D });
+  };
+  const SEVEN_A = [1, 5, 9, 13, 17, 21, 25], SEVEN_B = [2, 6, 10, 14, 18, 22, 26];
+  const tbRun = (o, seed) => {
+    const ctxT = tbCtx(o);
+    ok(ctxT.warnings.length === 0, "tie-break fixture: buildContext warnings " + JSON.stringify(ctxT.warnings));
+    CUR.seed = seed;
+    const out = GEN.generate(ctxT, MONTH + "-01", D, { seed, bestOf: 3 });
+    TB_RUNS.n++;
+    eq(out.diagnostics.uncovered, [], "tie-break fixture: the open primary day(s) " + (o.open || [D]).join(", ") + " are filled (a or b)");
+    eq(out.diagnostics.hardViolations, [], "tie-break fixture: no hard violation");
+    return out;
+  };
+  const s1 = { pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const o1 = tbRun(s1, 1);
+  eq(o1.schedule[D].primary, "b", "S1: a (7 P + 4 B = 9) and b (7 P + 2 B = 8) are both at the soft 7 - the lower weighted load (b) takes the over-limit day");
+  eq(o1.diagnostics.overSoftLimit, [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }], "S1: diagnostics.overSoftLimit names b's 6/30 as #8 of 7");
+  ok(o1.diagnostics.softPenalties.some((s) => s.day === D && s.id === "b" && s.reason === "over-preferred-cap:7" && s.weight === 3), "S1: the existing soft over-preferred-cap:7 (3) applies to the taker: " + JSON.stringify(o1.diagnostics.softPenalties.filter((s) => s.day === D)));
+  for (let sd = 1; sd <= 12; sd++) eq(tbRun(Object.assign({}, s1, { jitter: undefined }), sd).schedule[D].primary, "b", "S1 with the default jitter 1, seed " + sd + ": deterministic - b (the lower load) every time, never a coin flip");
+  eq(tbRun({ pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7], bB: [4, 8, 12, 16], jitter: 0 }, 1).schedule[D].primary, "a", "S1m: loads swapped (a 8, b 9) - a takes it");
+  eq(tbRun({ pA: [1, 5, 9, 13, 17], pB: [2, 6, 10, 14, 18], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 }, 1).schedule[D].primary, "a", "S2: both BELOW the soft limit (5 P; loads 7 / 6) - no term, equal scores, the first id (a) takes it");
+  const o3 = tbRun(Object.assign({}, s1, { soft: false }), 1);
+  eq([o3.schedule[D].primary, o3.diagnostics.overSoftLimit], ["a", []], "S3: no soft limit - no term (the first id takes it) and nothing is over a soft limit");
+  // S4 / S4m: a weekend unit - the lower load takes the larger share of the over-limit days
+  CUR.day = "2026-06-26";
+  const WK = ["2026-06-26", "2026-06-27", "2026-06-28"];
+  const s4 = { open: WK, pA: SEVEN_A, pB: [2, 6, 10, 14, 18, 22, 23], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const wkHeld = (out) => WK.map((d) => out.schedule[d].primary);
+  const wkSplit = (held) => [held.filter((x) => x === "a").length, held.filter((x) => x === "b").length];
+  const o4 = tbRun(s4, 1);
+  const h4 = wkHeld(o4);
+  eq(wkSplit(h4), [1, 2], "S4: a (load 9) and b (load 8) both at the soft 7 - b (the lower load) takes two of the weekend's three over-limit days, a one: " + h4.join(","));
+  {
+    const n = { a: 7, b: 7 };
+    const want = WK.map((d, i) => { n[h4[i]]++; return { day: d, id: h4[i], month: MONTH, count: n[h4[i]], limit: 7 }; });
+    eq(o4.diagnostics.overSoftLimit, want, "S4: diagnostics.overSoftLimit = the three weekend days, each its holder's #8 / #9 of 7");
+  }
+  for (let sd = 1; sd <= 6; sd++) eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { jitter: undefined }), sd))), [1, 2], "S4 with the default jitter 1, seed " + sd + ": b takes two, a one - every time");
+  eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1))), [2, 1], "S4m: loads swapped (a 8, b 9) - a takes two, b one");
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
 // ---- WF (9/23): the November 2026 case on the exact pre-publish inputs lives in test/water-fill.test.js ----
 // (its own chain step since the fix stage of the 9/23 review: two bestOf-200 runs, ~2 s, over
 // test/fixtures/water-fill-2026-10-07-to-2027-01-03.json - pinned tallies, 34 differing slots, score).
@@ -2427,7 +2520,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");
