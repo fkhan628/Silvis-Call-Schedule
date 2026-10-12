@@ -923,9 +923,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       IDS.forEach((id) => { const M = I.members[id]; if (!M) return; if (typeof M.primaryTarget === "number") { plP += Math.max(0, M.primaryTarget - M.lockedHeld.primary); haP += Math.max(0, M.lockedHeld.primary - M.primaryTarget); } if (typeof M.backupTarget === "number") { plB += Math.max(0, M.backupTarget - M.lockedHeld.backup); haB += Math.max(0, M.lockedHeld.backup - M.backupTarget); } });
       eq(I.placeableAtTarget, { primary: round1(plP), backup: round1(plB) }, "impliedTargets " + m + " placeableAtTarget = sum of max(0, target - lockedHeld) per role (got " + JSON.stringify(I.placeableAtTarget) + ")");
       eq(I.heldAboveShare, { primary: round1(haP), backup: round1(haB) }, "impliedTargets " + m + " heldAboveShare = sum of max(0, lockedHeld - target) per role (got " + JSON.stringify(I.heldAboveShare) + ")");
-      // pin moved deliberately 10/11: Prompt 32 step 2 - the tolerance is 0.05 per targeted pool member (was 0.05 in all): the
-      // weighted backup targets differ per member, so their round1 errors no longer cancel (each is at most 0.05)
-      ok(I.placeableAtTarget.primary >= primaryOpen - reserved - 0.05 * POOL.length && I.placeableAtTarget.backup >= backupOpen - 0.05 * POOL.length, "impliedTargets " + m + " placeableAtTarget below the pool's open slots (a share is not being redistributed): " + JSON.stringify(I.placeableAtTarget) + " vs open " + (primaryOpen - reserved) + " / " + backupOpen);
+      ok(I.placeableAtTarget.primary >= primaryOpen - reserved - 0.05 && I.placeableAtTarget.backup >= backupOpen - 0.05, "impliedTargets " + m + " placeableAtTarget below the pool's open slots (a share is not being redistributed): " + JSON.stringify(I.placeableAtTarget) + " vs open " + (primaryOpen - reserved) + " / " + backupOpen);
       eq(I.rangeDays, mdaysIn.length, "impliedTargets " + m + " rangeDays = the month's in-range days");
     }
     // K (fix stage): diagnostics.tallies carry the East primary-week days a countsEastDays cap adds
@@ -1924,6 +1922,18 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
       const so = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: 3 }, { id: "x", clipP: 30, clipB: 1, ovP: null, ovB: null }], { primary: 20, backup: 20 }, W12);
       ok(!("a" in so.primary.share) && !("c" in so.backup.share) && !("a" in so.makeup) && !("c" in so.makeup), "genWeightedShares: overridden members stay out of their role's fill and out of the makeup: " + JSON.stringify(so));
       ok(Math.abs(sumOf(so.primary.share) - 18) < 1e-6 && Math.abs(sumOf(so.backup.share) - 17) < 1e-6, "genWeightedShares: an override's number comes off its role's slots (18 P / 17 B left): " + JSON.stringify([sumOf(so.primary.share), sumOf(so.backup.share)]));
+      // DESIGN "Generator" 6, the handling chosen for a PRIMARY-overridden member's backup (review fix 10/11): he stays IN the
+      // weighted backup fill and is weighed at the primary LEVEL (the unclipped members' primary share), never at his own override
+      // number - so his backup share is the backup share at the primary level, exactly what an unclipped member (b) carries, and
+      // the plain equal backup share whenever the primaries are equal (today's plain backup fill). Here x is held at 8.5 after
+      // three rounds, b / c share 9.5 -> level 4.75, W* 8.83 -> a = b = (8.83 - 4.75) / 0.5 = 8.17 (weighed at his override 2 he
+      // would carry 11.4 and b 4.7; in the equal case below 16.3 against 2.3 / 2.3)
+      eq([so.backup.share.a, round1(so.backup.share.a), round1(so.backup.level)], [so.backup.share.b, 8.2, 8.2], "genWeightedShares: the primary-overridden member's backup share is the backup share at the primary level (b's, 8.17), not one weighed at his override 2: " + JSON.stringify(so.backup));
+      ok(Math.abs(so.backup.share.a - so.backup.level) < 1e-6, "genWeightedShares: the primary-overridden member's backup share " + so.backup.share.a + " != the backup share at the primary level " + so.backup.level);
+      // equal primaries (no clip binds): his backup share is exactly the plain equal share - genWaterFill over the same clips, 21 / 3
+      const soe = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: null }], { primary: 20, backup: 21 }, W12);
+      const soePlain = GEN.genWaterFill(["a", "b", "c"].map((id) => ({ id, clip: 30 })), 21);
+      eq([soe.primary.level, soe.backup.share, soe.backup.level], [9, soePlain.share, soePlain.level], "genWeightedShares: primary override 2, the others at 9 -> his backup share is the plain equal share 7 (today's handling): " + JSON.stringify(soe));
       // (d) deterministic and order-free: the same call twice is identical, a reversed member list gives the same shares
       eq(GEN.genWeightedShares(fmX(30), { primary: 20, backup: 20 }, W12), su, "genWeightedShares: deterministic (same input, same output)");
       const rev = GEN.genWeightedShares(fmX(30).slice().reverse(), { primary: 20, backup: 20 }, W12);
