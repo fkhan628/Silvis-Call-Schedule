@@ -117,12 +117,18 @@ export const contrastTable = (mod) => {
       add(theme, `painter day text on the ${k} row`, T.text, PR[k], "text");
       add(theme, `painter muted text on the ${k} row`, T.muted, PR[k], "text");
     }
+    // 10/4: the offer painter's "OPEN" (T.paintOpen, 10.5 px / 800 - the text class) on every day-row background it can sit on:
+    // a free row (T.surface), the weekend tint (T.weekend), the range-start and drafted rows, and the blocked row's tint (that
+    // row is a disabled control at 0.6 opacity, as for every text on it). T.open's dark #F06060 read 4.12:1 on the drafted and
+    // 3.62:1 on the range-start row. The vacation painter shows no OPEN (its only T.open is "cancel start", on the panel).
+    add(theme, "painter OPEN red on a free row (card)", T.paintOpen, T.surface, "text");
+    add(theme, "painter OPEN red on the weekend tint", T.paintOpen, T.weekend, "text");
+    for (const k of ["pending", "draft", "blocked"]) add(theme, `painter OPEN red on the ${k} row${k === "blocked" ? " (its tint)" : ""}`, T.paintOpen, PR[k], "text");
     // The brushes (WCAG 1.4.11): each chip's outline - idle and armed alike - against the header panel (dark mode: dkBorder),
     // the armed chip's white label on both stops of its gradient (dark primary: dkGradient), and the drafted pill's text on its
     // own tint (a pill keeps its tint in both themes - data-pill keeps the dark sheet off the Primary pill's navy text).
     // Known exception (review 10/3): the armed labels are 13 px / 800, below the 14 px the label class assumes, so the backup
     // (3.22) and either (3.39) gradient ends pass here only as labels; the look predates fix/painter-dark-mode - a follow-up.
-    // Also not measured yet: T.open ("OPEN", 10.5 px / 800) on the dark drafted / range-start rows - 4.12 / 3.62:1, a known gap.
     for (const [k, b] of Object.entries(m.OFFER_BRUSH || {})) {
       add(theme, `brush ${k} outline on the panel (idle+armed)`, theme === "dark" ? (b.dkBorder || b.border) : b.border, T.surface, "label");
       const grad = theme === "dark" && b.dkGradient ? b.dkGradient : b.gradient;

@@ -580,8 +580,11 @@ const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status 
 // steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
 let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
 let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
-let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s - step 8c)
+let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s, or later while appSlowHold holds it - step 8c)
 let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
+// 10/4 (P29 8b/8c timing windows): step 8c's own condition for the "fail500slow" answer - () => Promise; the 500 is held until it
+// settles AND at least 1.5 s have passed (null: the 1.5 s alone)
+let appSlowHold = null;
 const appServed = [];   // { path, method, status, sub }
 const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
 let appColumnFixture = false; // the users fixture rows carry is_app (Setup > Users offers "app")
@@ -1529,11 +1532,13 @@ const appRoute = (route, req, url, method, json) => {
   }
   if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
   // ship review 10/2: the same 500 held 1.5 s (recorded on arrival) - the load's read is still out when a Realtime SUBSCRIBED
-  // refreshAll starts its own (step 8c)
+  // refreshAll starts its own (step 8c). 10/4: and held on until step 8c's appSlowHold settles (the SUBSCRIBED refreshAll was
+  // seen) - the 1.5 s alone was a race the join lost on a busy PC
   if (appDaysMode === "fail500slow") {
     appServed.push({ path: url.pathname, method, status: 500, sub, at: Date.now() });
     appForcedLines.push({ path: url.pathname, status: 500 });
-    return new Promise(r => setTimeout(r, 1500)).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
+    const hold = appSlowHold;
+    return Promise.all([new Promise(r => setTimeout(r, 1500)), hold ? hold() : null]).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
   }
   if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
   const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
@@ -12065,6 +12070,21 @@ try {
       try { await settleA2(); await a2.close(); } catch (e) {}
     } catch (e) { fail(`${P} 8 (absent): ` + errLine(e)); }
     appDaysMode = "ok";
+    // 10/4 (P29 8b/8c timing windows): the load's toast of steps 8b / 8c is waited for by its own sentence, ceiling 30 s - not the
+    // first toast up within 8 / 10 s, read at a fixed moment after. "Synced" shows once the MOUNT run has loaded; the toast comes
+    // when the sign-in RE-RUN's batch has settled (eleven reads, some passed through to the live project), which on a busy PC
+    // took longer than 8 s. The toast's text and the header's pill are taken in the same poll that saw the sentence (one
+    // showToast sets both), so a toast that later expires (8 s) cannot empty the reading. On the ceiling: what is there now.
+    const p29LoadToast = async (pg, want) => {
+      const seen = await pg.waitForFunction((w) => {
+        const t = document.querySelector("[data-testid=toast]");
+        if (!t || !t.textContent.includes(w)) return false;
+        const pill = document.querySelector("[data-testid=hdr-errors]");
+        return { toast: t.textContent.trim(), pill: pill ? pill.textContent.trim() : "" };
+      }, want, { timeout: 30000 }).then(h => h.jsonValue()).catch(() => null);
+      if (seen) return seen;
+      return { toast: await pg.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => ""), pill: await pg.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "") };
+    };
     // ---- 8b. The merge with main (10/2, Do first 4): the APP-day read of a signed-in load fails (500) - it is said in the load's
     //      ONE toast (and so on Recent errors), on the grid's legend and in the day summary, never as "no APP days"; ONE read for the
     //      sign-in (the reset effect's owed read was paid by the load's batch) ----
@@ -12080,20 +12100,23 @@ try {
         await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
         await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rp, "P29 viewer page (APP read 500)");
-        await rp.waitForSelector("[data-testid=toast]", { timeout: 8000 }).catch(() => {});
-        const toastTxt = await rp.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
-        const errPill = await rp.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
+        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const { toast: toastTxt, pill: errPill } = await p29LoadToast(rp, want);
+        // 10/4: the reads are counted once the page's reads have settled (no REST read out for 500 ms) - not at the toast's
+        // moment, where a read whose route callback had not run yet would be missed
+        await settleR();
         const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
         await showM(rp);
+        await rp.waitForSelector("[data-testid=legend-app-failed]", { timeout: 15000 }).catch(() => {}); // 10/4: on the element, not the moment after showM
         const legend = await rp.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         const gl = await gridApp(rp);
         await rp.click(`[data-day="${D10}"]`);
-        await rp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
-        await rp.waitForTimeout(200);
+        await rp.waitForSelector("[data-testid=day-editor]", { timeout: 20000 });
+        // 10/4: the summary line itself is waited for (ceiling 15 s) - it was read 200 ms after the editor showed
+        await rp.waitForSelector("[data-testid=editor-app-summary-failed]", { timeout: 15000 }).catch(() => {});
         const sum = await rp.$eval("[data-testid=editor-app-summary-failed]", el => el.textContent.trim()).catch(() => "");
         await rp.keyboard.press("Escape");
-        await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
-        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 10000 }).catch(() => {});
         if (!toastTxt.includes(want)) fail(`${P} 8b: the load's toast should say '${want}', got '${toastTxt}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8b: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8b: the sign-in should read the APP days ONCE (the load's batch pays the reset effect's owed read), got ${reads}`);
@@ -12109,36 +12132,58 @@ try {
     }
     // ---- 8c. Ship review 10/2: 8b with Realtime WORKING (production's case - 8b silences the socket). The re-run's channel answers
     //      SUBSCRIBED and its refreshAll starts a quiet APP read while the load's read is still out (the harness holds the 500 for
-    //      1.5 s). That quiet read used to overtake the load's read and drop its sentence: no toast, nothing on Recent errors, and a
-    //      second read. Now it joins the read out: ONE read, the sentence in the load's toast and on Recent errors ----
+    //      1.5 s at least, and - 10/4 - until that refreshAll was seen). That quiet read used to overtake the load's read and drop
+    //      its sentence: no toast, nothing on Recent errors, and a second read. Now it joins the read out: ONE read, the sentence in
+    //      the load's toast and on Recent errors ----
     {
       appDaysMode = "fail500slow";
       const served0 = appServed.length;
       const rq = await context.newPage();
       watchPage(rq, "p29-viewer-appfail-rt");
       const settleQ = restReadsSettled(rq);
+      let holdCeiling = false;
       try {
         await rq.setViewportSize({ width: 390, height: 844 });
         await rq.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VIEWER_JWT);
         const rtq = await answerRealtimeJoinsOnly(rq);
+        // 10/4 (timing): the race is set up on what the page does, not on 1.5 s. The re-run's SUBSCRIBED refreshAll is seen as
+        // its own-profile read (refreshOwnProfile: GET user_profiles?id=eq.<viewer>, which the load batch never sends) made after
+        // the second join; refreshAll calls loadAppDays(false) in that same synchronous pass, so once it is seen the quiet read has
+        // joined the load's read (or, the bug, started its own). The load's 500 is held until then (and 1.5 s at least), ceiling
+        // 20 s - inside the app's 30 s join window. With 1.5 s alone a join that a busy PC answered after the 500 had landed let
+        // refreshAll start a read of its own - legitimate then - and the step counted two reads; or the race went unexercised.
+        let rerunProfileReads = 0;
+        rq.on("request", (r) => {
+          if (rtq.joins < 2 || r.method() !== "GET") return;
+          let u = null; try { u = new URL(r.url()); } catch (e) { return; }
+          if (u.hostname === SUPABASE_HOST && u.pathname === "/rest/v1/user_profiles" && u.searchParams.get("id") === "eq." + VIEWER_UID) rerunProfileReads++;
+        });
+        appSlowHold = async () => { if (!(await waitFor(() => rtq.joins >= 2 && rerunProfileReads > 0, 20000, 50))) holdCeiling = true; };
         await rq.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rq, "P29 viewer page (APP read 500, Realtime joins answered)");
-        await rq.waitForSelector("[data-testid=toast]", { timeout: 10000 }).catch(() => {});
-        await rq.waitForTimeout(2500); // a second read (the bug) would have been served by now - recorded on arrival anyway
-        const toastTxt = await rq.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
-        const errPill = await rq.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
-        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
-        await showM(rq);
-        const legend = await rq.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const { toast: toastTxt, pill: errPill } = await p29LoadToast(rq, want);
+        await waitFor(() => rtq.joins >= 2, 15000); // 10/4: the join count is read once the second join came, not at a fixed moment
+        // 10/4: replaces the fixed 2.5 s - the reads are counted once the page's REST reads have settled (none out for 500 ms). A
+        // second APP read is held 1.5 s at least, so the page cannot settle while one is out, and it is recorded on arrival.
+        await settleQ();
+        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
+        // what the 2.5 s-later reading guarded: no other toast replaced the load's meanwhile (none showing - it expired - is fine)
+        const toastLater = await rq.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+        await showM(rq);
+        await rq.waitForSelector("[data-testid=legend-app-failed]", { timeout: 15000 }).catch(() => {}); // 10/4: on the element
+        const legend = await rq.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         if (rtq.joins < 2) fail(`${P} 8c: the page's Realtime channel should have joined on the mount run and on the sign-in re-run (SUBSCRIBED -> refreshAll), got ${rtq.joins} join(s) - the step does not exercise the race`);
+        else if (holdCeiling) fail(`${P} 8c: the load's APP read was held 20 s and the sign-in re-run's SUBSCRIBED refreshAll was not seen meanwhile (${rtq.joins} joins, ${rerunProfileReads} own-profile read(s) after the second) - the step does not exercise the race`);
         else if (!toastTxt.includes(want)) fail(`${P} 8c: with Realtime answering, the load's toast should still say '${want}', got '${toastTxt}' (${reads} app_call_days read(s))`);
+        else if (toastLater && !toastLater.includes(want)) fail(`${P} 8c: another toast replaced the load's while the sign-in's reads settled: '${toastLater}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8c: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8c: ONE APP-day read for the sign-in (the SUBSCRIBED refreshAll joins the load's read out), got ${reads}`);
         else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8c: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
         else ok(`${P} 8c: Realtime joined (${rtq.joins} joins, SUBSCRIBED -> refreshAll) - ONE app_call_days read, '${want}' in the load's toast and on Recent errors ('${errPill}'), the legend says it`);
       } catch (e) { fail(`${P} 8c (a failed APP-day read with Realtime up): ` + errLine(e)); try { await rq.screenshot({ path: path.join(OUT, "failure-p29-8c.png"), fullPage: true }); } catch (e2) {} }
       try { await settleQ(); await rq.close(); } catch (e) {}
+      appSlowHold = null;
       appDaysMode = "ok";
       await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
     }
@@ -12152,7 +12197,7 @@ try {
     const emailPosts = p29Writes.filter(w => /^\/functions\/v1\//.test(w.path));
     if (clientAudit.length || notifPosts.length || emailPosts.length) fail(`${P} 9: the client wrote an audit row (${clientAudit.length}), a notification (${notifPosts.length}) or an e-mail call (${emailPosts.length}) during the APP steps`);
     else ok(`${P} 9: no client audit row, no notification row, no e-mail call during the APP steps (the save function writes the audit row: ${appAudit.length - audit0} recorded)`);
-    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appColumnFixture = false;
+    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appSlowHold = null; appColumnFixture = false;
     if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} }
     if (A) { try { await A.ctx.close(); } catch (e) {} }
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);

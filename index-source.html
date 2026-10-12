@@ -9314,7 +9314,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   // would otherwise be repainted #C9D6E8 by the dark sheet's navy-text rule, 1.26:1).
   const bg = T.bg, panelBg = T.surface, border = T.border, text = T.text, muted = T.muted;
   const PR = PAINT_ROWS[dk ? "dark" : "light"];
-  const openRed = T.open;
+  const openRed = T.paintOpen; // 10/4: "OPEN" on the day rows - T.open's dark red read 4.12 / 3.62:1 on the drafted / range-start rows
   const pillFor = (b) => { const c = OFFER_BRUSH[b] || OFFER_BRUSH.clear; return { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 6, fontSize: 12.5, fontWeight: 800, background: c.tint, color: c.text, border: `1px solid ${c.border}` }; };
   const holderText = (v, ds) => v ? holderLabel(v, nameOf) : (ds >= today ? "OPEN" : "-");
   const monthLabel = MO[ym.m] + " " + ym.y;
