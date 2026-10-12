@@ -2030,6 +2030,8 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   // the untapered reading was the product).
   let overCtl = 0, fewer = 0;
   const lines = [];
+  const genP = (out) => NOV.filter((d) => out.schedule[d].primary === ACTON && !out.schedule[d].primaryLocked);
+  const ctlGenPNone = {}; // seed -> the uncapped ("none") untapered control's generated primaries of Acton (the soft-7 block's contrast)
   [1, 2, 3].forEach((sd) => {
     CUR.range = "P2 review: Acton offers every November day"; CUR.seed = sd; CUR.day = "-";
     const ctxA = R.buildContext(mkInputS(seedNoCap, { periods: [FIXP.period], offers: allOffers }));
@@ -2037,6 +2039,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
     eq([R.monthlyCapFor(ctxA, ACTON).primary, R.monthlyCapFor(ctxA, ACTON).preferred], [null, null], "fixture: Acton has no cap or soft limit in the taper / control pair (\"none\")");
     const outA = GEN.generate(ctxA, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
     const outC = GEN.generate(R.buildContext(mkInputS(seedCtl, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+    ctlGenPNone[sd] = genP(outC);
     eq(outA.diagnostics.hardViolations, [], "all-days offers: no hard violation");
     eq(outA.diagnostics.uncovered.filter((u) => u.role === P).length, 0, "all-days offers: no open primary");
     const mm = outA.diagnostics.impliedTargets.months["2026-11"].members, m = mm[ACTON];
@@ -2074,17 +2077,24 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   ok(fewer > 0, "the taper places Acton below the control in at least one role and seed (" + fewer + " of 6 cells) - it is the taper that holds him, not the seed");
   // Prompt 32 (10/11): under the seed's own reading (Acton on the group's soft 7) the soft limit holds him in November with
   // or without the taper - the untapered control places no primary of his beyond his 8 locked days, and neither run gives
-  // him a generated primary at all
+  // him a generated primary at all. Run on seeds 1-3 like the taper loop: seeds 2 and 3 are the ones where the uncapped
+  // control (Acton at "none" above - what the pre-32 code made of his null) places 11/30, so the [[], []] pin binds there;
+  // on seed 1 the uncapped control gives him no generated primary either, so seed 1 alone proves nothing (review 10/11).
   {
-    CUR.range = "P2 review: Acton offers every November day, the seed's soft 7"; CUR.seed = 1; CUR.day = "-";
+    CUR.range = "P2 review: Acton offers every November day, the seed's soft 7"; CUR.seed = "-"; CUR.day = "-";
+    eq([1, 2, 3].map((sd) => ctlGenPNone[sd]), [[], ["2026-11-30"], ["2026-11-30"]], "contrast: the uncapped (\"none\") untapered control gives Acton a generated November primary (11/30) on seeds 2 and 3, none on seed 1");
     const seedCtl7 = JSON.parse(JSON.stringify(seed)); seedCtl7.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
     const ctx7 = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    const ctxC7 = R.buildContext(mkInputS(seedCtl7, { periods: [FIXP.period], offers: allOffers }));
     eq([R.monthlyCapFor(ctx7, ACTON).primary, R.monthlyCapFor(ctx7, ACTON).preferred], [null, 7], "seed: Acton on the group's soft 7 (Prompt 32)");
-    const out7 = GEN.generate(ctx7, "2026-11-02", "2026-11-30", { seed: 1, bestOf: 2 });
-    const outC7 = GEN.generate(R.buildContext(mkInputS(seedCtl7, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: 1, bestOf: 2 });
-    const genP = (out) => NOV.filter((d) => out.schedule[d].primary === ACTON && !out.schedule[d].primaryLocked);
-    eq([genP(out7), genP(outC7)], [[], []], "Prompt 32: on the seed neither the taper nor the untapered control gives Acton a generated November primary (his 8 locks are over the soft 7)");
-    eq(out7.diagnostics.hardViolations, [], "Prompt 32: the soft 7 makes no hard violation");
+    [1, 2, 3].forEach((sd) => {
+      CUR.seed = sd;
+      const out7 = GEN.generate(ctx7, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+      const outC7 = GEN.generate(ctxC7, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+      eq([genP(out7), genP(outC7)], [[], []], "Prompt 32: on the seed neither the taper nor the untapered control gives Acton a generated November primary (his 8 locks are over the soft 7; the uncapped control gives " + JSON.stringify(ctlGenPNone[sd]) + ")");
+      eq(out7.diagnostics.hardViolations, [], "Prompt 32: the soft 7 makes no hard violation");
+    });
+    CUR.seed = "-";
   }
   // (2) holiday-unit unplaced reason
   CUR.range = "P2 review: Christmas unit 2026-12-21..2026-12-27"; CUR.seed = 1; CUR.day = "2026-12-25";
