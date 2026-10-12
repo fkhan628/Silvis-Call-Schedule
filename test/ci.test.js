@@ -11,7 +11,7 @@
 // file the page loads and the build reads is in it; every tracked file outside
 // it is a known non-runtime path), pins test.yml (section 2b), pins the
 // offline switch on the exports step, pins the overridable wall-clock gates
-// (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js),
+// (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js, test/painting.test.js),
 // and pins the docs statements that the 2026-09-23 whole-branch review found
 // stale.
 //
@@ -324,6 +324,12 @@ const wfSrc = read("test/water-fill.test.js");
 ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(wfSrc), "test/water-fill.test.js has no SILVIS_GEN_BUDGET_MS override for its wall-clock budget");
 ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*6000\b/.test(wfSrc), "test/water-fill.test.js wall-clock default must be 6000 ms (the CI gate)");
 ok(/ok\(total <= BUDGET_MS/.test(wfSrc), "test/water-fill.test.js budget must stay a failing assertion (`ok(total <= BUDGET_MS ...)`), never a warning");
+// The painting suite (Prompt 32 step 5, 10/12: its own step for the same reason) rides it too: default 4000 ms, a
+// failing `ok(total <= BUDGET_MS ...)`.
+const ptSrc = read("test/painting.test.js");
+ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(ptSrc), "test/painting.test.js has no SILVIS_GEN_BUDGET_MS override for its wall-clock budget");
+ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*4000\b/.test(ptSrc), "test/painting.test.js wall-clock default must be 4000 ms (the CI gate)");
+ok(/ok\(total <= BUDGET_MS/.test(ptSrc), "test/painting.test.js budget must stay a failing assertion (`ok(total <= BUDGET_MS ...)`), never a warning");
 flush("rules wall-clock gate");
 
 // ---- 5. docs statements the 2026-09-23 review found stale ------------------
