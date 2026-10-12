@@ -1880,9 +1880,20 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 //       shape costs the same soft over-preferred-cap (three days over, 3 each) and the convex share term prefers a 1 + 2
 //       split of the days over a block; the term counts once per day a shape puts over his limit, so b (the lower load) takes
 //       TWO of the three days and a one - on every seed with the jitter 1 too. S4m: the loads swapped - a takes two.
+//   S5  a HOLIDAY unit (Mon 6/29 - Tue 6/30, minor) open instead, c unavailable on it: the unit has one holder, so both its
+//       days go over his limit - b (load 8) holds it over a (load 9), with the jitter 0 and 1 on every seed (genFillHoliday's
+//       term); S5m: the loads swapped - a holds it.
+//   S6  REPAIR only (genBestFor's term): 6/30's backup is open too; a and b cannot take it, z cannot take the day - the main
+//       pass gives the primary to c and leaves the backup open; the repair's swap moves c to the backup and refills the primary
+//       through genBestFor (no jitter): b (load 8) over a (load 9) on every seed, jitter 0 and 1; S6m: the loads swapped - a.
+//   S7  a cap that counts East days (countsEastDays + the soft 7): a placement on one of his East primary-week days adds no
+//       distinct day - the term counts the placement's days out of the East base (eligibility's monthPrimary and
+//       rules.overSoftLimitDays count distinct days); S7b / S7bm: the East base still counts his other East day.
 // Without the term (the code before step 4) S1 reads a with the jitter 0 and a coin flip per seed with the jitter 1; S4 reads
 // a on two days with the jitter 0 (the first 1 + 2 shape enumerated, the split a Fri + Sun / b Sat) - as it would with one
-// term per member instead of one per over-limit day ("a 1 + b 2" and "a 2 + b 1" would score the same).
+// term per member instead of one per over-limit day ("a 1 + b 2" and "a 2 + b 1" would score the same). Without the holiday
+// unit's term S5 reads a,a (jitter 0 and seeds 1-2 with the jitter 1); without genBestFor's term S6 reads a/c on every seed;
+// with the placement's East day counted twice (the code before the step 4 minors) S7 reads b on every seed.
 const TB_RUNS = { n: 0 };
 {
   CUR.range = "Prompt 32 step 4 tie-break fixture"; CUR.seed = "-"; CUR.day = "2026-06-30";
@@ -1891,22 +1902,29 @@ const TB_RUNS = { n: 0 };
     const roster = ["a", "b", "c", "z"].map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase() + id.toUpperCase() + id.toUpperCase(), active: true, roles: ["surgeon"] }));
     const surgeonRules = {};
     ["a", "b"].forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31, monthlyTarget: { primary: 7, backup: 3 } }; });
+    if (o.aTarget) surgeonRules.a.monthlyTarget = o.aTarget;
+    // S7: a's soft 7 counts his East PRIMARY-week days (countsEastDays); deriveFrom after the week, so the days count toward
+    // the cap but are not derived Silvis backup days (no derived lock - a Silvis primary placement on one stays possible)
+    if (o.eastA) { surgeonRules.a.monthlyCap = { preferred: 7, countsEastDays: true }; surgeonRules.a.eastFeed = { deriveFrom: "2026-07-06" }; }
     surgeonRules.c = { poolMember: true, maxConsecutiveDays: 31, monthlyCap: "none" };
     surgeonRules.z = { poolMember: false, maxConsecutiveDays: 31, monthlyCap: "none" };
     const weights = { low: 1, medium: 3, strong: 10, preferred: -1, patternDaily: 0, patternMismatch: 0, backToBackWeekend: 0, backupAfterPrimary: 0, weekendContribution: 0, longRunPerDay: 0, smoothingTolerance: 2 };
     if (o.jitter !== undefined) weights.jitter = o.jitter;
     const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, weights };
     if (o.soft !== false) groupRules.defaultMonthlyCap = { preferred: 7 };
-    const schedule = {}, open = o.open || [D];
+    const schedule = {}, open = o.open || [D], openB = o.openB || [];
     monthDays(MONTH).forEach((d) => {
       const n = +d.slice(8, 10);
       const e = { primary: null, backup: null, primaryLocked: false, backupLocked: true, source: "import", externalCover: null, note: null };
       if (!open.includes(d)) { e.primary = o.pA.includes(n) ? "a" : o.pB.includes(n) ? "b" : "c"; e.primaryLocked = true; }
-      e.backup = o.bA.includes(n) ? "a" : o.bB.includes(n) ? "b" : "z";
+      if (openB.includes(d)) e.backupLocked = false; // S6: an open backup slot
+      else e.backup = o.bA.includes(n) ? "a" : o.bB.includes(n) ? "b" : "z";
       schedule[d] = e;
     });
-    const availabilityRows = open.map((d) => ({ person_id: "c", start_date: d, end_date: d, kind: "unavailable", role: P }));
-    return R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows, schedule, rangeStart: MONTH + "-01", rangeEnd: D });
+    const availabilityRows = o.avail || open.map((d) => ({ person_id: "c", start_date: d, end_date: d, kind: "unavailable", role: P }));
+    const holidays = { units: o.holiday ? { "2026": [o.holiday] } : {} };
+    const eastDerived = o.eastA ? [{ surgeonId: "a", weekMonday: "2026-06-29", silvisRole: B }] : [];
+    return R.buildContext({ roster, surgeonRules, groupRules, holidays, timeOffRows: [], availabilityRows, schedule, eastDerived, rangeStart: MONTH + "-01", rangeEnd: D });
   };
   const SEVEN_A = [1, 5, 9, 13, 17, 21, 25], SEVEN_B = [2, 6, 10, 14, 18, 22, 26];
   const tbRun = (o, seed) => {
@@ -1945,6 +1963,55 @@ const TB_RUNS = { n: 0 };
   }
   for (let sd = 1; sd <= 6; sd++) eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { jitter: undefined }), sd))), [1, 2], "S4 with the default jitter 1, seed " + sd + ": b takes two, a one - every time");
   eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1))), [2, 1], "S4m: loads swapped (a 8, b 9) - a takes two, b one");
+  // S5 / S5m: a HOLIDAY unit (genFillHoliday's own tie term) - the unit's one holder takes both over-limit days
+  CUR.day = "2026-06-29";
+  const HU = ["2026-06-29", "2026-06-30"];
+  const s5 = { open: HU, holiday: { name: "Fixture Day", tier: "minor", days: HU }, pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const huHeld = (out) => HU.map((d) => out.schedule[d].primary).join(",");
+  const o5 = tbRun(s5, 1);
+  eq(huHeld(o5), "b,b", "S5: a (load 9) and b (load 8) both at the soft 7 - b (the lower load) holds the holiday unit (both its days over his limit)");
+  eq(o5.diagnostics.overSoftLimit, [{ day: HU[0], id: "b", month: MONTH, count: 8, limit: 7 }, { day: HU[1], id: "b", month: MONTH, count: 9, limit: 7 }], "S5: diagnostics.overSoftLimit = b's 6/29 #8 and 6/30 #9 of 7");
+  for (let sd = 1; sd <= 6; sd++) eq(huHeld(tbRun(Object.assign({}, s5, { jitter: undefined }), sd)), "b,b", "S5 with the default jitter 1, seed " + sd + ": b (the lower load) holds the unit every time");
+  eq(huHeld(tbRun(Object.assign({}, s5, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1)), "a,a", "S5m: loads swapped (a 8, b 9) - a holds the unit");
+  // S6 / S6m: REPAIR only (genBestFor's term). 6/30's primary AND backup are open; a and b are unavailable for its backup and z
+  // for the whole day, so the main pass gives the primary to c (no soft limit: a and b carry over-preferred-cap:7) and the
+  // backup is left open (c holds the other role). The repair's swap moves c to the backup and refills the primary through
+  // genBestFor (no jitter): a and b, both at the soft 7 - the lower weighted load takes it. The backup = c proves the swap ran.
+  CUR.day = D;
+  const s6 = {
+    openB: [D], pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0,
+    avail: [{ person_id: "a", start_date: D, end_date: D, kind: "unavailable", role: B }, { person_id: "b", start_date: D, end_date: D, kind: "unavailable", role: B }, { person_id: "z", start_date: D, end_date: D, kind: "unavailable", role: "any" }]
+  };
+  const pb = (out) => out.schedule[D].primary + "/" + out.schedule[D].backup;
+  const o6 = tbRun(s6, 1);
+  eq(pb(o6), "b/c", "S6: the repair's swap - c to the backup, the primary to b (load 8) over a (load 9), both at the soft 7");
+  eq(o6.diagnostics.overSoftLimit, [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }], "S6: diagnostics.overSoftLimit names b's 6/30 as #8 of 7");
+  for (let sd = 1; sd <= 6; sd++) {
+    eq(pb(tbRun(s6, sd)), "b/c", "S6 with the jitter 0, seed " + sd + ": b takes the repaired primary");
+    eq(pb(tbRun(Object.assign({}, s6, { jitter: undefined }), sd)), "b/c", "S6 with the default jitter 1, seed " + sd + ": b takes the repaired primary every time");
+  }
+  eq(pb(tbRun(Object.assign({}, s6, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1)), "a/c", "S6m: loads swapped (a 8, b 9) - a takes the repaired primary");
+  // S7 / S7b / S7bm: a cap that COUNTS East days (countsEastDays) - his East primary-week days 6/29 and 6/30 count toward his
+  // soft 7 as DISTINCT days (eligibility's monthPrimary, rules.overSoftLimitDays): a placement ON one of them adds no day.
+  //   S7  a 5 Silvis P + East 6/29 / 6/30 = 7 distinct; b 5 P. Taking 6/30 leaves a at 7 (not over) and b at 6: no term for
+  //       either - equal scores, the first id (a) takes it, nothing over. (Counting 6/30 twice - East base + placement - read
+  //       a at 8, gave him the term and handed the day to b.)
+  //   S7b a 6 Silvis P + East 6/29 / 6/30 = 8 distinct, target 6; b 7 P, target 7: both over at 6/30, the East base still
+  //       counts 6/29 (a's 6/30 is his #8) - the lower load (b 8 vs a 9) takes it; S7bm loads swapped - a takes it.
+  {
+    const s7 = { eastA: true, pA: [1, 5, 9, 13, 17], pB: [2, 6, 10, 14, 18], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+    const cE = tbCtx(s7), aP = cE.per.a;
+    eq([aP.countsEastDays, aP.capPreferred, aP.capPrimary, [...aP.eastPrimaryDays].filter((d) => d.slice(0, 7) === MONTH), Object.keys(aP.derived)], [true, 7, null, ["2026-06-29", "2026-06-30"], []], "S7 fixture: a's soft 7 counts his East primary days 6/29 / 6/30 (none derived)");
+    for (let sd = 1; sd <= 3; sd++) {
+      const o7 = tbRun(s7, sd);
+      eq([o7.schedule[D].primary, o7.diagnostics.overSoftLimit, o7.diagnostics.softPenalties.filter((s) => s.day === D)], ["a", [], []], "S7 seed " + sd + ": 6/30 is an East day of a's - his 7th distinct day, not over: no term, the first id (a) takes it");
+    }
+    const s7b = { eastA: true, aTarget: { primary: 6, backup: 3 }, pA: [1, 5, 9, 13, 17, 21], pB: SEVEN_B, bA: [3, 7, 11, 15, 19, 23], bB: [4, 8], jitter: 0 };
+    const o7b = tbRun(s7b, 1);
+    eq([o7b.schedule[D].primary, o7b.diagnostics.overSoftLimit], ["b", [{ day: "2026-06-21", id: "a", month: MONTH, count: 8, limit: 7 }, { day: D, id: "b", month: MONTH, count: 8, limit: 7 }]], "S7b: a (6 P + East 6/29 + 6/30 = 8, load 9) and b (7 P, load 8) both over at 6/30 - b takes it");
+    const o7bm = tbRun(Object.assign({}, s7b, { bA: [3, 7], bB: [4, 8, 12, 16, 20, 24] }), 1);
+    eq([o7bm.schedule[D].primary, o7bm.diagnostics.overSoftLimit], ["a", [{ day: D, id: "a", month: MONTH, count: 8, limit: 7 }]], "S7bm: loads swapped (a 7, b 10) - a takes 6/30, his #8 (6/29 still counts as an East day)");
+  }
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 

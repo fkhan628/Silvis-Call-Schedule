@@ -429,10 +429,13 @@ function genTargetDeltaForDays(G, S, id, days, role) {
 // apply (a backup placement, no soft limit, or he stays within it): the scorer keeps its jitter as before, so a run with no
 // soft limit anywhere is byte-identical. The score structure is otherwise unchanged (no new score part).
 var GEN_SOFT_LIMIT_TIE = 0.1;
-function genSoftLimitEastBase(G, P, id, month) {
+// A countsEastDays cap's East primary-week days of `month` he does not hold as Silvis primary - LESS the placement's own days
+// (`days`): the count is of DISTINCT days, as eligibility's monthPrimary and rules.js rdOverSoftEastBase count it, so a
+// placement on one of his East days adds no day (the placement's days are counted once, in perMonth below).
+function genSoftLimitEastBase(G, P, id, month, days) {
   if (!P.countsEastDays || !P.eastPrimaryDays) return 0;
   var W = G.ctx.schedule, b = 0;
-  P.eastPrimaryDays.forEach(function (d) { if (genMonthOf(d) === month) { var e = W[d]; if (!(e && e.primary === id)) b++; } });
+  P.eastPrimaryDays.forEach(function (d) { if (genMonthOf(d) === month && days.indexOf(d) < 0) { var e = W[d]; if (!(e && e.primary === id)) b++; } });
   return b;
 }
 function genSoftLimitTie(G, S, id, days, role) {
@@ -443,7 +446,7 @@ function genSoftLimitTie(G, S, id, days, role) {
   for (var i = 0; i < days.length; i++) { var m = genMonthOf(days[i]); if (!perMonth[m]) { perMonth[m] = 0; months.push(m); } perMonth[m]++; }
   for (var k = 0; k < months.length; k++) {
     var month = months[k], cp = genMonthCount(G, S, id, month, "primary");
-    var after = cp + genSoftLimitEastBase(G, P, id, month) + perMonth[month];
+    var after = cp + genSoftLimitEastBase(G, P, id, month, days) + perMonth[month];
     if (after <= P.capPreferred) continue;
     var over = Math.min(perMonth[month], after - P.capPreferred); // the placement's days of this month past his limit (>= 1)
     var load = G.shiftWeights.primary * cp + G.shiftWeights.backup * genMonthCount(G, S, id, month, "backup");

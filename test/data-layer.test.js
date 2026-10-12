@@ -12829,7 +12829,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const buildContext = vm.runInContext("buildContext", box);
       const css = vm.runInContext("css", box);
       const render = (o) => {
-        states = [o.mode || "month"]; // useState order: mode, year, month0, withPreview (year / month from today)
+        states = [o.mode || "month", o.year, o.month0]; // useState order: mode, year, month0, withPreview (year / month from today unless given)
         const ctx = o.noCtx ? null : buildContext({ roster: ROSTER, surgeonRules: {}, groupRules: o.groupRules || {}, schedule: SCHED, today: "2026-11-15" });
         return TotalsCard({
           css, dk: false, roster: ROSTER, schedule: SCHED, ctx, surgeonRules: {}, preview: o.preview === undefined ? PREVIEW : o.preview, today: "2026-11-15",
@@ -13000,6 +13000,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // 8 primaries over Oct + Nov against a soft 6 is NOT 6 x 2 months: only the month whose own count is over it is named
       const ytd = render({ groupRules: { defaultMonthlyCap: { preferred: 7 } }, mode: "ytd" });
       assert.strictEqual(flagOf(ytd, "s1").length, 0, "soft 7: November holds exactly 7 - not over, whatever the range total (8)");
+    });
+    check("P32-4 Totals: the flag is the PERIOD's - a month view of October (Khan 1 primary) shows no flag and no data-over-soft on the table or the fairness row although his November (7) is over the soft 6 in the same schedule; November's own view does", () => {
+      const { render } = lift();
+      const oct = render({ groupRules: SOFT6, year: 2026, month0: 9 });
+      const r = byId(oct, "totals-row-s1")[0];
+      assert.ok(r && r.props["data-primary"] === 1, "the view is October 2026 (Khan's one primary, 10/20): " + (r && r.props["data-primary"]));
+      assert.strictEqual(flagOf(oct, "s1").length, 0, "October is not over the soft 6: no totals-over-soft (November is outside the period on screen)");
+      assert.strictEqual(r.props["data-over-soft"], undefined, "no data-over-soft on October's row");
+      assert.strictEqual(text(byCol(r, "cap")[0]), "-", "the cap cell reads the bare '-' (no '(over 6)')");
+      const fo = byId(render({ groupRules: SOFT6, mode: "fairness", year: 2026, month0: 9 }), "fairness-row-s1")[0];
+      assert.ok(fo && byId(fo, "fairness-over-soft").length === 0, "October's fairness row carries no 'over 6'");
+      // the control: the same schedule, November named explicitly - flagged on both
+      const nov = byId(render({ groupRules: SOFT6, year: 2026, month0: 10 }), "totals-row-s1")[0];
+      assert.ok(nov && nov.props["data-over-soft"] === "2026-11" && byId(nov, "totals-over-soft").length === 1, "November's view: flagged");
+      const fn = byId(render({ groupRules: SOFT6, mode: "fairness", year: 2026, month0: 10 }), "fairness-row-s1")[0];
+      assert.ok(fn && byId(fn, "fairness-over-soft").length === 1, "November's fairness row: flagged");
     });
     check("P32-4 Totals: no soft limit -> no flag; a hard cap only keeps its own red cap cell (the hard-cap wording), never 'over N'; no rules context -> no flag; the CSV is unchanged", () => {
       const { render, csvOf } = lift();
