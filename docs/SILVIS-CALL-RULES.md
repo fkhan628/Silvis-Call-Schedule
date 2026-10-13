@@ -616,7 +616,10 @@ the pool, within each person's availability:
   day over — takes the place of the random jitter for those candidates only). Such a day is **"over 7"**: the 8th or later
   primary of the holder's calendar month in date order, derived from the schedule, never stored (`diagnostics.overSoftLimit`),
   flagged on the day and per month in Totals, listed first in the Generate preview and the Publish dialog, and named in
-  the Accept audit row. A day no rule lets anyone take stays open (Open shifts). Trades are unchanged.
+  the Accept audit row. ⟶ 10/12 (review fix): the preview, the Publish dialog and the audit row list the same days — for
+  each surgeon the run (or the publish) gives a primary in a month, every over-7 day of that month, a later day outside the
+  generated range included (the earlier new days push it past 7); a month over 7 by days he already held is not listed
+  there (the calendar and Totals still flag it). A day no rule lets anyone take stays open (Open shifts). Trades are unchanged.
 - **Caps count primary only** (9/22). Backup runs are unlimited by count; long any-role runs are discouraged by a soft
   penalty (see §1 consecutive days and Prompt 12 A). ⟶ 10/11: the soft limit counts primary only too; a backup day
   counts toward no cap or soft limit, only (at 0.5) toward the weighted load.
@@ -674,7 +677,10 @@ the pool, within each person's availability:
   ⟶ 10/11 (Prompt 32): beside them, never inside `.target` — per month `weightedShare` (the weighted level),
   `makeupRounds` and `weights`; per member `weightedShare`, `fillClip` and `makeupPrimary`; per tally month `weighted`
   (P × 1 + B × 0.5) and `weightedShare` (the range row: the range's weighted load and the sum of the monthly weighted
-  shares); and `diagnostics.overSoftLimit` = `[{ day, id, month, count, limit }]` in date order.
+  shares); and `diagnostics.overSoftLimit` = `[{ day, id, month, count, limit }]` in date order (⟶ 10/12: over the whole
+  calendar months the range touches, for a holder the run gave an in-range primary that month). The weights are
+  `groupRules.shiftAccounting.weights` as Setup holds them (⟶ 10/12: the regression pins that Generate reads the blob's —
+  a pool member 4 primaries short carries 2 backups per missing primary at backup 0.5 and 4 at backup 0.25).
 - `groupRules.weights.deviationConvexity` (⟶ 9/23; seed value **2**, also the code default): the exponent of the deviation
   term, `|count − target| ^ convexity`, read wherever the deviation is scored — the primary and backup passes, weekend and
   holiday unit patterns (the pattern total sums the per-member convex terms), repair, target smoothing and the best-of-N

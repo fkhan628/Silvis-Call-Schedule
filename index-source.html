@@ -12468,12 +12468,14 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   return (
     <div data-testid="gen-diagnostics" data-uncovered-count={(dg.uncovered || []).length} data-over-soft-count={Array.isArray(dg.overSoftLimit) ? dg.overSoftLimit.length : undefined}>
       {/* Prompt 32 step 4 (Faraz 10/11 decision 5): the preview's days over a holder's soft limit, listed FIRST (diagnostics.overSoftLimit -
-          rules.js overSoftLimitDays, derived from the preview, never stored); a preview without the list shows no box */}
+          rules.js overSoftLimitDays, derived from the preview, never stored); a preview without the list shows no box. Since the 10/12
+          review fix: every such day of the months the range touches (outside the range too) for a holder this run gives a primary
+          that month - the days the Publish dialog and the Accept audit row name */}
       {Array.isArray(dg.overSoftLimit) && (
         <div style={dg.overSoftLimit.length ? { ...box, borderColor: LIGHT.accentText } : box} data-testid="gen-over-soft">
           <div style={{ ...css.subT, margin: "0 0 4px", color: dg.overSoftLimit.length ? LIGHT.accentText : undefined }}>Over the soft limit ({dg.overSoftLimit.length})</div>
-          {dg.overSoftLimit.length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None - no primary day in the range is past its holder's soft monthly limit.</p> : <>
-            <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>The (L+1)th and later primary day of a holder's calendar month, L = his soft limit (the group's 7, or his own): the generator fills such a day itself under the soft over-limit term, and among the candidates already at their limit the lowest weighted load that month takes it. A hard cap is never passed here.</p>
+          {dg.overSoftLimit.length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None - nobody this run gives a primary ends that month past his soft monthly limit.</p> : <>
+            <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>The (L+1)th and later primary day of a holder's calendar month, L = his soft limit (the group's 7, or his own): the generator fills such a day itself under the soft over-limit term, and among the candidates already at their limit the lowest weighted load that month takes it. A hard cap is never passed here. Listed for each holder this run gives a primary in that month - every such day of the month, a later day outside the range included (the run's earlier days push it past the limit), as the Publish dialog lists them.</p>
             {dg.overSoftLimit.map(o => <div key={o.day + o.id} data-over-soft={o.day + ":" + o.id} style={{ fontSize: 12, fontFamily: mono }}>{overSoftLimitLine(o, nameOf)}</div>)}
           </>}
         </div>

@@ -36,6 +36,10 @@
 // Christmas run at bestOf 1 for the holiday-unit unplaced reason); since Prompt 23
 // (9/30) the notice fixture's two one-week runs, and since its review (10/1) the
 // two three-day weekend-pair runs (noLoneWeekendDay on / off) - 27 in the summary.
+// Prompt 32 (10/11-10/12) adds its own synthetic runs, counted apart in the summary:
+// the over-soft-limit tie-break runs (step 4), the five two-week February runs of
+// the whole-month over-soft-limit list and the three one-month shift-weight runs
+// (the review fixes, bestOf 3 / 1).
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -368,7 +372,7 @@ const CONVEXITY = seed.groupRules.weights.deviationConvexity;
 eq(CONVEXITY, 2, "seed: groupRules.weights.deviationConvexity = 2 (the water-filled share's convex deviation, decided 9/23)");
 eq(GEN.GEN_DEVIATION_CONVEXITY, CONVEXITY, "generator.js GEN_DEVIATION_CONVEXITY (the code default) = the seed's explicit knob");
 const round1 = (v) => Math.round(v * 10) / 10;
-const OVER_SEEN = { n: 0 }; // Prompt 32 step 2: over-soft-limit days listed across every checked run (the restatement is not vacuous)
+const OVER_SEEN = { n: 0, outside: 0, trimmed: 0 }; // Prompt 32 step 2: over-soft-limit days listed across every checked run (the restatement is not vacuous); review fix 10/12: of them outside the range, and the days left out because the run gave their holder no primary that month
 // Hard-reason vocabulary (rules doc sections 3-5; guide section 5). A reason in
 // diagnostics.uncovered must start with one of these; anything else is a renamed,
 // bogus or placeholder reason. Holiday-unit reasons carry "@YYYY-MM-DD".
@@ -949,22 +953,34 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   // HARD cap as well is a hard-cap breach that keeps its own wording (not listed), and a cap that counts East days counts his
   // East primary-week days not held as Silvis primary first (no seed member has both a soft limit and either - Fierce's
   // countsEastDays cap is a hard 14 - so on the seed these two clauses never fire; the rules suite pins them on variants).
+  // pin moved deliberately 10/12: Prompt 32 review fix - the list was the IN-RANGE days only, so a range ending mid-month
+  // (the 10/15-11/01 backfill, a custom end) left out the later held days of the month its placements pushed past the limit
+  // (the calendar badge and the Publish dialog showed them, the preview box and the Accept audit did not). Re-derived: every
+  // over-the-soft-limit primary day of the WHOLE calendar months the range touches (days outside the range listed too), kept
+  // only for a (holder, month) this run GAVE an in-range primary - the output's primary differs from the input's on an
+  // in-range day of that month, the way helpers.overSoftLimitForChanges trims the Publish dialog's list - so a month over
+  // the limit by held days alone (Acton's locked October / November) is not this run's doing and is not listed.
   {
+    const gave = new Set();
+    days.forEach((d) => { const id = holder(view, d, P); if (id && id !== holder(INPUT, d, P)) gave.add(id + "|" + monthOf(d)); });
     const expOver = [];
-    days.forEach((d) => {
+    months.forEach((m) => monthDays(m).forEach((d) => {
       const id = holder(view, d, P);
       if (!id || !SR[id]) return;
       const L = capOf(id).preferred, H = capOf(id).primary;
       if (L === null) return;
       const mc = SR[id].monthlyCap, countsE = !!(mc && typeof mc === "object" && (mc.countsEastDays === true || mc.countsEastDays === "distinct-days"));
-      const eastBase = countsE && id === FIERCE ? [...FIERCE_EAST_PRIMARY_DAYS].filter((x) => monthOf(x) === monthOf(d) && holder(view, x, P) !== id).length : 0;
-      const count = eastBase + monthDays(monthOf(d)).filter((x) => x <= d && holder(view, x, P) === id).length;
-      if (count > L && (H === null || count <= H)) expOver.push({ day: d, id, month: monthOf(d), count, limit: L });
-    });
+      const eastBase = countsE && id === FIERCE ? [...FIERCE_EAST_PRIMARY_DAYS].filter((x) => monthOf(x) === m && holder(view, x, P) !== id).length : 0;
+      const count = eastBase + monthDays(m).filter((x) => x <= d && holder(view, x, P) === id).length;
+      if (!(count > L && (H === null || count <= H))) return;
+      if (gave.has(id + "|" + m)) expOver.push({ day: d, id, month: m, count, limit: L });
+      else OVER_SEEN.trimmed++;
+    }));
     ok(Array.isArray(D.overSoftLimit), "diagnostics.overSoftLimit is missing (Prompt 32 step 2): " + JSON.stringify(D.overSoftLimit));
-    eq(D.overSoftLimit, expOver, "diagnostics.overSoftLimit = the restated over-soft-limit primary days (Prompt 32 step 2)");
+    eq(D.overSoftLimit, expOver, "diagnostics.overSoftLimit = the restated over-soft-limit primary days of the months the range touches, for the (holder, month) pairs this run gave an in-range primary (Prompt 32 review fix)");
     ok(D.overSoftLimit.every((o) => Object.keys(o).join() === "day,id,month,count,limit"), "overSoftLimit entries are plain { day, id, month, count, limit }");
     OVER_SEEN.n += D.overSoftLimit.length;
+    OVER_SEEN.outside += D.overSoftLimit.filter((o) => o.day < range.start || o.day > range.end).length;
   }
   if (range.name.indexOf("R2") === 0 || range.name.indexOf("R4") === 0) {
     const nov = D.impliedTargets.months["2026-11"], NF = nov.members[FIERCE];
@@ -1456,7 +1472,16 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
   // Prompt 32 step 2 (DESIGN "Generator" 9): the milestone preview's over-soft-limit days, observed (seed 1, bestOf 200) and
   // restated in checkRun: Acton's 8th November primary is his locked 11/18 (all eight are locks), Khan's 8th is the generated
   // 11/30 - both against the group's soft 7; nobody is over it in December. Who takes such a day is step 4's tie-break.
-  eq(DB.overSoftLimit.map((o) => CODE[o.id] + " " + o.day + " #" + o.count + "/" + o.limit), ["BDA 2026-11-18 #8/7", "FAK 2026-11-30 #8/7"], "milestone preview: diagnostics.overSoftLimit");
+  // pin moved deliberately 10/12: Prompt 32 review fix - the list keeps only a (holder, month) the run gave an in-range
+  // primary (the Publish dialog's trim): the run gives Acton no November primary (all eight of his are the import's locks,
+  // already over the soft 7), so his held 11/18 is not this run's doing and leaves the list (was ["BDA 2026-11-18 #8/7",
+  // "FAK 2026-11-30 #8/7"]); Khan's generated 11/30 stays. The whole-schedule reading (the calendar badge) still names both.
+  eq(DB.overSoftLimit.map((o) => CODE[o.id] + " " + o.day + " #" + o.count + "/" + o.limit), ["FAK 2026-11-30 #8/7"], "milestone preview: diagnostics.overSoftLimit");
+  {
+    const bigView = makeView(big);
+    eq(daysList(RANGES[1].start, "2026-11-30").filter((d) => holder(bigView, d, P) === ACTON && holder(INPUT, d, P) !== ACTON), [], "milestone preview: the run gives Acton no November primary (his eight are the import's locks)");
+    eq(R.overSoftLimitDays(ctx, bigView, "2026-11-01", "2026-12-31").map((o) => CODE[o.id] + " " + o.day + " #" + o.count), ["BDA 2026-11-18 #8", "FAK 2026-11-30 #8"], "milestone preview: the whole-schedule reading (the calendar badge) still names Acton's held 11/18");
+  }
   ok(kb.backup <= 1.5 * kb.target.backup, "Khan holds " + kb.backup + " backups in Nov-Dec against a backup target of " + kb.target.backup + " - more than 1.5x, the backup sink is back");
   // WF (9/23): the target is the water-filled share, never floored at the locked days, so a member whose locks already
   // exceed it (Acton's 8 locked November primaries against a level near 5.6) cannot come down to it - the tolerance is
@@ -2008,10 +2033,161 @@ const TB_RUNS = { n: 0 };
     }
     const s7b = { eastA: true, aTarget: { primary: 6, backup: 3 }, pA: [1, 5, 9, 13, 17, 21], pB: SEVEN_B, bA: [3, 7, 11, 15, 19, 23], bB: [4, 8], jitter: 0 };
     const o7b = tbRun(s7b, 1);
-    eq([o7b.schedule[D].primary, o7b.diagnostics.overSoftLimit], ["b", [{ day: "2026-06-21", id: "a", month: MONTH, count: 8, limit: 7 }, { day: D, id: "b", month: MONTH, count: 8, limit: 7 }]], "S7b: a (6 P + East 6/29 + 6/30 = 8, load 9) and b (7 P, load 8) both over at 6/30 - b takes it");
+    // pin moved deliberately 10/12: Prompt 32 review fix - a's locked 6/21 (his #8: East base 2 + six Silvis primaries) is no
+    // longer listed: the run gave a no June primary (b took 6/30, the only open slot), so his over-7 day is held, not this run's
+    // doing - the list keeps only a (holder, month) the run gave an in-range primary, as the Publish dialog's list does. The
+    // calendar badge still shows it (the whole-schedule reading below).
+    eq([o7b.schedule[D].primary, o7b.diagnostics.overSoftLimit], ["b", [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }]], "S7b: a (6 P + East 6/29 + 6/30 = 8, load 9) and b (7 P, load 8) both over at 6/30 - b takes it; a's held 6/21 is not this run's");
+    eq(R.overSoftLimitDays(tbCtx(s7b), Object.assign({}, tbCtx(s7b).schedule, o7b.schedule)).map((o) => o.day + " " + o.id + " #" + o.count), ["2026-06-21 a #8", D + " b #8"], "S7b: the whole-schedule reading (the calendar badge) still names a's held 6/21");
     const o7bm = tbRun(Object.assign({}, s7b, { bA: [3, 7], bB: [4, 8, 12, 16, 20, 24] }), 1);
     eq([o7bm.schedule[D].primary, o7bm.diagnostics.overSoftLimit], ["a", [{ day: D, id: "a", month: MONTH, count: 8, limit: 7 }]], "S7bm: loads swapped (a 7, b 10) - a takes 6/30, his #8 (6/29 still counts as an East day)");
   }
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 32 review fix (10/12): diagnostics.overSoftLimit covers the WHOLE calendar months the range touches ----
+// The review finding, reproduced: three plain pool members on the group's soft 7 (defaultMonthlyCap { preferred: 7 }, no hard
+// cap), February 2027 (28 days, no holiday). a1 holds locked primaries 2/15-2/21 and a2 2/22-2/28 (seven each); the range is
+// 2/1-2/14 - it ends mid-month - and every slot of it is open. Twenty-eight primaries over three members clipped at 7: seven
+// days must go over somebody's 7 (each one the soft over-preferred-cap), and every in-range primary a1 or a2 takes comes
+// BEFORE his locked days in date order, so it pushes his locked LATER days past 7 - days outside the range. Before the fix the
+// list named the in-range over days only (a3's), while the calendar badge and the Publish dialog named a1's and a2's too.
+// Now: every over day of the months the range touches, for a (holder, month) this run gave an in-range primary (the output's
+// primary differs from the input's) - the trim helpers.overSoftLimitForChanges applies to the Publish dialog's list - so the
+// preview box, the Accept audit (overSoftLimitAudit of the list) and the Publish dialog name the same days. Restated from the
+// output alone (the ordinal walk, then the trim):
+//   F1  seeds 1-4: diagnostics.overSoftLimit = the restated list; it names out-of-range days on every seed and is longer than
+//       the in-range-only reading (the bug); it equals helpers.overSoftLimitForChanges(rules.overSoftLimitDays over the merged
+//       schedule, this run's primary changes) - the Publish dialog's list after accepting the run over this input.
+//   F2  the trim: a1 is unavailable for primary 2/1-2/14 and holds 2/15-2/22 (EIGHT - his 2/22 is #8, over 7 on held days
+//       alone), a2 2/23-2/28 (six): the run gives a1 nothing, so his 2/22 is not listed - the whole-month reading (the calendar
+//       badge) lists it; a2's and a3's over days are, each with his out-of-range ones.
+const OSL_WHOLE = { n: 0 };
+{
+  CUR.range = "Prompt 32 review fix: over-soft-limit days over the whole months"; CUR.seed = "-"; CUR.day = "-";
+  const H = require("../helpers.js");
+  const FEB = "2027-02", FROM = "2027-02-01", TO = "2027-02-14";
+  const span = (a, b) => monthDays(FEB).filter((d) => d >= a && d <= b);
+  const oslCtx = (lockA1, lockA2, avail) => {
+    const ids = ["a1", "a2", "a3"];
+    const roster = ids.map((id, i) => ({ id, name: "Fixture " + id, code: ["AAA", "BBB", "CCC"][i], active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    ids.forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, defaultMonthlyCap: { preferred: 7 } };
+    const schedule = {};
+    monthDays(FEB).forEach((d) => {
+      const who = lockA1.includes(d) ? "a1" : lockA2.includes(d) ? "a2" : null;
+      schedule[d] = { primary: who, backup: null, primaryLocked: !!who, backupLocked: false, source: who ? "import" : "generated", externalCover: null, note: null };
+    });
+    const c = R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows: avail || [], schedule, eastDerived: [], rangeStart: FROM, rangeEnd: TO });
+    ok(c.warnings.length === 0, "over-soft-limit whole-month fixture: buildContext warnings " + JSON.stringify(c.warnings));
+    return c;
+  };
+  // the restatement: merged month, ordinal walk per holder (soft 7, no hard cap, no East), then the (holder, month) trim
+  const oslRestate = (ctxF, out) => {
+    const input = ctxF.schedule, merged = Object.assign({}, input, out.schedule), gave = new Set(), changes = [], n = {}, whole = [], exp = [];
+    Object.keys(out.schedule).forEach((d) => {
+      const to = out.schedule[d].primary || null, from = (input[d] && input[d].primary) || null;
+      if (to && to !== from) { gave.add(to + "|" + d.slice(0, 7)); changes.push({ day: d, role: P, from, to }); }
+    });
+    monthDays(FEB).forEach((d) => {
+      const id = merged[d] && merged[d].primary;
+      if (!id) return;
+      n[id] = (n[id] || 0) + 1;
+      if (n[id] <= 7) return;
+      const o = { day: d, id, month: FEB, count: n[id], limit: 7 };
+      whole.push(o);
+      if (gave.has(id + "|" + FEB)) exp.push(o);
+    });
+    return { merged, changes, whole, exp };
+  };
+  const oslRun = (ctxF, seed) => {
+    CUR.seed = seed;
+    const out = GEN.generate(ctxF, FROM, TO, { seed, bestOf: 3 });
+    OSL_WHOLE.n++;
+    eq([out.diagnostics.uncovered.length, out.diagnostics.hardViolations], [0, []], "over-soft-limit whole-month fixture: every in-range slot filled, no hard violation");
+    return out;
+  };
+  for (let sd = 1; sd <= 4; sd++) {
+    const ctxF = oslCtx(span("2027-02-15", "2027-02-21"), span("2027-02-22", "2027-02-28"));
+    const out = oslRun(ctxF, sd), D = out.diagnostics, X = oslRestate(ctxF, out);
+    const tag = "F1 seed " + sd + " (" + D.overSoftLimit.map((o) => o.day.slice(5) + " " + o.id + " #" + o.count).join(", ") + ")";
+    eq(D.overSoftLimit, X.exp, tag + ": diagnostics.overSoftLimit = every over day of February for a holder this run gave an in-range primary");
+    ok(D.overSoftLimit.some((o) => o.day > TO), tag + ": the list names the out-of-range days the run's earlier placements pushed past 7");
+    ok(D.overSoftLimit.length > R.overSoftLimitDays(ctxF, X.merged, FROM, TO).length, tag + ": longer than the in-range-only reading (before the fix)");
+    eq(H.overSoftLimitForChanges(R.overSoftLimitDays(ctxF, X.merged), X.changes), D.overSoftLimit, tag + ": the Publish dialog's list over the same changes names the same days");
+    eq(H.overSoftLimitAudit(D.overSoftLimit), X.exp.map((o) => ({ day: o.day, id: o.id })), tag + ": the Accept audit row's detail.overSoftLimit names them too");
+    eq(D.overSoftLimit.length, 7, tag + ": seven days over the soft 7 (28 primaries, three members clipped at 7) - every one listed");
+  }
+  {
+    const avail = [{ person_id: "a1", start_date: FROM, end_date: TO, kind: "unavailable", role: P }];
+    const ctxF = oslCtx(span("2027-02-15", "2027-02-22"), span("2027-02-23", "2027-02-28"), avail);
+    const out = oslRun(ctxF, 1), D = out.diagnostics, X = oslRestate(ctxF, out);
+    const tag = "F2 (" + D.overSoftLimit.map((o) => o.day.slice(5) + " " + o.id + " #" + o.count).join(", ") + ")";
+    ok(!Object.keys(out.schedule).some((d) => out.schedule[d].primary === "a1"), tag + ": a1 takes no in-range primary (unavailable)");
+    ok(X.whole.some((o) => o.id === "a1" && o.day === "2027-02-22" && o.count === 8), tag + ": the whole-month reading (the calendar badge) names a1's held 2/22 as #8");
+    eq(D.overSoftLimit, X.exp, tag + ": diagnostics.overSoftLimit = the restated, trimmed list");
+    ok(!D.overSoftLimit.some((o) => o.id === "a1"), tag + ": a1's held over day is not this run's - not listed");
+    ok(D.overSoftLimit.some((o) => o.id === "a2" && o.day > TO), tag + ": a2's out-of-range over days are listed (the run gave him an in-range primary)");
+  }
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 32 review fix (10/12): Generate reads groupRules.shiftAccounting.weights (the blob's, not the defaults) ----
+// genWeightedFill is pinned with { primary: 1, backup: 0.25 } when called directly (WF fill unit, below); every generate() run
+// of the seed carries the default weights, so nothing pinned that generate() hands the fill the BLOB's weights (rules.shiftWeightsOf
+// (ctx.groupRules)) - a generate() with a constant { 1, 0.5 } in their place passed every suite. Synthetic, re-derived by hand:
+// February 2027 (28 days, no holiday), a pool of a, b, c, d, every slot open; c carries a hard cap of 4 primaries (monthlyCap 4 -
+// his primary clip), nobody else a cap or a soft limit (no defaultMonthlyCap). Primary water-fill: c 4, a / b / d (28 - 4) / 3 =
+// 8. Weighted backup fill over the 28 backups, nobody clamped (each backup fill clip is his 28 allowed days): b_i = (W* - wP x p_i)
+// / wB summing to 28 -> W* = (wB x 28 + wP x (8 + 8 + 8 + 4)) / 4:
+//   null (the defaults, primary 1 / backup 0.5): W* = (14 + 28) / 4 = 10.5; a / b / d (10.5 - 8) / 0.5 = 5, c (10.5 - 4) / 0.5 = 13:
+//        c carries 8 more backups for his 4 missing primaries - TWO per missing primary;
+//   { primary: 1, backup: 0.25 }: W* = (7 + 28) / 4 = 8.75 -> 8.8; a / b / d 0.75 / 0.25 = 3, c 4.75 / 0.25 = 19: 16 more - FOUR
+//        per missing primary;
+//   { primary: 2, backup: 1 } (the defaults' ratio, the primary weight read too): W* = (28 + 56) / 4 = 21; a / b / d (21 - 16) / 1 =
+//        5, c (21 - 8) / 1 = 13 - the default targets, every weighted figure doubled.
+// Each run: impliedTargets.weights and the month's weights = the blob's (the defaults for null); the month's weightedShare =
+// round1(W*), backupShare = the backup share at the primary level 8, no makeup round; every member's targets and weightedShare
+// (round1(wP x tP + wB x tB)); the tallies' weighted = wP x P + wB x B of the run's own counts and weightedShare = the member's.
+{
+  CUR.range = "Prompt 32 review fix: Generate reads shiftAccounting.weights"; CUR.seed = 1; CUR.day = "-";
+  const FEB = "2027-02", IDS4 = ["a", "b", "c", "d"], PSH = { a: 8, b: 8, c: 4, d: 8 };
+  const swRun = (weights) => {
+    const roster = IDS4.map((id) => ({ id, name: "Fixture " + id, code: id.toUpperCase().repeat(3), active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    IDS4.forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+    surgeonRules.c.monthlyCap = 4;
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, shiftAccounting: { weights } };
+    const schedule = {};
+    monthDays(FEB).forEach((d) => { schedule[d] = { primary: null, backup: null, primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null }; });
+    const c = R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows: [], schedule, eastDerived: [], rangeStart: FEB + "-01", rangeEnd: FEB + "-28" });
+    ok(c.warnings.length === 0, "shift-weights fixture: buildContext warnings " + JSON.stringify(c.warnings));
+    eq([c.per.c.capPrimary, c.per.c.capPreferred, c.per.a.capPrimary, c.per.a.capPreferred], [4, null, null, null], "shift-weights fixture: c's hard 4 is the only cap");
+    return GEN.generate(c, FEB + "-01", FEB + "-28", { seed: 1, bestOf: 1 });
+  };
+  const HAND = [
+    { weights: null, w: { primary: 1, backup: 0.5 }, W: 10.5, b: { a: 5, b: 5, c: 13, d: 5 }, perMissing: 2 },
+    { weights: { primary: 1, backup: 0.25 }, w: { primary: 1, backup: 0.25 }, W: 8.8, b: { a: 3, b: 3, c: 19, d: 3 }, perMissing: 4 },
+    { weights: { primary: 2, backup: 1 }, w: { primary: 2, backup: 1 }, W: 21, b: { a: 5, b: 5, c: 13, d: 5 }, perMissing: 2 }
+  ];
+  HAND.forEach((h) => {
+    const tag = "shift weights " + JSON.stringify(h.weights);
+    const D = swRun(h.weights).diagnostics, IT = D.impliedTargets, M = IT.months[FEB];
+    // re-derived: W* = (wB x 28 + wP x 28) / 4 (nobody clamped), b_i = (W* - wP x p_i) / wB
+    const Wstar = (h.w.backup * 28 + h.w.primary * 28) / 4;
+    eq(round1(Wstar), h.W, tag + ": the hand-derived W* (" + Wstar + ")");
+    IDS4.forEach((id) => eq((Wstar - h.w.primary * PSH[id]) / h.w.backup, h.b[id], tag + ": the hand-derived backup share of " + id));
+    eq(IT.weights, h.w, tag + ": impliedTargets.weights = the blob's shiftAccounting.weights (the defaults for null)");
+    eq([M.weights, M.primaryShare, M.backupShare, M.weightedShare, M.makeupRounds], [h.w, 8, h.b.a, h.W, 0], tag + ": the month's weights, primary level 8, backup share at that level, weightedShare = round1(W*), no makeup");
+    IDS4.forEach((id) => {
+      const m = M.members[id];
+      eq([m.primaryTarget, m.backupTarget, m.weightedShare], [PSH[id], h.b[id], round1(h.w.primary * PSH[id] + h.w.backup * h.b[id])], tag + ": " + id + "'s targets and weightedShare");
+      const t = D.tallies[id].months[FEB];
+      eq([t.weighted, t.weightedShare], [round1(h.w.primary * t.primary + h.w.backup * t.backup), m.weightedShare], tag + ": " + id + "'s tallies weighted (" + t.primary + " P, " + t.backup + " B) / weightedShare");
+    });
+    eq(M.members.c.backupTarget - M.members.a.backupTarget, h.perMissing * (PSH.a - PSH.c), tag + ": the member 4 primaries short carries " + h.perMissing + " backups per missing primary (wP / wB)");
+  });
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
@@ -2587,7 +2763,8 @@ const TB_RUNS = { n: 0 };
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("Prompt 32 overSoftLimit (every checked run): " + OVER_SEEN.n + " day(s) listed, " + OVER_SEEN.outside + " of them outside the range; " + OVER_SEEN.trimmed + " over day(s) of the touched months left out (the run gave the holder no primary that month)");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

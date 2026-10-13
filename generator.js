@@ -2004,23 +2004,37 @@ function genDiagnostics(G, best, meta) {
     // locked / fixed ones may. Diagnostics only; rules.js owns the rule.
     eastVacations: genEastVacations(G, ctx),
     offers: offersDiag, // Prompt 14 P2: { periods, byPerson, outsideOffers }
-    // Prompt 32 step 2 (DESIGN "Generator" 9): the in-range primary days over the holder's soft limit (genOverSoftLimit)
+    // Prompt 32 step 2 (DESIGN "Generator" 9): the primary days over the holder's soft limit (genOverSoftLimit - since the 10/12
+    // review fix every such day of the months the range touches, for a holder this run gave an in-range primary that month)
     overSoftLimit: genOverSoftLimit(G, W),
     placedCount: Object.keys(S.placed).length,
     warnings: warnings
   };
 }
 
-// diagnostics.overSoftLimit (Prompt 32 step 2, DESIGN "Generator" 9; Faraz 10/11 decision 5): every in-range primary day
-// that is the (L+1)th or later primary of its holder's calendar month in date order - every day of the month counts toward
-// the ordinal (locked, published and out-of-range days included) - L = his SOFT limit (ctx.per[id].capPreferred; a surgeon
-// without one, a hard cap only or no limit, is never listed). Derived from the final schedule, never stored: plain
+// diagnostics.overSoftLimit (Prompt 32 step 2, DESIGN "Generator" 9; Faraz 10/11 decision 5): every primary day that is the
+// (L+1)th or later primary of its holder's calendar month in date order - every day of the month counts toward the ordinal
+// (locked, published and out-of-range days included) - L = his SOFT limit (ctx.per[id].capPreferred; a surgeon without one,
+// a hard cap only or no limit, is never listed). Derived from the final schedule, never stored: plain
 // [{ day, id, month, count, limit }] in date order (structured-clone safe). Prompt 32 step 4: read through the ONE helper,
 // rules.js overSoftLimitDays (the calendar badge, the Publish dialog and the Accept audit row read the same), which also
 // leaves out a day over the holder's hard cap (a hard-cap breach keeps its own wording) and an outside surgeon, and counts
 // a countsEastDays cap's East primary-week days first; the tie-break that picks who takes such a day is genSoftLimitTie.
+// Prompt 32 review fix (10/12): the days of the WHOLE calendar months the range touches - a range ending mid-month pushes
+// the later held days of its holders past the limit, and the calendar badge and the Publish dialog name those too - kept
+// only for a (holder, month) this run GAVE an in-range primary (the output's primary differs from the caller's input on an
+// in-range day of that month): the trim helpers.overSoftLimitForChanges applies to the Publish dialog's list, so the preview
+// box, the Accept audit row and the Publish dialog name the same days. A month over the limit by held days alone is not this
+// run's doing and is not listed (the calendar badge and Totals still show it).
 function genOverSoftLimit(G, W) {
-  return G.R.overSoftLimitDays(G.ctx, W, G.start, G.end);
+  var input = G.input || {}, gave = Object.create(null);
+  G.days.forEach(function (d) {
+    var e = W[d], o = input[d];
+    var to = e && e.primary ? e.primary : null, from = o && o.primary ? o.primary : null;
+    if (to && to !== from) gave[to + "|" + genMonthOf(d)] = true;
+  });
+  var lastMonth = genMonthDays(G.months[G.months.length - 1]);
+  return G.R.overSoftLimitDays(G.ctx, W, G.months[0] + "-01", lastMonth[lastMonth.length - 1]).filter(function (x) { return gave[x.id + "|" + x.month] === true; });
 }
 
 // diagnostics.eastVacations (Prompt 15 part 2): { [id]: { ranges, vacationDays, clearDays, feedBusyOnHome, conflicts } }
@@ -2071,6 +2085,7 @@ function generate(ctx, startDate, endDate, opts) {
   days.forEach(function (d) { var m = genMonthOf(d); if (months.indexOf(m) < 0) months.push(m); });
   var G = {
     ctx: ctx, R: R, W: W, start: startDate, end: endDate, days: days, months: months,
+    input: original, // Prompt 32 review fix (10/12): the caller's schedule - genOverSoftLimit's "the run gave him a primary" reads it
     respectLocks: opts.respectLocks !== false, jitter: typeof W.jitter === "number" ? W.jitter : 1, warnings: [],
     // WF 9/23: the exponent of the deviation term (data: groupRules.weights.deviationConvexity; 1 = the old flat term)
     convexity: typeof W.deviationConvexity === "number" && isFinite(W.deviationConvexity) && W.deviationConvexity >= 1 ? W.deviationConvexity : GEN_DEVIATION_CONVEXITY,
