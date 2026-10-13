@@ -1041,6 +1041,51 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!/>Enable<\/button>/.test(idx) && !/"Enable", push/.test(idx), "no bare Enable button anywhere");
   };
   await check("push UX 1(a): Notification settings opens by itself on Settings while push is off (once per account and page load, a close sticks, never over a tap on its header); the push button reads 'Enable phone notifications'", autoOpenCheck);
+  // Push UX follow-up (10/12): the Pop-ups box's permission was read once at start, so after allowing notifications in the
+  // phone's Settings it kept saying "Blocked" until a reload. refreshPushState now hands the push card's reading to it, and a
+  // visibilitychange listener re-reads the permission (and an open card's push state) when the app comes back to the front.
+  // Both lifted out of index-source.html and run on stubs.
+  const permRefreshCheck = async (S) => {
+    const idx = S.index;
+    const a = idx.indexOf("  const refreshPushState = useCallback(async (uid) => {");
+    const b = idx.indexOf("  }, []);", a);
+    assert.ok(a > 0 && b > a, "could not lift refreshPushState");
+    const body = idx.slice(a + "  const refreshPushState = useCallback(".length, b + 3);
+    const calls = [];
+    const mkRefresh = (stateAnswer) => new Function("pushDevice", "setPushInfo", "setPushNeedsTap", "setBrowserNotifPermission", "return (" + body.replace(/\}$/, "}") + ");")(
+      { state: async () => stateAnswer }, (s) => calls.push(["info", s && s.state]), () => {}, (p) => calls.push(["perm", p]));
+    await mkRefresh({ state: "off", permission: "granted" })("u1");
+    assert.deepStrictEqual(calls, [["info", "off"], ["perm", "granted"]], "refreshPushState hands the reading to the Pop-ups box: " + JSON.stringify(calls));
+    calls.length = 0;
+    await mkRefresh({ state: "unsupported" })("u1");
+    assert.deepStrictEqual(calls, [["info", "unsupported"]], "no permission in the answer -> the Pop-ups reading is left alone");
+    // the visibilitychange effect
+    const e1 = idx.indexOf("  // push UX follow-up (10/12): back in the foreground");
+    const e2 = idx.indexOf("  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);", e1);
+    assert.ok(e1 > 0 && e2 > e1, "could not lift the visibilitychange effect");
+    const eff = idx.slice(idx.indexOf("  useEffect(() => {", e1) + "  useEffect(() => ".length, e2 + 3);
+    const run = (opts) => {
+      const listeners = {}, got = [];
+      const doc = { visibilityState: opts.vis || "visible", addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: (t, f) => { if (listeners[t] === f) delete listeners[t]; } };
+      const cleanup = new Function("document", "Notification", "isPublicMode", "pushCardOpen", "pushUid", "refreshPushState", "setBrowserNotifPermission", eff)(
+        doc, opts.N, !!opts.pub, !!opts.open, "u1", (uid) => got.push(["refresh", uid]), (p) => got.push(["perm", p]));
+      if (listeners.visibilitychange) listeners.visibilitychange();
+      return { got, listeners, cleanup };
+    };
+    let r = run({ N: { permission: "granted" }, open: true });
+    assert.deepStrictEqual(r.got, [["perm", "granted"], ["refresh", "u1"]], "visible again: the permission is re-read and the open card refreshes: " + JSON.stringify(r.got));
+    r.cleanup();
+    assert.ok(!r.listeners.visibilitychange, "the listener is removed on cleanup");
+    r = run({ N: { permission: "denied" }, open: false });
+    assert.deepStrictEqual(r.got, [["perm", "denied"]], "card closed: only the permission is re-read");
+    r = run({ N: undefined, open: false });
+    assert.deepStrictEqual(r.got, [["perm", "unsupported"]], "no Notification API -> unsupported");
+    r = run({ N: { permission: "granted" }, open: true, vis: "hidden" });
+    assert.deepStrictEqual(r.got, [], "hidden: nothing");
+    r = run({ N: { permission: "granted" }, open: true, pub: true });
+    assert.ok(!r.listeners.visibilitychange && !r.got.length, "?public=1: no listener at all");
+  };
+  await check("push UX follow-up (10/12): the Pop-ups box's permission follows the push card's reading and is re-read when the app returns to the front (no stale 'Blocked' after the phone's Settings)", permRefreshCheck);
   // Push UX (b)-(f) (10/11): the Phone notifications card (the IIFE in Settings > Notification settings) and the Pop-ups box
   // lifted out of index-source.html, compiled by Babel (classic runtime, as build.js does) and run on a React.createElement
   // stub - the element tree they render, per state.
@@ -1162,6 +1207,12 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     ">Allow pop-ups</button>", ">Allow notifications</button>", popupsCheck);
   await mutant("(b) the Pop-ups test button back to 'Send test notification'", "index",
     ">Show a test pop-up</button>", ">Send test notification</button>", popupsCheck);
+  await mutant("refreshPushState no longer hands the permission to the Pop-ups box (the stale 'Blocked')", "index",
+    '    if (s && typeof s.permission === "string") setBrowserNotifPermission(s.permission);\n', "", permRefreshCheck);
+  await mutant("back in the foreground, an open card not refreshed", "index",
+    "      if (pushCardOpen) refreshPushState(pushUid);\n", "", permRefreshCheck);
+  await mutant("the visibilitychange listener also on ?public=1", "index",
+    "  useEffect(() => {\n    if (isPublicMode) return;\n    const onVisible = () => {", "  useEffect(() => {\n    const onVisible = () => {", permRefreshCheck);
   await mutant("the Pop-ups line not handed the push card's pushInfo (an installed app told to use browser site settings)", "index",
     "{notifPermissionText(browserNotifPermission, pushInfo)}", "{notifPermissionText(browserNotifPermission)}", popupsCheck);
   await mutant("notifPermissionText's installed-Android Blocked branch dropped", "helpers",

@@ -2384,7 +2384,10 @@ e-mail** button in the Email box (`email-test`, a linked surgeon only; its line 
 `helpers.emailTestMessage` and says "sent" only for an ok answer with a delivery). Follow-up (10/11): the box's Blocked line
 (`notifPermissionText(permission, pushInfo)`) names the same place as the push card's - an iPhone / iPad Home Screen app's
 Settings > Notifications > Silvis Call, an installed Android app's Settings > Apps > Silvis Call (the browser as the fallback) -
-and only a browser tab keeps "the browser's site settings". (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
+and only a browser tab keeps "the browser's site settings". Follow-up (10/12): the box's permission is no longer read once at
+start - `refreshPushState` hands it the push card's reading, and a `visibilitychange` listener (never on `?public=1`) re-reads it,
+and an open card's push state, when the app returns to the front - so after allowing notifications in the phone's Settings
+neither box keeps saying Blocked. (c) Safari on an iPhone / iPad (`ios-home-screen`): the state
 line is the ONE instruction - the generic "Turn this on once..." line and all four buttons (Enable phone notifications,
 Diagnose, Reset subscription, Send test) are hidden, since none works outside the Home Screen app; the phone switches stay
 (they cover every device); in the Home Screen app (standalone -> `off`) nothing changes and Enable is offered. (The Account

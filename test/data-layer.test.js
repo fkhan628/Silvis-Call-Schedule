@@ -9802,7 +9802,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(pt.includes("const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });"), "the mode");
       assert.ok(pt.includes('const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current("poll");\n      await refreshNotifs();'), "the hidden head: ensureFresh / re-send, then notifications");
       assert.ok(src.includes("const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };"), "the catch-up reads document.hidden (the smoke's keepalive dispatches override hidden only)");
-      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 5, "the keepalive flush, A3's ensureFresh, the version check, the shift clock and the poll's");
+      // pin moved deliberately 10/12: push UX follow-up - a sixth, the Pop-ups / push-card permission re-read (push.test.js permRefreshCheck)
+      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 6, "the keepalive flush, A3's ensureFresh, the version check, the shift clock, the poll's and the push UX permission re-read");
+      assert.strictEqual(count('document.addEventListener("visibilitychange", onVisible);\n    return () => document.removeEventListener("visibilitychange", onVisible);\n  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);'), 1, "the sixth is the push UX permission re-read, removed on cleanup");
       const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
       assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
       assert.ok(!/loadEastTables\(true\)/.test(ra) && ra.includes("refreshEastTables()"), "the poll's East read goes through the 10-minute cadence");

@@ -5607,6 +5607,9 @@ function CallSchedule() {
     if (!uid) { setPushInfo(null); return null; }
     const s = await pushDevice.state(uid);
     setPushInfo(s);
+    // push UX follow-up (10/12): the Pop-ups box reads the same permission as the push card, so the two never disagree
+    // (it was read once at start: after allowing notifications in the phone's Settings it kept saying "Blocked")
+    if (s && typeof s.permission === "string") setBrowserNotifPermission(s.permission);
     if (s.state === "on") setPushNeedsTap(false);
     return s;
   }, []);
@@ -5650,6 +5653,18 @@ function CallSchedule() {
       notifPrefsDb.pushColumns().then((c) => { pushColsRef.current = c; setPushCols(c); });
     }
   }, [pushCardOpen, pushUid, refreshPushState]);
+  // push UX follow-up (10/12): back in the foreground (e.g. from the phone's Settings, where the Blocked lines send people) the
+  // Pop-ups permission is read again, and an open Notification settings card re-reads the push state - no reload needed.
+  useEffect(() => {
+    if (isPublicMode) return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      try { setBrowserNotifPermission((typeof Notification !== "undefined" && Notification.permission) || "unsupported"); } catch (e) { /* keep the last reading */ }
+      if (pushCardOpen) refreshPushState(pushUid);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);
   // The tap target (helpers.pushDeepLink): ./?tab=<view>[&day=] - read ONCE per page load once signed in, the keys stripped
   // from the URL (history.replaceState; _v and the rest kept) so a refresh does not repeat it; a day opens when the data is
   // loaded (goToDay - its own unread-schedule refusal applies). Nothing on ?public=1. It waits for THIS account's profile and
