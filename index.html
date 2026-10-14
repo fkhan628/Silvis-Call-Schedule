@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ffUYFUT+iMwEvsY/zH87F0EIAp5PQmrQ+vQ2K6yD0aI=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-2IdCoSgOo8nPpE5lxHwP5/sngeS9AO5fvd+vVZl4vzc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-marN6ND3oBWnnAH9yYhjxqlPx0fKXUJabR2qYt8px7s=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-DP6UyBMreyRTj/H4mNuy+Lyet/dYyBQVS2Mz67ch8G4=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -70,6 +70,8 @@
     .cal-skel { display: inline-block; width: 58%; height: 9px; border-radius: 4px; background: #e4e8ee; opacity: 0.9; }
     .cal-mobile-note { display: none; }
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
+    /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
+    .cal-os-short { display: none; }
     .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
     /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
        "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
@@ -130,6 +132,8 @@
       .cal-hol, .cal-wk-label, .cal-note { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
+      .cal-os-long { display: none; }
+      .cal-os-short { display: inline; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -182,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.13a";
+    var APP_VERSION = "2026.10.14a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -590,6 +594,7 @@ function CallSchedule() {
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [publishLabel, setPublishLabel] = useState("");
   const [publishChanges, setPublishChanges] = useState([]);
+  const [publishOverSoft, setPublishOverSoft] = useState([]);
   const [tradeRequests, setTradeRequests] = useState([]);
   const [tradeFrom, setTradeFrom] = useState("");
   const [tradeTo, setTradeTo] = useState("");
@@ -3605,6 +3610,16 @@ function CallSchedule() {
       return [];
     }
   }, [rulesCtx, schedule]);
+  const overSoftByDay = useMemo(() => {
+    if (isPublicMode || !authUser || !rulesCtx || typeof overSoftLimitDays !== "function") return {};
+    const shown = previewGen && previewGen.schedule ? _objectSpread(_objectSpread({}, schedule || {}), previewGen.schedule) : schedule || {};
+    try {
+      return overSoftLimitIndex(overSoftLimitDays(rulesCtx, shown));
+    } catch (e) {
+      console.warn("over-soft-limit days could not be derived (no badge drawn):", e);
+      return {};
+    }
+  }, [isPublicMode, authUser, rulesCtx, schedule, previewGen]);
   const lastRulesWarnRef = useRef("");
   useEffect(() => {
     if (rulesCtxState.error) showToast("Couldn't build the rules context - eligibility checks are unavailable (" + rulesCtxState.error.slice(0, 90) + ").", "error");else if (rulesCtx && rulesCtx.warnings && rulesCtx.warnings.length) {
@@ -4580,6 +4595,7 @@ function CallSchedule() {
       fillOpenOnly: pv.fillOpenOnly === true,
       changes: changes.length,
       uncovered: (pv.diagnostics.uncovered || []).length,
+      overSoftLimit: overSoftLimitAudit(pv.diagnostics.overSoftLimit),
       snapshot: snap.counts || null,
       outcome,
       error: r && r.error ? String(r.error).slice(0, 160) : null
@@ -6395,6 +6411,7 @@ function CallSchedule() {
   const openPublishDialog = () => {
     const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);
     setPublishChanges(changes);
+    setPublishOverSoft(overSoftLimitForChanges(rulesCtx && typeof overSoftLimitDays === "function" ? overSoftLimitDays(rulesCtx, schedule) : [], changes));
     setPublishLabel(computePeriodLabel());
     setShowPublishDialog(true);
   };
@@ -9548,7 +9565,34 @@ function CallSchedule() {
       margin: "0 0 12px",
       lineHeight: 1.5
     }
-  }, publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished !== null && lastPublished !== void 0 && lastPublished.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`), publishChanges.length > 0 && React.createElement("div", {
+  }, publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished !== null && lastPublished !== void 0 && lastPublished.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`), publishChanges.length > 0 && publishOverSoft.length > 0 && React.createElement("div", {
+    "data-testid": "publish-over-soft",
+    style: {
+      border: "1px solid " + T.accentText,
+      borderRadius: 6,
+      padding: "8px 10px",
+      marginBottom: 10,
+      background: T.accentTint
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: T.accentText,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      marginBottom: 3
+    }
+  }, "Over the soft limit (", publishOverSoft.length, ")"), publishOverSoft.map(o => React.createElement("div", {
+    key: o.day + o.id,
+    "data-over-soft": o.day + ":" + o.id,
+    style: {
+      fontSize: 12,
+      fontFamily: mono,
+      color: T.text,
+      lineHeight: 1.5
+    }
+  }, overSoftLimitLine(o, nameOf)))), publishChanges.length > 0 && React.createElement("div", {
     style: {
       maxHeight: 260,
       overflowY: "auto",
@@ -11215,6 +11259,20 @@ function CallSchedule() {
       color: solid ? "#fff" : color,
       border: "1px solid " + color
     });
+    const overSoftBadgeStyle = {
+      display: "inline-flex",
+      alignItems: "center",
+      height: 13,
+      borderRadius: 3,
+      padding: "0 3px",
+      fontSize: 8,
+      fontWeight: 800,
+      lineHeight: 1,
+      whiteSpace: "nowrap",
+      background: "transparent",
+      color: T.accentText,
+      border: "1px solid " + T.accentText
+    };
     const entryStyle = e => e.kind === "open" ? {
       color: T.open,
       fontWeight: 800
@@ -11649,8 +11707,10 @@ function CallSchedule() {
       if (a && a.note) titleBits.push("note: " + a.note);
       const appE = !isPublicMode ? appByDay[d] || null : null;
       if (appE) titleBits.push("APP " + appE.name);
+      const ovS = overSoftByDay[d] || null;
+      if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
       if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
-      const nBadges = awaitingConfirmation(a) ? 1 : 0;
+      const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);
       return React.createElement("div", {
         key: d,
         className: "cal-cell" + (isPreview ? " cal-preview" : ""),
@@ -11712,7 +11772,17 @@ function CallSchedule() {
         "data-testid": "confirm-badge",
         title: "awaiting the scheduler's confirmation",
         style: badge(true, "#c2410c")
-      }, "?")), React.createElement(SlotLine, {
+      }, "?"), ovS && React.createElement("span", {
+        "data-badge": "over-soft",
+        "data-testid": "over-soft-badge",
+        "data-over-soft-id": ovS.id,
+        title: overSoftLimitTitle(ovS, nameOf),
+        style: overSoftBadgeStyle
+      }, React.createElement("span", {
+        className: "cal-os-long"
+      }, overSoftLimitWords(ovS.limit)), React.createElement("span", {
+        className: "cal-os-short"
+      }, ">" + ovS.limit))), React.createElement(SlotLine, {
         role: "P",
         day: d,
         holder: pH,
@@ -11827,7 +11897,14 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), !isPublicMode && appDaysState === "failed" && React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), gridDays.some(gd => overSoftByDay[gd]) && React.createElement("span", {
+      "data-testid": "legend-over-soft"
+    }, React.createElement("span", {
+      style: {
+        color: T.accentText,
+        fontWeight: 800
+      }
+    }, overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))), " = the primary is past his soft limit of primary days this month (the group's, or his own)"), !isPublicMode && appDaysState === "failed" && React.createElement("span", {
       "data-testid": "legend-app-failed",
       style: {
         color: T.open,
@@ -15690,7 +15767,9 @@ function OfferPainterSheet({
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
   const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
-  const cap = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid).primary : null;
+  const capRead = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid) : null;
+  const cap = capRead ? capRead.primary : null;
+  const capSoft = capRead && (cap === null || cap === undefined) ? capRead.preferred : null;
   const days = React.useMemo(() => {
     const out = [];
     const n = new Date(ym.y, ym.m + 1, 0).getDate();
@@ -16325,7 +16404,7 @@ function OfferPainterSheet({
     style: {
       color: text
     }
-  }, periodCount), " day", periodCount === 1 ? "" : "s", cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : "")), React.createElement("div", {
+  }, periodCount), " day", periodCount === 1 ? "" : "s", cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : capSoft !== null && capSoft !== undefined ? ` (soft limit: ${capSoft} primary a month${periodMonths > 1 ? ", " + capSoft * periodMonths + " over the period" : ""})` : "")), React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
@@ -17143,7 +17222,7 @@ function softTag(soft) {
     case "auto-offer-weekday":
       return "auto-offer";
     case "over-preferred-cap":
-      return "over preferred cap " + arg;
+      return "over soft limit " + arg;
     case "over-target":
       return "over target +" + arg;
     case "under-target":
@@ -18106,6 +18185,28 @@ function DayEditor(props) {
   })), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
+  const overSoft = React.useMemo(() => {
+    if (isPublicMode || !ctx || typeof overSoftLimitDays !== "function") return null;
+    try {
+      return overSoftLimitDays(ctx, ctx.schedule, day, day)[0] || null;
+    } catch (e) {
+      console.warn("over-soft-limit check failed for", day, e);
+      return null;
+    }
+  }, [ctx, day, isPublicMode]);
+  const overSoftTag = overSoft ? React.createElement("span", {
+    "data-testid": "editor-over-soft",
+    title: overSoftLimitTitle(overSoft, nameOf),
+    style: {
+      color: T.accentText,
+      border: "1px solid " + T.accentText,
+      borderRadius: 4,
+      padding: "0 6px",
+      fontSize: 11,
+      fontWeight: 700,
+      whiteSpace: "nowrap"
+    }
+  }, overSoftLimitWords(overSoft.limit)) : null;
   const east = ctx && eastDetailsVisible ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];
   const editorBlockDays = React.useMemo(() => {
     const dow = parse(day).getDay();
@@ -18448,7 +18549,7 @@ function DayEditor(props) {
         color: T.muted,
         fontSize: 11
       }
-    }, "(not final yet)"));
+    }, "(not final yet)"), role === "primary" && overSoftTag);
     return React.createElement("div", {
       "data-testid": "editor-" + role + "-block",
       style: {
@@ -18474,7 +18575,7 @@ function DayEditor(props) {
     }, role === "primary" ? "Primary" : "Backup"), holderView(role), locked && React.createElement(Padlock, {
       title: role + " locked",
       size: 11
-    }), confirmBadge, cur && cur.external && React.createElement("span", {
+    }), confirmBadge, role === "primary" && overSoftTag, cur && cur.external && React.createElement("span", {
       "data-testid": "editor-" + role + "-external-tag",
       style: {
         fontSize: 10,
@@ -19282,6 +19383,8 @@ function TotalsCard({
     weekendDays: ctx ? ctx.weekendDays : undefined,
     countBackup: ctx ? !!ctx.countBackupInConsecutive : false
   };
+  const sw = typeof shiftWeightsOf === "function" ? shiftWeightsOf(ctx ? ctx.groupRules : null) : null;
+  const swText = sw ? "primary days x " + sw.primary + " + backup days x " + sw.backup : null;
   const collapseFor = id => !!(surgeonRules && surgeonRules[id] && surgeonRules[id].holidayUnitCountsAsOneDay === true);
   const hasPreview = !!(preview && preview.schedule && Object.keys(preview.schedule).length);
   const sources = [{
@@ -19316,7 +19419,7 @@ function TotalsCard({
     ["primary", "backup"].forEach(role => {
       if (explicit[role] !== null) {
         out[role] = {
-          value: explicit[role] * nMonths,
+          value: Math.round(explicit[role] * nMonths * 10) / 10,
           kind: "explicit"
         };
         return;
@@ -19366,6 +19469,10 @@ function TotalsCard({
   }));
   const hasOutside = outside.some(o => o.rows.length > 0);
   const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  const osMonths = {};
+  sources.forEach(src => {
+    osMonths[src.key] = ctx && typeof overSoftLimitMonths === "function" ? overSoftLimitMonths(ctx, src.sched, range.from, range.to) : [];
+  });
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, _objectSpread(_objectSpread({}, opts), {}, {
@@ -19376,6 +19483,9 @@ function TotalsCard({
       east = eastFor(s.id),
       eastP = countsEast(s.id) ? eastPrimaryFor(s.id) : 0;
     const capUse = t.primary + eastP;
+    const weighted = ttWeightedLoad(t.primary, t.backup, sw),
+      weightedShare = ttWeightedShare(tg.primary.value, tg.backup.value, sw);
+    const overSoft = osMonths[src.key].filter(x => x.id === s.id);
     rows.push({
       id: s.id,
       name: s.name,
@@ -19394,7 +19504,13 @@ function TotalsCard({
       maxRule: maxConsecRule(s.id),
       maxRuleAny: maxConsecAnyRule(s.id),
       deviation: ttDeviation(t.primary, tg.primary.value),
-      deviationB: ttDeviation(t.backup, tg.backup.value)
+      deviationB: ttDeviation(t.backup, tg.backup.value),
+      weighted,
+      weightedShare,
+      weightedImplied: tg.primary.kind === "implied" || tg.backup.kind === "implied",
+      deviationW: weighted === null ? "-" : ttDeviation(weighted, weightedShare),
+      overSoft,
+      overSoftText: overSoft.length && typeof overSoftLimitMonthsText === "function" ? overSoftLimitMonthsText(overSoft, nMonths) : null
     });
   }));
   const capText = r => r.cap === null ? "-" : nMonths > 1 ? r.cap + "/mo" : String(r.cap);
@@ -19408,9 +19524,9 @@ function TotalsCard({
       return;
     }
     try {
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
-      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type", "Weighted"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool", r.weighted === null ? "" : r.weighted]);
+      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside", ""])));
       if (!eastDetailsVisible) {
         const eastCol = headers.indexOf("East days");
         headers.splice(eastCol, 1);
@@ -19456,7 +19572,11 @@ function TotalsCard({
   const devFlag = r => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
   const devColorB = r => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? T.primaryEnd : "#1a8040";
   const devFlagB = r => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
-  const targetSum = r => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
+  const devFlagW = r => r.weightedShare === null || r.weighted === null ? undefined : r.weighted > r.weightedShare ? "over" : r.weighted < r.weightedShare ? "under" : "ok";
+  const devColorW = r => {
+    const f = devFlagW(r);
+    return f === "over" ? "#c04040" : f === "under" ? T.primaryEnd : f === "ok" ? "#1a8040" : "#8a94a0";
+  };
   const overCap = r => r.cap !== null && r.capUse > r.cap * nMonths;
   const overConsec = r => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
   const overConsecAny = r => r.maxRuleAny !== null && r.t.maxConsecutiveAnyRole > r.maxRuleAny;
@@ -19543,7 +19663,7 @@ function TotalsCard({
       color: dk ? "#c0c0d8" : "#3a4a58",
       marginBottom: 8
     }
-  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : "", daysUnread ? React.createElement("strong", {
+  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; ", sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads.", " Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : "", daysUnread ? React.createElement("strong", {
     "data-testid": "totals-days-unread",
     style: {
       color: T.open
@@ -19589,6 +19709,10 @@ function TotalsCard({
   }, "Backup"), React.createElement("th", {
     style: th
   }, "Total"), React.createElement("th", {
+    style: th,
+    "data-testid": "totals-th-weighted",
+    title: swText ? "Weighted load: " + swText + " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "Weighted load: unavailable until the rules engine loads"
+  }, "Weighted"), React.createElement("th", {
     style: th
   }, "Weekend days"), React.createElement("th", {
     style: th,
@@ -19606,16 +19730,16 @@ function TotalsCard({
     title: "Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)"
   }, "East days"), React.createElement("th", {
     style: th,
-    title: eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it"
+    title: (eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"
   }, "Cap (P)", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
     style: th,
-    title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)"
+    title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)"
   }, "Target"), React.createElement("th", {
     style: th,
     title: "Primary days minus the primary target"
   }, "Deviation"), React.createElement("th", {
     style: th,
-    title: "Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool backup slots, open + already held (a locked day counts against its holder) (*)"
+    title: "Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)"
   }, "Target B"), React.createElement("th", {
     style: th,
     title: "Backup days minus the backup target"
@@ -19632,6 +19756,8 @@ function TotalsCard({
     "data-maxconsec": r.t.maxConsecutive,
     "data-maxconsecany": r.t.maxConsecutiveAnyRole,
     "data-east": showEast ? r.east : undefined,
+    "data-weighted": r.weighted === null ? undefined : r.weighted,
+    "data-over-soft": r.overSoft.length ? r.overSoft.map(x => x.month).join(",") : undefined,
     style: {
       borderTop: "1px solid " + border,
       opacity: r.src === "preview" ? 0.85 : 1,
@@ -19655,6 +19781,11 @@ function TotalsCard({
       fontWeight: 700
     })
   }, r.t.total), React.createElement("td", {
+    "data-col": "weighted",
+    style: td,
+    title: sw ? r.t.primary + " x " + sw.primary + " + " + r.t.backup + " x " + sw.backup : undefined
+  }, r.weighted === null ? "-" : r.weighted), React.createElement("td", {
+    "data-col": "weekend",
     style: td
   }, r.t.weekendDays), React.createElement("td", {
     style: td,
@@ -19680,7 +19811,14 @@ function TotalsCard({
       color: overCap(r) ? "#c04040" : td.color
     }),
     title: r.cap === null ? undefined : countsEast(r.id) ? eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts" : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts"
-  }, capText(r)), React.createElement("td", {
+  }, capText(r), r.overSoftText && React.createElement("span", {
+    "data-testid": "totals-over-soft",
+    title: r.overSoftText.title,
+    style: {
+      color: T.accentText,
+      fontWeight: 700
+    }
+  }, " (" + r.overSoftText.text + ")")), React.createElement("td", {
     "data-col": "target",
     style: td
   }, targetText(r)), React.createElement("td", {
@@ -19709,16 +19847,26 @@ function TotalsCard({
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "Total days in ", range.label, " against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviation reads primary days against the primary target, then backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'."), (() => {
-    const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
+  }, "Weighted load in ", range.label, " (", swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days", "; Silvis days only): the solid part of each bar is the primary days, the striped part the backup days. The green mark is the weighted share (", sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target", ") and the red mark the primary cap, read against the solid part. Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviations read the weighted load against the weighted share, then primary days against the primary target and backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'."), (() => {
+    const barW = sw || {
+      primary: 1,
+      backup: 1
+    };
+    const barP = r => r.t.primary * barW.primary,
+      barPB = r => barP(r) + r.t.backup * barW.backup;
+    const barMark = r => ttWeightedShare(r.target, r.targetB, barW);
+    const scale = Math.max(1, ...rows.map(r => Math.max(barPB(r) + r.eastP * barW.primary, r.capUse * barW.primary, r.cap === null ? 0 : r.cap * nMonths * barW.primary, barMark(r) === null ? 0 : barMark(r))));
     const pct = v => Math.min(100, Math.round(v / scale * 100));
     return rows.map(r => React.createElement("div", {
       key: r.id + r.src,
       "data-testid": "fairness-row-" + r.id,
       "data-source": r.src,
       "data-total": r.t.total,
+      "data-weighted": r.weighted === null ? undefined : r.weighted,
+      "data-weighted-share": r.weightedShare === null ? undefined : r.weightedShare,
       "data-deviation": r.deviation,
       "data-deviation-b": r.deviationB,
+      "data-deviation-w": r.deviationW,
       style: {
         display: "flex",
         alignItems: "center",
@@ -19758,36 +19906,49 @@ function TotalsCard({
         left: 0,
         top: 0,
         bottom: 0,
-        width: pct(r.t.total) + "%",
+        width: pct(barP(r)) + "%",
         background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`,
         borderRadius: 4
-      }
+      },
+      title: r.t.primary + " primary day(s) x " + barW.primary
+    }), React.createElement("div", {
+      "data-testid": "fairness-fill-b",
+      style: {
+        position: "absolute",
+        left: pct(barP(r)) + "%",
+        top: 0,
+        bottom: 0,
+        width: Math.max(0, pct(barPB(r)) - pct(barP(r))) + "%",
+        background: `repeating-linear-gradient(45deg,${T.barEnd} 0 3px,transparent 3px 6px)`,
+        borderRadius: 4
+      },
+      title: r.t.backup + " backup day(s) x " + barW.backup
     }), countsEast(r.id) && r.eastP > 0 && React.createElement("div", {
       title: "+ " + r.eastP + (eastDetailsVisible ? " East primary-week" : " other") + " day(s) counted toward the cap (P)",
       style: {
         position: "absolute",
-        left: pct(r.t.total) + "%",
+        left: pct(barPB(r)) + "%",
         top: 0,
         bottom: 0,
-        width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%",
+        width: Math.max(0, pct(barPB(r) + r.eastP * barW.primary) - pct(barPB(r))) + "%",
         background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)"
       }
-    }), targetSum(r) !== null && React.createElement("div", {
+    }), barMark(r) !== null && React.createElement("div", {
       "data-testid": "fairness-target-mark",
-      title: "target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r),
+      title: (sw ? "weighted share" : "target") + " = primary target x " + barW.primary + " + backup target x " + barW.backup + " = " + (r.target === null ? "-" : r.target) + " x " + barW.primary + " + " + (r.targetB === null ? "-" : r.targetB) + " x " + barW.backup + " = " + barMark(r),
       style: {
         position: "absolute",
-        left: pct(targetSum(r)) + "%",
+        left: pct(barMark(r)) + "%",
         top: 0,
         bottom: 0,
         width: 2,
         background: "#1a8040"
       }
     }), r.cap !== null && React.createElement("div", {
-      title: "cap " + r.cap * nMonths,
+      title: "cap (P) " + r.cap * nMonths + " primary days - read against the solid part",
       style: {
         position: "absolute",
-        left: pct(r.cap * nMonths) + "%",
+        left: pct(r.cap * nMonths * barW.primary) + "%",
         top: 0,
         bottom: 0,
         width: 2,
@@ -19800,7 +19961,13 @@ function TotalsCard({
         color: dk ? "#E6ECF5" : "#1F2A3A",
         minWidth: 250
       }
-    }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : "", " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - target B ", r.targetB === null ? "-" : r.targetB, r.targetBKind === "implied" ? "*" : "", " - cap (P) ", r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths, " - ", React.createElement("span", {
+    }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : "", " - weighted ", r.weighted === null ? "-" : r.weighted, r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : "", r.weightedShare !== null && React.createElement("span", {
+      "data-flag": devFlagW(r),
+      style: {
+        color: devColorW(r),
+        fontWeight: 700
+      }
+    }, " (", r.deviationW, ")"), " - target ", r.target === null ? "-" : r.target, r.targetKind === "implied" ? "*" : "", " - target B ", r.targetB === null ? "-" : r.targetB, r.targetBKind === "implied" ? "*" : "", " - cap (P) ", r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths, " - ", React.createElement("span", {
       "data-flag": devFlag(r),
       style: {
         color: devColor(r),
@@ -19812,7 +19979,14 @@ function TotalsCard({
         color: devColorB(r),
         fontWeight: 700
       }
-    }, " / ", r.deviationB, " B"))));
+    }, " / ", r.deviationB, " B"), r.overSoftText && React.createElement("span", {
+      "data-testid": "fairness-over-soft",
+      title: r.overSoftText.title,
+      style: {
+        color: T.accentText,
+        fontWeight: 700
+      }
+    }, " - " + r.overSoftText.text))));
   })()), hasOutside && modeEff !== "pay" && React.createElement("div", {
     "data-testid": "totals-external",
     style: {
@@ -21743,9 +21917,11 @@ function RulesEditor({
       setRawErr(String(e && e.message || e));
     }
   };
-  const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? draft.monthlyCap === null ? "none" : "number" : "default";
-  const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : typeof draft.monthlyCap === "number" ? {
-    primary: draft.monthlyCap
+  const capRaw = draft.monthlyCap;
+  const capMode = capRaw === undefined || capRaw === null ? "default" : capRaw === "none" ? "none" : typeof capRaw === "number" || capRaw && typeof capRaw === "object" && !Array.isArray(capRaw) ? "number" : "invalid";
+  const capGroupSoft = groupRules && groupRules.defaultMonthlyCap && typeof groupRules.defaultMonthlyCap.preferred === "number" && groupRules.defaultMonthlyCap.preferred > 0 ? groupRules.defaultMonthlyCap.preferred : 7;
+  const capObj = capRaw && typeof capRaw === "object" && !Array.isArray(capRaw) ? capRaw : typeof capRaw === "number" ? {
+    primary: capRaw
   } : {};
   const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : typeof capObj.total === "number" ? capObj.total : undefined;
   const setCapPrimary = v => {
@@ -22324,14 +22500,15 @@ function RulesEditor({
       case "monthlyCap":
         return React.createElement("div", null, React.createElement(RuField, {
           T: T,
-          label: "Monthly cap"
+          label: "Monthly cap",
+          hint: "primary days a month; group default = the limits under Group rules"
         }, React.createElement("select", {
           "data-testid": "rules-cap-mode",
           value: capMode,
           onChange: e => {
             const v = e.target.value;
-            if (v === "default") set("monthlyCap", undefined);else if (v === "none") set("monthlyCap", null);else set("monthlyCap", {
-              primary: capPrimaryVal || 8
+            if (v === "default") set("monthlyCap", undefined);else if (v === "none") set("monthlyCap", "none");else if (v === "number") set("monthlyCap", {
+              primary: capPrimaryVal || capGroupSoft
             });
           },
           style: _objectSpread(_objectSpread({}, inp), {}, {
@@ -22341,12 +22518,15 @@ function RulesEditor({
           value: "default"
         }, "group default"), React.createElement("option", {
           value: "none"
-        }, "no cap"), React.createElement("option", {
+        }, "no limit"), React.createElement("option", {
           value: "number"
-        }, "a number"))), capMode === "number" && React.createElement(React.Fragment, null, React.createElement(RuField, {
+        }, "a number"), capMode === "invalid" && React.createElement("option", {
+          value: "invalid",
+          disabled: true
+        }, "not readable - read as the group default"))), capMode === "number" && React.createElement(React.Fragment, null, React.createElement(RuField, {
           T: T,
           label: "Primary days per month",
-          hint: "hard; backup days never count"
+          hint: "hard - Generate and claims stay within it; blank = the group's hard cap; backup days never count"
         }, React.createElement("input", {
           type: "number",
           min: "1",
@@ -22359,11 +22539,13 @@ function RulesEditor({
           })
         })), React.createElement(RuField, {
           T: T,
-          label: "Preferred at most (soft)"
+          label: "Soft limit (primary days)",
+          hint: "a primary beyond it is allowed, with a penalty; blank with a hard cap set = none"
         }, React.createElement("input", {
           type: "number",
           min: "0",
           max: "31",
+          "data-testid": "rules-cap-preferred",
           value: capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred,
           onChange: e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value)),
           style: _objectSpread(_objectSpread({}, inp), {}, {
@@ -22839,8 +23021,25 @@ function RulesEditor({
     }
   }, "Group rules"), React.createElement(RuField, {
     T: T,
-    label: "Default monthly cap (primary days)",
-    hint: "blank = none; backup days never count"
+    label: "Group soft limit (primary days a month)",
+    hint: "a primary beyond it is allowed, with a penalty; blank = none; backup days never count"
+  }, React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "31",
+    "data-testid": "group-default-cap-preferred",
+    value: (() => {
+      const p = gget("defaultMonthlyCap.preferred", null);
+      return typeof p === "number" ? p : "";
+    })(),
+    onChange: e => gset("defaultMonthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value)),
+    style: _objectSpread(_objectSpread({}, inp), {}, {
+      width: 70
+    })
+  })), React.createElement(RuField, {
+    T: T,
+    label: "Group hard cap (primary days a month)",
+    hint: "hard - Generate and claims stay within it; blank = none; backup days never count"
   }, React.createElement("input", {
     type: "number",
     min: "1",
@@ -24927,8 +25126,39 @@ function GenDiagnostics({
   };
   return React.createElement("div", {
     "data-testid": "gen-diagnostics",
-    "data-uncovered-count": (dg.uncovered || []).length
+    "data-uncovered-count": (dg.uncovered || []).length,
+    "data-over-soft-count": Array.isArray(dg.overSoftLimit) ? dg.overSoftLimit.length : undefined
+  }, Array.isArray(dg.overSoftLimit) && React.createElement("div", {
+    style: dg.overSoftLimit.length ? _objectSpread(_objectSpread({}, box), {}, {
+      borderColor: LIGHT.accentText
+    }) : box,
+    "data-testid": "gen-over-soft"
   }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px",
+      color: dg.overSoftLimit.length ? LIGHT.accentText : undefined
+    })
+  }, "Over the soft limit (", dg.overSoftLimit.length, ")"), dg.overSoftLimit.length === 0 ? React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#1a8040",
+      margin: 0
+    }
+  }, "None - nobody this run gives a primary ends that month past his soft monthly limit.") : React.createElement(React.Fragment, null, React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82",
+      margin: "0 0 4px",
+      lineHeight: 1.5
+    }
+  }, "The (L+1)th and later primary day of a holder's calendar month, L = his soft limit (the group's 7, or his own): the generator fills such a day itself under the soft over-limit term, and among the candidates already at their limit the lowest weighted load that month takes it. A hard cap is never passed here. Listed for each holder this run gives a primary in that month - every such day of the month, a later day outside the range included (the run's earlier days push it past the limit), as the Publish dialog lists them."), dg.overSoftLimit.map(o => React.createElement("div", {
+    key: o.day + o.id,
+    "data-over-soft": o.day + ":" + o.id,
+    style: {
+      fontSize: 12,
+      fontFamily: mono
+    }
+  }, overSoftLimitLine(o, nameOf))))), React.createElement("div", {
     style: box
   }, React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
@@ -24994,10 +25224,14 @@ function GenDiagnostics({
   }, "Max consec. any"), React.createElement("th", {
     title: "Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it"
   }, "Cap (P)"), React.createElement("th", {
-    title: "Primary-day target for the month: an explicit monthlyTarget, else min(level, cap) where the level is the water-filled share of ALL the month's pool primary slots, open + already held (a locked day counts against its holder; the window surgeon: her window target)"
+    title: "Primary-day target for the month: an explicit monthlyTarget, else min(level, clip) where the level is the water-filled share of ALL the month's pool primary slots, open + already held (a locked day counts against its holder) and the clip is the soft limit (else the hard cap) or what the rules allow (the window surgeon: her window target)"
   }, "Target P"), React.createElement("th", {
-    title: "Backup-day target for the month: min(level, backup cap) where the level is the water-filled share of ALL the month's pool backup slots, open + already held (a windows surgeon has none)"
-  }, "Target B"))), React.createElement("tbody", null, ids.map(id => {
+    title: "Backup-day target for the month: the weighted share - the backup days that bring primary x w.primary + backup x w.backup to the month's weighted level over ALL the pool's slots, open + already held (two backups per primary below the primary level), within the backup cap and what the rules allow (a windows surgeon has none)"
+  }, "Target B"), React.createElement("th", {
+    title: "Weighted load: primary days x w.primary + backup days x w.backup (Silvis days only; Setup's shift weights, primary 1 / backup 0.5 by default)"
+  }, "Weighted"), React.createElement("th", {
+    title: "Weighted share: Target P x w.primary + Target B x w.backup (the month rows; the range row sums them)"
+  }, "W share"))), React.createElement("tbody", null, ids.map(id => {
     const t = dg.tallies[id];
     const rows = months.map(m => {
       const x = t.months[m] || {};
@@ -25013,7 +25247,11 @@ function GenDiagnostics({
         }
       }, m), React.createElement("td", null, x.primary), React.createElement("td", null, x.backup), React.createElement("td", null, React.createElement("strong", null, x.total)), React.createElement("td", null, x.weekendDays), React.createElement("td", null, x.majorHolidays), React.createElement("td", null, x.minorHolidays), React.createElement("td", null, x.maxConsecutive), React.createElement("td", null, x.maxConsecutiveAnyRole), React.createElement("td", {
         title: x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined
-      }, num(x.cap), x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""), React.createElement("td", null, num(tgtOf(x.target, "primary"))), React.createElement("td", null, num(tgtOf(x.target, "backup"))));
+      }, num(x.cap), x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""), React.createElement("td", null, num(tgtOf(x.target, "primary"))), React.createElement("td", null, num(tgtOf(x.target, "backup"))), React.createElement("td", {
+        "data-col": "weighted"
+      }, num(x.weighted)), React.createElement("td", {
+        "data-col": "weighted-share"
+      }, num(x.weightedShare)));
     });
     const r = t.range || {};
     rows.push(React.createElement("tr", {
@@ -25025,7 +25263,11 @@ function GenDiagnostics({
       }
     }, React.createElement("td", null, nameOf(id)), React.createElement("td", null, "range"), React.createElement("td", null, r.primary), React.createElement("td", null, r.backup), React.createElement("td", null, r.total), React.createElement("td", null, r.weekendDays), React.createElement("td", null, r.majorHolidays), React.createElement("td", null, r.minorHolidays), React.createElement("td", null, r.maxConsecutive), React.createElement("td", null, r.maxConsecutiveAnyRole), React.createElement("td", {
       title: r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined
-    }, num(r.cap), r.eastP ? " (+" + r.eastP + " East P)" : ""), React.createElement("td", null, num(tgtOf(r.target, "primary"))), React.createElement("td", null, num(tgtOf(r.target, "backup")))));
+    }, num(r.cap), r.eastP ? " (+" + r.eastP + " East P)" : ""), React.createElement("td", null, num(tgtOf(r.target, "primary"))), React.createElement("td", null, num(tgtOf(r.target, "backup"))), React.createElement("td", {
+      "data-col": "weighted"
+    }, num(r.weighted)), React.createElement("td", {
+      "data-col": "weighted-share"
+    }, num(r.weightedShare))));
     return rows;
   }))))), hasShares && React.createElement("div", {
     style: box,
@@ -25034,14 +25276,14 @@ function GenDiagnostics({
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
       margin: "0 0 4px"
     })
-  }, "Implied shares (water-filled share per role: target vs what the rules allow)"), React.createElement("p", {
+  }, "Implied shares (water-filled primary share, weighted backup share: target vs what the rules allow)"), React.createElement("p", {
     style: {
       fontSize: 11,
       color: "#5B6B82",
       margin: "0 0 6px",
       lineHeight: 1.5
     }
-  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's clip (Clip P; the backup cap for backup): a member below the level takes his clip and the rest is shared by the others, target = min(level, clip). A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
+  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
     const I = IT.months[m];
     if (!I || !I.members) return null;
     return React.createElement("div", {
@@ -25055,7 +25297,7 @@ function GenDiagnostics({
         fontFamily: mono
       },
       "data-testid": "gen-shares-head-" + m
-    }, m, ": ", I.poolSlots ? "primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare) : "pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare), I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : "", typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""), React.createElement("div", {
+    }, m, ": ", I.poolSlots ? "primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare) + (typeof I.weightedShare === "number" ? " at the primary level; weighted level " + I.weightedShare + " (P x " + (I.weights ? I.weights.primary : 1) + " + B x " + (I.weights ? I.weights.backup : 0.5) + ")" + (I.makeupRounds ? ", " + I.makeupRounds + " makeup round(s)" : "") : "") : "pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare), I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : "", typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""), React.createElement("div", {
       className: "table-wrap",
       style: css.tableWrap
     }, React.createElement("table", {
@@ -25064,10 +25306,14 @@ function GenDiagnostics({
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Surgeon"), React.createElement("th", null, "Target P"), React.createElement("th", null, "Allowed P"), React.createElement("th", {
       title: "Primary days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share"
     }, "Held P"), React.createElement("th", {
-      title: "min(preferred cap, cap - 1) minus East primary-week days (a cap that counts them); '-' when uncapped"
+      title: "The soft limit (else the hard cap) minus East primary-week days (a cap that counts them); '-' when neither is set"
     }, "Clip P"), React.createElement("th", null, "Target B"), React.createElement("th", null, "Allowed B"), React.createElement("th", {
       title: "Backup days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share"
-    }, "Held B"))), React.createElement("tbody", null, ids.filter(id => I.members[id]).map(id => {
+    }, "Held B"), React.createElement("th", {
+      title: "The clips the fill used: min(Clip P, Allowed P + Held P) / min(backup cap, Allowed B + Held B)"
+    }, "Fill clip P / B"), React.createElement("th", {
+      title: "Weighted share = Target P x w.primary + Target B x w.backup; P makeup = extra primaries a member at his backup clip takes up to his primary clip"
+    }, "W share"))), React.createElement("tbody", null, ids.filter(id => I.members[id]).map(id => {
       const M = I.members[id];
       const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget;
       const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget;
@@ -25084,7 +25330,7 @@ function GenDiagnostics({
           color: shortB ? "#a83232" : undefined
         },
         title: shortB ? "the rules allow fewer open backup slots than the target" : undefined
-      }, M.allowedBackup, shortB ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.backup));
+      }, M.allowedBackup, shortB ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.backup), React.createElement("td", null, M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"), React.createElement("td", null, num(M.weightedShare), M.makeupPrimary > 0 ? " (+" + num(M.makeupPrimary) + " P makeup)" : ""));
     })))));
   })), React.createElement("div", {
     style: box
