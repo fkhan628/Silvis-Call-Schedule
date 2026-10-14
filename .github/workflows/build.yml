@@ -64,6 +64,9 @@ on:
       - "generator.js"
       - "importer.js"
       - "app-styles.js"
+      # the loader list's last module (Prompt 31 Part B): the call-totals counter
+      # ported verbatim from the Davenport app.
+      - "call-totals.js"
       # Vendored runtime libraries (vendor/README.md): a bump is a deploy - the
       # suites re-check the pinned hashes and APP_VERSION bumps so cache-busted
       # clients refetch them.
@@ -185,6 +188,15 @@ jobs:
 
       - name: Totals helpers tests
         run: node test/totals.test.js
+
+      # Prompt 31 Part B: call-totals.js, the Davenport app's call-totals counter
+      # ported verbatim (commit eff3b81) - the bodies pinned by sha256, the
+      # copied fixture's exact card, invariants, periods, purity, time zones.
+      # Pure - no network. The clone parity leg needs a davenport-ref clone
+      # beside the repo; a runner has none, so it prints SKIPPED (CT_REQUIRE_CLONE
+      # is never set here - Faraz's pre-push run sets it).
+      - name: Call totals counter tests
+        run: node test/call-totals.test.js
 
       # Call pay (Faraz 9/27): the primary-pay helpers (fake rates only - the real
       # ones live in the authenticated call_pay_settings table, never the repo),

@@ -2061,6 +2061,24 @@ try {
     await page.waitForSelector("[data-testid=cal-month]", { timeout: 15000 });
   }
 
+  // Prompt 31 Part B (B1): call-totals.js - the ?v= loader list's last module, the Davenport call-totals counter ported
+  // verbatim (eff3b81) - loads in the real page: its names sit beside helpers.js's fmt / parse / addD in the page's one
+  // global scope (a name declared twice is a SyntaxError and the module would never load; nothing renders it before B4,
+  // so only this check would notice), and the page computes the copied fixture's card with it, exactly.
+  {
+    const fxCT = JSON.parse(fs.readFileSync(path.join(ROOT, "test", "fixtures", "call-totals-card-synthetic-2026-10-14.json"), "utf8"));
+    const canonCT = (v) => JSON.stringify(v, (k, x) => x && typeof x === "object" && !Array.isArray(x) ? Object.keys(x).sort().reduce((o, kk) => { o[kk] = x[kk]; return o; }, {}) : x);
+    const got = await page.evaluate((input) => {
+      const names = { callTotalsFor: typeof callTotalsFor, callTotalPeriods: typeof callTotalPeriods, weekBillingCredits: typeof weekBillingCredits, fmt: typeof fmt, NIGHT_KEYS: typeof NIGHT_KEYS !== "undefined" ? JSON.stringify(NIGHT_KEYS) : "undefined" };
+      if (names.callTotalsFor !== "function") return { names, out: null };
+      return { names, out: JSON.stringify(callTotalsFor(input)) };
+    }, fxCT.input).catch(e => ({ names: null, out: null, err: String(e && e.message || e).split("\n")[0] }));
+    const loadedCT = got.names && got.names.callTotalsFor === "function" && got.names.callTotalPeriods === "function" && got.names.weekBillingCredits === "function" && got.names.fmt === "function" && got.names.NIGHT_KEYS === '["mon","tue","wed","thu"]';
+    if (!loadedCT) fail(`B1 call-totals.js: the page does not expose the ported counter beside helpers.js's fmt - ${JSON.stringify(got).slice(0, 300)}`);
+    else if (!got.out || canonCT(JSON.parse(got.out)) !== canonCT(fxCT.expected)) fail(`B1 call-totals.js: the page's callTotalsFor(fixture.input) differs from fixture.expected - ${String(got.out).slice(0, 200)}`);
+    else ok("B1 call-totals.js loads in the page (callTotalsFor / callTotalPeriods / weekBillingCredits / NIGHT_KEYS beside helpers.js's fmt) and gives the copied fixture's exact card");
+  }
+
   // Every nav tab, screenshot each.
   const tabs = await page.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
   const expectedTabs = ["setup", "calendar", "openshifts", "myschedule", "timeoff", "totals", "settings"];

@@ -289,8 +289,9 @@
     // Cache-bust uses APP_VERSION (defined at the top of this file). The vendored
     // libraries come first (React before ReactDOM; supabase.js before config.js,
     // which captures its global) - vendor/README.md records versions and hashes.
+    // call-totals.js comes last (Prompt 31 Part B): it reuses helpers.js's fmt / parse / addD.
     var _v = APP_VERSION;
-    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
+    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js','call-totals.js'].forEach(function(f) {
       document.write('<script src="'+f+'?v='+_v+'"><\/script>');
     });
   </script>

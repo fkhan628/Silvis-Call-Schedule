@@ -147,6 +147,9 @@ const RUNTIME_FILTER = [
   // Prompt 30: the phone-push worker Pages serves beside the page (registered by config.js pushDevice, scope = the app
   // folder) - a worker-only push must run the gate and bump APP_VERSION.
   "sw.js",
+  // pin moved deliberately 10/13: Prompt 31 Part B adds the loader list's last module, call-totals.js (the Davenport
+  // call-totals counter ported verbatim from its commit eff3b81) - a module-only push must deploy like any loader file.
+  "call-totals.js",
   // The CI-owned outputs Pages serves (merge review 10/2): build.yml writes them, but a hand-committed copy pushed to
   // main (with tests, say) must run the gate and be rebuilt over instead of going live unbuilt.
   "index.html", "version.json",
@@ -667,7 +670,9 @@ const idxNoComments = idx.replace(/<!--[\s\S]*?-->/g, "");
 ok(!/<script[^>]+src="https?:\/\//.test(idx), "index-source.html still loads a script from a remote origin");
 ok(!/unpkg\.com|cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com/.test(idxNoComments), "index-source.html still names a CDN host (unpkg / jsdelivr / cdnjs)");
 ok(!/<script type="module">/.test(idx), "index-source.html still carries the <script type=\"module\"> SDK import");
-ok(idx.includes("['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js']"), "the ?v=APP_VERSION loader list must start with the vendored trio (React, ReactDOM, supabase-js, in that order) followed by config.js");
+// pin moved deliberately 10/13: Prompt 31 Part B appends call-totals.js, LAST - after helpers.js (fmt / parse / addD,
+// which the ported counter reuses) and east-feed.js.
+ok(idx.includes("['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js','call-totals.js']"), "the ?v=APP_VERSION loader list must start with the vendored trio (React, ReactDOM, supabase-js, in that order) followed by config.js, and end with call-totals.js");
 // config.js: the UMD declares a non-configurable `var supabase` global; config.js captures it into window._supabaseSDK
 // before its own `var supabase` REST wrapper takes the name (a `const` would be a SyntaxError against the UMD's var).
 const cfg = read("config.js");

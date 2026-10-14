@@ -2370,6 +2370,27 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(both, [], `helpers.js and ${f} both declare: ${both.join(", ")}`);
     }
   });
+  // Prompt 31 Part B (10/13): call-totals.js, the loader list's last module (the Davenport call-totals counter ported
+  // verbatim), shares the page's one global lexical scope with every other page script - a name declared twice is a
+  // SyntaxError and that script never loads. Checked both ways: against helpers.js (whose fmt / parse / addD it reuses),
+  // the other modules and the JSX block's module scope (column-0 declarations plus the React hooks it destructures).
+  check("P31B: no call-totals.js top-level name collides with helpers.js / config.js / rules.js / east-feed.js / generator.js / importer.js / app-styles.js or index-source.html's module scope", () => {
+    const decl = (text) => {
+      const out = new Set([...text.matchAll(/^(?:const|let|var|function|class|async function)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]));
+      for (const m of text.matchAll(/^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*React;/gm)) m[1].split(",").map(s => s.trim()).filter(Boolean).forEach(n => out.add(n));
+      return out;
+    };
+    const ct = decl(fs.readFileSync(path.join(ROOT, "call-totals.js"), "utf8"));
+    assert.ok(ct.has("callTotalsFor") && ct.has("NIGHT_KEYS"), "the scan reads call-totals.js's own names");
+    const jsxAt = src.indexOf('<script type="text/babel">');
+    const page = decl(src.slice(jsxAt, src.indexOf("</script>", jsxAt)));
+    assert.ok(page.has("CallSchedule") && page.has("useState"), "the scan reads the JSX block's module scope");
+    for (const [f, other] of [["helpers.js", null], ["config.js", null], ["rules.js", null], ["east-feed.js", null], ["generator.js", null], ["importer.js", null], ["app-styles.js", null], ["index-source.html", page]]) {
+      const names = other || decl(fs.readFileSync(path.join(ROOT, f), "utf8"));
+      const both = [...ct].filter(n => names.has(n));
+      assert.deepStrictEqual(both, [], `call-totals.js and ${f} both declare: ${both.join(", ")}`);
+    }
+  });
   // Prompt 12 B: the importer prefixes a flagged existingAssignments row's schedule_days note with one exact marker;
   // the app shows a "confirm" badge on a locked day whose note starts with it (DayEditor role row beside the padlock,
   // month grid cell). The literal lives in both files and must stay byte-identical.
@@ -5328,7 +5349,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const laAt = code.indexOf("  const logAudit = (action, summary, details) => {"), laEnd = code.indexOf("\n  };\n", laAt);
       assert.ok(withOpts[0].at > laAt && withOpts[0].at < laEnd, "that insert is logAudit's");
       assert.strictEqual((code.match(/\breturning\s*:/g) || []).length, 1, "`returning:` appears once in index-source.html's code");
-      ["helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js"].forEach(f => assert.ok(!/\bdb\.insert\(/.test(strip(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " calls db.insert"));
+      // Prompt 31 Part B (10/13): + call-totals.js (the call-totals counter writes nothing)
+      ["helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js", "call-totals.js"].forEach(f => assert.ok(!/\bdb\.insert\(/.test(strip(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " calls db.insert"));
       const cfg = strip(fs.readFileSync(path.join(ROOT, "config.js"), "utf8"));
       assert.ok(!/\bdb\.insert\((?![)$])/.test(cfg), "config.js calls db.insert (only its own log lines and the wrapper's hint name it)");
       const ins = cfg.slice(cfg.indexOf("async insert(table, row, opts) {"), cfg.indexOf("async update(table, id, data) {"));
@@ -11710,7 +11732,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(SRC.includes('<span data-testid="account-role" style={{...muted,marginLeft:6}}>({isApp ? "APP" : (userProfile?.role || "viewer")})</span>'), "Settings > Account names the APP");
     });
     check("P29 pins: the generator, the rules, the exports, Totals, pay and the edge functions never read the APP days", () => {
-      for (const f of ["generator.js", "rules.js", "importer.js", "east-feed.js"]) {
+      // Prompt 31 Part B (10/13): + call-totals.js (the call-totals card counts surgeon roles only, never an APP day)
+      for (const f of ["generator.js", "rules.js", "importer.js", "east-feed.js", "call-totals.js"]) {
         const t = fs.readFileSync(path.join(ROOT, f), "utf8");
         assert.ok(!/appDays|app_call|is_app|appByDay/.test(t), f + " mentions the APP days");
       }

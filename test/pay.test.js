@@ -572,7 +572,10 @@ check("a year switch never shows another year's call-ins: loadPay drops a stale 
   assert.ok(/Note \(optional - no patient or contact details\)/.test(card), "the call-in note asks for no patient and no contact details");
 });
 check("the pay tables are named only in config.js payDb", () => {
-  const files = ["index-source.html", "helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js", "importer.js"].filter(f => fs.existsSync(path.join(ROOT, f)));
+  // Prompt 31 Part B (10/13): + call-totals.js (the call-totals card shows no $ and reads no pay table), and it must be
+  // there to be scanned (the existence filter would otherwise skip it silently).
+  const files = ["index-source.html", "helpers.js", "rules.js", "generator.js", "east-feed.js", "app-styles.js", "importer.js", "call-totals.js"].filter(f => fs.existsSync(path.join(ROOT, f)));
+  assert.ok(files.includes("call-totals.js"), "call-totals.js is missing - nothing scanned it for a pay table");
   const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");   // comments may explain the tables
   files.forEach(f => assert.ok(!/call_pay_/.test(code(fs.readFileSync(path.join(ROOT, f), "utf8"))), f + " names a call_pay_ table in code (only config.js payDb may)"));
   const pd = CFG.slice(CFG.indexOf("const payDb = {"), CFG.indexOf("\n};", CFG.indexOf("const payDb = {")));
