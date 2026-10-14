@@ -27,6 +27,16 @@
 //      JSON. The clone's HEAD is also compared: a counter changed after eff3b81 means a re-port (a failure under
 //      CT_REQUIRE_CLONE=1, a printed NOTE otherwise - so a later Davenport commit never turns this repo's gate red by
 //      itself). No clone (CI): "clone parity: SKIPPED", unless CT_REQUIRE_CLONE=1.
+//   T10 the Silvis adapter (B2), on test/fixtures/call-totals-silvis-shapes-2026-10-14.json (the copied fixture re-shaped
+//      as east_feed rows, a resolved code map, the Silvis roster and day assignments by id): the counter's input is the
+//      copied fixture's and its output the copied `expected`, exactly; forecast rows never count; ids map to roster codes
+//      (never the id itself); every unknown state (cache pending / failed / empty, Davenport roster loading / failed /
+//      without the code, Silvis schedule not loaded) names its reason and turns that site's cells, the total and the
+//      weighted total into "?", never zeros; malformed inputs and a throwing read give ok:false, never a throw (the
+//      card renders inside the app - a throw would take the whole app to the crash screen); the device date
+//   T11 the card model: titles, periods, row ids / labels / order, cell text ("-", "7.5", "?"), sub rows, the month list
+//      (with "?" for months before the cache's first Davenport week), notes, the data line and the footnote - the
+//      text hand-transcribed in the shapes fixture's expectedCells; every string ASCII, never "East" or "DSG"
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -536,6 +546,336 @@ console.log("\n[T9] clone parity (Davenport's own counter at " + PORT_COMMIT + "
     }
   }
 }
+
+// ======================================================================================================================
+// T10 / T11 - the Silvis adapter and the card model (Prompt 31 Part B step B2). The adapter is Silvis's own: it shapes the
+// app's data (east_feed rows, the resolved Davenport id map, the published schedule by roster id) into the ported
+// counter's input and its output into the card's text. It restates no counting rule (T7 and the T10 code scan).
+const SHAPES = "test/fixtures/call-totals-silvis-shapes-2026-10-14.json";
+const SH = fs.existsSync(path.join(ROOT, SHAPES)) ? JSON.parse(readRoot(SHAPES)) : null;
+const ADAPTER_MARK = "// ---- Silvis adapter";
+const ADAPTER_NAMES = ["CT_UNKNOWN_DAVENPORT_ID", "callTotalsDeviceToday", "callTotalsWeeks", "callTotalsSilvisRows", "callTotalsInputs", "callTotalsCardModel", "callTotalsCardFor"];
+const SA = (() => {
+  try {
+    return vm.runInContext("({" + ADAPTER_NAMES.map(n => n + ": typeof " + n + ' !== "undefined" ? ' + n + " : null").join(", ") + "})", SBOX);
+  } catch (e) { return {}; }
+})();
+const NOA = "the adapter is not defined (call-totals.js has no Silvis adapter yet)";
+const callA = (name, ...args) => { if (typeof SA[name] !== "function") throw new Error(NOA + ": " + name); return copy(SA[name](...args)); };
+const shapeArgs = (over) => Object.assign({
+  feedRows: copy(SH.feedRows), feedState: "ok", idByCode: copy(SH.eastIdByCode), schedule: copy(SH.schedule), scheduleKnown: true,
+  roster: copy(SH.roster), personId: SH.personId, today: SH.today,
+}, over || {});
+const cardFor = (over) => callA("callTotalsCardFor", shapeArgs(over));
+const periodOf = (m, key) => (m && Array.isArray(m.periods) ? m.periods.find(p => p.key === key) : null);
+const rowsOf = (m, key) => { const p = periodOf(m, key); return p ? p.rows.map(r => [r.id, r.worked, r.scheduled, r.all]) : null; };
+const monthsOf = (m) => (m && Array.isArray(m.months) && Array.isArray(m.monthCols) ? m.months.map(x => [x.month, x.label].concat(m.monthCols.map(c => x.cells[c.id]))) : null);
+const EC = SH ? SH.expectedCells : null;
+const DAV_ROWS = ["dav-daycall", "dav-nights", "dav-weekend", "dav-holiday", "dav-backup", "dav-backup-daycall", "dav-backup-nights", "dav-backup-weekend", "dav-backup-holiday"];
+const SIL_ROWS = ["silvis-primary", "silvis-backup"];
+// every string (keys included) a model carries, for the ASCII / wording pins
+const stringsOf = (v, acc) => { acc = acc || []; if (typeof v === "string") acc.push(v); else if (v && typeof v === "object") Object.keys(v).forEach(k => { acc.push(k); stringsOf(v[k], acc); }); return acc; };
+
+console.log("\n[T10] the Silvis adapter");
+check("T10 call-totals.js defines the adapter (" + ADAPTER_NAMES.join(", ") + ") once, AFTER the verbatim block under a `" + ADAPTER_MARK + "` marker, and the export guard (require) names them", () => {
+  const a = MOD.indexOf(ADAPTER_MARK), v = MOD.indexOf(VERBATIM_CLOSE);
+  assert.ok(a > 0 && v > 0 && a > v, "the adapter marker is missing or not after the verbatim block");
+  assert.strictEqual(MOD.split(ADAPTER_MARK).length - 1, 1, "one adapter marker");
+  const tail = MOD.slice(a);
+  const bad = ADAPTER_NAMES.filter(n => (MOD.match(new RegExp("^(function|const) " + n + "\\b", "gm")) || []).length !== 1 || !new RegExp("^(function|const) " + n + "\\b", "m").test(tail));
+  assert.deepStrictEqual(bad, [], "defined once, in the adapter section");
+  ADAPTER_NAMES.forEach(n => assert.ok(SA[n] !== null && SA[n] !== undefined, n + " is not visible in the page's global scope"));
+  const M = require(path.join(ROOT, MODULE));
+  assert.deepStrictEqual(ADAPTER_NAMES.filter(n => M[n] === undefined), [], "require() does not export every adapter name");
+});
+check("T10 the shapes fixture is the copied Davenport fixture re-shaped: its published feed rows' data are the copied weeks (the one synthetic XXX list aside), its schedule the copied Silvis rows by roster id plus the 10/20 outside cover, and it names the copied file", () => {
+  assert.ok(SH && fx, SHAPES + " or " + FIXTURE + " is missing");
+  assert.strictEqual(SH.expectedFrom, FIXTURE);
+  const pub = SH.feedRows.filter(r => !(r.data && r.data.isForecast === true));
+  const weeks = {};
+  pub.forEach(r => { const d = copy(r.data); delete d.vacations; weeks[r.week_monday] = d; });
+  assert.ok(canon(weeks) === canon(fx.input.weeks), firstDiff(weeks, fx.input.weeks));
+  assert.deepStrictEqual(pub.filter(r => r.data.vacations).map(r => [r.week_monday, r.data.vacations.map(x => x.code).join()]), [["2026-08-31", "XXX"]]);
+  assert.deepStrictEqual(SH.feedRows.filter(r => r.data && r.data.isForecast === true).map(r => r.week_monday), ["2026-11-30", "2027-02-01"]);
+  const codeOf = {}; SH.roster.forEach(r => { codeOf[r.id] = r.code; });
+  const rows = Object.keys(SH.schedule).sort().filter(d => d !== "2026-10-20").map(d => ({ day: d, primary_code: SH.schedule[d].primary ? codeOf[SH.schedule[d].primary] : null, backup_code: SH.schedule[d].backup ? codeOf[SH.schedule[d].backup] : null }));
+  assert.deepStrictEqual(rows, fx.input.silvisRows.map(r => ({ day: r.day, primary_code: r.primary_code, backup_code: r.backup_code })));
+  assert.deepStrictEqual([SH.schedule["2026-10-20"].primary, SH.schedule["2026-10-20"].externalCover], [null, "Visiting surgeon"]);
+});
+check("T10 callTotalsWeeks: the east_feed rows keyed by week_monday with their data as cached (the vacation list rides along - the counter ignores it); forecast-marked rows, malformed keys, non-object data and non-rows are dropped", () => {
+  const w = callA("callTotalsWeeks", SH.feedRows);
+  assert.deepStrictEqual(Object.keys(w), Object.keys(fx.input.weeks).sort());
+  assert.deepStrictEqual(w["2026-08-31"].vacations, [{ code: "XXX", start: "2026-09-01", end: "2026-09-03" }]);
+  assert.ok(!w["2026-11-30"] && !w["2027-02-01"], "a forecast row is in the weeks");
+  const noisy = SH.feedRows.concat([null, 5, "x", { week_monday: null, data: {} }, { week_monday: "2026-13-02", data: { dayCall: "s6" } }, { week_monday: "notes", data: {} },
+    { week_monday: "2026-07-06", data: null }, { week_monday: "2026-07-13", data: "x" }, { week_monday: "2026-07-20", data: [] }, { week_monday: "2026-07-27T00:00:00", data: { dayCall: "s6" } }]);
+  const wn = callA("callTotalsWeeks", noisy);
+  assert.deepStrictEqual(Object.keys(wn), Object.keys(fx.input.weeks).concat(["2026-07-27"]).sort(), "a timestamp-shaped week_monday is read by its date; everything else malformed is dropped");
+  [null, undefined, "x", 5, {}].forEach(v => assert.deepStrictEqual(callA("callTotalsWeeks", v), {}, JSON.stringify(v)));
+});
+check("T10 callTotalsSilvisRows: every day of the schedule map in date order, roster ids -> upper-cased roster codes, null for an id with no roster code (NEVER the id itself), the outside-cover day's primary null; malformed keys and entries dropped", () => {
+  const rows = callA("callTotalsSilvisRows", SH.schedule, SH.roster);
+  const want = fx.input.silvisRows.map(r => ({ day: r.day, primary_code: r.primary_code, backup_code: r.backup_code }));
+  want.splice(7, 0, { day: "2026-10-20", primary_code: null, backup_code: "BDA" });
+  assert.deepStrictEqual(rows, want);
+  const odd = callA("callTotalsSilvisRows", { "2026-10-02": { primary: "s9", backup: "s2" }, "2026-10-01": { primary: "s1", backup: "s5" }, "2026-10-03": null, notes: { primary: "s1" }, "2026-13-01": { primary: "s1" }, "2026-10-04": "s1" },
+    [{ id: "s1", code: " fak " }, { id: "s2" }, null, 5, { id: "s5", code: "" }]);
+  assert.deepStrictEqual(odd, [{ day: "2026-10-01", primary_code: "FAK", backup_code: null }, { day: "2026-10-02", primary_code: null, backup_code: null }]);
+  [[null, SH.roster], ["x", SH.roster], [SH.schedule, null]].forEach(([s, r]) => assert.ok(Array.isArray(callA("callTotalsSilvisRows", s, r))));
+  assert.ok(callA("callTotalsSilvisRows", SH.schedule, null).every(x => x.primary_code === null && x.backup_code === null), "no roster: no code, never an id");
+});
+check("T10 callTotalsInputs on the shapes fixture: the counter's input is the copied fixture's (weeks, Silvis rows, code FAK, today) with a one-entry Davenport roster [{ id: s6, name: FAK }], and callTotalsFor of it is the copied `expected` EXACTLY - the forecast rows never count (dsgTo stays 2026-12-27) and the 2026-10-20 outside cover changes nothing", () => {
+  const inp = callA("callTotalsInputs", shapeArgs());
+  assert.ok(inp && inp.ok === true, JSON.stringify(inp).slice(0, 200));
+  assert.deepStrictEqual([inp.code, inp.today, inp.davenport.known, inp.davenport.why, inp.davenport.fetchedAt, inp.silvis.known, inp.silvis.why], ["FAK", "2026-10-14", true, null, "2026-10-14T13:00:00.000+00:00", true, null]);
+  assert.deepStrictEqual(inp.counter.roster, [{ id: "s6", name: "FAK" }]);
+  assert.deepStrictEqual([inp.counter.code, inp.counter.today], ["FAK", "2026-10-14"]);
+  const out = ct(inp.counter);
+  assert.ok(out && canon(out) === canon(fx.expected), out ? firstDiff(out, fx.expected) : NONE);
+  assert.strictEqual(out.range.dsgTo, "2026-12-27");
+});
+check("T10 callTotalsCardFor on the shapes fixture: every period row's and every month cell's numbers are the copied `expected`'s (worked, scheduled, worked + scheduled)", () => {
+  const m = cardFor();
+  assert.ok(m && m.ok === true, JSON.stringify(m).slice(0, 200));
+  const KEY = { "silvis-primary": "silvisP", "silvis-backup": "silvisB", "dav-daycall": "dc", "dav-nights": "nights", "dav-weekend": "wknd", "dav-holiday": "hol", "dav-backup": "dsgB",
+    "dav-backup-daycall": "dcB", "dav-backup-nights": "nightsB", "dav-backup-weekend": "wkndB", "dav-backup-holiday": "holB", total: "total", weighted: "weighted" };
+  const bad = [];
+  ["month", "ytd", "year", "rolling12"].forEach(pk => {
+    const e = fx.expected.periods[pk], p = periodOf(m, pk);
+    if (!p || p.from !== e.from || p.to !== e.to) { bad.push(pk + " span"); return; }
+    p.rows.forEach(r => { const k = KEY[r.id]; if (!r.num || r.num.worked !== e.worked[k] || r.num.scheduled !== e.scheduled[k] || r.num.all !== e.worked[k] + e.scheduled[k]) bad.push(pk + " " + r.id + " " + JSON.stringify(r.num)); });
+  });
+  const COL = { silvisP: "silvisP", silvisB: "silvisB", dav: "dsg", davB: "dsgB", total: "total", weighted: "weighted" };
+  fx.expected.months.forEach((e, i) => {
+    const x = m.months[i];
+    if (!x || x.month !== e.month || x.pending !== (e.scheduled.total > 0)) { bad.push(e.month + " month"); return; }
+    Object.keys(COL).forEach(c => { const v = e.worked[COL[c]] + e.scheduled[COL[c]]; const t = v === 0 ? "-" : (Number.isInteger(v) ? String(v) : v.toFixed(1)); if (x.cells[c] !== t) bad.push(e.month + " " + c + " " + x.cells[c] + " != " + t); });
+  });
+  assert.deepStrictEqual(bad, []);
+});
+const UNKNOWN_DAV = [
+  [{ feedState: "pending" }, "the Davenport cache is still loading"],
+  [{ feedState: "failed" }, "the Davenport cache could not be read"],
+  [{ feedState: undefined }, "the Davenport cache could not be read"],
+  [{ feedRows: [] }, "no Davenport weeks are cached yet"],
+  [{ feedRows: "FORECAST_ONLY" }, "no Davenport weeks are cached yet"],
+  [{ idByCode: null }, "the Davenport roster is still loading"],
+  [{ idByCode: { _source: "failed" } }, "the Davenport roster could not be read"],
+  [{ idByCode: { _source: "davenport", MAB: "s2" } }, "code FAK is not in the Davenport roster"],
+  [{ idByCode: { _source: "davenport", FAK: 6 } }, "code FAK is not in the Davenport roster"],
+];
+check("T10 each Davenport-unknown state (cache pending / failed / no state, no published week, roster loading / failed / without the code / a non-string id) names its reason, hands the counter no weeks and a placeholder id, shows ? in every Davenport cell, the total and the weighted total (no sub rows), and keeps the Silvis numbers", () => {
+  assert.ok(SH, SHAPES + " is missing");
+  const base = cardFor();
+  assert.ok(base && base.ok === true, NOA);
+  const bad = [];
+  UNKNOWN_DAV.forEach(([over, why]) => {
+    // Object.assign, not copy(): a JSON round trip would drop `feedState: undefined` and test the default instead
+    const o = Object.assign({}, over); if (o.feedRows === "FORECAST_ONLY") o.feedRows = SH.feedRows.filter(r => r.data && r.data.isForecast === true);
+    const inp = callA("callTotalsInputs", shapeArgs(o)), m = cardFor(o);
+    const tag = JSON.stringify(over);
+    if (!inp.ok || inp.davenport.known !== false || inp.davenport.why !== why) { bad.push(tag + " why " + JSON.stringify(inp.davenport)); return; }
+    if (canon(inp.counter.weeks) !== "{}" || canon(inp.counter.roster) !== canon([{ id: SA.CT_UNKNOWN_DAVENPORT_ID, name: "FAK" }])) bad.push(tag + " counter");
+    if (!m.ok || m.davenportKnown !== false || m.silvisKnown !== true) { bad.push(tag + " model " + JSON.stringify(m).slice(0, 120)); return; }
+    if (canon(m.notes) !== canon(["Davenport numbers unavailable - " + why + "; its cells and the totals show ?."])) bad.push(tag + " notes " + JSON.stringify(m.notes));
+    if (!m.dataLine.includes("Davenport: not available (" + why + ")")) bad.push(tag + " dataLine " + m.dataLine);
+    m.periods.forEach(p => {
+      const bp = periodOf(base, p.key);
+      p.rows.forEach(r => {
+        if (r.sub) bad.push(tag + " " + p.key + " sub row " + r.id);
+        const unknownRow = DAV_ROWS.includes(r.id) || r.id === "total" || r.id === "weighted";
+        if (unknownRow && (r.worked !== "?" || r.scheduled !== "?" || r.all !== "?" || r.num !== null)) bad.push(tag + " " + p.key + " " + r.id + " not ?");
+        if (SIL_ROWS.includes(r.id)) { const b = bp.rows.find(x => x.id === r.id); if (canon([r.worked, r.scheduled, r.all, r.num]) !== canon([b.worked, b.scheduled, b.all, b.num])) bad.push(tag + " " + p.key + " " + r.id + " changed"); }
+      });
+    });
+    m.months.forEach((x, i) => {
+      if (["dav", "davB", "total", "weighted"].some(c => x.cells[c] !== "?")) bad.push(tag + " " + x.month + " not ?");
+      if (x.cells.silvisP !== base.months[i].cells.silvisP || x.cells.silvisB !== base.months[i].cells.silvisB) bad.push(tag + " " + x.month + " Silvis changed");
+    });
+  });
+  assert.deepStrictEqual(bad, []);
+});
+check("T10 the Silvis schedule not loaded (scheduleKnown false): its reason, no Silvis rows handed to the counter, ? in the Silvis cells, the total and the weighted total, the Davenport numbers unchanged; both sites unknown: both reasons, every cell ?", () => {
+  const base = cardFor();
+  const inp = callA("callTotalsInputs", shapeArgs({ scheduleKnown: false })), m = cardFor({ scheduleKnown: false });
+  assert.deepStrictEqual([inp.silvis.known, inp.silvis.why, inp.counter.silvisRows, inp.davenport.known], [false, "the Silvis schedule is not loaded", [], true]);
+  assert.ok(m.ok && m.silvisKnown === false && m.davenportKnown === true, JSON.stringify(m).slice(0, 160));
+  const bad = [];
+  m.periods.forEach(p => p.rows.forEach(r => {
+    const b = periodOf(base, p.key).rows.find(x => x.id === r.id);
+    if ((SIL_ROWS.includes(r.id) || r.id === "total" || r.id === "weighted") && (r.worked !== "?" || r.scheduled !== "?" || r.all !== "?" || r.num !== null)) bad.push(p.key + " " + r.id + " not ?");
+    if (DAV_ROWS.includes(r.id) && (!b || canon([r.worked, r.scheduled, r.all, r.num]) !== canon([b.worked, b.scheduled, b.all, b.num]))) bad.push(p.key + " " + r.id + " changed");
+  }));
+  assert.deepStrictEqual(bad, []);
+  const both = cardFor({ scheduleKnown: false, feedState: "failed" });
+  assert.deepStrictEqual(both.notes, ["Davenport numbers unavailable - the Davenport cache could not be read; its cells and the totals show ?.", "Silvis numbers unavailable - the Silvis schedule is not loaded; its cells and the totals show ?."]);
+  assert.ok(both.periods.every(p => p.rows.every(r => r.worked === "?" && r.scheduled === "?" && r.all === "?")) && both.months.every(x => Object.values(x.cells).every(c => c === "?")), "every cell ? when both sites are unknown");
+});
+check("T10 refusals: a person with no roster entry, a roster entry with no code, no arguments, an impossible today - ok:false with the title and a reason, never zeros", () => {
+  const cases = [
+    [{ personId: "s9" }, /no roster entry for s9/],
+    [{ personId: "" }, /no roster entry/],
+    [{ roster: SH.roster.map(r => (r.id === "s1" ? { id: "s1", name: "Khan", code: " " } : r)) }, /no roster code for Khan/],
+    [{ today: "2026-02-30" }, /not a date: "2026-02-30"/],
+    [{ today: undefined }, /not a date/],
+  ];
+  const bad = [];
+  cases.forEach(([over, rx]) => { const m = cardFor(over); if (!m || m.ok !== false || m.title !== "My call - Silvis + Davenport" || !rx.test(String(m.error)) || m.periods) bad.push(JSON.stringify(over).slice(0, 60) + " -> " + JSON.stringify(m).slice(0, 160)); });
+  [undefined, null, {}, 5].forEach(a => { const m = callA("callTotalsCardFor", a); if (!m || m.ok !== false || !m.error) bad.push(String(a) + " -> " + JSON.stringify(m)); });
+  assert.deepStrictEqual(bad, []);
+  const inp = callA("callTotalsInputs", shapeArgs({ roster: SH.roster.map(r => (r.id === "s1" ? Object.assign({}, r, { code: "fak" }) : r)) }));
+  assert.deepStrictEqual([inp.ok, inp.code, inp.counter.roster[0].name], [true, "FAK", "FAK"], "a lower-case roster code is counted upper-cased");
+});
+check("T10 crash-safe: malformed rows, maps, rosters and id maps never throw (the card renders inside the app; the only error boundary is the whole app's) - and a read that throws comes back ok:false 'the totals could not be computed (...)'", () => {
+  const bad = [];
+  const weird = [
+    { feedRows: [null, 5, "x", { week_monday: "2026-10-12", data: { dayCall: "s6", holidayCoverage: "nope", nights: 7, dayCallOverrides: 3, isBackup: "yes" } }, { week_monday: "2026-10-19", data: { dayCall: { id: "s6" }, holidayCoverage: { "2026-10-20": null, "2026-10-21": 5 }, nights: { mon: ["s6"] } } }] },
+    { schedule: null }, { schedule: "x" }, { schedule: { "2026-10-01": null, "2026-10-02": "s1", "2026-10-03": { primary: {}, backup: 5 }, notes: { primary: "s1" } } },
+    { roster: [null, 5, { id: "s1", code: "FAK" }] }, { roster: "x" }, { roster: null },
+    { idByCode: "x" }, { idByCode: 5 }, { idByCode: { _source: "davenport", FAK: { id: "s6" } } }, { idByCode: [] },
+    { feedRows: SH.feedRows.map(r => Object.assign({}, r, { fetched_at: r.week_monday === "2026-10-12" ? "garbage" : null })) },
+    { today: 20261014 }, { today: null }, { feedState: { ok: true } }, { scheduleKnown: "yes" },
+  ];
+  weird.forEach(over => {
+    let m; try { m = cardFor(over); } catch (e) { bad.push(JSON.stringify(over).slice(0, 80) + " THREW " + e.message); return; }
+    if (!m || typeof m.ok !== "boolean" || m.title !== "My call - Silvis + Davenport" || (m.ok === false && !m.error)) bad.push(JSON.stringify(over).slice(0, 80) + " -> " + JSON.stringify(m).slice(0, 120));
+  });
+  const boomRow = Object.defineProperty({ week_monday: "2026-10-12" }, "data", { enumerable: true, get() { throw new Error("boom in a row"); } });
+  const boomDay = Object.defineProperty({}, "2026-10-01", { enumerable: true, get() { throw new Error("boom in a day"); } });
+  [[{ feedRows: [boomRow] }, "boom in a row"], [{ schedule: boomDay }, "boom in a day"]].forEach(([over, msg]) => {
+    let m; try { m = SA.callTotalsCardFor ? copy(SA.callTotalsCardFor(shapeArgs(over))) : null; } catch (e) { bad.push(msg + " THREW " + e.message); return; }
+    if (!m || m.ok !== false || m.error !== "the totals could not be computed (" + msg + ")" || m.title !== "My call - Silvis + Davenport") bad.push(msg + " -> " + JSON.stringify(m));
+  });
+  assert.deepStrictEqual(bad, []);
+});
+check("T10 the counter is handed published rows only: callTotalsInputs takes no forecast / override input (extra keys change nothing), and the adapter's code reads no Davenport week field and no busy-day, forecast, override, Central-today or shift-weight source", () => {
+  const plain = callA("callTotalsInputs", shapeArgs());
+  const extra = callA("callTotalsInputs", shapeArgs({ forecastRows: [{ week_monday: "2026-11-30", data: { isForecast: true, dayCall: "s6" } }], overrideRows: [{ day: "2026-10-15", person_id: "s1", busy: true }], eastForecastRows: [1], eastOverrideRows: [1], previewGen: { schedule: { "2026-10-16": { primary: "s1" } } } }));
+  assert.ok(canon(plain) === canon(extra), firstDiff(extra, plain));
+  // the adapter section = the marker .. the export guard (the guard itself names the ported functions to export them)
+  const a = MOD.indexOf(ADAPTER_MARK), g = MOD.indexOf('if (typeof module !== "undefined" && module.exports) {');
+  assert.ok(a > 0 && g > a, "no adapter section before the export guard");
+  const code = stripComments(MOD.slice(a, g));
+  const m = code.match(/dayCallOverrides|holidayCoverage|NIGHT_KEYS|\.nights\??\.|\.nights\??\[|\.dayCall\b|\.isBackup\b|weekBillingCredits|deriveKhanBusyDays|deriveFierceWeeks|eastForecast|forecastFromFeedRows|east_overrides|applyOverrides|overridesByPerson|todayCentral|shiftAccounting|shiftWeightsOf|previewGen|groupRules/);
+  assert.strictEqual(m && m[0], null);
+  assert.ok(/callTotalsFor\(/.test(code), "the adapter counts through callTotalsFor");
+});
+{
+  const code = [
+    'const vm = require("vm"), fs = require("fs"), path = require("path");',
+    'const sb = { console, window: {}, document: undefined, navigator: { userAgent: "node-test" }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, fetch: () => { throw new Error("no fetch"); }, setTimeout, clearTimeout };',
+    "sb.globalThis = sb; vm.createContext(sb);",
+    'for (const f of ["helpers.js", "east-feed.js", "call-totals.js"]) vm.runInContext(fs.readFileSync(path.join(process.argv[1], f), "utf8"), sb, { filename: f });',
+    'const p2 = (n) => String(n).padStart(2, "0"); const local = () => { const d = new Date(); return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()); };',
+    'const before = local(); const dev = vm.runInContext("typeof callTotalsDeviceToday === \\"function\\" ? callTotalsDeviceToday() : null", sb); const after = local();',
+    'const sh = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));',
+    'const cf = vm.runInContext("typeof callTotalsCardFor === \\"function\\" ? callTotalsCardFor : null", sb);',
+    'const card = cf ? cf({ feedRows: sh.feedRows, feedState: "ok", idByCode: sh.eastIdByCode, schedule: sh.schedule, scheduleKnown: true, roster: sh.roster, personId: sh.personId, today: sh.today }) : null;',
+    'process.stdout.write(JSON.stringify({ tz: process.env.TZ, off: new Date(2026, 9, 24).getTimezoneOffset(), dev, okDev: dev === before || dev === after, card }));',
+  ].join("\n");
+  const inZone = (TZ) => {
+    const r = cp.spawnSync(process.execPath, ["-e", code, ROOT, path.join(ROOT, SHAPES)], { env: Object.assign({}, process.env, { TZ }), encoding: "utf8" });
+    if (r.status !== 0) return { err: String(r.stderr || r.error).slice(0, 300) };
+    try { return JSON.parse(r.stdout); } catch (e) { return { err: "bad output: " + String(r.stdout).slice(0, 200) }; }
+  };
+  const chi = inZone("America/Chicago"), tok = inZone("Asia/Tokyo");
+  check("T10 the device date: callTotalsDeviceToday() is the device's own local YYYY-MM-DD (children proven in America/Chicago, offset 300, and Asia/Tokyo, offset -540), and the shapes card - its data line's cache date included - is the same text in both zones", () => {
+    assert.deepStrictEqual([chi.tz, chi.off, tok.tz, tok.off], ["America/Chicago", 300, "Asia/Tokyo", -540], JSON.stringify({ chi: chi.err, tok: tok.err }));
+    assert.ok(chi.okDev === true && tok.okDev === true && /^\d{4}-\d{2}-\d{2}$/.test(String(chi.dev)), "device date: " + JSON.stringify([chi.dev, tok.dev]));
+    assert.ok(chi.card && tok.card && chi.card.ok === true, NOA + " " + JSON.stringify({ chi: chi.err, tok: tok.err }));
+    assert.ok(canon(chi.card) === canon(tok.card), firstDiff(chi.card, tok.card));
+    assert.ok(EC && chi.card.dataLine === EC.dataLine, "data line: " + chi.card.dataLine);
+  });
+}
+
+console.log("\n[T11] the card model");
+const ROW_SPEC = [
+  ["silvis-primary", "Silvis primary days", false, false, false], ["silvis-backup", "Silvis backup days", false, false, false],
+  ["dav-daycall", "Davenport day-call days", false, false, false], ["dav-nights", "Davenport weeknights", false, false, false],
+  ["dav-weekend", "Davenport weekend days", false, false, false], ["dav-holiday", "Davenport holiday days", false, false, false],
+  ["dav-backup", "Davenport backup-week days", true, false, false],
+  ["dav-backup-daycall", "day call", false, true, false], ["dav-backup-nights", "weeknights", false, true, false],
+  ["dav-backup-weekend", "weekend days", false, true, false], ["dav-backup-holiday", "holiday days", false, true, false],
+  ["total", "Total call days (both sites)", true, false, true], ["weighted", "Weighted (backup roles count 0.5)", true, false, false],
+];
+check("T11 the head: title 'My call - Silvis + Davenport', subtitle 'only you see this', today / year / code, the four periods in order (This month, Year to date, Full year, 12 months) with their spans, M/D/YYYY range text and start notes", () => {
+  const m = cardFor();
+  assert.ok(m && m.ok === true, NOA);
+  assert.deepStrictEqual([m.title, m.subtitle, m.today, m.year, m.code], ["My call - Silvis + Davenport", "only you see this", "2026-10-14", 2026, "FAK"]);
+  assert.deepStrictEqual(m.periods.map(p => [p.key, p.label, p.from, p.to]), [["month", "This month", "2026-10-01", "2026-10-31"], ["ytd", "Year to date", "2026-01-01", "2026-10-14"], ["year", "Full year", "2026-01-01", "2026-12-31"], ["rolling12", "12 months", "2025-10-15", "2026-10-14"]]);
+  assert.deepStrictEqual(m.periods.map(p => [p.rangeText, p.startsNote]), ["month", "ytd", "year", "rolling12"].map(k => [EC.periods[k].rangeText, EC.periods[k].startsNote]));
+});
+check("T11 the period rows: ids, labels, order and the strong / sub / top flags of the design (3.5); every cell's text - worked, scheduled, total - is the hand-transcribed expectedCells for all four periods ('-' for 0, '7.5' for a half)", () => {
+  const m = cardFor();
+  assert.ok(m && m.ok === true, NOA);
+  assert.deepStrictEqual(periodOf(m, "year").rows.map(r => [r.id, r.label, r.strong, r.sub, r.top]), ROW_SPEC);
+  const bad = [];
+  ["month", "ytd", "year", "rolling12"].forEach(k => { const got = rowsOf(m, k); if (canon(got) !== canon(EC.periods[k].rows)) bad.push(k + ": " + firstDiff(got, EC.periods[k].rows)); });
+  assert.deepStrictEqual(bad, []);
+});
+check("T11 the backup-week sub rows show only when the period's backup-week days (worked + scheduled) are above 0 and Davenport is known: June 2026 (none) has no sub rows, the year has all four", () => {
+  const jun = cardFor({ today: "2026-06-14" });
+  assert.ok(jun && jun.ok === true, NOA);
+  assert.deepStrictEqual(rowsOf(jun, "month").map(r => r[0]), ["silvis-primary", "silvis-backup", "dav-daycall", "dav-nights", "dav-weekend", "dav-holiday", "dav-backup", "total", "weighted"]);
+  assert.deepStrictEqual(rowsOf(jun, "month").find(r => r[0] === "dav-backup"), ["dav-backup", "-", "-", "-"]);
+  assert.strictEqual(rowsOf(jun, "year").filter(r => /^dav-backup-/.test(r[0])).length, 4);
+});
+check("T11 the month list: columns Silvis P / Silvis B / Davenport / Dav. backup / Total / Wtd, Jan..Dec of today's year, ' *' on a month with scheduled days, every cell the hand-transcribed expectedCells (worked + scheduled), and the '*' note", () => {
+  const m = cardFor();
+  assert.ok(m && m.ok === true, NOA);
+  assert.deepStrictEqual(m.monthCols, [{ id: "silvisP", label: "Silvis P" }, { id: "silvisB", label: "Silvis B" }, { id: "dav", label: "Davenport" }, { id: "davB", label: "Dav. backup" }, { id: "total", label: "Total" }, { id: "weighted", label: "Wtd" }]);
+  const got = monthsOf(m);
+  assert.ok(canon(got) === canon(EC.months), firstDiff(got, EC.months));
+  assert.deepStrictEqual(m.months.filter(x => x.pending).map(x => x.month), ["2026-10", "2026-11", "2026-12"]);
+  assert.deepStrictEqual(m.monthNotes, EC.monthNotes);
+});
+check("T11 the hand-transcribed variants: Davenport unknown (the roster still loading) and the Silvis schedule not loaded - the year rows, the month list, the start notes, the notes and the data line", () => {
+  const bad = [];
+  [["davenportUnknown", { idByCode: null }], ["silvisUnknown", { scheduleKnown: false }]].forEach(([name, over]) => {
+    const v = EC[name], m = cardFor(over);
+    if (canon(v.set) !== canon(over)) bad.push(name + " fixture set " + JSON.stringify(v.set));
+    if (!m || m.ok !== true) { bad.push(name + " " + JSON.stringify(m).slice(0, 120)); return; }
+    if (canon(rowsOf(m, "year")) !== canon(v.year)) bad.push(name + " year: " + firstDiff(rowsOf(m, "year"), v.year));
+    if (canon(monthsOf(m)) !== canon(v.months)) bad.push(name + " months: " + firstDiff(monthsOf(m), v.months));
+    if (canon(m.notes) !== canon(v.notes)) bad.push(name + " notes " + JSON.stringify(m.notes));
+    if (m.dataLine !== v.dataLine) bad.push(name + " dataLine " + m.dataLine);
+    if (periodOf(m, "rolling12").startsNote !== v.rolling12StartsNote) bad.push(name + " rolling12 note " + periodOf(m, "rolling12").startsNote);
+    if (v.ytdStartsNote !== undefined && periodOf(m, "ytd").startsNote !== v.ytdStartsNote) bad.push(name + " ytd note " + periodOf(m, "ytd").startsNote);
+  });
+  assert.deepStrictEqual(bad, []);
+});
+check("T11 months before the cache's first Davenport week show ? (Davenport, Dav. backup, Total, Wtd) - never a '-' that reads as no call - with a note naming that week; the start notes name it on the chips; the data line starts there (shapes fixture minus the weeks before 2026-08-31)", () => {
+  const v = EC.cacheFrom20260831;
+  const m = cardFor({ feedRows: SH.feedRows.filter(r => r.week_monday >= v.dropWeeksBefore) });
+  assert.ok(m && m.ok === true, NOA);
+  const got = monthsOf(m);
+  assert.ok(canon(got) === canon(v.months), firstDiff(got, v.months));
+  assert.deepStrictEqual(m.months.filter(x => x.beforeCache).map(x => x.month), ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"]);
+  assert.deepStrictEqual([m.monthNotes, periodOf(m, "ytd").startsNote, m.dataLine], [v.monthNotes, v.ytdStartsNote, v.dataLine]);
+  assert.deepStrictEqual(m.notes, [], "the cache start is a note on the months and chips, not an unavailable site");
+  const mid = cardFor({ feedRows: SH.feedRows.filter(r => r.week_monday >= "2026-09-07") });
+  assert.deepStrictEqual(monthsOf(mid).find(x => x[0] === "2026-09").slice(2), ["1", "1", "?", "?", "?", "?"], "a month the cache covers only in part (cache from 9/7) is ?, never an undercount that reads as complete");
+  const full = cardFor();
+  assert.deepStrictEqual(full.months.filter(x => x.beforeCache), [], "a cache starting before Jan 1 marks no month");
+});
+check("T11 the data line and the footnote are the transcribed text: data from / to for both sites with the cache's newest published fetched_at (forecast rows' later fetched_at ignored), today's device date in the footnote; no data line date is hard-coded (a cache without fetched_at drops the refresh clause)", () => {
+  const m = cardFor();
+  assert.ok(m && m.ok === true, NOA);
+  assert.deepStrictEqual([m.dataLine, m.footnote, m.notes], [EC.dataLine, EC.footnote, EC.notes]);
+  const nf = cardFor({ feedRows: SH.feedRows.map(r => { const x = copy(r); delete x.fetched_at; return x; }) });
+  assert.strictEqual(nf.dataLine, "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 12/29/2025 to 12/27/2026 (its last published week).");
+  const ns = cardFor({ schedule: {} });
+  assert.ok(ns.dataLine.startsWith("Data: Silvis: no days on file; Davenport from 12/29/2025"), ns.dataLine);
+  assert.ok(/^Worked = on or before 6\/1\/2027 \(this device's date\)/.test(cardFor({ today: "2027-06-01" }).footnote));
+});
+check("T11 every string of every model state (ok, each unknown state, refusals, the late cache) is ASCII and never says East or DSG (/\\beast\\b|dsg/i), keys included", () => {
+  const models = [cardFor(), cardFor({ scheduleKnown: false }), cardFor({ feedRows: SH.feedRows.filter(r => r.week_monday >= "2026-08-31") }), cardFor({ personId: "s9" }), cardFor({ today: "x" })]
+    .concat(UNKNOWN_DAV.map(([over]) => cardFor(over.feedRows === "FORECAST_ONLY" ? { feedRows: [] } : Object.assign({}, over))));
+  const bad = [];
+  models.forEach((m, i) => stringsOf(m).forEach(s => { if (/[^\x00-\x7F]/.test(s) || /\beast\b|dsg/i.test(s)) bad.push(i + ": " + s.slice(0, 80)); }));
+  assert.ok(models[0] && models[0].ok === true, NOA);
+  assert.deepStrictEqual(bad, []);
+});
 
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed ? 1 : 0);

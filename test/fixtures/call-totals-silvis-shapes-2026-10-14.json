@@ -1,0 +1,238 @@
+{
+  "_about": [
+    "Silvis shapes for the call-totals card (Prompt 31 Part B step B2). SYNTHETIC data.",
+    "It re-shapes call-totals-card-synthetic-2026-10-14.json (the Davenport session's fixture, copied byte for byte) the way the Silvis",
+    "app holds it: feedRows = its 9 weeks as east_feed cache rows (data = the week as published; the 2026-08-31 row also",
+    "carries a synthetic list for code XXX, which the counter ignores) plus two forecast-marked rows that must never count;",
+    "eastIdByCode = the resolved code -> Davenport id map; roster = the six Silvis roster entries (ids and codes as in the",
+    "seed); schedule = its Silvis rows as day assignments by roster id, plus 2026-10-20 covered from outside the roster",
+    "(primary null). callTotalsCardFor on these must give the copied file's `expected` numbers (expectedFrom);",
+    "expectedCells is the card's text HAND-TRANSCRIBED from that `expected` (cells: worked / scheduled / total; months:",
+    "Silvis P, Silvis B, Davenport, Dav. backup, Total, Wtd). Variants: Davenport unknown (eastIdByCode null), Silvis",
+    "unknown (scheduleKnown false), and a cache whose first week is 2026-08-31 (months before it show ?)."
+  ],
+  "expectedFrom": "test/fixtures/call-totals-card-synthetic-2026-10-14.json",
+  "today": "2026-10-14",
+  "personId": "s1",
+  "roster": [
+    {"id":"s1","name":"Khan","code":"FAK"},
+    {"id":"s2","name":"Burchett","code":"MAB"},
+    {"id":"s3","name":"Acton","code":"BDA"},
+    {"id":"s4","name":"Philip","code":"AFP"},
+    {"id":"s5","name":"Fierce","code":"NF"},
+    {"id":"s6","name":"Sarkar","code":"SRK"}
+  ],
+  "eastIdByCode": {"_source":"davenport","DJA":"s1","MCC":"s2","RPC":"s3","KJH":"s4","REH":"s5","FAK":"s6","ARW":"s7"},
+  "feedRows": [
+    {"week_monday":"2025-12-29","data":{"dayCall":"s6","isBackup":false,"nights":{"mon":"s1","tue":"s2","wed":"s3","thu":"s4","wknd":"s7"}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-02-09","data":{"dayCall":"s3","isBackup":false,"nights":{"mon":"s1","tue":"s6","wed":"s2","thu":"s4","wknd":"s5"},"holidayCoverage":{"2026-02-14":{"surgeonId":"s6","role":"swap_coverage","type":"swap","name":"Saturday swap coverage"}}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-06-15","data":{"dayCall":"s2","isBackup":false,"nights":{"mon":"s1","tue":"s3","wed":"s4","thu":"s5","wknd":"s7"}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-08-31","data":{"dayCall":"s2","isBackup":false,"nights":{"mon":"s1","tue":"s3","wed":"s4","thu":"s6","wknd":"s6"},"dayCallOverrides":{"2026-09-02":"s6"},"vacations":[{"code":"XXX","start":"2026-09-01","end":"2026-09-03"}]},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-09-07","data":{"dayCall":"s6","isBackup":false,"nights":{"mon":"s5","tue":"s7","wed":"s1","thu":"s2","wknd":"s4"},"dayCallOverrides":{"2026-09-11":"s4"},"holidayCoverage":{"2026-09-07":{"surgeonId":"s3","role":"holiday_24h","type":"minor","hours":"7a–7a","name":"Labor Day"}}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-09-28","data":{"dayCall":"s1","isBackup":true,"nights":{"mon":"s6","tue":"s2","wed":"s3","thu":"s4","wknd":"s6"}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-10-12","data":{"dayCall":"s6","isBackup":false,"nights":{"mon":"s1","tue":"s2","wed":"s6","thu":"s3","wknd":"s4"}},"fetched_at":"2026-10-14T13:00:00.000+00:00"},
+    {"week_monday":"2026-11-23","data":{"dayCall":"s1","isBackup":false,"nights":{"mon":"s6","tue":"s2","wed":"s3","thu":"s4","wknd":"s5"},"holidayCoverage":{"2026-11-26":{"surgeonId":"s6","role":"holiday_24h","type":"major","hours":"7a–7a","name":"Thanksgiving"}}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-12-21","data":{"dayCall":"s6","isBackup":true,"nights":{"mon":"s1","tue":"s2","wed":"s3","thu":"s4","wknd":"s5"},"holidayCoverage":{"2026-12-25":{"surgeonId":"s6","role":"holiday_24h","type":"major","hours":"7a–7a","name":"Christmas"}}},"fetched_at":"2026-10-07T18:00:00.000+00:00"},
+    {"week_monday":"2026-11-30","data":{"isForecast":true,"dayCall":"s6","isBackup":false,"nights":{"mon":"s6","tue":"s6","wed":"s6","thu":"s6","wknd":"s6"},"fakBusyProbabilityByDay":{"2026-11-30":0.9}},"fetched_at":"2026-10-15T09:00:00.000+00:00"},
+    {"week_monday":"2027-02-01","data":{"isForecast":true,"dayCall":"s6","isBackup":false,"nights":{"mon":"s1","tue":"s2","wed":"s3","thu":"s4","wknd":"s6"}},"fetched_at":"2026-10-15T09:00:00.000+00:00"}
+  ],
+  "schedule": {
+    "2026-09-14": {"primary":"s1","backup":"s2","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-09-15": {"primary":"s3","backup":"s1","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-09-16": {"primary":"s2","backup":"s3","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-09-17": {"primary":null,"backup":null,"primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-10-10": {"primary":"s4","backup":"s1","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-10-11": {"primary":"s1","backup":"s5","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-10-14": {"primary":"s6","backup":"s1","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-10-20": {"primary":null,"backup":"s3","primaryLocked":true,"backupLocked":false,"source":"manual","externalCover":"Visiting surgeon","note":null},
+    "2026-10-24": {"primary":"s1","backup":"s2","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2026-11-05": {"primary":"s5","backup":"s1","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2027-01-02": {"primary":"s1","backup":"s3","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null},
+    "2027-01-03": {"primary":"s5","backup":"s6","primaryLocked":false,"backupLocked":false,"source":"generated","externalCover":null,"note":null}
+  },
+  "expectedCells": {
+    "periods": {
+      "month": {
+        "rangeText": "10/1/2026 - 10/31/2026",
+        "startsNote": "",
+        "rows": [
+          ["silvis-primary","1","1","2"],
+          ["silvis-backup","2","-","2"],
+          ["dav-daycall","3","4","7"],
+          ["dav-nights","1","-","1"],
+          ["dav-weekend","-","-","-"],
+          ["dav-holiday","-","-","-"],
+          ["dav-backup","3","-","3"],
+          ["dav-backup-daycall","-","-","-"],
+          ["dav-backup-nights","-","-","-"],
+          ["dav-backup-weekend","3","-","3"],
+          ["dav-backup-holiday","-","-","-"],
+          ["total","10","5","15"],
+          ["weighted","7.5","5","12.5"]
+        ]
+      },
+      "ytd": {
+        "rangeText": "1/1/2026 - 10/14/2026",
+        "startsNote": "Silvis days start 9/14/2026.",
+        "rows": [
+          ["silvis-primary","2","-","2"],
+          ["silvis-backup","3","-","3"],
+          ["dav-daycall","13","-","13"],
+          ["dav-nights","3","-","3"],
+          ["dav-weekend","3","-","3"],
+          ["dav-holiday","-","-","-"],
+          ["dav-backup","4","-","4"],
+          ["dav-backup-daycall","-","-","-"],
+          ["dav-backup-nights","1","-","1"],
+          ["dav-backup-weekend","3","-","3"],
+          ["dav-backup-holiday","-","-","-"],
+          ["total","28","-","28"],
+          ["weighted","24.5","-","24.5"]
+        ]
+      },
+      "year": {
+        "rangeText": "1/1/2026 - 12/31/2026",
+        "startsNote": "Silvis days start 9/14/2026.",
+        "rows": [
+          ["silvis-primary","2","1","3"],
+          ["silvis-backup","3","1","4"],
+          ["dav-daycall","13","4","17"],
+          ["dav-nights","3","1","4"],
+          ["dav-weekend","3","-","3"],
+          ["dav-holiday","-","2","2"],
+          ["dav-backup","4","8","12"],
+          ["dav-backup-daycall","-","6","6"],
+          ["dav-backup-nights","1","-","1"],
+          ["dav-backup-weekend","3","-","3"],
+          ["dav-backup-holiday","-","2","2"],
+          ["total","28","17","45"],
+          ["weighted","24.5","12.5","37"]
+        ]
+      },
+      "rolling12": {
+        "rangeText": "10/15/2025 - 10/14/2026",
+        "startsNote": "Davenport weeks are cached from 12/29/2025 - nothing earlier is counted. Silvis days start 9/14/2026.",
+        "rows": [
+          ["silvis-primary","2","-","2"],
+          ["silvis-backup","3","-","3"],
+          ["dav-daycall","16","-","16"],
+          ["dav-nights","3","-","3"],
+          ["dav-weekend","3","-","3"],
+          ["dav-holiday","-","-","-"],
+          ["dav-backup","4","-","4"],
+          ["dav-backup-daycall","-","-","-"],
+          ["dav-backup-nights","1","-","1"],
+          ["dav-backup-weekend","3","-","3"],
+          ["dav-backup-holiday","-","-","-"],
+          ["total","31","-","31"],
+          ["weighted","27.5","-","27.5"]
+        ]
+      }
+    },
+    "months": [
+      ["2026-01","Jan","-","-","4","-","4","4"],
+      ["2026-02","Feb","-","-","1","-","1","1"],
+      ["2026-03","Mar","-","-","-","-","-","-"],
+      ["2026-04","Apr","-","-","-","-","-","-"],
+      ["2026-05","May","-","-","-","-","-","-"],
+      ["2026-06","Jun","-","-","-","-","-","-"],
+      ["2026-07","Jul","-","-","-","-","-","-"],
+      ["2026-08","Aug","-","-","-","-","-","-"],
+      ["2026-09","Sep","1","1","10","1","13","12"],
+      ["2026-10","Oct *","2","2","8","3","15","12.5"],
+      ["2026-11","Nov *","-","1","3","-","4","3.5"],
+      ["2026-12","Dec *","-","-","-","8","8","4"]
+    ],
+    "monthNotes": ["* includes scheduled days (after today)"],
+    "notes": [],
+    "dataLine": "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 12/29/2025 to 12/27/2026 (its last published week; cache refreshed 10/14/2026).",
+    "footnote": "Worked = on or before 10/14/2026 (this device's date); scheduled = after it. Every number counts role-days, so one date can count twice (a Davenport day-call day and a weeknight, or a Davenport day and a Silvis day). Davenport days are counted the way the Davenport app's Stats > Billing counts them: each day of a service week, each weeknight, Fri + Sat + Sun for a weekend, 2 days for a covered holiday; backup-week roles are listed apart. Silvis: one 07:00-07:00 day = 1. Weighted: every backup role (Silvis backup days, Davenport backup-week days) counts 0.5.",
+    "davenportUnknown": {
+      "set": {"idByCode":null},
+      "notes": ["Davenport numbers unavailable - the Davenport roster is still loading; its cells and the totals show ?."],
+      "year": [
+        ["silvis-primary","2","1","3"],
+        ["silvis-backup","3","1","4"],
+        ["dav-daycall","?","?","?"],
+        ["dav-nights","?","?","?"],
+        ["dav-weekend","?","?","?"],
+        ["dav-holiday","?","?","?"],
+        ["dav-backup","?","?","?"],
+        ["total","?","?","?"],
+        ["weighted","?","?","?"]
+      ],
+      "rolling12StartsNote": "Silvis days start 9/14/2026.",
+      "months": [
+        ["2026-01","Jan","-","-","?","?","?","?"],
+        ["2026-02","Feb","-","-","?","?","?","?"],
+        ["2026-03","Mar","-","-","?","?","?","?"],
+        ["2026-04","Apr","-","-","?","?","?","?"],
+        ["2026-05","May","-","-","?","?","?","?"],
+        ["2026-06","Jun","-","-","?","?","?","?"],
+        ["2026-07","Jul","-","-","?","?","?","?"],
+        ["2026-08","Aug","-","-","?","?","?","?"],
+        ["2026-09","Sep","1","1","?","?","?","?"],
+        ["2026-10","Oct *","2","2","?","?","?","?"],
+        ["2026-11","Nov *","-","1","?","?","?","?"],
+        ["2026-12","Dec","-","-","?","?","?","?"]
+      ],
+      "dataLine": "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport: not available (the Davenport roster is still loading)."
+    },
+    "silvisUnknown": {
+      "set": {"scheduleKnown":false},
+      "notes": ["Silvis numbers unavailable - the Silvis schedule is not loaded; its cells and the totals show ?."],
+      "year": [
+        ["silvis-primary","?","?","?"],
+        ["silvis-backup","?","?","?"],
+        ["dav-daycall","13","4","17"],
+        ["dav-nights","3","1","4"],
+        ["dav-weekend","3","-","3"],
+        ["dav-holiday","-","2","2"],
+        ["dav-backup","4","8","12"],
+        ["dav-backup-daycall","-","6","6"],
+        ["dav-backup-nights","1","-","1"],
+        ["dav-backup-weekend","3","-","3"],
+        ["dav-backup-holiday","-","2","2"],
+        ["total","?","?","?"],
+        ["weighted","?","?","?"]
+      ],
+      "ytdStartsNote": "",
+      "rolling12StartsNote": "Davenport weeks are cached from 12/29/2025 - nothing earlier is counted.",
+      "months": [
+        ["2026-01","Jan","?","?","4","-","?","?"],
+        ["2026-02","Feb","?","?","1","-","?","?"],
+        ["2026-03","Mar","?","?","-","-","?","?"],
+        ["2026-04","Apr","?","?","-","-","?","?"],
+        ["2026-05","May","?","?","-","-","?","?"],
+        ["2026-06","Jun","?","?","-","-","?","?"],
+        ["2026-07","Jul","?","?","-","-","?","?"],
+        ["2026-08","Aug","?","?","-","-","?","?"],
+        ["2026-09","Sep","?","?","10","1","?","?"],
+        ["2026-10","Oct *","?","?","8","3","?","?"],
+        ["2026-11","Nov *","?","?","3","-","?","?"],
+        ["2026-12","Dec *","?","?","-","8","?","?"]
+      ],
+      "dataLine": "Data: Silvis: not available (the Silvis schedule is not loaded); Davenport from 12/29/2025 to 12/27/2026 (its last published week; cache refreshed 10/14/2026)."
+    },
+    "cacheFrom20260831": {
+      "dropWeeksBefore": "2026-08-31",
+      "months": [
+        ["2026-01","Jan","-","-","?","?","?","?"],
+        ["2026-02","Feb","-","-","?","?","?","?"],
+        ["2026-03","Mar","-","-","?","?","?","?"],
+        ["2026-04","Apr","-","-","?","?","?","?"],
+        ["2026-05","May","-","-","?","?","?","?"],
+        ["2026-06","Jun","-","-","?","?","?","?"],
+        ["2026-07","Jul","-","-","?","?","?","?"],
+        ["2026-08","Aug","-","-","?","?","?","?"],
+        ["2026-09","Sep","1","1","10","1","13","12"],
+        ["2026-10","Oct *","2","2","8","3","15","12.5"],
+        ["2026-11","Nov *","-","1","3","-","4","3.5"],
+        ["2026-12","Dec *","-","-","-","8","8","4"]
+      ],
+      "monthNotes": ["* includes scheduled days (after today)","? = before the first cached Davenport week (8/31/2026) - not counted."],
+      "ytdStartsNote": "Davenport weeks are cached from 8/31/2026 - nothing earlier is counted. Silvis days start 9/14/2026.",
+      "dataLine": "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 8/31/2026 to 12/27/2026 (its last published week; cache refreshed 10/14/2026)."
+    }
+  }
+}

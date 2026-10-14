@@ -2078,6 +2078,28 @@ try {
     else if (!got.out || canonCT(JSON.parse(got.out)) !== canonCT(fxCT.expected)) fail(`B1 call-totals.js: the page's callTotalsFor(fixture.input) differs from fixture.expected - ${String(got.out).slice(0, 200)}`);
     else ok("B1 call-totals.js loads in the page (callTotalsFor / callTotalPeriods / weekBillingCredits / NIGHT_KEYS beside helpers.js's fmt) and gives the copied fixture's exact card");
   }
+  // Prompt 31 Part B (B2): the Silvis adapter + card model in the real page - callTotalsCardFor over the shapes fixture
+  // (east_feed rows, the resolved code map, the Silvis roster and day assignments) beside east-feed.js's efIsForecastRow
+  // gives the hand-transcribed cells of every period and the month list, and a throwing read comes back ok:false (the
+  // card must never take the app down). The data line's cache date is device-local, so it is not compared here.
+  {
+    const sh = JSON.parse(fs.readFileSync(path.join(ROOT, "test", "fixtures", "call-totals-silvis-shapes-2026-10-14.json"), "utf8"));
+    const got = await page.evaluate((s) => {
+      if (typeof callTotalsCardFor !== "function") return { missing: true };
+      const args = { feedRows: s.feedRows, feedState: "ok", idByCode: s.eastIdByCode, schedule: s.schedule, scheduleKnown: true, roster: s.roster, personId: s.personId, today: s.today };
+      const m = callTotalsCardFor(args);
+      const boom = callTotalsCardFor(Object.assign({}, args, { feedRows: [Object.defineProperty({ week_monday: "2026-10-12" }, "data", { get() { throw new Error("smoke boom"); } })] }));
+      const rows = m && m.ok ? Object.fromEntries(m.periods.map(p => [p.key, p.rows.map(r => [r.id, r.worked, r.scheduled, r.all])])) : null;
+      const months = m && m.ok ? m.months.map(x => [x.month, x.label].concat(m.monthCols.map(c => x.cells[c.id]))) : null;
+      return { ok: m && m.ok, title: m && m.title, rows, months, boom: boom && [boom.ok, boom.error], deviceToday: typeof callTotalsDeviceToday === "function" ? callTotalsDeviceToday() : null };
+    }, sh).catch(e => ({ err: String(e && e.message || e).split("\n")[0] }));
+    const wantRows = Object.fromEntries(Object.keys(sh.expectedCells.periods).map(k => [k, sh.expectedCells.periods[k].rows]));
+    if (got.missing || got.err) fail(`B2 call-totals.js: the page has no callTotalsCardFor - ${JSON.stringify(got).slice(0, 200)}`);
+    else if (got.ok !== true || JSON.stringify(got.rows) !== JSON.stringify(wantRows) || JSON.stringify(got.months) !== JSON.stringify(sh.expectedCells.months)) fail(`B2 call-totals.js: the page's card model differs from the shapes fixture's expectedCells - ${JSON.stringify({ ok: got.ok, rows: got.rows && got.rows.month, months: got.months && got.months.slice(9) }).slice(0, 300)}`);
+    else if (!got.boom || got.boom[0] !== false || got.boom[1] !== "the totals could not be computed (smoke boom)") fail(`B2 call-totals.js: a throwing read did not come back ok:false - ${JSON.stringify(got.boom)}`);
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(got.deviceToday))) fail(`B2 call-totals.js: callTotalsDeviceToday() is not a date - ${got.deviceToday}`);
+    else ok(`B2 call-totals.js: the page's callTotalsCardFor gives the shapes fixture's transcribed cells (4 periods, 12 months), a throwing read comes back ok:false, device today ${got.deviceToday}`);
+  }
 
   // Every nav tab, screenshot each.
   const tabs = await page.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
