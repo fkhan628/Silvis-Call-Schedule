@@ -283,6 +283,65 @@ function coverageOf(weeks) {
   return { from: ms[0], to: efFmt(efAddD(efParse(ms[ms.length - 1]), 6)) };
 }
 
+// ---- Prompt 31 Part B item 7 (10/13): the refresh windows ----
+// eastRefreshWindows(today) -> { main:{ from, to }, extra:{ from, to } } | null
+//   today: 'YYYY-MM-DD' in Central time (the app passes todayCentral(); Part A's server refresh must pass its Central
+//   date and mirror this function, EAST_AHEAD_DAYS and eastExtraWeeks - one window in both refreshes).
+//   main  = the window the refresh has always read WITH the vacations: Monday of (today - 28) .. that Monday + 210 days.
+//           Unchanged on purpose - the time_off read, the review-reset floor and the forecast prune stay where they were.
+//   extra = the weeks-only read for the call-totals card ("My call - Silvis + Davenport"): Monday of the same date one
+//           year back (Feb 29 -> Feb 28) .. Monday of today + EAST_AHEAD_DAYS, far enough to reach Davenport's last
+//           published week. What the extra read returns is filtered by eastExtraWeeks before anything is cached.
+//   A malformed or impossible date -> null.
+const EAST_AHEAD_DAYS = 1095;
+function efMonday(s) { const d = efParse(s); return efFmt(efAddD(d, -((d.getDay() + 6) % 7))); }
+function eastRefreshWindows(today) {
+  if (!efIsDateStr(today) || efFmt(efParse(today)) !== today) return null;
+  const mainFrom = efMonday(efFmt(efAddD(efParse(today), -28)));
+  const mainTo = efFmt(efAddD(efParse(mainFrom), 210));
+  const y = Number(today.slice(0, 4)) - 1, m = Number(today.slice(5, 7)), d = Number(today.slice(8, 10));
+  const back = y + "-" + efPad2(m) + "-" + efPad2(Math.min(d, new Date(y, m, 0).getDate()));
+  return { main: { from: mainFrom, to: mainTo }, extra: { from: efMonday(back), to: efMonday(efFmt(efAddD(efParse(today), EAST_AHEAD_DAYS))) } };
+}
+
+// eastExtraWeeks(mainWeeks, extraWeeks, win) -> { weeks, past, ahead, skipped }
+//   What the refresh's EXTRA leg caches from the weeks its extra read returned (win = eastRefreshWindows(...)):
+//   - past:  Mondays in [win.extra.from, win.main.from) - the 12 months back. A gap there is harmless: no day before
+//            today is ever generated.
+//   - ahead: Mondays after win.main.to ONLY while contiguous with the last week the MAIN read returned (each one 7 days
+//            after the previous; the first missing Monday ends it; no main week -> nothing ahead). Critic 10/13 item 9:
+//            the rules' published coverage is coverageOf(every cached row) - one first..last range with no gap check -
+//            so a week past a gap would stretch it over unpublished weeks, where Khan reads as known clear and the
+//            forecast is ignored. skipped = the weeks after the main window dropped by this rule.
+//   Never a week the main read returned (that leg wrote it, with its vacations), a week inside the main window (the
+//   main leg's business), a week outside the extra window, a forecast row or a malformed one; a duplicate Monday counts
+//   once (the first). weeks = past then ahead, sorted, the input objects as they are (no vacations key added - the
+//   caller runs keepCachedVacations). Never mutates its inputs; no windows -> nothing.
+function eastExtraWeeks(mainWeeks, extraWeeks, win) {
+  const none = { weeks: [], past: 0, ahead: 0, skipped: 0 };
+  if (!win || !win.main || !win.extra || !efIsDateStr(win.main.from) || !efIsDateStr(win.main.to) || !efIsDateStr(win.extra.from) || !efIsDateStr(win.extra.to)) return none;
+  const ok = (w) => !!(w && efIsDateStr(w.weekMonday) && !efIsForecastRow(w));
+  const mainSet = new Set((mainWeeks || []).filter(ok).map(w => w.weekMonday));
+  const lastMain = [...mainSet].sort().pop() || null;
+  const seen = new Set(), past = [], later = [];
+  (extraWeeks || []).forEach(w => {
+    if (!ok(w) || mainSet.has(w.weekMonday) || seen.has(w.weekMonday)) return;
+    seen.add(w.weekMonday);
+    const m = w.weekMonday;
+    if (m < win.extra.from || m > win.extra.to) return;
+    if (m < win.main.from) past.push(w);
+    else if (m > win.main.to) later.push(w);
+  });
+  const byMonday = (a, b) => a.weekMonday < b.weekMonday ? -1 : a.weekMonday > b.weekMonday ? 1 : 0;
+  past.sort(byMonday); later.sort(byMonday);
+  const ahead = [];
+  if (lastMain) {
+    let want = efFmt(efAddD(efParse(lastMain), 7));
+    for (const w of later) { if (w.weekMonday !== want) break; ahead.push(w); want = efFmt(efAddD(efParse(want), 7)); }
+  }
+  return { weeks: past.concat(ahead), past: past.length, ahead: ahead.length, skipped: later.length - ahead.length };
+}
+
 // ---- forecast rows (scripts/east-forecast.js --sql -> public.east_forecast) ----
 // A forecast row is { week_monday | weekMonday, data:{ isForecast:true, runs,
 // generatedAt, fakBusyProbabilityByDay:{date:p}, fierceWeekProbability } }.
@@ -569,5 +628,6 @@ if (typeof module !== "undefined") {
     forecastOutsideCoverage, overridesByPerson,
     eastMergeRanges, vacationsFromTimeOff, attachVacationsToWeeks, keepCachedVacations, planVacationCache, eastVacations,
     EAST_VACATIONS_HORIZON_DAYS, efFmt, efParse, efAddD, efDayOffsets,
+    EAST_AHEAD_DAYS, efMonday, eastRefreshWindows, eastExtraWeeks,
   };
 }

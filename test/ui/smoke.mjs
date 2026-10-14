@@ -454,6 +454,8 @@ let planDaysCapture = false;
 const planDayStore = {};
 let forcedOffer400 = false;     // Prompt 14 part 3a: the browser's own "400" line for the save_offers refusal the harness forced (OF002) - consumed once
 let abortEastFeedPost = false;  // fix round 2 (safe-1 / wire-2): the east_feed upsert POST is aborted at the network level
+let eastExtraAnswer = null;     // Prompt 31 Part B item 7: { after, weeks } - routeEast answers `weeks` to a schedule_weeks GET whose week_monday=lte. is later than `after` (only the refresh's extra leg asks that far); null = [EAST_WEEK] to every GET, as before
+let abortEastExtraPost = null;  // Prompt 31 Part B item 7: a week_monday - the east_feed POST whose body carries it (the extra leg's upsert) dies at the network level
 let delayScheduleWriteMs = 0;   // RF2 b: hold every schedule_days POST / PATCH open for N ms so a CAS sync run is provably in flight
 let abortDayWrite = null;       // review 9/27 Do first 2: { day, method } - that schedule_days write dies at the network level (route.abort, a rejected fetch: offline / DNS / timeout)
 let abortDayWriteLines = 0;     // one browser 'Failed to load resource' line per aborted write (armed by the route as it aborts)
@@ -1025,7 +1027,12 @@ const routeEast = async (route) => {
   const url = new URL(route.request().url());
   const json = (body) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
   if (route.request().method() !== "GET") return route.fulfill({ status: 405, contentType: "application/json", body: "[]" });
-  if (url.pathname.startsWith("/rest/v1/schedule_weeks")) return json([EAST_WEEK]);
+  if (url.pathname.startsWith("/rest/v1/schedule_weeks")) {
+    // Prompt 31 Part B item 7: only the refresh's extra leg asks this far ahead (lte = Monday of today + 1095 days)
+    const lte = (url.searchParams.getAll("week_monday").find(v => v.startsWith("lte.")) || "").slice(4);
+    if (eastExtraAnswer && lte > eastExtraAnswer.after) return json(eastExtraAnswer.weeks);
+    return json([EAST_WEEK]);
+  }
   if (url.pathname.startsWith("/rest/v1/call_schedule_data")) return json([{ id: "main", data: EAST_BLOB }]);
   // Prompt 15: the Davenport time_off read (kind vacation, FAK = s6 there) answers the same three ranges the
   // harness overlays on the cache, so a Refresh keeps every review (nothing changed, nothing removed).
@@ -1075,7 +1082,7 @@ const watchPage = (pg, tag) => {
       else if (p29xLine(msg)) forcedConsoleErrors.push(msg.text()); // the merge with main (10/2): an answer a P29 interplay step forced through its own route, one line each
       else if (failSnapshotInsert && /status of 500/.test(msg.text())) forcedConsoleErrors.push(msg.text());
       else if (forcedOffer400 && /status of 400/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); forcedOffer400 = false; } // the forced OF002 answer of rpc/save_offers (offer painter)
-      else if (abortEastFeedPost && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted
+      else if ((abortEastFeedPost || abortEastExtraPost) && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // the east_feed POST the harness aborted (Prompt 31 item 7: or the extra leg's)
       else if (abortDayWriteLines > 0 && /ERR_FAILED|Failed to fetch|Failed to load resource/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); abortDayWriteLines--; } // review 9/27 Do first 2: a schedule_days write the harness aborted (one line each)
       else if (expiredWrites401 && /status of (401|400)|Save failed: Error: blob save failed: .*JWT expired/.test(msg.text())) forcedConsoleErrors.push(msg.text()); // Prompt 16 A3: the 401s of the expired-bearer writes, the 400 of the rejected refresh and the blob leg's own console.error for that 401 - all forced by the harness
       else if (b7DeadLinkStatusLines > 0 && /status of (401|400)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); b7DeadLinkStatusLines--; } // Prompt 16 B7: the dead link's probe (401) and its refresh (400), answered by the B7 route
@@ -1089,7 +1096,7 @@ const watchPage = (pg, tag) => {
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
   });
-  pg.on("requestfailed", (r) => { if (abortEastFeedPost && /\/rest\/v1\/east_feed/.test(r.url())) return; if (abortedDayUrls.has(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
+  pg.on("requestfailed", (r) => { if ((abortEastFeedPost || abortEastExtraPost) && /\/rest\/v1\/east_feed/.test(r.url())) return; if (abortedDayUrls.has(r.url())) return; failedRequests.push(`${tag}: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`); });
   pg.on("request", (r) => { if (/\/vendor\//.test(r.url())) vendorRequests.push(`${tag}: ${r.url()}`); });
 };
 // 9/29 (smoke clean): resolves once no Supabase REST read of `pg` has been in flight for 500 ms (cap 10 s). The signin and
@@ -1795,6 +1802,11 @@ const routeSupabase = async (route, scope) => {
     // the network level (a rejected fetch, not an HTTP error) - the app must
     // warn + toast and leave the cache alone. The attempt is still recorded.
     if (abortEastFeedPost && method === "POST" && url.pathname.startsWith("/rest/v1/east_feed")) {
+      writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
+      return route.abort("failed");
+    }
+    // Prompt 31 Part B item 7: only the upsert that carries the named week (the refresh's extra leg) dies at the network level
+    if (abortEastExtraPost && method === "POST" && url.pathname.startsWith("/rest/v1/east_feed") && body.includes('"week_monday":"' + abortEastExtraPost + '"')) {
       writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", aborted: true });
       return route.abort("failed");
     }
@@ -9170,6 +9182,65 @@ try {
         if (conflicts === null) fail("East card (C.4): no [data-testid=east-conflicts] conflict report");
         else if (!(conflicts === "none" || /\d{4}-\d{2}-\d{2} (primary|backup) /.test(conflicts))) fail("East card (C.4): the conflict report is neither 'none' nor day/role rows: " + conflicts.slice(0, 160));
         else ok("East card (C.4): conflicts with the published schedule: " + (conflicts === "none" ? "none" : conflicts.slice(0, 120)));
+      }
+      // Prompt 31 Part B item 7 (10/13): the refresh's weeks-only EXTRA leg. The harness's Davenport answers the extra read
+      // (the only schedule_weeks GET asking past today + 400 days) with the main week, a week ~6 months back (before the
+      // main window) and a week after the main window past a gap. Expected: the first east_feed POST exactly as above
+      // (1 row, the main week), then ONE more POST with exactly the past week (its payload, the read's fetched_at, no
+      // vacations key - weeks only); the gap week never cached (the main read's last week is the main week, so it is not
+      // contiguous - critic 10/13 item 9); audit detail.extra = { the windows, weeks 1, past 1, ahead 0, skipped 1, error
+      // null }; the toast names it. Then the same refresh with ONLY that second POST aborted: the first POST and the audit
+      // row as before, extra.error set, the toast "could NOT be cached", tone error. Every POST is the harness's - nothing
+      // reaches the live database.
+      {
+        const EFM = require(path.join(ROOT, "east-feed.js"));
+        const today7 = HELPERS.todayCentral();
+        const win7 = EFM.eastRefreshWindows(today7);
+        const pastWeek = EFM.efMonday(HELPERS.fmt(HELPERS.addD(HELPERS.parse(today7), -182)));
+        const gapWeek = EFM.efMonday(HELPERS.fmt(HELPERS.addD(HELPERS.parse(win7.main.to), 70)));
+        const mkWeek = (m) => ({ week_monday: m, data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: [], isBackup: false, dayCallOverrides: {} } });
+        const wantExtra = (weeks, error) => ({ from: win7.extra.from, to: win7.extra.to, weeks, past: weeks, ahead: 0, skipped: 1, error });
+        try {
+          eastExtraAnswer = { after: HELPERS.fmt(HELPERS.addD(HELPERS.parse(today7), 400)), weeks: [EAST_WEEK, mkWeek(pastWeek), mkWeek(gapWeek)] };
+          const b7a = writes.length;
+          await page.click("[data-testid=east-refresh]");
+          await waitFor(() => !!auditSince(b7a, "east.refresh"), 20000);
+          await page.waitForTimeout(400);
+          const posts7 = writesSince(b7a, "/rest/v1/east_feed").filter(w => w.method === "POST");
+          const rowsOf = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
+          const r1 = posts7[0] ? rowsOf(posts7[0]) : null, r2 = posts7[1] ? rowsOf(posts7[1]) : null;
+          const au7 = auditSince(b7a, "east.refresh");
+          const ex7 = au7 && au7.detail ? au7.detail.extra : undefined;
+          const txt7 = await bodyText();
+          if (posts7.length !== 2) fail(`item 7 extra leg: expected two east_feed POSTs (the main week, then the week before the main window), saw ${posts7.length}: ${JSON.stringify(posts7.map(w => (rowsOf(w) || []).map(r => r.week_monday)))}`);
+          else if (!r1 || r1.length !== 1 || r1[0].week_monday !== EAST_WEEK.week_monday) fail("item 7 extra leg: the FIRST POST is not the main read's one week: " + JSON.stringify((r1 || []).map(r => r.week_monday)));
+          else if (!r2 || r2.length !== 1 || r2[0].week_monday !== pastWeek || !r2[0].data || r2[0].data.dayCall !== "s6" || !r2[0].fetched_at || Object.prototype.hasOwnProperty.call(r2[0].data, "vacations") || !/resolution=merge-duplicates/.test(posts7[1].prefer || "")) fail(`item 7 extra leg: the second POST must be exactly ${pastWeek} (dayCall s6, fetched_at, no vacations key, merge-duplicates): ` + JSON.stringify({ prefer: posts7[1].prefer, rows: r2 }).slice(0, 300));
+          else if (JSON.stringify(ex7) !== JSON.stringify(wantExtra(1, null))) fail("item 7 extra leg: audit east.refresh detail.extra is " + JSON.stringify(ex7) + ", expected " + JSON.stringify(wantExtra(1, null)));
+          else if (!/1 more published week\(s\) cached \(/.test((au7.detail && au7.detail.summary) || "")) fail("item 7 extra leg: the audit summary does not name the extra weeks: " + String(au7.detail && au7.detail.summary).slice(0, 300));
+          else if (!/1 more published week\(s\) cached\./.test(txt7) || !/1 later week\(s\) after a gap/.test(txt7)) fail("item 7 extra leg: the toast does not name the extra week and the skipped one: " + txt7.slice(0, 400));
+          else ok(`item 7 extra leg: two east_feed POSTs - the main week ${EAST_WEEK.week_monday}, then exactly ${pastWeek} (before the main window; no vacations key); ${gapWeek} after a gap not cached; audit extra ${win7.extra.from}..${win7.extra.to} weeks 1 skipped 1; toast names both`);
+          // the extra upsert aborted at the network level: the main leg stands, the extra leg is named as failed
+          abortEastExtraPost = pastWeek;
+          const b7b = writes.length;
+          await page.click("[data-testid=east-refresh]");
+          await waitFor(() => !!auditSince(b7b, "east.refresh"), 20000);
+          await page.waitForTimeout(400);
+          const posts7b = writesSince(b7b, "/rest/v1/east_feed").filter(w => w.method === "POST");
+          const au7b = auditSince(b7b, "east.refresh");
+          const ex7b = au7b && au7b.detail ? au7b.detail.extra : undefined;
+          const txt7b = await bodyText();
+          if (posts7b.length !== 2 || posts7b[0].aborted || !posts7b[1].aborted) fail("item 7 extra leg (aborted): expected the main POST answered and ONLY the extra POST aborted, saw " + JSON.stringify(posts7b.map(w => (w.aborted ? "[aborted] " : "") + ((rowsOf(w) || []).map(r => r.week_monday).join(",")))));
+          else if (!ex7b || ex7b.weeks !== 0 || typeof ex7b.error !== "string" || !ex7b.error || ex7b.from !== win7.extra.from || ex7b.to !== win7.extra.to) fail("item 7 extra leg (aborted): audit detail.extra should carry the error and weeks 0: " + JSON.stringify(ex7b));
+          else if (!/Davenport weeks outside the refresh window could NOT be cached/.test(txt7b)) fail("item 7 extra leg (aborted): the toast does not say the extra weeks could NOT be cached: " + txt7b.slice(0, 400));
+          else if (!/East feed refreshed: 1 published week\(s\) cached/.test(txt7b)) fail("item 7 extra leg (aborted): the main leg's result is not in the toast: " + txt7b.slice(0, 300));
+          else if (!consoleWarns.some(w => /weeks outside the refresh window were not cached - cache kept/.test(w))) fail("item 7 extra leg (aborted): no console.warn for the failed extra upsert");
+          else ok(`item 7 extra leg (aborted): the main POST answered, only the extra POST aborted - audit extra.error '${String(ex7b.error).slice(0, 60)}', weeks 0; the toast keeps the main result and says the extra weeks could NOT be cached`);
+        } catch (e) {
+          fail("item 7 extra leg: harness exception: " + errLine(e));
+        } finally {
+          eastExtraAnswer = null; abortEastExtraPost = null;
+          await page.waitForTimeout(300);
+        }
       }
     }
 

@@ -4008,6 +4008,126 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(rb.includes("feed.vacations[code] || []"), false, "never against the raw fetched list (a kept-unseen range joined in the cache would reset the review on every refresh)");
     assert.ok(rb.includes("feed.vacations && cacheRows &&"), "a failed cache reload resets nothing");
   });
+  // Prompt 31 Part B item 7 (10/13): the in-app refresh's windows come from east-feed.js eastRefreshWindows(todayCentral()).
+  // The MAIN window is the old one exactly (the vacations read, the review-reset floor and the forecast prune keep it); a
+  // weeks-only EXTRA leg caches the published Davenport weeks outside it for the call-totals card - 12 months back, and
+  // ahead only while contiguous with the main read's last week (eastExtraWeeks; critic 10/13 item 9: a week past a gap
+  // would stretch the published coverage over unpublished weeks, read there as known clear). It runs after the reloaded
+  // cache and the resets and before the toast / audit text; its failure is its own (cache kept, named, tone error).
+  const P31I7 = (() => {
+    const rs = src.indexOf("const refreshEastFeed = async () => {");
+    const rb = rs < 0 ? "" : src.slice(rs, src.indexOf("const saveEastOverride = async", rs));
+    const legAt = rb.indexOf("const extra = {"), endAt = rb.indexOf("const resetText");
+    return { rb, legAt, endAt, leg: legAt >= 0 && endAt > legAt ? rb.slice(legAt, endAt) : "" };
+  })();
+  check("P31B item 7: refreshEastFeed takes its windows from eastRefreshWindows(todayCentral()) (one call in the page); the main leg is unchanged - fetchEastWeeks(fromMon, toMon, { vacationCodes }), planVacationCache's floor fromMon, the reset floor st.review.end >= fromMon, the forecast prune over coverageOf(feed.weeks)", () => {
+    const { rb } = P31I7;
+    assert.ok(rb.length > 0, "refreshEastFeed not found");
+    assert.strictEqual(count("eastRefreshWindows("), 1, "exactly one window call in the page");
+    const winAt = rb.indexOf("const eastWin = eastRefreshWindows(todayCentral());");
+    assert.ok(winAt > 0 && rb.indexOf("const fromMon = eastWin.main.from;") > winAt && rb.indexOf("const toMon = eastWin.main.to;") > winAt, "fromMon / toMon read eastWin.main");
+    assert.ok(rb.indexOf("if (!eastWin) throw new Error(") > winAt && rb.indexOf("if (!eastWin) throw new Error(") < rb.indexOf("const fromMon = eastWin.main.from;"), "no window -> the refresh fails loudly (the outer catch's toast), never a read of an undefined window");
+    assert.strictEqual(count("feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes });"), 1, "the main read (weeks + vacations) keeps the main window");
+    assert.ok(rb.includes("planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon })"), "the vacation plan keeps the main window's floor");
+    assert.ok(rb.includes("st.review.end >= fromMon"), "the review-reset floor stays fromMon");
+    assert.ok(rb.includes("const publishedCoverage = coverageOf(feed.weeks);"), "the forecast prune stays over the MAIN read's coverage");
+  });
+  check("P31B item 7: the weeks-only extra leg - after the reloaded cache and the resets, before resetText; only when the cache reloaded (else a named skip); fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {}) (no vacation codes); eastExtraWeeks(feed.weeks, more.weeks, eastWin) picks the weeks; keepCachedVacations over the RELOADED cache; one merge-duplicates upsert through dbAuthHeaders, then a reload; its own try / catch (console.warn + extra.error); no review reset, forecast prune, vacation plan or stale state inside", () => {
+    const { rb, legAt, endAt, leg } = P31I7;
+    assert.ok(leg.length > 0, "no `const extra = {` .. `const resetText` leg in refreshEastFeed");
+    assert.ok(legAt > rb.indexOf("const cacheRows = ") && legAt > rb.lastIndexOf("reviewResetFailures).push("), "the leg runs after the cache reload and the review resets (they read the cache the main leg wrote)");
+    assert.ok(endAt > legAt && rb.indexOf('logAudit("east.refresh"') > endAt, "the leg runs before the audit row and the toast text");
+    assert.ok(leg.startsWith("const extra = { from: eastWin.extra.from, to: eastWin.extra.to, weeks: 0, past: 0, ahead: 0, skipped: 0, error: null };"), "extra starts as an empty record of the window");
+    assert.ok(leg.includes("if (cacheRows) {") && leg.includes('} else extra.error = "the cache did not reload - skipped";'), "a failed cache reload skips the leg, named");
+    assert.ok(leg.includes("const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});"), "weeks only: the extra read asks no vacation code (no time off read)");
+    assert.ok(leg.includes("const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);"), "the selection is east-feed.js eastExtraWeeks (past weeks; ahead only while contiguous)");
+    assert.ok(leg.includes("toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }))"), "a week keeps the vacation list its RELOADED cached row carries; the extra read's fetched_at");
+    assert.ok(/fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/east_feed`, \{ method: "POST", headers: \{ \.\.\.dbAuthHeaders\(\), Prefer: "resolution=merge-duplicates,return=minimal" \}, body: JSON\.stringify\(extraRows\) \}\)/.test(leg), "one upsert of the extra rows, the user's bearer, merge-duplicates");
+    assert.ok(leg.indexOf("await loadEastTables();") > leg.indexOf("JSON.stringify(extraRows)"), "the caches reload after the extra upsert");
+    assert.ok(leg.includes("if (!res.ok) {") && leg.includes('throw new Error("couldn\'t cache them: " + describeDbError(t));'), "a failed upsert is an error, never success");
+    assert.ok(/\} catch \(e\) \{ console\.warn\("[^"]+- cache kept", e\); extra\.error = errText\(e\)\.slice\(0, 200\); \}/.test(leg), "the leg's own catch: console.warn + extra.error (the main leg's result stands)");
+    for (const banned of [/\bvacationCodes\b/, /saveEastVacationReview/, /east_forecast/, /planVacationCache/, /attachVacationsToWeeks/, /derivedEastVacations/, /\beastFeedRows\b/, /setEastIdByCode/, /DELETE/]) assert.ok(!banned.test(leg), "the extra leg must not contain " + banned);
+  });
+  check("P31B item 7: the extra leg is named in the audit row (summary + detail.extra) and in the ONE final toast (both branches; tone error when it failed) - the C.2 prune pins stay as they were", () => {
+    const { rb } = P31I7;
+    const au = rb.slice(rb.indexOf('logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
+    assert.ok(au.includes("${extraSummary}"), "the audit summary carries the extra leg");
+    assert.ok(/reviewResets, reviewResetFailures, extra \}\);/.test(au), "the audit detail carries the extra record");
+    const es = rb.slice(rb.indexOf("const extraSummary = "), rb.indexOf('logAudit("east.refresh"'));
+    assert.ok(es.includes("NOT cached") && es.includes("more published week(s) cached") && es.includes("extra.skipped"), "the summary names a failure, the weeks cached and the weeks skipped after a gap");
+    const toast = rb.slice(rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"), rb.indexOf("} catch (e) {", rb.indexOf("showToast(weekRows.length ? `East feed refreshed:")));
+    assert.strictEqual((toast.match(/\$\{extraWord\}/g) || []).length, 2, "both toast branches carry extraWord");
+    assert.ok(toast.includes('feed.vacationsError || reviewResetFailures.length || extra.error ? "error"'), "a failed extra leg turns the toast's tone to error");
+    const ew = rb.slice(rb.indexOf("const extraWord = "), rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"));
+    assert.ok(ew.includes("could NOT be cached") && ew.includes("more published week(s) cached.") && ew.includes("extra.skipped"), "the toast names a failure, the weeks cached and the weeks skipped after a gap");
+  });
+  await (async () => {
+    const { leg } = P31I7;
+    const EF = require(path.join(ROOT, "east-feed.js"));
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const win = typeof EF.eastRefreshWindows === "function" ? EF.eastRefreshWindows("2026-10-13") : null;
+    const FETCHED_AT = "2026-10-13T12:00:00.000Z";
+    const run = async (o) => {
+      const posts = [], warns = [], reads = []; let reloads = 0;
+      const fn = new AsyncFunction("eastWin", "cacheRows", "feed", "fetchEastWeeks", "eastExtraWeeks", "keepCachedVacations", "toEastFeedRows", "fetch", "SUPABASE_URL", "dbAuthHeaders", "describeDbError", "errText", "loadEastTables", "console", leg + "\nreturn extra;");
+      const extra = await fn(win, o.cacheRows, { weeks: o.mainWeeks },
+        async (from, to, opts) => { reads.push([from, to, opts]); if (o.readFails) throw new Error("east-feed: GET weeks failed: HTTP 503 down"); return { weeks: o.extraWeeks, fetchedAt: FETCHED_AT }; },
+        EF.eastExtraWeeks, EF.keepCachedVacations, EF.toEastFeedRows,
+        async (url, init) => { posts.push({ url, init }); if (o.postFails) return { ok: false, status: 403, text: async () => '{"message":"denied"}' }; return { ok: true, status: 201, text: async () => "" }; },
+        "https://x.supabase.co", () => ({ apikey: "anon", Authorization: "Bearer user-jwt" }), (t) => "D(" + t + ")", (e) => String(e && e.message || e),
+        async () => { reloads++; return { ok: true, feedRows: [] }; }, { warn: (...a) => warns.push(a.map(String).join(" ")) });
+      return { extra, posts, warns, reads, reloads };
+    };
+    const mondays = (from, to) => { const out = []; for (let d = H.parse(from); H.fmt(d) <= to; d = H.addD(d, 7)) out.push(H.fmt(d)); return out; };
+    const wk = (m, data) => ({ weekMonday: m, data: Object.assign({ dayCall: "s6" }, data || {}) });
+    const mainWeeks = mondays("2026-09-14", "2026-11-09").map(m => wk(m));
+    const cacheRows = [{ week_monday: "2026-02-02", data: { dayCall: "s1", vacations: [{ code: "FAK", start: "2026-02-03", end: "2026-02-04" }] }, fetched_at: "2026-09-22T00:00:00Z" }].concat(mondays("2026-06-01", "2026-11-09").map(m => ({ week_monday: m, data: { dayCall: "s2" } })));
+    const acheckI7 = async (name, fn) => { try { if (!leg) throw new Error("no extra leg in refreshEastFeed"); if (!win) throw new Error("east-feed.js has no eastRefreshWindows"); await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    await acheckI7("P31B item 7 behaviour (the leg lifted from index-source.html, east-feed.js's own helpers): the live shape - one extra read of the extra window with no vacation code, ONE upsert of the 37 weeks before the main window (fetched_at of that read; a cached week keeps ITS cached vacation list over the fetched payload, a new week has no vacations key), a far week after a gap not cached (skipped 1), one reload, extra = { weeks 37, past 37, ahead 0, skipped 1, error null }", async () => {
+      const r = await run({ cacheRows, mainWeeks, extraWeeks: mondays("2025-12-29", "2026-11-09").map(m => wk(m)).concat([wk("2027-06-07")]) });
+      assert.deepStrictEqual(r.reads, [[win.extra.from, win.extra.to, {}]], "one weeks-only read of the extra window");
+      assert.strictEqual(r.posts.length, 1, "one upsert");
+      const p = r.posts[0];
+      assert.strictEqual(p.url, "https://x.supabase.co/rest/v1/east_feed");
+      assert.strictEqual(p.init.method, "POST");
+      assert.strictEqual(p.init.headers.Prefer, "resolution=merge-duplicates,return=minimal");
+      assert.strictEqual(p.init.headers.Authorization, "Bearer user-jwt", "the user's bearer (dbAuthHeaders)");
+      const rows = JSON.parse(p.init.body);
+      assert.deepStrictEqual(rows.map(x => x.week_monday), mondays("2025-12-29", "2026-09-07"), "the weeks before the main window, nothing the main read wrote, nothing past the gap");
+      assert.ok(rows.every(x => x.fetched_at === FETCHED_AT), "the extra read's fetched_at on every row");
+      const feb = rows.find(x => x.week_monday === "2026-02-02");
+      assert.deepStrictEqual([feb.data.dayCall, feb.data.vacations], ["s6", [{ code: "FAK", start: "2026-02-03", end: "2026-02-04" }]], "the fetched payload with the cached row's vacation list");
+      assert.ok(rows.filter(x => x.week_monday !== "2026-02-02").every(x => !Object.prototype.hasOwnProperty.call(x.data, "vacations")), "a week without a cached list gets no vacations key");
+      assert.strictEqual(r.reloads, 1, "the caches reload once after the upsert");
+      assert.deepStrictEqual(r.extra, { from: win.extra.from, to: win.extra.to, weeks: 37, past: 37, ahead: 0, skipped: 1, error: null });
+      assert.deepStrictEqual(r.warns, []);
+    });
+    await acheckI7("P31B item 7 behaviour: nothing outside the main window (the smoke's mock answers the main read's week to both reads) -> no second upsert, no reload, extra.weeks 0, no error", async () => {
+      const r = await run({ cacheRows, mainWeeks, extraWeeks: [wk("2026-10-05")] });
+      assert.deepStrictEqual([r.posts.length, r.reloads, r.extra.weeks, r.extra.skipped, r.extra.error], [0, 0, 0, 0, null]);
+    });
+    await acheckI7("P31B item 7 behaviour: weeks ahead of the main window, contiguous with its last read week, are cached; the ones past a gap are not", async () => {
+      const full = mondays("2026-09-14", "2027-04-12").map(m => wk(m));
+      const r = await run({ cacheRows, mainWeeks: full, extraWeeks: [wk("2027-04-19"), wk("2027-04-26"), wk("2027-05-10")] });
+      assert.deepStrictEqual(JSON.parse(r.posts[0].init.body).map(x => x.week_monday), ["2027-04-19", "2027-04-26"]);
+      assert.deepStrictEqual([r.extra.weeks, r.extra.past, r.extra.ahead, r.extra.skipped], [2, 0, 2, 1]);
+    });
+    await acheckI7("P31B item 7 behaviour: a failed extra read -> no upsert, no reload, extra.error names it, one console.warn (the cache is kept; the main leg's result stands)", async () => {
+      const r = await run({ cacheRows, mainWeeks, readFails: true });
+      assert.deepStrictEqual([r.posts.length, r.reloads, r.extra.weeks], [0, 0, 0]);
+      assert.ok(/HTTP 503/.test(r.extra.error), r.extra.error);
+      assert.strictEqual(r.warns.length, 1);
+    });
+    await acheckI7("P31B item 7 behaviour: a refused upsert -> extra.error \"couldn't cache them: <describeDbError>\", weeks 0, no reload", async () => {
+      const r = await run({ cacheRows, mainWeeks, postFails: true, extraWeeks: [wk("2026-01-05")] });
+      assert.strictEqual(r.posts.length, 1);
+      assert.deepStrictEqual([r.reloads, r.extra.weeks, r.extra.error], [0, 0, "couldn't cache them: D({\"message\":\"denied\"})"]);
+    });
+    await acheckI7("P31B item 7 behaviour: the cache did not reload (cacheRows null) -> no extra read, no upsert, extra.error 'the cache did not reload - skipped'", async () => {
+      const r = await run({ cacheRows: null, mainWeeks, extraWeeks: [wk("2026-01-05")] });
+      assert.deepStrictEqual([r.reads.length, r.posts.length, r.reloads, r.extra.error], [0, 0, 0, "the cache did not reload - skipped"]);
+    });
+  })();
   check("P15 fix: a quiet reset reports through the ONE refresh toast - saveEastVacationReview's failure toasts are conditioned on !quiet; the start-up 404 (migration not applied) is a console.warn + the panel banner, never a toast to every signed-in user", () => {
     const ws = src.indexOf("const saveEastVacationReview = async");
     const wb = src.slice(ws, src.indexOf("\n  };", ws));
@@ -7465,7 +7585,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(B9SRC.includes("setVacStart(todayCentral()); setVacEnd(todayCentral());"), "the vacation form reset");
       assert.strictEqual(B9count("year: todayCentral().slice(0, 4)"), 1, "the pasted-list year");
       assert.ok(B9SRC.includes("const today = parse(todayCentral());"), "the painter's first month");
-      assert.ok(B9SRC.includes("const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));"), "the East refresh window");
+      // pin moved deliberately 10/13: Prompt 31 Part B item 7 - the refresh's windows come from east-feed.js
+      // eastRefreshWindows(todayCentral()) (still the Central date); its main window is the old expression exactly
+      // (test/east-feed.test.js compares them over every day 2025-12-01..2028-12-31)
+      assert.ok(B9SRC.includes("const eastWin = eastRefreshWindows(todayCentral());"), "the East refresh windows");
+      assert.ok(B9SRC.includes("const fromMon = eastWin.main.from;") && B9SRC.includes("const toMon = eastWin.main.to;"), "the East refresh's main window");
+      assert.strictEqual(B9count("monOf(addD(parse(todayCentral()), -28))"), 0, "the old inline window is gone (one definition: east-feed.js)");
       const left = B9SRC.split("\n").filter(l => /new Date\(\)/.test(l) && !/toISOString|Date\.now|getTime\(\)|toLocaleTimeString|generatedAt: new Date\(\)|now = new Date\(\)/.test(l));
       assert.deepStrictEqual(left.map(l => l.trim().slice(0, 80)), [], "device-local dates left");
     });

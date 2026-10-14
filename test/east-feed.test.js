@@ -413,6 +413,120 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   eq(nul.rewritten, []);
   eq(ef.planVacationCache(null, null, { FAK: [] }), { weeks: [], rewritten: [], carriers: 0 }, "P15 fix 1: empty everything");
 }
+// ---- Prompt 31 Part B item 7 (10/13): the refresh windows and the extra leg's week selection ----
+// eastRefreshWindows(today) -> { main, extra }: main = the window the in-app refresh has always read WITH the vacations
+// (Monday of today - 28 .. + 210 days - unchanged on purpose: the time_off read, the review-reset floor and the forecast
+// prune stay where they were); extra = the weeks-only read for the call-totals card: Monday of the same date one year
+// back (Feb 29 -> Feb 28) .. Monday of today + EAST_AHEAD_DAYS. eastExtraWeeks(mainWeeks, extraWeeks, win) picks what the
+// extra leg caches: the weeks before the main window, and the weeks after it ONLY while contiguous with the last week
+// the main read returned (critic 10/13 item 9: a week past a gap would stretch the published coverage over unpublished
+// weeks, where the rules read Khan as known clear and ignore the forecast).
+{
+  const vm = require("vm"), fs = require("fs"), path = require("path"), cp = require("child_process");
+  const ROOT = path.join(__dirname, "..");
+  const H = require("../helpers.js");   // the refresh's OLD window expression is written with helpers' fmt / monOf / addD / parse
+  ok(typeof ef.eastRefreshWindows === "function", "P31B item 7: east-feed.js exports eastRefreshWindows");
+  ok(typeof ef.eastExtraWeeks === "function", "P31B item 7: east-feed.js exports eastExtraWeeks");
+  eq(ef.EAST_AHEAD_DAYS, 1095, "P31B item 7: the extra read reaches three years ahead (EAST_AHEAD_DAYS)");
+  ok(typeof ef.efMonday === "function", "P31B item 7: east-feed.js exports efMonday");
+  eq(["2026-10-12", "2026-10-13", "2026-10-18", "2028-02-29", "2027-01-01"].map(ef.efMonday), ["2026-10-12", "2026-10-12", "2026-10-12", "2028-02-28", "2026-12-28"], "P31B item 7: efMonday = the Monday on or before the date");
+  // callTotalPeriods (call-totals.js, the ported counter): the extra window must cover every period the card counts
+  const box = { console }; box.globalThis = box; vm.createContext(box);
+  for (const f of ["helpers.js", "east-feed.js", "call-totals.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+  const ctp = vm.runInContext("callTotalPeriods", box);
+  const days = [];
+  for (let d = H.parse("2025-12-01"); H.fmt(d) <= "2028-12-31"; d = H.addD(d, 1)) days.push(H.fmt(d));
+  ok(days.length === 1127, "P31B item 7: 2025-12-01..2028-12-31 is 1127 days, got " + days.length);
+  const isMonday = (s) => H.parse(s).getDay() === 1;
+  const bad = [];
+  days.forEach(d => {
+    const w = ef.eastRefreshWindows(d);
+    if (!w || !w.main || !w.extra) { bad.push(d + ": no windows"); return; }
+    const oldFrom = H.fmt(H.monOf(H.addD(H.parse(d), -28)));
+    const oldTo = H.fmt(H.addD(H.parse(oldFrom), 7 * 30));
+    if (w.main.from !== oldFrom || w.main.to !== oldTo) bad.push(d + ": main " + JSON.stringify(w.main) + " != the old " + oldFrom + ".." + oldTo);
+    if (!isMonday(w.extra.from) || !isMonday(w.extra.to)) bad.push(d + ": extra not Mondays " + JSON.stringify(w.extra));
+    if (w.extra.to !== H.fmt(H.monOf(H.addD(H.parse(d), 1095)))) bad.push(d + ": extra.to " + w.extra.to);
+    if (!(w.extra.to >= w.main.to) || !(w.extra.from <= w.main.from)) bad.push(d + ": extra does not contain main");
+    const y = Number(d.slice(0, 4)) - 1, back = y + d.slice(4, 8) + String(Math.min(Number(d.slice(8, 10)), new Date(y, Number(d.slice(5, 7)), 0).getDate())).padStart(2, "0");
+    if (w.extra.from !== H.fmt(H.monOf(H.parse(back)))) bad.push(d + ": extra.from " + w.extra.from + " != Monday of " + back);
+    // the card's "today" is the DEVICE date (D2), at most a day off the Central date the refresh uses
+    [-1, 0, 1].forEach(k => {
+      const dev = H.fmt(H.addD(H.parse(d), k)), p = ctp(dev);
+      if (!p) { bad.push(dev + ": callTotalPeriods null"); return; }
+      if (!(w.extra.from <= p.rolling12.from)) bad.push(d + " (device " + dev + "): extra.from " + w.extra.from + " after the 12-month period's start " + p.rolling12.from);
+      if (!(w.extra.from <= p.ytd.from) || !(w.extra.from <= p.year.from)) bad.push(d + " (device " + dev + "): extra.from " + w.extra.from + " after Jan 1 " + p.ytd.from);
+    });
+  });
+  eq(bad.slice(0, 5), [], "P31B item 7: over every day 2025-12-01..2028-12-31 main equals the old refresh window exactly and extra (Mondays) covers the card's 12 months, YTD and full year for the device date +/- 1 day (" + bad.length + " problem(s))");
+  // spot values (design 2.3, re-computed by the critic)
+  eq(ef.eastRefreshWindows("2026-10-13"), { main: { from: "2026-09-14", to: "2027-04-12" }, extra: { from: "2025-10-13", to: "2029-10-08" } }, "P31B item 7: 2026-10-13");
+  eq(ef.eastRefreshWindows("2028-02-29").extra.from, "2027-02-22", "P31B item 7: leap day -> one year back is Feb 28 -> its Monday");
+  eq(ef.eastRefreshWindows("2027-01-01").extra.from, "2025-12-29", "P31B item 7: a year turn - Monday of 2026-01-01 (Davenport's first week)");
+  [undefined, null, "", "2026-02-30", "2026-13-01", "20261013", "2026-10-13T00:00", 20261013, {}].forEach(v => eq(ef.eastRefreshWindows(v), null, "P31B item 7: no window for " + JSON.stringify(v)));
+  // the same windows in a child process under another time zone (the offsets proven first)
+  const parentAll = JSON.stringify(days.map(d => ef.eastRefreshWindows(d)));
+  ["America/Chicago", "Asia/Tokyo"].forEach(tz => {
+    const r = cp.spawnSync(process.execPath, ["-e", [
+      "const ef = require(process.argv[1]);",
+      "const days = []; for (let d = ef.efParse('2025-12-01'); ef.efFmt(d) <= '2028-12-31'; d = ef.efAddD(d, 1)) days.push(ef.efFmt(d));",
+      "process.stdout.write(JSON.stringify({ jan: new Date(2026, 0, 15).getTimezoneOffset(), jul: new Date(2026, 6, 15).getTimezoneOffset(), all: JSON.stringify(days.map(d => ef.eastRefreshWindows(d))) }));",
+    ].join("\n"), path.join(ROOT, "east-feed.js")], { env: Object.assign({}, process.env, { TZ: tz }), encoding: "utf8" });
+    ok(r.status === 0, "P31B item 7: the " + tz + " child ran: " + (r.stderr || "").slice(0, 300));
+    const out = JSON.parse(r.stdout);
+    eq([out.jan, out.jul], tz === "Asia/Tokyo" ? [-540, -540] : [360, 300], "P31B item 7: the child really runs in " + tz);
+    ok(out.all === parentAll, "P31B item 7: the windows under TZ=" + tz + " equal this process's for every day");
+  });
+
+  // ---- eastExtraWeeks: what the extra leg caches ----
+  const win = ef.eastRefreshWindows("2026-10-13");   // main 2026-09-14..2027-04-12, extra 2025-10-13..2029-10-08
+  const wk = (m, extra) => ({ weekMonday: m, data: Object.assign({ dayCall: "s6" }, extra || {}) });
+  const mondays = (from, to) => { const out = []; for (let d = H.parse(from); H.fmt(d) <= to; d = H.addD(d, 7)) out.push(H.fmt(d)); return out; };
+  const ms = (r) => r.weeks.map(w => w.weekMonday);
+  // today's live shape: Davenport publishes 2025-12-29..2026-11-09; the main read returns its part, the extra read all
+  const mainLive = mondays("2026-09-14", "2026-11-09").map(m => wk(m));
+  const extraLive = mondays("2025-12-29", "2026-11-09").map(m => wk(m));
+  const live = ef.eastExtraWeeks(mainLive, extraLive, win);
+  eq(ms(live), mondays("2025-12-29", "2026-09-07"), "P31B item 7: the live shape caches the 37 weeks before the main window (12/29/2025 .. 9/7/2026) and nothing the main read returned");
+  eq([live.past, live.ahead, live.skipped], [37, 0, 0], "P31B item 7: counts past / ahead / skipped");
+  ok(live.weeks.every(w => w.data && w.data.vacations === undefined), "P31B item 7: the selection writes no vacations key (weeks only)");
+  // ahead: contiguous with the main read's last week (main.to here), stop at the first missing Monday
+  const mainFull = mondays("2026-09-14", "2027-04-12").map(m => wk(m));
+  const ahead = ef.eastExtraWeeks(mainFull, [wk("2027-04-19"), wk("2027-04-26"), wk("2027-05-10"), wk("2027-05-17")], win);
+  eq(ms(ahead), ["2027-04-19", "2027-04-26"], "P31B item 7 (critic 9): weeks after the main window are kept only while contiguous - 5/3 is missing, so 5/10 and 5/17 are not cached");
+  eq([ahead.past, ahead.ahead, ahead.skipped], [0, 2, 2], "P31B item 7 (critic 9): the two weeks past the gap are counted as skipped");
+  // the main read's last week inside its window: any week after main.to is past a gap
+  const far = ef.eastExtraWeeks(mainLive, extraLive.concat([wk("2027-04-19"), wk("2027-06-07")]), win);
+  eq(ms(far), mondays("2025-12-29", "2026-09-07"), "P31B item 7 (critic 9): Davenport's last published week inside the main window -> no week after the main window is cached");
+  eq(far.skipped, 2, "P31B item 7 (critic 9): ...both counted as skipped");
+  // the main read returned nothing -> nothing ahead (no week to be contiguous with); the weeks before are still cached
+  const none = ef.eastExtraWeeks([], [wk("2026-01-05"), wk("2027-04-19")], win);
+  eq([ms(none), none.skipped], [["2026-01-05"], 1], "P31B item 7: an empty main read caches nothing ahead");
+  // what never reaches the extra leg's upsert
+  const mixed = ef.eastExtraWeeks(mainLive, [
+    wk("2026-10-05"),                                   // the main read returned it (the smoke's mock answers it to both reads)
+    wk("2026-12-07"),                                   // inside the main window but not in the main read: the main leg's business
+    { weekMonday: "2026-01-12", data: { isForecast: true } }, // a forecast row
+    { weekMonday: "2026/01/19", data: {} }, null, { data: {} }, // malformed
+    wk("2025-10-06"),                                   // before extra.from
+    wk("2026-02-02"), wk("2026-02-02", { dayCall: "s2" }), // a duplicate Monday: the first one wins
+    wk("2026-01-26"),
+  ], win);
+  eq(ms(mixed), ["2026-01-26", "2026-02-02"], "P31B item 7: never a main-read week, a main-window week, a forecast row, a malformed row, a week outside the extra window or a duplicate; sorted");
+  eq(mixed.weeks[1].data.dayCall, "s6", "P31B item 7: the first copy of a duplicate Monday wins");
+  // a week the main read returned OUTSIDE its window (the smoke's Davenport mock answers its one week to every read; after
+  // 11/2/2026 that week lies before the main window) is the main leg's: never upserted a second time
+  const odd = ef.eastExtraWeeks([wk("2026-08-31")], [wk("2026-08-31"), wk("2026-08-24")], win);
+  eq([ms(odd), odd.past], [["2026-08-24"], 1], "P31B item 7: a week the main read returned is never in the extra upsert, even outside the main window");
+  const pastAfter = ef.eastExtraWeeks(mainFull, [wk("2029-10-15")], win);
+  eq([ms(pastAfter), pastAfter.skipped], [[], 0], "P31B item 7: a week after extra.to is outside the window (not a gap skip)");
+  // never mutates its inputs; bad input -> nothing
+  const mIn = mainLive.map(w => JSON.stringify(w)).join("|"), xIn = extraLive.map(w => JSON.stringify(w)).join("|");
+  ef.eastExtraWeeks(mainLive, extraLive, win);
+  ok(mainLive.map(w => JSON.stringify(w)).join("|") === mIn && extraLive.map(w => JSON.stringify(w)).join("|") === xIn, "P31B item 7: eastExtraWeeks never mutates its inputs");
+  eq(ef.eastExtraWeeks(mainLive, extraLive, null), { weeks: [], past: 0, ahead: 0, skipped: 0 }, "P31B item 7: no windows -> nothing");
+  eq(ef.eastExtraWeeks(null, null, win), { weeks: [], past: 0, ahead: 0, skipped: 0 }, "P31B item 7: no weeks -> nothing");
+}
 // fetchEastWeeks with a stubbed fetch: the time_off read is scoped to the
 // resolved ids, kind vacation, the window; its failure is NOT the weeks' failure.
 {

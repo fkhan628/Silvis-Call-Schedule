@@ -3671,8 +3671,13 @@ function CallSchedule() {
     if (!isScheduler) return;
     setEastRefreshing(true);
     try {
-      const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));
-      const toMon = fmt(addD(parse(fromMon), 7 * 30));
+      // Prompt 31 Part B item 7 (10/13): the windows come from east-feed.js eastRefreshWindows (Central today). The MAIN
+      // window is the one this refresh has always read with the vacations (Monday of today - 28, 30 weeks); the weeks-only
+      // EXTRA window (12 months back .. 3 years ahead) is read after the resets below, for the call totals.
+      const eastWin = eastRefreshWindows(todayCentral());
+      if (!eastWin) throw new Error("no refresh window for " + todayCentral());
+      const fromMon = eastWin.main.from;
+      const toMon = eastWin.main.to;
       // Prompt 15 part 1a (9/23): the same refresh reads the Davenport VACATIONS
       // (time_off, kind vacation only) of every roster surgeon whose East feature
       // reads busy days - the codes go in, fetchEastWeeks resolves each through
@@ -3766,6 +3771,28 @@ function CallSchedule() {
           }
         }
       }
+      // Prompt 31 Part B item 7 (10/13): the call totals need the published Davenport weeks OUTSIDE the main window -
+      // 12 months back, and ahead only while contiguous with the last week the main read returned (east-feed.js
+      // eastExtraWeeks; a week past a gap would stretch the published coverage over unpublished weeks, read there as
+      // known clear). Weeks only: no vacation codes, no review reset, no forecast prune. A week keeps the vacation list
+      // its cached row carries (keepCachedVacations over the RELOADED cache, never the stale state); a week new to the
+      // cache gets none. Runs only on a reloaded cache. A failed read or upsert keeps the cache and is named in the audit
+      // row and the toast - never "no East call"; the main leg's result above stands either way.
+      const extra = { from: eastWin.extra.from, to: eastWin.extra.to, weeks: 0, past: 0, ahead: 0, skipped: 0, error: null };
+      if (cacheRows) {
+        try {
+          const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});
+          const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);
+          extra.skipped = sel.skipped;
+          const extraRows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }));
+          if (extraRows.length) {
+            const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(extraRows) });
+            if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error("couldn't cache them: " + describeDbError(t)); }
+            extra.weeks = extraRows.length; extra.past = sel.past; extra.ahead = sel.ahead;
+            await loadEastTables();
+          }
+        } catch (e) { console.warn("East feed: the Davenport weeks outside the refresh window were not cached - cache kept", e); extra.error = errText(e).slice(0, 200); }
+      } else extra.error = "the cache did not reload - skipped";
       const resetText = (x) => `${fmtMD(x.start)}-${fmtMD(x.end)} (was ${x.decision}; ${x.reason === "changed" ? "dates changed" : "removed from Davenport"})`;
       const resetWord = reviewResets.length || reviewResetFailures.length
         ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.`
@@ -3781,10 +3808,13 @@ function CallSchedule() {
         : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept"
         : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}`
         : `no East vacations read${unresolvedWord}`;
-      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}`,
+      // Prompt 31 Part B item 7: the extra leg, named in the audit row and the ONE final toast (a failure is tone error).
+      const extraSummary = extra.error ? `; Davenport weeks outside the window NOT cached: ${extra.error}`
+        : `; ${extra.weeks} more published week(s) cached (${extra.from}..${extra.to}${extra.skipped ? `; ${extra.skipped} after a gap skipped` : ""})`;
+      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${extraSummary}`,
         { from: fromMon, to: toMon, weeks: weekRows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null,
           vacations: { codes: vacationCodes, ranges: vacationCount, to: feed.vacationsTo || null, rewrittenWeeks: rewrittenRows.length, unresolved: feed.vacationCodesUnresolved || [], error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null },
-          reviewResets, reviewResetFailures });
+          reviewResets, reviewResetFailures, extra });
       const pruneWord = !publishedCoverage ? ""
         : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.`
         : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.`
@@ -3793,7 +3823,10 @@ function CallSchedule() {
         : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}`
         : feed.vacations ? (plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.`)
         : ` No East vacations read${unresolvedWord}.`;
-      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}${resetWord}`, feed.vacationsError || reviewResetFailures.length ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
+      const extraWord = extra.error ? ` Davenport weeks outside the refresh window could NOT be cached (the call totals may undercount): ${extra.error}.`
+        : (extra.weeks ? ` ${extra.weeks} more published week(s) cached.` : "")
+          + (extra.skipped ? ` ${extra.skipped} later week(s) after a gap in Davenport's published weeks not cached (they follow once the weeks between are published).` : "");
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${resetWord}${extraWord}`, feed.vacationsError || reviewResetFailures.length || extra.error ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
     } catch (e) {
       // A rejected fetch (network drop, CORS, DNS) on the east_feed upsert, the
       // cache reload or the audit row must not escape as an unhandled rejection
