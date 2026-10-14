@@ -11280,7 +11280,7 @@ function CallTotalsCard({ css, dk, model }) {
               </thead>
               <tbody>
                 {months.map(mo => (
-                  <tr key={mo.month} data-testid="ct-month" data-month={mo.month} data-pending={mo.pending ? "1" : "0"} data-before-cache={mo.beforeCache ? "1" : "0"}>
+                  <tr key={mo.month} data-testid="ct-month" data-month={mo.month} data-pending={mo.pending ? "1" : "0"} data-before-cache={mo.beforeCache ? "1" : "0"} data-after-cache={mo.afterCache ? "1" : "0"}>
                     <td style={{ whiteSpace: "nowrap", padding: "4px 6px", borderTop: "1px solid " + T.border }}><span style={{ color: T.text, fontWeight: 600 }}>{mo.label}</span></td>
                     {cols.map(c => <td key={c.id} data-col={c.id} style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", padding: "4px 6px", borderTop: "1px solid " + T.border }}><span style={{ color: T.text }}>{mo.cells ? mo.cells[c.id] : "?"}</span></td>)}
                   </tr>
@@ -12432,7 +12432,16 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
   // win - so it can never name a day eligibility ignores; rows inside the coverage
   // (stale after a failed prune) are counted and named as ignored.
   const forecast = (typeof forecastFromFeedRows === "function" && typeof forecastOutsideCoverage === "function") ? forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov) : {};
-  const fcInsideCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to).length : 0;
+  // Prompt 31 Part B review (10/14): every forecast row inside the published coverage is ignored by the rules, but Refresh
+  // deletes only the ones inside its MAIN window's published weeks (refreshEastFeed prunes coverageOf(the main read)).
+  // Since item 7 the cache also holds published weeks past that window (and 12 months back), so the rows there are named
+  // apart: past the window they wait until the window reaches them; before it no refresh deletes them. The windows are
+  // the refresh's own (eastRefreshWindows of today = todayCentral(), the date refreshEastFeed passes).
+  const fcWin = typeof eastRefreshWindows === "function" ? eastRefreshWindows(today) : null;
+  const fcInCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to) : [];
+  const fcPastWin = fcWin ? fcInCov.filter(r => r.week_monday > fcWin.main.to).length : 0;
+  const fcBeforeWin = fcWin ? fcInCov.filter(r => r.week_monday < fcWin.main.from).length : 0;
+  const fcInsideCov = fcInCov.length - fcPastWin - fcBeforeWin;
   const fcGenerated = (forecastRows || []).map(r => r.generated_at || (r.data && r.data.generatedAt)).filter(Boolean).sort().slice(-1)[0] || null;
   const fcRuns = (forecastRows || []).map(r => r.data && r.data.runs).filter(x => typeof x === "number")[0];
   const horizon = suAddDays(today, 90);
@@ -12455,11 +12464,11 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Forecast (while Davenport is unpublished)</div>
         {(forecastRows || []).length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>No forecast rows.</p> : (
           <div style={{ fontSize: 12, color: "#3a4a58", lineHeight: 1.6 }}>
-            generated {suFmtTs(fcGenerated)}, {fcRuns !== undefined ? fcRuns + " runs" : "runs unknown"}, {(forecastRows || []).length} week(s){fcInsideCov > 0 ? <span style={{ color: "#a83232" }}> ({fcInsideCov} inside the published coverage (ignored) - refresh the feed to delete them)</span> : null}; days at or above {Math.round((threshold || 0.5) * 100)}% in the next 90 days: {fcDays.length === 0 ? "none" : null}
+            generated {suFmtTs(fcGenerated)}, {fcRuns !== undefined ? fcRuns + " runs" : "runs unknown"}, {(forecastRows || []).length} week(s){fcInsideCov > 0 ? <span style={{ color: "#a83232" }}> ({fcInsideCov} inside the published coverage (ignored) - Refresh from Davenport deletes them)</span> : null}{fcPastWin > 0 ? <span data-testid="east-forecast-past-window"> ({fcPastWin} in cached weeks past the refresh window (ignored by the rules) - deleted once the refresh window reaches them)</span> : null}{fcBeforeWin > 0 ? <span style={{ color: "#a83232" }}> ({fcBeforeWin} in cached weeks before the refresh window (ignored by the rules) - no refresh deletes them; delete them by hand)</span> : null}; days at or above {Math.round((threshold || 0.5) * 100)}% in the next 90 days: {fcDays.length === 0 ? "none" : null}
             {fcDays.length > 0 && <div data-testid="east-forecast-days" style={{ fontFamily: mono, fontSize: 11 }}>{fcDays.map(d => d + " " + Math.round(forecast[d] * 100) + "%").join(", ")}</div>}
           </div>
         )}
-        <p style={{ fontSize: 11, color: "#5B6B82", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.</p>
+        <p style={{ fontSize: 11, color: "#5B6B82", margin: "4px 0 0" }}>How to refresh: run <span style={{ fontFamily: mono }}>node scripts/east-forecast.js --sql</span> on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes the forecast rows for the published weeks inside its refresh window (the Monday 4 weeks back through 30 weeks on); a forecast row for a cached week past that window is ignored by the rules and deleted once the window reaches it. The forecast only ever fills weeks Davenport has not published.</p>
       </div>
       <div style={{ border: "1px solid " + ((conflicts || []).length ? "#e0b4b4" : "#e8ecf0"), borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
         <div style={{ ...css.subT, margin: "0 0 4px", color: (conflicts || []).length ? "#a83232" : undefined }}>Conflicts with the published schedule ({(conflicts || []).length})</div>

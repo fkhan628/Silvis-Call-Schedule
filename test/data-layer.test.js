@@ -1055,8 +1055,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   });
   check("C.4/C.5: the East card carries the conflict report (data-testid east-conflicts) and the corrected forecast sentence", () => {
     assert.ok(src.includes('data-testid="east-conflicts"'), "no east-conflicts list in the East card");
-    assert.ok(src.includes("Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published."), "the corrected sentence is missing");
+    // pin moved deliberately 10/14: Prompt 31 Part B review minors - since item 7 the cache also holds published weeks
+    // past the refresh's main window, and Refresh prunes the forecast only inside the main read's published weeks
+    // (coverageOf(feed.weeks)), so "deletes forecast rows for weeks that are now published" stopped being true for those
+    assert.ok(src.includes("Refreshing the feed caches Davenport's published weeks and deletes the forecast rows for the published weeks inside its refresh window (the Monday 4 weeks back through 30 weeks on); a forecast row for a cached week past that window is ignored by the rules and deleted once the window reaches it. The forecast only ever fills weeks Davenport has not published."), "the corrected sentence is missing");
     assert.strictEqual(src.includes("Published weeks replace the forecast automatically"), false, "the old (untrue) sentence is still there");
+    assert.strictEqual(src.includes("deletes forecast rows for weeks that are now published"), false, "the 9/22 sentence (untrue for cached weeks past the refresh window since item 7) is still there");
     assert.ok(src.includes("eastConflicts(rulesCtx"), "the conflict report is not computed from rulesCtx over the schedule map");
     // Fix round (findings 2 + 12): the card's own forecast strip reads the PRUNED map
     // (published coverage applied) and says how many forecast rows are ignored.
@@ -1064,10 +1068,39 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const card = src.slice(cs, src.indexOf("\nfunction ", cs + 10));
     assert.ok(card.includes("forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov)"), "EastFeedCard must prune its forecast strip with the published coverage (cov)");
     assert.ok(card.includes("inside the published coverage (ignored)"), "EastFeedCard must say how many forecast rows lie inside the published coverage and are ignored");
+    // pin moved deliberately 10/14: Prompt 31 Part B review minors - "refresh the feed to delete them" was untrue for the
+    // rows in cached weeks past the main window (the extra leg's weeks ahead); the three cases are named apart (below)
+    assert.strictEqual(card.includes("refresh the feed to delete them"), false, "the blanket 'refresh the feed to delete them' is still there");
     // Fix round (finding 13): My schedule's F badge (badgesFor - the month grid has drawn none since Item E2, 9/25) honours an override busy:false.
     const bs = src.indexOf("const badgesFor = (d, who) => {"); // Prompt 20 F3: badgesFor reads the shown surgeon's ctx (who || pid)
     const badges = src.slice(bs, src.indexOf("return out;", bs));
     assert.ok(badges.includes("P.eastOverrides[d] === false"), "badgesFor must skip the F badge on an override busy:false day");
+  });
+  check("P31B review (10/14): EastFeedCard names the forecast rows inside the published coverage by what deletes them - inside the refresh's MAIN window (Refresh from Davenport deletes them), in cached weeks past it (ignored by the rules, deleted once the window reaches them) and before it (no refresh deletes them) - from the same eastRefreshWindows(today) the refresh reads; the extra leg gains no prune; the lifted lines run on east-feed.js", () => {
+    const cs = src.indexOf("function EastFeedCard(");
+    const card = src.slice(cs, src.indexOf("\nfunction ", cs + 10));
+    const a = card.indexOf("  const fcWin = "), b = card.indexOf("  const fcGenerated = ");
+    assert.ok(a > 0 && b > a, "EastFeedCard has no `const fcWin = ` .. `const fcGenerated = ` block");
+    const lines = card.slice(a, b);
+    assert.ok(lines.includes('typeof eastRefreshWindows === "function" ? eastRefreshWindows(today) : null'), "the card reads the refresh's own windows (eastRefreshWindows of the card's today = todayCentral())");
+    assert.ok(/<EastFeedCard [^>]*today=\{todayStr\}/.test(src) && src.includes("const todayStr = todayCentral();"), "the card's today is todayCentral(), the date refreshEastFeed passes to eastRefreshWindows");
+    // the words, each count on its own (the red ones need an action; the rows past the window wait for it)
+    assert.ok(card.includes("{fcInsideCov > 0 ? <span style={{ color: \"#a83232\" }}> ({fcInsideCov} inside the published coverage (ignored) - Refresh from Davenport deletes them)</span> : null}"), "the in-window rows: Refresh from Davenport deletes them");
+    assert.ok(card.includes("{fcPastWin > 0 ? <span data-testid=\"east-forecast-past-window\"> ({fcPastWin} in cached weeks past the refresh window (ignored by the rules) - deleted once the refresh window reaches them)</span> : null}"), "the rows past the window: ignored, deleted once the window reaches them");
+    assert.ok(card.includes("{fcBeforeWin > 0 ? <span style={{ color: \"#a83232\" }}> ({fcBeforeWin} in cached weeks before the refresh window (ignored by the rules) - no refresh deletes them; delete them by hand)</span> : null}"), "the rows before the window: no refresh deletes them");
+    // the refresh itself is unchanged: ONE forecast DELETE, inside the main read's coverage (no prune in the extra leg)
+    const fn = src.slice(src.indexOf("const refreshEastFeed = async () => {"), src.indexOf("const resetText = (x) =>"));
+    assert.strictEqual((fn.match(/east_forecast\?/g) || []).length, 1, "one forecast DELETE in the refresh");
+    assert.ok(fn.includes("const publishedCoverage = coverageOf(feed.weeks);"), "the prune's coverage is the main read's weeks");
+    const box = { console };
+    vm.createContext(box);
+    vm.runInContext(fs.readFileSync(path.join(ROOT, "east-feed.js"), "utf8"), box, { filename: "east-feed.js" });
+    const run = (today, cov, weeks) => vm.runInContext("(() => { const today = " + JSON.stringify(today) + ", cov = " + JSON.stringify(cov) + ", forecastRows = " + JSON.stringify(weeks.map(w => ({ week_monday: w, data: { isForecast: true } }))) + ";\n" + lines + "\nreturn [fcInsideCov, fcPastWin, fcBeforeWin]; })()", box);
+    // 10/14/2026: the main window is 9/14/2026 .. 4/12/2027 (its last Monday)
+    const W = ["2026-08-31", "2026-09-14", "2026-11-30", "2027-04-12", "2027-04-19", "2027-06-07", "2027-09-06"];
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(run("2026-10-14", { from: "2025-12-29", to: "2027-06-13" }, W))), [3, 2, 1], "inside the coverage: 9/14, 11/30, 4/12 in the window; 4/19, 6/7 past it; 8/31 before it (9/6/2027 is outside the coverage)");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(run("2026-10-14", { from: "2026-09-14", to: "2027-04-18" }, W))), [3, 0, 0], "a cache inside the main window (before item 7): every row inside it is the refresh's to delete");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(run("2026-10-14", null, W))), [0, 0, 0], "no coverage: nothing inside it");
   });
   check("edge-function base is derived from SUPABASE_URL (no Edge Function URL setting)", () => {
     assert.strictEqual(src.includes("edgeFunctionUrl"), false);
@@ -4020,10 +4053,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const legAt = rb.indexOf("const extra = {"), endAt = rb.indexOf("const resetText");
     return { rb, legAt, endAt, leg: legAt >= 0 && endAt > legAt ? rb.slice(legAt, endAt) : "" };
   })();
-  check("P31B item 7: refreshEastFeed takes its windows from eastRefreshWindows(todayCentral()) (one call in the page); the main leg is unchanged - fetchEastWeeks(fromMon, toMon, { vacationCodes }), planVacationCache's floor fromMon, the reset floor st.review.end >= fromMon, the forecast prune over coverageOf(feed.weeks)", () => {
+  check("P31B item 7: refreshEastFeed takes its windows from eastRefreshWindows(todayCentral()) (one call in the refresh; EastFeedCard reads the same windows for its forecast line); the main leg is unchanged - fetchEastWeeks(fromMon, toMon, { vacationCodes }), planVacationCache's floor fromMon, the reset floor st.review.end >= fromMon, the forecast prune over coverageOf(feed.weeks)", () => {
     const { rb } = P31I7;
     assert.ok(rb.length > 0, "refreshEastFeed not found");
-    assert.strictEqual(count("eastRefreshWindows("), 1, "exactly one window call in the page");
+    // pin moved deliberately 10/14: Prompt 31 Part B review minors - EastFeedCard reads the same windows (display only) to
+    // name the forecast rows a Refresh deletes apart from the ones in cached weeks past the main window; the refresh
+    // still takes its windows from ONE call (it was: exactly one call in the page)
+    assert.strictEqual(count("eastRefreshWindows("), 2, "two window calls in the page: the refresh's and EastFeedCard's");
+    assert.strictEqual((rb.match(/eastRefreshWindows\(/g) || []).length, 1, "exactly one window call in refreshEastFeed");
+    const efc = src.slice(src.indexOf("function EastFeedCard("), src.indexOf("\nfunction ", src.indexOf("function EastFeedCard(") + 10));
+    assert.strictEqual((efc.match(/eastRefreshWindows\(/g) || []).length, 1, "and one in EastFeedCard (its forecast line)");
     const winAt = rb.indexOf("const eastWin = eastRefreshWindows(todayCentral());");
     assert.ok(winAt > 0 && rb.indexOf("const fromMon = eastWin.main.from;") > winAt && rb.indexOf("const toMon = eastWin.main.to;") > winAt, "fromMon / toMon read eastWin.main");
     assert.ok(rb.indexOf("if (!eastWin) throw new Error(") > winAt && rb.indexOf("if (!eastWin) throw new Error(") < rb.indexOf("const fromMon = eastWin.main.from;"), "no window -> the refresh fails loudly (the outer catch's toast), never a read of an undefined window");
@@ -4322,7 +4361,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(byId(t, "ct-month-note").map(text), m.monthNotes);
       assert.strictEqual(byId(t, "ct-months-toggle")[0].props["aria-expanded"], true);
     });
-    checkC("P31B CallTotalsCard behaviour: Davenport unknown (the cache read failed) - the reason as a ct-note, every Davenport cell and the totals '?', the Silvis cells unchanged; a month before the first cached week reads '?' with its note", () => {
+    checkC("P31B CallTotalsCard behaviour: Davenport unknown (the cache read failed) - the reason as a ct-note, every Davenport cell and the totals '?', the Silvis cells unchanged; a month before the first cached week, and one ending after the last, reads '?' with its note", () => {
       const m = modelOf({ feedState: "failed" });
       const t = render(m, false);
       assert.deepStrictEqual(byId(t, "ct-note").map(text), ["Davenport numbers unavailable - the Davenport cache could not be read; its cells and the totals show ?."]);
@@ -4334,6 +4373,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const jan = byId(lt, "ct-month").find(r => r.props["data-month"] === "2026-01");
       assert.deepStrictEqual(cells(jan), ["Jan", "-", "-", "?", "?", "?", "?"], "a month before the cache reads ? for Davenport and the totals");
       assert.ok(byId(lt, "ct-month-note").map(text).some(s => /before the first cached Davenport week \(8\/31\/2026\)/.test(s)), "and its note names the first cached week");
+      // Prompt 31 Part B review minors (10/14): a month ending after the last cached week (12/27/2026) reads ? too
+      const dec = byId(lt, "ct-month").find(r => r.props["data-month"] === "2026-12");
+      assert.deepStrictEqual([cells(dec), dec.props["data-after-cache"], jan.props["data-before-cache"], jan.props["data-after-cache"]], [["Dec *", "-", "-", "?", "?", "?", "?"], "1", "1", "0"], "December (12/28-12/31 not cached) reads ? for Davenport and the totals, marked data-after-cache");
+      assert.ok(byId(lt, "ct-month-note").map(text).some(s => /after the last cached Davenport week \(12\/27\/2026\)/.test(s)), "and its note names the last cached week");
     });
     checkC("P31B CallTotalsCard behaviour: a refused count (no roster entry) and a page whose modules are older (model null) render ONE 'Totals unavailable - <reason>' line (data-state unavailable) - no table, no chip, no number", () => {
       const refusedWithRows = Object.assign(modelOf(), { ok: false, error: "the count was refused (harness)" }); // ok:false wins over any periods it carries

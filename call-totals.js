@@ -259,16 +259,20 @@ function callTotalsInputs(args) {
 //   { ok:false, title, subtitle, error } for a refused count, else { ok:true, title, subtitle, code, today, year,
 //   davenportKnown, silvisKnown, ranges, periods:[{ key, label, from, to, rangeText, startsNote, rows:[{ id, label,
 //   strong, sub, top, worked, scheduled, all, num }] }], monthCols:[{ id, label }], months:[{ month, label, pending,
-//   beforeCache, cells:{ colId: text } }], monthNotes, notes, dataLine, footnote }.
+//   beforeCache, afterCache, cells:{ colId: text } }], monthNotes, notes, dataLine, footnote }.
 //   Cells are text ("?", "-", "3", "7.5"); `num` holds the numbers ({ worked, scheduled, all }) of a known row, else null.
-//   A month that starts before the first cached Davenport week shows "?" in its Davenport cells and totals (the cache
-//   does not reach it - a "-" there would read as no call); the period chips say so in their start note.
+//   A month that starts before the first cached Davenport week, or ends after the last one (range.dsgTo, its Sunday),
+//   shows "?" in its Davenport cells and totals (the cache does not reach all of it - a "-" or a part count there would
+//   read as the month's call); the period chips say so in their start note. The cache's last week is not always
+//   Davenport's last published one: the in-app refresh caches the weeks ahead only while contiguous (eastExtraWeeks),
+//   so the data line says "its last cached week".
 function callTotalsCardModel(totals, inputs) {
   if (!totals || totals.ok !== true) return { ok: false, title: CT_TITLE, subtitle: CT_SUBTITLE, error: totals && totals.error ? String(totals.error) : "the count was refused" };
   const inp = inputs || {};
   const dav = !!(inp.davenport && inp.davenport.known), sil = !!(inp.silvis && inp.silvis.known);
   const range = totals.range || {};
   const davFrom = dav && ctIsDay(range.dsgFrom) ? range.dsgFrom : null;
+  const davTo = dav && ctIsDay(range.dsgTo) ? range.dsgTo : null;
   const known = (site) => (site === "s" ? sil : site === "d" ? dav : sil && dav);
   const periods = CT_PERIODS.map(([key, label]) => {
     const p = totals.periods[key];
@@ -280,20 +284,24 @@ function callTotalsCardModel(totals, inputs) {
     });
     const starts = [];
     if (davFrom && davFrom > p.from) starts.push("Davenport weeks are cached from " + ctMdy(davFrom) + " - nothing earlier is counted.");
+    if (davTo && davTo < p.to) starts.push("Davenport weeks are cached through " + ctMdy(davTo) + " - nothing later is counted.");
     if (sil && ctIsDay(range.silvisFrom) && range.silvisFrom > p.from) starts.push("Silvis days start " + ctMdy(range.silvisFrom) + ".");
     return { key, label, from: p.from, to: p.to, rangeText: ctMdy(p.from) + " - " + ctMdy(p.to), startsNote: starts.join(" "), rows };
   });
-  let anyBefore = false;
+  let anyBefore = false, anyAfter = false;
   const months = totals.months.map(m => {
     const pending = m.scheduled.total > 0;
     const beforeCache = !!davFrom && m.from < davFrom;
+    const afterCache = !!davTo && m.to > davTo;
     if (beforeCache) anyBefore = true;
+    if (afterCache) anyAfter = true;
     const cells = {};
-    CT_MONTH_COLS.forEach(c => { cells[c.id] = ctCell(m.worked[c.k] + m.scheduled[c.k], known(c.site) && !(beforeCache && c.site !== "s")); });
-    return { month: m.month, label: CT_MONTH_NAMES[Number(m.month.slice(5, 7)) - 1] + (pending ? " *" : ""), pending, beforeCache, cells };
+    CT_MONTH_COLS.forEach(c => { cells[c.id] = ctCell(m.worked[c.k] + m.scheduled[c.k], known(c.site) && !((beforeCache || afterCache) && c.site !== "s")); });
+    return { month: m.month, label: CT_MONTH_NAMES[Number(m.month.slice(5, 7)) - 1] + (pending ? " *" : ""), pending, beforeCache, afterCache, cells };
   });
   const monthNotes = ["* includes scheduled days (after today)"];
   if (anyBefore) monthNotes.push("? = before the first cached Davenport week (" + ctMdy(davFrom) + ") - not counted.");
+  if (anyAfter) monthNotes.push("? = after the last cached Davenport week (" + ctMdy(davTo) + ") - not counted.");
   const davWhy = (inp.davenport && inp.davenport.why) || "no data", silWhy = (inp.silvis && inp.silvis.why) || "no data";
   const notes = [];
   if (!dav) notes.push("Davenport numbers unavailable - " + davWhy + "; its cells and the totals show ?.");
@@ -302,7 +310,7 @@ function callTotalsCardModel(totals, inputs) {
   const silPart = !sil ? "Silvis: not available (" + silWhy + ")"
     : ctIsDay(range.silvisFrom) ? "Silvis from " + ctMdy(range.silvisFrom) + " to " + ctMdy(range.silvisTo) : "Silvis: no days on file";
   const davPart = !dav ? "Davenport: not available (" + davWhy + ")"
-    : "Davenport from " + ctMdy(davFrom) + " to " + ctMdy(range.dsgTo) + " (its last published week" + (refreshed ? "; cache refreshed " + ctMdy(refreshed) : "") + ")";
+    : "Davenport from " + ctMdy(davFrom) + " to " + ctMdy(range.dsgTo) + " (its last cached week" + (refreshed ? "; cache refreshed " + ctMdy(refreshed) : "") + ")";
   const footnote = "Worked = on or before " + ctMdy(totals.today) + " (this device's date); scheduled = after it. Every number counts role-days, so one date can count twice (a Davenport day-call day and a weeknight, or a Davenport day and a Silvis day). Davenport days are counted the way the Davenport app's Stats > Billing counts them: each day of a service week, each weeknight, Fri + Sat + Sun for a weekend, 2 days for a covered holiday; backup-week roles are listed apart. Silvis: one 07:00-07:00 day = 1. Weighted: every backup role (Silvis backup days, Davenport backup-week days) counts 0.5.";
   return {
     ok: true, title: CT_TITLE, subtitle: CT_SUBTITLE, code: totals.code, today: totals.today, year: Number(String(totals.today).slice(0, 4)),

@@ -35,8 +35,10 @@
 //      weighted total into "?", never zeros; malformed inputs and a throwing read give ok:false, never a throw (the
 //      card renders inside the app - a throw would take the whole app to the crash screen); the device date
 //   T11 the card model: titles, periods, row ids / labels / order, cell text ("-", "7.5", "?"), sub rows, the month list
-//      (with "?" for months before the cache's first Davenport week), notes, the data line and the footnote - the
-//      text hand-transcribed in the shapes fixture's expectedCells; every string ASCII, never "East" or "DSG"
+//      (with "?" for months before the cache's first Davenport week and for months ending after its last - the gap
+//      scenario: the refresh caches the weeks ahead only while contiguous), notes, the data line ("its last cached
+//      week") and the footnote - the text hand-transcribed in the shapes fixture's expectedCells; every string ASCII,
+//      never "East" or "DSG"
 //   T12 the docs (B5): the build guide's "My call - Silvis + Davenport" section, found by its title with its number
 //      derived (23 on this base; the next free number after a rebase - the guide's section numbers unique and ascending)
 //      (its sub-headings, the port commit, the parity rule, the units, the device date, the gate, every "?" reason
@@ -653,10 +655,16 @@ check("T10 callTotalsCardFor on the shapes fixture: every period row's and every
     p.rows.forEach(r => { const k = KEY[r.id]; if (!r.num || r.num.worked !== e.worked[k] || r.num.scheduled !== e.scheduled[k] || r.num.all !== e.worked[k] + e.scheduled[k]) bad.push(pk + " " + r.id + " " + JSON.stringify(r.num)); });
   });
   const COL = { silvisP: "silvisP", silvisB: "silvisB", dav: "dsg", davB: "dsgB", total: "total", weighted: "weighted" };
+  // pin moved deliberately 10/14: Prompt 31 Part B review minors - a month that ends AFTER the last cached Davenport week
+  // (the counter's range.dsgTo, 12/27/2026 here) reads "?" in its Davenport, Dav. backup, Total and Wtd cells, as a month
+  // before the cache does: 12/28-12/31/2026 are not cached, so December's copied numbers are a lower bound the card must
+  // not print as a count. The Silvis cells, and every other month, keep the copied `expected` numbers.
+  const AFTER = ["2026-12"], NOT_SILVIS = ["dav", "davB", "total", "weighted"];
   fx.expected.months.forEach((e, i) => {
     const x = m.months[i];
     if (!x || x.month !== e.month || x.pending !== (e.scheduled.total > 0)) { bad.push(e.month + " month"); return; }
-    Object.keys(COL).forEach(c => { const v = e.worked[COL[c]] + e.scheduled[COL[c]]; const t = v === 0 ? "-" : (Number.isInteger(v) ? String(v) : v.toFixed(1)); if (x.cells[c] !== t) bad.push(e.month + " " + c + " " + x.cells[c] + " != " + t); });
+    if (x.afterCache !== AFTER.includes(e.month)) bad.push(e.month + " afterCache " + x.afterCache);
+    Object.keys(COL).forEach(c => { const v = e.worked[COL[c]] + e.scheduled[COL[c]]; const t = AFTER.includes(e.month) && NOT_SILVIS.includes(c) ? "?" : v === 0 ? "-" : (Number.isInteger(v) ? String(v) : v.toFixed(1)); if (x.cells[c] !== t) bad.push(e.month + " " + c + " " + x.cells[c] + " != " + t); });
   });
   assert.deepStrictEqual(bad, []);
 });
@@ -865,18 +873,80 @@ check("T11 months before the cache's first Davenport week show ? (Davenport, Dav
   const full = cardFor();
   assert.deepStrictEqual(full.months.filter(x => x.beforeCache), [], "a cache starting before Jan 1 marks no month");
 });
+// The gap scenario (Prompt 31 Part B review minors, 10/14): what the in-app refresh holds on 2027-03-01 when the Davenport
+// app has published 2025-12-29..2027-09-27 and, after a gap, 2027-11-01..2027-12-27 - the main read (eastRefreshWindows'
+// main window), the extra leg's selection (east-feed.js eastExtraWeeks: the weeks ahead only while contiguous, so the
+// block past the gap is never cached) and the weeks earlier refreshes cached (nothing deletes). Every week gives FAK
+// (Davenport s6) its Monday night; the 9/27 week also its weekend (Fri 10/1 .. Sun 10/3, in October). The Silvis days are
+// the shapes fixture's plus a primary on 11/10/2027 and a backup on 12/5/2027.
+const GAP_TODAY = "2027-03-01";
+const gapMondays = (a, b) => { const out = []; for (let d = new Date(a + "T12:00:00Z"); d.toISOString().slice(0, 10) <= b; d.setUTCDate(d.getUTCDate() + 7)) out.push(d.toISOString().slice(0, 10)); return out; };
+const gapScenario = () => {
+  const ef = vm.runInContext('({ win: typeof eastRefreshWindows === "function" ? eastRefreshWindows : null, pick: typeof eastExtraWeeks === "function" ? eastExtraWeeks : null })', SBOX);
+  if (!ef.win || !ef.pick) throw new Error("east-feed.js has no eastRefreshWindows / eastExtraWeeks");
+  const week = (m) => ({ dayCall: "s1", isBackup: false, nights: { mon: "s6", tue: "s2", wed: "s3", thu: "s4", wknd: m === "2027-09-27" ? "s6" : "s5" } });
+  const published = gapMondays("2025-12-29", "2027-09-27").concat(gapMondays("2027-11-01", "2027-12-27")).map(m => ({ weekMonday: m, data: week(m) }));
+  const win = copy(ef.win(GAP_TODAY));
+  const within = (w, a, b) => w.weekMonday >= a && w.weekMonday <= b;
+  const mainRead = published.filter(w => within(w, win.main.from, win.main.to));
+  const sel = copy(ef.pick(mainRead, published.filter(w => within(w, win.extra.from, win.extra.to)), win));
+  const cached = published.filter(w => w.weekMonday < win.extra.from).concat(mainRead, sel.weeks).sort((a, b) => (a.weekMonday < b.weekMonday ? -1 : 1));
+  const feedRows = cached.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: "2027-03-01T13:00:00.000+00:00" }));
+  const schedule = Object.assign(copy(SH.schedule), { "2027-11-10": { primary: "s1", backup: "s2" }, "2027-12-05": { primary: "s3", backup: "s1" } });
+  return { win, sel, cachedMondays: cached.map(w => w.weekMonday), args: { feedRows, schedule, today: GAP_TODAY } };
+};
+check("T11 months that END after the last cached Davenport week show ? (Davenport, Dav. backup, Total, Wtd) - never a '-' that reads as no call - with a note naming that week; the chips say so; the data line names the last cached week. Today 2027-03-01, Davenport published 2025-12-29..2027-09-27 plus a separate 2027-11-01..2027-12-27 block (never cached - the weeks ahead only while contiguous): October (cached to 10/3 only), November and December read ?", () => {
+  const G = gapScenario();
+  assert.deepStrictEqual([G.win.main.from, G.win.main.to, G.win.extra.from], ["2027-02-01", "2027-08-30", "2026-02-23"]);
+  assert.deepStrictEqual([G.sel.past, G.sel.ahead, G.sel.skipped], [49, 4, 9], "the extra leg caches 49 weeks back and 4 ahead, and skips the 9 weeks past the gap");
+  assert.deepStrictEqual(G.cachedMondays, gapMondays("2025-12-29", "2027-09-27"), "the cache ends with the 9/27/2027 week");
+  const out = ct(callA("callTotalsInputs", shapeArgs(G.args)).counter);
+  assert.ok(out && out.ok === true, NONE);
+  assert.strictEqual(out.range.dsgTo, "2027-10-03");
+  const davOf = (i) => ["dsg", "dsgB"].reduce((a, k) => a + out.months[i].worked[k] + out.months[i].scheduled[k], 0);
+  assert.deepStrictEqual([davOf(9), davOf(10), davOf(11)], [3, 0, 0], "the counter's own October holds only 10/1-10/3, November and December nothing - a '-' there would read as no call");
+  const m = cardFor(G.args);
+  assert.ok(m && m.ok === true && m.davenportKnown === true && m.silvisKnown === true, NOA + " " + JSON.stringify(m).slice(0, 160));
+  assert.deepStrictEqual(monthsOf(m), [
+    ["2027-01", "Jan", "1", "-", "4", "-", "5", "5"],
+    ["2027-02", "Feb", "-", "-", "4", "-", "4", "4"],
+    ["2027-03", "Mar *", "-", "-", "5", "-", "5", "5"],
+    ["2027-04", "Apr *", "-", "-", "4", "-", "4", "4"],
+    ["2027-05", "May *", "-", "-", "5", "-", "5", "5"],
+    ["2027-06", "Jun *", "-", "-", "4", "-", "4", "4"],
+    ["2027-07", "Jul *", "-", "-", "4", "-", "4", "4"],
+    ["2027-08", "Aug *", "-", "-", "5", "-", "5", "5"],
+    ["2027-09", "Sep *", "-", "-", "4", "-", "4", "4"],
+    ["2027-10", "Oct *", "-", "-", "?", "?", "?", "?"],
+    ["2027-11", "Nov *", "1", "-", "?", "?", "?", "?"],
+    ["2027-12", "Dec *", "-", "1", "?", "?", "?", "?"],
+  ]);
+  assert.deepStrictEqual([m.months.filter(x => x.afterCache).map(x => x.month), m.months.filter(x => x.beforeCache).map(x => x.month)], [["2027-10", "2027-11", "2027-12"], []]);
+  assert.deepStrictEqual(m.monthNotes, ["* includes scheduled days (after today)", "? = after the last cached Davenport week (10/3/2027) - not counted."]);
+  assert.deepStrictEqual(m.periods.map(p => [p.key, p.startsNote]), [["month", ""], ["ytd", ""], ["year", "Davenport weeks are cached through 10/3/2027 - nothing later is counted."], ["rolling12", "Silvis days start 9/14/2026."]]);
+  assert.strictEqual(m.dataLine, "Data: Silvis from 9/14/2026 to 12/5/2027; Davenport from 12/29/2025 to 10/3/2027 (its last cached week; cache refreshed 3/1/2027).");
+  assert.deepStrictEqual(m.notes, [], "a cache end is a note on the months and chips, not an unavailable site");
+  // the period rows keep their numbers (the chips' note says where the cache ends): the year's Davenport weeknights and
+  // weekend days, the total and the weighted total
+  assert.deepStrictEqual(rowsOf(m, "year").filter(r => ["dav-nights", "dav-weekend", "total", "weighted"].includes(r[0])),
+    [["dav-nights", "9", "30", "39"], ["dav-weekend", "-", "3", "3"], ["total", "10", "35", "45"], ["weighted", "10", "34.5", "44.5"]]);
+});
 check("T11 the data line and the footnote are the transcribed text: data from / to for both sites with the cache's newest published fetched_at (forecast rows' later fetched_at ignored), today's device date in the footnote; no data line date is hard-coded (a cache without fetched_at drops the refresh clause)", () => {
   const m = cardFor();
   assert.ok(m && m.ok === true, NOA);
   assert.deepStrictEqual([m.dataLine, m.footnote, m.notes], [EC.dataLine, EC.footnote, EC.notes]);
   const nf = cardFor({ feedRows: SH.feedRows.map(r => { const x = copy(r); delete x.fetched_at; return x; }) });
-  assert.strictEqual(nf.dataLine, "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 12/29/2025 to 12/27/2026 (its last published week).");
+  // pin moved deliberately 10/14: Prompt 31 Part B review minors - the line names the last CACHED week ("its last cached
+  // week"): the in-app refresh caches the weeks ahead only while contiguous, so Davenport may have published past it
+  assert.strictEqual(nf.dataLine, "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 12/29/2025 to 12/27/2026 (its last cached week).");
+  assert.ok(!/last published week/.test(JSON.stringify(cardFor())), "the model never says 'last published week'");
   const ns = cardFor({ schedule: {} });
   assert.ok(ns.dataLine.startsWith("Data: Silvis: no days on file; Davenport from 12/29/2025"), ns.dataLine);
   assert.ok(/^Worked = on or before 6\/1\/2027 \(this device's date\)/.test(cardFor({ today: "2027-06-01" }).footnote));
 });
-check("T11 every string of every model state (ok, each unknown state, refusals, the late cache) is ASCII and never says East or DSG (/\\beast\\b|dsg/i), keys included", () => {
-  const models = [cardFor(), cardFor({ scheduleKnown: false }), cardFor({ feedRows: SH.feedRows.filter(r => r.week_monday >= "2026-08-31") }), cardFor({ personId: "s9" }), cardFor({ today: "x" })]
+check("T11 every string of every model state (ok, each unknown state, refusals, the late cache, the gap cache) is ASCII and never says East or DSG (/\\beast\\b|dsg/i), keys included", () => {
+  let gapModel = null; try { gapModel = cardFor(gapScenario().args); } catch (e) { gapModel = { threw: String(e.message || e) }; }
+  const models = [cardFor(), cardFor({ scheduleKnown: false }), cardFor({ feedRows: SH.feedRows.filter(r => r.week_monday >= "2026-08-31") }), cardFor({ personId: "s9" }), cardFor({ today: "x" }), gapModel]
     .concat(UNKNOWN_DAV.map(([over]) => cardFor(over.feedRows === "FORECAST_ONLY" ? { feedRows: [] } : Object.assign({}, over))));
   const bad = [];
   models.forEach((m, i) => stringsOf(m).forEach(s => { if (/[^\x00-\x7F]/.test(s) || /\beast\b|dsg/i.test(s)) bad.push(i + ": " + s.slice(0, 80)); }));
@@ -942,7 +1012,7 @@ console.log("\n[T12] docs: the build guide, the rules doc, HISTORY and ONBOARDIN
     const s = flat(secN);
     ["`call-totals.js`", "commit " + PORT_COMMIT, "verbatim", "PARITY CONTRACT", "re-port", "CT_REQUIRE_CLONE=1", "test/fixtures/call-totals-card-synthetic-2026-10-14.json",
       "Stats > Billing", "0.5", "shiftAccounting", "one shift", "callTotalsDeviceToday", "device date", "callTotalsShown", "eastVacationPerson", "pid === mySurgeon",
-      "callTotalsCardFor", "crash", "efIsForecastRow", "east_forecast", "east_overrides", "previewGen", "before the first cached Davenport week",
+      "callTotalsCardFor", "crash", "efIsForecastRow", "east_forecast", "east_overrides", "previewGen", "before the first cached Davenport week", "after the last cached Davenport week",
       "eastRefreshWindows", "eastExtraWeeks", "EAST_AHEAD_DAYS", "contiguous", "keepCachedVacations", "Refresh from Davenport", "?public=1", "\"East\"", "\"DSG\""]
       .forEach(w => assert.ok(s.includes(w), "section " + N + " must name " + JSON.stringify(w)));
     REASONS.forEach(r => {

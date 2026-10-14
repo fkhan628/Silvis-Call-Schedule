@@ -164,7 +164,8 @@ public link, and when the scheduler picks another person on Mine the card is not
 are not in hand (a note under the chips says why) - never zero - and the line at the bottom says which dates the counts
 cover. The Davenport numbers come from the East feed cache, so they are as fresh as the scheduler's last **Setup → East
 feed → Refresh from Davenport**: the scheduler presses it once after the build that ships this card - it caches the
-published Davenport weeks of the last 12 months (until then the months before the cache's first week read "?").
+published Davenport weeks of the last 12 months (until then the months before the cache's first week read "?"). A month
+that runs past the last Davenport week in the cache reads "?" as well, and the bottom line names that week.
 
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
 `surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the office contact).
