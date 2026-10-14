@@ -1420,6 +1420,13 @@ function CallSchedule() {
   const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile?.role === "surgeon" && !!mySurgeon));
   // Totals > Pay: the scheduler's, and the office's read-only view (payTotalsRole "office")
   const payTotalsRole = payVisible && isScheduler ? "scheduler" : payVisible && isCoordinator ? "office" : null;
+  // Prompt 31 Part B (Faraz 10/9): "My call - Silvis + Davenport" is the signed-in East-code surgeon's alone - a linked
+  // roster entry whose eastFeed reads his own Davenport call (eastVacationPerson: enabled, a blocked role, a roster code,
+  // not an outside surgeon - Khan today), keyed by that roster code (switched on for another surgeon by data in Setup, no
+  // code branch). Never the office, a viewer / follower / APP, a failed profile or ?public=1; the Mine mount adds
+  // pid === mySurgeon, so the scheduler's picker never shows it for another person.
+  const callTotalsShown = !isPublicMode && !profileLoadFailed && !!authUser && !!mySurgeon && !isCoordinator && !isViewer
+    && eastVacationPerson(surgeons.find(s => s.id === mySurgeon), surgeonRules && surgeonRules[mySurgeon] ? surgeonRules[mySurgeon].eastFeed : null);
   const [paySettingsRow, setPaySettingsRow] = useState(null);
   const [payLogRows, setPayLogRows] = useState([]);
   const [payState, setPayState] = useState({ settings: "unread", logs: "unread", loadedYear: null, attemptYear: null, settingsLoaded: false });
@@ -8180,6 +8187,12 @@ function CallSchedule() {
                 payMyCardHidden); the scheduler's for the person picked above (one line for a switched-off surgeon). Never for
                 the office coordinator (Totals > Pay only), a viewer, a follower or ?public=1 (payVisible). */}
             {payVisible && !isCoordinator && !payMyCardHidden && (pid === mySurgeon || isScheduler) && pid && <PayCard key={pid} css={css} dk={dk} personId={pid} nameOf={nameOf} isSelf={pid === mySurgeon} schedule={schedule} holidays={holidays} settingsRow={paySettingsRow} logs={payLogRows} state={payState} today={todayStr} year={payYear} onYear={setPayYear} canEdit={isScheduler || pid === mySurgeon} busy={payBusy} onAdd={addPayLog} onUpdate={updatePayLog} onDelete={deletePayLog} onRefresh={() => loadPay(payYear, true)}/>}
+            {/* Prompt 31 Part B: "My call - Silvis + Davenport" - the signed-in East-code surgeon's own page only. Published rows
+                only (the schedule map and the east_feed cache rows - never the Generate preview, a forecast or an override),
+                counted by call-totals.js (the Davenport app's counter, ported verbatim) to this device's date. */}
+            {callTotalsShown && pid === mySurgeon && (
+              <CallTotalsCard key={pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>
+            )}
             <div style={css.card} data-testid="mine-offers">
               {(() => {
                 // Prompt 14 part 3a: the person's own future offers, as saved (the painter is where they change).
@@ -11185,6 +11198,104 @@ function PayTotalsPanel({ css, dk, roster, schedule, holidays, settingsRow, logs
   );
 }
 // ---- end call pay components
+
+// --- My call - Silvis + Davenport (Prompt 31 Part B, Faraz 10/9) ---
+// The signed-in East-code surgeon's own card in Mine (its gate and its one mount live in CallSchedule). It RENDERS the model
+// call-totals.js builds (the Davenport app's counter ported verbatim, plus the Silvis adapter) and nothing else: every label,
+// note and number comes from the model; there is no read, write, timer or clock here. Local state: the period chip and the
+// month list. A model that is missing (a page older than its modules) or refused (no roster code, or a count that threw)
+// shows ONE "Totals unavailable" line, never zeros; a site whose data is not in hand reads "?" with its reason (the model's
+// notes). Every colour it writes is a THEME token (T); the card, its title, the chips and the scroller are css.*, which the
+// dark sheet repaints. Values sit in a span inside each td (the dark sheet forces td text to one colour). At 390 px nothing
+// has a fixed width but the month table, inside its swipe-hint scroller.
+function CallTotalsCard({ css, dk, model }) {
+  const T = THEME[dk ? "dark" : "light"];
+  const [pick, setPick] = React.useState("month");
+  const [showMonths, setShowMonths] = React.useState(false);
+  const ok = !!(model && model.ok === true && Array.isArray(model.periods) && model.periods.length);
+  const small = { fontSize: 11, color: T.muted, lineHeight: 1.5 };
+  const head = (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ ...css.cardT, margin: 0 }}>{model && model.title ? model.title : "My call"}</div>
+      {model && model.subtitle && <span style={{ fontSize: 11, color: T.muted }}>{model.subtitle}</span>}
+    </div>
+  );
+  if (!ok) return (
+    <div style={css.card} data-testid="call-totals-card" data-state="unavailable">
+      {head}
+      <div data-testid="ct-unavailable" style={{ fontSize: 12, color: T.open, lineHeight: 1.5 }}>Totals unavailable - {model ? (model.error || "the count was refused") : "this page is older than its modules - reload the app"}</div>
+    </div>
+  );
+  const period = model.periods.find(p => p && p.key === pick) || model.periods[0];
+  const rows = Array.isArray(period.rows) ? period.rows : [];
+  const months = Array.isArray(model.months) ? model.months : [];
+  const cols = Array.isArray(model.monthCols) ? model.monthCols : [];
+  const th = { textAlign: "right", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 4px", whiteSpace: "nowrap" };
+  const pad = "5px 4px";
+  return (
+    <div style={css.card} data-testid="call-totals-card" data-state="ok" data-period={period.key} data-today={model.today}>
+      {head}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+        {model.periods.map(p => <button key={p.key} type="button" data-testid={"ct-period-" + p.key} aria-pressed={p.key === period.key} onClick={() => setPick(p.key)} style={css.mini(p.key === period.key)}>{p.label}</button>)}
+      </div>
+      <div data-testid="ct-range" style={small}>{period.rangeText}{period.startsNote ? " - " + period.startsNote : ""}</div>
+      {(model.notes || []).map((n, i) => <div key={i} data-testid="ct-note" style={{ fontSize: 12, color: T.warnText, lineHeight: 1.5, marginTop: 4 }}>{n}</div>)}
+      <table data-testid="ct-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: "left" }}><span style={{ color: T.muted }}>{period.label}</span></th>
+            <th style={th}><span style={{ color: T.muted }}>Worked</span></th>
+            <th style={th}><span style={{ color: T.muted }}>Scheduled</span></th>
+            <th style={th}><span style={{ color: T.muted }}>Total</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const rule = r.top ? "1px solid " + T.border : undefined;
+            const text = (v) => <span style={{ color: r.sub ? T.muted : T.text, fontWeight: r.strong ? 700 : 400, fontSize: r.sub ? 11 : 12 }}>{v}</span>;
+            const num = { textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", padding: r.sub ? "2px 4px" : pad, borderTop: rule };
+            return (
+              <tr key={r.id} data-testid="ct-row" data-row={r.id} data-worked={r.worked} data-scheduled={r.scheduled} data-all={r.all} data-sub={r.sub ? "1" : "0"}>
+                <td style={{ whiteSpace: "normal", padding: r.sub ? "2px 4px 2px 16px" : pad, borderTop: rule }}>{text(r.label)}</td>
+                <td style={num}>{text(r.worked)}</td>
+                <td style={num}>{text(r.scheduled)}</td>
+                <td style={num}>{text(r.all)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 10 }}>
+        <button type="button" data-testid="ct-months-toggle" aria-expanded={showMonths} onClick={() => setShowMonths(v => !v)} style={css.mini(showMonths)}>Month by month ({model.year})</button>
+      </div>
+      {showMonths && (
+        <>
+          <div className="table-wrap" style={{ ...css.tableWrap, marginTop: 6 }}>
+            <table data-testid="ct-months" style={{ width: "100%", minWidth: 320, borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: "left", padding: "4px 6px" }}><span style={{ color: T.muted }}>Month</span></th>
+                  {cols.map(c => <th key={c.id} style={{ ...th, padding: "4px 6px" }}><span style={{ color: T.muted }}>{c.label}</span></th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {months.map(mo => (
+                  <tr key={mo.month} data-testid="ct-month" data-month={mo.month} data-pending={mo.pending ? "1" : "0"} data-before-cache={mo.beforeCache ? "1" : "0"}>
+                    <td style={{ whiteSpace: "nowrap", padding: "4px 6px", borderTop: "1px solid " + T.border }}><span style={{ color: T.text, fontWeight: 600 }}>{mo.label}</span></td>
+                    {cols.map(c => <td key={c.id} data-col={c.id} style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", padding: "4px 6px", borderTop: "1px solid " + T.border }}><span style={{ color: T.text }}>{mo.cells ? mo.cells[c.id] : "?"}</span></td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(model.monthNotes || []).map((n, i) => <div key={i} data-testid="ct-month-note" style={{ ...small, fontSize: 10.5, marginTop: 2 }}>{n}</div>)}
+        </>
+      )}
+      <div data-testid="ct-data-line" style={{ ...small, marginTop: 10 }}>{model.dataLine}</div>
+      <div data-testid="ct-footnote" style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.5, marginTop: 4 }}>{model.footnote}</div>
+    </div>
+  );
+}
 
 // --- Roster (names / codes only; no contact fields by design) ---
 function RosterEditor({ css, roster, schedule, availabilityRows, timeOffRows, onSave, showToast }) {

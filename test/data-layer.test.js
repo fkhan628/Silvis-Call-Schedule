@@ -4128,6 +4128,254 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual([r.reads.length, r.posts.length, r.reloads, r.extra.error], [0, 0, 0, "the cache did not reload - skipped"]);
     });
   })();
+  // Prompt 31 Part B step B4 (10/13): "My call - Silvis + Davenport" in Mine. The signed-in East-code surgeon's OWN card
+  // (Khan today; keyed by his roster code through surgeonRules.<id>.eastFeed - data, never a code branch): ONE gate
+  // (callTotalsShown, beside the pay gates), ONE mount in the own-Mine return (after My pay, before My offers, never in the
+  // Following / APP returns) and ONE module-scope component that renders call-totals.js's model and nothing else (no fetch,
+  // db, storage, timer or write path; THEME tokens and css.* only; every word comes from the module). Published rows only:
+  // the schedule map (never the Generate preview) and the east_feed cache rows (the adapter drops forecast rows; never
+  // east_forecast / east_overrides), counted to the DEVICE date (Davenport's parity contract).
+  const P31C = (() => {
+    const gAt = src.indexOf("  const callTotalsShown = ");
+    const gEnd = gAt < 0 ? -1 : src.indexOf(";\n", gAt);
+    const mAt = src.indexOf("{callTotalsShown && pid === mySurgeon && (");
+    const mEnd = mAt < 0 ? -1 : src.indexOf("\n            )}\n", mAt);
+    const cAt = src.indexOf("\nfunction CallTotalsCard(");
+    const cEnd = cAt < 0 ? -1 : src.indexOf("\n}\n", cAt + 1);
+    return {
+      gAt, decl: gAt >= 0 && gEnd > gAt ? src.slice(gAt + 2, gEnd + 1) : "",
+      mAt, mount: mAt >= 0 && mEnd > mAt ? src.slice(mAt, mEnd + 15) : "",
+      cAt, comp: cAt >= 0 && cEnd > cAt ? src.slice(cAt + 1, cEnd + 2) : "",
+    };
+  })();
+  const P31C_GATE = "const callTotalsShown = !isPublicMode && !profileLoadFailed && !!authUser && !!mySurgeon && !isCoordinator && !isViewer\n"
+    + "    && eastVacationPerson(surgeons.find(s => s.id === mySurgeon), surgeonRules && surgeonRules[mySurgeon] ? surgeonRules[mySurgeon].eastFeed : null);";
+  const P31C_MOUNT = '<CallTotalsCard key={pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>';
+  check("P31B card gate: exactly one `const callTotalsShown = ` - signed in, linked to a roster entry, not the office / a viewer / a failed profile / ?public=1, and eastVacationPerson(his roster entry, his surgeonRules eastFeed) - declared right after the pay gates", () => {
+    assert.strictEqual(count("const callTotalsShown = "), 1, "one gate");
+    assert.strictEqual(P31C.decl, P31C_GATE, "the gate expression (design 3.2)");
+    const payAt = src.indexOf("  const payTotalsRole = "), nextAt = src.indexOf("  const [paySettingsRow, setPaySettingsRow] = useState(null);");
+    assert.ok(payAt > 0 && P31C.gAt > payAt && P31C.gAt < nextAt, "declared right after payTotalsRole (beside payVisible), before the pay state");
+    assert.ok(src.indexOf("\nfunction eastVacationPerson(s, ef) {") > 0, "eastVacationPerson is the module-scope predicate the East-code features share");
+  });
+  check("P31B card gate behaviour (the expression lifted and run with the page's own eastVacationPerson, the seed's roster and surgeonRules): Khan (s1, FAK - his eastFeed reads his own Davenport call) -> shown; Burchett / Acton / Philip / Sarkar, Fierce (derived weeks only, no blocked role), s1 switched off / with no blocked role / without eastFeed / without a code / an outside surgeon / not in the roster, the office, a viewer / follower / APP (no roster link), a failed profile, signed out and ?public=1 -> hidden; another surgeon given a blocking eastFeed later (data) -> shown", () => {
+    assert.ok(P31C.decl, "no callTotalsShown declaration");
+    const expr = P31C.decl.slice("const callTotalsShown = ".length).replace(/;$/, "");
+    const evAt = src.indexOf("\nfunction eastVacationPerson(s, ef) {");
+    const eastVacationPerson = new Function(src.slice(evAt, src.indexOf("\n}\n", evAt + 1) + 2) + "\nreturn eastVacationPerson;")();
+    const gate = new Function("isPublicMode", "profileLoadFailed", "authUser", "mySurgeon", "isCoordinator", "isViewer", "surgeons", "surgeonRules", "eastVacationPerson", "return (" + expr + ");");
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    assert.ok(seed.surgeonRules.s1.eastFeed && seed.surgeonRules.s5.eastFeed, "the seed carries Khan's and Fierce's eastFeed");
+    const base = { isPublicMode: false, profileLoadFailed: false, authUser: { id: "u1" }, mySurgeon: "s1", isCoordinator: false, isViewer: false, surgeons: seed.roster, surgeonRules: seed.surgeonRules };
+    const run = (o) => { const a = Object.assign({}, base, o); return gate(a.isPublicMode, a.profileLoadFailed, a.authUser, a.mySurgeon, a.isCoordinator, a.isViewer, a.surgeons, a.surgeonRules, eastVacationPerson); };
+    const withS1 = (patch) => seed.roster.map(s => s.id === "s1" ? Object.assign({}, s, patch) : s);
+    const efS1 = (patch) => Object.assign({}, seed.surgeonRules, { s1: Object.assign({}, seed.surgeonRules.s1, { eastFeed: patch === undefined ? undefined : Object.assign({}, seed.surgeonRules.s1.eastFeed, patch) }) });
+    const cases = [
+      ["Khan (s1), signed in and linked", {}, true],
+      ["Khan with a backup-blocking eastFeed only", { surgeonRules: efS1({ eastBlocksPrimary: false, eastBlocksBackup: true }) }, true],
+      ["Burchett (s2)", { mySurgeon: "s2" }, false],
+      ["Acton (s3)", { mySurgeon: "s3" }, false],
+      ["Philip (s4)", { mySurgeon: "s4" }, false],
+      ["Fierce (s5, derived weeks only - no blocked role)", { mySurgeon: "s5" }, false],
+      ["Sarkar (s6)", { mySurgeon: "s6" }, false],
+      ["s1 eastFeed switched off", { surgeonRules: efS1({ enabled: false }) }, false],
+      ["s1 eastFeed with no blocked role", { surgeonRules: efS1({ eastBlocksPrimary: false, eastBlocksBackup: false }) }, false],
+      ["s1 without an eastFeed", { surgeonRules: efS1(undefined) }, false],
+      ["no surgeonRules read yet", { surgeonRules: undefined }, false],
+      ["s1 without a roster code", { surgeons: withS1({ code: "" }) }, false],
+      ["s1 an outside surgeon", { surgeons: withS1({ type: "external" }) }, false],
+      ["s1 not in the roster", { surgeons: seed.roster.filter(s => s.id !== "s1") }, false],
+      ["the office (coordinator, no roster link)", { isCoordinator: true, mySurgeon: "" }, false],
+      ["a coordinator account linked to s1", { isCoordinator: true }, false],
+      ["a viewer / follower / APP (no roster link)", { isViewer: true, mySurgeon: "" }, false],
+      ["an account with no roster link", { mySurgeon: "" }, false],
+      ["a failed profile read", { profileLoadFailed: true }, false],
+      ["signed out", { authUser: null }, false],
+      ["?public=1", { isPublicMode: true }, false],
+      ["another surgeon switched on later by data (s3 given a blocking eastFeed)", { mySurgeon: "s3", surgeonRules: Object.assign({}, seed.surgeonRules, { s3: { eastFeed: { enabled: true, eastBlocksPrimary: true } } }) }, true],
+    ];
+    const bad = cases.filter(([, o, want]) => run(o) !== want).map(([n, , want]) => n + " -> " + (want ? "hidden" : "shown"));
+    assert.deepStrictEqual(bad, []);
+  });
+  check("P31B card mount: exactly one <CallTotalsCard in the page, in the own-Mine return (after the Following / APP returns), after My pay and before My offers, under {callTotalsShown && pid === mySurgeon && (; its model is callTotalsCardFor over the published rows only (eastFeedRows + eastLoadState.feed, eastIdByCode, schedule + daysShown, the roster, mySurgeon) and the device date - never the preview, a forecast / override row, the rules context or the Central today; the page never calls the counter itself", () => {
+    assert.strictEqual(count("<CallTotalsCard"), 1, "one mount");
+    const a = src.indexOf('{view==="myschedule" && !isPublicMode && (() => {'), b = src.indexOf("{/* ================ TIME OFF & TRADES", a);
+    assert.ok(a > 0 && b > a, "the Mine view block");
+    const mine = src.slice(a, b);
+    const appAt = mine.indexOf("if (!pid && isApp) return <>"), folAt = mine.indexOf("if (following.length) return <>{followingCards()}</>;");
+    const payAt = mine.indexOf("<PayCard key={pid}"), mAt = mine.indexOf("{callTotalsShown && pid === mySurgeon && ("), cardAt = mine.indexOf("<CallTotalsCard"), offersAt = mine.indexOf('<div style={css.card} data-testid="mine-offers">');
+    assert.ok(appAt > 0 && folAt > appAt && payAt > folAt, "the APP and Following returns come before the own Mine (and My pay)");
+    assert.ok(mAt > payAt && cardAt > mAt && offersAt > cardAt, `the card sits after My pay and before My offers, as the operand of the gate (pay ${payAt}, gate ${mAt}, card ${cardAt}, offers ${offersAt})`);
+    assert.ok(P31C.mount.startsWith("{callTotalsShown && pid === mySurgeon && (") && P31C.mount.includes(P31C_MOUNT), "the mount's exact props (design 3.2)");
+    for (const banned of ["previewGen", "eastForecastRows", "eastOverrideRows", "rulesCtx", "ctxInputs", "todayStr", "todayCentral", "lastPublished", "statedWeeks", "deriveKhanBusyDays"]) assert.ok(!P31C.mount.includes(banned), "the mount must not read " + banned);
+    assert.strictEqual(count("callTotalsFor("), 0, "one call path: callTotalsCardFor (the adapter) - the page never calls the counter itself");
+    assert.strictEqual(count("callTotalsCardFor("), 1, "the model is computed at the mount only");
+    assert.strictEqual(count("callTotalsDeviceToday()"), 1, "the device date (parity contract) at the mount only - the rest of the page keeps todayStr");
+    assert.strictEqual(count("callTotalsShown"), 2, "the gate and its one use");
+  });
+  check("P31B card: the Following view, an APP's My APP days and the 'not linked' card carry no call-totals card (they return before the mount; P20 F3 / P29)", () => {
+    const a = src.indexOf('{view==="myschedule" && !isPublicMode && (() => {'), b = src.indexOf("{/* ================ TIME OFF & TRADES", a);
+    const mine = src.slice(a, b);
+    const notLinked = mine.slice(mine.indexOf("if (!pid && !following.length && !isApp) return ("), mine.indexOf("const perOf = (who) =>"));
+    const fol = mine.slice(mine.indexOf("// Prompt 20 F3 (c): the Following view"), mine.indexOf("// end of the Following view"));
+    const app = mine.slice(mine.indexOf("if (!pid && isApp) return <>"), mine.indexOf("if (following.length) return <>"));
+    assert.ok(notLinked.length > 20 && fol.length > 200 && app.length > 50, "the three branches were found");
+    for (const [name, part] of [["the not-linked card", notLinked], ["the Following view", fol], ["My APP days", app]]) assert.ok(!/CallTotalsCard|callTotals/.test(part), name + " carries the call-totals card");
+  });
+  check("P31B CallTotalsCard: defined once at module scope, after `// ---- end call pay components` and before the Roster editor; it renders the model only - no fetch / db / supabase / storage / timer / authFetch / clock / counter call, no hex colour (THEME tokens and css.* only), no emoji / non-ASCII, no fixed width but the month table's minWidth inside its scroller, and no wording of its own about the sites (no East / DSG / Davenport - every label comes from call-totals.js)", () => {
+    assert.strictEqual(count("function CallTotalsCard("), 1, "one definition");
+    assert.ok(P31C.comp.startsWith("function CallTotalsCard({ css, dk, model }) {"), "a module-scope function taking { css, dk, model }");
+    const endPay = src.indexOf("// ---- end call pay components"), rosterAt = src.indexOf("// --- Roster (names / codes only; no contact fields by design) ---");
+    assert.ok(endPay > 0 && P31C.cAt > endPay && P31C.cAt < rosterAt, "after the pay components' end marker (outside the pay block pay.test.js scans), before the Roster editor");
+    const comp = P31C.comp;
+    for (const banned of [/fetch\(/, /\bdb\./, /supabase/i, /localStorage/, /sessionStorage/, /indexedDB/, /setInterval/, /setTimeout/, /authFetch/, /dbAuthHeaders/, /#[0-9a-fA-F]{3,8}\b/, /[^\x00-\x7F]/, /\beast\b/i, /dsg/i, /Davenport/, /callTotalsFor\(|callTotalsCardFor\(/, /new Date/, /todayCentral/]) assert.ok(!banned.test(comp), "CallTotalsCard must not contain " + banned);
+    assert.ok(comp.includes('const T = THEME[dk ? "dark" : "light"];'), "colours from the THEME tokens of the current theme");
+    assert.ok(comp.includes("React.useState(\"month\")") && comp.includes("React.useState(false)"), "local UI state only: the period chip (This month first) and the month list (closed)");
+    assert.deepStrictEqual(comp.match(/\b(width|minWidth|maxWidth)\s*:\s*\d+/g) || [], ["minWidth: 320"], "no fixed width at 390 px but the month table's, inside its scroller");
+    for (const id of ['"call-totals-card"', '"ct-unavailable"', '"ct-period-" + ', '"ct-range"', '"ct-note"', '"ct-table"', '"ct-row"', '"ct-months-toggle"', '"ct-months"', '"ct-month"', '"ct-month-note"', '"ct-data-line"', '"ct-footnote"']) assert.ok(comp.includes("data-testid=" + (id.endsWith('" + ') ? "{" + id : id)), "the card's testid " + id);
+  });
+  {
+    // CallTotalsCard lifted verbatim, transpiled by the build's own Babel (preset-react, classic runtime) and RUN on a
+    // React stand-in whose createElement returns plain nodes, in a vm realm holding helpers.js, east-feed.js, call-totals.js
+    // and app-styles.js (the page's THEME / css) - on call-totals.js's own model of the shapes fixture.
+    const SH = JSON.parse(fs.readFileSync(path.join(ROOT, "test", "fixtures", "call-totals-silvis-shapes-2026-10-14.json"), "utf8"));
+    let Card = null, box = null, liftError = null;
+    try {
+      const babel = require("@babel/core");
+      if (!P31C.comp) throw new Error("no module-scope function CallTotalsCard in index-source.html");
+      const code = babel.transformSync(P31C.comp, { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      box = { console };
+      box.globalThis = box;
+      vm.createContext(box);
+      for (const f of ["helpers.js", "east-feed.js", "call-totals.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      box.__st = { queue: [], n: 0, sets: [] };
+      box.React = {
+        createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment",
+        useState: (init) => { const st = box.__st; const i = st.n++; const v = st.queue.length > i ? st.queue[i] : undefined; return [v === undefined ? init : v, (x) => st.sets.push([i, x])]; },
+      };
+      Card = vm.runInContext(code + "\n;CallTotalsCard", box, { filename: "CallTotalsCard.jsx" });
+    } catch (e) { liftError = e; }
+    const args = (over) => Object.assign({ feedRows: SH.feedRows, feedState: "ok", idByCode: SH.eastIdByCode, schedule: SH.schedule, scheduleKnown: true, roster: SH.roster, personId: SH.personId, today: SH.today }, over || {});
+    // (the model is copied into this realm: deepStrictEqual compares prototypes, and the vm's arrays are another realm's)
+    const modelOf = (over) => JSON.parse(JSON.stringify(vm.runInContext("callTotalsCardFor", box)(JSON.parse(JSON.stringify(args(over))))));
+    const render = (model, dk, state) => { box.__st = { queue: state || [], n: 0, sets: [] }; return Card({ css: vm.runInContext("css", box), dk: !!dk, model }); };
+    const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true && c !== "");
+    const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+    const byId = (n, id) => all(n, x => x.props && x.props["data-testid"] === id);
+    const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+    const cells = (tr) => kids(tr).filter(c => c && c.type === "td").map(td => text(td).trim());
+    const checkC = (name, fn) => check(name, () => { if (liftError) throw liftError; fn(); });
+    checkC("P31B CallTotalsCard behaviour (lifted + run): the shapes fixture's model, This month, month list closed - the root's testid / data-state ok / data-period / data-today, the title and 'only you see this', four period chips (This month active, css.mini), the range line, a ct-row per model row with data-row / data-worked / data-scheduled / data-all = the model's cell text and the same text in its cells, the toggle 'Month by month (2026)', no month table, the data line and the footnote verbatim, no note, no 'unavailable' line", () => {
+      const m = modelOf();
+      assert.strictEqual(m.ok, true, "the shapes fixture's model is ok");
+      const t = render(m, false);
+      assert.deepStrictEqual([t.type, t.props["data-testid"], t.props["data-state"], t.props["data-period"], t.props["data-today"]], ["div", "call-totals-card", "ok", "month", "2026-10-14"]);
+      assert.ok(text(t).includes(m.title) && text(t).includes(m.subtitle), "title + subtitle");
+      const chips = all(t, x => x.type === "button" && /^ct-period-/.test(x.props["data-testid"] || ""));
+      assert.deepStrictEqual(chips.map(c => [c.props["data-testid"], text(c)]), [["ct-period-month", "This month"], ["ct-period-ytd", "Year to date"], ["ct-period-year", "Full year"], ["ct-period-rolling12", "12 months"]]);
+      const css = vm.runInContext("css", box);
+      assert.deepStrictEqual(chips.map(c => JSON.stringify(c.props.style) === JSON.stringify(css.mini(c.props["data-testid"] === "ct-period-month"))), [true, true, true, true], "the chips are css.mini, the picked one active");
+      assert.deepStrictEqual(chips.map(c => c.props["aria-pressed"]), [true, false, false, false]);
+      assert.strictEqual(text(byId(t, "ct-range")[0]), "10/1/2026 - 10/31/2026", "the range line (no start note this month)");
+      const rows = byId(t, "ct-row");
+      const want = m.periods[0].rows;
+      assert.deepStrictEqual(rows.map(r => [r.props["data-row"], r.props["data-worked"], r.props["data-scheduled"], r.props["data-all"]]), want.map(r => [r.id, r.worked, r.scheduled, r.all]));
+      assert.deepStrictEqual(rows.map(cells), want.map(r => [r.label, r.worked, r.scheduled, r.all]), "each row's cells read the label and the three values");
+      assert.deepStrictEqual(rows.filter(r => r.props["data-sub"] === "1").map(r => r.props["data-row"]), want.filter(r => r.sub).map(r => r.id), "sub rows are marked");
+      assert.strictEqual(byId(t, "ct-table").length, 1);
+      const tog = byId(t, "ct-months-toggle")[0];
+      assert.ok(tog && tog.type === "button" && text(tog) === "Month by month (2026)" && tog.props["aria-expanded"] === false, "the month-list toggle, closed");
+      assert.strictEqual(byId(t, "ct-months").length, 0, "no month table while closed");
+      assert.strictEqual(text(byId(t, "ct-data-line")[0]), m.dataLine);
+      assert.strictEqual(text(byId(t, "ct-footnote")[0]), m.footnote);
+      assert.deepStrictEqual([byId(t, "ct-note").length, byId(t, "ct-unavailable").length], [0, 0]);
+    });
+    checkC("P31B CallTotalsCard behaviour: a chip tap picks its period, the toggle flips the month list (local state only - nothing else is called)", () => {
+      const t = render(modelOf(), false);
+      byId(t, "ct-period-ytd")[0].props.onClick();
+      byId(t, "ct-period-rolling12")[0].props.onClick();
+      const tog = byId(t, "ct-months-toggle")[0];
+      tog.props.onClick();
+      const sets = box.__st.sets;
+      assert.deepStrictEqual(sets.slice(0, 2), [[0, "ytd"], [0, "rolling12"]], "the chips set the period state");
+      assert.strictEqual(sets[2][0], 1, "the toggle sets the month-list state");
+      const flip = sets[2][1];
+      assert.ok(typeof flip === "function" ? flip(false) === true && flip(true) === false : flip === true, "the toggle opens a closed list and closes an open one");
+    });
+    checkC("P31B CallTotalsCard behaviour: Year to date with the month list open - data-period ytd, the ytd rows, the range line with its start note; 12 ct-month rows (data-month, data-pending, the label with ' *' and the six cells of the model), the month notes, inside the swipe-hint scroller (table-wrap + css.tableWrap)", () => {
+      const m = modelOf();
+      const t = render(m, false, ["ytd", true]);
+      assert.strictEqual(t.props["data-period"], "ytd");
+      const p = m.periods.find(x => x.key === "ytd");
+      assert.deepStrictEqual(byId(t, "ct-row").map(r => [r.props["data-row"], r.props["data-all"]]), p.rows.map(r => [r.id, r.all]));
+      assert.strictEqual(text(byId(t, "ct-range")[0]), p.rangeText + " - " + p.startsNote);
+      const months = byId(t, "ct-month");
+      assert.deepStrictEqual(months.map(r => [r.props["data-month"], r.props["data-pending"]].concat(cells(r))), m.months.map(x => [x.month, x.pending ? "1" : "0", x.label].concat(m.monthCols.map(c => x.cells[c.id]))));
+      const table = byId(t, "ct-months")[0];
+      const head = all(table, x => x.type === "th").map(text);
+      assert.deepStrictEqual(head, ["Month"].concat(m.monthCols.map(c => c.label)));
+      const wrap = all(t, x => x.props && x.props.className === "table-wrap");
+      assert.ok(wrap.length === 1 && byId(wrap[0], "ct-months").length === 1, "the month table sits inside one .table-wrap");
+      const css = vm.runInContext("css", box);
+      assert.ok(Object.keys(css.tableWrap).every(k => JSON.stringify(wrap[0].props.style[k]) === JSON.stringify(css.tableWrap[k])), "the wrapper carries css.tableWrap");
+      assert.strictEqual(table.props.style.minWidth, 320);
+      assert.deepStrictEqual(byId(t, "ct-month-note").map(text), m.monthNotes);
+      assert.strictEqual(byId(t, "ct-months-toggle")[0].props["aria-expanded"], true);
+    });
+    checkC("P31B CallTotalsCard behaviour: Davenport unknown (the cache read failed) - the reason as a ct-note, every Davenport cell and the totals '?', the Silvis cells unchanged; a month before the first cached week reads '?' with its note", () => {
+      const m = modelOf({ feedState: "failed" });
+      const t = render(m, false);
+      assert.deepStrictEqual(byId(t, "ct-note").map(text), ["Davenport numbers unavailable - the Davenport cache could not be read; its cells and the totals show ?."]);
+      const rows = byId(t, "ct-row").map(r => [r.props["data-row"], r.props["data-all"]]);
+      assert.deepStrictEqual(rows.filter(([id]) => /^dav-|^total$|^weighted$/.test(id)).map(([, v]) => v).filter(v => v !== "?"), [], "every Davenport row and the totals read ?");
+      assert.deepStrictEqual(rows.filter(([id]) => /^silvis-/.test(id)), [["silvis-primary", "2"], ["silvis-backup", "2"]], "the Silvis rows keep their numbers");
+      const late = modelOf({ feedRows: SH.feedRows.filter(r => r.week_monday >= "2026-08-31") });
+      const lt = render(late, false, ["month", true]);
+      const jan = byId(lt, "ct-month").find(r => r.props["data-month"] === "2026-01");
+      assert.deepStrictEqual(cells(jan), ["Jan", "-", "-", "?", "?", "?", "?"], "a month before the cache reads ? for Davenport and the totals");
+      assert.ok(byId(lt, "ct-month-note").map(text).some(s => /before the first cached Davenport week \(8\/31\/2026\)/.test(s)), "and its note names the first cached week");
+    });
+    checkC("P31B CallTotalsCard behaviour: a refused count (no roster entry) and a page whose modules are older (model null) render ONE 'Totals unavailable - <reason>' line (data-state unavailable) - no table, no chip, no number", () => {
+      const refusedWithRows = Object.assign(modelOf(), { ok: false, error: "the count was refused (harness)" }); // ok:false wins over any periods it carries
+      for (const [m, why] of [[modelOf({ personId: "s9" }), "no roster entry for s9"], [null, "this page is older than its modules - reload the app"], [{ ok: false, title: "My call", error: "the totals could not be computed (boom)" }, "the totals could not be computed (boom)"], [refusedWithRows, "the count was refused (harness)"]]) {
+        const t = render(m, false);
+        assert.deepStrictEqual([t.props["data-testid"], t.props["data-state"]], ["call-totals-card", "unavailable"]);
+        assert.strictEqual(text(byId(t, "ct-unavailable")[0]), "Totals unavailable - " + why);
+        assert.deepStrictEqual([byId(t, "ct-table").length, byId(t, "ct-row").length, all(t, x => x.type === "button").length], [0, 0, 0]);
+      }
+    });
+    checkC("P31B CallTotalsCard behaviour: every colour the card writes itself is a THEME token of the theme in force (light and dark; buttons and the card / title boxes are css.*, which the dark sheet repaints); value cells are tabular and nowrap, labels wrap, strong rows bold, sub rows indented, the total row ruled above", () => {
+      const m = modelOf();
+      const themes = vm.runInContext("THEME", box);
+      for (const dk of [false, true]) {
+        const t = render(m, dk, ["year", true]);
+        const tokens = Object.values(themes[dk ? "dark" : "light"]);
+        const css = vm.runInContext("css", box);
+        const own = all(t, x => x.type !== "button" && x.props && x.props.style && x.props.style.color && x.props.style.color !== css.cardT.color);
+        const off = own.map(x => x.props.style.color).filter(c => !tokens.includes(c));
+        assert.deepStrictEqual(off, [], (dk ? "dark" : "light") + ": colours outside THEME." + (dk ? "dark" : "light"));
+        assert.ok(own.length > 20, "the card writes its own text colours (" + own.length + ")");
+      }
+      const t = render(m, false, ["year", false]);
+      const rows = byId(t, "ct-row");
+      const tds = (r) => kids(r).filter(c => c && c.type === "td");
+      rows.forEach(r => {
+        const [label, ...vals] = tds(r);
+        assert.strictEqual(label.props.style.whiteSpace, "normal", "the label cell wraps");
+        vals.forEach(v => assert.ok(v.props.style.whiteSpace === "nowrap" && v.props.style.fontVariantNumeric === "tabular-nums" && v.props.style.textAlign === "right", "value cells: nowrap, tabular, right"));
+      });
+      const strong = (id) => { const r = rows.find(x => x.props["data-row"] === id); return all(r, x => x.type === "span").every(s => s.props.style.fontWeight === 700); };
+      assert.ok(strong("total") && strong("weighted") && strong("dav-backup") && !strong("silvis-primary"), "strong rows bold");
+      const sub = rows.find(r => r.props["data-row"] === "dav-backup-daycall");
+      assert.ok(sub && /16px$/.test(tds(sub)[0].props.style.padding), "a sub row is indented");
+      const total = rows.find(r => r.props["data-row"] === "total");
+      assert.ok(tds(total).every(c => /^1px solid /.test(c.props.style.borderTop)), "the total row is ruled above");
+    });
+  }
+  check("P31B smoke: the harness carries the B4 card checks (the expected card computed in Node from the served rows, the picker, 390 px light + dark, the failed east_feed read; hidden for s2 / the office / a viewer / ?public=1 / a follower / an APP, shown for Khan as a surgeon)", () => {
+    const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+    for (const t of ["// ====================== Prompt 31 Part B (B4): \"My call - Silvis + Davenport\"", "const ctCardFor = vmCT.runInContext(\"callTotalsCardFor\", ctBox);", "let ctFailFeed = false;", "ctForced500Lines", "[data-testid=call-totals-card]", "P31B card (Item E3, ${R.tag})", "P31B card (F3 follower", "P31B card (P29 APP A)"]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+  });
   check("P15 fix: a quiet reset reports through the ONE refresh toast - saveEastVacationReview's failure toasts are conditioned on !quiet; the start-up 404 (migration not applied) is a console.warn + the panel banner, never a toast to every signed-in user", () => {
     const ws = src.indexOf("const saveEastVacationReview = async");
     const wb = src.slice(ws, src.indexOf("\n  };", ws));

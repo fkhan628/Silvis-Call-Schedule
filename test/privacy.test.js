@@ -301,6 +301,38 @@ function payKeyHits(value, where) {
 }
 // <<< A6f
 
+// >>> A6g
+// ---- A6g: the call-totals card (Prompt 31 Part B, Faraz 10/9: "My call - Silvis + Davenport", the East-code surgeon only).
+// It names the other site and his own call there, so it is HIS card and nothing else's: every string call-totals.js builds
+// reaches the page through ONE component (CallTotalsCard), mounted ONCE in the Mine view under the gate (never ?public=1, the
+// office, a viewer / follower / APP, a signed-out page or a failed profile) and on his own page only (pid === mySurgeon). No
+// exporter, feed, digest, e-mail, notification, push worker, script or edge function names the module or the card; the
+// model's words never say East or DSG (test/call-totals.test.js T11 checks every state's strings; data-layer the gate's
+// truth table and the component).
+{
+  const src = texts["index-source.html"] || "";
+  const gateAt = src.indexOf("  const callTotalsShown = "), gateEnd = gateAt < 0 ? -1 : src.indexOf(";\n", gateAt);
+  const gate = gateAt >= 0 && gateEnd > gateAt ? src.slice(gateAt, gateEnd) : "";
+  ok(gate && ["!isPublicMode", "!profileLoadFailed", "!!authUser", "!!mySurgeon", "!isCoordinator", "!isViewer", "eastVacationPerson("].every(t => gate.includes(t)), "A6g: the card's gate excludes ?public=1, a failed profile, a signed-out page, an unlinked account, the office and a viewer, and asks eastVacationPerson");
+  const mineAt = src.indexOf('{view==="myschedule" && !isPublicMode && (() => {'), mineEnd = src.indexOf("{/* ================ TIME OFF & TRADES", mineAt);
+  const mountAt = src.indexOf("{callTotalsShown && pid === mySurgeon && ("), mountEnd = mountAt < 0 ? -1 : src.indexOf(")}\n", mountAt);
+  ok(mineAt > 0 && mountAt > mineAt && mountAt < mineEnd && mountEnd > mountAt, "A6g: the card is mounted in the Mine view (not rendered on ?public=1) under callTotalsShown && pid === mySurgeon");
+  ok((src.match(/<CallTotalsCard\b/g) || []).length === 1 && (src.match(/\nfunction CallTotalsCard\(/g) || []).length === 1, "A6g: one CallTotalsCard component, mounted once");
+  const compAt = src.indexOf("\nfunction CallTotalsCard("), compEnd = compAt < 0 ? -1 : src.indexOf("\n}\n", compAt + 1);
+  // every mention of the card / the module's names in the page sits inside the gate, the mount or the component
+  const inside = (i) => (i >= gateAt && i <= gateEnd) || (i >= mountAt && i <= mountEnd) || (i >= compAt && i <= compEnd);
+  const stray = [];
+  for (const m of src.matchAll(/callTotal\w*|CallTotalsCard|\bCT_[A-Z_]+/g)) if (!inside(m.index)) stray.push(m[0] + " @ index-source.html:" + src.slice(0, m.index).split("\n").length);
+  report("A6g call-totals names outside the gate / mount / component in index-source.html", stray);
+  // nothing that leaves the signed-in surgeon's own screen names the card: the exporters / share page / calendar feeds /
+  // e-mails (helpers.js), the data layer (config.js), the other page modules, the push worker, the scripts and every edge
+  // function (the office digest, calendar-sync, reminders, notifications)
+  const outbound = files.filter(f => /^(helpers|config|rules|generator|east-feed|importer|app-styles|sw)\.js$/.test(f) || /^scripts\/.+\.(js|mjs|sh)$/.test(f) || /^edge-functions\/[^/]+\/index\.ts$/.test(f));
+  ok(outbound.includes("helpers.js") && outbound.includes("config.js") && outbound.filter(f => f.startsWith("edge-functions/")).length >= 4, "A6g must scan helpers.js, config.js and the edge functions, got " + outbound.join(", "));
+  report("A6g call-totals names in an exporter / feed / digest / e-mail / push / script / edge function", outbound.filter(f => /callTotal|CallTotalsCard|\bCT_[A-Z_]+/.test(texts[f])).map(f => f + "  <names the call-totals card>"));
+}
+// <<< A6g
+
 // ---- summary ----------------------------------------------------------------
 if (failures.length) {
   failures.forEach(f => console.error("FAIL: " + f));

@@ -550,6 +550,7 @@ let e4Forced500Lines = 0;
 let toast390Forced500Lines = 0; // review of Do first 8 (10/2): the browser's "status of 500" line per availability read the toast-390 page answered 500 (cleared after it)
 let daysFail500Lines = 0, daysFailAppLines = 0; // review 9/27 Do first 1 (9/28): per forced schedule_days 500 (the route adds one to each as it serves it), exactly one browser 'status of 500' line + one app console.error 'Supabase load error (schedule_days)'
 let df4Forced500Lines = 0; // review 9/27 Do first 4: the browser's own "status of 500" line per time_off / availability read the startup page's route forced to fail (armed per forced answer, consumed one line each, cleared after the step)
+let ctForced500Lines = 0; // Prompt 31 Part B (B4): the browser's own "status of 500" line per east_feed read the call-totals page's route forced to fail (armed per forced answer, consumed one line each, that page only)
 // Call pay (9/29, smoke clean on main): every call_pay_settings / call_pay_logs read is answered by the harness itself (the
 // route below: the default 404 PGRST205 - the missing-table guard - or a step's payMock, e.g. the 500s of the settings-failed
 // and year-switch steps), never by the live project. Each non-2xx answer it forces is pushed here ({ path, status, page }) and
@@ -1092,6 +1093,7 @@ const watchPage = (pg, tag) => {
       else if (daysFail500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFail500Lines--; } // 9/28: the browser's line for a forced schedule_days 500 on the days-fail page (one per 500 served)
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
       else if (df4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); df4Forced500Lines--; } // review 9/27 Do first 4: a time_off / availability read the startup page's route answered 500
+      else if (ctForced500Lines > 0 && tag === "call-totals" && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); ctForced500Lines--; } // Prompt 31 Part B (B4): an east_feed read the call-totals page's route answered 500 (the fail-loud step)
       else { consoleErrors.push(msg.text()); consoleErrorWhere.push({ text: msg.text(), where: tag + " @ " + (((msg.location() || {}).url) || "?") }); } // Prompt 29: where each line came from (printed with the unexpected ones)
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -3457,6 +3459,22 @@ try {
           ok(`${T}: the page reads as a ${R.tag} - Time off tab '${toText}', ${tabs.includes("myschedule") ? "a Mine tab" : "no Mine tab"}${officeCard === null ? "" : officeCard ? ", the office's offers card" : ", no office offers card"}`);
         }
         await rp.waitForTimeout(800);
+        // Prompt 31 Part B (B4): "My call - Silvis + Davenport" is the signed-in East-code surgeon's own card - on Khan's Mine
+        // as a SURGEON (role surgeon, person s1) too, and on nobody else's page: the surgeon s2's Mine, the office, a viewer
+        // and ?public=1 have no card anywhere. Its own try: a miss here never stops the E3 checks below.
+        try {
+          if (R.kind === "surgeon") {
+            await rp.click('button[data-tab="myschedule"]');
+            await rp.waitForSelector("[data-testid=mine-card]", { timeout: 8000 });
+            if (R.eastPerson) await rp.waitForSelector("[data-testid=call-totals-card]", { timeout: 8000 }).catch(() => {});
+            else await rp.waitForTimeout(300);
+          }
+          const ctStates = await rp.$$eval("[data-testid=call-totals-card]", els => els.map(e => e.getAttribute("data-state") || ""));
+          const ctWant = R.eastPerson ? 1 : 0;
+          if (ctStates.length !== ctWant) fail(`P31B card (Item E3, ${R.tag}): expected ${ctWant} call-totals card(s) on ${R.kind === "surgeon" ? "his Mine" : "the page"}, found ${ctStates.length}`);
+          else if (R.eastPerson && ctStates[0] !== "ok") fail(`P31B card (Item E3, ${R.tag}): his card reads data-state '${ctStates[0]}', not ok - ${await rp.$eval("[data-testid=call-totals-card]", el => el.innerText.replace(/\s+/g, " ").slice(0, 200)).catch(() => "")}`);
+          else ok(`P31B card (Item E3, ${R.tag}): ${R.eastPerson ? "Khan as a surgeon sees his call-totals card on his own Mine (data-state ok)" : "no call-totals card " + (R.kind === "surgeon" ? "on his Mine" : "anywhere on the page")}`);
+        } catch (e) { fail(`P31B card (Item E3, ${R.tag}): ` + errLine(e)); }
         // Prompt 22: the group-call line on this role's Calendar (the office roles were moved to Time off by the role probe)
         if (R.jwt) { await rp.click('button[data-tab="calendar"]').catch(() => {}); await rp.waitForSelector("[data-testid=today-banner]", { timeout: 8000 }).catch(() => {}); }
         await checkGroupCallBanner(rp, T);
@@ -11508,6 +11526,12 @@ try {
       if (!mineTab || mineTab[1] !== "Mine" || tabs.some(t => t[0] === "setup")) fail(`${P} 1: the APP's tabs should include Mine (labelled "Mine") and no Setup: ${JSON.stringify(tabs)}`);
       else ok(`${P} 1: the APP keeps the Mine tab ("Mine"), no Setup: ${tabs.map(t => t[0]).join(", ")}`);
       await toMineM(A.pg);
+      // Prompt 31 Part B (B4): the call-totals card is the East-code surgeon's own - never on an APP's Mine (My APP days)
+      {
+        const ctA = await A.pg.$$eval("[data-testid=call-totals-card]", els => els.length).catch(() => -1);
+        if (ctA !== 0) fail(`P31B card (P29 APP A): ${ctA < 0 ? "the page could not be read" : ctA + " call-totals card(s)"} on the APP's Mine - the card is the East-code surgeon's own`);
+        else ok("P31B card (P29 APP A): no call-totals card on the APP's Mine (My APP days)");
+      }
       const s0 = appSaves().length;
       await A.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);
       await A.pg.click(`[data-testid=appdays-cell][data-day="${D11}"]`);
@@ -12379,6 +12403,238 @@ try {
   if (writes.some(w => w.public)) fail("public mode attempted a write: " + JSON.stringify(writes.filter(w => w.public)));
   else ok("public mode issued no writes");
   await pub.close();
+
+  // ====================== Prompt 31 Part B (B4): "My call - Silvis + Davenport" in Mine (the East-code surgeon's own) ======================
+  // A fresh page of the main context (the scheduler s1 = Khan, FAKE_PROFILE) records what it is SERVED - the east_feed and
+  // east_forecast bodies, the blob (roster + surgeonRules) and every full schedule_days page (merged by day) - and the
+  // expected card is computed HERE in Node by the same modules in one vm context (helpers.js + east-feed.js + call-totals.js,
+  // the page's loader order) from exactly those rows, the Davenport id the page's resolver picks (a forecast row built for the
+  // one code, else the harness's Davenport roster blob) and the page's own device date: the page must show that card, chip by
+  // chip and month by month (the totals and the weighted total re-added from the cells too). Then: the scheduler's picker on
+  // s2 (no card - his own page only) and back on s1; 390 x 844 in light and in dark (no sideways scroll, the card inside the
+  // screen, every chip >= 36 px inside the card, the month list scrolls in its own wrapper, the dark page and card, value /
+  // sub-row / data-line text >= 4.5:1 on the card); and a failed east_feed read (every Davenport cell and both totals read "?"
+  // with the reason in a note, the Silvis numbers unchanged). The hidden side (the surgeon s2, Khan as a surgeon - shown -, the
+  // office, a viewer, ?public=1, the follower, an APP) is checked on those pages (Item E3, F3, P29 1). The card writes nothing.
+  {
+    const vmCT = require("vm");
+    const ctBox = { console };
+    ctBox.globalThis = ctBox;
+    vmCT.createContext(ctBox);
+    for (const f of ["helpers.js", "east-feed.js", "call-totals.js"]) vmCT.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), ctBox, { filename: f });
+    const ctCardFor = vmCT.runInContext("callTotalsCardFor", ctBox);
+    const ctServed = { feed: null, forecast: null, blob: null, days: new Map() };
+    let ctFailFeed = false;
+    let ctForcedFeedReads = 0, ctThemeWas, ctOkSilvis = null;
+    const ctp = await context.newPage();
+    watchPage(ctp, "call-totals");
+    const settleCT = restReadsSettled(ctp);
+    ctp.on("response", async (res) => {
+      try {
+        const u = new URL(res.url());
+        if (u.hostname !== SUPABASE_HOST || res.request().method() !== "GET" || res.status() < 200 || res.status() >= 300) return;
+        if (u.pathname === "/rest/v1/east_feed") { const b = await res.json(); if (Array.isArray(b)) ctServed.feed = b; }
+        else if (u.pathname === "/rest/v1/east_forecast") { const b = await res.json(); if (Array.isArray(b)) ctServed.forecast = b; }
+        else if (u.pathname === "/rest/v1/call_schedule_data") { const b = await res.json(); const row = Array.isArray(b) ? b[0] : b; if (row && row.data) ctServed.blob = typeof row.data === "string" ? JSON.parse(row.data) : row.data; }
+        else if (u.pathname === "/rest/v1/schedule_days" && u.searchParams.get("select") === "*" && !u.searchParams.get("day")) { const b = await res.json(); if (Array.isArray(b)) b.forEach(r => { if (r && r.day) ctServed.days.set(String(r.day).slice(0, 10), r); }); }
+      } catch (e) {}
+    });
+    await ctp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+    await ctp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+      const req = route.request();
+      if (ctFailFeed && req.method() === "GET" && new URL(req.url()).pathname === "/rest/v1/east_feed") {
+        ctForcedFeedReads++; ctForced500Lines++;
+        return route.fulfill({ status: 500, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ code: "XX000", message: "harness: P31B forced east_feed read failure", details: null, hint: null }) });
+      }
+      return routeSupabase(route);
+    });
+    ctp.on("dialog", (d) => d.dismiss().catch(() => {}));
+    // the expected card(s): the served rows through call-totals.js, once per Davenport id the page's resolver may have picked
+    const ctExpected = (feedState, today) => {
+      const blob = ctServed.blob || {};
+      const roster = Array.isArray(blob.roster) && blob.roster.length ? blob.roster : (gcBlobEarly.roster || []);
+      const rules = blob.surgeonRules || gcBlobEarly.surgeonRules || {};
+      const schedule = {};
+      ctServed.days.forEach((r, d) => { schedule[d] = { primary: r.primary_id || null, backup: r.backup_id || null }; });
+      const needCodes = roster.filter(s => { const ef = s && rules[s.id] && rules[s.id].eastFeed; return ef && ef.enabled && (ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code; }).map(s => String(s.code).toUpperCase());
+      const fromRoster = { _source: "davenport" };
+      EAST_BLOB.surgeons.forEach(s => { fromRoster[String(s.name).toUpperCase()] = s.id; });
+      const fc = (ctServed.forecast || []).find(r => r && r.data && r.data.fakId && r.data.code);
+      const maps = [fromRoster];
+      if (fc && needCodes.length === 1 && needCodes[0] === String(fc.data.code).toUpperCase()) maps.unshift({ _source: "forecast", [needCodes[0]]: fc.data.fakId });
+      return maps.map(idByCode => ({ idByCode, model: JSON.parse(JSON.stringify(ctCardFor({ feedRows: feedState === "ok" ? (ctServed.feed || []) : [], feedState, idByCode, schedule, scheduleKnown: true, roster, personId: "s1", today }))) }));
+    };
+    const ctRowsOf = (m, key) => { const p = m && m.ok ? m.periods.find(x => x.key === key) : null; return p ? p.rows.map(r => [r.id, r.worked, r.scheduled, r.all]) : null; };
+    const ctDomRows = () => ctp.$$eval("[data-testid=call-totals-card] [data-testid=ct-row]", els => els.map(e => [e.getAttribute("data-row"), e.getAttribute("data-worked"), e.getAttribute("data-scheduled"), e.getAttribute("data-all")]));
+    // the page's own cells re-added: total = every line, weighted = backup lines at 0.5, backup-week = its sub lines
+    const ctSumsBad = (dom, key) => {
+      const by = {}; dom.forEach(r => { by[r[0]] = r; });
+      const out = [];
+      const base = ["silvis-primary", "silvis-backup", "dav-daycall", "dav-nights", "dav-weekend", "dav-holiday", "dav-backup"];
+      const subs = ["dav-backup-daycall", "dav-backup-nights", "dav-backup-weekend", "dav-backup-holiday"];
+      [1, 2, 3].forEach(i => {
+        if (base.concat(["total", "weighted"]).some(id => !by[id] || by[id][i] === "?")) return;
+        const g = (id) => (by[id][i] === "-" ? 0 : Number(by[id][i]));
+        const total = base.reduce((s, id) => s + g(id), 0);
+        const weighted = g("silvis-primary") + g("dav-daycall") + g("dav-nights") + g("dav-weekend") + g("dav-holiday") + (g("silvis-backup") + g("dav-backup")) / 2;
+        if (Math.abs(total - g("total")) > 1e-9 || Math.abs(weighted - g("weighted")) > 1e-9) out.push(`${key} col ${i}: total ${g("total")} (lines add to ${total}), weighted ${g("weighted")} (formula ${weighted})`);
+        if (subs.every(id => by[id]) && Math.abs(subs.reduce((s, id) => s + g(id), 0) - g("dav-backup")) > 1e-9) out.push(`${key} col ${i}: the backup-week sub lines do not add to ${g("dav-backup")}`);
+      });
+      return out;
+    };
+    const CT_PROBE = () => {
+      const card = document.querySelector("[data-testid=call-totals-card]");
+      if (!card) return null;
+      const cr = card.getBoundingClientRect();
+      const chips = Array.from(card.querySelectorAll('[data-testid^="ct-period-"], [data-testid=ct-months-toggle]')).map(b => { const r = b.getBoundingClientRect(); return { id: b.getAttribute("data-testid"), h: Math.round(r.height * 10) / 10, inside: r.left >= cr.left - 0.5 && r.right <= cr.right + 0.5 }; });
+      const parseRgb = (s) => { const m = /rgba?\(([^)]+)\)/.exec(s || ""); if (!m) return null; const p = m[1].split(",").map(x => parseFloat(x)); return p.length >= 4 && p[3] === 0 ? null : p.slice(0, 3); };
+      const lum = (rgb) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      const ratioOf = (el) => { if (!el) return null; let bg = null; for (let e = el; e && !bg; e = e.parentElement) bg = parseRgb(getComputedStyle(e).backgroundColor); const fg = parseRgb(getComputedStyle(el).color); if (!fg || !bg) return null; const a = lum(fg), b = lum(bg); return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100; };
+      let flag = "?"; try { flag = localStorage.getItem("silvis-dark-mode"); } catch (e) {}
+      const wrap = card.querySelector(".table-wrap");
+      return {
+        sw: document.documentElement.scrollWidth, right: Math.round(cr.right * 10) / 10, chips, flag,
+        bodyBg: getComputedStyle(document.body).backgroundColor, cardBg: getComputedStyle(card).backgroundColor,
+        value: ratioOf(card.querySelector("[data-testid=ct-row][data-row=total] td:last-child span")),
+        sub: ratioOf(card.querySelector("[data-testid=ct-row][data-sub='1'] td span")),
+        line: ratioOf(card.querySelector("[data-testid=ct-data-line]")),
+        wrap: wrap ? { right: Math.round(wrap.getBoundingClientRect().right * 10) / 10, scrolls: wrap.scrollWidth > wrap.clientWidth + 1 } : null,
+      };
+    };
+    try {
+      ctThemeWas = await page.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } }); // the origin's storage is the main page's too
+      // (1) the card on the scheduler's own Mine (1180 px) = the Node computation, period by period, and the month list
+      try {
+        await loadWithRetry(ctp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "call-totals page");
+        await ctp.waitForSelector("text=Synced", { timeout: 30000 });
+        await ctp.click('button[data-tab="myschedule"]');
+        await ctp.waitForSelector("[data-testid=mine-card]", { timeout: 10000 });
+        await ctp.waitForSelector("[data-testid=call-totals-card]", { timeout: 10000 });
+        // the card settles once the cache and the Davenport roster read are in ("still loading" is a passing state)
+        await ctp.waitForFunction(() => !Array.from(document.querySelectorAll("[data-testid=ct-note]")).some(n => /still loading/.test(n.textContent)), null, { timeout: 15000 }).catch(() => {});
+        await settleCT();
+        await ctp.waitForTimeout(300);
+        const head = await ctp.$eval("[data-testid=call-totals-card]", el => ({ state: el.getAttribute("data-state"), today: el.getAttribute("data-today"), text: el.innerText.replace(/\s+/g, " ") }));
+        const ctToday = await ctp.evaluate(() => (typeof callTotalsDeviceToday === "function" ? callTotalsDeviceToday() : null));
+        if (head.state !== "ok") {
+          const why = await ctp.$eval("[data-testid=ct-unavailable]", el => el.textContent).catch(() => "");
+          if (/^Totals unavailable - no roster (entry|code) for /.test(why)) console.log(`     (P31B card: the card reads '${why}' - a data state of the roster; the numbers are not compared this run)`);
+          else fail(`P31B card (scheduler s1, 1180): the card reads '${why || head.text.slice(0, 160)}' - not a data state the model names`);
+        } else if (!ctToday || head.today !== ctToday) fail(`P31B card (scheduler s1, 1180): data-today ${head.today} is not the page's device date ${ctToday}`);
+        else {
+          const dom0 = await ctDomRows();
+          const cands = ctExpected("ok", ctToday);
+          const exp = cands.find(c => JSON.stringify(ctRowsOf(c.model, "month")) === JSON.stringify(dom0)) || cands[0];
+          const m = exp.model;
+          ctOkSilvis = dom0.filter(r => /^silvis-/.test(r[0]));
+          const bad = [], sums = [];
+          if (!m || !m.ok) bad.push("the Node computation refused the served rows: " + (m && m.error));
+          else {
+            for (const key of ["month", "ytd", "year", "rolling12"]) {
+              await ctp.click(`[data-testid=ct-period-${key}]`);
+              await ctp.waitForSelector(`[data-testid=call-totals-card][data-period=${key}]`, { timeout: 5000 });
+              const dom = await ctDomRows();
+              const want = ctRowsOf(m, key);
+              if (JSON.stringify(dom) !== JSON.stringify(want)) bad.push(`${key}: the page ${JSON.stringify(dom).slice(0, 260)} != Node ${JSON.stringify(want).slice(0, 260)}`);
+              const p = m.periods.find(x => x.key === key);
+              const range = await ctp.$eval("[data-testid=ct-range]", el => el.textContent);
+              if (range !== p.rangeText + (p.startsNote ? " - " + p.startsNote : "")) bad.push(`${key}: the range line reads '${range}'`);
+              sums.push(...ctSumsBad(dom, key));
+            }
+            const notes = await ctp.$$eval("[data-testid=call-totals-card] [data-testid=ct-note]", els => els.map(e => e.textContent));
+            if (JSON.stringify(notes) !== JSON.stringify(m.notes)) bad.push(`notes ${JSON.stringify(notes)} != ${JSON.stringify(m.notes)}`);
+            const line = await ctp.$eval("[data-testid=ct-data-line]", el => el.textContent);
+            const foot = await ctp.$eval("[data-testid=ct-footnote]", el => el.textContent);
+            if (line !== m.dataLine) bad.push(`the data line reads '${line}', Node '${m.dataLine}'`);
+            else if (m.davenportKnown && m.silvisKnown && !/Silvis from \d+\/\d+\/\d{4} to .*; Davenport from \d+\/\d+\/\d{4} to /.test(line)) bad.push(`the data line's shape: '${line}'`);
+            if (foot !== m.footnote) bad.push("the footnote differs from the model's");
+            await ctp.click("[data-testid=ct-months-toggle]");
+            await ctp.waitForSelector("[data-testid=ct-months]", { timeout: 5000 });
+            const domM = await ctp.$$eval("[data-testid=ct-month]", trs => trs.map(tr => [tr.getAttribute("data-month"), tr.getAttribute("data-pending")].concat(Array.from(tr.querySelectorAll("td")).map(td => td.textContent.trim()))));
+            const wantM = m.months.map(x => [x.month, x.pending ? "1" : "0", x.label].concat(m.monthCols.map(c => x.cells[c.id])));
+            if (domM.length !== 12 || JSON.stringify(domM) !== JSON.stringify(wantM)) bad.push(`month list (${domM.length} rows): the page ${JSON.stringify(domM).slice(0, 260)} != Node ${JSON.stringify(wantM).slice(0, 260)}`);
+            else if (domM.some(r => (r[1] === "1") !== / \*$/.test(r[2]))) bad.push("a month with scheduled days lacks its '*' (or one without has it)");
+          }
+          if (bad.length || sums.length) fail(`P31B card (scheduler s1, 1180): ${bad.concat(sums).join(" | ")}`);
+          else ok(`P31B card (scheduler s1, 1180): the four periods and the 12-month list equal the Node computation from the served rows (${ctServed.days.size} day row(s), ${(ctServed.feed || []).length} east_feed row(s), Davenport id ${exp.idByCode.FAK || "?"} from the ${exp.idByCode._source} map, device date ${ctToday}); totals and weighted re-add from the cells; data line '${m.dataLine}' (Silvis from ${m.ranges ? m.ranges.silvisFrom : "?"} - expected 2026-09-14; Davenport from ${m.ranges ? m.ranges.davenportFrom : "?"} - 2025-12-29 after the item-7 backfill)`);
+        }
+      } catch (e) { fail("P31B card (scheduler s1, 1180): " + errLine(e)); }
+      // (2) the scheduler's picker: another person's Mine has no card; his own has it again
+      try {
+        await ctp.selectOption("[data-testid=mine-person]", "s2");
+        await ctp.waitForSelector("[data-testid=call-totals-card]", { state: "detached", timeout: 5000 });
+        await ctp.selectOption("[data-testid=mine-person]", "s1");
+        await ctp.waitForSelector("[data-testid=call-totals-card]", { timeout: 5000 });
+        ok("P31B card (picker): the scheduler's picker on s2 shows no call-totals card (the surgeon's own page only); back on s1 it is there");
+      } catch (e) { fail("P31B card (picker): " + errLine(e)); }
+      // (3) 390 x 844, light then dark
+      try {
+        await ctp.setViewportSize({ width: 390, height: 844 });
+        for (const theme of ["light", "dark"]) {
+          if (theme === "dark") { await ctp.click('button[data-tab="settings"]'); await ctp.click("button:has-text('Dark')"); await ctp.click('button[data-tab="myschedule"]'); }
+          await ctp.waitForSelector("[data-testid=call-totals-card][data-state=ok]", { timeout: 8000 });
+          await ctp.waitForTimeout(300);
+          const first = await ctp.evaluate(CT_PROBE);
+          if (!(await ctp.$("[data-testid=ct-months]"))) await ctp.click("[data-testid=ct-months-toggle]");
+          await ctp.waitForSelector("[data-testid=ct-months]", { timeout: 5000 });
+          await ctp.waitForTimeout(200);
+          const open = await ctp.evaluate(CT_PROBE);
+          await ctp.screenshot({ path: path.join(OUT, `call-totals-390-${theme}.png`), fullPage: true });
+          const bad = [];
+          for (const [what, p] of [["months closed", first], ["months open", open]]) {
+            if (!p) { bad.push(what + ": no card"); continue; }
+            if (p.sw > 392) bad.push(`${what}: the page scrolls sideways (scrollWidth ${p.sw})`);
+            if (p.right > 390.5) bad.push(`${what}: the card's right edge ${p.right} is past the screen`);
+            const shortChips = p.chips.filter(c => c.h < 36 || !c.inside);
+            if (!p.chips.length || shortChips.length) bad.push(`${what}: chips under 36 px or outside the card ${JSON.stringify(shortChips)}`);
+            if (!(p.value >= 4.5) || !(p.line >= 4.5) || (p.sub !== null && !(p.sub >= 4.5))) bad.push(`${what}: contrast on the card - value ${p.value}, sub row ${p.sub}, data line ${p.line}`);
+            if (theme === "dark" && (p.bodyBg !== "rgb(11, 26, 51)" || p.cardBg !== "rgb(19, 41, 75)" || p.flag !== "true")) bad.push(`${what}: the dark theme did not take (body ${p.bodyBg}, card ${p.cardBg}, flag ${p.flag})`);
+            if (theme === "light" && (p.cardBg !== "rgb(255, 255, 255)" || p.flag === "true")) bad.push(`${what}: the light theme did not take (card ${p.cardBg}, flag ${p.flag})`);
+          }
+          if (open && (!open.wrap || open.wrap.right > 390.5)) bad.push(`the month list's scroller ${JSON.stringify(open && open.wrap)} is missing or past the screen`);
+          if (bad.length) fail(`P31B card (390 ${theme}): ${bad.join(" | ")}`);
+          else ok(`P31B card (390 ${theme}): no sideways scroll (scrollWidth ${first.sw} / ${open.sw} with the month list open${open.wrap.scrolls ? " - it scrolls in its own wrapper" : ""}), the card ends at ${first.right} px, ${first.chips.length} chips >= 36 px inside the card, contrast value ${first.value} / data line ${first.line}${first.sub !== null ? " / sub row " + first.sub : ""}:1${theme === "dark" ? ", body " + first.bodyBg + ", card " + first.cardBg : ""}; screenshot test/ui/out/call-totals-390-${theme}.png`);
+        }
+      } catch (e) { fail("P31B card (390): " + errLine(e)); }
+      finally {
+        try { await ctp.click('button[data-tab="settings"]'); await ctp.click("button:has-text('Light')"); await ctp.click('button[data-tab="myschedule"]'); } catch (e) {}
+        await ctp.setViewportSize({ width: 1180, height: 900 }).catch(() => {});
+      }
+      // (4) fail loud: every east_feed read of a reload answers 500 - the Davenport cells and both totals read "?" with the
+      // reason in a note; the Silvis numbers stay
+      try {
+        ctFailFeed = true; ctForcedFeedReads = 0;
+        await loadWithRetry(ctp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "call-totals page (east_feed failing)");
+        await ctp.waitForSelector("text=Synced", { timeout: 30000 });
+        await waitFor(() => ctForcedFeedReads >= 2, 20000);
+        await ctp.click('button[data-tab="myschedule"]');
+        await ctp.waitForSelector("[data-testid=call-totals-card][data-state=ok]", { timeout: 10000 });
+        await ctp.waitForFunction(() => Array.from(document.querySelectorAll("[data-testid=ct-note]")).some(n => /could not be read/.test(n.textContent)), null, { timeout: 10000 }).catch(() => {});
+        const notes = await ctp.$$eval("[data-testid=call-totals-card] [data-testid=ct-note]", els => els.map(e => e.textContent));
+        const dom = await ctDomRows();
+        const todayF = await ctp.evaluate(() => (typeof callTotalsDeviceToday === "function" ? callTotalsDeviceToday() : null));
+        const want = ctRowsOf(ctExpected("failed", todayF)[0].model, "month");
+        const wantNote = "Davenport numbers unavailable - the Davenport cache could not be read; its cells and the totals show ?.";
+        const davNotQ = dom.filter(r => /^dav-|^total$|^weighted$/.test(r[0]) && r.slice(1).some(v => v !== "?"));
+        const sil = dom.filter(r => /^silvis-/.test(r[0]));
+        if (!ctForcedFeedReads) fail("P31B card (east_feed failing): the forced failure never reached the page - the check proves nothing");
+        else if (!notes.includes(wantNote)) fail(`P31B card (east_feed failing): no note naming the failed cache read - notes ${JSON.stringify(notes)}`);
+        else if (davNotQ.length) fail(`P31B card (east_feed failing): Davenport / total cells that are not '?': ${JSON.stringify(davNotQ)}`);
+        else if (JSON.stringify(dom) !== JSON.stringify(want)) fail(`P31B card (east_feed failing): the page ${JSON.stringify(dom).slice(0, 260)} != Node ${JSON.stringify(want).slice(0, 260)}`);
+        else if (ctOkSilvis && JSON.stringify(sil) !== JSON.stringify(ctOkSilvis)) fail(`P31B card (east_feed failing): the Silvis lines changed ${JSON.stringify(sil)} (were ${JSON.stringify(ctOkSilvis)})`);
+        else ok(`P31B card (east_feed failing, ${ctForcedFeedReads} read(s) answered 500): the note '${wantNote}', every Davenport cell and both totals '?', the Silvis lines unchanged ${JSON.stringify(sil.map(r => r[0] + " " + r[3]))} - never a zero for the unknown site`);
+      } catch (e) { fail("P31B card (east_feed failing): " + errLine(e)); }
+      finally { ctFailFeed = false; }
+    } finally {
+      ctFailFeed = false;
+      try { await settleCT(); } catch (e) {}
+      await ctp.close().catch(() => {});
+      await page.waitForTimeout(300);
+      ctForced500Lines = 0;
+      // the shared silvis-dark-mode flag back as it was before this page
+      if (ctThemeWas !== undefined) await page.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, ctThemeWas).catch((e) => fail("P31B card: could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+    }
+  }
 
   // ====================== Prompt 11: refresh banners (version.json + client_versions.main.min_version) ======================
   {
@@ -14185,6 +14441,12 @@ try {
           }
           if (bad.length) fail(`F3 follower (${theme}): Following does not match the served rows - ${bad.join(" | ")}`);
           else ok(`F3 follower (${theme}): Following = two cards (${counts.join("; ")}), each list equal to the page's own schedule_days rows for that surgeon from ${today} to ${limit}; no trade / offer / painter / vacation / download control`);
+        }
+        // Prompt 31 Part B (B4): the call-totals card is the East-code surgeon's own - never on the Following view
+        {
+          const ctF = await pf.$$eval("[data-testid=call-totals-card]", els => els.length).catch(() => -1);
+          if (ctF !== 0) fail(`P31B card (F3 follower, ${theme}): ${ctF < 0 ? "the page could not be read" : ctF + " call-totals card(s)"} on the Following view - the card is the East-code surgeon's own`);
+          else ok(`P31B card (F3 follower, ${theme}): no call-totals card on the Following view`);
         }
         // review 9/27 Do first 9 (10/1), 390 px: a locked row is ONE line (its padlock sits inside the date span - it used to
         // wrap onto a line of its own), no row carries a button, and each list is part of the page (no nested scroller)
