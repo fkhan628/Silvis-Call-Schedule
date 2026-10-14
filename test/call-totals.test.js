@@ -37,10 +37,13 @@
 //   T11 the card model: titles, periods, row ids / labels / order, cell text ("-", "7.5", "?"), sub rows, the month list
 //      (with "?" for months before the cache's first Davenport week), notes, the data line and the footnote - the
 //      text hand-transcribed in the shapes fixture's expectedCells; every string ASCII, never "East" or "DSG"
-//   T12 the docs (B5): build guide section 23 (its sub-headings, the port commit, the parity rule, the units, the device
-//      date, the gate, every "?" reason verbatim, the item 7 windows), guide sections 2 / 7 / 11 (NIGHT_KEYS's one home,
-//      the pointer to 23.5, the runtime modules = the ?v= loader list), the rules doc's section 6 bullet (display only; one
-//      day = one shift stands) and ONBOARDING's paragraph for the East-code surgeon
+//   T12 the docs (B5): the build guide's "My call - Silvis + Davenport" section, found by its title with its number
+//      derived (23 on this base; the next free number after a rebase - the guide's section numbers unique and ascending)
+//      (its sub-headings, the port commit, the parity rule, the units, the device date, the gate, every "?" reason
+//      verbatim, the item 7 windows), guide sections 2 / 7 / 11 (NIGHT_KEYS's one home, the pointer to <n>.5, the runtime
+//      modules = the ?v= loader list), the rules doc's section 6 bullet (display only; the card's 0.5 apart from the
+//      Silvis shift accounting; one day = one shift), HISTORY's Part B row and ONBOARDING's paragraph for the East-code
+//      surgeon
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -887,16 +890,31 @@ check("T11 every string of every model state (ok, each unknown state, refusals, 
 // port commit (the same as call-totals.js's header - a re-port updates both), the card's "?" reasons (the same strings as
 // the adapter's), the guide's runtime-module list (= the ?v= loader list) - never dates, live counts or wording beyond
 // those. CLAUDE.md is Faraz's own file: it is not pinned here (its module and suite lists are his to update).
-console.log("\n[T12] docs: the build guide, the rules doc and ONBOARDING");
+// The section NUMBER is not pinned (B5 review, 10/14): Prompt 32 appends its own section after section 22 and merges
+// first, so at the rebase this section becomes the next free number. Every check reads the number off the heading found
+// by its title, and the guide's "## <n>." numbers must be unique and ascending - a rebase that keeps two section 23s, or
+// renumbers the heading but leaves a stale pointer (guide 2 / 7, an internal "<n>.<k>", the rules doc, HISTORY), fails
+// here. Nor does any statement here hold the rest of Silvis unweighted: Prompt 32 weights the Silvis load
+// (groupRules.shiftAccounting.weights); the card's 0.5 is its own constant and reads none of it.
+console.log("\n[T12] docs: the build guide, the rules doc, HISTORY and ONBOARDING");
 {
   const readDoc = (p) => (fs.existsSync(path.join(ROOT, p)) ? readRoot(p) : "");
   const guide = readDoc("docs/SILVIS-BUILD-GUIDE.md"), rulesDoc = readDoc("docs/SILVIS-CALL-RULES.md");
-  const onboarding = readDoc("docs/ONBOARDING.md");
+  const onboarding = readDoc("docs/ONBOARDING.md"), historyDoc = readDoc("docs/HISTORY.md");
   // h2(text, head): the section from "\n" + head to the next "\n## " (or the end), "" when the heading is missing
   const h2 = (t, head) => { const i = t.indexOf("\n" + head); if (i < 0) return ""; const j = t.indexOf("\n## ", i + 1); return t.slice(i, j < 0 ? t.length : j); };
-  const GUIDE23 = "## 23. My call - Silvis + Davenport";
-  const sec23 = h2(guide, GUIDE23);
+  // the guide's numbered sections in file order; this one found by its TITLE, its number N read off the heading (23 on
+  // this base, the next free number after the rebase onto Prompt 32) - never a literal 23 below
+  const TITLE = "My call - Silvis + Davenport";
+  const HEADINGS = [...guide.matchAll(/^## (\d+)\. (.*)$/gm)].map(m => ({ n: Number(m[1]), title: m[2] }));
+  const MINE = HEADINGS.filter(h => h.title.startsWith(TITLE));
+  const N = MINE.length === 1 ? MINE[0].n : NaN;
+  const secN = MINE.length === 1 ? h2(guide, "## " + N + ". " + TITLE) : "";
   const flat = (t) => t.replace(/\s+/g, " ");
+  const sectRefs = (t) => (t.match(/§\d+(?:\.\d+)?/g) || []);  // every "§<n>" / "§<n>.<k>" in a text
+  // a statement that holds the REST of Silvis unweighted - true before Prompt 32, false after it (it weights the Silvis load
+  // in groupRules.shiftAccounting.weights); the card's text says what the card reads (none of that), never what the rest weighs
+  const UNWEIGHTED = /\bunweighted\b|nothing (?:else )?(?:is )?weighted|never weighted|no weighted burden/i;
   const loaderModules = (() => {
     const m = readRoot("index-source.html").match(/\[('[^\]]+')\]\.forEach\(function\(f\) \{\s*document\.write\('<script src="'\+f\+'\?v='/);
     return m ? m[1].split(",").map(s => s.trim().replace(/^'|'$/g, "")).filter(f => !f.startsWith("vendor/")) : [];
@@ -904,29 +922,38 @@ console.log("\n[T12] docs: the build guide, the rules doc and ONBOARDING");
   // the card's unknown-state reasons, as the adapter writes them (design D8 / 3.3)
   const REASONS = ["the Davenport cache is still loading", "the Davenport cache could not be read", "no Davenport weeks are cached yet",
     "the Davenport roster is still loading", "the Davenport roster could not be read", "is not in the Davenport roster", "the Silvis schedule is not loaded"];
-  check("T12 guide: section 23 '" + GUIDE23.slice(3) + "' follows section 22, with the sub-headings 23.1 .. 23.6 in order", () => {
-    assert.ok(sec23.length > 0, "'" + GUIDE23 + "' heading missing");
-    assert.ok(guide.indexOf("\n## 22. ") > 0 && guide.indexOf("\n## 22. ") < guide.indexOf("\n" + GUIDE23), "section 23 must follow section 22");
-    const HEADS = ["### 23.1 One counting definition", "### 23.2 Units, periods and today", "### 23.3 Published data only", "### 23.4 Who sees the card", "### 23.5 Item 7", "### 23.6 Tests and the ship"];
+  check("T12 guide: the '## <n>.' section numbers are unique and ascending; exactly one is '" + TITLE + "' (section " + N + "), directly after section " + (N - 1) + " (22 or later), with the sub-headings " + N + ".1 .. " + N + ".6 in order and every internal '<n>.<k>' pointer its own number", () => {
+    assert.strictEqual(MINE.length, 1, "exactly one '## <n>. " + TITLE + "' heading in the guide (found " + MINE.length + ")");
+    const nums = HEADINGS.map(h => h.n);
+    const dups = nums.filter((n, i) => nums.indexOf(n) !== i);
+    assert.deepStrictEqual(dups, [], "each '## <n>.' number appears ONCE in the guide - rebased onto another prompt's section " + N + ", renumber this one to the next free number with its pointers (guide 2 / 7, its own <n>.<k>, the rules doc's section 6 bullet, HISTORY)");
+    nums.forEach((n, i) => assert.ok(i === 0 || n > nums[i - 1], "the guide's section numbers ascend ('## " + n + ".' follows '## " + nums[i - 1] + ".')"));
+    const at = HEADINGS.indexOf(MINE[0]);
+    assert.ok(N >= 23 && at > 0 && HEADINGS[at - 1].n === N - 1, "section " + N + " must directly follow section " + (N - 1) + " (after 22, phone push)");
+    const HEADS = ["One counting definition", "Units, periods and today", "Published data only", "Who sees the card", "Item 7", "Tests and the ship"].map((t, i) => "### " + N + "." + (i + 1) + " " + t);
     let last = -1;
-    HEADS.forEach(h => { const i = sec23.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
+    HEADS.forEach(h => { const i = secN.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
+    const stale = (secN.match(/(?<![\d.\/:-])\d{2}\.[1-9](?!\d)/g) || []).filter(r => Number(r.split(".")[0]) !== N);
+    assert.deepStrictEqual(stale, [], "section " + N + "'s internal pointers ('<n>.<k>') must name section " + N);
   });
-  check("T12 guide 23 names the port (call-totals.js, the commit call-totals.js's header names, verbatim, the parity contract, the re-port rule, CT_REQUIRE_CLONE), the units and the fixed 0.5, the device date, the gate, every '?' reason verbatim, the months before the cache, the crash-safe call, the item 7 window and the Refresh after the ship", () => {
+  check("T12 guide " + N + " names the port (call-totals.js, the commit call-totals.js's header names, verbatim, the parity contract, the re-port rule, CT_REQUIRE_CLONE), the units and the fixed 0.5 (never reading groupRules.shiftAccounting, never holding the rest of Silvis unweighted), the device date, the gate, every '?' reason verbatim, the months before the cache, the crash-safe call, the item 7 window and the Refresh after the ship", () => {
     const hdr = /PORTED VERBATIM from the Davenport app \(github\.com\/fkhan628\/Call-Schedule-App\) at commit ([0-9a-f]{7,40})\b/.exec(MOD);
     assert.ok(hdr && hdr[1] === PORT_COMMIT, "call-totals.js's header names the port commit " + PORT_COMMIT);
-    const s = flat(sec23);
+    const s = flat(secN);
     ["`call-totals.js`", "commit " + PORT_COMMIT, "verbatim", "PARITY CONTRACT", "re-port", "CT_REQUIRE_CLONE=1", "test/fixtures/call-totals-card-synthetic-2026-10-14.json",
       "Stats > Billing", "0.5", "shiftAccounting", "one shift", "callTotalsDeviceToday", "device date", "callTotalsShown", "eastVacationPerson", "pid === mySurgeon",
       "callTotalsCardFor", "crash", "efIsForecastRow", "east_forecast", "east_overrides", "previewGen", "before the first cached Davenport week",
       "eastRefreshWindows", "eastExtraWeeks", "EAST_AHEAD_DAYS", "contiguous", "keepCachedVacations", "Refresh from Davenport", "?public=1", "\"East\"", "\"DSG\""]
-      .forEach(w => assert.ok(s.includes(w), "section 23 must name " + JSON.stringify(w)));
+      .forEach(w => assert.ok(s.includes(w), "section " + N + " must name " + JSON.stringify(w)));
     REASONS.forEach(r => {
-      assert.ok(MOD.includes(r), "call-totals.js no longer writes the reason " + JSON.stringify(r) + " - update the list here and guide 23 together");
-      assert.ok(s.includes(r), "section 23 must list the reason " + JSON.stringify(r) + " verbatim");
+      assert.ok(MOD.includes(r), "call-totals.js no longer writes the reason " + JSON.stringify(r) + " - update the list here and guide " + N + " together");
+      assert.ok(s.includes(r), "section " + N + " must list the reason " + JSON.stringify(r) + " verbatim");
     });
+    assert.ok(/never reads `groupRules\.shiftAccounting`/.test(s), "section " + N + " must say call-totals.js never reads `groupRules.shiftAccounting` (the Silvis shift accounting - Prompt 32's weights): the card's 0.5 is its own");
+    assert.ok(!UNWEIGHTED.test(s), "section " + N + " must not hold the rest of Silvis unweighted (" + (s.match(UNWEIGHTED) || [""])[0] + ") - false once Prompt 32 weights the Silvis load; say the card reads none of it");
     assert.ok(!/\bNOT applied\b|not live yet|not pushed yet/i.test(s), "worded true before and after the ship (no 'not applied / not live yet / not pushed yet')");
   });
-  check("T12 guide: section 11's runtime inputs name exactly the ?v= loader modules (call-totals.js included), section 2's dropped-constants line says where NIGHT_KEYS lives now, and section 7 points at 23.5 for the refresh windows", () => {
+  check("T12 guide: section 11's runtime inputs name exactly the ?v= loader modules (call-totals.js included), section 2's dropped-constants line says where NIGHT_KEYS lives now (pointing at section " + N + " only), and section 7's refresh-windows bullet points at " + N + ".5 (and section " + N + " only)", () => {
     assert.ok(loaderModules.includes(MODULE) && loaderModules.includes("helpers.js"), "loader list read: " + JSON.stringify(loaderModules));
     const s11 = flat(h2(guide, "## 11. Build & deploy"));
     const m = /the `\?v=` loader modules \(([^)]*)\)/.exec(s11);
@@ -935,17 +962,35 @@ console.log("\n[T12] docs: the build guide, the rules doc and ONBOARDING");
     assert.deepStrictEqual(named.slice().sort(), loaderModules.slice().sort(), "section 11's loader modules = index-source.html's ?v= list (vendor aside)");
     const s2 = flat(h2(guide, "## 2. Repo layout"));
     assert.ok(/NIGHT_KEYS[^.]*call-totals\.js/.test(s2), "section 2's dropped-constants sentence must say call-totals.js carries NIGHT_KEYS (the verbatim port only)");
-    const s7 = flat(h2(guide, "## 7. East feed"));
-    assert.ok(s7.includes("\u00a723.5") && s7.includes("eastRefreshWindows"), "section 7 must point at 23.5 (eastRefreshWindows) for the refresh windows");
+    const p2 = /Prompt 31 Part B: the Davenport `NIGHT_KEYS`[^)]*\)/.exec(s2);
+    const r2 = p2 ? sectRefs(p2[0]) : [];
+    assert.ok(r2.length > 0 && r2.every(r => r === "§" + N), "section 2's Part B note must point at §" + N + " only (found " + JSON.stringify(r2) + ")");
+    const b7 = h2(guide, "## 7. East feed").split(/\n(?=- )/).filter(b => b.startsWith("- **Refresh windows (Prompt 31 item 7"));
+    assert.strictEqual(b7.length, 1, "section 7 has one '- **Refresh windows (Prompt 31 item 7' bullet");
+    const r7 = sectRefs(b7[0]);
+    assert.ok(b7[0].includes("eastRefreshWindows") && r7.includes("§" + N + ".5") && r7.every(r => r === "§" + N || r.startsWith("§" + N + ".")),
+      "section 7's refresh-windows bullet must point at §" + N + ".5 (eastRefreshWindows) and section " + N + " only (found " + JSON.stringify(r7) + ")");
   });
-  check("T12 rules doc section 6: one bullet says the card's weighted total is display only - its 0.5 the card's own, never read by the generator, shares, caps, Totals or pay - and one 24-hour day = one shift stands; section 1's shift-accounting row is unchanged", () => {
+  check("T12 rules doc section 6: one bullet says the card's weighted total is display only - its 0.5 the card's own, never reading groupRules.shiftAccounting, nothing (generator, shares, caps, Totals, pay) reading the card, a Silvis day one shift - pointing at build guide section " + N + " only and never holding the rest of Silvis unweighted; section 1's shift-accounting row still opens 'Each 24-hour day is one shift. No half-days,'", () => {
     const s6 = h2(rulesDoc, "## 6. Fairness model");
     assert.ok(s6.length > 0, "rules doc section 6 not found");
     const bullets = s6.split(/\n(?=- )/).filter(b => b.startsWith("- ") && /My call - Silvis \+ Davenport/.test(b));
     assert.strictEqual(bullets.length, 1, "exactly one section 6 bullet names the card");
     const b = flat(bullets[0].split("\n\n")[0]);
-    ["display only", "0.5", "Davenport", "generator", "caps", "Totals", "pay", "one shift", "\u00a723"].forEach(w => assert.ok(b.includes(w), "the bullet must say " + JSON.stringify(w)));
-    assert.ok(/^\| Shift accounting \| \*\*Each 24-hour day is one shift\.\*\* No half-days, no weighted burden/m.test(rulesDoc), "section 1's shift-accounting row still reads 'Each 24-hour day is one shift. No half-days, no weighted burden'");
+    ["display only", "0.5", "Davenport", "generator", "caps", "Totals", "pay", "one shift", "build guide §" + N].forEach(w => assert.ok(b.includes(w), "the bullet must say " + JSON.stringify(w)));
+    const gRefs = (b.match(/build guide §\d+/g) || []);
+    assert.ok(gRefs.every(r => r === "build guide §" + N), "the bullet's build-guide pointers must name section " + N + " only (found " + JSON.stringify(gRefs) + ")");
+    assert.ok(/never reads `groupRules\.shiftAccounting`/.test(b), "the bullet must say the card never reads `groupRules.shiftAccounting` (the Silvis shift accounting - Prompt 32's weights)");
+    assert.ok(!UNWEIGHTED.test(b), "the bullet must not hold the rest of Silvis unweighted (" + (b.match(UNWEIGHTED) || [""])[0] + ") - false once Prompt 32 weights the Silvis load");
+    // pin moved deliberately 10/13: Prompt 31 Part B B5 review (10/14) - Prompt 32 strikes "no weighted burden" in this row
+    // and merges first; only what both prompts keep is pinned (it was "... No half-days, no weighted burden")
+    assert.ok(/^\| Shift accounting \| \*\*Each 24-hour day is one shift\.\*\* No half-days,/m.test(rulesDoc), "section 1's shift-accounting row still opens 'Each 24-hour day is one shift. No half-days,'");
+  });
+  check("T12 HISTORY: the Part B design row points at guide section " + N + " (renumbered with the section)", () => {
+    const rows = historyDoc.split("\n").filter(l => l.includes("PART-B-DESIGN.md"));
+    assert.strictEqual(rows.length, 1, "exactly one HISTORY row names PART-B-DESIGN.md");
+    const refs = (rows[0].match(/guide section \d+/g) || []);
+    assert.ok(refs.length > 0 && refs.every(r => r === "guide section " + N), "the row must point at 'guide section " + N + "' only (found " + JSON.stringify(refs) + ")");
   });
   check("T12 ONBOARDING: one paragraph for the person with an East code - the card in Mine, worked / scheduled, published days only, '?' never zero, nobody else sees it, and the one Refresh from Davenport after the ship - apart from the East vacations paragraph", () => {
     const paras = onboarding.split("\n\n").filter(p => /\*\*My call - Silvis \+ Davenport/.test(p));

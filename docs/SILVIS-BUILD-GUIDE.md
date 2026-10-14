@@ -2557,10 +2557,12 @@ report and apply). The binding design is `PART-B-DESIGN.md` with its critic corr
   card's backup-week columns). **Silvis:** one 07:00-07:00 day = 1 per role (primary, backup).
 - **Sums:** Davenport = day call + weeknights + weekend + holiday; the backup-week days the same over the backup kinds; the
   total = both sites; **the weighted total counts every backup role 0.5** (Silvis backup days and Davenport backup-week
-  days; Faraz 10/9) and everything else 1. The 0.5 is the counter's own: `call-totals.js` never reads
-  `groupRules.shiftAccounting` or any Setup weight (pinned), so a Setup change can never make the two apps' cards disagree.
-  It is a display line on one surgeon's card: Totals, the shares, the caps and pay stay unweighted - one 24-h day = one
-  shift stands (rules doc §6).
+  days; Faraz 10/9) and everything else 1. The 0.5 is the counter's own fixed constant, the same at both sites:
+  `call-totals.js` never reads `groupRules.shiftAccounting` - the Silvis shift accounting, whatever weights the group rules
+  hold there - or any other Setup weight (pinned), so no Setup change moves the card and the two apps' cards stay in
+  parity; where a Silvis backup weight is also 0.5, that is the same number, never a shared setting. It is a display line
+  on one surgeon's card and nothing reads it: the generator, the shares, the caps, Totals and pay keep their own
+  accounting (rules doc §1 Shift accounting, §6), and the card counts a Silvis 24-h day as one shift per role.
 - **Different definitions on purpose - never reused for the card:** `deriveKhanBusyDays` (busy days: service Mon-Sat,
   weekend Fri + Sun), the rules context's East days, Totals' East days column, Totals' `ttRangeFor` / `TOTALS_YTD_FLOORS`
   periods, and the Davenport app's week-unit tallies.

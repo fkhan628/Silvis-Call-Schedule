@@ -605,8 +605,11 @@ pool, within each person's availability:
 - ⟶ **10/9 (Faraz, Prompt 31 Part B): "My call - Silvis + Davenport"** - a card on the East-code surgeon's own Mine page
   (Khan today; nobody else sees it) that sets his Silvis primary and backup days beside his Davenport call days, counted
   exactly as the Davenport app counts them (its billing days - the Davenport counter ported verbatim), with a total of both
-  sites and a weighted total in which every backup role counts 0.5. It is display only: the 0.5 is that card's own, and the
-  generator, the shares, the caps, Totals and pay never read it - one 24-hour day = one shift stands (build guide §23).
+  sites and a weighted total in which every backup role counts 0.5. It is display only and stands apart from any weighting
+  of the Silvis load: the 0.5 is the card's own fixed constant at both sites - the card never reads
+  `groupRules.shiftAccounting` (§1 Shift accounting, whatever weights the group rules hold there), so no Setup change moves
+  the card and the two apps' cards stay in parity - and nothing reads the card: the generator, the shares, the caps, Totals
+  and pay keep their own accounting. The card counts a Silvis 24-hour day as one shift per role (build guide §23).
 - Generation objective, in order: (1) zero uncovered primary days, (2) zero uncovered backup days, (3) zero hard-rule
   violations, (4) minimize soft penalties, (5) minimize primary spread, (6) minimize backup spread, (7) balance weekends
   and holidays.
