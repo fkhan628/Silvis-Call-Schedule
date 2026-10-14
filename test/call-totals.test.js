@@ -37,6 +37,10 @@
 //   T11 the card model: titles, periods, row ids / labels / order, cell text ("-", "7.5", "?"), sub rows, the month list
 //      (with "?" for months before the cache's first Davenport week), notes, the data line and the footnote - the
 //      text hand-transcribed in the shapes fixture's expectedCells; every string ASCII, never "East" or "DSG"
+//   T12 the docs (B5): build guide section 23 (its sub-headings, the port commit, the parity rule, the units, the device
+//      date, the gate, every "?" reason verbatim, the item 7 windows), guide sections 2 / 7 / 11 (NIGHT_KEYS's one home,
+//      the pointer to 23.5, the runtime modules = the ?v= loader list), the rules doc's section 6 bullet (display only; one
+//      day = one shift stands) and ONBOARDING's paragraph for the East-code surgeon
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -876,6 +880,81 @@ check("T11 every string of every model state (ok, each unknown state, refusals, 
   assert.ok(models[0] && models[0].ok === true, NOA);
   assert.deepStrictEqual(bad, []);
 });
+
+// ======================================================================================================================
+// T12 (step B5) - the docs are part of the contract: Faraz reads the build guide, the rules doc and ONBOARDING. Pinned only
+// on what must STAY true (the P15 docs-pin rule in data-layer.test.js): the headings, the names a reader greps for, the
+// port commit (the same as call-totals.js's header - a re-port updates both), the card's "?" reasons (the same strings as
+// the adapter's), the guide's runtime-module list (= the ?v= loader list) - never dates, live counts or wording beyond
+// those. CLAUDE.md is Faraz's own file: it is not pinned here (its module and suite lists are his to update).
+console.log("\n[T12] docs: the build guide, the rules doc and ONBOARDING");
+{
+  const readDoc = (p) => (fs.existsSync(path.join(ROOT, p)) ? readRoot(p) : "");
+  const guide = readDoc("docs/SILVIS-BUILD-GUIDE.md"), rulesDoc = readDoc("docs/SILVIS-CALL-RULES.md");
+  const onboarding = readDoc("docs/ONBOARDING.md");
+  // h2(text, head): the section from "\n" + head to the next "\n## " (or the end), "" when the heading is missing
+  const h2 = (t, head) => { const i = t.indexOf("\n" + head); if (i < 0) return ""; const j = t.indexOf("\n## ", i + 1); return t.slice(i, j < 0 ? t.length : j); };
+  const GUIDE23 = "## 23. My call - Silvis + Davenport";
+  const sec23 = h2(guide, GUIDE23);
+  const flat = (t) => t.replace(/\s+/g, " ");
+  const loaderModules = (() => {
+    const m = readRoot("index-source.html").match(/\[('[^\]]+')\]\.forEach\(function\(f\) \{\s*document\.write\('<script src="'\+f\+'\?v='/);
+    return m ? m[1].split(",").map(s => s.trim().replace(/^'|'$/g, "")).filter(f => !f.startsWith("vendor/")) : [];
+  })();
+  // the card's unknown-state reasons, as the adapter writes them (design D8 / 3.3)
+  const REASONS = ["the Davenport cache is still loading", "the Davenport cache could not be read", "no Davenport weeks are cached yet",
+    "the Davenport roster is still loading", "the Davenport roster could not be read", "is not in the Davenport roster", "the Silvis schedule is not loaded"];
+  check("T12 guide: section 23 '" + GUIDE23.slice(3) + "' follows section 22, with the sub-headings 23.1 .. 23.6 in order", () => {
+    assert.ok(sec23.length > 0, "'" + GUIDE23 + "' heading missing");
+    assert.ok(guide.indexOf("\n## 22. ") > 0 && guide.indexOf("\n## 22. ") < guide.indexOf("\n" + GUIDE23), "section 23 must follow section 22");
+    const HEADS = ["### 23.1 One counting definition", "### 23.2 Units, periods and today", "### 23.3 Published data only", "### 23.4 Who sees the card", "### 23.5 Item 7", "### 23.6 Tests and the ship"];
+    let last = -1;
+    HEADS.forEach(h => { const i = sec23.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
+  });
+  check("T12 guide 23 names the port (call-totals.js, the commit call-totals.js's header names, verbatim, the parity contract, the re-port rule, CT_REQUIRE_CLONE), the units and the fixed 0.5, the device date, the gate, every '?' reason verbatim, the months before the cache, the crash-safe call, the item 7 window and the Refresh after the ship", () => {
+    const hdr = /PORTED VERBATIM from the Davenport app \(github\.com\/fkhan628\/Call-Schedule-App\) at commit ([0-9a-f]{7,40})\b/.exec(MOD);
+    assert.ok(hdr && hdr[1] === PORT_COMMIT, "call-totals.js's header names the port commit " + PORT_COMMIT);
+    const s = flat(sec23);
+    ["`call-totals.js`", "commit " + PORT_COMMIT, "verbatim", "PARITY CONTRACT", "re-port", "CT_REQUIRE_CLONE=1", "test/fixtures/call-totals-card-synthetic-2026-10-14.json",
+      "Stats > Billing", "0.5", "shiftAccounting", "one shift", "callTotalsDeviceToday", "device date", "callTotalsShown", "eastVacationPerson", "pid === mySurgeon",
+      "callTotalsCardFor", "crash", "efIsForecastRow", "east_forecast", "east_overrides", "previewGen", "before the first cached Davenport week",
+      "eastRefreshWindows", "eastExtraWeeks", "EAST_AHEAD_DAYS", "contiguous", "keepCachedVacations", "Refresh from Davenport", "?public=1", "\"East\"", "\"DSG\""]
+      .forEach(w => assert.ok(s.includes(w), "section 23 must name " + JSON.stringify(w)));
+    REASONS.forEach(r => {
+      assert.ok(MOD.includes(r), "call-totals.js no longer writes the reason " + JSON.stringify(r) + " - update the list here and guide 23 together");
+      assert.ok(s.includes(r), "section 23 must list the reason " + JSON.stringify(r) + " verbatim");
+    });
+    assert.ok(!/\bNOT applied\b|not live yet|not pushed yet/i.test(s), "worded true before and after the ship (no 'not applied / not live yet / not pushed yet')");
+  });
+  check("T12 guide: section 11's runtime inputs name exactly the ?v= loader modules (call-totals.js included), section 2's dropped-constants line says where NIGHT_KEYS lives now, and section 7 points at 23.5 for the refresh windows", () => {
+    assert.ok(loaderModules.includes(MODULE) && loaderModules.includes("helpers.js"), "loader list read: " + JSON.stringify(loaderModules));
+    const s11 = flat(h2(guide, "## 11. Build & deploy"));
+    const m = /the `\?v=` loader modules \(([^)]*)\)/.exec(s11);
+    assert.ok(m, "section 11's runtime-input sentence lists 'the `?v=` loader modules (...)'");
+    const named = (m[1].match(/`[^`]+`/g) || []).map(x => x.slice(1, -1));
+    assert.deepStrictEqual(named.slice().sort(), loaderModules.slice().sort(), "section 11's loader modules = index-source.html's ?v= list (vendor aside)");
+    const s2 = flat(h2(guide, "## 2. Repo layout"));
+    assert.ok(/NIGHT_KEYS[^.]*call-totals\.js/.test(s2), "section 2's dropped-constants sentence must say call-totals.js carries NIGHT_KEYS (the verbatim port only)");
+    const s7 = flat(h2(guide, "## 7. East feed"));
+    assert.ok(s7.includes("\u00a723.5") && s7.includes("eastRefreshWindows"), "section 7 must point at 23.5 (eastRefreshWindows) for the refresh windows");
+  });
+  check("T12 rules doc section 6: one bullet says the card's weighted total is display only - its 0.5 the card's own, never read by the generator, shares, caps, Totals or pay - and one 24-hour day = one shift stands; section 1's shift-accounting row is unchanged", () => {
+    const s6 = h2(rulesDoc, "## 6. Fairness model");
+    assert.ok(s6.length > 0, "rules doc section 6 not found");
+    const bullets = s6.split(/\n(?=- )/).filter(b => b.startsWith("- ") && /My call - Silvis \+ Davenport/.test(b));
+    assert.strictEqual(bullets.length, 1, "exactly one section 6 bullet names the card");
+    const b = flat(bullets[0].split("\n\n")[0]);
+    ["display only", "0.5", "Davenport", "generator", "caps", "Totals", "pay", "one shift", "\u00a723"].forEach(w => assert.ok(b.includes(w), "the bullet must say " + JSON.stringify(w)));
+    assert.ok(/^\| Shift accounting \| \*\*Each 24-hour day is one shift\.\*\* No half-days, no weighted burden/m.test(rulesDoc), "section 1's shift-accounting row still reads 'Each 24-hour day is one shift. No half-days, no weighted burden'");
+  });
+  check("T12 ONBOARDING: one paragraph for the person with an East code - the card in Mine, worked / scheduled, published days only, '?' never zero, nobody else sees it, and the one Refresh from Davenport after the ship - apart from the East vacations paragraph", () => {
+    const paras = onboarding.split("\n\n").filter(p => /\*\*My call - Silvis \+ Davenport/.test(p));
+    assert.strictEqual(paras.length, 1, "exactly one ONBOARDING paragraph leads with **My call - Silvis + Davenport");
+    const p = flat(paras[0]);
+    ["East code", "Khan today", "**Mine**", "worked", "scheduled", "published", "?", "never zero", "0.5", "office", "public", "Refresh from Davenport"].forEach(w => assert.ok(p.includes(w), "the paragraph must say " + JSON.stringify(w)));
+    assert.ok(!/\*\*East vacations/.test(paras[0]), "not inside the East vacations paragraph (data-layer P15 reads the first paragraph with that lead-in)");
+  });
+}
 
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed ? 1 : 0);

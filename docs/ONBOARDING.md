@@ -153,6 +153,19 @@ away, filled green = home), the day editor names the state, and the coverage str
 they are decided - since 9/25 (item E3) those three are the scheduler's view only; the person's own Time off view and
 My schedule keep the list and the control.
 
+**My call - Silvis + Davenport (for the person with an East code - Khan today; Prompt 31 Part B).** On their own **Mine**
+page, under My pay, one card counts their call at both sites: Silvis primary and backup days (one 07:00-07:00 day = 1),
+Davenport call days counted the way the Davenport app's own Stats > Billing counts them (day call, weeknights, weekend
+days, holiday days; backup-week roles listed apart), the total of both sites and a weighted total in which every backup
+role counts 0.5. The chips pick **This month**, **Year to date**, **Full year** or **12 months**; **Month by month** lists
+the year. Days on or before the phone's own date count as worked, later days as scheduled, and only published days count -
+never a Generate preview or a forecast. Nobody else sees the card: not the office, a viewer, a follower, an APP or the
+public link, and when the scheduler picks another person on Mine the card is not there. A "?" means that site's numbers
+are not in hand (a note under the chips says why) - never zero - and the line at the bottom says which dates the counts
+cover. The Davenport numbers come from the East feed cache, so they are as fresh as the scheduler's last **Setup → East
+feed → Refresh from Davenport**: the scheduler presses it once after the build that ships this card - it caches the
+published Davenport weeks of the last 12 months (until then the months before the cache's first week read "?").
+
 Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
 `surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the office contact).
 Roles (`user_profiles.role`, set in Setup → Users by the admin):

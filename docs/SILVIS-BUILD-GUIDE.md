@@ -66,7 +66,10 @@ daily backup role and the derived Fierce weeks), **no-call days** (`kind === "no
 `vacationsOnly` map), the **vacation request/approval workflow** (`vacation_requests`, pending/approved/denied states,
 `VACATION_DEADLINE_WEEKS_BEFORE`, the vacation-deadline reminder), `MIN_AVAILABLE_SURGEONS` request gating, the AI
 file-scanner remnants, OneSignal SDK tags and `OneSignalSDKWorker.js`, all weighting/billing schemes (SW×6 / 7-1-3 / etc.),
-`SHIFT_LABELS/SHIFT_TIMES/NIGHT_KEYS/ALL_SHIFT_KEYS`, and the holiday surgeon-A/surgeon-B convention.
+`SHIFT_LABELS/SHIFT_TIMES/NIGHT_KEYS/ALL_SHIFT_KEYS`, and the holiday surgeon-A/surgeon-B convention. (⟶ 10/13, Prompt 31
+Part B: the Davenport `NIGHT_KEYS` line is back in one place only, `call-totals.js` - part of the Davenport call-totals
+counter ported verbatim for the East-code surgeon's call-totals card, which counts Davenport's billing days as a display;
+the Silvis shift model stays as above - §23.)
 
 **Carry over intact (retargeted to day + role):** the office-notifications flow (`office_contacts`, the digest/change
 emails), calendar sync (per-surgeon ICS subscription feed via the `calendar-sync` edge function), the refresh mechanism
@@ -582,6 +585,11 @@ Derivations (pure functions, unit-tested):
 - **Forecast rows live in their own table `east_forecast`** (`week_monday pk`, `data`, `generated_at`; printed by `scripts/east-forecast.js --sql`, never executed by the script). `east_feed` holds published Davenport rows only. A forecast row is `{ isForecast:true, runs, generatedAt, fakBusyProbabilityByDay:{date:p}, fierceWeekProbability }` and is consumed only via `forecastFromFeedRows(rows)` → `forecastToBusy(forecast, groupRules.eastFeed.forecast.busyThreshold)`. As a second guard, `deriveKhanBusyDays`, `deriveFierceWeeks`, `coverageOf` and `toEastFeedRows` treat any `data.isForecast === true` row as absent, so a forecast can never read as "published" (Khan silently free, a stated Fierce week suppressed, coverage claimed) — reviewer finding east-2, 2026-09-22.
 - **Precedence, pruning and the conflict report (Prompt 12 C, 9/22): published > override > forecast.** Inside the published coverage (`ctx.eastCoverage` = `coverageOf` of the cached Davenport weeks) the forecast is never consulted — no `east-forecast-busy`, no soft `east-forecast`; only the busy set derived from published rows counts, so a stale probability can never block Khan after Davenport publishes (published-free day + forecast 0.9 = eligible). `east_overrides` reach `buildContext` as their own input (`eastOverrides[id] = { day: true|false }`, grouped by `overridesByPerson`): `busy:false` clears the day whether it came from a published row or from the forecast (the day stays "known", never `east-unknown`), `busy:true` is `east-busy` regardless of the forecast; `applyOverrides` on the busy set stays for older callers. Outside the coverage the forecast rule stands as before (`forecastOutsideCoverage` prunes the map the app and `scripts/preview-generate.js` pass). **Refreshing the feed** caches Davenport's published weeks and then `DELETE`s every `east_forecast` row whose `week_monday` lies inside the new published coverage (`Prefer: return=representation` to count them; a failed delete is a toast + warning, never silent); the `east.refresh` audit row carries `forecastRowsDeleted`. The forecast only ever fills weeks Davenport has not published. **Conflict report:** `rules.eastConflicts(ctx, days)` walks the held slots of the given days and lists `{ day, role, id, reasons }` where the East data makes the holder ineligible — `east-busy`, `east-forecast-busy`, `derived-lock:` (the derived surgeon held in the other role of his derived week) and `derived-lock-held:` (someone else in his derived slot); locks are reported too (a lock is a fact that now collides), a holder who is the derived surgeon in the derived role is fine. The generator puts it in `diagnostics.eastConflicts` over the final schedule (empty for generated slots; locked ones may conflict) and the East feed card shows "Conflicts with the published schedule" over the whole schedule map after every load or refresh, each row opening the day editor. `scripts/east-forecast.js` defaults `--runs` to the seed's `groupRules.eastFeed.forecast.runs` (200), the budget to 900 s, and writes `requestedRuns` and `runs` (executed) into `docs/east-forecast-latest.json`. **Fix round (review 9/22):** the app prunes the forecast with the *same* coverage the engine receives (null while an East id is unresolved, so a hard forecast block never degrades to `east-unknown`); the East card's own forecast strip reads the pruned map and names how many rows lie inside the coverage (ignored); a `DELETE` that returns no array records `forecastRowsDeleted: null` ("count unknown"), never a confident 0, and one final toast (tone error) carries a prune failure; an `east_overrides` map for a surgeon whose East feature blocks no role is dropped with a `ctx.warnings` entry; My schedule's F badge honours `busy:false` (an O badge marks the cleared day; the month grid has carried no F badge since item E2, 9/25). For a holder with `outsideDerivedWeeks` the conflict report also keeps `weekday-pattern:` / `weekend-block-only` on days outside his current derived weeks and from his `eastFeed.deriveFrom` on (evaluated as a block member when he holds the whole Fri+Sat+Sun block, as the generator does) — that is a derived week that moved away; before `deriveFrom` nothing was ever derived, so Faraz's single locked 10/12 is never listed; a former derived week where he holds *backup* is undetectable here (backup is open) and is covered by `diagnostics.derivedYields` and the day editor's "East week -> Silvis <role> (derived)" line, or at a glance Setup > East feed's derived-weeks list (`east-derived`) (plus My schedule's E badge; the month grid's E badge came off on 9/25, item E2). `scripts/preview-generate.js` dumps `diagnostics.eastConflicts` in the report and the backfill section. Contiguity assumption: `coverageOf` is one `[first Monday, last Sunday]` range with no gap check, so the prune `DELETE` and `rdInPublishedCoverage` both assume Davenport's published weeks are contiguous (they are today, 2026-06-01..2026-11-09); a gap week inside the range would be pruned and read as known-clear.
 - **East vacations (Prompt 15 part 1a, 2026-09-23).** Davenport's `time_off` table (`id, person_id, kind, start_date, end_date`; inclusive dates; `kind` `vacation` | `nocall`) is read through the East feed's existing read path (probed read-only 2026-09-22; the probe's raw output stays out of the repo), so the path is 1a: no paste box, no Davenport change. *Refresh from Davenport* passes `fetchEastWeeks(from, to, { vacationCodes })` the roster codes of every surgeon whose `eastFeed` feature reads busy days (`eastBlocksPrimary`/`eastBlocksBackup`; FAK today); east-feed.js resolves each code to its Davenport id through the roster blob (never a hard-coded id), reads `time_off?kind=eq.vacation&person_id=in.(ids)&end_date=gte.{from}&start_date=lte.{vacationsTo}` (no-call days stay a Davenport concept; `opts.vacationsTo` defaults to the weeks window's Sunday + 365 days — the `time_off` read does not depend on what Davenport has published and vacations reach further than the weeks, Generate will offer 12-month presets — review E1 finding 2) and merges adjacent/overlapping ranges per code (`eastMergeRanges`, `vacationsFromTimeOff`). The cache stays per week: `attachVacationsToWeeks` writes into every published week's payload the ranges touching its Mon–Sun, whole, as `data.vacations: [{ code, start, end }]` (dates only, never a note — `east_feed` is anon-readable), so a refresh replaces them cleanly; a range that touches **no** cached week — Davenport publishes a few months ahead, vacations reach further (Khan's later ranges lie beyond the published 11/09 week today) — rides on the latest cached week before it (or the first), and moves to its own row once that week is published. **The split runs over the whole cache, not the refresh window** (`planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from })`, review E1 finding 1): the carriers are the cached published rows plus the fetched weeks (the fetched payload wins per Monday), and every cached row *outside* the window whose list changed — a ride-on range now hosted by a newly published week, or cancelled / shortened in Davenport — is upserted too, with its own payload, the new list and its own `fetched_at`; otherwise a range riding on the newest cached week would go stale the day that host left the 28-day window (still a Silvis vacation under part 2's conservative default while Davenport had cancelled it), and a refresh that fetched 0 weeks would never touch the host. Ranges the read cannot see (`end < from`) stay as cached, so old rows neither churn nor lose past ranges; a row without the key whose computed list is empty is not rewritten. The toast and the audit row name the count ("N older cached week(s) rewritten"). `eastVacations(rows, code)` merges the per-week copies back into one sorted list — the single read path for the app and `rules.js` (`ctx.eastVacations`, part 2). **Failure contract, same as the weeks:** the `time_off` read is a separate step after the weeks and the roster; a non-2xx leaves `vacations: null` + `vacationsError` (unknown, never "no vacations"), the weeks are still cached, `keepCachedVacations` copies each week's previously cached list into the new payload so the upsert never wipes known vacations, and the one final toast (tone error) and the `east.refresh` audit row (`vacations: { codes, ranges, unresolved, error }`) name it. Known blind spot: an RLS-blocked read on the Davenport side is HTTP 200 + `[]` — indistinguishable from "no vacations in the window"; the toast therefore always states the count ("N East vacation range(s) for FAK cached"), so a sudden 0 is visible. Callers that pass no `vacationCodes` (`scripts/preview-generate.js`, `scripts/publish-preview.js`) do no `time_off` read and are unchanged. Nothing visual yet: the review states, badges and the coverage-strip count are parts 2–3.
+- **Refresh windows (Prompt 31 item 7, 10/13 - §23.5).** *Refresh from Davenport* reads two windows from
+  `eastRefreshWindows(todayCentral())`: the main one (Monday of today - 28, + 210 days) with the vacations, exactly as
+  before, and a weeks-only extra leg (12 months back to 3 years ahead) that caches the past weeks, and the weeks ahead only
+  while contiguous with the main read's last week (`eastExtraWeeks`) - so the contiguity assumption above still holds ahead
+  of today. The East-code surgeon's call-totals card (§23) counts those cached weeks.
 
 ## 8. UI (index-source.html) — what changes
 
@@ -812,7 +820,7 @@ deployed source before overwriting, byte-diff after). OneSignal is not used: pho
 - Pages URL once live: `https://fkhan628.github.io/Silvis-Call-Schedule/`.
 - One push to `main` is a live deploy — branch + PR for anything touching destructive paths, sync/state, RLS, or many call sites.
 - Supply chain (Prompt 16 B8, 2026-09-23): React 18.3.1, ReactDOM 18.3.1 and supabase-js 2.117.1 are served from `vendor/` (the npm registry's bytes; source URL, version and sha256 per file in `vendor/README.md`, the same hashes pinned in `test/ci.test.js` section 8) through the `?v=APP_VERSION` loader — no script comes from a CDN, and Babel is never loaded at runtime (`build.js` transpiles). To bump one: replace the file, re-hash it, update the README row and the test table together, `npm test && node build.js && npm run smoke` (the smoke fails on any unpkg / jsdelivr request), push — `vendor/**` is a watched path. The page carries a `Content-Security-Policy` meta: `script-src 'self'` plus a hash list that `build.js` fills from the three inline scripts it emits (the `__CSP_SCRIPT_HASHES__` token) plus the printable popup's toolbar script (a static hash — re-hash it when that script in `helpers.js` changes); `connect-src` is this project (https + wss) and the Davenport project; styles allow inline + Google Fonts; `frame-ancestors` cannot travel in a meta and is absent. CI installs with `npm ci` from the committed `package-lock.json` (a dependency change is a lockfile change in the same commit), and both actions are pinned to a full commit SHA with the tag in a trailing comment.
-- Two workflows (review 9/27 Do first 10, 10/2). **`.github/workflows/test.yml`** runs on every push to any branch and every pull request, with no paths filter: `contents: read`, the same two SHA-pinned actions and Node as `build.yml`, `npm ci`, then `npm test` with `EXPORTS_OFFLINE=1` (default wall-clock budgets); it never bumps, builds, commits or deploys, and a newer push to the same ref cancels the run it supersedes. **`.github/workflows/build.yml`** (the deploy) runs only on a push to `main` that touches a **runtime input** — `index-source.html`, `build.js`, `bump-version.js`, `package.json`, `package-lock.json`, the `?v=` loader modules (`config.js`, `helpers.js`, `rules.js`, `east-feed.js`, `generator.js`, `importer.js`, `app-styles.js`), `vendor/**`, the PWA shell (`manifest.json` and the three icons) and the CI-owned outputs `index.html` / `version.json` (merge review 10/2: a hand-committed copy pushed with tests runs the gate and is rebuilt over instead of going live unbuilt; the bot's commit-back never re-triggers, and ci-owned-files-gate.yml still refuses both in a PR) — and still runs every suite of the chain step by step before it bumps `APP_VERSION` and builds (the deploy keeps its own gate). A push touching only tests, fixtures, the seed, docs, sql, scripts or the edge-function sources (deployed by hand) is no deploy and no update banner; test.yml runs its suites. `test/ci.test.js` section 2 pins the filter exactly, pins that every loader file, every local `href`/`src` of the page and every build input is in it, and that every tracked file outside it sits under a known non-runtime path (`test/`, `docs/`, `sql/`, `scripts/`, `edge-functions/`, `.github/`, the READMEs) — so a new runtime file fails the tests instead of silently never deploying. Because that classification goes by folder, section 2 also pins the indirect loads (review 10/2): the generator worker's `importScripts` list (`helpers.js` `GEN_WORKER_MODULES`) is loader files only, every path-shaped relative literal (or `base + "file"`) the page or any watched root script hands to `fetch` / `importScripts` / `new URL` / `new Worker` / `serviceWorker.register` / `window.open` is watched (no exemption: the CI-owned `index.html` and `version.json` are watched too, so a service worker's `fetch("./index.html")` fallback passes), and every manifest icon is watched. **Adding a runtime file** (a new root module, a service worker such as Prompt 30's `sw.js`, an icon) is one line in build.yml's `paths:` and one in `RUNTIME_FILTER` in `test/ci.test.js`, in the same commit — until both agree section 2 fails (§2d fails an unlisted tracked root file; §2g pins that `NON_RUNTIME` can never classify one — `sw.js`, a root module, an icon); `scripts/ci-watched-paths.js` reads the filter itself. Every `paths:` entry is written `- "path"`: section 1 and the matcher refuse any other shape (an unquoted or single-quoted entry is a valid GitHub filter both would otherwise skip; the matcher exits 2). Conservative by design: a push changing only `vendor/README.md` or only `package.json`'s scripts (a suite added to the chain) still matches the filter and bumps `APP_VERSION`. Section 2b pins test.yml (also: no `if:`, no `continue-on-error`, a 10–60 min job timeout — 20 today — and `persist-credentials: false`); section 1 pins that build.yml has no `continue-on-error`, that its only `if:` is the job's `[skip ci]` guard and that the chain ends with the generator regression; sections 1 and 2b pin that neither workflow overrides `shell:` / `working-directory:` / `defaults:` (a `shell: bash -c 'true' {0}` would make a suite step a green no-op); section 7 pins the build job's 10–60 min timeout (30 today). The header of build.yml says what the gate does not hold back: Pages serves `main` directly, so a raw runtime module is live before the gate finishes and stays live if it fails (deploying Pages from the workflow is a separate task). `test/nov-backups.test.js` is no chain entry of its own: it runs inside `test/generator-regression.js` (`require` + `NB.run`), which ci.test.js also pins.
+- Two workflows (review 9/27 Do first 10, 10/2). **`.github/workflows/test.yml`** runs on every push to any branch and every pull request, with no paths filter: `contents: read`, the same two SHA-pinned actions and Node as `build.yml`, `npm ci`, then `npm test` with `EXPORTS_OFFLINE=1` (default wall-clock budgets); it never bumps, builds, commits or deploys, and a newer push to the same ref cancels the run it supersedes. **`.github/workflows/build.yml`** (the deploy) runs only on a push to `main` that touches a **runtime input** — `index-source.html`, `build.js`, `bump-version.js`, `package.json`, `package-lock.json`, the `?v=` loader modules (`config.js`, `helpers.js`, `rules.js`, `east-feed.js`, `generator.js`, `importer.js`, `app-styles.js`, `call-totals.js` - the last since Prompt 31 Part B), `vendor/**`, the PWA shell (`manifest.json` and the three icons) and the CI-owned outputs `index.html` / `version.json` (merge review 10/2: a hand-committed copy pushed with tests runs the gate and is rebuilt over instead of going live unbuilt; the bot's commit-back never re-triggers, and ci-owned-files-gate.yml still refuses both in a PR) — and still runs every suite of the chain step by step before it bumps `APP_VERSION` and builds (the deploy keeps its own gate). A push touching only tests, fixtures, the seed, docs, sql, scripts or the edge-function sources (deployed by hand) is no deploy and no update banner; test.yml runs its suites. `test/ci.test.js` section 2 pins the filter exactly, pins that every loader file, every local `href`/`src` of the page and every build input is in it, and that every tracked file outside it sits under a known non-runtime path (`test/`, `docs/`, `sql/`, `scripts/`, `edge-functions/`, `.github/`, the READMEs) — so a new runtime file fails the tests instead of silently never deploying. Because that classification goes by folder, section 2 also pins the indirect loads (review 10/2): the generator worker's `importScripts` list (`helpers.js` `GEN_WORKER_MODULES`) is loader files only, every path-shaped relative literal (or `base + "file"`) the page or any watched root script hands to `fetch` / `importScripts` / `new URL` / `new Worker` / `serviceWorker.register` / `window.open` is watched (no exemption: the CI-owned `index.html` and `version.json` are watched too, so a service worker's `fetch("./index.html")` fallback passes), and every manifest icon is watched. **Adding a runtime file** (a new root module, a service worker such as Prompt 30's `sw.js`, an icon) is one line in build.yml's `paths:` and one in `RUNTIME_FILTER` in `test/ci.test.js`, in the same commit — until both agree section 2 fails (§2d fails an unlisted tracked root file; §2g pins that `NON_RUNTIME` can never classify one — `sw.js`, a root module, an icon); `scripts/ci-watched-paths.js` reads the filter itself. Every `paths:` entry is written `- "path"`: section 1 and the matcher refuse any other shape (an unquoted or single-quoted entry is a valid GitHub filter both would otherwise skip; the matcher exits 2). Conservative by design: a push changing only `vendor/README.md` or only `package.json`'s scripts (a suite added to the chain) still matches the filter and bumps `APP_VERSION`. Section 2b pins test.yml (also: no `if:`, no `continue-on-error`, a 10–60 min job timeout — 20 today — and `persist-credentials: false`); section 1 pins that build.yml has no `continue-on-error`, that its only `if:` is the job's `[skip ci]` guard and that the chain ends with the generator regression; sections 1 and 2b pin that neither workflow overrides `shell:` / `working-directory:` / `defaults:` (a `shell: bash -c 'true' {0}` would make a suite step a green no-op); section 7 pins the build job's 10–60 min timeout (30 today). The header of build.yml says what the gate does not hold back: Pages serves `main` directly, so a raw runtime module is live before the gate finishes and stays live if it fails (deploying Pages from the workflow is a separate task). `test/nov-backups.test.js` is no chain entry of its own: it runs inside `test/generator-regression.js` (`require` + `NB.run`), which ci.test.js also pins.
 - Two pushes to `main` within one run's window (~30 s; audit T3, 9/23): the commit-back step fetches `origin/main` first — a move touching only unwatched paths (tests / docs / sql / scripts / edge-function sources) is carried by this run (its push queued no build run): reset onto `origin/main`, the whole chain re-run there (`EXPORTS_OFFLINE=1 npm test` — since 10/2 a test, fixture or seed change can land in that window, and test.yml's run of that push does not gate the deploy; a failure is an `::error::`, nothing pushed), then bump and rebuild; a watched move is left to its own queued run (a notice, nothing pushed), and a push that is still rejected fails the run with an `::error::` — re-run "Build & deploy" from the Actions tab (workflow_dispatch); the live site stays on the previous build until then. The matcher reads the filter as of `origin/main` (`scripts/ci-watched-paths.js --ref=origin/main`, since 10/2): GitHub judged that push with the filter in the pushed commit. A run already in progress when a filter change lands still runs its OLD commit-back step, so **push a change to build.yml's filter only when no "Build & deploy" run is queued or running**, and afterwards check that the last runtime commit got its `[skip ci]` build commit. CI runs Node 24 (audit T2): the Babel 8 packages need `^22.18.0 || >=24.11.0`, and `package.json` `engines` carries the same floor.
 
 ## 12. Testing
@@ -2500,3 +2508,184 @@ closed, and with push still off the first Settings visit after the reload opens 
   its 400 for a surgeon.
 - Not in this prompt: the 6 AM / Monday reminder (daily-reminder) and its `shift_reminders_push` switch; suppressing the
   duplicate desktop pop-up for the same event.
+
+## 23. My call - Silvis + Davenport (Faraz 10/9; Prompt 31 Part B) - the East-code surgeon's call totals
+
+Faraz asked (10/9) for one card that counts his call at both sites: his Silvis primary and backup days beside his Davenport
+call days, counted exactly as the Davenport app counts them, for this month, the year to date, the full year, the rolling 12
+months and month by month - shown only to the signed-in surgeon who has an East code (Khan today), keyed by that code. The
+Davenport app gets the same card through its own prompt and the two cards must show the same numbers for the same period
+(item 11), so there is ONE counting definition: the Davenport app's own counter, ported verbatim. Part B also carries the
+in-app half of item 7 (the refresh windows, 23.5), which the card needs. **No SQL, RLS, trigger, function, edge function,
+secret or apply script:** Part B is client-only and ships as a normal PWA push (CI transpiles and bumps) on Faraz's go,
+before or after Part A (Khan's East vacations for everyone signed in, and the daily server-side East refresh - its own
+report and apply). The binding design is `PART-B-DESIGN.md` with its critic corrections of 10/13 (private folder,
+`docs/HISTORY.md`).
+
+### 23.1 One counting definition - `call-totals.js`, ported verbatim
+
+- **A new root classic-script module, loaded LAST** in `index-source.html`'s `?v=` loader list - after `helpers.js`, which
+  provides `fmt` / `parse` / `addD` (byte-identical to the Davenport app's helpers.js:4-6), and after `east-feed.js`, which
+  provides `efIsForecastRow`. It declares none of them: the classic scripts share one global scope, so a second `const fmt`
+  is a SyntaxError and the module would never load. Wired like every runtime module, in the same commit: build.yml's paths
+  filter, `test/ci.test.js`'s RUNTIME_FILTER and loader-list literal, and its suite `test/call-totals.test.js` in
+  package.json's chain right after totals, with its own build.yml step. In Node it loads in ONE vm context after
+  `helpers.js` and `east-feed.js` (require() alone gives functions whose `fmt` is undefined).
+- **PORTED VERBATIM from the Davenport app (`github.com/fkhan628/Call-Schedule-App`) at commit eff3b81** (2026-10-11,
+  "Totals card review fixes ... parity contract", read with `git show eff3b81:<path>` in the davenport-ref clone at HEAD
+  bb07a0b - no ported line changed after eff3b81): `weekBillingCredits` (its helpers.js:66-81), `callTotalPeriods`
+  (:107-122), `callTotalsFor` (:141-191) and the `NIGHT_KEYS` line (its config.js:380), between the
+  `// ---- verbatim (eff3b81) ----` / `// ---- end verbatim ----` markers. The Davenport app's PARITY CONTRACT comment (its
+  helpers.js:83-99, addressed to this prompt) asks for exactly this module. The header names the commit and the lines; the
+  Davenport doc comments are not copied (they are not ASCII), the bodies are.
+- **Never edit the verbatim block here.** A change to the counting is made in the Davenport app first and then re-ported:
+  the bodies, the header's commit, the sha256 digests in `test/call-totals.test.js` and this section's commit change
+  together. Below the block, the **Silvis adapter** (Silvis's own code, 23.3) shapes the app's data into the counter's input
+  and its output into the card's text; it counts nothing itself and reads no Davenport week field (pinned).
+- **Why not an existing module:** `helpers.js`, `config.js`, `app-styles.js` and `index-source.html` sit under the
+  data-layer WEEKLY ban (Davenport's weekly-model words, comments included) and R.4 (`DSG`, case-insensitive), which the
+  verbatim bodies cannot pass; `east-feed.js` is the busy-day module (a counter beside `deriveKhanBusyDays` invites a second
+  definition) and the scripts and the edge-function mirrors depend on it.
+
+### 23.2 Units, periods and today
+
+- **Davenport units are its Stats > Billing days** (`weekBillingCredits`), not its Stats > Counts week units: **day call** =
+  each of Mon..Sun of a service week (`dayCall`; a `dayCallOverrides[date]` moves that date to its holder); **weeknights** =
+  the Mon..Thu nights, 1 each; **weekend** = Fri + Sat + Sun = 3; **holiday** = a `holidayCoverage[date]` with a surgeon,
+  inside the week and not a swap = **2** days to the coverer, and every regular credit of that date drops for everyone. A
+  backup week (`isBackup`) is counted by the SAME function as if it were first call, its kinds listed apart (the Davenport
+  card's backup-week columns). **Silvis:** one 07:00-07:00 day = 1 per role (primary, backup).
+- **Sums:** Davenport = day call + weeknights + weekend + holiday; the backup-week days the same over the backup kinds; the
+  total = both sites; **the weighted total counts every backup role 0.5** (Silvis backup days and Davenport backup-week
+  days; Faraz 10/9) and everything else 1. The 0.5 is the counter's own: `call-totals.js` never reads
+  `groupRules.shiftAccounting` or any Setup weight (pinned), so a Setup change can never make the two apps' cards disagree.
+  It is a display line on one surgeon's card: Totals, the shares, the caps and pay stay unweighted - one 24-h day = one
+  shift stands (rules doc §6).
+- **Different definitions on purpose - never reused for the card:** `deriveKhanBusyDays` (busy days: service Mon-Sat,
+  weekend Fri + Sun), the rules context's East days, Totals' East days column, Totals' `ttRangeFor` / `TOTALS_YTD_FLOORS`
+  periods, and the Davenport app's week-unit tallies.
+- **Periods** (`callTotalPeriods(today)`): this month; year to date (Jan 1 .. today); the full year (Jan 1 .. Dec 31,
+  scheduled days included); 12 months (the day after the same date last year - Feb 29 -> Feb 28 - .. today); the month list
+  Jan..Dec. A day on or before `today` is **worked**, a later one **scheduled**.
+- **`today` is the device date:** `callTotalsDeviceToday()` = `fmt(new Date())`, the module's only clock read, per the
+  Davenport PARITY CONTRACT's decision of 2026-10-11 (both cards count to the device date, so they agree on one phone). The
+  rest of Mine, and the app, keep the Central date; the footnote says "this device's date", so a traveller sees why the
+  month edge can differ around midnight. `index-source.html` gains no `fmt(new Date())` (B9i).
+
+### 23.3 Published data only - the inputs, and "?" never zero
+
+- **Silvis days** = the in-memory `schedule` map (every `schedule_days` row - a Silvis edit is live on save), never the
+  Generate preview (`previewGen`) or the office's last-published snapshot; ids map to the roster `code` upper-cased, null
+  for an id with no code (never the id itself); an outside-cover day has primary null.
+- **Davenport weeks** = the `east_feed` cache rows that are not forecast-marked (`efIsForecastRow`) - never `east_forecast`,
+  `east_overrides`, the stated weeks or the busy days. Davenport has no publish flag (every `schedule_weeks` row is
+  published; its Generate preview stays in its client until Accept), so its last published week is the largest
+  non-forecast row the cache holds. The vacation list a cached payload carries rides along; the counter ignores it.
+- **The Davenport id of the code** comes from `eastIdByCode` (a served `east_forecast` row's `fakId` + `code`, else a read
+  of the Davenport roster), never a hard-coded id - the Davenport app numbers its roster differently.
+- **Unknown is never zero** (`callTotalsInputs`). Davenport is unknown, with its reason, while "the Davenport cache is still
+  loading", when "the Davenport cache could not be read", when "no Davenport weeks are cached yet", while "the Davenport
+  roster is still loading", when "the Davenport roster could not be read", and when "code FAK is not in the Davenport
+  roster"; Silvis when "the Silvis schedule is not loaded". The unknown site's cells, the total and the weighted total read
+  "?" with a note naming the reason; the known site keeps its numbers.
+- **Months before the cache** (critic 10/13 item 11): a month that starts before the first cached Davenport week reads "?"
+  in its Davenport, Dav. backup, Total and Wtd cells - a month the cache covers only in part too (stricter than the critic's
+  "ends before", so a month never undercounts silently) - with a note naming that week; each period's range line adds
+  "Davenport weeks are cached from M/D/YYYY - nothing earlier is counted." when the cache starts after the period does, and
+  "Silvis days start M/D/YYYY." likewise.
+- **The data line** is built from the counter's own ranges and the cache's newest published `fetched_at` - never a
+  hard-coded date: "Data: Silvis from <first day> to <last day>; Davenport from <first Monday> to <last Sunday> (its last
+  published week; cache refreshed <date>)." Expected live after the first Refresh: Silvis from 9/14/2026, Davenport from
+  12/29/2025 (where the Davenport app's data starts).
+- **Crash-safe:** `callTotalsCardFor(args)` is the card's ONE call (the page never calls the counter itself). It runs while
+  the app renders and the only error boundary is the whole app's, so anything that throws on malformed data comes back
+  `{ ok:false, error }` and the card reads "Totals unavailable - ..." - never a crash screen, never zeros (critic item 10).
+
+### 23.4 Who sees the card - the gate, the mount and the words
+
+- **The gate** (`callTotalsShown`, beside `payVisible` in CallSchedule): not `?public=1`, not a failed profile read, signed
+  in, linked (`mySurgeon`), not the office, not a viewer (followers and APPs are viewer accounts), and
+  `eastVacationPerson(his roster entry, surgeonRules[his id].eastFeed)` - the predicate the East-code features already share
+  (eastFeed enabled with a blocked role, a roster code, not an outside surgeon). **Khan only today**; Fierce's eastFeed
+  blocks no role, so he is out. The mount adds `pid === mySurgeon`, so the scheduler's person picker never shows the card on
+  anyone else's page.
+- **The mount:** once, in the own-Mine return (after the APP and Following returns, so neither reaches it), after My pay and
+  before My offers: `CallTotalsCard` gets the model `callTotalsCardFor({ feedRows: eastFeedRows, feedState:
+  eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon,
+  today: callTotalsDeviceToday() })`.
+- **The component** (`CallTotalsCard`, module scope after the call pay components) renders the model and nothing else - no
+  fetch, db, storage, timer, clock or write path; THEME tokens and `css.*` only (the dark sheet repaints them): the period
+  chips (This month first), the Worked / Scheduled / Total table (the backup-week sub rows only when the period has some),
+  "Month by month (YYYY)" in the swipe-hint scroller, the data line and the footnote. At 390 px nothing has a fixed width but
+  the month table, inside its scroller.
+- **Words:** the card says "Davenport" - it is the East-code surgeon's own card, and the prompt names it so - and never
+  "East" or "DSG" (every model string is pinned ASCII and free of both). Nothing else changes: `?public=1`, its share links,
+  the printable month, the calendar feeds, the office digest, the ER export, Totals (pay included), e-mails, notifications
+  and push neither read the module nor render the card (privacy A6g).
+- **Switching it on for another surgeon later** is data, no code branch: his roster code and an eastFeed with a blocked role,
+  in Setup. That same switch also makes his Davenport call block his Silvis eligibility, makes his Davenport vacations Silvis
+  vacations and starts the id resolver (critic item 12); a card without those rules would need its own data key (for example
+  `surgeonRules.<id>.eastFeed.callTotals`). Faraz's call when it comes - with the wording question, since a non-scheduler
+  would then read "Davenport" on his own card.
+
+### 23.5 Item 7 - the refresh windows (the in-app refresh; `east-feed.js`)
+
+- **`eastRefreshWindows(today)`** (`today` = `todayCentral()`) -> `{ main, extra }` | null. **main** = Monday of (today - 28)
+  .. that Monday + 210 days - exactly the old inline window, so the vacations read, `planVacationCache`'s floor, the
+  review-reset floor and the forecast prune are unchanged. **extra** = Monday of the same date one year back (Feb 29 -> Feb
+  28) .. Monday of today + `EAST_AHEAD_DAYS` (1095), for the weeks only. A null window throws into the refresh's outer catch
+  ("East feed refresh FAILED").
+- **`eastExtraWeeks(mainWeeks, extraWeeks, win)`** picks what the extra leg caches: the weeks of the 12 months back (from
+  `extra.from` up to `main.from` - a gap there is harmless, no past day is generated) and the weeks after the main window
+  ONLY while contiguous with the last week the main read returned (critic item 9: the rules' published coverage is
+  `coverageOf` over every cached row - one first..last range with no gap check - so a week past a gap would make the
+  unpublished weeks between read as known clear, the forecast ignored and Khan placeable on forecast-busy days). Never a
+  week the main read returned, a forecast or a malformed row; the weeks skipped after a gap are counted.
+- **The extra leg in `refreshEastFeed`** runs after the main upsert, the forecast prune, the reload and the review resets,
+  and only on a reloaded cache: `fetchEastWeeks(extra.from, extra.to, {})` (no vacation codes, so no Davenport time off
+  read), the selection, `keepCachedVacations` over the RELOADED cache (a cached week keeps its list, a new week gets none),
+  one merge-duplicates upsert, then `loadEastTables`. No review reset, forecast prune or vacation plan inside it. Its own
+  try / catch: a failed read or upsert keeps the cache, and the `east.refresh` audit row (`detail.extra` = from, to, weeks,
+  past, ahead, skipped, error) and the one final toast name it ("... could NOT be cached (the call totals may
+  undercount)", tone error) - never "no East call".
+- **What it changes (scheduler-visible; design Q4 / Q5, critic items 7-8):** the first Refresh after the ship caches the
+  published Davenport weeks back 12 months (Jan-May 2026 if the cache starts in June 2026); every later Refresh re-upserts
+  the past 12 months, so a later Davenport edit to a past week now reaches the past busy days, Totals' East days, Fierce's
+  past weeks and the s1 / s5 cap counts of past months; weeks ahead of the main window are cached only while contiguous
+  (the busy days, the derived weeks and Khan's `?east=1` feed then gain them; a forecast row for such a week stays in
+  `east_forecast`, ignored inside the coverage, until the main window reaches it). **No delete:** a week the Davenport app
+  removed stays cached (Part A's question - never delete on an empty or sharply shrunk read).
+- **Part A's server refresh** must mirror `eastRefreshWindows`, `EAST_AHEAD_DAYS` and `eastExtraWeeks` (one window in both
+  refreshes), pinned against `east-feed.js`.
+
+### 23.6 Tests and the ship
+
+- **`test/call-totals.test.js`** (in the chain after totals, with its own build.yml step): T1 one global scope, no name
+  clash, loaded last; T2 the three bodies and the `NIGHT_KEYS` line pinned by sha256; T3 the Davenport session's fixture
+  (`test/fixtures/call-totals-card-synthetic-2026-10-14.json`, copied byte for byte - never edit it) gives its `expected`
+  exactly; T4-T8 the invariants, the periods, the fail-loud refusals, purity (no clock but the device date, no second
+  definition) and two time zones; **T9 clone parity** against the PINNED commit (`git -C <clone> show eff3b81:<path>`, LF
+  blobs, never the CRLF working tree; the clone is `DAVENPORT_REF` or `../davenport-ref`): the clone's bodies, `NIGHT_KEYS`
+  line, date helpers and fixture equal ours, and the Davenport app's own counter runs beside ours on the fixture, its two
+  live-week fixtures (read from the clone, never copied) and 300 seeded synthetic inputs. No clone (CI): "clone parity:
+  SKIPPED"; a clone whose HEAD changed the counter after eff3b81 prints a NOTE. **`CT_REQUIRE_CLONE=1 node
+  test/call-totals.test.js`** makes T9 and that drift failures - the implementer's gate and Faraz's pre-push run set it.
+  T10-T11 the adapter and the model on `test/fixtures/call-totals-silvis-shapes-2026-10-14.json` (every unknown state,
+  malformed inputs, the hand-transcribed cells); T12 these docs.
+- **Elsewhere:** `test/east-feed.test.js` (the windows for every day from 12/1/2025 through 2028, in two time zones, and
+  `eastExtraWeeks`);
+  `test/data-layer.test.js` P31B (the name collisions, the B9i pin moved to the `eastWin` lines, the extra leg's place,
+  guards and bans and the leg run on a lifted copy, the gate run on a 22-case truth table, the one mount, the component
+  compiled and run on a React stand-in); `test/privacy.test.js` A6g (the gate's exclusions, one mount, no exporter, feed,
+  digest, e-mail, push, script or edge function names the card); `test/ui/smoke.mjs` (every cell against a Node computation
+  on the served rows, the picker on s2 -> no card, 390 px light and dark, the hidden roles, a failed `east_feed` read -> "?",
+  the extra leg's two POSTs and its abort).
+- **The ship (Faraz's go; Part B can go first):** before it, his read-only probe of the cache's range (`select
+  min(week_monday), max(week_monday), count(*), max(fetched_at) from east_feed;` - a cache starting later than 74 days before
+  today would also give Khan's `?east=1` feed past Davenport events after the backfill); merge -> CI builds and deploys;
+  then **Setup > East feed > Refresh from Davenport** once (the backfill). Until Part A's daily server job lands, the card is
+  as fresh as the last Refresh. Cowork then compares the two live cards for 2026 (item 11); the Davenport card counts Silvis
+  through its own Silvis feed, which must reach the whole year.
+- **Defaults taken, for Faraz to confirm** (the design's section 7): the device date; the gate = `eastVacationPerson` (Khan
+  only); the fixed 0.5; the extra leg 12 months back and ahead only while contiguous (3 years at most); no delete of a week
+  the Davenport app removed (Part A); the data line from the real ranges.

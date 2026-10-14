@@ -602,6 +602,11 @@ pool, within each person's availability:
   is weighted or split. The counts stay unweighted; ~~no compensation, stipend or $ figures anywhere in the app~~ ⟶ 9/27:
   primary call pay is tracked separately (§1 "Call pay"; Totals → Pay - the scheduler, and the office coordinator read-only)
   and never weights a count or a share.
+- ⟶ **10/9 (Faraz, Prompt 31 Part B): "My call - Silvis + Davenport"** - a card on the East-code surgeon's own Mine page
+  (Khan today; nobody else sees it) that sets his Silvis primary and backup days beside his Davenport call days, counted
+  exactly as the Davenport app counts them (its billing days - the Davenport counter ported verbatim), with a total of both
+  sites and a weighted total in which every backup role counts 0.5. It is display only: the 0.5 is that card's own, and the
+  generator, the shares, the caps, Totals and pay never read it - one 24-hour day = one shift stands (build guide §23).
 - Generation objective, in order: (1) zero uncovered primary days, (2) zero uncovered backup days, (3) zero hard-rule
   violations, (4) minimize soft penalties, (5) minimize primary spread, (6) minimize backup spread, (7) balance weekends
   and holidays.
