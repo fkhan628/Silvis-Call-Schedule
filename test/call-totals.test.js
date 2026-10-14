@@ -40,7 +40,8 @@
 //      week") and the footnote - the text hand-transcribed in the shapes fixture's expectedCells; every string ASCII,
 //      never "East" or "DSG"
 //   T12 the docs (B5): the build guide's "My call - Silvis + Davenport" section, found by its title with its number
-//      derived (23 on this base; the next free number after a rebase - the guide's section numbers unique and ascending)
+//      derived (24 since the 10/14 merge of main, whose Prompt 32 section is 23; the next free number after any later
+//      merge - the guide's section numbers unique and ascending)
 //      (its sub-headings, the port commit, the parity rule, the units, the device date, the gate, every "?" reason
 //      verbatim, the item 7 windows), guide sections 2 / 7 / 11 (NIGHT_KEYS's one home, the pointer to <n>.5, the runtime
 //      modules = the ?v= loader list), the rules doc's section 6 bullet (display only; the card's 0.5 apart from the
@@ -960,9 +961,10 @@ check("T11 every string of every model state (ok, each unknown state, refusals, 
 // port commit (the same as call-totals.js's header - a re-port updates both), the card's "?" reasons (the same strings as
 // the adapter's), the guide's runtime-module list (= the ?v= loader list) - never dates, live counts or wording beyond
 // those. CLAUDE.md is Faraz's own file: it is not pinned here (its module and suite lists are his to update).
-// The section NUMBER is not pinned (B5 review, 10/14): Prompt 32 appends its own section after section 22 and merges
-// first, so at the rebase this section becomes the next free number. Every check reads the number off the heading found
-// by its title, and the guide's "## <n>." numbers must be unique and ascending - a rebase that keeps two section 23s, or
+// The section NUMBER is not pinned (B5 review, 10/14): Prompt 32 appended its own section 23 after section 22 and merged
+// first, so at the 10/14 merge of main this section became 24, the next free number. Every check reads the number off
+// the heading found by its title, and the guide's "## <n>." numbers must be unique and ascending - a merge that keeps
+// two section 23s, or
 // renumbers the heading but leaves a stale pointer (guide 2 / 7, an internal "<n>.<k>", the rules doc, HISTORY), fails
 // here. Nor does any statement here hold the rest of Silvis unweighted: Prompt 32 weights the Silvis load
 // (groupRules.shiftAccounting.weights); the card's 0.5 is its own constant and reads none of it.
@@ -973,8 +975,8 @@ console.log("\n[T12] docs: the build guide, the rules doc, HISTORY and ONBOARDIN
   const onboarding = readDoc("docs/ONBOARDING.md"), historyDoc = readDoc("docs/HISTORY.md");
   // h2(text, head): the section from "\n" + head to the next "\n## " (or the end), "" when the heading is missing
   const h2 = (t, head) => { const i = t.indexOf("\n" + head); if (i < 0) return ""; const j = t.indexOf("\n## ", i + 1); return t.slice(i, j < 0 ? t.length : j); };
-  // the guide's numbered sections in file order; this one found by its TITLE, its number N read off the heading (23 on
-  // this base, the next free number after the rebase onto Prompt 32) - never a literal 23 below
+  // the guide's numbered sections in file order; this one found by its TITLE, its number N read off the heading (24 since
+  // the 10/14 merge of main, after Prompt 32's section 23) - never a literal number below
   const TITLE = "My call - Silvis + Davenport";
   const HEADINGS = [...guide.matchAll(/^## (\d+)\. (.*)$/gm)].map(m => ({ n: Number(m[1]), title: m[2] }));
   const MINE = HEADINGS.filter(h => h.title.startsWith(TITLE));
