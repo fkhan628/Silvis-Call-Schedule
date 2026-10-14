@@ -163,7 +163,9 @@ eq(derivedSR.d.explicitListMonths, undefined, "no explicit list -> nothing gover
 eq(SA.seedToSurgeonRules(seed)[ACTON].explicitListMonths, ["2026-10"], "Y: Acton's explicitListMonths = October only (T had the November object entry)");
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 eq(SA.seedToSurgeonRules(seed)[BURCHETT].explicitListMonths, ["2026-10", { month: "2026-11", roles: ["primary", "backup"] }, { month: "2026-12", roles: ["primary", "backup"] }], "T: Burchett likewise, between his October and December entries (Y leaves his November object entry as written); 9/23: December is an object entry too - his 9/17 list names primary or backup");
-eq(SA.seedToTimeOffRows(seed).length, 8, "eight vacation rows (Acton x2, Philip x1, Burchett x5 - the 2027 weekends stated 9/22 evening + 2027-07-22..08-02 stated 9/23)");
+// pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 - this read 8 (Burchett x5); his remaining rows are pinned exactly
+eq(SA.seedToTimeOffRows(seed).length, 6, "six vacation rows (Acton x2, Philip x1, Burchett x3 - the Feb / Apr 2027 weekends stated 9/22 evening + 2027-07-22..08-02 stated 9/23; 1/9-1/10 and 1/16-1/17/2027 withdrawn 10/10)");
+eq(SA.seedToTimeOffRows(seed).filter(r => r.person_id === BURCHETT).map(r => [r.start_date, r.end_date]), [["2027-02-12", "2027-02-14"], ["2027-04-09", "2027-04-11"], ["2027-07-22", "2027-08-02"]], "10/10: Burchett's vacation rows are exactly 2/12-14, 4/9-11 and 7/22-8/2/2027 (1/9-1/10 and 1/16-1/17 withdrawn 10/10)");
 const sched = SA.seedToSchedule(seed);
 eq(sched["2026-09-30"].primaryLocked, true, "externalCover day is primary-locked");
 eq(sched["2026-10-15"].primaryLocked, false, "null slot is never locked");
@@ -342,16 +344,19 @@ okElig(R.eligibility(clean, "2027-01-03", B, BURCHETT), "spill-over date is addi
 okElig(R.eligibility(clean, "2027-01-11", P, BURCHETT), "2nd Monday via recurring whitelist");
 okElig(R.eligibility(clean, "2027-01-05", P, BURCHETT), "1st Tuesday");
 okElig(R.eligibility(clean, "2027-01-13", P, BURCHETT), "2nd Wednesday");
-okElig(R.eligibility(clean, "2027-01-23", P, BURCHETT), "weekend via weekendsAvailable");   // was Sat 1/9 - a vacation since 9/22 evening
-okElig(R.eligibility(clean, "2027-01-08", B, BURCHETT), "Friday backup via weekendsAvailable (the day before his 1/9-10 vacation blocks primary only)");
+okElig(R.eligibility(clean, "2027-01-23", P, BURCHETT), "weekend via weekendsAvailable");   // was Sat 1/9 - a vacation from 9/22 evening until 10/10 (withdrawn)
+okElig(R.eligibility(clean, "2027-01-08", B, BURCHETT), "Friday backup via weekendsAvailable");
 // 9/22 evening (Burchett email): the 2027 weekends he cannot work are seed vacations - both roles blocked, the day before primary only
-blocked(R.eligibility(clean, "2027-01-09", P, BURCHETT), "time-off:2027-01-09", "Sat 1/9 vacation (primary)");
-blocked(R.eligibility(clean, "2027-01-10", B, BURCHETT), "time-off:2027-01-10", "Sun 1/10 vacation (backup)");
-blocked(R.eligibility(clean, "2027-01-08", P, BURCHETT), "day-before-vacation", "Fri 1/8 primary: day before the vacation");
-blocked(R.eligibility(clean, "2027-01-16", P, BURCHETT), "time-off:2027-01-16"); blocked(R.eligibility(clean, "2027-01-17", P, BURCHETT), "time-off:2027-01-17");
+// pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027. These lines read time-off blocks on Sat 1/9 (primary),
+// Sun 1/10 (backup), Sat 1/16 and Sun 1/17 (primary), day-before-vacation on Fri 1/8 primary, and Fri 1/15 open as backup with no
+// time-off on primary. The January days now read open in both roles; the vacation pins moved to his 2/12-14 and 4/9-11 weekends
+// (both roles, exact hard lists) and the day-before pin to Thu 2/11 with its exact hard list (2/11 also carries
+// not-recurring-available, so the whole list is asserted - dropping day-before-vacation still fails it).
+["2027-01-08", "2027-01-09", "2027-01-10", "2027-01-15", "2027-01-16", "2027-01-17"].forEach(d => [P, B].forEach(role => okElig(R.eligibility(clean, d, role, BURCHETT), "10/10: " + d + " " + role + " is open again (1/9-1/10 and 1/16-1/17/2027 withdrawn 10/10)")));
 ["2027-02-12", "2027-02-13", "2027-02-14", "2027-04-09", "2027-04-10", "2027-04-11"].forEach(d => blocked(R.eligibility(clean, d, B, BURCHETT), "time-off:" + d, "Burchett vacation " + d));
-okElig(R.eligibility(clean, "2027-01-15", B, BURCHETT), "Fri 1/15 backup is open (the January entries are Sat+Sun only)");
-lacks(R.eligibility(clean, "2027-01-15", P, BURCHETT).hard, "time-off", "Fri 1/15 is not itself a vacation day");
+["2027-02-12", "2027-02-13", "2027-02-14", "2027-04-09", "2027-04-10", "2027-04-11"].forEach(d => [P, B].forEach(role => eq(R.eligibility(clean, d, role, BURCHETT).hard, ["time-off:" + d], "10/10 (was Sat 1/9, Sun 1/10, 1/16-17): Burchett vacation " + d + " " + role + " - time-off is the only block")));
+eq(R.eligibility(clean, "2027-02-11", P, BURCHETT).hard, ["day-before-vacation", "not-recurring-available"], "10/10 (was Fri 1/8): Thu 2/11 primary, the day before the 2/12-14 vacation");
+okElig(R.eligibility(clean, "2027-02-11", B, BURCHETT), "10/10 (was Fri 1/8 and 1/15): Thu 2/11 backup is open - the day before a vacation blocks primary only, and 2/11 is not itself a vacation day");
 blocked(R.eligibility(clean, "2027-01-04", P, BURCHETT), "not-recurring-available", "1st Monday is not on his recurring list");
 blocked(R.eligibility(clean, "2027-01-12", P, BURCHETT), "not-recurring-available", "a Tuesday that is not the 1st");
 step("Burchett October import rows");
@@ -1180,7 +1185,7 @@ blocked(R.eligibility(ctx, "2026-11-26", B, KHAN), "holds-other-role", "the lock
 step("tests-05: role mask on availability rows");
 okElig(R.eligibility(clean, "2026-11-01", P, PHILIP), "11/1 primary via his October PRIMARY row (spill-over is additive)");
 okElig(R.eligibility(clean, "2026-11-01", B, PHILIP), "9/22: backup is open outside his weeks regardless of the row (row scoping is shown on Sarkar's window in fidelity-02)");
-const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-17", "primary"), row(BURCHETT, "unavailable", "2027-01-23", "backup")]);   // Tue 11/17 is on Acton's November backup list (T); Sat 1/23 (1/9 is Burchett's vacation since 9/22 evening)
+const maskCtx = withRows([row(ACTON, "unavailable", "2026-11-17", "primary"), row(BURCHETT, "unavailable", "2027-01-23", "backup")]);   // Tue 11/17 is on Acton's November backup list (T); Sat 1/23 (1/9 was Burchett's vacation from 9/22 evening until 10/10)
 blocked(R.eligibility(maskCtx, "2026-11-17", P, ACTON), "unavailable-row");
 okElig(R.eligibility(maskCtx, "2026-11-17", B, ACTON), "a primary-only unavailable row leaves backup open");
 blocked(R.eligibility(maskCtx, "2027-01-23", B, BURCHETT), "unavailable-row");
@@ -1395,7 +1400,7 @@ eq(penOf("block", BURCHETT, BURCHETT, BURCHETT), null, "Burchett cannot block: m
 eq(penOf("split", BURCHETT, ACTON, BURCHETT), 0, "the designed split pair");
 // Prompt 23 A FLIP (9/30): this pin read penOf("split", ACTON, BURCHETT, ACTON) = 3 on 1/22-24 - Acton's recurring-avoid on
 // Sunday 1/24 (before the 4th Monday). From January 2027 he avoids only the Sunday before the 2nd Monday, so 1/24 is free
-// and the same mirror-split cost is pinned on 2/5-7 (Sunday 2/7 precedes the 2nd Monday 2/8; Burchett is away 1/9).
+// and the same mirror-split cost is pinned on 2/5-7 (Sunday 2/7 precedes the 2nd Monday 2/8; Burchett was away 1/9 until 10/10).
 eq(penOf("split", ACTON, BURCHETT, ACTON), 0, "Prompt 23 A: Sunday 1/24 is no longer avoided - the mirror split on 1/22-24 is free");
 eq(R.weekendUnitPatterns(cleanPre23, "2027-02-05").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 3, "the mirror split costs Acton's recurring-avoid on Sunday 2/7 (before the 2nd Monday 2/8)");
 eq(R.weekendUnitPatterns(clean, "2027-01-29").find(q => q.kind === "split" && q.members.fri === ACTON && q.members.sat === BURCHETT).penalty, 0, "on a weekend without that Sunday (1/31) the mirror split is free");

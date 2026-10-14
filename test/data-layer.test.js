@@ -6811,9 +6811,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(det.includes(">Re-check</button>") && det.includes(">Try enable anyway</button>") && det.includes("Diagnostic:</strong> {biometricReason}") && det.includes("Add to Home Screen"), "the diagnostic box, Re-check and Try enable anyway sit behind Details");
       assert.ok(!/color:(dk\?)?"#/.test(bio), "the moved block reads tokens (T.muted / T.text)");
       assert.ok(SD.includes(": <button data-testid=\"biometric-enable\" onClick={handleBiometricEnroll} style={{...css.btn(true),padding:\"6px 14px\",fontSize:12}}>Enable Face ID / Touch ID</button>}") && !SD.includes(">Enable</button>"), "the available branch keeps Enable / Disable - Enable named for what it turns on (push UX 1(a): never a bare Enable beside phone notifications)");
-      assert.ok(SD.includes("Shown while the app is open. {notifPermissionText(browserNotifPermission)}</p>") && !SD.includes("Permission: <span style={{fontFamily:mono}}>{browserNotifPermission}</span>"), "plain words, not the raw Notification.permission token");
+      // pin moved deliberately 10/11: push UX follow-up - the line also reads the push card's pushInfo (iOS / installed app / Android)
+      assert.ok(SD.includes("Shown while the app is open. {notifPermissionText(browserNotifPermission, pushInfo)}</p>") && !SD.includes("Permission: <span style={{fontFamily:mono}}>{browserNotifPermission}</span>"), "plain words, not the raw Notification.permission token");
+      // push UX follow-up (10/11): Blocked in an installed app points at the same place as the push card's Blocked line, never
+      // at browser site settings it does not have; a browser tab, a computer app and an unknown env keep the site-settings words
+      assert.strictEqual(H.notifPermissionText("denied", { ios: true, standalone: true, device: "iPhone" }), "Blocked on this iPhone - allow them in Settings > Notifications > Silvis Call to get pop-ups.");
+      assert.strictEqual(H.notifPermissionText("denied", { ios: true, standalone: true, device: "iPad" }), "Blocked on this iPad - allow them in Settings > Notifications > Silvis Call to get pop-ups.");
+      assert.strictEqual(H.notifPermissionText("denied", { standalone: true, device: "Android" }), "Blocked on this phone - allow them in your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications to get pop-ups.");
+      const siteWords = "Blocked in this browser - allow them in the browser's site settings to get pop-ups.";
+      [null, undefined, {}, { standalone: false, device: "Android" }, { standalone: true, device: "Chrome on Windows" }].forEach(e => assert.strictEqual(H.notifPermissionText("denied", e), siteWords, "the site-settings words for " + JSON.stringify(e)));
+      assert.ok(H.notifPermissionText("denied", { standalone: true, device: "Android" }).includes("Settings > Apps > " + JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8")).short_name + " (or Chrome"), "the installed app's entry is the manifest's short_name, as in the push card's line");
       assert.strictEqual(H.notifPermissionText("granted"), "Allowed on this device.");
-      assert.ok(/^Blocked/.test(H.notifPermissionText("denied")) && /Allow notifications/.test(H.notifPermissionText("default")) && /can't show pop-ups/.test(H.notifPermissionText("unsupported")) && /can't show pop-ups/.test(H.notifPermissionText(undefined)));
+      // push UX (b) (10/11): the Pop-ups box's button reads "Allow pop-ups" (it was confusable with the push box's Enable)
+      assert.ok(/^Blocked/.test(H.notifPermissionText("denied")) && /tap Allow pop-ups\.$/.test(H.notifPermissionText("default")) && /can't show pop-ups/.test(H.notifPermissionText("unsupported")) && /can't show pop-ups/.test(H.notifPermissionText(undefined)));
+      assert.ok(SD.includes(">Allow pop-ups</button>") && SD.includes(">Show a test pop-up</button>") && !SD.includes(">Allow notifications</button>") && !SD.includes(">Send test notification</button>"), "the Pop-ups box's buttons say what they do");
       ["granted", "denied", "default", "unsupported", undefined].forEach(p => { const t = H.notifPermissionText(p); assert.ok(!/notification settings/i.test(t) && !/^(granted|denied|default|unsupported)$/.test(t), "never the raw token, never the smoke's 'Notification settings' title: " + t); });
     });
     check("SD5: role fixes - the calendar-sync card renders only when a URL block would (roster link, a follow, scheduler or viewer: never the unlinked coordinator's empty card); the Email box gives an unlinked coordinator / viewer ONE line (the sign-in-address sentence is the linked surgeon's only)", () => {
@@ -7293,12 +7304,25 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(/could not show/i.test(H.notifTestMessage(false, "granted")) && /Home Screen/.test(H.notifTestMessage(false, "granted")), H.notifTestMessage(false, "granted"));
         assert.ok(!/sent/i.test(H.notifTestMessage(false, "granted")));
       });
-      check("B9d pins: sendTestNotification reads the boolean and shows notifTestMessage(shown, browserNotifPermission); the unconditional 'Browser notification sent.' is gone; the e-mail line says the pop-up state truthfully", () => {
-        const st = B9slice("  const sendTestNotification = useCallback(async () => {", "  }, [sendBrowserNotif, sendEmailNotif, mySurgeon");
+      // pin moved deliberately 10/11: push UX review fix - "Show a test pop-up" no longer sends a linked surgeon a test e-mail
+      // behind the button's back; the e-mail has its own button in the Email box (sendTestEmail + helpers.emailTestMessage).
+      check("B9d pins: sendTestNotification reads the boolean and shows notifTestMessage(shown, browserNotifPermission) and sends NO e-mail; the unconditional 'Browser notification sent.' is gone", () => {
+        const st = B9slice("  const sendTestNotification = useCallback(async () => {", "  }, [sendBrowserNotif, browserNotifPermission]);");
         assert.ok(st.includes("const shown = sendBrowserNotif("), "reads the answer");
         assert.ok(st.includes("notifTestMessage(shown, browserNotifPermission)"), "the helper picks the line");
         assert.strictEqual(B9count('setNotifTestSent("Browser notification sent.")'), 0, "no unconditional sent line");
-        assert.ok(st.includes('(shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent'), "the e-mail line carries the pop-up truth: " + st);
+        assert.ok(!/sendEmailNotif|email test sent/i.test(st), "the pop-up test sends no e-mail: " + st);
+      });
+      check("push UX review fix (10/11): the Email box's 'Send a test e-mail' - a linked surgeon only, the deployed function's answer read by emailTestMessage; 'sent' only for ok + a delivery", () => {
+        const se = B9slice("  const sendTestEmail = useCallback(async () => {", "  }, [sendEmailNotif, mySurgeon]);");
+        assert.ok(se.includes("if (!mySurgeon) return;") && se.includes('sendEmailNotif("test", { message: "This is a test email from Silvis Call Schedule." }, [mySurgeon])') && se.includes("setEmailTestState(emailTestMessage(r))"), se);
+        assert.strictEqual(B9count('{mySurgeon && <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>\n                  <button data-testid="email-test" onClick={sendTestEmail}'), 1, "the button sits in the Email box for a linked surgeon only");
+        assert.strictEqual(H.emailTestMessage({ ok: true, sent: 1 }), "Test e-mail sent to your sign-in address.");
+        for (const r of [{ ok: true, sent: 0 }, { ok: false, notEnabled: true, status: 404 }, { ok: false, status: 0 }, { ok: false, status: 500 }, null, undefined])
+          assert.ok(!/sent to your/i.test(H.emailTestMessage(r)), "no 'sent' for " + JSON.stringify(r) + ": " + H.emailTestMessage(r));
+        assert.ok(/HTTP 500/.test(H.emailTestMessage({ ok: false, status: 500 })) && /not set up/.test(H.emailTestMessage({ ok: false, notEnabled: true })) && /connection/.test(H.emailTestMessage({ ok: false, status: 0 })));
+        assert.strictEqual(H.emailTestMessage({ ok: false, status: 200, sent: 0, failed: 1 }), "The server could not deliver the test e-mail.", "re-check 10/11: a 200 that reports a failed delivery reads plainly, never 'HTTP 200'");
+        assert.ok(se.includes("clearTimeout(emailTestTimerRef.current);") && se.includes("emailTestTimerRef.current = setTimeout("), "re-check 10/11: a new tap cancels the old clear timer");
       });
     })();
 
@@ -9827,7 +9851,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(pt.includes("const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });"), "the mode");
       assert.ok(pt.includes('const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current("poll");\n      await refreshNotifs();'), "the hidden head: ensureFresh / re-send, then notifications");
       assert.ok(src.includes("const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };"), "the catch-up reads document.hidden (the smoke's keepalive dispatches override hidden only)");
-      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 5, "the keepalive flush, A3's ensureFresh, the version check, the shift clock and the poll's");
+      // pin moved deliberately 10/12: push UX follow-up - a sixth, the Pop-ups / push-card permission re-read (push.test.js permRefreshCheck)
+      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 6, "the keepalive flush, A3's ensureFresh, the version check, the shift clock, the poll's and the push UX permission re-read");
+      assert.strictEqual(count('document.addEventListener("visibilitychange", onVisible);\n    return () => document.removeEventListener("visibilitychange", onVisible);\n  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);'), 1, "the sixth is the push UX permission re-read, removed on cleanup");
       const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
       assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
       assert.ok(!/loadEastTables\(true\)/.test(ra) && ra.includes("refreshEastTables()"), "the poll's East read goes through the 10-minute cadence");
@@ -10329,6 +10355,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       "Holidays: No Christmas primary (standing East call).",
     ];
     // Per seed surgeon, verbatim.
+    // pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 (withdrawn 10/10) - s2's seed vacations 5 -> 3.
     const SEED_LINES = {
       s1: P23_S1_LINES.slice(0, 5).concat(["Holidays: Never covers Christmas (primary or backup); the standing East call also rules out Christmas primary."]),
       s2: [
@@ -10338,7 +10365,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
         // pin moved deliberately 10/11: Prompt 32 Burchett { primary: 7 } (was "cap 8 primary days a month, 7 preferred")
         "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 7 primary days a month; equal share.",
-        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 5 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
+        "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 3 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
       ],
       s3: [
         "Availability: Only the listed days in Oct 2026 (primary).",
@@ -12445,6 +12472,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(out.now, [], "this tree's token table passes");
       const cm = fs.readFileSync(path.join(ROOT, "test", "ui", "contrast.mjs"), "utf8");
       assert.ok(cm.includes("for (const r of rows) r.ok = r.exact >= r.min;") && cm.includes("ok: contrastRatioExact(fg, bg) >= min });"), "both tables compare contrastRatioExact");
+    });
+    check("PD OPEN (10/4): the offer painter's \"OPEN\" reads T.paintOpen - light = T.open (unchanged), dark #FF8A8A >= 4.5:1 unrounded on every day-row background it can sit on (contrast.mjs measures the five pairs per theme; T.open's dark #F06060 fails the drafted 4.12 and range-start 3.62 rows)", () => {
+      assert.strictEqual(L.paintOpen, L.open, "light: the painter's OPEN stays T.open (the look is unchanged)");
+      assert.strictEqual(D.paintOpen, "#FF8A8A", "dark: the painter's own red");
+      assert.ok(offer.includes("const openRed = T.paintOpen;") && cntP(offer, "openRed") === 3, "openRed = T.paintOpen, read by the two holder spans only");
+      assert.ok(offer.includes('<span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>') && offer.includes('<span>B <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span></span>'), "both holder spans paint OPEN with openRed");
+      assert.ok(offer.includes("const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;"), "the five backgrounds a day row can take (the pairs below)");
+      assert.ok(!/"OPEN"/.test(vac), "the vacation painter shows no OPEN");
+      const { pathToFileURL } = require("url");
+      const cmUrl = pathToFileURL(path.join(ROOT, "test", "ui", "contrast.mjs")).href;
+      const script = `import { createRequire } from "node:module"; import { contrastTable } from ${JSON.stringify(cmUrl)};
+        const m = createRequire(${JSON.stringify(cmUrl)})(${JSON.stringify(path.join(ROOT, "app-styles.js"))});
+        const old = { ...m, THEME: { ...m.THEME, dark: { ...m.THEME.dark, paintOpen: m.THEME.dark.open } } };
+        const pick = (rows) => rows.filter(r => /^painter OPEN red /.test(r.pair)).map(r => ({ theme: r.theme, pair: r.pair, bg: r.bg, exact: r.exact, ok: r.ok }));
+        console.log(JSON.stringify({ now: pick(contrastTable(m)), old: pick(contrastTable(old)).filter(r => !r.ok).map(r => [r.theme, r.pair, Math.round(r.exact * 100) / 100]) }));`;
+      const r = require("child_process").spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", cwd: ROOT, maxBuffer: 16 * 1024 * 1024 });
+      assert.strictEqual(r.status, 0, "contrast probe crashed: " + String(r.stderr || "").slice(0, 400));
+      const out = JSON.parse(String(r.stdout || "").trim().split("\n").pop());
+      const PRL = STY.PAINT_ROWS.light, PRD = STY.PAINT_ROWS.dark;
+      const want = (theme, T, PR) => [["painter OPEN red on a free row (card)", T.surface], ["painter OPEN red on the weekend tint", T.weekend], ["painter OPEN red on the pending row", PR.pending], ["painter OPEN red on the draft row", PR.draft], ["painter OPEN red on the blocked row (its tint)", PR.blocked]].map(([pair, bg]) => [theme, pair, bg]);
+      assert.deepStrictEqual(out.now.map(x => [x.theme, x.pair, x.bg]), want("light", L, PRL).concat(want("dark", D, PRD)), "contrast.mjs measures OPEN on every row background, both themes");
+      assert.deepStrictEqual(out.now.filter(x => !(x.ok && x.exact >= 4.5)).map(x => x.theme + " " + x.pair + " " + x.exact), [], "every pair >= 4.5:1 unrounded");
+      assert.deepStrictEqual(out.old, [["dark", "painter OPEN red on the pending row", 3.62], ["dark", "painter OPEN red on the draft row", 4.12]], "T.open's dark red would fail exactly the range-start and drafted rows (the pairs catch a regression)");
     });
     check("PD A: the No primary legend's ending names the read-only range, no pronoun (both variants)", () => {
       assert.strictEqual(cntP(offer, 'A \\"No primary (set by the scheduler)\\" range only the scheduler can change."'), 2);

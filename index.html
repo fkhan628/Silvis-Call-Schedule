@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-FGBN3xMpaTMPxCRwl1V77FXqbSJK4yUs7LXiqFW1CSM=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-q5ciUW9FUBVOBq42o/EBfh9uJxagCEDI5eHSwnTjLzM=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ffUYFUT+iMwEvsY/zH87F0EIAp5PQmrQ+vQ2K6yD0aI=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-2IdCoSgOo8nPpE5lxHwP5/sngeS9AO5fvd+vVZl4vzc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -182,7 +182,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.10a";
+    var APP_VERSION = "2026.10.13a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -6230,14 +6230,20 @@ function CallSchedule() {
   const sendTestNotification = useCallback(async () => {
     const shown = sendBrowserNotif("Silvis Call Schedule", "This is a test notification. Browser notifications are working.", "silvis-test", true);
     setNotifTestSent(notifTestMessage(shown, browserNotifPermission));
-    if (mySurgeon) {
-      await sendEmailNotif("test", {
-        message: "This is a test email from Silvis Call Schedule."
-      }, [mySurgeon]);
-      setNotifTestSent((shown ? "Browser pop-up shown" : "No browser pop-up") + " + email test sent (email requires the deployed function).");
-    }
     setTimeout(() => setNotifTestSent(""), 6000);
-  }, [sendBrowserNotif, sendEmailNotif, mySurgeon, browserNotifPermission]);
+  }, [sendBrowserNotif, browserNotifPermission]);
+  const [emailTestState, setEmailTestState] = useState("");
+  const emailTestTimerRef = useRef(null);
+  const sendTestEmail = useCallback(async () => {
+    if (!mySurgeon) return;
+    clearTimeout(emailTestTimerRef.current);
+    setEmailTestState("Sending...");
+    const r = await sendEmailNotif("test", {
+      message: "This is a test email from Silvis Call Schedule."
+    }, [mySurgeon]);
+    setEmailTestState(emailTestMessage(r));
+    emailTestTimerRef.current = setTimeout(() => setEmailTestState(""), 8000);
+  }, [sendEmailNotif, mySurgeon]);
   const addOfficeContact = async () => {
     const name = (newOfficeName || "").trim();
     const email = (newOfficeEmail || "").trim();
@@ -6971,6 +6977,7 @@ function CallSchedule() {
     }
     const s = await pushDevice.state(uid);
     setPushInfo(s);
+    if (s && typeof s.permission === "string") setBrowserNotifPermission(s.permission);
     if (s.state === "on") setPushNeedsTap(false);
     return s;
   }, []);
@@ -7019,6 +7026,18 @@ function CallSchedule() {
       });
     }
   }, [pushCardOpen, pushUid, refreshPushState]);
+  useEffect(() => {
+    if (isPublicMode) return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        setBrowserNotifPermission(typeof Notification !== "undefined" && Notification.permission || "unsupported");
+      } catch (e) {}
+      if (pushCardOpen) refreshPushState(pushUid);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);
   const pushLinkReady = !!pushUid && !!userProfile && String(userProfile.id) === pushUid && isScheduler === (userProfile.role === "scheduler" || userProfile.role === "admin");
   useEffect(() => {
     if (isPublicMode || !pushLinkReady || pushLinkDoneRef.current) return;
@@ -13807,8 +13826,10 @@ function CallSchedule() {
       label: info.label,
       ios: info.ios,
       device: info.device,
+      standalone: info.standalone,
       needsTap: pushNeedsTap
     }) : null;
+    const parts = pushCardParts(st);
     const pbtn = (testid, name, label, onClick, primary) => React.createElement("button", {
       "data-testid": testid,
       onClick: onClick,
@@ -13829,7 +13850,7 @@ function CallSchedule() {
         gap: 8,
         cursor: editable ? "pointer" : "default",
         fontSize: 12,
-        color: T.text,
+        color: parts.prefsBlocked ? dkSubtext : T.text,
         opacity: editable ? 1 : 0.6
       }
     }, React.createElement("input", {
@@ -13872,7 +13893,7 @@ function CallSchedule() {
         fontWeight: 600,
         color: st === "on" ? T.success : T.open
       }
-    }, words.badge)), React.createElement("p", {
+    }, words.badge)), parts.intro && React.createElement("p", {
       "data-testid": "push-line",
       style: {
         fontSize: 11,
@@ -13896,7 +13917,7 @@ function CallSchedule() {
         flexWrap: "wrap",
         alignItems: "center"
       }
-    }, (st === "off" || st === "ios-home-screen") && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true), st === "on" && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false), pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false), pbtn("push-reset", "reset", "Reset subscription", pushReset, false), pbtn("push-test", "test", "Send test", pushSendTest, false)), pushMsg && React.createElement("div", {
+    }, parts.enable && pbtn("push-enable", "enable", "Enable phone notifications", pushEnable, true), parts.disable && pbtn("push-disable", "disable", "Turn off", pushTurnOff, false), parts.diagnose && pbtn("push-diagnose", "diagnose", "Diagnose", pushDiagnose, false), parts.reset && pbtn("push-reset", "reset", "Reset subscription", pushReset, false), parts.test && pbtn("push-test", "test", "Send test", pushSendTest, false)), pushMsg && React.createElement("div", {
       "data-testid": "push-msg",
       role: "status",
       style: {
@@ -13937,7 +13958,15 @@ function CallSchedule() {
         color: dkSubtext,
         lineHeight: 1.5
       }
-    }, pushCols === "unavailable" ? "Phone switches are available after the next update." : "Couldn't check the phone switches - reload the app to try again.") : mySurgeon || isFollowing ? React.createElement(React.Fragment, null, React.createElement("div", {
+    }, pushCols === "unavailable" ? "Phone switches are available after the next update." : "Couldn't check the phone switches - reload the app to try again.") : mySurgeon || isFollowing ? React.createElement(React.Fragment, null, parts.prefsBlocked && React.createElement("p", {
+      "data-testid": "push-prefs-blocked",
+      style: {
+        fontSize: 11,
+        color: dkSubtext,
+        margin: "0 0 6px",
+        lineHeight: 1.5
+      }
+    }, "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on."), React.createElement("div", {
       "data-testid": "push-prefs",
       "data-owner": mySurgeon ? "person" : "follower",
       style: {
@@ -13983,7 +14012,31 @@ function CallSchedule() {
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time)."), notifPrefsLoadFailed && mySurgeon && React.createElement("div", {
+  }, "E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time)."), mySurgeon && React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginBottom: 8
+    }
+  }, React.createElement("button", {
+    "data-testid": "email-test",
+    onClick: sendTestEmail,
+    disabled: emailTestState === "Sending...",
+    style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+      padding: "5px 12px",
+      fontSize: 11
+    })
+  }, "Send a test e-mail"), emailTestState && React.createElement("span", {
+    "data-testid": "email-test-state",
+    role: "status",
+    style: {
+      fontSize: 11,
+      color: /^Test e-mail sent/.test(emailTestState) ? T.success : dkSubtext,
+      fontWeight: 600
+    }
+  }, emailTestState)), notifPrefsLoadFailed && mySurgeon && React.createElement("div", {
     "data-testid": "notif-prefs-load-failed",
     style: _objectSpread(_objectSpread({}, css.errBox), {}, {
       marginBottom: 8
@@ -14169,7 +14222,7 @@ function CallSchedule() {
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "Shown while the app is open. ", notifPermissionText(browserNotifPermission)), React.createElement("div", {
+  }, "Shown while the app is open. ", notifPermissionText(browserNotifPermission, pushInfo)), React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -14177,18 +14230,20 @@ function CallSchedule() {
       alignItems: "center"
     }
   }, browserNotifPermission === "default" && React.createElement("button", {
+    "data-testid": "popup-allow",
     onClick: requestBrowserNotifPermission,
     style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
       padding: "5px 12px",
       fontSize: 11
     })
-  }, "Allow notifications"), React.createElement("button", {
+  }, "Allow pop-ups"), React.createElement("button", {
+    "data-testid": "popup-test",
     onClick: sendTestNotification,
     style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
       padding: "5px 12px",
       fontSize: 11
     })
-  }, "Send test notification"), notifTestSent && React.createElement("span", {
+  }, "Show a test pop-up"), notifTestSent && React.createElement("span", {
     style: {
       fontSize: 11,
       color: T.success,
@@ -16046,7 +16101,7 @@ function OfferPainterSheet({
     text = T.text,
     muted = T.muted;
   const PR = PAINT_ROWS[dk ? "dark" : "light"];
-  const openRed = T.open;
+  const openRed = T.paintOpen;
   const pillFor = b => {
     const c = OFFER_BRUSH[b] || OFFER_BRUSH.clear;
     return {

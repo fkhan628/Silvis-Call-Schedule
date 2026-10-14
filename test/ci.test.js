@@ -9,7 +9,9 @@
 // file keeps package.json's chain and build.yml's steps aligned (the deploy
 // keeps its own gate), pins the filter to exactly the runtime inputs (every
 // file the page loads and the build reads is in it; every tracked file outside
-// it is a known non-runtime path), pins test.yml (section 2b), pins the
+// it is a known non-runtime path), pins test.yml (section 2b), pins the rest
+// of build.yml's `on:` block (section 2c: push to main + the paths list, the
+// manual run, no other trigger), pins the
 // offline switch on the exports step, pins the overridable wall-clock gates
 // (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js, test/painting.test.js),
 // and pins the docs statements that the 2026-09-23 whole-branch review found
@@ -279,6 +281,148 @@ const tTimeout = Number((tymlCode.match(/^ {4}timeout-minutes:\s*(\d+)\s*$/m) ||
 ok(tTimeout >= 10 && tTimeout <= 60, "test.yml's job must set `timeout-minutes:` between 10 and 60 (found " + tTimeout + ")");
 ok(/uses: actions\/checkout@\S+[^\n]*\n\s+with:[ \t]*\n\s+persist-credentials: false[ \t]*$/m.test(tymlCode), "test.yml's checkout must set `with: persist-credentials: false` (nothing here pushes)");
 flush("test.yml");
+
+// ---- 2c. build.yml's whole `on:` block (10/4) ----
+// Section 2 pins the paths list; this pins the rest of the trigger exactly. `push:` holds `branches: [main]` and the
+// paths list and nothing else: no paths-ignore (GitHub refuses it beside `paths:`, and in place of it the same list
+// would turn the deploy filter inside out), no branches-ignore / tags / tags-ignore. `workflow_dispatch:` is there (the
+// manual recovery the commit step's ::error:: names) with no inputs. There is no other trigger: a pull_request,
+// schedule, release or workflow_run event would run the job, with its contents: write bump, build and commit-back,
+// on something other than a push to main. A small block-YAML
+// reader does the reading. It skips blank and comment lines, strips trailing comments and reads a flow list
+// `[a, b]` as well as a block list. It fails closed on any shape it cannot read: the string or flow form of `on`, a
+// line it cannot place. The reader is proved on mutated copies of build.yml in memory; the file itself is not touched.
+function yamlStripComment(s) {
+  let q = null, prev = null; // prev: the last non-blank character outside a quoted scalar
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === q) q = null; continue; }
+    if ((c === '"' || c === "'") && (prev === null || ":-[{,".includes(prev))) { q = c; continue; } // a quote opens only a scalar
+    if (c === "#" && (i === 0 || /\s/.test(s[i - 1]))) return s.slice(0, i).replace(/\s+$/, "");
+    if (!/\s/.test(c)) prev = c;
+  }
+  return s.replace(/\s+$/, "");
+}
+const yamlLinesOf = (text) => String(text).replace(/\r\n/g, "\n").split("\n").map(raw => {
+  const s = yamlStripComment(raw);
+  return { ind: (s.match(/^ */) || [""])[0].length, text: s.trim(), tab: /^ *\t/.test(s) };
+}).filter(l => l.text);
+// The lines at indentation `ind` from `from` on, each with its deeper lines as children: { key (null for `- item`), value
+// (the inline rest, "" when none), children }. Stops at the first shallower line; a line deeper than its block's own
+// indentation without a parent line, a tab indent or a line that is neither `key:` nor `- item` is an error.
+function yamlBlock(lines, from, ind) {
+  const nodes = [];
+  let i = from;
+  while (i < lines.length && lines[i].ind >= ind) {
+    const l = lines[i];
+    if (l.tab) return { nodes, next: i, error: "a tab-indented line: `" + l.text + "`" };
+    if (l.ind > ind) return { nodes, next: i, error: "a line indented past its block: `" + l.text + "`" };
+    let key = null, value = "";
+    const seq = l.text.match(/^-(?:\s+(.*))?$/);
+    if (seq) value = seq[1] || "";
+    else {
+      const m = l.text.match(/^("[^"]*"|'[^']*'|[^\s"'#\-[{][^:]*?)\s*:(?:\s+(.*))?$/);
+      if (!m) return { nodes, next: i, error: "neither `key:` nor `- item`: `" + l.text + "`" };
+      key = m[1].replace(/^(["'])(.*)\1$/, "$2"); value = m[2] || "";
+    }
+    i++;
+    let children = [];
+    if (i < lines.length && lines[i].ind > ind) {
+      const sub = yamlBlock(lines, i, lines[i].ind);
+      if (sub.error) return { nodes, next: sub.next, error: sub.error };
+      children = sub.nodes; i = sub.next;
+    }
+    nodes.push({ key, value, children });
+  }
+  return { nodes, next: i, error: null };
+}
+const yamlScalar = (s) => String(s).trim().replace(/^(["'])(.*)\1$/, "$2");
+// A node's list: the flow form `[a, "b"]` or `- a` items with no nesting; null for any other shape (a bare scalar too).
+function yamlScalarList(node) {
+  if (node.value) {
+    const m = node.value.match(/^\[(.*)\]$/);
+    if (!m || node.children.length) return null;
+    return m[1].trim() ? m[1].split(",").map(yamlScalar) : [];
+  }
+  if (!node.children.length || node.children.some(n => n.key !== null || n.children.length)) return null;
+  return node.children.map(n => yamlScalar(n.value));
+}
+// { problems: [...], paths: the push paths entries as read here (null when unread) } for a workflow text.
+function buildOnRead(y) {
+  const problems = [];
+  const lines = yamlLinesOf(y);
+  // review 10/11: any tab-led line fails closed first - a tab at column 0 reads as indent 0, so the block reader alone ended
+  // there silently (GitHub's parser refuses tab indentation, i.e. the workflow would stop running while this passed)
+  const tabLine = lines.find(l => l.tab || /^\t/.test(l.text));
+  if (tabLine) return { problems: ["build.yml has a tab-indented line: `" + tabLine.text + "`"], paths: null };
+  const onTops = lines.filter(l => l.ind === 0 && /^["']?on["']?\s*:/i.test(l.text));
+  if (onTops.length !== 1) return { problems: ["build.yml must have exactly ONE top-level `on:` key, found " + onTops.length], paths: null };
+  if (onTops[0].text !== "on:") return { problems: ["build.yml's trigger must be the block mapping `on:` (no string / flow / inline form), found `" + onTops[0].text + "`"], paths: null };
+  const at = lines.indexOf(onTops[0]);
+  if (!(at + 1 < lines.length && lines[at + 1].ind > 0)) return { problems: ["build.yml's `on:` block is empty"], paths: null };
+  const blk = yamlBlock(lines, at + 1, lines[at + 1].ind);
+  if (blk.error) return { problems: ["build.yml's `on:` block does not read as a block mapping: " + blk.error], paths: null };
+  if (blk.next < lines.length && lines[blk.next].ind !== 0) return { problems: ["build.yml's `on:` block ends on a line that is not a top-level key: `" + lines[blk.next].text + "`"], paths: null };
+  const keys = blk.nodes.map(n => n.key);
+  if (JSON.stringify(keys.slice().sort()) !== JSON.stringify(["push", "workflow_dispatch"])) problems.push("build.yml must trigger on exactly `push` and `workflow_dispatch`, each once (no pull_request, schedule, release, workflow_run or other event), found " + JSON.stringify(keys));
+  let paths = null;
+  const push = blk.nodes.find(n => n.key === "push");
+  if (push) {
+    if (push.value) problems.push("build.yml's `push:` must be a block mapping, found `push: " + push.value + "`");
+    const pk = push.children.map(n => n.key);
+    if (JSON.stringify(pk.slice().sort()) !== JSON.stringify(["branches", "paths"])) problems.push("build.yml's `push:` must hold exactly `branches:` and `paths:`, each once (no paths-ignore, branches-ignore, tags or tags-ignore), found " + JSON.stringify(pk));
+    const br = push.children.find(n => n.key === "branches");
+    const brList = br ? yamlScalarList(br) : null;
+    if (JSON.stringify(brList) !== JSON.stringify(["main"])) problems.push("build.yml's `push: branches:` must be exactly [main], found " + (br ? (br.value ? "`" + br.value + "`" : JSON.stringify(brList)) : "none"));
+    const pa = push.children.find(n => n.key === "paths");
+    paths = pa ? yamlScalarList(pa) : null;
+    if (!pa || pa.value || !paths || !paths.length) problems.push("build.yml's `push: paths:` must be a block list of entries (section 2 pins its content)");
+  }
+  const wd = blk.nodes.find(n => n.key === "workflow_dispatch");
+  if (wd && ((wd.value !== "{}" && wd.value !== "") || wd.children.length)) problems.push("build.yml's `workflow_dispatch:` must be `workflow_dispatch: {}` (the manual run, no inputs), found `workflow_dispatch: " + wd.value + "`" + (wd.children.length ? " with " + wd.children.length + " nested line(s)" : ""));
+  return { problems, paths };
+}
+const onRead = buildOnRead(yml);
+ok(onRead.problems.length === 0, "build.yml's `on:` block: " + onRead.problems.join(" | "));
+ok(JSON.stringify(onRead.paths) === JSON.stringify(filter), "the `on:` reader must see the same paths list as section 2's parse (it read " + JSON.stringify(onRead.paths) + ")");
+// The reader on mutated copies of build.yml (in memory). Every mutation must change the text: a replace that missed its
+// anchor would test the unchanged file and pass vacuously.
+const BR_LINE = "\n    branches: [main]\n", WD_LINE = "\n  workflow_dispatch: {}";
+ok(yml.includes(BR_LINE) && yml.includes(WD_LINE) && yml.includes("\non:\n  push:\n"), "build.yml's `on:` block no longer has the anchors the mutation proofs below edit (`on:` / `  push:` / `    branches: [main]` / `  workflow_dispatch: {}`) - update the proofs with the block");
+const mutate = (label, from, to) => { const m = yml.replace(from, to); ok(m !== yml, "the mutation proof `" + label + "` did not change build.yml (its anchor is gone)"); return m; };
+const onMustPass = [
+  ["branches quoted", mutate("branches quoted", BR_LINE, "\n    branches: [\"main\"]\n")],
+  ["branches as a block list", mutate("branches as a block list", BR_LINE, "\n    branches:\n      - main\n")],
+  ["a comment naming a trigger", mutate("a comment naming a trigger", WD_LINE, "\n  # pull_request: is deliberately not a trigger\n  workflow_dispatch: {}")],
+  ["workflow_dispatch as null", mutate("workflow_dispatch as null", WD_LINE, "\n  workflow_dispatch:")],
+];
+onMustPass.forEach(([label, y]) => { const r = buildOnRead(y); ok(r.problems.length === 0, "the `on:` reader must accept the equivalent form `" + label + "`, got " + JSON.stringify(r.problems)); });
+const onMustFail = [
+  ["a second branch", mutate("a second branch", BR_LINE, "\n    branches: [main, dev]\n"), /`push: branches:` must be exactly \[main\], found `\[main, dev\]`/],
+  ["a branch glob", mutate("a branch glob", BR_LINE, "\n    branches: [\"**\"]\n"), /`push: branches:` must be exactly \[main\], found `\["\*\*"\]`/],
+  ["a second branch in block form", mutate("a second branch in block form", BR_LINE, "\n    branches:\n      - main\n      - dev\n"), /`push: branches:` must be exactly \[main\], found \["main","dev"\]/],
+  ["branches as a bare scalar", mutate("branches as a bare scalar", BR_LINE, "\n    branches: main\n"), /`push: branches:` must be exactly \[main\], found `main`/],
+  ["no branches", mutate("no branches", BR_LINE, "\n"), /must hold exactly `branches:` and `paths:`[^]*found \["paths"\]/],
+  ["paths-ignore beside paths", mutate("paths-ignore beside paths", BR_LINE, "\n    branches: [main]\n    paths-ignore:\n      - \"docs/**\"\n"), /must hold exactly `branches:` and `paths:`[^]*"paths-ignore"/],
+  ["paths-ignore instead of paths", mutate("paths-ignore instead of paths", /\n {4}paths:\n/, "\n    paths-ignore:\n"), /must hold exactly `branches:` and `paths:`[^]*found \["branches","paths-ignore"\]/],
+  ["branches-ignore", mutate("branches-ignore", BR_LINE, "\n    branches: [main]\n    branches-ignore: [dev]\n"), /must hold exactly `branches:` and `paths:`[^]*"branches-ignore"/],
+  ["tags", mutate("tags", BR_LINE, "\n    branches: [main]\n    tags:\n      - \"v*\"\n"), /must hold exactly `branches:` and `paths:`[^]*"tags"/],
+  ["a pull_request trigger", mutate("a pull_request trigger", WD_LINE, "\n  pull_request:\n    branches: [main]\n  workflow_dispatch: {}"), /exactly `push` and `workflow_dispatch`[^]*"pull_request"/],
+  ["a pull_request_target trigger", mutate("a pull_request_target trigger", WD_LINE, "\n  pull_request_target: {}\n  workflow_dispatch: {}"), /exactly `push` and `workflow_dispatch`[^]*"pull_request_target"/],
+  ["a schedule trigger", mutate("a schedule trigger", WD_LINE, "\n  schedule:\n    - cron: \"0 3 * * *\"\n  workflow_dispatch: {}"), /exactly `push` and `workflow_dispatch`[^]*"schedule"/],
+  ["a workflow_run trigger", mutate("a workflow_run trigger", WD_LINE, "\n  workflow_run:\n    workflows: [Tests]\n    types: [completed]\n  workflow_dispatch: {}"), /exactly `push` and `workflow_dispatch`[^]*"workflow_run"/],
+  ["no workflow_dispatch", mutate("no workflow_dispatch", WD_LINE, ""), /exactly `push` and `workflow_dispatch`[^]*found \["push"\]/],
+  ["workflow_dispatch with inputs", mutate("workflow_dispatch with inputs", WD_LINE, "\n  workflow_dispatch:\n    inputs:\n      force:\n        type: boolean"), /`workflow_dispatch: \{\}`/],
+  ["a second push key", mutate("a second push key", WD_LINE, "\n  workflow_dispatch: {}\n  push:\n    branches: [dev]"), /exactly `push` and `workflow_dispatch`, each once/],
+  ["the flow form of on", mutate("the flow form of on", "\non:\n", "\non: [push, workflow_dispatch]\nx_was_on:\n"), /block mapping `on:`/],
+  ["a second top-level on", yml + "\n\"on\":\n  pull_request: {}\n", /exactly ONE top-level `on:`/],
+  ["a line indented past its block", mutate("a line indented past its block", WD_LINE, "\n   release: {}\n  workflow_dispatch: {}"), /does not read as a block mapping/],
+  // review 10/11: a tab at column 0 counted as indent 0 and ended the block silently (GitHub refuses tab indents outright)
+  ["a tab-led line at column 0 after the block", mutate("a tab-led line at column 0 after the block", WD_LINE, "\n  workflow_dispatch: {}\n\tpull_request: {}"), /tab-indented line/],
+  ["a tab-led line at column 0 inside the block", mutate("a tab-led line at column 0 inside the block", WD_LINE, "\n\tpull_request: {}\n  workflow_dispatch: {}"), /tab-indented line/],
+];
+onMustFail.forEach(([label, y, want]) => { const r = buildOnRead(y); ok(r.problems.some(p => want.test(p)), "the `on:` reader must refuse `" + label + "` with a problem matching " + want + ", got " + JSON.stringify(r.problems)); });
+flush("build.yml on: block");
 
 // ---- 3. step environment pins --------------------------------------------
 // The exports suite's live ER-panel section needs network to Supabase; CI runs

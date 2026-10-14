@@ -216,8 +216,10 @@
 //     the save body + badge, Diagnose, Send test, the phone switches, the
 //     version-change reset keeps sw.js, the silent re-arm, the ?tab= deep
 //     link, the open-window message, Turn off, Reset, the columns absent,
-//     sign-out order, Blocked, ?public=1, iPhone Safari / Home Screen at
-//     390 px); a
+//     sign-out order, Blocked (no Send test, the switches editable with
+//     their note), ?public=1, iPhone Safari (one instruction, no push
+//     button) / Home Screen at 390 px, an installed Android app's Blocked
+//     line); a
 //     third page runs data management end to end with recorded writes: JSON
 //     export shape/counts = live anon data, malformed imports refused with no
 //     write, factory reset needs the typed RESET, records the snapshot BEFORE
@@ -578,8 +580,11 @@ const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status 
 // steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
 let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
 let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
-let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s - step 8c)
+let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s, or later while appSlowHold holds it - step 8c)
 let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
+// 10/4 (P29 8b/8c timing windows): step 8c's own condition for the "fail500slow" answer - () => Promise; the 500 is held until it
+// settles AND at least 1.5 s have passed (null: the 1.5 s alone)
+let appSlowHold = null;
 const appServed = [];   // { path, method, status, sub }
 const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
 let appColumnFixture = false; // the users fixture rows carry is_app (Setup > Users offers "app")
@@ -1527,11 +1532,13 @@ const appRoute = (route, req, url, method, json) => {
   }
   if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
   // ship review 10/2: the same 500 held 1.5 s (recorded on arrival) - the load's read is still out when a Realtime SUBSCRIBED
-  // refreshAll starts its own (step 8c)
+  // refreshAll starts its own (step 8c). 10/4: and held on until step 8c's appSlowHold settles (the SUBSCRIBED refreshAll was
+  // seen) - the 1.5 s alone was a race the join lost on a busy PC
   if (appDaysMode === "fail500slow") {
     appServed.push({ path: url.pathname, method, status: 500, sub, at: Date.now() });
     appForcedLines.push({ path: url.pathname, status: 500 });
-    return new Promise(r => setTimeout(r, 1500)).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
+    const hold = appSlowHold;
+    return Promise.all([new Promise(r => setTimeout(r, 1500)), hold ? hold() : null]).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
   }
   if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
   const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
@@ -2090,6 +2097,8 @@ try {
         lightTop: pos(light), refreshTop: pos(titleEl("Refresh app")), auditTop: pos(document.querySelector("[data-testid=card-settings_audit]")), restoreTop: pos(titleEl("Restore from snapshot")),
         plusMinus: Array.from(document.querySelectorAll("span")).filter(s => s.children.length === 0 && /^[+-]$/.test(s.textContent.trim()) && s.parentElement && /Office notifications|Notification settings|Restore from snapshot/i.test(s.parentElement.textContent)).length,
         permText: perm ? perm.textContent.trim() : null, permRaw: perm ? perm.getAttribute("data-permission") : null,
+        popupButtons: Array.from(document.querySelectorAll("[data-testid=popup-allow], [data-testid=popup-test]")).map(b => [b.getAttribute("data-testid"), b.textContent.trim()]),
+        oldPopupNames: Array.from(document.querySelectorAll("button")).map(b => b.textContent.trim()).filter(t => t === "Allow notifications" || t === "Send test notification"),
         bioLine: !!document.querySelector("[data-testid=biometric-unavailable]"), bioDetails: !!document.querySelector("[data-testid=biometric-details]") };
     });
     const groups = sd.heads.map(h => h.group).join(",");
@@ -2101,6 +2110,32 @@ try {
     if (sd.permText === null) fail("Settings declutter: the Pop-ups box has no [data-testid=notif-permission] line (Notification settings was expanded above)");
     else if (/\b(granted|denied|default|unsupported)\b/.test(sd.permText)) fail("Settings declutter: the Pop-ups box still prints the raw permission token: " + sd.permText);
     else ok(`Settings declutter: Pop-ups permission '${sd.permRaw}' reads '${sd.permText}'`);
+    // push UX (b) (10/11): the Pop-ups box's buttons say what they do (they were confusable with the push box's Enable / Send test)
+    const wantPopups = (sd.permRaw === "default" ? [["popup-allow", "Allow pop-ups"]] : []).concat([["popup-test", "Show a test pop-up"]]);
+    if (JSON.stringify(sd.popupButtons) !== JSON.stringify(wantPopups) || sd.oldPopupNames.length) fail("Settings declutter: the Pop-ups box's buttons " + JSON.stringify(sd.popupButtons) + " (want " + JSON.stringify(wantPopups) + "), old names on screen " + JSON.stringify(sd.oldPopupNames));
+    else ok(`Settings declutter: the Pop-ups box's buttons read ${wantPopups.map(x => "'" + x[1] + "'").join(" / ")} - never 'Allow notifications' / 'Send test notification'`);
+    // push UX review fix (10/11): "Show a test pop-up" sends NO e-mail; the Email box's "Send a test e-mail" (a linked surgeon
+    // only) sends exactly one { type: "test" } to his own id and shows a line
+    {
+      const mailsSince = (b) => writes.slice(b).filter(w => w.method === "POST" && w.path.startsWith("/functions/v1/send-notification")).map(w => { try { return JSON.parse(w.body || "{}"); } catch (e) { return {}; } });
+      const bP = writes.length;
+      await page.click("[data-testid=popup-test]");
+      await page.waitForTimeout(1200);
+      const popMails = mailsSince(bP);
+      if (popMails.length) fail("Show a test pop-up: it POSTed send-notification " + JSON.stringify(popMails) + " - the pop-up test must send no e-mail");
+      else ok("Show a test pop-up: no send-notification POST (the test e-mail has its own button)");
+      // re-check 10/11: the harness account (FAKE_PROFILE) is always linked to s1, so a missing button is a FAIL, not a skip
+      if (!(await page.$("[data-testid=email-test]"))) fail("Send a test e-mail: no [data-testid=email-test] button for the harness account linked to " + FAKE_PROFILE.person_id + " - it is a linked surgeon's button");
+      else {
+        const bE = writes.length;
+        await page.click("[data-testid=email-test]");
+        await waitFor(async () => !!(await page.$("[data-testid=email-test-state]")) && (await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim())) !== "Sending...", 10000, 200);
+        const eMails = mailsSince(bE), line = await page.$eval("[data-testid=email-test-state]", el => el.textContent.trim()).catch(() => "");
+        if (eMails.length !== 1 || eMails[0].type !== "test" || JSON.stringify(eMails[0].targetIds) !== JSON.stringify([FAKE_PROFILE.person_id])) fail("Send a test e-mail: want exactly one POST { type: 'test', targetIds: [own id] }, got " + JSON.stringify(eMails));
+        else if (!line || line === "Sending...") fail("Send a test e-mail: no result line after the POST (got " + JSON.stringify(line) + ")");
+        else ok(`Send a test e-mail: one POST { type: 'test', targetIds: [${eMails[0].targetIds[0]}] }, line '${line}'`);
+      }
+    }
     if (!sd.bioLine) console.log("     (Settings declutter: biometrics report available in this browser - the Account 'Details' disclosure is not exercised this run)");
     else if (sd.bioDetails) fail("Settings declutter: the biometric Details (Re-check / Try enable anyway) are open on entry - they belong behind Details");
     else {
@@ -12094,6 +12129,21 @@ try {
       try { await settleA2(); await a2.close(); } catch (e) {}
     } catch (e) { fail(`${P} 8 (absent): ` + errLine(e)); }
     appDaysMode = "ok";
+    // 10/4 (P29 8b/8c timing windows): the load's toast of steps 8b / 8c is waited for by its own sentence, ceiling 30 s - not the
+    // first toast up within 8 / 10 s, read at a fixed moment after. "Synced" shows once the MOUNT run has loaded; the toast comes
+    // when the sign-in RE-RUN's batch has settled (eleven reads, some passed through to the live project), which on a busy PC
+    // took longer than 8 s. The toast's text and the header's pill are taken in the same poll that saw the sentence (one
+    // showToast sets both), so a toast that later expires (8 s) cannot empty the reading. On the ceiling: what is there now.
+    const p29LoadToast = async (pg, want) => {
+      const seen = await pg.waitForFunction((w) => {
+        const t = document.querySelector("[data-testid=toast]");
+        if (!t || !t.textContent.includes(w)) return false;
+        const pill = document.querySelector("[data-testid=hdr-errors]");
+        return { toast: t.textContent.trim(), pill: pill ? pill.textContent.trim() : "" };
+      }, want, { timeout: 30000 }).then(h => h.jsonValue()).catch(() => null);
+      if (seen) return seen;
+      return { toast: await pg.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => ""), pill: await pg.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "") };
+    };
     // ---- 8b. The merge with main (10/2, Do first 4): the APP-day read of a signed-in load fails (500) - it is said in the load's
     //      ONE toast (and so on Recent errors), on the grid's legend and in the day summary, never as "no APP days"; ONE read for the
     //      sign-in (the reset effect's owed read was paid by the load's batch) ----
@@ -12109,20 +12159,23 @@ try {
         await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
         await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rp, "P29 viewer page (APP read 500)");
-        await rp.waitForSelector("[data-testid=toast]", { timeout: 8000 }).catch(() => {});
-        const toastTxt = await rp.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
-        const errPill = await rp.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
+        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const { toast: toastTxt, pill: errPill } = await p29LoadToast(rp, want);
+        // 10/4: the reads are counted once the page's reads have settled (no REST read out for 500 ms) - not at the toast's
+        // moment, where a read whose route callback had not run yet would be missed
+        await settleR();
         const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
         await showM(rp);
+        await rp.waitForSelector("[data-testid=legend-app-failed]", { timeout: 15000 }).catch(() => {}); // 10/4: on the element, not the moment after showM
         const legend = await rp.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         const gl = await gridApp(rp);
         await rp.click(`[data-day="${D10}"]`);
-        await rp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
-        await rp.waitForTimeout(200);
+        await rp.waitForSelector("[data-testid=day-editor]", { timeout: 20000 });
+        // 10/4: the summary line itself is waited for (ceiling 15 s) - it was read 200 ms after the editor showed
+        await rp.waitForSelector("[data-testid=editor-app-summary-failed]", { timeout: 15000 }).catch(() => {});
         const sum = await rp.$eval("[data-testid=editor-app-summary-failed]", el => el.textContent.trim()).catch(() => "");
         await rp.keyboard.press("Escape");
-        await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
-        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 10000 }).catch(() => {});
         if (!toastTxt.includes(want)) fail(`${P} 8b: the load's toast should say '${want}', got '${toastTxt}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8b: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8b: the sign-in should read the APP days ONCE (the load's batch pays the reset effect's owed read), got ${reads}`);
@@ -12138,36 +12191,58 @@ try {
     }
     // ---- 8c. Ship review 10/2: 8b with Realtime WORKING (production's case - 8b silences the socket). The re-run's channel answers
     //      SUBSCRIBED and its refreshAll starts a quiet APP read while the load's read is still out (the harness holds the 500 for
-    //      1.5 s). That quiet read used to overtake the load's read and drop its sentence: no toast, nothing on Recent errors, and a
-    //      second read. Now it joins the read out: ONE read, the sentence in the load's toast and on Recent errors ----
+    //      1.5 s at least, and - 10/4 - until that refreshAll was seen). That quiet read used to overtake the load's read and drop
+    //      its sentence: no toast, nothing on Recent errors, and a second read. Now it joins the read out: ONE read, the sentence in
+    //      the load's toast and on Recent errors ----
     {
       appDaysMode = "fail500slow";
       const served0 = appServed.length;
       const rq = await context.newPage();
       watchPage(rq, "p29-viewer-appfail-rt");
       const settleQ = restReadsSettled(rq);
+      let holdCeiling = false;
       try {
         await rq.setViewportSize({ width: 390, height: 844 });
         await rq.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, VIEWER_JWT);
         const rtq = await answerRealtimeJoinsOnly(rq);
+        // 10/4 (timing): the race is set up on what the page does, not on 1.5 s. The re-run's SUBSCRIBED refreshAll is seen as
+        // its own-profile read (refreshOwnProfile: GET user_profiles?id=eq.<viewer>, which the load batch never sends) made after
+        // the second join; refreshAll calls loadAppDays(false) in that same synchronous pass, so once it is seen the quiet read has
+        // joined the load's read (or, the bug, started its own). The load's 500 is held until then (and 1.5 s at least), ceiling
+        // 20 s - inside the app's 30 s join window. With 1.5 s alone a join that a busy PC answered after the 500 had landed let
+        // refreshAll start a read of its own - legitimate then - and the step counted two reads; or the race went unexercised.
+        let rerunProfileReads = 0;
+        rq.on("request", (r) => {
+          if (rtq.joins < 2 || r.method() !== "GET") return;
+          let u = null; try { u = new URL(r.url()); } catch (e) { return; }
+          if (u.hostname === SUPABASE_HOST && u.pathname === "/rest/v1/user_profiles" && u.searchParams.get("id") === "eq." + VIEWER_UID) rerunProfileReads++;
+        });
+        appSlowHold = async () => { if (!(await waitFor(() => rtq.joins >= 2 && rerunProfileReads > 0, 20000, 50))) holdCeiling = true; };
         await rq.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rq, "P29 viewer page (APP read 500, Realtime joins answered)");
-        await rq.waitForSelector("[data-testid=toast]", { timeout: 10000 }).catch(() => {});
-        await rq.waitForTimeout(2500); // a second read (the bug) would have been served by now - recorded on arrival anyway
-        const toastTxt = await rq.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
-        const errPill = await rq.$eval("[data-testid=hdr-errors]", el => el.textContent.trim()).catch(() => "");
-        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
-        await showM(rq);
-        const legend = await rq.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const { toast: toastTxt, pill: errPill } = await p29LoadToast(rq, want);
+        await waitFor(() => rtq.joins >= 2, 15000); // 10/4: the join count is read once the second join came, not at a fixed moment
+        // 10/4: replaces the fixed 2.5 s - the reads are counted once the page's REST reads have settled (none out for 500 ms). A
+        // second APP read is held 1.5 s at least, so the page cannot settle while one is out, and it is recorded on arrival.
+        await settleQ();
+        const reads = appServed.slice(served0).filter(x => x.sub === VIEWER_UID && x.path === "/rest/v1/app_call_days").length;
+        // what the 2.5 s-later reading guarded: no other toast replaced the load's meanwhile (none showing - it expired - is fine)
+        const toastLater = await rq.$eval("[data-testid=toast]", el => el.textContent.trim()).catch(() => "");
+        await showM(rq);
+        await rq.waitForSelector("[data-testid=legend-app-failed]", { timeout: 15000 }).catch(() => {}); // 10/4: on the element
+        const legend = await rq.$eval("[data-testid=legend-app-failed]", el => el.textContent.trim()).catch(() => "");
         if (rtq.joins < 2) fail(`${P} 8c: the page's Realtime channel should have joined on the mount run and on the sign-in re-run (SUBSCRIBED -> refreshAll), got ${rtq.joins} join(s) - the step does not exercise the race`);
+        else if (holdCeiling) fail(`${P} 8c: the load's APP read was held 20 s and the sign-in re-run's SUBSCRIBED refreshAll was not seen meanwhile (${rtq.joins} joins, ${rerunProfileReads} own-profile read(s) after the second) - the step does not exercise the race`);
         else if (!toastTxt.includes(want)) fail(`${P} 8c: with Realtime answering, the load's toast should still say '${want}', got '${toastTxt}' (${reads} app_call_days read(s))`);
+        else if (toastLater && !toastLater.includes(want)) fail(`${P} 8c: another toast replaced the load's while the sign-in's reads settled: '${toastLater}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8c: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8c: ONE APP-day read for the sign-in (the SUBSCRIBED refreshAll joins the load's read out), got ${reads}`);
         else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8c: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
         else ok(`${P} 8c: Realtime joined (${rtq.joins} joins, SUBSCRIBED -> refreshAll) - ONE app_call_days read, '${want}' in the load's toast and on Recent errors ('${errPill}'), the legend says it`);
       } catch (e) { fail(`${P} 8c (a failed APP-day read with Realtime up): ` + errLine(e)); try { await rq.screenshot({ path: path.join(OUT, "failure-p29-8c.png"), fullPage: true }); } catch (e2) {} }
       try { await settleQ(); await rq.close(); } catch (e) {}
+      appSlowHold = null;
       appDaysMode = "ok";
       await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
     }
@@ -12181,7 +12256,7 @@ try {
     const emailPosts = p29Writes.filter(w => /^\/functions\/v1\//.test(w.path));
     if (clientAudit.length || notifPosts.length || emailPosts.length) fail(`${P} 9: the client wrote an audit row (${clientAudit.length}), a notification (${notifPosts.length}) or an e-mail call (${emailPosts.length}) during the APP steps`);
     else ok(`${P} 9: no client audit row, no notification row, no e-mail call during the APP steps (the save function writes the audit row: ${appAudit.length - audit0} recorded)`);
-    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appColumnFixture = false;
+    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appSlowHold = null; appColumnFixture = false;
     if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} }
     if (A) { try { await A.ctx.close(); } catch (e) {} }
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
@@ -12466,6 +12541,14 @@ try {
       const fromB64u = (s) => { const t = atob(String(s).replace(/-/g, "+").replace(/_/g, "/")); const u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u.buffer; };
       const toB64u = (buf) => { const u = new Uint8Array(buf); let s = ""; for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
       if (cfg.standalone) { try { Object.defineProperty(Navigator.prototype, "standalone", { get: () => true, configurable: true }); } catch (e) {} }
+      // an installed app on Android / a computer: matchMedia("(display-mode: standalone)") matches (navigator.standalone is iOS only)
+      if (cfg.displayStandalone) {
+        try {
+          const mm0 = window.matchMedia.bind(window);
+          window.matchMedia = (q) => (/display-mode:\s*standalone/.test(String(q)) ? { matches: true, media: String(q), onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } } : mm0(q));
+        } catch (e) {}
+      }
+      if (cfg.perm) { try { if (localStorage.getItem("smoke-p30-perm") === null) localStorage.setItem("smoke-p30-perm", cfg.perm); } catch (e) {} }
       const N = function Notification() {};
       Object.defineProperty(N, "permission", { get: () => LS("smoke-p30-perm", "default") });
       N.requestPermission = async () => {
@@ -12703,8 +12786,9 @@ try {
       await pg.waitForFunction(() => /^Reset done/.test((document.querySelector("[data-testid=push-msg]") || { textContent: "" }).textContent.trim()), null, { timeout: 10000 });
       s = await stateOf(pg);
       regs = await swRegs(pg);
-      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Reload the app, then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
-      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Reload the app, then tap Enable phone notifications.'");
+      // push UX (d) (10/11): a Home Screen app has no reload - the message says close and reopen first
+      if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
+      else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications.'");
       // (11) the columns probe answering 400 42703 (the migration not applied): the switches hidden, the e-mail upsert names no *_push key
       p30.cols = "unavailable";
       await loadApp(pg, P30_BASE);
@@ -12734,14 +12818,32 @@ try {
       const subAfter = await pg.evaluate(() => Object.keys(localStorage).filter(k => /^smoke-p30-sub:|^silvis-push-on-/.test(k)));
       if (JSON.stringify(seq) !== JSON.stringify(["POST rpc/delete_push_subscription", "unsubscribe smoke-device-1", "POST logout"]) || subAfter.length) fail("P30 sign-out: order " + JSON.stringify(seq) + ", left on the device " + JSON.stringify(subAfter));
       else ok("P30 sign-out: the device's row deleted (still signed in), THEN unsubscribed, THEN /auth/v1/logout - no subscription or flag left on the device");
-      // (13) denied: 'Blocked for 127.0.0.1' (no Davenport clause off fkhan628.github.io), no Enable
+      // (13) denied: 'Blocked for 127.0.0.1' (no Davenport clause off fkhan628.github.io), no Enable. Push UX (e) (10/11): no
+      // Send test (it cannot reach this device); the phone switches stay EDITABLE (they cover the account's other devices too)
+      // with the blocked note - a tap still saves
       await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "denied"));
       await loadApp(pg, P30_BASE);
       await openCard(pg);
+      await pg.waitForSelector("[data-testid=push-card] [data-testid=push-prefs]", { timeout: 10000 }).catch(() => {});
       s = await stateOf(pg);
       const host = new URL(BASE).hostname;
+      const bp = await pg.$eval("[data-testid=push-card]", (el) => ({
+        note: el.querySelector("[data-testid=push-prefs-blocked]") ? el.querySelector("[data-testid=push-prefs-blocked]").textContent.trim() : null,
+        disabled: Array.from(el.querySelectorAll("[data-testid=push-pref] input[type=checkbox]")).map(i => i.disabled),
+      }));
       if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.` || s.buttons.includes("Enable phone notifications")) fail("P30 blocked: " + JSON.stringify(s));
       else ok(`P30 blocked: badge 'Blocked', '${s.line.slice(0, 60)}...' (no Davenport clause on ${host}), no Enable`);
+      if (JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail("P30 blocked: the buttons " + JSON.stringify(s.buttons) + " - want Diagnose / Reset subscription only (no Send test)");
+      else if (bp.note !== "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on." || bp.disabled.length !== 2 || bp.disabled.some(Boolean)) fail("P30 blocked: the phone switches " + JSON.stringify(bp));
+      else {
+        c0 = p30.calls.length;
+        await pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=trade_updates_push] input[type=checkbox]").click();
+        await pg.waitForTimeout(1200);
+        const bPosts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+        let bRow = null; try { bRow = JSON.parse(bPosts.length ? bPosts[0].body : "null"); } catch (e) {}
+        if (bPosts.length !== 1 || !bRow || bRow.person_id !== "s2" || !("trade_updates_push" in bRow)) fail("P30 blocked: a tap on a phone switch did not save: " + JSON.stringify(bPosts.map(x => x.body)));
+        else ok("P30 blocked: buttons Diagnose / Reset subscription (no Send test); the phone switches stay editable with the note '" + bp.note + "' - a tap saved (one POST notification_preferences)");
+      }
       await pg.evaluate(() => localStorage.setItem("smoke-p30-perm", "granted"));
       // (14) ?public=1: no card, no registration, no push request
       c0 = p30.calls.length;
@@ -12816,8 +12918,10 @@ try {
       p30.profile = null;
       if (sctx) await sctx.close();
     }
-    // (15) iPhone: Safari outside the Home Screen app -> the iOS line, Enable asks nothing and registers nothing; the Home Screen
-    // app (navigator.standalone) -> Enable offered; 390 px screenshots of both for the report
+    // (15) iPhone: Safari outside the Home Screen app -> the iOS line as the ONE instruction, no push button (push UX c, 10/11:
+    // none of Enable / Diagnose / Reset subscription / Send test works there; the generic line is hidden), the phone switches
+    // stay; nothing asked, nothing registered. The Home Screen app (navigator.standalone) -> Enable offered; 390 px screenshots
+    // of both for the report
     const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
     for (const standalone of [false, true]) {
       let ictx = null, ip = null;
@@ -12833,16 +12937,16 @@ try {
         let s = await stateOf(ip);
         if (!standalone) {
           const want = "On iPhone and iPad, phone notifications work only in the Home Screen app: tap Share > Add to Home Screen, open Silvis Call from that icon, sign in there once (it has its own sign-in, separate from Safari - your email and password work), then come back to Settings > Notification settings > Phone notifications and tap Enable phone notifications.";
-          if (s.state !== "ios-home-screen" || s.line !== want || !s.buttons.includes("Enable phone notifications")) fail(`P30 ${label}: ` + JSON.stringify(s));
-          else {
-            await ip.click("[data-testid=push-enable]");
-            await ip.waitForTimeout(800);
-            s = await stateOf(ip);
-            const asks = await lsGet(ip, "smoke-p30-asks");
-            const regs = await swRegs(ip);
-            if (s.msg !== want || asks !== null || regs.length) fail(`P30 ${label} Enable: msg ${JSON.stringify(s.msg)}, permission asks ${asks}, registrations ${JSON.stringify(regs)}`);
-            else ok(`P30 ${label}: the Home Screen line (add to Home Screen, open from the icon, sign in there once, then Enable); Enable asks nothing and registers nothing`);
-          }
+          await ip.waitForSelector("[data-testid=push-card] [data-testid=push-prefs]", { timeout: 10000 }).catch(() => {});
+          await ip.waitForTimeout(800);
+          s = await stateOf(ip);
+          const sv = await ip.$eval("[data-testid=push-card]", (el) => ({ intro: !!el.querySelector("[data-testid=push-line]"), homeScreen: el.textContent.split("Add to Home Screen").length - 1, prefs: !!el.querySelector("[data-testid=push-prefs]") }));
+          const asks = await lsGet(ip, "smoke-p30-asks");
+          const regs = await swRegs(ip);
+          if (s.state !== "ios-home-screen" || s.line !== want || s.buttons.length || s.msg !== null) fail(`P30 ${label}: ` + JSON.stringify(s) + " - want the Home Screen line and no push button");
+          else if (sv.intro || sv.homeScreen !== 1 || !sv.prefs) fail(`P30 ${label}: the card ` + JSON.stringify(sv) + " - want no generic line, the Home Screen instruction once, the phone switches kept");
+          else if (asks !== null || regs.length) fail(`P30 ${label}: permission asks ${asks}, registrations ${JSON.stringify(regs)} - want none`);
+          else ok(`P30 ${label}: ONE instruction (the Home Screen line: add to Home Screen, open from the icon, sign in there once, then Enable), no push button and no generic line; the phone switches kept; nothing asked, nothing registered`);
         } else {
           if (s.state !== "off" || !s.buttons.includes("Enable phone notifications") || s.line !== "Off for this device.") fail(`P30 ${label}: ` + JSON.stringify(s));
           else ok(`P30 ${label} (navigator.standalone): 'Off for this device.' with Enable offered`);
@@ -12855,6 +12959,34 @@ try {
         if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));
       } catch (e) { fail(`P30 ${label}: ` + errLine(e)); try { if (ip) await ip.screenshot({ path: path.join(OUT, "failure-p30-iphone.png"), fullPage: true }); } catch (e2) {} }
       if (ictx) await ictx.close();
+    }
+    // (16) push UX (f) (10/11): Blocked in an installed Android app (display-mode standalone - opened from its icon, no address
+    // bar): the line points at the phone's Settings > Apps > Silvis Call (the installed app's own entry; the browser if it is
+    // not listed - review fix 10/11) > Notifications and says reopen the app; no Send test (e)
+    {
+      let actx = null, ap = null;
+      const label = "Android installed app, Blocked";
+      try {
+        p30.errors = [];
+        actx = await mkP30Ctx({ viewport: { width: 412, height: 915 }, userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36" });
+        await actx.addInitScript(p30Init, Object.assign({}, P30_CFG, { displayStandalone: true, perm: "denied" }));
+        ap = await actx.newPage();
+        watch(ap, label);
+        await loadApp(ap, P30_BASE);
+        await openCard(ap);
+        const s = await stateOf(ap);
+        const want = `Blocked for ${new URL(BASE).hostname}. To allow it, open your phone's Settings > Apps > Silvis Call (or Chrome / the browser you installed it from, if Silvis Call is not listed) > Notifications, allow them, then reopen the app and tap Enable phone notifications.`;
+        if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== want || JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail(`P30 ${label}: ` + JSON.stringify(s));
+        else ok(`P30 ${label}: '${s.line}' (the phone's own settings - no address-bar hint); buttons Diagnose / Reset subscription (no Send test)`);
+        // push UX follow-up (10/11): the Pop-ups box below names the same place, never the browser's site settings
+        const popLine = await ap.$eval("[data-testid=notif-permission]", el => el.textContent.trim()).catch(() => "");
+        if (!/Settings > Apps > Silvis Call/.test(popLine) || /site settings/.test(popLine)) fail(`P30 ${label}: the Pop-ups line should name the phone's Settings > Apps > Silvis Call, got ` + JSON.stringify(popLine));
+        else ok(`P30 ${label}: the Pop-ups line names the same place - '${popLine}'`);
+        await ap.locator("[data-testid=push-card]").scrollIntoViewIfNeeded();
+        await ap.locator("[data-testid=push-card]").screenshot({ path: path.join(OUT, "p30-push-card-android-app-blocked-412.png") });
+        if (p30.errors.length) fail(`P30 ${label} errors: ` + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail(`P30 ${label}: ` + errLine(e)); try { if (ap) await ap.screenshot({ path: path.join(OUT, "failure-p30-android.png"), fullPage: true }); } catch (e2) {} }
+      if (actx) await actx.close();
     }
   }
   // @p30-smoke-end

@@ -233,34 +233,36 @@ const keys = plan.availabilityRows.map((r) => [r.person_id, r.kind, r.role, r.st
 eq(new Set(keys).size, keys.length, "availability keys unique");
 // stats agree
 eq(plan.stats.availability, plan.availabilityRows.length);
-eq(plan.stats.schedule_days, 73); eq(plan.stats.time_off, 8, "stats.time_off: 3 + Burchett's four 2027 weekends (9/22 evening) + his 2027-07-22..08-02 vacation (9/23)");
+// pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 - the seed drops both ranges (time_off 8 -> 6)
+eq(plan.stats.schedule_days, 73); eq(plan.stats.time_off, 6, "stats.time_off: 3 + Burchett's two remaining 2027 weekends (9/22 evening; 1/9-1/10 and 1/16-1/17 withdrawn 10/10) + his 2027-07-22..08-02 vacation (9/23)");
 eq(plan.stats.scheduleDays.externalCover, 7); eq(plan.stats.scheduleDays.openBackup, 24, "open backups: 14 October (16 before BK 9/23: 10/9 and 10/15 are Burchett's) + 11/5 (Y) + 11/7, 11/8, 11/20, 11/23, 11/25 + 4 Thanksgiving days"); eq(plan.stats.scheduleDays.openPrimary, 7, "open primaries in the import: 10/15, 10/24 (9/22 evening) and, since T, 11/9, 11/10, 11/12, 11/13, 11/17 (Y FLIP: 11/5 is Acton's now)");
 
 /* ------------------------------------------------------------ time_off */
 step("time_off rows");
 const to = plan.timeOffRows;
-eq(to.length, 8, "2 Acton + 1 Philip + 5 Burchett (four 9/22 weekends + the 9/23 July - August vacation)");
+// pins moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 - his rows 5 -> 3, the public notes 5 -> 3
+eq(to.length, 6, "2 Acton + 1 Philip + 3 Burchett (two 9/22 weekends + the 9/23 July - August vacation)");
 eq(to.filter((t) => t.person_id === ACTON).map((t) => t.start_date + ".." + t.end_date), ["2026-11-19..2026-11-22", "2026-11-25..2026-11-29"]);
 eq(to.filter((t) => t.person_id === PHILIP).map((t) => t.start_date + ".." + t.end_date), ["2026-10-15..2026-10-15"]);
-eq(to.filter((t) => t.person_id === BURCHETT).map((t) => t.start_date + ".." + t.end_date), ["2027-01-09..2027-01-10", "2027-01-16..2027-01-17", "2027-02-12..2027-02-14", "2027-04-09..2027-04-11", "2027-07-22..2027-08-02"], "Burchett's four 2027 weekends exactly as stated (Sat+Sun in January, Fri-Sun in February and April) + Thu 7/22 - Mon 8/2 (stated 9/23)");
+eq(to.filter((t) => t.person_id === BURCHETT).map((t) => t.start_date + ".." + t.end_date), ["2027-02-12..2027-02-14", "2027-04-09..2027-04-11", "2027-07-22..2027-08-02"], "Burchett's 2027 weekends exactly as stated (Fri-Sun in February and April; the January Sat+Sun pair withdrawn 10/10) + Thu 7/22 - Mon 8/2 (stated 9/23)");
 ok(to.every((t) => t.created_by === "seed"), "created_by 'seed' on every row, public note or not");
 ok(to.filter((t) => t.person_id !== BURCHETT).every((t) => t.note === "vacation (seed)"), "private seed notes (Acton, Philip) still scrubbed to 'vacation (seed)'");
-eq(to.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "public seed notes (public: true) reach time_off as written - dates and a stated-on stamp, never a reason");
+eq(to.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "public seed notes (public: true) reach time_off as written - dates and a stated-on stamp, never a reason");
 // which seed notes are public is read from the seed here, never from importer.js
 const seedVac = [].concat(...Object.keys(seed.surgeonRules).map((id) => (seed.surgeonRules[id].timeOff || []).map((t) => Object.assign({ id: id }, t))));
 const privateVacNotes = seedVac.filter((t) => t.note && t.public !== true).map((t) => t.note);
 const publicVacNotes = seedVac.filter((t) => t.note && t.public === true).map((t) => t.note);
-eq([privateVacNotes.length, publicVacNotes.length], [3, 5], "seed carries 3 private vacation notes (scrubbed) and 5 public ones (written)");
+eq([privateVacNotes.length, publicVacNotes.length], [3, 3], "seed carries 3 private vacation notes (scrubbed) and 3 public ones (written)");
 ok(seedVac.filter((t) => t.public === true).every((t) => t.id === BURCHETT && ["burchett-email-2026-09-22", "burchett-via-faraz-2026-09-23"].indexOf(t.source) >= 0), "the public entries are Burchett's, provenance in the seed only");
 const sql = IMP.importSql(plan);
 privateVacNotes.forEach((note) => ok(sql.indexOf(note) < 0 && JSON.stringify(to).indexOf(note) < 0, "private seed wording never written: " + note));
 publicVacNotes.forEach((note) => ok(sql.indexOf(note) >= 0 && JSON.stringify(to).indexOf(note) >= 0, "public seed wording written: " + note));
 ok(sql.indexOf("burchett-email-2026-09-22") < 0 && JSON.stringify(to).indexOf("burchett-email-2026-09-22") < 0 && JSON.stringify(plan.blob).indexOf("burchett-email-2026-09-22") < 0, "time_off provenance (source) stays in the seed - not in the rows, the SQL or the blob");
 ok(sql.indexOf("burchett-via-faraz-2026-09-23") < 0 && JSON.stringify(to).indexOf("burchett-via-faraz-2026-09-23") < 0 && JSON.stringify(plan.blob).indexOf("burchett-via-faraz-2026-09-23") < 0, "PD: the July vacation's source stays in the seed too");
-eq(plan.blob.surgeonRules[BURCHETT].timeOff, [{ start: "2027-01-09", end: "2027-01-10" }, { start: "2027-01-16", end: "2027-01-17" }, { start: "2027-02-12", end: "2027-02-14" }, { start: "2027-04-09", end: "2027-04-11" }, { start: "2027-07-22", end: "2027-08-02" }], "blob timeOff: dates only - no note, no public flag, no source");
+eq(plan.blob.surgeonRules[BURCHETT].timeOff, [{ start: "2027-02-12", end: "2027-02-14" }, { start: "2027-04-09", end: "2027-04-11" }, { start: "2027-07-22", end: "2027-08-02" }], "blob timeOff: dates only - no note, no public flag, no source");
 // the dry-run inventory shows the public notes (path -> public), counted separately from the rule-note scrub
-eq(plan.noteScrub.counts.timeOffPublic, 5, "noteScrub.counts.timeOffPublic = the public notes kept");
-eq(plan.noteScrub.inventory.filter((e) => e.action === "public").map((e) => e.path), ["surgeonRules.s2.timeOff[0].note", "surgeonRules.s2.timeOff[1].note", "surgeonRules.s2.timeOff[2].note", "surgeonRules.s2.timeOff[3].note", "surgeonRules.s2.timeOff[4].note"], "inventory: one 'public' entry per public time_off note");
+eq(plan.noteScrub.counts.timeOffPublic, 3, "noteScrub.counts.timeOffPublic = the public notes kept");
+eq(plan.noteScrub.inventory.filter((e) => e.action === "public").map((e) => e.path), ["surgeonRules.s2.timeOff[0].note", "surgeonRules.s2.timeOff[1].note", "surgeonRules.s2.timeOff[2].note"], "inventory: one 'public' entry per public time_off note");
 ok(plan.noteScrub.inventory.filter((e) => e.action === "public").every((e) => e.to === "time_off" && e.from === seed.surgeonRules.s2.timeOff[+e.path.match(/\[(\d+)\]/)[1]].note), "public entries: from = the seed's note at that path, to = 'time_off'");
 ok(!plan.noteScrub.inventory.some((e) => /timeOff/.test(e.path) && e.action !== "public"), "private time_off notes are replaced, not inventoried (they never enter the scrub)");
 
@@ -367,7 +369,7 @@ ok(checked > 1000, "eligibility identical on " + checked + " (day, role, surgeon
 /* ------------------------------------------------------- seed adapter */
 step("seed adapter delegate keeps its contract");
 eq(SA.seedToAvailabilityRows(seed).length, expected.size, "adapter: one row per dated statement");
-eq(SA.seedToTimeOffRows(seed).length, 8, "adapter: 8 vacation rows (Acton 2, Philip 1, Burchett 5 - four 9/22 weekends + the 9/23 July - August vacation)");
+eq(SA.seedToTimeOffRows(seed).length, 6, "adapter: 6 vacation rows (Acton 2, Philip 1, Burchett 3 - two 9/22 weekends + the 9/23 July - August vacation; pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027)");
 eq(Object.keys(SA.seedToSchedule(seed)).length, 73);
 eq(SA.seedToSurgeonRules(seed)[PHILIP].explicitListMonths, [{ month: "2026-10", roles: ["primary"] }]);
 
@@ -414,7 +416,7 @@ ok(/^[\x00-\x7f]*$/.test(sqlNA), "still 7-bit");
 ok(/^begin;/m.test(sql) && /^commit;/m.test(sql), "one transaction");
 const stmts = sql.split(/;\s*\n/).map((s) => s.replace(/^\s*--.*$/gm, "").trim()).filter(Boolean);
 const inserts = stmts.filter((s) => /^insert\s+into/i.test(s));
-ok(inserts.length >= 1 + 1 + 1 + 1 + 8, "snapshot + blob + schedule_days + availability + 8 time_off inserts (" + inserts.length + ")");
+ok(inserts.length >= 1 + 1 + 1 + 1 + 6, "snapshot + blob + schedule_days + availability + 6 time_off inserts (" + inserts.length + ")");
 inserts.forEach((s) => {
   const table = (s.match(/^insert\s+into\s+(\S+)/i) || [])[1];
   if (/call_schedule_snapshots/.test(table)) ok(/\bwhere\s+exists/i.test(s), "snapshot insert is conditional");
@@ -428,12 +430,14 @@ ok(/\(coalesce\(call_schedule_data\.data, '\{\}'::jsonb\) - 'settings'\) \|\| /.
 ok(/'\{settings\}'/.test(sql), "settings merged one level deeper");
 ok(/before_seed_import/.test(sql) && sql.indexOf("call_schedule_snapshots") < sql.indexOf("call_schedule_data (id"), "snapshot comes first");
 ok(sql.indexOf("into public.schedule_days") < sql.indexOf("into public.time_off"), "schedule_days before time_off so the ON_CALL_CONFLICT trigger sees the schedule");
-eq((sql.match(/insert into public\.time_off/g) || []).length, 8, "one guarded insert per time_off row (8)");
-// the stale-row delete guard lists all 7 (person, start, end) tuples - Burchett's four included
+// pins moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 - 8 -> 6 time_off inserts and guard tuples
+eq((sql.match(/insert into public\.time_off/g) || []).length, 6, "one guarded insert per time_off row (6)");
+// the stale-row delete guard lists all 6 (person, start, end) tuples - Burchett's three included
 const toGuard = sql.slice(sql.indexOf("delete from public.time_off"), sql.indexOf("insert into public.time_off"));
 const toTuples = to.map((r) => "('" + r.person_id + "', '" + r.start_date + "'::date, '" + r.end_date + "'::date)");
-eq(toTuples.filter((t) => toGuard.indexOf(t) >= 0).length, 8, "time_off delete guard lists the 8 tuples");
-ok(toGuard.indexOf("('s2', '2027-01-09'::date, '2027-01-10'::date)") >= 0 && toGuard.indexOf("('s2', '2027-04-09'::date, '2027-04-11'::date)") >= 0, "Burchett's first and last 2027 ranges are in the guard");
+eq(toTuples.filter((t) => toGuard.indexOf(t) >= 0).length, 6, "time_off delete guard lists the 6 tuples");
+ok(toGuard.indexOf("('s2', '2027-02-12'::date, '2027-02-14'::date)") >= 0 && toGuard.indexOf("('s2', '2027-04-09'::date, '2027-04-11'::date)") >= 0 && toGuard.indexOf("('s2', '2027-07-22'::date, '2027-08-02'::date)") >= 0, "Burchett's three 2027 ranges are in the guard");
+ok(toGuard.indexOf("('s2', '2027-01-09'::date, '2027-01-10'::date)") < 0 && toGuard.indexOf("('s2', '2027-01-16'::date, '2027-01-17'::date)") < 0, "Burchett's 1/9-1/10 and 1/16-1/17/2027 (withdrawn 10/10) are not in the guard");
 // simulate applying twice in an in-memory model keyed the way the SQL is: second pass changes nothing
 function applyToModel(model, p) {
   const changed = { sd: 0, av: 0, to: 0 };
@@ -444,16 +448,17 @@ function applyToModel(model, p) {
   return changed;
 }
 const model = { blob: {}, schedule_days: [], availability: [], time_off: [] };
-eq(applyToModel(model, plan), { sd: 73, av: plan.availabilityRows.length, to: 8 }, "first apply writes everything");
+eq(applyToModel(model, plan), { sd: 73, av: plan.availabilityRows.length, to: 6 }, "first apply writes everything");
 eq(applyToModel(model, plan), { sd: 0, av: 0, to: 0 }, "second apply writes nothing");
 ok(model.schedule_days.every((d) => d.version === 1), "versions untouched by the no-op re-run");
 
 /* ------------------------------------------------------------ planDiff */
 step("planDiff");
 const d0 = IMP.planDiff(plan, { blob: {}, availability: [], time_off: [], schedule_days: [] });
-eq(d0.tables.schedule_days.insert, 73); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 8);
+// pins moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027 - time_off 8 -> 6 below, Burchett's inserts 5 -> 3
+eq(d0.tables.schedule_days.insert, 73); eq(d0.tables.availability.insert, plan.availabilityRows.length); eq(d0.tables.time_off.insert, 6);
 eq(d0.tables.call_schedule_data.insert, 5); eq(d0.blocked, []); eq(d0.changes, []);
-eq(d0.totalChanges, 5 + 73 + plan.availabilityRows.length + 8);
+eq(d0.totalChanges, 5 + 73 + plan.availabilityRows.length + 6);
 const liveEq = { blob: clone(plan.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) };
 liveEq.blob.settings.importedAt = "2020-01-01T00:00:00Z"; // a different import time is not a change
 liveEq.blob.settings.appAdded = true;                        // keys the app added are ignored
@@ -461,16 +466,16 @@ liveEq.blob.extraTopLevel = { keep: 1 };
 const d1 = IMP.planDiff(plan, liveEq);
 eq(d1.totalChanges, 0, "live == plan -> nothing"); eq(d1.changes, []); eq(d1.blocked, []);
 ok(/No changes/.test(d1.text));
-eq(d1.tables.schedule_days.unchanged, 73); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 8);
-// the expected live diff for the orchestrator (item S): live = tonight's rows before S -> 1 schedule_days update (10/24), 4 time_off inserts, blob update, availability unchanged
+eq(d1.tables.schedule_days.unchanged, 73); eq(d1.tables.availability.unchanged, plan.availabilityRows.length); eq(d1.tables.time_off.unchanged, 6);
+// the expected live diff for the orchestrator (item S): live = tonight's rows before S -> 1 schedule_days update (10/24), 3 time_off inserts, blob update, availability unchanged
 const livePreS = clone(liveEq);
 Object.assign(livePreS.schedule_days.find((d) => d.day === "2026-10-24"), { primary_id: "s6", primary_locked: true, note: "seed: burchett-email-2026-09-17" });
 livePreS.time_off = livePreS.time_off.filter((t) => t.person_id !== BURCHETT);
 livePreS.blob.surgeonRules = clone(plan.blob.surgeonRules); livePreS.blob.surgeonRules.s6.availableWindows[0].end = "2026-10-24";
 const dS = IMP.planDiff(plan, livePreS);
-eq([dS.tables.schedule_days.update, dS.tables.time_off.insert, dS.tables.availability.insert + dS.tables.availability.update + dS.tables.availability.delete, dS.tables.call_schedule_data.update, dS.tables.time_off.delete], [1, 5, 0, 1, 0], "expected live diff: 1 day update, 5 vacation inserts (four 9/22 weekends + the 9/23 July - August vacation), blob update, availability untouched, no deletes");
+eq([dS.tables.schedule_days.update, dS.tables.time_off.insert, dS.tables.availability.insert + dS.tables.availability.update + dS.tables.availability.delete, dS.tables.call_schedule_data.update, dS.tables.time_off.delete], [1, 3, 0, 1, 0], "expected live diff: 1 day update, 3 vacation inserts (two 9/22 weekends + the 9/23 July - August vacation), blob update, availability untouched, no deletes");
 eq(dS.changes, ["10/24 P Sarkar -> OPEN"], "the one day change is 10/24 primary Sarkar -> OPEN");
-eq(dS.tables.time_off.rows, ["insert Burchett 2027-01-09..2027-01-10", "insert Burchett 2027-01-16..2027-01-17", "insert Burchett 2027-02-12..2027-02-14", "insert Burchett 2027-04-09..2027-04-11", "insert Burchett 2027-07-22..2027-08-02"]);
+eq(dS.tables.time_off.rows, ["insert Burchett 2027-02-12..2027-02-14", "insert Burchett 2027-04-09..2027-04-11", "insert Burchett 2027-07-22..2027-08-02"]);
 // the expected live diff for the orchestrator (item T): live = the rows as they stand before T (no November rows before
 // 11/26, no November availability for Burchett / Acton, the blob without their November lists) -> 20 schedule_days
 // inserts, the November availability inserts (collapsed ranges of the two role-scoped lists), one blob update, nothing
@@ -585,7 +590,7 @@ const eB = edited((fx) => { fx.surgeonRules.s4.timeOff[0].start = "2026-10-16"; 
 const dB = IMP.planDiff(eB.plan, liveEq);
 eq(dB.tables.time_off.insert, 1); eq(dB.tables.time_off.delete, 1);
 ok(dB.tables.time_off.rows.some((l) => /^delete Philip 2026-10-15\.\.2026-10-15 \(seed-owned/.test(l)), "vacation delete rendered");
-ok(/delete from public\.time_off\n where created_by = 'seed'\n   and \(person_id, start_date, end_date\) not in \(\('s2', '2027-01-09'::date, '2027-01-10'::date\), .*\('s3', '2026-11-19'::date, '2026-11-22'::date\)/.test(IMP.importSql(eB.plan)), "guarded set-based delete on time_off (Burchett's rows lead the tuple list)");
+ok(/delete from public\.time_off\n where created_by = 'seed'\n   and \(person_id, start_date, end_date\) not in \(\('s2', '2027-02-12'::date, '2027-02-14'::date\), .*\('s3', '2026-11-19'::date, '2026-11-22'::date\)/.test(IMP.importSql(eB.plan)), "guarded set-based delete on time_off (Burchett's rows lead the tuple list; pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027, so 2/12-2/14 leads)");
 const rB = converges("vacation moved", eB);
 ok(!rB.ctx.per.s4.vacation.has("2026-10-15") && rB.ctx.per.s4.vacation.has("2026-10-16"), "10/15 no longer a vacation day for Philip, 10/16 is");
 // a self-entered vacation (created_by = the surgeon) is never deleted
@@ -617,7 +622,7 @@ eq(IMP.planDiff(plan, liveSetup).tables.availability.delete, 0, "source 'setup' 
 // (g) safety valve: a plan with NO rows for a table never deletes that table's seed-owned rows
 const eG = edited((fx) => { Object.values(fx.surgeonRules).forEach((r) => { delete r.timeOff; }); });
 const dG = IMP.planDiff(eG.plan, liveEq);
-eq(dG.tables.time_off.delete, 0); eq(dG.tables.time_off.kept, 8); eq(dG.kept.length, 8, "8 seed vacations listed as kept");
+eq(dG.tables.time_off.delete, 0); eq(dG.tables.time_off.kept, 6); eq(dG.kept.length, 6, "6 seed vacations listed as kept (pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027)");
 ok(dG.kept.every((l) => /^time_off .* \[KEPT: plan has no time_off rows/.test(l)), dG.kept.join(" | "));
 eq(dG.tables.time_off.insert + dG.tables.time_off.update + dG.tables.availability.insert + dG.tables.availability.update + dG.tables.schedule_days.insert + dG.tables.schedule_days.update, 0, "only the blob update counts (no row change)");
 eq(dG.totalChanges, 2, "RF2 review fix: the blob update = surgeonRules + settings (the seedCoreHash stamp follows the seed-owned content; fail-before: 1)");
@@ -784,13 +789,15 @@ step("public time_off notes: written only with public: true AND past the denylis
 // a public note that trips the item-F denylist REFUSES the import (path + word, never the text)
 const mTo = refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[0].note (\"family\")", (fx) => { fx.surgeonRules.s2.timeOff[0].note = "family weekend"; }, "public note with a denylist word");
 ok(mTo.indexOf("weekend") < 0, "the refusal names the path and the word, never the note text");
-refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[3].note (\"Hosting\")", (fx) => { fx.surgeonRules.s2.timeOff[3].note = "Hosting visitors"; }, "public note, denylist is case-insensitive");
+// pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027, so s2.timeOff has three entries - the same
+// public entry (4/9-4/11) is index [1] now, was [3]; below, [1] / [2] are 4/9-4/11 and 7/22-8/2 (both public: true)
+refusesWith("NOTE_DENYLIST: surgeonRules.s2.timeOff[1].note (\"Hosting\")", (fx) => { fx.surgeonRules.s2.timeOff[1].note = "Hosting visitors"; }, "public note, denylist is case-insensitive");
 // a public note naming a roster last name is neither written nor refused: it falls back to the private default
 // (design decision d: the denylist gate refuses, a surname falls back) and the dry run lists the path as 'private-name', never the text
 const fxName = clone(seed); fxName.surgeonRules.s2.timeOff[1].note = "Burchett away"; fxName.surgeonRules.s2.timeOff[2].note = "covering for sarkar";
 const planName = IMP.importPlan(fxName, { now: NOW });
-eq(planName.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["unavailable (stated 9/22)", "vacation (seed)", "vacation (seed)", "unavailable (stated 9/22)", "off (stated 9/23)"], "a public note naming a roster last name (any case) falls back to 'vacation (seed)'");
-eq(planName.noteScrub.counts.timeOffPublic, 3, "a surname fallback is not counted as public");
+eq(planName.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["unavailable (stated 9/22)", "vacation (seed)", "vacation (seed)"], "a public note naming a roster last name (any case) falls back to 'vacation (seed)'");
+eq(planName.noteScrub.counts.timeOffPublic, 1, "a surname fallback is not counted as public");
 eq(planName.noteScrub.inventory.filter((e) => e.action === "private-name").map((e) => [e.path, e.to, "from" in e]), [["surgeonRules.s2.timeOff[1].note", null, false], ["surgeonRules.s2.timeOff[2].note", null, false]], "inventory: 'private-name' entries carry the path only, never the note");
 ok(JSON.stringify(planName).indexOf("Burchett away") < 0 && JSON.stringify(planName).indexOf("covering for") < 0 && IMP.importSql(planName).indexOf("covering for") < 0, "the surname note reaches neither the plan nor the SQL");
 // a denylist word wins over the surname fallback: the import is refused, not defaulted
@@ -802,15 +809,15 @@ refuses((fx) => { fx.surgeonRules.s2.timeOff[0].note = "cell 555-555-0100"; }, "
 const fxPriv = clone(seed); fxPriv.surgeonRules.s3.timeOff[0].note = "family weekend"; fxPriv.surgeonRules.s2.timeOff[0].public = false; fxPriv.surgeonRules.s2.timeOff[1].public = "yes";
 const planPriv = IMP.importPlan(fxPriv, { now: NOW });
 eq(planPriv.timeOffRows.filter((t) => t.person_id === ACTON)[0].note, "vacation (seed)", "a private note with a denylist word is replaced, not refused");
-eq(planPriv.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["vacation (seed)", "vacation (seed)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "public: false and a non-boolean public read as private; only boolean true passes the note through");
-eq(planPriv.noteScrub.counts.timeOffPublic, 3, "the public count follows the flags");
+eq(planPriv.timeOffRows.filter((t) => t.person_id === BURCHETT).map((t) => t.note), ["vacation (seed)", "vacation (seed)", "off (stated 9/23)"], "public: false and a non-boolean public read as private; only boolean true passes the note through");
+eq(planPriv.noteScrub.counts.timeOffPublic, 1, "the public count follows the flags");
 // public: true without a note -> the default wording; public: true with an operational note that passes -> written
 const fxNoNote = clone(seed); delete fxNoNote.surgeonRules.s2.timeOff[0].note; fxNoNote.surgeonRules.s2.timeOff[1].note = "out of town (stated 9/22)";
 const planNoNote = IMP.importPlan(fxNoNote, { now: NOW });
 eq(planNoNote.timeOffRows.filter((t) => t.person_id === BURCHETT).slice(0, 2).map((t) => t.note), ["vacation (seed)", "out of town (stated 9/22)"], "public without a note -> 'vacation (seed)'; a passing operational note is written as is");
 ok(planNoNote.timeOffRows.every((t) => t.created_by === "seed"), "created_by stays 'seed' whatever the note");
 // the blob copy never sees the flag, the note or the source, whichever way the seed is flagged
-eq(planPriv.blob.surgeonRules[BURCHETT].timeOff.map((t) => Object.keys(t).sort().join(",")), ["end,start", "end,start", "end,start", "end,start", "end,start"], "blob timeOff keys are start/end only");
+eq(planPriv.blob.surgeonRules[BURCHETT].timeOff.map((t) => Object.keys(t).sort().join(",")), ["end,start", "end,start", "end,start"], "blob timeOff keys are start/end only");
 // the seed adapter (tests' ctx) sees the same rows, so a bad public note fails the tests' ctx too
 let adapterMsg = null;
 try { SA.seedToTimeOffRows(clone(fxPriv) && Object.assign(clone(seed), { surgeonRules: Object.assign(clone(seed.surgeonRules), { s2: Object.assign(clone(seed.surgeonRules.s2), { timeOff: [{ start: "2027-01-09", end: "2027-01-10", note: "family", public: true }] }) }) })); } catch (e) { adapterMsg = e.message; }
@@ -1062,7 +1069,7 @@ eq(IMP.impScrubRuleNotes(clone(plan.blob.surgeonRules), clone(plan.blob.groupRul
 // (8) time_off public notes are not blob keys and stay as stated (item S) - but none carries a denylist word or a former
 // token / reason word (the plain status word 'unavailable' / 'vacation' is not a reason)
 const aaPublic = plan.timeOffRows.map((t) => t.note).filter((x) => x !== "vacation (seed)");
-eq(aaPublic, ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "AA: the public time_off notes as stated by the surgeon (dates and a stated-on stamp, never a reason)");
+eq(aaPublic, ["unavailable (stated 9/22)", "unavailable (stated 9/22)", "off (stated 9/23)"], "AA: the public time_off notes as stated by the surgeon (dates and a stated-on stamp, never a reason; pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027)");
 ok(aaPublic.every((x) => !DENY.test(x) && !AA_WORDS.test(x) && !/\b(clinic|Aledo|Clinton|DeWitt|Jackson County|birthday|wife|husband)\b/i.test(x)), "AA: no public time_off note carries a denylist word, a former token or a reason word");
 // (9) the CLI's printed scrub summary names no category; NOTE_UNCLASSIFIED is no longer a refusal it expects
 {
@@ -1456,7 +1463,7 @@ eq(p5.offerStatus[0].byPerson, {
   const pv = IMP.importPlan(fx, { now: P5_NOW, offerPeriods: true });
   eq(pv.offerRows.filter((o) => o.person_id === BURCHETT).length, 32, "P5: 12/5 and 12/6 are not offers");
   eq(pv.offerSkips, [{ person_id: BURCHETT, day: "2026-12-05", role_pref: "either", reason: "vacation" }, { person_id: BURCHETT, day: "2026-12-06", role_pref: "either", reason: "vacation" }], "P5: the skipped days are listed with the reason 'vacation' (path-free, reason-free wording)");
-  eq(pv.timeOffRows.filter((t) => t.person_id === BURCHETT).length, 6, "P5: the vacation itself is still planned");
+  eq(pv.timeOffRows.filter((t) => t.person_id === BURCHETT).length, 4, "P5: the vacation itself is still planned (his 3 seed ranges + 12/5-12/6; pin moved deliberately 10/10: Burchett withdrew 1/9-1/10 and 1/16-1/17/2027)");
   ok(IMP.importSql(pv).indexOf("'2026-12-05'") < 0 || !/call_offers[\s\S]*'s2', '2026-12-05'/.test(IMP.importSql(pv).slice(IMP.importSql(pv).indexOf("insert into public.call_offers"))), "P5: the skipped day is not in the call_offers insert");
 }
 // (6) a submitted surgeon: no 'available' row for the period days, no governed month for the period months; everything else identical
@@ -1827,12 +1834,13 @@ step("9/29 (Prompt 22): groupRules.groupCall reaches the blob as data - the rule
   const revAfter929 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/fold-jan-jun/.test(t));
   const revVg930 = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
   eq([revAfter929.length, revVg930.length], [1, 1], "9/29: one 9/30 fold entry and one 9/30 vacation-guard entry");
+  // pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) sits before the two 10/11 entries - one more place up.
   // pin moved deliberately 10/11 (Prompt 32, the caps): the seed's 10/11 entry (feat/backup-weight-cap) is appended last, so
   // the three entries move one place up. Kept intent: the 9/29, fold and vacation-guard entries in order, then Prompt 23's,
   // Prompt 25's and the 10/11 entry - nothing appended between them, none moved.
   // pin moved deliberately 10/11: Prompt 32 step 1 appends a SECOND 10/11 entry (the shift weights) after the caps entry, so
   // the three entries move one more place up. Kept intent as before - nothing appended between them, none moved.
-  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0]), seed._meta.revisions.indexOf(revVg930[0])], [seed._meta.revisions.length - 7, seed._meta.revisions.length - 6, seed._meta.revisions.length - 5], "9/29: the 9/29 entry sits right before the 9/30 fold entry, which sits right before the 9/30 vacation-guard entry (then Prompt 23's, Prompt 25's, the 10/11 caps entry, then the 10/11 weights entry - the last)");
+  eq([seed._meta.revisions.indexOf(rev929[0]), seed._meta.revisions.indexOf(revAfter929[0]), seed._meta.revisions.indexOf(revVg930[0])], [seed._meta.revisions.length - 8, seed._meta.revisions.length - 7, seed._meta.revisions.length - 6], "9/29: the 9/29 entry sits right before the 9/30 fold entry, which sits right before the 9/30 vacation-guard entry (then Prompt 23's, Prompt 25's, the 10/10 entry, the 10/11 caps entry, then the 10/11 weights entry - the last)");
   // pin moved deliberately 10/1 (Prompt 23 merged after Prompt 27): a THIRD 9/30 entry (feat/khan-weekdays) follows the
   // vacation-guard entry, so the three entries pinned above move one place up. Kept intent: the 9/29, fold and vacation-guard
   // entries still sit back to back (nothing appended between them, none moved); the step for Prompt 23 pins its entry as the last.
@@ -1881,17 +1889,18 @@ step("9/30 (TASK 2): Jan 2027 widened to Jan 2027 - Jun 2027, Feb - Apr 2027 fol
   // kept intent - one fold entry, the vacation-guard entry right after it, seedLastRevision 2026-09-30
   // pin moved deliberately 10/1 (Prompt 25 merged after Prompt 23): a fourth entry dated 2026-09-30 (feat/holiday-plan) is the last
   eq(seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t)).length, 4, "9/30: four entries dated 2026-09-30 - the fold, the vacation guard (Prompt 27), Prompt 23 and Prompt 25 (the holiday plan)");
+  // pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) sits before the two 10/11 entries.
   // pin moved deliberately 10/11 (Prompt 32, the caps): the 10/11 entry is appended last - the fold entry is four before it
   // and seedLastRevision reads 2026-10-11
   // pin moved deliberately 10/11: Prompt 32 step 1 - the 10/11 weights entry follows the caps entry; the fold entry is five before the last
-  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 6]], ["2026-10-11", rev930[0]], "9/30: it is five entries before the last (the vacation-guard entry, Prompt 23's, Prompt 25's, the 10/11 caps entry, then the 10/11 weights entry), and seedLastRevision reads 2026-10-11");
+  eq([plan.blob.settings.seedLastRevision, seed._meta.revisions[seed._meta.revisions.length - 7]], ["2026-10-11", rev930[0]], "9/30: it is six entries before the last (the vacation-guard entry, Prompt 23's, Prompt 25's, the 10/10 entry, the 10/11 caps entry, then the 10/11 weights entry), and seedLastRevision reads 2026-10-11");
   eq([P930.blob.settings.seedLastRevision, P930.blob.settings.seedRevisionCount], ["2026-10-11", seed._meta.revisions.length], "9/30: ...in the CLI's plan too");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev930[0]) && IMP.impFindContactValues(rev930[0]).length === 0, "9/30: the entry carries no amount and no contact-like value");
   ok(/Jan 2027 - Jun 2027/.test(rev930[0]) && /Feb 2027 - Apr 2027/.test(rev930[0]) && /lengthMonths 3 -> 6/.test(rev930[0]) && /remindDaysBeforeClose \[42, 14, 3\] -> \[14, 3\]/.test(rev930[0]) && /noticeDaysBeforeClose 42 -> 14/.test(rev930[0]) && /seedCoreHash moves/.test(rev930[0]), "9/30: the entry names the fold, the three moved keys and the core-hash move");
   // groupRules is a core key: the block moves the seed's core hash (against the 9/27 block, without the 9/30 entry)
   const seedPre930 = clone(seed);
   seedPre930.groupRules.offerPeriods = { lengthMonths: 3, presets: [3, 6], closeWeeksBeforeStart: 6, publishWeeksBeforeStart: 4, remindDaysBeforeClose: [42, 14, 3], noticeDaysBeforeClose: 42, noticeUrgentDaysBeforeClose: 14 };
-  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-(09-30|10-11) /.test(t));   // the 9/30 entries (the fold, the vacation guard, ...) and the later 10/11 entry (pin moved deliberately 10/11: Prompt 32, the caps)
+  seedPre930._meta.revisions = seedPre930._meta.revisions.filter((t) => !/^2026-(09-30|10-10|10-11) /.test(t));   // the 9/30 entries (the fold, the vacation guard, ...) and the later 10/10 and 10/11 entries (pin moved deliberately 10/11: Prompt 32; 10/14: + main's 10/10 entry)
   delete seedPre930.groupRules.vacations;   // Prompt 27: the pre-9/30 seed has no vacations block either (the step below pins that block on its own)
   const planPre930 = IMP.importPlan(seedPre930, { now: NOW });
   ok(plan.blob.settings.seedCoreHash !== planPre930.blob.settings.seedCoreHash, "9/30: the block moves the seed's core hash (groupRules is a core key)");
@@ -1917,8 +1926,9 @@ step("9/30 (Prompt 27): groupRules.vacations reaches the blob as data - the rule
   const revVg = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /feat\/vacation-guard/.test(t));
   eq(revVg.length, 1, "Prompt 27: one _meta.revisions entry for the vacation guard, dated 2026-09-30");
   // pin moved deliberately 10/1 (Prompt 23 merged after Prompt 27): Prompt 23's 9/30 entry follows this one and is the last
+  // pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) sits before the two 10/11 entries.
   // pin moved deliberately 10/11: Prompt 32 step 1 - the 10/11 weights entry follows the caps entry (one more place up)
-  eq([seed._meta.revisions.indexOf(revVg[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 5, "2026-10-11", seed._meta.revisions.length], "Prompt 27: it is four entries before the last (Prompt 23's, Prompt 25's - pin moved deliberately 10/1 - then the 10/11 caps entry, pin moved deliberately 10/11: Prompt 32, the caps, and the 10/11 weights entry, Prompt 32 step 1); seedLastRevision reads 2026-10-11 and seedRevisionCount counts it");
+  eq([seed._meta.revisions.indexOf(revVg[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 6, "2026-10-11", seed._meta.revisions.length], "Prompt 27: it is five entries before the last (Prompt 23's, Prompt 25's - pin moved deliberately 10/1 - then the 10/10 entry, the 10/11 caps entry, pin moved deliberately 10/11: Prompt 32, the caps, and the 10/11 weights entry, Prompt 32 step 1); seedLastRevision reads 2026-10-11 and seedRevisionCount counts it");
   ok(/groupRules\.vacations/.test(revVg[0]) && /minSurgeonsAround: 2/.test(revVg[0]) && /VACATION_GUARD_DEFAULTS/.test(revVg[0]) && /time_off_vacation_guard/.test(revVg[0]) && /seedCoreHash moves/.test(revVg[0]), "Prompt 27: the entry names the block, the code default, the trigger and the core-hash move");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(revVg[0]) && IMP.impFindContactValues(revVg[0]).length === 0, "Prompt 27: the entry carries no amount and no contact-like value");
   const seedNoVg = clone(seed); delete seedNoVg.groupRules.vacations; seedNoVg._meta.revisions = seedNoVg._meta.revisions.filter((t) => t !== revVg[0]);
@@ -1943,9 +1953,10 @@ step("9/30 (Prompt 23): Khan's new call preferences + Acton's 2027 outreach days
   const rev23 = seed._meta.revisions.filter((t) => /^2026-09-30 \(Claude Code, branch feat\/khan-weekdays/.test(t));
   eq(rev23.length, 1, "Prompt 23: one _meta.revisions entry (branch feat/khan-weekdays)");
   // pin moved deliberately 10/1 (Prompt 25 merged after Prompt 23): the holiday-plan entry follows this one and is the last
+  // pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) sits before the two 10/11 entries.
   // pin moved deliberately 10/11 (Prompt 32, the caps): the 10/11 entry follows Prompt 25's and is the last
   // pin moved deliberately 10/11: Prompt 32 step 1 - the 10/11 weights entry follows the caps entry and is the last
-  eq([seed._meta.revisions[seed._meta.revisions.length - 4], /feat\/holiday-plan/.test(seed._meta.revisions[seed._meta.revisions.length - 3]), /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 3/.test(seed._meta.revisions[seed._meta.revisions.length - 2]), /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 1/.test(seed._meta.revisions[seed._meta.revisions.length - 1])], [rev23[0], true, true, true], "Prompt 23: it is the entry right before Prompt 25's holiday plan, which is right before the 10/11 caps entry, then the 10/11 weights entry (the last)");
+  eq([seed._meta.revisions[seed._meta.revisions.length - 5], /feat\/holiday-plan/.test(seed._meta.revisions[seed._meta.revisions.length - 4]), /^2026-10-10 \(Claude Code, branch chore\/seed-burchett-jan-withdrawn/.test(seed._meta.revisions[seed._meta.revisions.length - 3]), /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 3/.test(seed._meta.revisions[seed._meta.revisions.length - 2]), /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 1/.test(seed._meta.revisions[seed._meta.revisions.length - 1])], [rev23[0], true, true, true, true], "Prompt 23: it is the entry right before Prompt 25's holiday plan, which is right before the 10/10 entry, then the 10/11 caps entry, then the 10/11 weights entry (the last)");
   eq([plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], ["2026-10-11", seed._meta.revisions.length], "Prompt 23: seedLastRevision reads 2026-10-11 (the 10/11 entry, pin moved deliberately 10/11: Prompt 32, the caps), the count includes the entry");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev23[0]) && IMP.impFindContactValues(rev23[0]).length === 0 && !DENY.test(rev23[0]), "Prompt 23: the entry carries no amount, no contact-like value and no denylist word");
   ok(/primaryContribution weekends -> weekdays/.test(rev23[0]) && /standaloneFriday/.test(rev23[0]) && /noLoneWeekendDay/.test(rev23[0]) && /weekendCap/.test(rev23[0]) && /hardNeverWeekdaysNoticeDays 56/.test(rev23[0]) && /recurringUnavailable dated/.test(rev23[0]) && /seedCoreHash moves/.test(rev23[0]), "Prompt 23: the entry names the five Khan keys, Acton's dated patterns and the core-hash move");
@@ -1995,7 +2006,8 @@ step("10/11 (Prompt 32 step 3): the caps reach the blob as rules only - group de
   seedPre32._meta.revisions = seedPre32._meta.revisions.filter((t) => !/^2026-10-11 /.test(t));
   const planPre32 = IMP.importPlan(seedPre32, { now: NOW });
   ok(plan.blob.settings.seedCoreHash !== planPre32.blob.settings.seedCoreHash, "Prompt 32: the caps move the seed's core hash");
-  eq(planPre32.blob.settings.seedLastRevision, "2026-09-30", "Prompt 32: without the 10/11 entries the last revision is 9/30's (Prompt 25)");
+  // pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) now precedes the 10/11 ones
+  eq(planPre32.blob.settings.seedLastRevision, "2026-10-10", "Prompt 32: without the 10/11 entries the last revision is main's 10/10 entry");
   const d32 = IMP.planDiff(plan, { blob: clone(planPre32.blob), availability: clone(plan.availabilityRows), time_off: clone(plan.timeOffRows), schedule_days: clone(plan.scheduleDayRows) });
   eq(d32.tables.call_schedule_data.keys, { roster: "unchanged", surgeonRules: "update", groupRules: "update", holidays: "unchanged", settings: "update" }, "Prompt 32: against the pre-32 blob only surgeonRules, groupRules and settings update");
   eq([d32.tables.schedule_days.insert + d32.tables.schedule_days.update, d32.tables.availability.insert, d32.tables.time_off.insert, d32.totalDeletes], [0, 0, 0, 0], "Prompt 32: no schedule_days / availability / time_off row moves");

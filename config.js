@@ -714,7 +714,8 @@ const pushDevice = {
       const reg = await pushDevice.registration(false); // ONLY the Silvis push worker - never another registration
       if (reg) unregistered = !!(await reg.unregister());
     } catch (x) { unregistered = false; }
-    return { ok: d.ok, unregistered, message: "Reset done. Reload the app, then tap Enable phone notifications." + (d.ok ? "" : " (" + d.message + ")") };
+    // push UX (d) (10/11): a Home Screen app has no reload - close and reopen it (a browser tab may reload)
+    return { ok: d.ok, unregistered, message: "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications." + (d.ok ? "" : " (" + d.message + ")") };
   },
   async rearm(profileId, label) {
     if (!profileId) return { action: "skipped" };
@@ -794,7 +795,8 @@ const pushDevice = {
       return { action: "failed" };
     }
   },
-  // state(profileId) - no network: { state, label, device, permission, worker, hasSub, flag, ios, standalone, hostname }.
+  // state(profileId) - no network: { state, label, device, permission, worker, hasSub, flag, ios, standalone, hostname }. The card
+  // hands ios / device / standalone / hostname to helpers.pushStateWords (standalone picks an installed Android app's Blocked line).
   async state(profileId) {
     const e = pushDevice.env();
     const s = pushDevice._support(e);
