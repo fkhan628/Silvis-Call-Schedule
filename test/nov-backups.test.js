@@ -38,6 +38,15 @@
 // with a flat deviation term fails 4 / 6 (a coin flip per leftover day instead of the lower
 // count) - the mutant runs are quoted in docs/REPORT-WATER-FILL-2026-09-23.md.
 //
+// Prompt 32 step 2 (Faraz 10/11, DESIGN "Generator" 2): the fill also stops at what the rules
+// allow - a member's fill clip is min(cap, allowed + held) per role. B limited can hold only the
+// open in-range days of the role before day 8 that A has not locked (spread: 2, 4, 6 = 3; pre
+// N = 6: day 7 = 1; pre N = 12: none = 0), so his target is that count and the month's level is
+// what A and C share of the rest ((30 - B's) / 2 = 13.5 / 14.5 / 15) - the share he cannot reach
+// is no longer left on him. Items 2 and 6 read that level for the b-limited profile (pin moved
+// deliberately 10/11: Prompt 32 - they read the flat 10 for every profile); the free profile is
+// unchanged (no clip binds: share 10).
+//
 // Runs inside test/generator-regression.js (the CI chain) through run(); standalone:
 //   node test/nov-backups.test.js   (exit 1 on the first failing assertion)
 "use strict";
@@ -105,9 +114,17 @@ function run(deps, opts) {
             const targets = {}; IDS.forEach((id) => { targets[id] = M[id][role + "Target"]; });
             // 1. the tally sees the locks
             ok(M.a.lockedHeld[role] === nLocked, tag + ": impliedTargets lockedHeld." + role + " for A expected " + nLocked + " got " + M.a.lockedHeld[role]);
-            // 2. the water-filled share: every target is the share of ALL the month's slots, A's included, whatever N is
-            ok(IT[role + "Share"] === SHARE, tag + ": the month's " + role + " share " + IT[role + "Share"] + " is not the water level " + SHARE + " (" + LAST + " slots / " + IDS.length + ")");
-            IDS.forEach((id) => ok(targets[id] === SHARE, tag + ": " + id.toUpperCase() + "'s " + role + " target " + targets[id] + " is not the share " + SHARE + " regardless of N (locked " + (id === "a" ? nLocked : 0) + ")"));
+            // 2. the water-filled share: every target is the share of ALL the month's slots, A's included, whatever N is.
+            //    Prompt 32 step 2 (pin moved deliberately 10/11: Prompt 32 the fill stops at allowed + held): B limited can hold
+            //    only the in-range days of the role before LIMIT_FROM that A has not locked - his target is that count and A and
+            //    C share the rest of the 30 slots (the level); free: no clip binds, the share is 10 for everyone
+            const startDay = +b.start.slice(8, 10);
+            let bCan = null;
+            if (profile === "b-limited") { bCan = 0; for (let d = startDay; d < LIMIT_FROM; d++) if (b.lockDays.indexOf(d) < 0) bCan++; }
+            const LEVEL = bCan === null ? SHARE : round1((LAST - bCan) / 2);
+            const EXPECT = { a: LEVEL, b: bCan === null ? SHARE : bCan, c: LEVEL };
+            ok(IT[role + "Share"] === LEVEL, tag + ": the month's " + role + " share " + IT[role + "Share"] + " is not the water level " + LEVEL + " (" + LAST + " slots / " + IDS.length + (bCan === null ? "" : ", B limited to " + bCan) + ")");
+            IDS.forEach((id) => ok(targets[id] === EXPECT[id], tag + ": " + id.toUpperCase() + "'s " + role + " target " + targets[id] + " is not " + EXPECT[id] + " regardless of N (locked " + (id === "a" ? nLocked : 0) + (id === "b" && bCan !== null ? "; B can hold " + bCan : "") + ")"));
             ok(/water-filled/.test(dg.impliedTargets.rule || ""), tag + ": impliedTargets.rule does not name the water-filled share");
             // 3. the whole-month tally reported for A = locks + generated
             const gen = generatedCounts(out, role);
@@ -124,7 +141,9 @@ function run(deps, opts) {
               }
             } else {
               ok(Math.abs(F.a - F.c) <= 1, tag + ": with B limited, A " + F.a + " (locked " + nLocked + ") and C " + F.c + " differ by more than one " + role + " day - the leftover is not going to the lower count");
-              ok(gen.a === 0 || F.c >= SHARE, tag + ": A received " + gen.a + " generated " + role + " day(s) although C ended below share at " + F.c);
+              // pin moved deliberately 10/11: Prompt 32 the share here is the b-limited level (13.5 / 14.5 / 15, was the flat 10);
+              // "below share" in whole days is below its integer part (for the old 10 exactly the old check)
+              ok(gen.a === 0 || F.c >= Math.floor(LEVEL), tag + ": A received " + gen.a + " generated " + role + " day(s) although C ended below share " + LEVEL + " at " + F.c);
             }
             summary.push(tag + ": share " + IT[role + "Share"] + " | targets " + IDS.map((id) => id + " " + targets[id]).join(", ") + " | generated " + IDS.map((id) => id + " " + gen[id]).join(", ") + " | month totals " + IDS.map((id) => id + " " + F[id]).join(", "));
           }

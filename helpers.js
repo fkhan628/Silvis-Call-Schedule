@@ -2564,7 +2564,9 @@ function suFmtTs(iso) {
 
 // Node entry point for test/data-layer.test.js. A no-op in the browser.
 /* === TOTALS (Prompt 6 Slice F) - pure tally helpers ===
-   One 24-h day = one shift; nothing weighted or split; counts only (no $).
+   One 24-h day = one shift; nothing split; counts only (no $). The raw counts stay unweighted (trade
+   suggestions read them); Prompt 32 step 1 (10/11) adds the WEIGHTED view beside them - ttWeightedLoad /
+   ttWeightedShare below, with the weights handed in from rules.js shiftWeightsOf (primary 1, backup 0.5).
    tt-prefixed so nothing collides with rules.js / generator.js globals.
    ttTotalsFor(schedule, surgeonId, from, to, opts) ->
      { primary, backup, total, weekendDays, majorHolidays, minorHolidays, maxConsecutive, holidayUnits: [names] }
@@ -2679,11 +2681,34 @@ function ttRangeFor(mode, year, month0, opts) {
   for (var c = parse(from); fmt(c) <= to; c = new Date(c.getFullYear(), c.getMonth() + 1, 1)) months.push(c.getFullYear() + "-" + String(c.getMonth() + 1).padStart(2, "0"));
   return { from: from, to: to, label: label, months: months };
 }
-// Signed deviation text: "+2", "-1", "0", or "-" without a target.
+// Signed deviation text: "+2", "-1", "0", or "-" without a target. Prompt 32 step 1 (10/11): a non-integer
+// difference is rounded to one decimal for display (7 - 5.6 printed "+1.4000000000000004"); a difference that
+// rounds to zero reads "0", never "-0"; integer outputs are unchanged.
 function ttDeviation(total, target) {
   if (typeof target !== "number" || isNaN(target)) return "-";
-  var d = Number(total || 0) - target;
+  var d = ttRound1(Number(total || 0) - target);
+  if (d === 0) return "0";
   return d > 0 ? "+" + d : String(d);
+}
+// One decimal for display (the GenDiagnostics num() rule); 0 for -0.
+function ttRound1(x) { var r = Math.round(Number(x) * 10) / 10; return r === 0 ? 0 : r; }
+// Prompt 32 step 1 (Faraz 10/11): the WEIGHTED LOAD of a tally - primary x weights.primary + backup x
+// weights.backup, one decimal. `weights` comes from rules.js shiftWeightsOf(groupRules) - the ONE reader of
+// groupRules.shiftAccounting.weights and its default; this helper never supplies a default of its own (null
+// when weights is not { primary: number, backup: number }). Silvis days only: the caller passes ttTotalsFor's
+// counts, which never include East days.
+function ttWeightedLoad(primary, backup, weights) {
+  if (!weights || typeof weights.primary !== "number" || typeof weights.backup !== "number") return null;
+  return ttRound1(Number(primary || 0) * weights.primary + Number(backup || 0) * weights.backup);
+}
+// The WEIGHTED SHARE beside it: targetP x weights.primary + targetB x weights.backup, one decimal. A missing
+// role target reads 0 (as the fairness view's green mark summed P + B before); null without any target or
+// without weights.
+function ttWeightedShare(targetP, targetB, weights) {
+  if (!weights || typeof weights.primary !== "number" || typeof weights.backup !== "number") return null;
+  var p = typeof targetP === "number" && !isNaN(targetP) ? targetP : null, b = typeof targetB === "number" && !isNaN(targetB) ? targetB : null;
+  if (p === null && b === null) return null;
+  return ttRound1((p || 0) * weights.primary + (b || 0) * weights.backup);
 }
 // ttOutsideSurgeons(roster, schedule, from, to, opts) -> [{ id, name, code, active, primary, backup, total }]
 // The Totals view's "Outside surgeons" section (Prompt 12 M, 9/22): every roster
@@ -2713,6 +2738,73 @@ function ttCsvText(headers, rows) {
   var lines = [headers.map(cell).join(",")];
   (rows || []).forEach(function (r) { lines.push(r.map(cell).join(",")); });
   return lines.join("\r\n") + "\r\n";
+}
+
+/* === OVER THE SOFT LIMIT (Prompt 32 step 4; Faraz 10/11 decision 5) ===
+   A primary day is "over the soft limit" when it is the (L+1)th or later primary of its holder's calendar month in date
+   order, L = his soft limit (the group's 7). The DAYS come from ONE helper, rules.js overSoftLimitDays(ctx, schedule,
+   from, to) -> [{ day, id, month, count, limit }], and the months from overSoftLimitMonths -> [{ id, month, count, limit }]
+   - derived from the schedule, never stored. These helpers only word, index and trim those plain lists (they read no
+   rules). Words: "over 7" for the group's 7, "over <L>" for an own soft limit - the limit is always named; a hard-cap
+   breach is not on these lists (it keeps its own wording). Signed-in surfaces only - the callers gate ?public=1. No $. */
+const OSL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const OSL_WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function oslOk(o) { return !!(o && typeof o === "object" && typeof o.id === "string" && o.id && /^\d{4}-\d{2}-\d{2}$/.test(String(o.day || ""))); }
+function oslOrdinal(n) {
+  const v = Math.abs(Math.trunc(Number(n) || 0)), t = v % 100;
+  return v + (t >= 11 && t <= 13 ? "th" : v % 10 === 1 ? "st" : v % 10 === 2 ? "nd" : v % 10 === 3 ? "rd" : "th");
+}
+// "over 7" (the badge / flag words); "over the soft limit" without a number
+function overSoftLimitWords(limit) { return typeof limit === "number" && isFinite(limit) ? "over " + limit : "over the soft limit"; }
+// "Wed 11/18 P Acton - 8th primary day of November (over 7)" - the Generate preview's and the Publish dialog's line
+function overSoftLimitLine(o, nameOf) {
+  const d = String(o && o.day || ""), m = Number(d.slice(5, 7));
+  const wd = OSL_WD[new Date(Date.UTC(Number(d.slice(0, 4)), m - 1, Number(d.slice(8, 10)))).getUTCDay()] || "";
+  const who = typeof nameOf === "function" ? nameOf(o.id) : o.id;
+  return wd + " " + fmtMD(d) + " P " + who + " - " + oslOrdinal(o.count) + " primary day of " + (OSL_MONTHS[m - 1] || d.slice(0, 7)) + " (" + overSoftLimitWords(o.limit) + ")";
+}
+// "Khan: 8th primary day of November 2026 - over the soft limit of 7 primary days a month" - the badge's hover
+function overSoftLimitTitle(o, nameOf) {
+  const d = String(o && o.day || ""), m = Number(d.slice(5, 7));
+  const who = typeof nameOf === "function" ? nameOf(o.id) : o.id;
+  return who + ": " + oslOrdinal(o.count) + " primary day of " + (OSL_MONTHS[m - 1] || d.slice(0, 7)) + " " + d.slice(0, 4) + " - over the soft limit" + (typeof o.limit === "number" ? " of " + o.limit + " primary days a month" : "");
+}
+// { day: entry } (a day has one primary, so one entry) - the calendar badge's lookup; junk -> {}
+function overSoftLimitIndex(list) {
+  const out = {};
+  (Array.isArray(list) ? list : []).forEach(o => { if (oslOk(o) && !out[o.day]) out[o.day] = o; });
+  return out;
+}
+// The Publish dialog's list: the days of a (holder, month) to which this publish's changes GAVE a primary - his new day
+// itself when it is over, or a later unchanged day an earlier new one moved up past the limit. A backup change, a primary
+// taken away from him, a lock or note change gives him nothing. List order (date order) kept; junk -> [].
+function overSoftLimitForChanges(list, changes) {
+  if (!Array.isArray(list) || !Array.isArray(changes)) return [];
+  const gained = new Set();
+  changes.forEach(c => { if (c && c.role === "primary" && typeof c.to === "string" && c.to && c.to !== c.from && /^\d{4}-\d{2}/.test(String(c.day || ""))) gained.add(c.to + "|" + String(c.day).slice(0, 7)); });
+  return list.filter(o => oslOk(o) && gained.has(o.id + "|" + o.day.slice(0, 7)));
+}
+// The Accept audit row's detail.overSoftLimit: [{ day, id }] - ids and days only (never a name, the ordinal or the limit)
+function overSoftLimitAudit(list) { return (Array.isArray(list) ? list : []).filter(oslOk).map(o => ({ day: o.day, id: o.id })); }
+// The calendar legend's words for the badges a grid draws (never a hard-coded 7): "over 7", or "over 7 / over 9" when the
+// holders shown carry different soft limits - ascending, each once; entries without a number -> "over the soft limit";
+// nothing valid -> "" (the caller shows no legend line)
+function overSoftLimitLegend(list) {
+  const ok = (Array.isArray(list) ? list : []).filter(oslOk), lim = [];
+  ok.forEach(o => { if (typeof o.limit === "number" && isFinite(o.limit) && lim.indexOf(o.limit) < 0) lim.push(o.limit); });
+  if (!ok.length) return "";
+  return lim.length ? lim.sort((a, b) => a - b).map(overSoftLimitWords).join(" / ") : overSoftLimitWords(null);
+}
+// Totals' month flag: { text: "over 7" (one month) | "over 7: Oct, Nov" (a longer period), title } or null when no month is
+// over. `list` = one holder's overSoftLimitMonths entries; nMonths = the months of the period on screen.
+function overSoftLimitMonthsText(list, nMonths) {
+  const ok = (Array.isArray(list) ? list : []).filter(x => x && /^\d{4}-\d{2}$/.test(String(x.month || ""))).slice().sort((a, b) => a.month < b.month ? -1 : a.month > b.month ? 1 : 0);
+  if (!ok.length) return null;
+  const L = ok[0].limit, mon = (k) => VAC_MON[Number(k.slice(5, 7)) - 1];
+  return {
+    text: overSoftLimitWords(L) + (nMonths > 1 ? ": " + ok.map(x => mon(x.month)).join(", ") : ""),
+    title: "Primary days over the soft limit" + (typeof L === "number" ? " of " + L + " a month" : "") + ": " + ok.map(x => mon(x.month) + " " + x.month.slice(0, 4) + " (" + x.count + ")").join(", ")
+  };
 }
 
 /* === NOTIFICATION MESSAGE COMPOSERS (Prompt 6 Slice G) ===
@@ -4827,6 +4919,32 @@ function tradeWaitingUnitLine(group, tag, viewerId, isGive) {
   const back = ret.length === 1 ? slotLabel(ret[0].return_day, ret[0].return_role) : ret[0].return_role + " " + span(ret[0].return_day, ret[ret.length - 1].return_day, ret.length);
   return taker + " would take " + role + " for " + unit + "; " + backTaker + " would take " + back;
 }
+// suMonthlyCapReading(rules, groupRules) -> { hard, hardGroup, soft, softGroup, none, invalid, east }: one surgeon's
+// monthly PRIMARY cap as rules.js buildContext reads it (Prompt 32, Faraz 10/11), for the words below (offerRulesWords,
+// suRulesSummary) - one reading, so the two never disagree with the engine. groupRules.defaultMonthlyCap = { primary
+// (HARD, optional; the legacy 'total' is its alias), preferred (SOFT, optional, a positive number) }. monthlyCap absent
+// or null = the group default; "none" = no limit at all; a number = a hard cap with no soft limit; an object = its own
+// hard cap (else the group's) + its own soft limit (else the group's, but only when it has no hard cap of its own);
+// anything else = the group default (invalid: true - rules.js warns). hardGroup / softGroup say the number is the group's.
+function suMonthlyCapReading(rules, groupRules) {
+  const R = rules && typeof rules === "object" ? rules : {};
+  const d = groupRules && groupRules.defaultMonthlyCap && typeof groupRules.defaultMonthlyCap === "object" ? groupRules.defaultMonthlyCap : {};
+  const dHard = typeof d.primary === "number" ? d.primary : typeof d.total === "number" ? d.total : null;
+  const dSoft = typeof d.preferred === "number" && isFinite(d.preferred) && d.preferred > 0 ? d.preferred : null;
+  const group = { hard: dHard, hardGroup: dHard !== null, soft: dSoft, softGroup: dSoft !== null, none: false, invalid: false, east: false };
+  const mc = Object.prototype.hasOwnProperty.call(R, "monthlyCap") ? R.monthlyCap : undefined;
+  if (mc === undefined || mc === null) return group;
+  if (mc === "none") return { hard: null, hardGroup: false, soft: null, softGroup: false, none: true, invalid: false, east: false };
+  if (typeof mc === "number") return { hard: mc, hardGroup: false, soft: null, softGroup: false, none: false, invalid: false, east: false };
+  if (typeof mc === "object" && !Array.isArray(mc)) {
+    const own = typeof mc.primary === "number" ? mc.primary : typeof mc.total === "number" ? mc.total : null;
+    const ownSoft = typeof mc.preferred === "number" ? mc.preferred : null;
+    const soft = ownSoft !== null ? ownSoft : (own === null ? dSoft : null);
+    return { hard: own !== null ? own : dHard, hardGroup: own === null && dHard !== null, soft, softGroup: ownSoft === null && soft !== null, none: false, invalid: false,
+      east: mc.countsEastDays === true || mc.countsEastDays === "distinct-days" };
+  }
+  return Object.assign(group, { invalid: true });
+}
 // offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
 // the painter next to "Go by my rules" so the person knows what that means for them. Never carries a note field.
@@ -4900,11 +5018,12 @@ function offerRulesWords(rules, groupRules) {
   }
   if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
   if (R.weekendStyle) out.push((sfOn ? "Backup weekends: " : "Weekends: ") + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
-  const cap = R.monthlyCap;
-  if (typeof cap === "number") out.push("Cap: " + cap + " primary days a month.");
-  else if (cap && typeof cap === "object" && typeof cap.primary === "number") out.push("Cap: " + cap.primary + " primary days a month" + (typeof cap.preferred === "number" ? " (" + cap.preferred + " preferred)" : "") + (cap.countsEastDays ? ", East primary-week days included" : "") + ".");
-  else if (cap === null) out.push("No monthly cap of your own.");
-  else if (cap === undefined && G.defaultMonthlyCap && typeof G.defaultMonthlyCap.primary === "number") out.push("Cap: the group default of " + G.defaultMonthlyCap.primary + " primary days a month.");
+  // Prompt 32 (Faraz 10/11): the hard cap and the soft limit as rules.js reads them - null and an absent key are the
+  // group default (the seed's soft 7), "none" is no limit; an unreadable value reads as the group default too
+  const cap = suMonthlyCapReading(R, G);
+  if (cap.none) out.push("No monthly limit.");
+  else if (cap.hard !== null) out.push("Cap: " + (cap.hardGroup ? "the group default of " : "") + cap.hard + " primary days a month" + (cap.soft !== null ? " (soft limit " + cap.soft + (cap.softGroup ? ", the group's" : "") + ")" : "") + (cap.east ? ", East primary-week days included" : "") + ".");
+  else if (cap.soft !== null) out.push("Soft limit: " + cap.soft + " primary days a month" + (cap.softGroup ? " (the group's)" : "") + (cap.east ? ", East primary-week days included" : "") + ".");
   if (R.backupCap && typeof R.backupCap === "object") out.push("Backup cap: " + [typeof R.backupCap.perMonthDays === "number" ? R.backupCap.perMonthDays + " days" : null, typeof R.backupCap.weekendsPerMonth === "number" ? R.backupCap.weekendsPerMonth + " weekend" + (R.backupCap.weekendsPerMonth === 1 ? "" : "s") : null].filter(Boolean).join(" and ") + " a month.");
   if (typeof R.maxConsecutiveDays === "number") out.push("At most " + R.maxConsecutiveDays + " consecutive primary days" + (typeof R.maxConsecutiveAnyRole === "number" ? " (" + R.maxConsecutiveAnyRole + " in any role)" : "") + ".");
   const hr = R.holidayRules;
@@ -4921,7 +5040,7 @@ function offerRulesWords(rules, groupRules) {
    suRulesSummary(rules, info) -> [{ family, text }]: one line per rule family, saying what rules.js does with each key
    of ONE surgeonRules entry (and, for the seed lists, what the import does) - engine defaults included: the
    hardNeverWeekdays roles default to primary while backup is open, weekdays.autoOffer and aledo.hardAvoidDayBefore
-   default on, eastFeed.eastBackupCountsAsBusy defaults on, an absent monthlyCap is the group default, an absent
+   default on, eastFeed.eastBackupCountsAsBusy defaults on, an absent or null monthlyCap is the group default (Prompt 32), an absent
    maxConsecutiveDays the group default. Data only: names, holiday names and the group rules come in through `info`
    ({ names: { id: name }, holidayNames: [..], groupRules }); there is no surgeon-specific branch. A key the helper does
    not know (top level, or inside an object it reads) is listed on the "Other" line as not read by the engine - nothing
@@ -5279,17 +5398,18 @@ function suRulesSummary(rules, info) {
   const mcd = typeof R.maxConsecutiveDays === "number" ? R.maxConsecutiveDays : null;
   const dmc = typeof G.defaultMaxConsecutiveDays === "number" ? G.defaultMaxConsecutiveDays : 2;
   lim.push("at most " + (mcd !== null ? mcd : dmc) + " " + (G.countBackupInConsecutive ? "days on call" : "primary days") + " in a row" + (mcd === null ? " (group default)" : "") + (R.holidayUnitCountsAsOneDay === true ? " (a holiday unit counts as one)" : "") + (typeof R.maxConsecutiveAnyRole === "number" ? ", " + R.maxConsecutiveAnyRole + " in any role (soft)" : ""));
-  const dcap = suSumObj(G.defaultMonthlyCap) ? (typeof G.defaultMonthlyCap.primary === "number" ? G.defaultMonthlyCap.primary : typeof G.defaultMonthlyCap.total === "number" ? G.defaultMonthlyCap.total : null) : null;
-  const capWords = (n) => "cap " + n + " primary days a month";
-  if (!suSumHas(R, "monthlyCap")) lim.push(dcap !== null ? capWords(dcap) + " (group default)" : "no monthly cap");
-  else if (R.monthlyCap === null) lim.push("no monthly cap");
-  else if (typeof R.monthlyCap === "number") lim.push(capWords(R.monthlyCap));
-  else if (R.monthlyCap && typeof R.monthlyCap === "object") {
-    const mc = R.monthlyCap;
-    const own = typeof mc.primary === "number" ? mc.primary : typeof mc.total === "number" ? mc.total : null;
-    const c = own !== null ? own : dcap;
-    lim.push((c !== null ? capWords(c) + (own === null ? " (group default)" : "") : "no hard monthly cap") + (typeof mc.preferred === "number" ? ", " + mc.preferred + " preferred" : "") + (mc.countsEastDays === true || mc.countsEastDays === "distinct-days" ? ", East primary-week days count" : ""));
-  } else lim.push("a monthly cap that is not a number (invalid - no cap applied)"); // rules.js: a string / boolean cap leaves no cap at all
+  // Prompt 32 (Faraz 10/11): the hard cap and the soft limit as rules.js reads them (suMonthlyCapReading) - absent and null
+  // are the group default (the seed's soft 7), "none" is no limit, an unreadable value reads as the group default (warned)
+  const capR = suMonthlyCapReading(R, G);
+  const capWords = (c) => {
+    const parts = [];
+    if (c.hard !== null) parts.push("cap " + c.hard + " primary days a month" + (c.hardGroup ? " (group default)" : ""));
+    if (c.soft !== null) parts.push("soft limit " + c.soft + (c.hard !== null ? "" : " primary days a month") + (c.softGroup ? " (the group's)" : ""));
+    return parts.length ? parts.join(", ") : "no monthly cap";
+  };
+  if (capR.none) lim.push("no monthly cap (none - the group default does not apply)");
+  else if (capR.invalid) lim.push("a monthly cap that is not a number (invalid - read as the group default: " + capWords(capR) + ")");
+  else lim.push(capWords(capR) + (capR.east ? ", East primary-week days count" : ""));
   const mt = R.monthlyTarget;
   // generator.js genTargetOverride: a number = the primary target, an object = its numeric roles, anything else = none
   const mtP = suSumObj(mt) && typeof mt.primary === "number" ? mt.primary : null, mtB = suSumObj(mt) && typeof mt.backup === "number" ? mt.backup : null;
@@ -5405,7 +5525,8 @@ const SU_RULE_FIELDS = [
   { id: "maxConsecutiveAnyRole", group: "limits", label: "Most days in a row, any role", paths: ["maxConsecutiveAnyRole"], used: r => typeof r.maxConsecutiveAnyRole === "number" },
   { id: "holidayUnitCountsAsOneDay", group: "limits", label: "A holiday unit counts as one day", paths: ["holidayUnitCountsAsOneDay"], used: r => r.holidayUnitCountsAsOneDay === true, start: true },
   { id: "monthlyTarget", group: "limits", label: "Monthly target", paths: ["monthlyTarget"], used: r => typeof r.monthlyTarget === "number" || suRfObj(r.monthlyTarget) },
-  { id: "monthlyCap", group: "limits", label: "Monthly cap", paths: ["monthlyCap"], used: r => suSumHas(r, "monthlyCap") },
+  // Prompt 32 (10/11): monthlyCap null is the group default - the same as no key - so only a non-null value uses the field
+  { id: "monthlyCap", group: "limits", label: "Monthly cap", paths: ["monthlyCap"], used: r => suSumHas(r, "monthlyCap") && r.monthlyCap !== null },
   { id: "preferAlternateDays", group: "limits", label: "Prefers alternate days", paths: ["preferAlternateDays"], used: r => r.preferAlternateDays === true, start: true },
   { id: "handoffPartnerRequired", group: "limits", label: "Flag a missing handoff", paths: ["handoffPartnerRequired"], used: r => r.handoffPartnerRequired === true, start: true },
   { id: "eastFeed", group: "east", label: "East (Davenport) call", paths: ["eastFeed"], used: r => suRfObj(r.eastFeed), start: { enabled: true } },
@@ -5476,6 +5597,7 @@ const SU_RULE_VALUE_WORDS = {
   availabilityMode: SU_SUM_MODE_WORDS,
   weekendStyle: { block: "one block (Fri+Sat+Sun)", split: "split (Fri+Sun / Sat)", daily: "single days", "saturday-only": "Saturday only (older setting)" },
   weekendBlockPenalty: { "": "blank - read as medium" },
+  monthlyCap: { none: "no limit" },   // Prompt 32: the Monthly cap menu's "no limit" writes the string "none"
 };
 function suRuleCanon(v) { return JSON.stringify(v, (k, x) => suRfObj(x) ? Object.keys(x).sort().reduce((o, kk) => { o[kk] = x[kk]; return o; }, {}) : x); }
 function suRuleFieldHeld(field, rules) {
@@ -5484,8 +5606,8 @@ function suRuleFieldHeld(field, rules) {
   let notes = false;
   const vw = SU_RULE_VALUE_WORDS[field.id] || null;
   // Review 2 (10/1): a null the field does not read - used() false on that null alone (monthlyTarget: null is the same as
-  // no key) - is nothing to lose: no item, so no question for it; a null the engine reads (monthlyCap: null = no cap,
-  // over the group default) still counts
+  // no key) - is nothing to lose: no item, so no question for it; a null the engine reads differently from no key would
+  // still count (Prompt 32, 10/11: monthlyCap null is the group default now - the same as no key; its no-limit is "none")
   const nullIsNoKey = (p) => {
     const o = {}, parts = p.split(".");
     let c = o;
@@ -6873,7 +6995,8 @@ if (typeof module !== "undefined" && module.exports) {
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
-    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttCsvText, ttIsIso, ttOutsideSurgeons,
+    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, ttCsvText, ttIsIso, ttOutsideSurgeons,
+    overSoftLimitWords, overSoftLimitLine, overSoftLimitTitle, overSoftLimitIndex, overSoftLimitForChanges, overSoftLimitAudit, overSoftLimitLegend, overSoftLimitMonthsText,
     buildWeekRows, exportColorsFor,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,
     escHtml, holidayNameByDay, monthsOfSchedule, normalizeMonths,
@@ -6885,7 +7008,7 @@ if (typeof module !== "undefined" && module.exports) {
     holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanWrittenCheck, holidayPlanConflictLines, holidayPlanUnitLines, holidayPlanNoticeChanges, holidayPlanHeldNotices,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
-    offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, suMonthlyCapReading, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
     NO_PRIMARY_RANGE_WORDS, NO_PRIMARY_HELD_WORDS, noPrimaryDays, offerPaintCell, noPrimaryDraftDiff, offersAuditSummary, noPrimaryErrorWords,
     suRulesSummary, suRulesUnknownKeys, suHnOtherDayRules, suSumGoverned, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,

@@ -869,6 +869,24 @@ check("Group call: the app passes groupRules to both builders (index-source.html
   assert.ok(/buildPrintableCalendarHTML\(\{ startYear: calYear[^}]*weekStartsOn, groupRules \}\)/.test(src), "printable month");
 });
 
+/* ---- Prompt 32 step 1 (Faraz 10/11): weighted accounting is the Totals card's (signed-in) only - never in an export others see ---- */
+// A guard (it holds before and after the step): the shift weights (groupRules.shiftAccounting.weights, read through rules.js
+// shiftWeightsOf) and the Totals weighted figures stay out of the share page, the printable month, the ER Call Panels and the
+// .ics files - the documents are byte-for-byte the same whatever the weights, and no builder reads them.
+check("Prompt 32 step 1: no export others see reads the shift weights or prints a weighted figure (share page / printable / ER panel / ICS, byte-for-byte across weights)", () => {
+  const wOn = { groupCall: gcOn.groupCall, shiftAccounting: { weights: { primary: 1, backup: 0.5 } } };
+  const wOdd = { groupCall: gcOn.groupCall, shiftAccounting: { weights: { primary: 3, backup: 2 } } };
+  assert.strictEqual(gcShare(wOn), gcShare(gcOn), "share page: the weights change nothing");
+  assert.strictEqual(gcShare(wOdd), gcShare(gcOn), "share page: other weights change nothing");
+  assert.strictEqual(gcPrint(wOn, 2), gcPrint(gcOn, 2), "printable: the weights change nothing");
+  assert.strictEqual(gcPrint(wOdd, 2), gcPrint(gcOn, 2), "printable: other weights change nothing");
+  const docs = [gcShare(wOn), gcPrint(wOn, 2), H.buildErCallPanelsHTML(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV }), H.buildErCallPanelsText(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV }), H.generateICS(H.buildICSEvents(schedule, null, roster, {}), "x")];
+  docs.forEach((d, i) => assert.ok(!/\bweighted\b/i.test(d), "document #" + i + " names a weighted figure"));
+  for (const f of ["generateShareHTML", "buildPrintableCalendarHTML", "buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS"]) {
+    assert.ok(typeof H[f] === "function" && !/shiftWeightsOf|shiftAccounting|ttWeighted/.test(H[f].toString()), f + " reads the shift weights");
+  }
+});
+
 livePanel().catch(e => { failed++; console.log("FAIL live ER panel\n     " + (e && e.message || e)); }).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

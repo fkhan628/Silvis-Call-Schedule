@@ -220,6 +220,15 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   if (overrideApplied.length) { L.push(""); L.push(`**Rules override (in memory only - nothing saved): ${md(ARGS.rulesOverride)}** - ${md(overrideApplied.join(", "))}.`); }
   L.push("");
   if (dg.score) { L.push("## Score"); L.push(""); L.push("```"); L.push(JSON.stringify(dg.score, null, 2)); L.push("```"); L.push(""); }
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the over-soft-limit days, listed first - before the calendar and the tallies.
+  // Since the 10/12 review fix: every such day of the months the range touches (outside the range too) for a holder the run
+  // gives a primary that month - the days the app's Publish dialog and Accept audit row name
+  if (Array.isArray(dg.overSoftLimit)) {
+    L.push("## Over the soft limit (" + dg.overSoftLimit.length + ")"); L.push("");
+    if (!dg.overSoftLimit.length) L.push("None - nobody this run gives a primary ends that month past his soft monthly limit.");
+    else dg.overSoftLimit.forEach((o) => L.push("- " + md(H.overSoftLimitLine(o, nameOf))));
+    L.push("");
+  }
 
   // calendar as week rows over the merged schedule (locks + generated)
   const merged = Object.assign({}, schedule, sched);
@@ -247,14 +256,14 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     // = { primary, backup } - the water-filled share per role for a pool member (WF 9/23), the window target for Sarkar (no backup target), '-'
     // where none. A legacy numeric target (a pre-J preview) reads as the primary target.
     const tgt = (x, role) => { const t = x && x.target; if (t && typeof t === "object") return typeof t[role] === "number" ? Math.round(t[role] * 10) / 10 : "-"; return role === "primary" && typeof t === "number" ? Math.round(t * 10) / 10 : "-"; };
-    L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. P | Max consec. any | Cap (P) | Target P | Target B |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
-    for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.maxConsecutiveAnyRole} | ${x.cap == null ? "-" : x.cap} | ${tgt(x, "primary")} | ${tgt(x, "backup")} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | **${x.maxConsecutiveAnyRole}** | | **${tgt(x, "primary")}** | **${tgt(x, "backup")}** |`); } }
+    L.push("| Surgeon | Month | Primary | Backup | Total | Weekend days | Major | Minor | Max consec. P | Max consec. any | Cap (P) | Target P | Target B | Weighted | W share |"); L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    for (const s of roster) { const tl = dg.tallies[s.id]; if (!tl) continue; const months = Object.keys(tl.months).sort(); for (const m of months) { const x = tl.months[m]; L.push(`| ${s.name} | ${m} | ${x.primary} | ${x.backup} | ${x.total} | ${x.weekendDays} | ${x.majorHolidays} | ${x.minorHolidays} | ${x.maxConsecutive} | ${x.maxConsecutiveAnyRole} | ${x.cap == null ? "-" : x.cap} | ${tgt(x, "primary")} | ${tgt(x, "backup")} | ${x.weighted == null ? "-" : x.weighted} | ${x.weightedShare == null ? "-" : x.weightedShare} |`); } if (tl.range) { const x = tl.range; L.push(`| **${s.name}** | **range** | **${x.primary}** | **${x.backup}** | **${x.total}** | **${x.weekendDays}** | **${x.majorHolidays}** | **${x.minorHolidays}** | **${x.maxConsecutive}** | **${x.maxConsecutiveAnyRole}** | | **${tgt(x, "primary")}** | **${tgt(x, "backup")}** | **${x.weighted == null ? "-" : x.weighted}** | **${x.weightedShare == null ? "-" : x.weightedShare}** |`); } }
     // Implied shares (J, water-filled WF 9/23): per month the pool slots (open + held), the pool and the two levels, then per member the target
     // against what the rules ALLOW on the lock-only schedule - a target above the allowed count is an
     // availability shortfall the generator cannot close, not a defect.
     const IT = dg.impliedTargets;
     if (IT && IT.months && Object.values(IT.months).some(I => I && I.members)) {
-      L.push(""); L.push("## Implied shares (water-filled share per role; target vs what the rules allow)"); L.push("");
+      L.push(""); L.push("## Implied shares (water-filled primary share, weighted backup share - Prompt 32 step 2; target vs what the rules allow)"); L.push("");
       L.push(`*Pool: ${(IT.pool || []).map(nameOf).join(", ")}. ${md(IT.rule || "")}*`); L.push("");
       for (const m of Object.keys(IT.months).sort()) {
         const I = IT.months[m]; if (!I || !I.members) continue;
@@ -264,10 +273,10 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
         const partial = typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? ` | partial month: ${I.rangeDays} day(s) in range, whole-month targets` : "";
         const lvl = (x) => (x == null ? "at caps" : x);
         L.push(I.poolSlots
-          ? `### ${m}: primary ${I.poolSlots.primary} pool slots (${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows + ${I.heldByPool ? I.heldByPool.primary : "-"} held) = level ${lvl(I.primaryShare)} each of ${I.poolSize}; backup ${I.poolSlots.backup} pool slots (${I.backupOpen} open + ${I.heldByPool ? I.heldByPool.backup : "-"} held) = level ${lvl(I.backupShare)}${pl}${partial}`
+          ? `### ${m}: primary ${I.poolSlots.primary} pool slots (${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows + ${I.heldByPool ? I.heldByPool.primary : "-"} held) = level ${lvl(I.primaryShare)} each of ${I.poolSize}; backup ${I.poolSlots.backup} pool slots (${I.backupOpen} open + ${I.heldByPool ? I.heldByPool.backup : "-"} held) = level ${lvl(I.backupShare)}${typeof I.weightedShare === "number" ? ` at the primary level; weighted level ${I.weightedShare}${I.makeupRounds ? ` (${I.makeupRounds} makeup round(s))` : ""}` : ""}${pl}${partial}`
           : `### ${m}: pre-9/23 preview (flat share): primary ${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows, share ${I.primaryShare} each of ${I.poolSize}; backup ${I.backupOpen} open, share ${I.backupShare}${pl}${partial}`); L.push("");
-        L.push("| Surgeon | Target P | Allowed P | Held P | Clip P | Target B | Allowed B | Held B |"); L.push("|---|---|---|---|---|---|---|---|");
-        for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} |`); }
+        L.push("| Surgeon | Target P | Allowed P | Held P | Clip P | Target B | Allowed B | Held B | Fill clip P / B | W share |"); L.push("|---|---|---|---|---|---|---|---|---|---|");
+        for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} | ${M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"} | ${v(M.weightedShare)}${M.makeupPrimary > 0 ? " (+" + M.makeupPrimary + " P makeup)" : ""} |`); }
         L.push("");
       }
     }

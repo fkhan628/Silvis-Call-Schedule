@@ -5,7 +5,7 @@
 //
 // Section A - data: HOLIDAY_PLAN_DEFAULTS = the seed's groupRules.holidayPlan (the GROUP_CALL_DEFAULTS pattern), the
 //   key reader's fallbacks, Khan's 9/30 Christmas opt-out (data only, Faraz to confirm), what reaches the blob, the
-//   openQuestions entry and the ONE 2026-09-30 revision entry (right before the 10/10 entry, the last).
+//   openQuestions entry and the ONE 2026-09-30 revision entry (right before the 10/10 entry, then the two 10/11 entries - the caps, then the shift weights, the last).
 // Section B - history (rule 6): the schedule's units + the before-the-app list, the schedule winning a conflict.
 // Sections C..G - one per rule: C pool + what still refuses (rule 1), D the tier split (rule 2), E alternation and the
 //   primary rate (rule 3), F no repeat + the tie-breaks (rule 4), G the derived East week (rule 5).
@@ -89,7 +89,7 @@ ok(!("holidayPlanNote" in imp.blob.groupRules), "holidayPlanNote is dropped from
 eq(imp.blob.surgeonRules.s1.holidayRules, { holidaysOff: ["Christmas"] }, "blob s1.holidayRules = the rule only (holidaysOffNote dropped)");
 ok(IMP.impFindContactValues(seed.groupRules.holidayPlan).length === 0 && !seed.roster.some((r) => JSON.stringify(seed.groupRules.holidayPlan).indexOf(r.name) >= 0), "the block carries no contact-like value and no roster name (the blob is anon-readable)");
 
-step("A3: openQuestions 21 and ONE 2026-09-30 revision entry for Prompt 25, right before the 10/10 entry (the last)");
+step("A3: openQuestions 21 and ONE 2026-09-30 revision entry for Prompt 25, right before the 10/10 entry (then the 10/11 caps entry and the 10/11 weights entry, the last)");
 // pin moved deliberately 10/1 (merge with Prompt 23, which shipped first and took openQuestions 20 / rules doc section 8 item 23):
 // the holiday plan's entry is 21 (section 8 item 24); kept intent - one entry, its text, the last revision entry
 const q20 = seed.openQuestions.filter((t) => /^21\. Holiday plan \(Prompt 25, Faraz 9\/30\)/.test(t));
@@ -98,15 +98,21 @@ ok(/Khan off Christmas in BOTH roles/.test(q20[0]) && /Faraz to confirm/.test(q2
 ok(/\(c\) tie 2 .* is read as the sum over the pool of last year's days in the tier x this year's days/.test(q20[0]) && /\(d\) Should rules\.js read an accepted holiday-plan row as the holder's own availability .*Default taken: no - kept as locks, listed as lock violations/.test(q20[0]), "review fixes M / L: the tie-2 reading and the lock question are recorded as defaults to confirm");
 const rev = seed._meta.revisions.filter((t) => /^2026-09-30 /.test(t) && /Prompt 25/.test(t));
 eq(rev.length, 1, "one _meta.revisions entry for Prompt 25");
-// pin moved deliberately 10/10 (Burchett withdrew 1/9-1/10 and 1/16-1/17/2027): the seed's 10/10 entry
-// (chore/seed-burchett-jan-withdrawn) follows this one and is the last, so seedLastRevision reads 2026-10-10. Kept intent:
-// one Prompt 25 entry, sitting right before the 10/10 entry - nothing appended between the two, neither moved.
+// pin moved deliberately 10/14 (merging main into Prompt 32): main's 10/10 entry (Burchett's January ranges) sits before the two 10/11 entries.
+// pin moved deliberately 10/11 (Prompt 32, the caps): the seed's 10/11 entry (feat/backup-weight-cap) follows this one and is
+// the last, so seedLastRevision reads 2026-10-11. Kept intent: one Prompt 25 entry, sitting right before the 10/11 entry -
+// nothing appended between the two, neither moved.
+// pin moved deliberately 10/11: Prompt 32 step 1 appends a SECOND 10/11 entry (the shift weights) after the caps entry, so the
+// caps entry is found by its step and the Prompt 25 entry sits one more place up. Kept intent: one Prompt 25 entry, right before
+// the 10/11 caps entry, then the 10/11 weights entry (the last) - nothing appended between them, none moved.
 const rev1010 = seed._meta.revisions.filter((t) => /^2026-10-10 \(Claude Code, branch chore\/seed-burchett-jan-withdrawn/.test(t));
-eq(rev1010.length, 1, "one _meta.revisions entry dated 2026-10-10 (Burchett's January ranges, withdrawn 10/10)");
-eq([seed._meta.revisions.indexOf(rev[0]), seed._meta.revisions.indexOf(rev1010[0])], [seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "it sits right before the 10/10 entry, which is the last");
+const rev1011 = seed._meta.revisions.filter((t) => /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 3/.test(t));
+const rev1011w = seed._meta.revisions.filter((t) => /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 1/.test(t));
+eq([rev1010.length, rev1011.length, rev1011w.length], [1, 1, 1], "one _meta.revisions entry dated 2026-10-10 (Burchett's January ranges), one dated 2026-10-11 for the caps (Prompt 32 step 3) and one for the shift weights (step 1)");
+eq([seed._meta.revisions.indexOf(rev[0]), seed._meta.revisions.indexOf(rev1010[0]), seed._meta.revisions.indexOf(rev1011[0]), seed._meta.revisions.indexOf(rev1011w[0])], [seed._meta.revisions.length - 4, seed._meta.revisions.length - 3, seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "it sits right before the 10/11 caps entry, which sits right before the 10/11 weights entry (the last)");
 ok(/groupRules\.holidayPlan/.test(rev[0]) && /HOLIDAY_PLAN_DEFAULTS/.test(rev[0]) && /holidaysOff \['Christmas'\]/.test(rev[0]) && /seedCoreHash moves/.test(rev[0]), "it names the block, the code defaults, Khan's opt-out and the core-hash move");
 ok(IMP.impFindContactValues(rev[0]).length === 0 && !/\$\s*\d/.test(rev[0]), "no contact-like value, no amount");
-eq(imp.blob.settings.seedLastRevision, "2026-10-10", "blob settings.seedLastRevision (the 10/10 entry is the last - pin moved deliberately 10/10)");
+eq(imp.blob.settings.seedLastRevision, "2026-10-11", "blob settings.seedLastRevision (the 10/11 entry is the last - pin moved deliberately 10/11)");
 
 /* =================================================================== B */
 step("B1: holidayPlanHistory reads the schedule's units (split holders listed, external cover kept, empty units skipped)");

@@ -70,6 +70,8 @@
     .cal-skel { display: inline-block; width: 58%; height: 9px; border-radius: 4px; background: #e4e8ee; opacity: 0.9; }
     .cal-mobile-note { display: none; }
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
+    /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
+    .cal-os-short { display: none; }
     .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
     /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
        "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
@@ -130,6 +132,8 @@
       .cal-hol, .cal-wk-label, .cal-note { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
+      .cal-os-long { display: none; }
+      .cal-os-short { display: inline; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -182,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.12a";
+    var APP_VERSION = "2026.10.14a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -733,6 +737,7 @@ function CallSchedule() {
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [publishLabel, setPublishLabel] = useState("");
   const [publishChanges, setPublishChanges] = useState([]); // diffScheduleDays output (primary/backup only)
+  const [publishOverSoft, setPublishOverSoft] = useState([]); // Prompt 32 step 4: the over-soft-limit days this publish gave a primary (listed first)
 
   // --- Shift Trade Requests (by day + role) ---
   const [tradeRequests, setTradeRequests] = useState([]);
@@ -3366,6 +3371,16 @@ function CallSchedule() {
     try { return eastConflicts(rulesCtx, Object.keys(schedule || {}).sort()); }
     catch (e) { console.warn("East conflict report failed", e); return []; }
   }, [rulesCtx, schedule]);
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the primary days over their holder's soft limit - the (L+1)th and later
+  // primary of his calendar month, L = his soft limit (the group's 7) - through the ONE helper, rules.js overSoftLimitDays
+  // (derived, never stored), over the schedule the grid shows (a Generate preview overlaid, as the cells draw it), indexed
+  // by day for the cell's "over 7" badge. Signed-in roles only: on ?public=1 nothing is computed and nothing is drawn.
+  const overSoftByDay = useMemo(() => {
+    if (isPublicMode || !authUser || !rulesCtx || typeof overSoftLimitDays !== "function") return {};
+    const shown = previewGen && previewGen.schedule ? { ...(schedule || {}), ...previewGen.schedule } : (schedule || {});
+    try { return overSoftLimitIndex(overSoftLimitDays(rulesCtx, shown)); }
+    catch (e) { console.warn("over-soft-limit days could not be derived (no badge drawn):", e); return {}; }
+  }, [isPublicMode, authUser, rulesCtx, schedule, previewGen]);
   // The warnings are logged once per distinct set, not on every context rebuild (each poll rebuilds it): a blob that
   // still carries an ignored key would otherwise flood the console (seen on build 2026.09.23p).
   const lastRulesWarnRef = useRef("");
@@ -4076,7 +4091,7 @@ function CallSchedule() {
     // Audited AFTER the CAS sync with its outcome (Prompt 11): a wipe-blocked
     // or failed write must not leave a row saying the schedule was accepted.
     const outcome = r && r.ok ? "ok" : r && r.blocked ? "blocked" : r && r.conflict ? "conflict" : "failed";
-    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, fillOpenOnly: pv.fillOpenOnly === true, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
+    logAudit("schedule.generate_accept", `Accepted a generated schedule ${fmtMD(pv.start)} - ${fmtMD(pv.end)} (seed ${pv.seed}, best of ${pv.bestOf}): ${changes.length} slot change(s), ${(pv.diagnostics.uncovered || []).length} open slot(s)${outcome === "ok" ? "" : " - write " + outcome.toUpperCase()}`, { start: pv.start, end: pv.end, seed: String(pv.seed), bestOf: pv.bestOf, respectLocks: pv.respectLocks, fillOpenOnly: pv.fillOpenOnly === true, changes: changes.length, uncovered: (pv.diagnostics.uncovered || []).length, overSoftLimit: overSoftLimitAudit(pv.diagnostics.overSoftLimit), snapshot: snap.counts || null, outcome, error: r && r.error ? String(r.error).slice(0, 160) : null });
     if (r && r.ok) {
       setSaveStatus("Generated days saved"); setTimeout(() => setSaveStatus(""), 2000);
       // WHY IS IT OPEN (Prompt 13 part 4): the generator's reasons, rendered to
@@ -5328,6 +5343,9 @@ function CallSchedule() {
     // so helpers.labelGiveChanges finds the latest applied shift_trade_requests leg that put the holder there.
     const changes = labelGiveChanges(diffScheduleDays(publishedAsSchedule(lastPublished), schedule).filter(c => c.role === "primary" || c.role === "backup"), schedule, tradeRequests, tradeIsGiveProposal);
     setPublishChanges(changes);
+    // Prompt 32 step 4 (Faraz 10/11 decision 5): the days this publish puts over a holder's soft limit - the ONE helper over the
+    // schedule, trimmed to the (holder, month) pairs these changes gave a primary - listed FIRST in the dialog
+    setPublishOverSoft(overSoftLimitForChanges(rulesCtx && typeof overSoftLimitDays === "function" ? overSoftLimitDays(rulesCtx, schedule) : [], changes));
     setPublishLabel(computePeriodLabel());
     setShowPublishDialog(true);
   };
@@ -5648,6 +5666,9 @@ function CallSchedule() {
     if (!uid) { setPushInfo(null); return null; }
     const s = await pushDevice.state(uid);
     setPushInfo(s);
+    // push UX follow-up (10/12): the Pop-ups box reads the same permission as the push card, so the two never disagree
+    // (it was read once at start: after allowing notifications in the phone's Settings it kept saying "Blocked")
+    if (s && typeof s.permission === "string") setBrowserNotifPermission(s.permission);
     if (s.state === "on") setPushNeedsTap(false);
     return s;
   }, []);
@@ -5691,6 +5712,18 @@ function CallSchedule() {
       notifPrefsDb.pushColumns().then((c) => { pushColsRef.current = c; setPushCols(c); });
     }
   }, [pushCardOpen, pushUid, refreshPushState]);
+  // push UX follow-up (10/12): back in the foreground (e.g. from the phone's Settings, where the Blocked lines send people) the
+  // Pop-ups permission is read again, and an open Notification settings card re-reads the push state - no reload needed.
+  useEffect(() => {
+    if (isPublicMode) return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      try { setBrowserNotifPermission((typeof Notification !== "undefined" && Notification.permission) || "unsupported"); } catch (e) { /* keep the last reading */ }
+      if (pushCardOpen) refreshPushState(pushUid);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);
   // The tap target (helpers.pushDeepLink): ./?tab=<view>[&day=] - read ONCE per page load once signed in, the keys stripped
   // from the URL (history.replaceState; _v and the rest kept) so a refresh does not repeat it; a day opens when the data is
   // loaded (goToDay - its own unread-schedule refusal applies). Nothing on ?public=1. It waits for THIS account's profile and
@@ -7108,6 +7141,13 @@ function CallSchedule() {
             <p style={{fontSize:13,color:T.muted,margin:"0 0 12px",lineHeight:1.5}}>
               {publishChanges.length === 0 ? "Nothing has changed since the last publish." : `${publishChanges.length} change(s) since ${lastPublished?.at ? fmtAuditTime(lastPublished.at) : "the beginning"}:`}
             </p>
+            {/* Prompt 32 step 4 (Faraz 10/11 decision 5): the days this publish puts over a holder's soft limit, listed FIRST */}
+            {publishChanges.length > 0 && publishOverSoft.length > 0 && (
+              <div data-testid="publish-over-soft" style={{border:"1px solid " + T.accentText,borderRadius:6,padding:"8px 10px",marginBottom:10,background:T.accentTint}}>
+                <div style={{fontSize:11,fontWeight:700,color:T.accentText,textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>Over the soft limit ({publishOverSoft.length})</div>
+                {publishOverSoft.map(o => <div key={o.day + o.id} data-over-soft={o.day + ":" + o.id} style={{fontSize:12,fontFamily:mono,color:T.text,lineHeight:1.5}}>{overSoftLimitLine(o, nameOf)}</div>)}
+              </div>
+            )}
             {publishChanges.length > 0 && (
               <div style={{maxHeight:260,overflowY:"auto",border:"1px solid " + T.border,borderRadius:6,padding:"8px 10px",marginBottom:12}}>
                 {describePublishDiff(publishChanges, nameOf).map(g => (
@@ -7613,6 +7653,9 @@ function CallSchedule() {
           };
           const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
             background: solid ? color : "transparent", color: solid ? "#fff" : color, border: "1px solid " + color });
+          // Prompt 32 step 4: the over-soft-limit badge ("over 7"; ">7" on a phone) - outlined in the confirm badge's orange
+          // in the accent text token (#C2410C light / #FF8A4C dark), about two badge widths wide
+          const overSoftBadgeStyle = { display:"inline-flex",alignItems:"center",height:13,borderRadius:3,padding:"0 3px",fontSize:8,fontWeight:800,lineHeight:1,whiteSpace:"nowrap",background:"transparent",color:T.accentText,border:"1px solid " + T.accentText };
           // Week-row text sits directly on the page background, so dark mode
           // uses the lightened per-code text palette (vis-003), not the pill's tx.
           const entryStyle = (e) => e.kind === "open" ? { color:T.open, fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
@@ -7766,12 +7809,15 @@ function CallSchedule() {
                 // Prompt 29: the APP on call that day (signed-in sessions only - appByDay is {} on ?public=1)
                 const appE = !isPublicMode ? appByDay[d] || null : null;
                 if (appE) titleBits.push("APP " + appE.name);
+                // Prompt 32 step 4: the day's primary is over its holder's soft limit this month (overSoftByDay is {} on ?public=1)
+                const ovS = overSoftByDay[d] || null;
+                if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
                 // Item E3 (9/25): eastVacByDay is empty unless eastDetailsVisible, so this bit (and the dots row's) is the scheduler's only
                 if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
                 // The header reserves 15px per 13px badge shown, at least 30px, so a badge never covers the holiday label. Since
                 // Item E2 (9/25) the confirm "?" is the grid's only badge (the E / F / f badges are gone), so nBadges counts just
-                // that one; a future cell badge adds its own term here.
-                const nBadges = awaitingConfirmation(a) ? 1 : 0;
+                // that one; a future cell badge adds its own term here. Prompt 32 step 4: the over-soft-limit "over 7" takes two.
+                const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>openCellDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCellDay(d); } }}
@@ -7783,6 +7829,7 @@ function CallSchedule() {
                     </div>
                     <div className="cal-badges">
                       {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
+                      {ovS && <span data-badge="over-soft" data-testid="over-soft-badge" data-over-soft-id={ovS.id} title={overSoftLimitTitle(ovS, nameOf)} style={overSoftBadgeStyle}><span className="cal-os-long">{overSoftLimitWords(ovS.limit)}</span><span className="cal-os-short">{">" + ovS.limit}</span></span>}
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
@@ -7815,6 +7862,9 @@ function CallSchedule() {
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
               <span>dots = vacations</span>
+              {/* Prompt 32 step 4: the over-soft-limit badge's legend - only when a day of this grid carries one (signed-in; never ?public=1);
+                  its words name the limits the grid's badges carry (overSoftLimitLegend: "over 7", "over 7 / over 9") - never a hard-coded 7 */}
+              {gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft"><span style={{color:T.accentText,fontWeight:800}}>{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}</span> = the primary is past his soft limit of primary days this month (the group's, or his own)</span>}
               {/* Prompt 29: the APP line's legend - only when a day of this grid has an APP (signed-in sessions; nothing on ?public=1) */}
               {/* the merge with main (10/2): a failed APP-day read is said in place while it lasts (the load's toast goes; the poll stays quiet) */}
               {!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn't be loaded - the A lines may be missing</span>}
@@ -9145,7 +9195,10 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
   const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
-  const cap = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid).primary : null;
+  const capRead = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid) : null;
+  const cap = capRead ? capRead.primary : null;
+  // Prompt 32 (Faraz 10/11): with no hard cap, the soft limit (the group's 7) is what the count line names
+  const capSoft = capRead && (cap === null || cap === undefined) ? capRead.preferred : null;
 
   // Per-day picture for the shown month: greys (with why), one-role blocks, pattern confirms, the published
   // holders and the others' count. Recomputed when the month, the ctx (schedule / rules / feed) or the rows move.
@@ -9408,7 +9461,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
         )}
         <div data-testid="ofp-counts" data-month-primary={monthCounts.primary} data-month-backup={monthCounts.backup} data-month-either={monthCounts.either} data-month-noprimary={monthCounts.noprimary} data-period-count={periodCount} style={{ fontSize: 11, color: muted, textAlign: "center", marginTop: 2, lineHeight: 1.5 }}>
           {monthLabel}: <b style={{ color: text }}>{monthCounts.primary}</b> primary, <b style={{ color: text }}>{monthCounts.backup}</b> backup, <b style={{ color: text }}>{monthCounts.either}</b> either offered{monthCounts.noprimary > 0 && <>, <b style={{ color: text }}>{monthCounts.noprimary}</b> no primary</>}
-          {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : ""}</>}
+          {period && <> - {periodLabel}: <b style={{ color: text }}>{periodCount}</b> day{periodCount === 1 ? "" : "s"}{cap !== null && cap !== undefined ? ` (your cap: ${cap} primary a month${periodMonths > 1 ? ", " + cap * periodMonths + " over the period" : ""})` : capSoft !== null && capSoft !== undefined ? ` (soft limit: ${capSoft} primary a month${periodMonths > 1 ? ", " + capSoft * periodMonths + " over the period" : ""})` : ""}</>}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
           {["primary", "backup", "either", "noprimary", "clear"].map(k => {
@@ -9738,7 +9791,7 @@ function softTag(soft) {
     case "east-forecast": return "East " + Math.round(Number(arg) * 100) + "%";
     case "east-unknown": return "East unknown";
     case "auto-offer-weekday": return "auto-offer";
-    case "over-preferred-cap": return "over preferred cap " + arg;
+    case "over-preferred-cap": return "over soft limit " + arg; // Prompt 32: the preferred cap is the soft limit (the group's 7)
     case "over-target": return "over target +" + arg;
     case "under-target": return "under target";
     case "window-week-below-target": return "under window target " + arg;
@@ -10209,6 +10262,16 @@ function DayEditor(props) {
   const draftState = React.useMemo(() => safeBuildContext({ ...ctxInputs, schedule: { ...ctxInputs.schedule, [day]: { ...draft, source: draft.source || "manual" } }, heldSchedule: ctxInputs.schedule }), [ctxInputs, day, draft]);
   const ctx = draftState.ctx;
   const hol = ctx ? isHolidayDay(ctx, day) : null;
+  // Prompt 32 step 4 (Faraz 10/11 decision 5): the day's primary is the (L+1)th or later of his calendar month (L = his soft
+  // limit, the group's 7) - rules.js overSoftLimitDays, the ONE helper, on THIS editor's ctx (the draft swapped in, so a pick
+  // that goes over shows it before Save), this day only. The summary (every signed-in role) and the scheduler's editor show
+  // it on the primary row; ?public=1 never computes it.
+  const overSoft = React.useMemo(() => {
+    if (isPublicMode || !ctx || typeof overSoftLimitDays !== "function") return null;
+    try { return overSoftLimitDays(ctx, ctx.schedule, day, day)[0] || null; }
+    catch (e) { console.warn("over-soft-limit check failed for", day, e); return null; }
+  }, [ctx, day, isPublicMode]);
+  const overSoftTag = overSoft ? <span data-testid="editor-over-soft" title={overSoftLimitTitle(overSoft, nameOf)} style={{color:T.accentText,border:"1px solid " + T.accentText,borderRadius:4,padding:"0 6px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{overSoftLimitWords(overSoft.limit)}</span> : null;
   // Item E3 (Faraz 9/25): the East lines - the East-vacation review state and its diamond included - are the
   // scheduler's only (the App's eastDetailsVisible = isScheduler && !isPublicMode); nobody else gets them built, let
   // alone drawn. The rest of the editor (holders, locks, holiday unit, vacations, offers, note) is the same for everyone.
@@ -10397,6 +10460,7 @@ function DayEditor(props) {
         {mine && <span data-testid="editor-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
         {confirmBadge}
         {confirmBadge && <span data-testid="editor-not-final" style={{color:T.muted,fontSize:11}}>(not final yet)</span>}
+        {role === "primary" && overSoftTag}
       </div>
     );
     return (
@@ -10406,6 +10470,7 @@ function DayEditor(props) {
           {holderView(role)}
           {locked && <Padlock title={role + " locked"} size={11}/>}
           {confirmBadge}
+          {role === "primary" && overSoftTag}
           {cur && cur.external && <span data-testid={"editor-" + role + "-external-tag"} style={{fontSize:10,color:sub,fontWeight:700}}>outside surgeon - written in by hand</span>}
           {/* Item E3 (Faraz 9/25): which rule a locked holder breaks (East reasons among them, the raw codes in the hover) is
               override detail - the scheduler's only, like the Override panel's reason list */}
@@ -10696,6 +10761,12 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     weekendDays: ctx ? ctx.weekendDays : undefined,
     countBackup: ctx ? !!ctx.countBackupInConsecutive : false,
   };
+  // Prompt 32 step 1 (Faraz 10/11): the WEIGHTED LOAD - primary days x 1 + backup days x 0.5, Silvis days only (East days
+  // keep counting toward a cap only) - beside the raw counts. The weights are data (groupRules.shiftAccounting.weights)
+  // read ONLY through rules.js shiftWeightsOf, which holds the default - never ctx.weights (the soft-penalty table). Without
+  // the rules engine the weighted figures read '-' (no second default here). Pay is untouched (primary only).
+  const sw = typeof shiftWeightsOf === "function" ? shiftWeightsOf(ctx ? ctx.groupRules : null) : null;
+  const swText = sw ? "primary days x " + sw.primary + " + backup days x " + sw.backup : null;
   // Prompt 12 A (9/22): a holiday unit is one day for the run columns only for a surgeon who opted in
   // (surgeonRules.<id>.holidayUnitCountsAsOneDay - Khan); everyone else shows real days.
   const collapseFor = (id) => !!(surgeonRules && surgeonRules[id] && surgeonRules[id].holidayUnitCountsAsOneDay === true);
@@ -10717,7 +10788,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     };
     const out = { primary: { value: null, kind: "none" }, backup: { value: null, kind: "none" } };
     ["primary", "backup"].forEach(role => {
-      if (explicit[role] !== null) { out[role] = { value: explicit[role] * nMonths, kind: "explicit" }; return; }
+      // Prompt 32 step 1: one decimal, like the implied target below (5.5 x 3 months reads 16.5; 1.1 x 3 no longer 3.3000000000000003)
+      if (explicit[role] !== null) { out[role] = { value: Math.round(explicit[role] * nMonths * 10) / 10, kind: "explicit" }; return; }
       if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
         let sum = 0, all = nMonths > 0;
         range.months.forEach(m => {
@@ -10751,6 +10823,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   // still compares primary + East primary-week days with the cap, and flags over it the same way - the other roles read
   // that count with neutral wording ("other days this cap counts").
   const showEast = !!eastDetailsVisible && list.some(s => eastFor(s.id) > 0 || countsEast(s.id));
+  // Prompt 32 step 4 (Faraz 10/11 decision 5; DESIGN "Totals" Over-7): the MONTHS of the period whose primary count is over
+  // the holder's soft limit (the group's 7) - rules.js overSoftLimitMonths, each month's own count (never cap x months; a
+  // hard cap keeps its red cap cell) - per source schedule; flagged on the cap cell and the fairness row. Counts only.
+  const osMonths = {};
+  sources.forEach(src => { osMonths[src.key] = ctx && typeof overSoftLimitMonths === "function" ? overSoftLimitMonths(ctx, src.sched, range.from, range.to) : []; });
   const rows = [];
   list.forEach(s => sources.forEach(src => {
     const t = ttTotalsFor(src.sched, s.id, range.from, range.to, { ...opts, unitCollapse: collapseFor(s.id) });
@@ -10758,7 +10835,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     const capUse = t.primary + eastP; // K: primary days (+ East primary-week days for Fierce's 14); backup never counts
     // J: Target / Deviation are PRIMARY days against the primary target; Target B / Deviation B are backup days
     // against the backup target (ttDeviation per role; '-' without a target).
-    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value) });
+    // Prompt 32 step 1: the weighted load (ttWeightedLoad) and the weighted share = primary target x 1 + backup target x 0.5
+    // (ttWeightedShare; a missing role target reads 0, null without any target) with their deviation - one decimal each
+    const weighted = ttWeightedLoad(t.primary, t.backup, sw), weightedShare = ttWeightedShare(tg.primary.value, tg.backup.value, sw);
+    const overSoft = osMonths[src.key].filter(x => x.id === s.id); // Prompt 32 step 4: his months over the soft limit
+    rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value), weighted, weightedShare, weightedImplied: tg.primary.kind === "implied" || tg.backup.kind === "implied", deviationW: weighted === null ? "-" : ttDeviation(weighted, weightedShare), overSoft, overSoftText: overSoft.length && typeof overSoftLimitMonthsText === "function" ? overSoftLimitMonthsText(overSoft, nMonths) : null });
   }));
   const capText = (r) => r.cap === null ? "-" : (nMonths > 1 ? r.cap + "/mo" : String(r.cap));
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
@@ -10776,9 +10857,11 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
       // minus it; the backup target and its deviation are APPENDED as the last two columns.
       // M (9/22): a "Type" column is APPENDED (pool / outside) and the outside surgeons' rows follow the pool rows
       // with their day counts only (the share / cap / run columns stay blank for them).
-      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
-      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool"]);
-      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside"])));
+      // Prompt 32 step 1 (10/11): "Weighted" (primary x 1 + backup x 0.5, the on-screen column) is APPENDED after "Type";
+      // blank for an outside surgeon (counts only) and when the weights cannot be read.
+      const headers = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type", "Weighted"];
+      const data = rows.map(r => [range.label, range.from, range.to, r.srcLabel, r.name, r.code, r.t.primary, r.t.backup, r.t.total, r.t.weekendDays, r.t.majorHolidays, r.t.minorHolidays, r.t.maxConsecutive, r.east, r.cap === null ? "" : r.cap, r.target === null ? "" : r.target, r.target === null ? "" : r.deviation, r.t.maxConsecutiveAnyRole, r.capUse, r.targetB === null ? "" : r.targetB, r.targetB === null ? "" : r.deviationB, "pool", r.weighted === null ? "" : r.weighted]);
+      outside.forEach(o => o.rows.forEach(x => data.push([range.label, range.from, range.to, o.src.label, x.name, x.code, x.primary, x.backup, x.total, "", "", "", "", "", "", "", "", "", "", "", "", "outside", ""])));
       // Item E3 (9/25): the CSV follows the on-screen column - without eastDetailsVisible the "East days" column is left out
       // (header and cells) and the cap-count header drops its East wording; the scheduler's file is unchanged, column for column.
       if (!eastDetailsVisible) {
@@ -10805,7 +10888,10 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const devFlag = (r) => r.target === null ? undefined : r.t.primary > r.target ? "over" : r.t.primary < r.target ? "under" : "ok";
   const devColorB = (r) => r.targetB === null ? "#8a94a0" : r.t.backup > r.targetB ? "#c04040" : r.t.backup < r.targetB ? T.primaryEnd : "#1a8040";
   const devFlagB = (r) => r.targetB === null ? undefined : r.t.backup > r.targetB ? "over" : r.t.backup < r.targetB ? "under" : "ok";
-  const targetSum = (r) => r.target === null && r.targetB === null ? null : Math.round(((r.target || 0) + (r.targetB || 0)) * 10) / 10;
+  // Prompt 32 step 1: the weighted load against the weighted share (the fairness view's green mark; both one decimal) -
+  // the share replaces the old unweighted "primary target + backup target" sum
+  const devFlagW = (r) => r.weightedShare === null || r.weighted === null ? undefined : r.weighted > r.weightedShare ? "over" : r.weighted < r.weightedShare ? "under" : "ok";
+  const devColorW = (r) => { const f = devFlagW(r); return f === "over" ? "#c04040" : f === "under" ? T.primaryEnd : f === "ok" ? "#1a8040" : "#8a94a0"; };
   const overCap = (r) => r.cap !== null && r.capUse > r.cap * nMonths;
   const overConsec = (r) => r.maxRule !== null && r.t.maxConsecutive > r.maxRule;
   const overConsecAny = (r) => r.maxRuleAny !== null && r.t.maxConsecutiveAnyRole > r.maxRuleAny;
@@ -10822,7 +10908,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         {modeEff !== "pay" && <button data-testid="totals-csv" onClick={exportCsv} disabled={!!daysUnread} title={daysUnread ? "The schedule has not loaded - nothing to export yet" : undefined} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto", opacity: daysUnread ? 0.5 : 1 }}>Export CSV</button>}
       </div>
       <div data-testid="totals-period" style={{ fontSize: 12.5, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 8 }}>
-        <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; nothing weighted. Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}{daysUnread ? <strong data-testid="totals-days-unread" style={{color:T.open}}> Schedule not loaded - these counts are not the schedule's until it loads.</strong> : null}
+        <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; {sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads."} Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}{daysUnread ? <strong data-testid="totals-days-unread" style={{color:T.open}}> Schedule not loaded - these counts are not the schedule's until it loads.</strong> : null}
       </div>
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets{eastDetailsVisible ? ", holiday units and East days" : " and holiday units"} show as '-' until the setup loads.</div>}
       {modeEff === "pay" ? (
@@ -10833,21 +10919,21 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
             <thead>
               <tr>
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
-                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
+                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th} data-testid="totals-th-weighted" title={swText ? "Weighted load: " + swText + " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "Weighted load: unavailable until the rules engine loads"}>Weighted</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title={eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder) (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap) from the last Generate preview, where the level is the water-filled share of ALL the period's pool backup slots, open + already held (a locked day counts against its holder) (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
+                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={showEast ? r.east : undefined} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
+                <tr key={r.id + r.src} data-testid={"totals-row-" + r.id} data-source={r.src} data-primary={r.t.primary} data-backup={r.t.backup} data-total={r.t.total} data-weekend={r.t.weekendDays} data-major={r.t.majorHolidays} data-minor={r.t.minorHolidays} data-maxconsec={r.t.maxConsecutive} data-maxconsecany={r.t.maxConsecutiveAnyRole} data-east={showEast ? r.east : undefined} data-weighted={r.weighted === null ? undefined : r.weighted} data-over-soft={r.overSoft.length ? r.overSoft.map(x => x.month).join(",") : undefined} style={{ borderTop: "1px solid " + border, opacity: r.src === "preview" ? 0.85 : 1, fontStyle: r.src === "preview" ? "italic" : "normal" }}>
                   <td style={tdL}><Badge id={r.id}/></td>{sources.length > 1 && <td style={{ ...tdL, fontSize: 11, color: r.src === "preview" ? "#7a4fbf" : "#5B6B82" }}>{r.srcLabel}</td>}
-                  <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td style={td}>{r.t.weekendDays}</td>
+                  <td style={td}>{r.t.primary}</td><td style={td}>{r.t.backup}</td><td style={{ ...td, fontWeight: 700 }}>{r.t.total}</td><td data-col="weighted" style={td} title={sw ? r.t.primary + " x " + sw.primary + " + " + r.t.backup + " x " + sw.backup : undefined}>{r.weighted === null ? "-" : r.weighted}</td><td data-col="weekend" style={td}>{r.t.weekendDays}</td>
                   <td style={td} title={r.t.holidayUnits.join(", ") || "none"}>{r.t.majorHolidays} / {r.t.minorHolidays}</td>
                   <td data-col="maxconsec" data-flag={overConsec(r) ? "over" : undefined} style={{ ...td, color: overConsec(r) ? "#c04040" : td.color }}>{r.t.maxConsecutive}{r.maxRule !== null ? " (" + r.maxRule + ")" : ""}</td>
                   <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
-                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}</td>
+                  <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}{r.overSoftText && <span data-testid="totals-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" (" + r.overSoftText.text + ")"}</span>}</td>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
                   <td data-col="targetb" style={td}>{targetBText(r)}</td>
@@ -10859,21 +10945,28 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         </div>
       ) : (
         <div data-testid="fairness-view">
-          <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 10px", lineHeight: 1.5 }}>Total days in {range.label} against each surgeon's targets (green mark = primary target + backup target) and primary cap (red mark). Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviation reads primary days against the primary target, then backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'.</p>
+          <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 10px", lineHeight: 1.5 }}>Weighted load in {range.label} ({swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days"}; Silvis days only): the solid part of each bar is the primary days, the striped part the backup days. The green mark is the weighted share ({sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target"}) and the red mark the primary cap, read against the solid part. Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviations read the weighted load against the weighted share, then primary days against the primary target and backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'.</p>
           {(() => {
-            const scale = Math.max(1, ...rows.map(r => Math.max(r.capUse, r.cap === null ? 0 : r.cap, targetSum(r) === null ? 0 : targetSum(r))));
+            // Prompt 32 step 1: the bar is the WEIGHTED load - the primary part (primary days x w.primary, solid) then the
+            // backup part (backup days x w.backup, striped in the bar colour) - with the green mark at the weighted share and the
+            // red cap mark at the cap in the same units as the primary part. Without the weights the bar falls back to raw days.
+            const barW = sw || { primary: 1, backup: 1 };
+            const barP = (r) => r.t.primary * barW.primary, barPB = (r) => barP(r) + r.t.backup * barW.backup;
+            const barMark = (r) => ttWeightedShare(r.target, r.targetB, barW);
+            const scale = Math.max(1, ...rows.map(r => Math.max(barPB(r) + r.eastP * barW.primary, r.capUse * barW.primary, r.cap === null ? 0 : r.cap * nMonths * barW.primary, barMark(r) === null ? 0 : barMark(r))));
             const pct = (v) => Math.min(100, Math.round((v / scale) * 100));
             return rows.map(r => (
-              <div key={r.id + r.src} data-testid={"fairness-row-" + r.id} data-source={r.src} data-total={r.t.total} data-deviation={r.deviation} data-deviation-b={r.deviationB} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid " + border, flexWrap: "wrap" }}>
+              <div key={r.id + r.src} data-testid={"fairness-row-" + r.id} data-source={r.src} data-total={r.t.total} data-weighted={r.weighted === null ? undefined : r.weighted} data-weighted-share={r.weightedShare === null ? undefined : r.weightedShare} data-deviation={r.deviation} data-deviation-b={r.deviationB} data-deviation-w={r.deviationW} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: "1px solid " + border, flexWrap: "wrap" }}>
                 <div style={{ width: 110, display: "flex", gap: 6, alignItems: "center" }}><Badge id={r.id}/>{r.src === "preview" && <span style={{ fontSize: 9, color: "#7a4fbf" }}>preview</span>}</div>
                 <div data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack, borderRadius: 4, overflow: "hidden" }}>
-                  <div data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`, borderRadius: 4 }}/>
-                  {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + (eastDetailsVisible ? " East primary-week" : " other") + " day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(r.t.total) + "%", top: 0, bottom: 0, width: Math.max(0, pct(r.t.total + r.eastP) - pct(r.t.total)) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
-                  {targetSum(r) !== null && <div data-testid="fairness-target-mark" title={"target P " + (r.target === null ? "-" : r.target) + " + B " + (r.targetB === null ? "-" : r.targetB) + " = " + targetSum(r)} style={{ position: "absolute", left: pct(targetSum(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
-                  {r.cap !== null && <div title={"cap " + r.cap * nMonths} style={{ position: "absolute", left: pct(r.cap * nMonths) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
+                  <div data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(barP(r)) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`, borderRadius: 4 }} title={r.t.primary + " primary day(s) x " + barW.primary}/>
+                  <div data-testid="fairness-fill-b" style={{ position: "absolute", left: pct(barP(r)) + "%", top: 0, bottom: 0, width: Math.max(0, pct(barPB(r)) - pct(barP(r))) + "%", background: `repeating-linear-gradient(45deg,${T.barEnd} 0 3px,transparent 3px 6px)`, borderRadius: 4 }} title={r.t.backup + " backup day(s) x " + barW.backup}/>
+                  {countsEast(r.id) && r.eastP > 0 && <div title={"+ " + r.eastP + (eastDetailsVisible ? " East primary-week" : " other") + " day(s) counted toward the cap (P)"} style={{ position: "absolute", left: pct(barPB(r)) + "%", top: 0, bottom: 0, width: Math.max(0, pct(barPB(r) + r.eastP * barW.primary) - pct(barPB(r))) + "%", background: "repeating-linear-gradient(135deg,#c0a8e0 0 4px,transparent 4px 8px)" }}/>}
+                  {barMark(r) !== null && <div data-testid="fairness-target-mark" title={(sw ? "weighted share" : "target") + " = primary target x " + barW.primary + " + backup target x " + barW.backup + " = " + (r.target === null ? "-" : r.target) + " x " + barW.primary + " + " + (r.targetB === null ? "-" : r.targetB) + " x " + barW.backup + " = " + barMark(r)} style={{ position: "absolute", left: pct(barMark(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
+                  {r.cap !== null && <div title={"cap (P) " + r.cap * nMonths + " primary days - read against the solid part"} style={{ position: "absolute", left: pct(r.cap * nMonths * barW.primary) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
                 <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#E6ECF5" : "#1F2A3A", minWidth: 250 }}>
-                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}
+                  {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - weighted {r.weighted === null ? "-" : r.weighted}{r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : ""}{r.weightedShare !== null && <span data-flag={devFlagW(r)} style={{ color: devColorW(r), fontWeight: 700 }}> ({r.deviationW})</span>} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}{r.overSoftText && <span data-testid="fairness-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" - " + r.overSoftText.text}</span>}
                 </div>
               </div>
             ));
@@ -11630,9 +11723,14 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       setDraft(obj); setDirty(true); setRawErr(""); setRawOpen(false);
     } catch (e) { console.warn("Rules JSON not applied:", e); setRawErr(String(e && e.message || e)); }
   };
-  const capMode = Object.prototype.hasOwnProperty.call(draft, "monthlyCap") ? (draft.monthlyCap === null ? "none" : "number") : "default";
+  // Prompt 32 (Faraz 10/11): monthlyCap absent or null = the group default (the group's soft 7), "none" = no limit, a number /
+  // an object = his own cap; any other value is read by rules.js as the group default with a warning - shown as such here.
+  const capRaw = draft.monthlyCap;
+  const capMode = capRaw === undefined || capRaw === null ? "default" : capRaw === "none" ? "none" : (typeof capRaw === "number" || (capRaw && typeof capRaw === "object" && !Array.isArray(capRaw))) ? "number" : "invalid";
+  // "a number" starts from his own hard cap, else the group's soft limit, else 7 (no hard-coded group value)
+  const capGroupSoft = groupRules && groupRules.defaultMonthlyCap && typeof groupRules.defaultMonthlyCap.preferred === "number" && groupRules.defaultMonthlyCap.preferred > 0 ? groupRules.defaultMonthlyCap.preferred : 7;
   // The cap is on PRIMARY days (monthlyCap.primary). A legacy 'total' value is shown in the field and rewritten as 'primary' on the first edit.
-  const capObj = draft.monthlyCap && typeof draft.monthlyCap === "object" ? draft.monthlyCap : (typeof draft.monthlyCap === "number" ? { primary: draft.monthlyCap } : {});
+  const capObj = capRaw && typeof capRaw === "object" && !Array.isArray(capRaw) ? capRaw : (typeof capRaw === "number" ? { primary: capRaw } : {});
   const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : (typeof capObj.total === "number" ? capObj.total : undefined);
   const setCapPrimary = (v) => { if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined); set("monthlyCap.primary", v); };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
@@ -11791,14 +11889,15 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       );
       case "monthlyCap": return (
         <div>
-          <RuField T={T} label="Monthly cap">
-            <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", null); else set("monthlyCap", { primary: capPrimaryVal || 8 }); }} style={{ ...inp, width: 200 }}>
-              <option value="default">group default</option><option value="none">no cap</option><option value="number">a number</option>
+          <RuField T={T} label="Monthly cap" hint="primary days a month; group default = the limits under Group rules">
+            <select data-testid="rules-cap-mode" value={capMode} onChange={e => { const v = e.target.value; if (v === "default") set("monthlyCap", undefined); else if (v === "none") set("monthlyCap", "none"); else if (v === "number") set("monthlyCap", { primary: capPrimaryVal || capGroupSoft }); }} style={{ ...inp, width: 200 }}>
+              <option value="default">group default</option><option value="none">no limit</option><option value="number">a number</option>
+              {capMode === "invalid" && <option value="invalid" disabled>not readable - read as the group default</option>}
             </select>
           </RuField>
           {capMode === "number" && <>
-            <RuField T={T} label="Primary days per month" hint="hard; backup days never count"><input type="number" min="1" max="31" data-testid="rules-cap-primary" value={capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal} onChange={e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
-            <RuField T={T} label="Preferred at most (soft)"><input type="number" min="0" max="31" value={capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred} onChange={e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="Primary days per month" hint="hard - Generate and claims stay within it; blank = the group's hard cap; backup days never count"><input type="number" min="1" max="31" data-testid="rules-cap-primary" value={capPrimaryVal === undefined || capPrimaryVal === null ? "" : capPrimaryVal} onChange={e => setCapPrimary(e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="Soft limit (primary days)" hint="a primary beyond it is allowed, with a penalty; blank with a hard cap set = none"><input type="number" min="0" max="31" data-testid="rules-cap-preferred" value={capObj.preferred === undefined || capObj.preferred === null ? "" : capObj.preferred} onChange={e => set("monthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
             <SuCheck label="East primary-week days count toward it" checked={capObj.countsEastDays === true || capObj.countsEastDays === "distinct-days"} onChange={v => set("monthlyCap.countsEastDays", v ? true : undefined)} />
           </>}
         </div>
@@ -11919,8 +12018,11 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
 
           <div data-testid="rules-group-box" style={{ ...box, background: T.raised }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: T.text, marginBottom: 6 }}>Group rules</div>
+            {/* Prompt 32 (Faraz 10/11): the group default = a SOFT limit (defaultMonthlyCap.preferred, the seed's 7) plus an optional
+                HARD cap (defaultMonthlyCap.primary); a surgeon with no cap key or a null one gets both */}
+            <RuField T={T} label="Group soft limit (primary days a month)" hint="a primary beyond it is allowed, with a penalty; blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-preferred" value={(() => { const p = gget("defaultMonthlyCap.preferred", null); return typeof p === "number" ? p : ""; })()} onChange={e => gset("defaultMonthlyCap.preferred", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
             {/* bound to defaultMonthlyCap.primary; a legacy 'total' value is shown and replaced on the first edit */}
-            <RuField T={T} label="Default monthly cap (primary days)" hint="blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-primary" value={(() => { const p = gget("defaultMonthlyCap.primary", null); if (typeof p === "number") return p; const t = gget("defaultMonthlyCap.total", null); return typeof t === "number" ? t : ""; })()} onChange={e => { if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined); gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></RuField>
+            <RuField T={T} label="Group hard cap (primary days a month)" hint="hard - Generate and claims stay within it; blank = none; backup days never count"><input type="number" min="1" max="31" data-testid="group-default-cap-primary" value={(() => { const p = gget("defaultMonthlyCap.primary", null); if (typeof p === "number") return p; const t = gget("defaultMonthlyCap.total", null); return typeof t === "number" ? t : ""; })()} onChange={e => { if (gget("defaultMonthlyCap.total", null) !== null) gset("defaultMonthlyCap.total", undefined); gset("defaultMonthlyCap.primary", e.target.value === "" ? undefined : Number(e.target.value)); }} style={{ ...inp, width: 70 }} /></RuField>
             <RuField T={T} label="Default most primary days in a row"><input type="number" min="1" max="14" value={gget("defaultMaxConsecutiveDays", "")} onChange={e => gset("defaultMaxConsecutiveDays", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
             <RuField T={T} label="East forecast: busy at or above (0-1)"><input type="number" min="0" max="1" step="0.05" value={gget("eastFeed.forecast.busyThreshold", "")} onChange={e => gset("eastFeed.forecast.busyThreshold", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 80 }} /></RuField>
             <div>
@@ -12554,7 +12656,20 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
   const scoreKeys = dg.score ? Object.keys(dg.score) : [];
   const box = { border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px", marginBottom: 8 };
   return (
-    <div data-testid="gen-diagnostics" data-uncovered-count={(dg.uncovered || []).length}>
+    <div data-testid="gen-diagnostics" data-uncovered-count={(dg.uncovered || []).length} data-over-soft-count={Array.isArray(dg.overSoftLimit) ? dg.overSoftLimit.length : undefined}>
+      {/* Prompt 32 step 4 (Faraz 10/11 decision 5): the preview's days over a holder's soft limit, listed FIRST (diagnostics.overSoftLimit -
+          rules.js overSoftLimitDays, derived from the preview, never stored); a preview without the list shows no box. Since the 10/12
+          review fix: every such day of the months the range touches (outside the range too) for a holder this run gives a primary
+          that month - the days the Publish dialog and the Accept audit row name */}
+      {Array.isArray(dg.overSoftLimit) && (
+        <div style={dg.overSoftLimit.length ? { ...box, borderColor: LIGHT.accentText } : box} data-testid="gen-over-soft">
+          <div style={{ ...css.subT, margin: "0 0 4px", color: dg.overSoftLimit.length ? LIGHT.accentText : undefined }}>Over the soft limit ({dg.overSoftLimit.length})</div>
+          {dg.overSoftLimit.length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None - nobody this run gives a primary ends that month past his soft monthly limit.</p> : <>
+            <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>The (L+1)th and later primary day of a holder's calendar month, L = his soft limit (the group's 7, or his own): the generator fills such a day itself under the soft over-limit term, and among the candidates already at their limit the lowest weighted load that month takes it. A hard cap is never passed here. Listed for each holder this run gives a primary in that month - every such day of the month, a later day outside the range included (the run's earlier days push it past the limit), as the Publish dialog lists them.</p>
+            {dg.overSoftLimit.map(o => <div key={o.day + o.id} data-over-soft={o.day + ":" + o.id} style={{ fontSize: 12, fontFamily: mono }}>{overSoftLimitLine(o, nameOf)}</div>)}
+          </>}
+        </div>
+      )}
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Score (lower is better)</div>
         <div data-testid="gen-score" style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, fontFamily: mono }}>
@@ -12573,16 +12688,16 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Per-surgeon tallies vs cap / target</div>
         <div className="table-wrap" style={css.tableWrap}>
           <table className="setup-table" data-testid="gen-tallies">
-            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th title="Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it">Cap (P)</th><th title="Primary-day target for the month: an explicit monthlyTarget, else min(level, cap) where the level is the water-filled share of ALL the month's pool primary slots, open + already held (a locked day counts against its holder; the window surgeon: her window target)">Target P</th><th title="Backup-day target for the month: min(level, backup cap) where the level is the water-filled share of ALL the month's pool backup slots, open + already held (a windows surgeon has none)">Target B</th></tr></thead>
+            <thead><tr><th>Surgeon</th><th>Month</th><th>P</th><th>B</th><th>Total</th><th>Wknd days</th><th>Major</th><th>Minor</th><th title="Longest run of consecutive primary days touching the month / range (real days; the hard limit's measure)">Max consec. P</th><th title="Longest run of consecutive days in either role (real days; the soft limit's measure)">Max consec. any</th><th title="Monthly cap on PRIMARY days (backup days never count); a row is flagged when P - plus, for a cap that counts East days, his East primary-week days - is over it">Cap (P)</th><th title="Primary-day target for the month: an explicit monthlyTarget, else min(level, clip) where the level is the water-filled share of ALL the month's pool primary slots, open + already held (a locked day counts against its holder) and the clip is the soft limit (else the hard cap) or what the rules allow (the window surgeon: her window target)">Target P</th><th title="Backup-day target for the month: the weighted share - the backup days that bring primary x w.primary + backup x w.backup to the month's weighted level over ALL the pool's slots, open + already held (two backups per primary below the primary level), within the backup cap and what the rules allow (a windows surgeon has none)">Target B</th><th title="Weighted load: primary days x w.primary + backup days x w.backup (Silvis days only; Setup's shift weights, primary 1 / backup 0.5 by default)">Weighted</th><th title="Weighted share: Target P x w.primary + Target B x w.backup (the month rows; the range row sums them)">W share</th></tr></thead>
             <tbody>
               {ids.map(id => {
                 const t = dg.tallies[id];
                 const rows = months.map(m => { const x = t.months[m] || {}; return (
                   <tr key={id + m} data-tally={id} style={{ color: (x.cap !== null && x.cap !== undefined && (x.primary + (x.eastP || 0)) > x.cap) ? "#a83232" : undefined }}>
-                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td title={x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined}>{num(x.cap)}{x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""}</td><td>{num(tgtOf(x.target, "primary"))}</td><td>{num(tgtOf(x.target, "backup"))}</td>
+                    <td>{nameOf(id)}</td><td style={{ fontFamily: mono }}>{m}</td><td>{x.primary}</td><td>{x.backup}</td><td><strong>{x.total}</strong></td><td>{x.weekendDays}</td><td>{x.majorHolidays}</td><td>{x.minorHolidays}</td><td>{x.maxConsecutive}</td><td>{x.maxConsecutiveAnyRole}</td><td title={x.eastP ? x.primary + " P + " + x.eastP + " East primary-week day(s) = " + (x.primary + x.eastP) + " counted against the cap" : undefined}>{num(x.cap)}{x.eastP ? " (" + (x.primary + x.eastP) + " counted)" : ""}</td><td>{num(tgtOf(x.target, "primary"))}</td><td>{num(tgtOf(x.target, "backup"))}</td><td data-col="weighted">{num(x.weighted)}</td><td data-col="weighted-share">{num(x.weightedShare)}</td>
                   </tr>); });
                 const r = t.range || {};
-                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td title={r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined}>{num(r.cap)}{r.eastP ? " (+" + r.eastP + " East P)" : ""}</td><td>{num(tgtOf(r.target, "primary"))}</td><td>{num(tgtOf(r.target, "backup"))}</td></tr>);
+                rows.push(<tr key={id + "range"} data-tally-range={id} style={{ background: "#f4f6f8", fontWeight: 700 }}><td>{nameOf(id)}</td><td>range</td><td>{r.primary}</td><td>{r.backup}</td><td>{r.total}</td><td>{r.weekendDays}</td><td>{r.majorHolidays}</td><td>{r.minorHolidays}</td><td>{r.maxConsecutive}</td><td>{r.maxConsecutiveAnyRole}</td><td title={r.eastP ? r.primary + " P + " + r.eastP + " East primary-week day(s) in the range" : undefined}>{num(r.cap)}{r.eastP ? " (+" + r.eastP + " East P)" : ""}</td><td>{num(tgtOf(r.target, "primary"))}</td><td>{num(tgtOf(r.target, "backup"))}</td><td data-col="weighted">{num(r.weighted)}</td><td data-col="weighted-share">{num(r.weightedShare)}</td></tr>);
                 return rows;
               })}
             </tbody>
@@ -12591,14 +12706,14 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       </div>
       {hasShares && (
         <div style={box} data-testid="gen-shares">
-          <div style={{ ...css.subT, margin: "0 0 4px" }}>Implied shares (water-filled share per role: target vs what the rules allow)</div>
-          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's clip (Clip P; the backup cap for backup): a member below the level takes his clip and the rest is shared by the others, target = min(level, clip). A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone.</p>
+          <div style={{ ...css.subT, margin: "0 0 4px" }}>Implied shares (water-filled primary share, weighted backup share: target vs what the rules allow)</div>
+          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone.</p>
           {months.map(m => { const I = IT.months[m]; if (!I || !I.members) return null; return (
             <div key={m} style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 12, fontFamily: mono }} data-testid={"gen-shares-head-" + m}>{m}: {I.poolSlots ? ("primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare)) : ("pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare))}{I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : ""}{typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""}</div>
-              <div className="table-wrap" style={css.tableWrap}><table className="setup-table" data-testid={"gen-shares-" + m}><thead><tr><th>Surgeon</th><th>Target P</th><th>Allowed P</th><th title="Primary days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held P</th><th title="min(preferred cap, cap - 1) minus East primary-week days (a cap that counts them); '-' when uncapped">Clip P</th><th>Target B</th><th>Allowed B</th><th title="Backup days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held B</th></tr></thead><tbody>
+              <div style={{ fontSize: 12, fontFamily: mono }} data-testid={"gen-shares-head-" + m}>{m}: {I.poolSlots ? ("primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare) + (typeof I.weightedShare === "number" ? " at the primary level; weighted level " + I.weightedShare + " (P x " + (I.weights ? I.weights.primary : 1) + " + B x " + (I.weights ? I.weights.backup : 0.5) + ")" + (I.makeupRounds ? ", " + I.makeupRounds + " makeup round(s)" : "") : "")) : ("pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare))}{I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : ""}{typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""}</div>
+              <div className="table-wrap" style={css.tableWrap}><table className="setup-table" data-testid={"gen-shares-" + m}><thead><tr><th>Surgeon</th><th>Target P</th><th>Allowed P</th><th title="Primary days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held P</th><th title="The soft limit (else the hard cap) minus East primary-week days (a cap that counts them); '-' when neither is set">Clip P</th><th>Target B</th><th>Allowed B</th><th title="Backup days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held B</th><th title="The clips the fill used: min(Clip P, Allowed P + Held P) / min(backup cap, Allowed B + Held B)">Fill clip P / B</th><th title="Weighted share = Target P x w.primary + Target B x w.backup; P makeup = extra primaries a member at his backup clip takes up to his primary clip">W share</th></tr></thead><tbody>
                 {ids.filter(id => I.members[id]).map(id => { const M = I.members[id]; const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget; const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget; return (
-                  <tr key={id} data-share={id + ":" + m}><td>{nameOf(id)}</td><td>{num(M.primaryTarget)}</td><td style={{ color: shortP ? "#a83232" : undefined }} title={shortP ? "the rules allow fewer open primary slots than the target" : undefined}>{M.allowedPrimary}{shortP ? " (short)" : ""}</td><td>{M.lockedHeld.primary}</td><td>{num(M.clipPrimary)}</td><td>{num(M.backupTarget)}</td><td style={{ color: shortB ? "#a83232" : undefined }} title={shortB ? "the rules allow fewer open backup slots than the target" : undefined}>{M.allowedBackup}{shortB ? " (short)" : ""}</td><td>{M.lockedHeld.backup}</td></tr>); })}
+                  <tr key={id} data-share={id + ":" + m}><td>{nameOf(id)}</td><td>{num(M.primaryTarget)}</td><td style={{ color: shortP ? "#a83232" : undefined }} title={shortP ? "the rules allow fewer open primary slots than the target" : undefined}>{M.allowedPrimary}{shortP ? " (short)" : ""}</td><td>{M.lockedHeld.primary}</td><td>{num(M.clipPrimary)}</td><td>{num(M.backupTarget)}</td><td style={{ color: shortB ? "#a83232" : undefined }} title={shortB ? "the rules allow fewer open backup slots than the target" : undefined}>{M.allowedBackup}{shortB ? " (short)" : ""}</td><td>{M.lockedHeld.backup}</td><td>{M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"}</td><td>{num(M.weightedShare)}{M.makeupPrimary > 0 ? " (+" + num(M.makeupPrimary) + " P makeup)" : ""}</td></tr>); })}
               </tbody></table></div>
             </div>); })}
         </div>

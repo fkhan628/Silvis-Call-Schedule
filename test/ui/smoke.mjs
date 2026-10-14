@@ -3179,7 +3179,7 @@ try {
   //    the last was drawn for the scheduler and the person with the East code only, so KHAN AS A SURGEON (person s1, role
   //    surgeon) is the role that proves its gate - the other roles never saw it;
   //  - Totals for November 2026, month and fairness views + EVERY line of the CSV (signed-in roles; ?public=1 has no
-  //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 22-field CSV lines; 21 fields
+  //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 23-field CSV lines; 22 fields
   //    on every line for the others (a header that lost its East column over rows that kept it would shift every value).
   // "No East text" = no match of E3_RE (case-insensitive: innerText returns CSS-uppercased text as shown) in the
   // surface's visible text or in any title / aria-label inside it, and no [data-eastvac] element. A day's NOTE is data,
@@ -3367,11 +3367,12 @@ try {
         else ok(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): '${eS.source}' (the served row's own source)`);
       }
       const tS = await e3Totals(page, "e3-scheduler-totals.png");
-      const badS = tS.csvRows.filter(r => r.length !== 22);
-      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 22) fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (22 columns): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
-      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 22 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+      // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
+      const badS = tS.csvRows.filter(r => r.length !== 23);
+      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
+      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
       else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals Nov 2026): the 'East days: days on Davenport call ...' footnote is gone`);
-      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 22 fields each, unchanged)`);
+      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
       sched.fierceEastP = /East P-week/.test(tS.fierce);
       if (factsS.countsEast.includes("s5")) {
         if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness Nov 2026): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
@@ -3486,6 +3487,32 @@ try {
         if (!strip.ids.includes("cov-open-primary") || !strip.textLen) fail(`${T}: the coverage strip did not render (${strip.ids.join(",")})`);
         else if (strip.hits.length || eastIds.length) fail(`${T}: the coverage strip still shows East detail - ${eastIds.join(", ")}${eastIds.length && strip.hits.length ? "; " : ""}${hitsText(strip.hits)}`);
         else ok(`${T}: coverage strip without East items - '${strip.text.slice(0, 120)}'${R.eastPerson ? (facts.eastVac[E3_VAC_DAY] ? " (before E3 this page drew 'unreviewed East vacations': the rules here hold " + facts.eastVac[E3_VAC_DAY] + " East vacation on " + E3_VAC_DAY + ")" : " (NOTE: the rules here hold no East vacation on " + E3_VAC_DAY + " - the strip gate is not exercised)") : ""}`);
+        // Prompt 32 step 4: the over-soft-limit badge ("over 7") on the November 2026 grid (the 9/23 record gave Acton 10
+        // primaries there) - the page's OWN rules context (found as e3Facts finds it) and rules.overSoftLimitDays derive the
+        // expected days; a signed-in page draws exactly those, ?public=1 none (the badge is for signed-in roles only)
+        {
+          await e3Month(rp, 2026, 10);
+          const os = await rp.evaluate(() => {
+            const rootEl = document.getElementById("root");
+            const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+            if (!ck) return { error: "no React container key on #root" };
+            const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+            let ctx = null, n = 0; const stack = [current];
+            while (stack.length && !ctx && n++ < 500000) {
+              const f = stack.pop(); if (!f) continue;
+              if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+              if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+            }
+            const want = ctx && typeof overSoftLimitDays === "function" ? overSoftLimitDays(ctx, ctx.schedule, "2026-11-01", "2026-11-30").map(o => o.day + ":" + o.id) : null;
+            const drawn = Array.from(document.querySelectorAll("[data-testid=cal-grid] .cal-cell [data-testid=over-soft-badge]")).map(b => b.closest(".cal-cell").getAttribute("data-day") + ":" + b.getAttribute("data-over-soft-id")).filter(x => x >= "2026-11-01" && x < "2026-12");
+            return { want, drawn, legend: !!document.querySelector("[data-testid=legend-over-soft]") };
+          });
+          if (os.error) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge - ${os.error}`);
+          else if (R.kind === "public") { if (os.drawn.length || os.legend) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge shows on ?public=1 (${os.drawn.join(", ")}${os.legend ? "; legend line" : ""}) - it is for signed-in roles only`); else ok(`${T}, Prompt 32 step 4: the over-soft-limit badge - none on ?public=1 (the page's rules derive ${os.want ? os.want.length : "?"} such November day(s))`); }
+          else if (!os.want) fail(`${T}, Prompt 32 step 4: the over-soft-limit badge - no rules context / overSoftLimitDays on this page`);
+          else if (os.drawn.slice().sort().join() !== os.want.slice().sort().join() || os.legend !== os.want.length > 0) fail(`${T}, Prompt 32 step 4: the November 2026 grid draws the over-soft-limit badge on ${os.drawn.join(", ") || "no day"} (legend ${os.legend}), the page's rules derive ${os.want.join(", ") || "none"}`);
+          else ok(`${T}, Prompt 32 step 4: the over-soft-limit badge on exactly the November days the page's rules derive (${os.want.join(", ") || "none - nothing to show"})`);
+        }
         // the grid + legend: November 2026 and the East-vacation month
         const gN = await e3Grid(rp, 2026, 10);
         const vacM = [Number(E3_VAC_DAY.slice(0, 4)), Number(E3_VAC_DAY.slice(5, 7)) - 1];
@@ -3638,14 +3665,15 @@ try {
         // Totals (signed-in roles): screen, fairness and EVERY CSV line
         if (R.totals) {
           const tt = await e3Totals(rp, "e3-" + R.file + "-totals.png");
-          const badRows = tt.csvRows.filter(r => r.length !== 21);
+          // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 21 -> 22 fields for everyone else
+          const badRows = tt.csvRows.filter(r => r.length !== 22);
           if (tt.rows < 6) fail(`${T}, Totals Nov 2026: ${tt.rows} row(s) - the table never loaded`);
           else if (tt.month.hits.length || tt.fair.hits.length || tt.hdr.includes("East days")) fail(`${T}, Totals Nov 2026: East detail shown - month ${hitsText(tt.month.hits) || "none"}; fairness ${hitsText(tt.fair.hits) || "none"}; header ${tt.hdr.join(" | ")}`);
           else ok(`${T}, Totals Nov 2026: ${tt.rows} rows, no East column / tooltip / footnote; fairness view without East text (Fierce: '${tt.fierce.slice(0, 90)}')${sched.fierceEastP ? " while the scheduler's reads 'East P-week'" : ""}`);
-          if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 21 || !tt.csvHeader.includes("Counted vs cap")) fail(`${T}, Totals CSV: the header must follow the screen (21 columns, no East column, 'Counted vs cap'): ${tt.csvHeader.join(" | ")}`);
-          else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 21 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+          if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 22 || !tt.csvHeader.includes("Counted vs cap") || tt.csvHeader[21] !== "Weighted") fail(`${T}, Totals CSV: the header must follow the screen (22 columns, no East column, 'Counted vs cap', Weighted the last): ${tt.csvHeader.join(" | ")}`);
+          else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 22 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
-          else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 21 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
+          else ok(`${T}, Totals CSV: header + ${tt.csvRows.length} line(s), 22 fields each, no East column ('... ${tt.csvHeader.slice(12, 18).join(", ")} ...')`);
         }
         // Call pay (9/27): a surgeon gets his own My pay card ('unavailable' on the harness's forced 404 - the missing-table
         // guard; the live tables exist since 2026-09-28 and are never read here) and no Totals > Pay; the
@@ -5559,7 +5587,9 @@ try {
     return {
       id: e.getAttribute("data-testid").replace("totals-row-", ""), source: e.getAttribute("data-source"),
       primary: Number(e.getAttribute("data-primary")), backup: Number(e.getAttribute("data-backup")), total: Number(e.getAttribute("data-total")), weekend: Number(e.getAttribute("data-weekend")), maxconsec: Number(e.getAttribute("data-maxconsec")), major: Number(e.getAttribute("data-major")), minor: Number(e.getAttribute("data-minor")),
-      visible: { primary: tds[1], backup: tds[2], total: tds[3], weekend: tds[4], maxconsec: col("maxconsec"), cap: col("cap"), target: col("target"), deviation: col("deviation") },
+      weighted: e.getAttribute("data-weighted"), // Prompt 32 step 1: primary x 1 + backup x 0.5 (a string as the attribute carries it)
+      // Prompt 32 step 1: the Weighted column sits right after Total, so the weekend cell is read by its data-col (tds[4] is Weighted now)
+      visible: { primary: tds[1], backup: tds[2], total: tds[3], weekend: col("weekend"), weighted: col("weighted"), maxconsec: col("maxconsec"), cap: col("cap"), target: col("target"), deviation: col("deviation") },
       flags: { cap: flag("cap"), maxconsec: flag("maxconsec"), deviation: flag("deviation") },
       text: e.innerText.replace(/\s+/g, " "),
     };
@@ -5591,6 +5621,13 @@ try {
       });
       if (mismatches.length) fail("Totals Oct 2026 disagrees with the independent recount (visible cells and/or data-* attributes): " + mismatches.join("; "));
       else ok("Totals Oct 2026: 6 rows; the VISIBLE primary / backup / total / weekend-day / max-consecutive cells and the data-* attributes all equal the independent recount (" + published.map(r => `${r.id} ${r.visible.primary}+${r.visible.backup}=${r.visible.total} w${r.visible.weekend} c${r.visible.maxconsec}`).join(", ") + ")");
+      // Prompt 32 step 1 (Faraz 10/11): the Weighted column = primary x 1 + backup x 0.5 (Silvis days only; the live blob's
+      // groupRules.shiftAccounting.weights is null or { primary: 1, backup: 0.5 } - rules.js shiftWeightsOf reads both as that) -
+      // the cell the surgeon sees AND data-weighted, against the independent recount
+      const wBad = [];
+      published.forEach(r => { const x = recount[r.id]; const wantW = x.primary + 0.5 * x.backup; if (Number(r.weighted) !== wantW || r.visible.weighted !== String(wantW)) wBad.push(`${r.id}: data-weighted ${r.weighted} / visible '${r.visible.weighted}' vs ${x.primary} + 0.5 x ${x.backup} = ${wantW}`); });
+      if (wBad.length) fail("Totals Oct 2026 (Prompt 32): the Weighted column is not primary + 0.5 x backup: " + wBad.join("; "));
+      else ok("Totals Oct 2026 (Prompt 32): the Weighted column reads primary + 0.5 x backup for all six, visible cell and data-weighted (" + published.map(r => `${r.id} ${r.visible.primary}+0.5x${r.visible.backup}=${r.visible.weighted}`).join(", ") + ")");
       const octTotal = published.reduce((s, r) => s + r.total, 0);
       console.log(`     (October: ${octTotal} tallied shifts across the six; ${octExternal} externally covered primary day(s) excluded; holiday units in October: ${octHoliday ? "yes" : "none"})`);
       const acton = published.find(r => r.id === "s3");
@@ -5680,15 +5717,17 @@ try {
         const csv = await saveDownload(() => page.click("[data-testid=totals-csv]"));
         const lines = csv.text.split("\r\n").filter(Boolean);
         if (csv.name !== "silvis-totals-month-2026-10-01-2026-10-31.csv") fail("Totals CSV filename: " + csv.name);
-        else if (!/^Period,From,To,Source,Surgeon,Code,Primary,Backup,Total,Weekend days/.test(lines[0]) || lines.length !== 7) fail(`Totals CSV shape wrong: ${lines.length} line(s), header "${lines[0]}"`);
+        else if (!/^Period,From,To,Source,Surgeon,Code,Primary,Backup,Total,Weekend days/.test(lines[0]) || !/,Type,Weighted$/.test(lines[0]) || lines.length !== 7) fail(`Totals CSV shape wrong (Prompt 32: Weighted appended after Type): ${lines.length} line(s), header "${lines[0]}"`);
         else if (/\$/.test(csv.text)) fail("Totals CSV contains a '$'");
         else {
           const khan = lines.find(l => /,Khan,FAK,/.test(l)) || "";
           const cols = khan.split(",");
           const actonCsv = (lines.find(l => /,Acton,BDA,/.test(l)) || "").split(",");
+          const khanW = cols[cols.length - 1]; // Prompt 32 step 1: the appended Weighted column
           if (Number(cols[6]) !== recount.s1.primary || Number(cols[7]) !== recount.s1.backup) fail("Totals CSV: Khan's primary/backup differ from the recount: " + khan);
           else if (actonCsv[15] !== String(ACTON_TARGET) || actonCsv[16] !== expDev) fail(`Totals CSV: Acton's Target / Deviation columns should read ${ACTON_TARGET} / ${expDev}, got '${actonCsv[15]}' / '${actonCsv[16]}'`);
-          else ok(`Totals CSV: ${csv.name} - header + 6 rows, Khan ${cols[6]} P / ${cols[7]} B matches the recount, Acton Target ${actonCsv[15]} / Deviation ${actonCsv[16]}, no '$'`);
+          else if (khanW !== String(recount.s1.primary + 0.5 * recount.s1.backup)) fail(`Totals CSV (Prompt 32): Khan's Weighted (the last column) should read ${recount.s1.primary} + 0.5 x ${recount.s1.backup} = ${recount.s1.primary + 0.5 * recount.s1.backup}, got '${khanW}'`);
+          else ok(`Totals CSV: ${csv.name} - header + 6 rows, Khan ${cols[6]} P / ${cols[7]} B matches the recount, Weighted ${khanW} = P + 0.5 B, Acton Target ${actonCsv[15]} / Deviation ${actonCsv[16]}, no '$'`);
         }
       } catch (e) { fail("Totals CSV download: " + errLine(e)); }
     }
@@ -8731,20 +8770,28 @@ try {
           else if (diffWrites.length) fail(`${P24} group JSON: applying the group rules unchanged must not change them - ${diffWrites.length} blob write(s) carried other groupRules`);
           else ok(`${P24} group JSON: applied unchanged and saved -> no diff (${blobPatches(b0).length} blob write(s), none with other group rules)`);
           // (g2) an edit through the JSON editor shows in the form and is what Save writes
-          const capWas = g0.defaultMonthlyCap && typeof g0.defaultMonthlyCap.primary === "number" ? g0.defaultMonthlyCap.primary : 8;
-          const g1 = JSON.parse(JSON.stringify(g0)); g1.defaultMonthlyCap = Object.assign({}, g1.defaultMonthlyCap || {}, { primary: capWas + 1 }); delete g1.defaultMonthlyCap.total;
+          // pin moved deliberately 10/11: Prompt 32 the group default is the SOFT limit (defaultMonthlyCap.preferred, the seed's 7)
+          // plus an optional HARD cap (defaultMonthlyCap.primary, none in the seed) - two fields; the round trip moves both (it
+          // moved the hard cap alone and fell back to 8, a hard-coded value, when the blob had none)
+          const dmc0 = (g0.defaultMonthlyCap && typeof g0.defaultMonthlyCap === "object") ? g0.defaultMonthlyCap : {};
+          const prefWas = typeof dmc0.preferred === "number" ? dmc0.preferred : null;
+          const hardWas = typeof dmc0.primary === "number" ? dmc0.primary : (typeof dmc0.total === "number" ? dmc0.total : null);
+          const prefNew = (prefWas === null ? 7 : prefWas) + 1, hardNew = Math.max(hardWas === null ? 0 : hardWas, prefNew) + 1;
+          const shownCaps = async () => [await page.inputValue("[data-testid=group-default-cap-preferred]"), await page.inputValue("[data-testid=group-default-cap-primary]")];
+          const g1 = JSON.parse(JSON.stringify(g0)); g1.defaultMonthlyCap = Object.assign({}, dmc0, { preferred: prefNew, primary: hardNew }); delete g1.defaultMonthlyCap.total;
           await applyGroup(g1);
-          const capShown = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const capShown = await shownCaps();
           const s1r = await saveGroupAndFind(g1);
-          if (capShown !== String(capWas + 1)) fail(`${P24} group JSON: Apply JSON should put the default monthly cap ${capWas + 1} into the form, it shows '${capShown}'`);
+          if (JSON.stringify(capShown) !== JSON.stringify([String(prefNew), String(hardNew)])) fail(`${P24} group JSON: Apply JSON should put the group soft limit ${prefNew} and hard cap ${hardNew} into the form, it shows ${JSON.stringify(capShown)}`);
           else if (!s1r.hit) fail(`${P24} group JSON: Save group rules after the JSON edit should write groupRules = the edited JSON - ${s1r.n} write(s), last ${canon(s1r.last).slice(0, 300)}`);
-          else ok(`${P24} group JSON: an edit applied through the group JSON editor shows in the form (default cap ${capWas} -> ${capShown}) and Save writes exactly that groupRules`);
+          else ok(`${P24} group JSON: an edit applied through the group JSON editor shows in the form (soft limit ${prefWas} -> ${capShown[0]}, hard cap ${hardWas === null ? "none" : hardWas} -> ${capShown[1]}) and Save writes exactly that groupRules`);
           // (g3) the original back the same way
           await applyGroup(g0);
-          const capBack = await page.inputValue("[data-testid=group-default-cap-primary]");
+          const capBack = await shownCaps();
           const s0r = await saveGroupAndFind(g0);
-          if (!s0r.hit || capBack !== String(capWas)) fail(`${P24} group JSON (restore): the original group rules should be back in the form (cap '${capBack}') and written unchanged - ${s0r.n} write(s), last ${canon(s0r.last).slice(0, 300)}`);
-          else ok(`${P24} group JSON (restore): the original group rules applied back (cap ${capBack}) and written unchanged`);
+          const wantBack = [prefWas === null ? "" : String(prefWas), hardWas === null ? "" : String(hardWas)];
+          if (!s0r.hit || JSON.stringify(capBack) !== JSON.stringify(wantBack)) fail(`${P24} group JSON (restore): the original group rules should be back in the form (soft / hard ${JSON.stringify(capBack)}, want ${JSON.stringify(wantBack)}) and written unchanged - ${s0r.n} write(s), last ${canon(s0r.last).slice(0, 300)}`);
+          else ok(`${P24} group JSON (restore): the original group rules applied back (soft / hard ${JSON.stringify(capBack)}) and written unchanged`);
           await page.click("[data-testid=rules-advanced-toggle]");
         } catch (e) { fail(`${P24} group JSON: ` + errLine(e)); }
       }
@@ -10049,6 +10096,15 @@ try {
     const tallyRows = await page.$$eval("[data-testid=gen-tallies] tr[data-tally]", els => els.map(e => e.innerText.replace(/\t/g, " | ")));
     if (tallyRange !== 6 || tallyRows.length !== 6) fail(`Generate tallies: expected 6 month rows + 6 range rows, got ${tallyRows.length} + ${tallyRange}`); else ok(`Generate tallies: 6 surgeons x (${genStart.slice(0, 7)} + range) rows vs cap/target`);
     tallyRows.forEach(r => console.log("     " + r));
+    // Prompt 32 step 4 (Faraz 10/11 decision 5): the preview's over-soft-limit days are listed FIRST - their own box is the
+    // diagnostics' first child, one line per day (data-over-soft "day:id"), the count on the root; kept for the Accept audit check
+    const genOverSoft = await page.evaluate(() => {
+      const root = document.querySelector("[data-testid=gen-diagnostics]"), first = root ? root.firstElementChild : null;
+      return { count: root ? root.getAttribute("data-over-soft-count") : null, firstId: first ? first.getAttribute("data-testid") : null, lines: Array.from(document.querySelectorAll("[data-testid=gen-over-soft] [data-over-soft]")).map(e => e.getAttribute("data-over-soft")) };
+    });
+    if (genOverSoft.firstId !== "gen-over-soft") fail("Prompt 32 step 4: the Generate preview does not list the over-soft-limit days first (the diagnostics' first box is " + genOverSoft.firstId + ")");
+    else if (Number(genOverSoft.count) !== genOverSoft.lines.length) fail(`Prompt 32 step 4: the over-soft-limit box lists ${genOverSoft.lines.length} line(s), the root counts ${genOverSoft.count}`);
+    else ok(`Prompt 32 step 4: the Generate preview lists its over-soft-limit days first - ${genOverSoft.lines.length ? genOverSoft.lines.join(", ") : "none in this range"}`);
     const unc = Number(await page.$eval("[data-testid=gen-diagnostics]", el => el.getAttribute("data-uncovered-count")));
     const uncRows = await page.$$eval("[data-testid=gen-uncovered] tr[data-uncovered]", els => els.map(e => e.getAttribute("data-uncovered"))).catch(() => []);
     if (unc > 0 && uncRows.length !== unc) fail(`Generate uncovered: ${unc} open slot(s) but ${uncRows.length} row(s) rendered`); else ok(`Generate uncovered: ${unc} open slot(s)${unc ? " rendered with per-surgeon reasons: " + uncRows.join(", ") : ""}`);
@@ -10215,6 +10271,9 @@ try {
     else if (idleWrites.length) fail(`Accept & Publish: ${idleWrites.length} write(s) inside the preview range change nothing the harness can name (holders, lock flags, source and note all equal the live row): ${JSON.stringify(idleWrites.slice(0, 3))}`);
     else if (!genAudit) fail("Accept & Publish: no audit_log 'schedule.generate_accept'");
     else if (auditChanges !== expectedSlots.length) fail(`Accept & Publish: the audit row 'schedule.generate_accept' reports ${auditChanges} slot change(s), the harness derived ${expectedSlots.length} (${expectedSlots.slice(0, 8).join(", ")}${expectedSlots.length > 8 ? ", ..." : ""})`);
+    // Prompt 32 step 4: the Accept audit row names the preview's over-soft-limit days - ids and days only, exactly the lines
+    // the Generate preview listed (genOverSoft above); [] when it listed none
+    else if (!genAudit.detail || !Array.isArray(genAudit.detail.overSoftLimit) || !genAudit.detail.overSoftLimit.every(o => o && Object.keys(o).join() === "day,id") || genAudit.detail.overSoftLimit.map(o => o.day + ":" + o.id).join() !== genOverSoft.lines.join()) fail(`Accept & Publish (Prompt 32 step 4): genAudit.detail.overSoftLimit ${JSON.stringify(genAudit.detail && genAudit.detail.overSoftLimit)} is not the preview's over-soft-limit days as { day, id } (${genOverSoft.lines.join(", ") || "none"})`);
     else ok(`Accept & Publish: snapshot 'generate_publish' (#${snapIdx}) precedes the first schedule_days write (#${dayIdx}); ${dayWrites.length} CAS writes (${dayWrites.filter(w => w.method === "POST").length} POST v1, ${dayWrites.filter(w => w.method === "PATCH").length} PATCH ?day&version) = the ${expectedDays.size} grid-changed day(s) derived from the live rows${metaNamed.length ? " + " + metaNamed.length + " holders-unchanged write(s) each naming a lock / source / note change: " + metaNamed.join(", ") : " and no holders-unchanged write"}, all inside the preview range with the preview's holders; audit schedule.generate_accept changes=${auditChanges} = derived ${expectedSlots.length}; publish dialog opened`);
     const dlgText = await page.$eval("[data-testid=publish-dialog]", el => el.innerText);
     if (!/Publish schedule changes/.test(dlgText) || !/→/.test(dlgText)) fail("publish dialog after Accept lacks the diff lines: " + dlgText.slice(0, 200)); else ok("publish dialog after Accept: diff since last publish with arrow lines (" + (dlgText.match(/→/g) || []).length + ")");

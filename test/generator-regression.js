@@ -36,6 +36,10 @@
 // Christmas run at bestOf 1 for the holiday-unit unplaced reason); since Prompt 23
 // (9/30) the notice fixture's two one-week runs, and since its review (10/1) the
 // two three-day weekend-pair runs (noLoneWeekendDay on / off) - 27 in the summary.
+// Prompt 32 (10/11-10/12) adds its own synthetic runs, counted apart in the summary:
+// the over-soft-limit tie-break runs (step 4), the five two-week February runs of
+// the whole-month over-soft-limit list and the three one-month shift-weight runs
+// (the review fixes, bestOf 3 / 1).
 // bestOf per range is 6 / 5 / 2 / 2
 // (R1 / R2 / R3 / R4), chosen on 2026-09-22 from measured per-candidate costs
 // on the dev machine (R1 2.2 ms, R2 8 ms, R3 19 ms, R4 ~10 ms; R4 = the
@@ -318,16 +322,34 @@ const sarkarWeeksInMonth = (m, range) => Object.keys(SARKAR_WEEKS).filter((mon) 
 // Weekend styles.
 const BLOCK_STYLE = IDS.filter((id) => SR[id].weekendStyle === "block");
 eq(BLOCK_STYLE.sort(), [KHAN, PHILIP, FIERCE].sort(), "seed: block-style surgeons are Khan, Philip, Fierce");
-// Caps (an explicit null never falls back to the default). 9/22 (Prompt 12 K): a cap
-// is on PRIMARY days per month (monthlyCap.primary; defaultMonthlyCap.primary).
-eq(SR[ACTON].monthlyCap, null, "seed: Acton uncapped"); eq(SR[KHAN].monthlyCap, null, "seed: Khan uncapped");
-const DEFAULT_CAP = seed.groupRules.defaultMonthlyCap.primary; // 8 primary days: Philip (no key) falls back to it
-eq(DEFAULT_CAP, 8, "seed: groupRules.defaultMonthlyCap.primary = 8 (K: not the legacy total key)");
+// Caps. 9/22 (Prompt 12 K): a cap is on PRIMARY days per month (monthlyCap.primary; defaultMonthlyCap.primary).
+// Prompt 32 (Faraz 10/11): an absent key AND an explicit null read the group default; "none" is the explicit no-limit;
+// the group default is { primary (hard, optional), preferred (soft, optional) } - the seed's is the SOFT 7 with no hard
+// group cap; an own number / own hard cap carries no soft limit; an own object with neither number takes the group's both.
+// pin moved deliberately 10/11: Prompt 32 Acton / Khan null = the group default (was "uncapped"), the group default is the
+// soft 7 (was DEFAULT_CAP 8, hard), Burchett { primary: 7 } (was { primary: 8, preferred: 7 })
+eq(SR[ACTON].monthlyCap, null, "seed: Acton null = the group default (Prompt 32)"); eq(SR[KHAN].monthlyCap, null, "seed: Khan null = the group default (Prompt 32)");
+eq(seed.groupRules.defaultMonthlyCap, { preferred: 7 }, "seed: groupRules.defaultMonthlyCap = { preferred: 7 } - the group's SOFT limit, no hard group cap (Prompt 32, Faraz 10/11: 7 is not a hard rule)");
+const DEFAULT_CAP = typeof seed.groupRules.defaultMonthlyCap.primary === "number" ? seed.groupRules.defaultMonthlyCap.primary : null; // the hard group default: none in the seed
+const DEFAULT_PREFERRED = seed.groupRules.defaultMonthlyCap.preferred; // the soft group default: 7
 ok(!("total" in seed.groupRules.defaultMonthlyCap), "seed: no legacy defaultMonthlyCap.total");
-eq(SR[BURCHETT].monthlyCap, { primary: 8, preferred: 7 }, "seed: Burchett cap 8 primary / preferred 7");
+eq(SR[BURCHETT].monthlyCap, { primary: 7 }, "seed: Burchett's own cap is a hard 7, no preferred (Prompt 32, Faraz 10/11)");
 eq(SR[FIERCE].monthlyCap.primary, 14, "seed: Fierce cap 14 primary"); eq(SR[FIERCE].monthlyCap.countsEastDays, true, "seed: Fierce countsEastDays is boolean true");
+ok(!("preferred" in SR[FIERCE].monthlyCap), "seed: Fierce has no soft limit of his own");
 ok(!("total" in SR[BURCHETT].monthlyCap) && !("total" in SR[FIERCE].monthlyCap), "seed: no legacy monthlyCap.total keys");
 ok(!("monthlyCap" in SR[PHILIP]), "seed: Philip has no cap key");
+// the cap reading restated from the seed (not from rules.js): { primary: hard or null, preferred: soft or null }
+const capOf = (id) => {
+  const has = Object.prototype.hasOwnProperty.call(SR[id], "monthlyCap"), mc = SR[id].monthlyCap;
+  if (!has || mc === null) return { primary: DEFAULT_CAP, preferred: DEFAULT_PREFERRED };
+  if (mc === "none") return { primary: null, preferred: null };
+  if (typeof mc === "number") return { primary: mc, preferred: null };
+  const own = typeof mc.primary === "number" ? mc.primary : null;
+  return { primary: own !== null ? own : DEFAULT_CAP, preferred: typeof mc.preferred === "number" ? mc.preferred : (own === null ? DEFAULT_PREFERRED : null) };
+};
+eq(IDS.map((id) => CODE[id] + " " + JSON.stringify(capOf(id))), ["FAK {\"primary\":null,\"preferred\":7}", "MAB {\"primary\":7,\"preferred\":null}", "BDA {\"primary\":null,\"preferred\":7}", "AFP {\"primary\":null,\"preferred\":7}", "NF {\"primary\":14,\"preferred\":null}", "SRK {\"primary\":null,\"preferred\":7}"],
+  "seed caps restated (Prompt 32): Khan / Acton / Philip / Sarkar the group's soft 7, Burchett a hard 7, Fierce a hard 14");
+eq(IDS.map((id) => { const c = R.monthlyCapFor(ctx, id); return { primary: c.primary, preferred: c.preferred }; }), IDS.map(capOf), "rules.js monthlyCapFor reads every seed cap as restated");
 // Targets (9/22, Prompt 12 J - equal-share fairness): nobody has a numeric target; Khan and Sarkar carry an
 // explicit null, which since J reads "equal share" for a pool member (Khan) and "window target" for the
 // windows surgeon (Sarkar) - never a neutral term and never "no target".
@@ -350,6 +372,7 @@ const CONVEXITY = seed.groupRules.weights.deviationConvexity;
 eq(CONVEXITY, 2, "seed: groupRules.weights.deviationConvexity = 2 (the water-filled share's convex deviation, decided 9/23)");
 eq(GEN.GEN_DEVIATION_CONVEXITY, CONVEXITY, "generator.js GEN_DEVIATION_CONVEXITY (the code default) = the seed's explicit knob");
 const round1 = (v) => Math.round(v * 10) / 10;
+const OVER_SEEN = { n: 0, outside: 0, trimmed: 0 }; // Prompt 32 step 2: over-soft-limit days listed across every checked run (the restatement is not vacuous); review fix 10/12: of them outside the range, and the days left out because the run gave their holder no primary that month
 // Hard-reason vocabulary (rules doc sections 3-5; guide section 5). A reason in
 // diagnostics.uncovered must start with one of these; anything else is a renamed,
 // bogus or placeholder reason. Holiday-unit reasons carry "@YYYY-MM-DD".
@@ -415,27 +438,36 @@ function khanOpenWeekends(days) {
 // (locks are facts the generator keeps; the conflicts must be REPORTED):
 //   R1  Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23:
 //       10/22's backup is Burchett's locked manual edit, mirrored in the seed). Since
-//       9/22 (Prompt 12 K) the monthly cap counts PRIMARY days only, so his 7 primaries
-//       sit under the default cap of 8 and his 7 locked backups sit AT backup-cap 7
-//       (the explicit backup cap, unchanged) - no locked Philip slot breaks a rule now
-//       (before BK his 8 backups broke backup-cap 7; the expectation below is computed
-//       from the inputs, so it follows the seed). Plus Fierce's single locked Monday
-//       primary 10/12 outside any derived week (weekday-pattern:Mon - October is not
-//       derived).
+//       9/22 (Prompt 12 K) the monthly cap counts PRIMARY days only; since Prompt 32
+//       (10/11) his cap is the group's SOFT 7 (no hard cap), and his 7 locked backups
+//       sit AT backup-cap 7 (the explicit backup cap, unchanged) - no locked Philip slot
+//       breaks a rule now (before BK his 8 backups broke backup-cap 7; the expectation
+//       below is computed from the inputs, so it follows the seed). Plus Fierce's single
+//       locked Monday primary 10/12 outside any derived week (weekday-pattern:Mon -
+//       October is not derived). A locked primary over a HARD cap is restated for every
+//       holder (Prompt 32; was Philip's October only); a soft limit never makes a lock
+//       violation, so Acton's 10 locked October / 8 locked November primaries (over the
+//       group's soft 7) are expected as nothing.
 //   R2  Khan's import-locked Thanksgiving primaries on the synthetic East-busy days
 //       11/26, 11/27, 11/28 (east-busy); 11/29 is not East-busy.
 //   R3  nothing is locked -> empty.
 function expectedLockViolations(range) {
   const out = [];
-  const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: under the primary cap of 8 (K)
+  const philipOctP = monthDays("2026-10").filter((d) => holder(INPUT, d, P) === PHILIP).length; // 7: at the group's soft 7, no hard cap (Prompt 32; was under the hard default 8, K)
   const philipOctB = monthDays("2026-10").filter((d) => holder(INPUT, d, B) === PHILIP).length; // 7: at his explicit backup cap of 7 (8 until BK 9/23 - 10/22 went to Burchett)
   eq([philipOctP, philipOctB], [7, 7], "seed: Philip's locked October is 7 primaries + 7 backups (8 backups until BK 9/23: 10/22 is Burchett's) (fixture drift?)");
+  // Prompt 32: a holder's locked primaries of the calendar month (+ his East primary-week days under a countsEastDays cap)
+  // against his restated HARD cap; the generator never places past a hard cap, so only locks alone can break it
+  const lockedPrimaries = (id, m) => monthDays(m).filter((d) => (INPUT[d] && INPUT[d].primaryLocked && INPUT[d].primary === id) || (SR[id].monthlyCap && SR[id].monthlyCap.countsEastDays === true && id === FIERCE && FIERCE_EAST_PRIMARY_DAYS.has(d))).length;
+  const overHardCap = (id, m) => capOf(id).primary !== null && lockedPrimaries(id, m) > capOf(id).primary;
+  eq(["2026-10", "2026-11"].map((m) => IDS.filter((id) => lockedPrimaries(id, m) > 7).map((id) => CODE[id] + " " + lockedPrimaries(id, m))), [["BDA 10"], ["BDA 8"]], "seed: only Acton's locks pass 7 (10 October, 8 November primaries) - over the group's soft 7, never a hard cap (fixture drift?)");
   Object.keys(INPUT).sort().forEach((d) => {
     if (d < range.start || d > range.end) return;
     ROLES.forEach((role) => {
       const e = INPUT[d];
       if (!e[role + "Locked"] || !e[role]) return;
-      if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === P && philipOctP > DEFAULT_CAP) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "monthly-cap:" });
+      // pin moved deliberately 10/11: Prompt 32 generic over every holder's restated HARD cap (was Philip's October against DEFAULT_CAP 8)
+      if (role === P && overHardCap(e[role], monthOf(d))) out.push({ day: d, role, id: e[role], lock: "import", prefix: "monthly-cap:" });
       if (e[role] === PHILIP && monthOf(d) === "2026-10" && role === B && philipOctB > SR[PHILIP].backupCap.perMonthDays) out.push({ day: d, role, id: PHILIP, lock: "import", prefix: "backup-cap:" });
       if (e[role] === FIERCE && role === P && weekday(d) === "Mon" && !DERIVED_ROLE[d]) out.push({ day: d, role, id: FIERCE, lock: "import", prefix: "weekday-pattern:Mon" });
       if (e[role] === KHAN && role === P && KHAN_BUSY.includes(d)) out.push({ day: d, role, id: KHAN, lock: "import", prefix: "east-busy" });
@@ -444,7 +476,10 @@ function expectedLockViolations(range) {
       else if (role === P && DAY_BEFORE_VAC[e[role]] && DAY_BEFORE_VAC[e[role]].has(d)) out.push({ day: d, role, id: e[role], lock: "import", prefix: "day-before-vacation" });
     });
   });
-  return out.sort((a, b) => (a.day + a.role).localeCompare(b.day + b.role));
+  // one entry per locked slot (the engine reports a slot once, with every reason): with the generic cap line a slot could
+  // match two restated rules - the first one stays and its prefix is checked against the reported reasons
+  const seenLV = new Set();
+  return out.filter((x) => { const k = x.day + " " + x.role; if (seenLV.has(k)) return false; seenLV.add(k); return true; }).sort((a, b) => (a.day + a.role).localeCompare(b.day + b.role));
 }
 function makeView(out) {
   // merged view: generated range from the output, everything else from the published input
@@ -716,9 +751,24 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   // WF (Faraz 9/23, decision after docs/REPORT-NOV-BACKUPS-2026-09-23.md): the WATER-FILLED share. Restated here
   // independently: the pool's slots of the role in the month = the open in-range slots (primary: minus Sarkar's reserved
   // window primaries) + every day of the calendar month a pool member already holds on the lock-only base; they are
-  // poured over the members up to each member's clip (the K clip for primary, backupCap.perMonthDays for backup) - a
-  // member whose clip is below the level takes the clip, the rest share the remainder; the level is the share; a
-  // member's target is min(level, clip), NEVER floored at his locked days (his fixed days count against the share).
+  // poured over the members up to each member's clip - a member whose clip is below the level takes the clip, the rest
+  // share the remainder; NEVER floored at his locked days (his fixed days count against the share).
+  // Prompt 32 step 2 (Faraz 10/11, DESIGN "Generator" 1-7) - per-role shares + the WEIGHTED cross-role balance, restated:
+  //   (1) the cap clip = the soft limit when set, else the hard cap (the smaller when both are set), minus the East
+  //       primary-week days of a countsEastDays cap - no "- 1" any more (decision 3);
+  //   (2) the feasibility clip = allowed + held per role (allowed = the generator's own static walk, range-checked below and
+  //       pinned exactly for Khan's backups and Sarkar's primaries); fill clip P = min(cap clip, allowedP + heldP), fill clip
+  //       B = min(backupCap.perMonthDays, allowedB + heldB);
+  //   (3) the primary water-fill over the fill clips -> p;
+  //   (4) the backup by the WEIGHTED fill (groupRules.shiftAccounting.weights, primary 1 / backup 0.5): a common level W*
+  //       with b = clamp((W* - wP x p) / wB, 0, fill clip B) summing to the backup slots - restated here by its breakpoints
+  //       (linear between two of them), not by the generator's bisection; a member short of primaries carries wP / wB = 2
+  //       backups per missing primary;
+  //   (5) the reverse makeup: a member at his backup fill clip whose weighted load is below W* is held at min(fill clip P,
+  //       (W* - wB x clip B) / wP) primaries when that is more than 0.05 over his plain share, the others re-fill around the
+  //       holds; at most 3 rounds, stop when no hold moves by more than 0.05.
+  //   Targets = round1 of p / b; primaryShare = the primary level; backupShare = the backup share of a member on the primary
+  //   level ((W* - wP x level) / wB); weightedShare = W*.
   const waterFill = (members, slots) => { // members: [{ id, clip }]; own loop, not generator.js genWaterFill
     let left = Math.max(0, slots), open = members.slice().sort((a, b) => (a.clip === null ? Infinity : a.clip) - (b.clip === null ? Infinity : b.clip));
     const share = {};
@@ -727,47 +777,121 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     open.forEach((m) => { share[m.id] = m.clip === null ? level : Math.min(level, m.clip); });
     return { level, share };
   };
+  const SW = seed.groupRules.shiftAccounting.weights;
+  eq(SW, { primary: 1, backup: 0.5 }, "seed: groupRules.shiftAccounting.weights = primary 1 / backup 0.5 (Prompt 32 step 1)");
+  const snap9 = (v) => Math.round(v * 1e9) / 1e9;
+  const minN = (a, b) => (a === null ? b : b === null ? a : Math.min(a, b));
+  const weightedFillR = (members, slots) => { // members: [{ id, p, clip }]; breakpoints, not bisection
+    const T = Math.max(0, slots), share = {};
+    if (!members.length) return { level: null, share };
+    const cl = (x) => (x.clip === null ? Infinity : x.clip);
+    if (members.every((x) => x.clip !== null) && members.reduce((s, x) => s + x.clip, 0) < T - 1e-9) { members.forEach((x) => { share[x.id] = x.clip; }); return { level: null, share }; }
+    const f = (W) => members.reduce((s, x) => s + Math.min(cl(x), Math.max(0, (W - SW.primary * x.p) / SW.backup)), 0);
+    const bps = []; members.forEach((x) => { bps.push(SW.primary * x.p); if (x.clip !== null) bps.push(SW.primary * x.p + SW.backup * x.clip); });
+    bps.sort((a, b) => a - b);
+    let W;
+    if (T <= 0) W = bps[0];
+    else {
+      const k = bps.findIndex((x) => f(x) >= T);
+      if (k <= 0) { const lo = bps[bps.length - 1], n = members.filter((x) => x.clip === null).length; W = k === 0 ? bps[0] : lo + (T - f(lo)) * SW.backup / n; }
+      else { const lo = bps[k - 1], hi = bps[k]; W = lo + (T - f(lo)) * (hi - lo) / (f(hi) - f(lo)); }
+    }
+    members.forEach((x) => { share[x.id] = snap9(Math.min(cl(x), Math.max(0, (W - SW.primary * x.p) / SW.backup))); });
+    return { level: snap9(W), share };
+  };
+  const sharesR = (fm, slots) => { // fm: [{ id, clipP, clipB }] (no monthlyTarget override on the seed)
+    let holds = {}, rounds = 0;
+    const solve = () => {
+      const free = fm.filter((x) => !(x.id in holds)), heldSum = fm.reduce((s, x) => s + (x.id in holds ? holds[x.id] : 0), 0);
+      const fp = waterFill(free.map((x) => ({ id: x.id, clip: x.clipP })), slots.primary - heldSum);
+      const p = {}; fm.forEach((x) => { p[x.id] = x.id in holds ? holds[x.id] : fp.share[x.id]; });
+      const lref = fp.level !== null ? fp.level : Math.max(...fm.map((x) => p[x.id]));
+      const fb = weightedFillR(fm.map((x) => ({ id: x.id, p: p[x.id], clip: x.clipB })), slots.backup);
+      return { p, pLevel: fp.level, lref, b: fb.share, W: fb.level };
+    };
+    let st = solve();
+    while (rounds < 3 && st.W !== null) {
+      const next = {}; let sum = 0;
+      fm.forEach((x) => { const base = st.pLevel === null ? x.clipP : Math.min(st.pLevel, x.clipP); const want = snap9(Math.min(x.clipP, (st.W - SW.backup * x.clipB) / SW.primary)); if (want > base + 0.05) { next[x.id] = want; sum += want; } });
+      const moved = Object.keys(next).some((id) => !(id in holds) || Math.abs(next[id] - holds[id]) > 0.05) || Object.keys(holds).some((id) => !(id in next));
+      if (!moved || sum > slots.primary) break;
+      holds = next; rounds++; st = solve();
+    }
+    const makeup = {}; Object.keys(holds).forEach((id) => { const x = fm.find((y) => y.id === id); makeup[id] = snap9(holds[id] - (st.pLevel === null ? x.clipP : Math.min(st.pLevel, x.clipP))); });
+    const bShare = st.W === null || st.lref === null ? null : Math.max(0, snap9((st.W - SW.primary * st.lref) / SW.backup));
+    return { p: st.p, b: st.b, pLevel: st.pLevel, bShare, W: st.W, rounds, makeup };
+  };
   eq(D.impliedTargets.convexity, CONVEXITY, "impliedTargets.convexity = the seed's weights.deviationConvexity (" + CONVEXITY + ")");
+  eq(D.impliedTargets.weights, SW, "impliedTargets.weights = the seed's shiftAccounting.weights (Prompt 32 step 2: the weighted view's weights)");
+  ok(/water-filled/.test(D.impliedTargets.rule) && /weighted/.test(D.impliedTargets.rule) && /soft limit/.test(D.impliedTargets.rule) && !/capPrimary - 1/.test(D.impliedTargets.rule), "impliedTargets.rule names the water-filled primary, the weighted backup and the soft-limit clip (and no longer cap - 1)");
   const round1n = (v) => (v === null ? null : round1(v)); // a null level stays null
-  const LEVEL = {}; // month -> { primary, backup }: the restated water levels (read again by the Fierce November pins below)
+  const LEVEL = {}; // month -> the restated levels and shares (read again by the Fierce November pins below)
   months.forEach((m) => {
     const I = D.impliedTargets.months[m];
     const mdaysIn = days.filter((d) => monthOf(d) === m);
-    ok(I && "primaryShare" in I && "backupShare" in I && I.members, "impliedTargets " + m + " lacks primaryShare / backupShare / members (keys: " + JSON.stringify(I ? Object.keys(I) : null) + ")");
-    ok(typeof I.primaryShare === "number" && typeof I.backupShare === "number", "impliedTargets " + m + " primaryShare / backupShare must be numbers on the seed (no month has every member clipped): " + JSON.stringify([I.primaryShare, I.backupShare]));
+    ok(I && "primaryShare" in I && "backupShare" in I && "weightedShare" in I && I.members, "impliedTargets " + m + " lacks primaryShare / backupShare / weightedShare / members (keys: " + JSON.stringify(I ? Object.keys(I) : null) + ")");
+    // pin moved deliberately 10/11: Prompt 32 step 2 - this read "primaryShare / backupShare must be numbers on the seed (no
+    // month has every member clipped)". The fill clips now add what the rules allow (allowed + held), so a month whose fill clips
+    // cannot hold the pool's primary slots has no primary level ("at caps"): on the seed only the imports-locked October 2026
+    // (Acton's 10 locked primaries over his soft 7, Philip's 7 and Burchett's 5 locked, 2 open slots) and a November 2026 the
+    // range touches on 11/1 alone. The backup share and the weighted level stay numbers everywhere; the null itself is restated
+    // from the fill clips below (sharesR).
+    ok(typeof I.backupShare === "number" && typeof I.weightedShare === "number" && (typeof I.primaryShare === "number" || m === "2026-10" || (m === "2026-11" && range.end === "2026-11-01")), "impliedTargets " + m + " primaryShare / backupShare / weightedShare must be numbers on the seed (only October 2026 and an 11/1-only November may have every member at his primary fill clip): " + JSON.stringify([I.primaryShare, I.backupShare, I.weightedShare]));
     ok(!("neutralTerm" in I) && !("noTerm" in I) && !("share" in I) && !("targets" in I), "impliedTargets " + m + " still carries a pre-J key (neutralTerm / noTerm / share / targets)");
     const primaryOpen = mdaysIn.filter((d) => baseOpen(d, P)).length, backupOpen = mdaysIn.filter((d) => baseOpen(d, B)).length;
     const nW = sarkarWeeksInMonth(m, range);
     const openWindow = mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P)).length;
     const reserved = Math.min(SARKAR_TARGET * nW, openWindow);
     eq([I.primaryOpen, I.backupOpen, I.poolSize, I.reservedForWindows], [primaryOpen, backupOpen, POOL.length, reserved], "impliedTargets " + m + " primaryOpen / backupOpen / poolSize / reservedForWindows");
-    // clips (K, per role since J): Burchett preferred 7; Philip default 8 - 1; Acton / Khan uncapped; Fierce 13 minus the
-    // East primary-week days of the month he does not hold as Silvis PRIMARY - the cap adds those days to his primary
-    // count whether or not he holds the derived Silvis backup, so November (derived week held) reads 6, not 13.
+    // the cap clip (K, per role since J), restated from capOf (the seed's caps as Prompt 32 reads them): the East primary-week
+    // days of the month a countsEastDays surgeon does not hold as Silvis PRIMARY come off it (the cap adds those days to his
+    // primary count whether or not he holds the derived Silvis backup).
+    // pin moved deliberately 10/11: Prompt 32 step 2 the clip is the soft limit when set, else the hard cap, with no "- 1"
+    // (Faraz 10/11 decision 3): Khan / Acton / Philip on the group's soft 7 -> 7 (was null: the K clip read the hard cap only),
+    // Burchett's hard 7 -> 7 (was 7 - 1 = 6), Fierce 14 - East days (was 13 - East days)
     const fierceEastP = monthDays(m).filter((d) => FIERCE_EAST_PRIMARY_DAYS.has(d) && baseHolder(d, P) !== FIERCE).length;
-    const CLIP_P = { [BURCHETT]: 7, [PHILIP]: DEFAULT_CAP - 1, [ACTON]: null, [KHAN]: null, [FIERCE]: 14 - 1 - fierceEastP };
+    const kClip = (id) => { const c = capOf(id), lim = minN(c.preferred, c.primary); return lim === null ? null : Math.max(0, lim - (id === FIERCE ? fierceEastP : 0)); };
+    const CLIP_P = { [BURCHETT]: kClip(BURCHETT), [PHILIP]: kClip(PHILIP), [ACTON]: kClip(ACTON), [KHAN]: kClip(KHAN), [FIERCE]: kClip(FIERCE) };
+    eq([CLIP_P[BURCHETT], CLIP_P[PHILIP], CLIP_P[ACTON], CLIP_P[KHAN], CLIP_P[FIERCE]], [7, 7, 7, 7, 14 - fierceEastP], "restated cap clips in " + m + " (Prompt 32 step 2): MAB his hard 7 / AFP, BDA, FAK the group's soft 7 / NF 14 - East days");
     const clipB = (id) => (SR[id].backupCap && typeof SR[id].backupCap.perMonthDays === "number" ? SR[id].backupCap.perMonthDays : null);
     const HELD = {}; POOL.forEach((id) => { HELD[id] = { primary: monthDays(m).filter((d) => baseHolder(d, P) === id).length, backup: monthDays(m).filter((d) => baseHolder(d, B) === id).length }; });
     const heldByPool = { primary: POOL.reduce((s, id) => s + HELD[id].primary, 0), backup: POOL.reduce((s, id) => s + HELD[id].backup, 0) };
     const poolSlots = { primary: Math.max(0, primaryOpen - reserved) + heldByPool.primary, backup: backupOpen + heldByPool.backup };
     eq([I.poolSlots, I.heldByPool], [poolSlots, heldByPool], "impliedTargets " + m + " poolSlots / heldByPool = (open - reserved | open) + the pool's whole-month held days per role");
-    const fillP = waterFill(POOL.map((id) => ({ id, clip: CLIP_P[id] })), poolSlots.primary), fillB = waterFill(POOL.map((id) => ({ id, clip: clipB(id) })), poolSlots.backup);
-    LEVEL[m] = { primary: fillP.level, backup: fillB.level };
-    eq([I.primaryShare, I.backupShare], [round1n(fillP.level), round1n(fillB.level)], "impliedTargets " + m + " primaryShare / backupShare = the water levels over the pool's slots (" + poolSlots.primary + " P / " + poolSlots.backup + " B)");
+    // (2) the fill clips: the cap clip / backup cap met by what the rules allow (allowed + held)
+    const FILL = {}; POOL.forEach((id) => { const M = I.members[id] || { allowedPrimary: 0, allowedBackup: 0 }; FILL[id] = { primary: minN(CLIP_P[id], M.allowedPrimary + HELD[id].primary), backup: minN(clipB(id), M.allowedBackup + HELD[id].backup) }; });
+    const SH = sharesR(POOL.map((id) => ({ id, clipP: FILL[id].primary, clipB: FILL[id].backup })), poolSlots);
+    LEVEL[m] = { primary: SH.pLevel, backup: SH.bShare, weighted: SH.W, p: SH.p, b: SH.b, fill: FILL };
+    eq([I.primaryShare, I.backupShare, I.weightedShare], [round1n(SH.pLevel), round1n(SH.bShare), round1n(SH.W)], "impliedTargets " + m + " primaryShare / backupShare / weightedShare = the restated levels over the pool's slots (" + poolSlots.primary + " P / " + poolSlots.backup + " B)");
+    eq([I.makeupRounds, I.weights], [SH.rounds, SW], "impliedTargets " + m + " makeupRounds / weights (restated: " + SH.rounds + " round(s), makeup " + JSON.stringify(SH.makeup) + ")");
     POOL.forEach((id) => {
       const M = I.members[id];
       ok(M && typeof M.primaryTarget === "number" && typeof M.backupTarget === "number", CODE[id] + " must carry a primary AND a backup target in " + m + " (got " + JSON.stringify(M) + ")");
       const heldP = HELD[id].primary, heldB = HELD[id].backup;
       eq(M.lockedHeld, { primary: heldP, backup: heldB }, CODE[id] + " lockedHeld in " + m);
-      // WF: the target is the water-filled share clipped - and never floored at the locked days
-      eq([M.primaryTarget, M.backupTarget], [round1(fillP.share[id]), round1(fillB.share[id])], CODE[id] + " targets in " + m + " are not min(level, clip) per role (level P " + round1(fillP.level) + " / B " + round1(fillB.level) + ", clip P " + CLIP_P[id] + " / B " + clipB(id) + ", locked " + heldP + " / " + heldB + ")");
-      ok((I.primaryShare === null || M.primaryTarget <= I.primaryShare + 0.05) && (I.backupShare === null || M.backupTarget <= I.backupShare + 0.05), CODE[id] + " a target above the share in " + m + " (a locked floor is back): " + JSON.stringify(M));
+      eq(M.fillClip, FILL[id], CODE[id] + " fillClip in " + m + " = { min(cap clip " + CLIP_P[id] + ", allowed " + M.allowedPrimary + " + held " + heldP + "), min(backup cap " + clipB(id) + ", allowed " + M.allowedBackup + " + held " + heldB + ") }");
+      // the target is the restated share - the water-filled primary, the weighted backup - and never floored at the locked days
+      eq([M.primaryTarget, M.backupTarget], [round1(SH.p[id]), round1(SH.b[id])], CODE[id] + " targets in " + m + " are not the restated per-role / weighted shares (level P " + round1n(SH.pLevel) + ", W* " + round1n(SH.W) + ", fill clip P " + FILL[id].primary + " / B " + FILL[id].backup + ", locked " + heldP + " / " + heldB + ")");
+      eq([M.makeupPrimary, M.weightedShare], [id in SH.makeup ? round1(SH.makeup[id]) : 0, round1(SW.primary * M.primaryTarget + SW.backup * M.backupTarget)], CODE[id] + " makeupPrimary / weightedShare in " + m);
+      // pin moved deliberately 10/11: Prompt 32 step 2 - this read "every target <= its role's share + 0.05 (a locked floor is
+      // back)". With the weighted balance a backup target sits above the backup share by the weighted makeup for the primaries
+      // the member is short, and a primary target above the primary level by the reverse makeup - both restated exactly above.
+      // The floor it guarded is checked directly: a member whose held days exceed his restated share is never targeted at them.
+      ok((heldP <= SH.p[id] + 0.05 || M.primaryTarget < heldP) && (heldB <= SH.b[id] + 0.05 || M.backupTarget < heldB), CODE[id] + " a target lifted to the held days in " + m + " (a locked floor is back): " + JSON.stringify(M));
+      ok(M.primaryTarget <= FILL[id].primary + 0.05 && M.backupTarget <= FILL[id].backup + 0.05, CODE[id] + " a target above its fill clip in " + m + ": " + JSON.stringify(M));
       ok(M.primaryTarget <= (M.clipPrimary === null ? Infinity : M.clipPrimary) + 0.05, CODE[id] + " primary target " + M.primaryTarget + " above his clip " + M.clipPrimary + " in " + m);
       if (clipB(id) !== null) ok(M.backupTarget <= clipB(id) + 0.05, CODE[id] + " backup target " + M.backupTarget + " above his backup cap in " + m);
       ok(typeof M.allowedPrimary === "number" && typeof M.allowedBackup === "number" && M.allowedPrimary >= 0 && M.allowedPrimary <= primaryOpen && M.allowedBackup >= 0 && M.allowedBackup <= backupOpen, CODE[id] + " allowedPrimary / allowedBackup out of range in " + m + ": " + JSON.stringify(M));
       eq(D.tallies[id].months[m].target, { primary: M.primaryTarget, backup: M.backupTarget }, CODE[id] + " tallies target = { primary, backup } in " + m);
     });
-    eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [7, DEFAULT_CAP - 1, null, null, 14 - 1 - fierceEastP], "clipPrimary MAB 7 / AFP 7 / BDA null / FAK null / NF 13 - East primary-week days in " + m);
+    // the sums of the restated shares are the pool's slots where a level exists (the fill hands out every slot), else the fill
+    // clips (every member on his clip, the rest of the slots carry no target pressure)
+    const sumClips = (role) => POOL.reduce((s, id) => s + FILL[id][role], 0);
+    ok(Math.abs(POOL.reduce((s, id) => s + SH.p[id], 0) - (SH.pLevel === null ? sumClips(P) : poolSlots.primary)) < 1e-6 && Math.abs(POOL.reduce((s, id) => s + SH.b[id], 0) - (SH.W === null ? sumClips(B) : poolSlots.backup)) < 1e-6, "restated shares in " + m + " do not sum to the pool's slots " + JSON.stringify(poolSlots) + " (or the fill clips where no level exists): " + JSON.stringify([SH.p, SH.b]));
+    if (SH.pLevel === null) ok(sumClips(P) < poolSlots.primary, "restated: no primary level in " + m + " although the fill clips hold the pool's slots");
+    // pin moved deliberately 10/11: Prompt 32 step 2 clipPrimary is the soft limit (else the hard cap) minus East days, no "- 1":
+    // MAB 7 (was 6), AFP / BDA / FAK the group's 7 (was null), NF 14 - East days (was 13 - East days)
+    eq([I.members[BURCHETT].clipPrimary, I.members[PHILIP].clipPrimary, I.members[ACTON].clipPrimary, I.members[KHAN].clipPrimary, I.members[FIERCE].clipPrimary], [7, 7, 7, 7, 14 - fierceEastP], "clipPrimary MAB 7 / AFP 7 / BDA 7 / FAK 7 / NF 14 - East primary-week days in " + m);
     eq(I.members[FIERCE].eastPrimaryDays, fierceEastP, "Fierce members.eastPrimaryDays in " + m);
     // Khan's allowed backup count exactly: since 9/22 backup is open to him on every open in-range backup slot of the
     // month except his vacation days and the days he holds the locked primary (Thanksgiving) - no cap, no East block.
@@ -781,6 +905,17 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     eq([MS.primaryTarget, MS.backupTarget], [nW ? SARKAR_TARGET * nW : null, null], "Sarkar primaryTarget = window target, backupTarget null in " + m + " (got " + JSON.stringify(MS) + ")");
     eq(MS.allowedPrimary, mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P) && !vacHas(SARKAR, d) && !rowBlocks(SARKAR, d, P)).length, "Sarkar allowedPrimary = open in-range primary slots inside her windows (minus vacations and fixture unavailable rows) in " + m);
     eq(D.tallies[SARKAR].months[m].target, { primary: nW ? SARKAR_TARGET * nW : null, backup: null }, "Sarkar tallies target in " + m);
+    // Prompt 32 step 2: the windows surgeon keeps today's handling - out of the fills, no fill clip, no makeup; her weighted
+    // share is her primary target x w.primary (no backup target reads 0), none without a window week
+    eq([MS.weightedShare, MS.fillClip, MS.makeupPrimary], [nW ? round1(SW.primary * SARKAR_TARGET * nW) : null, null, null], "Sarkar weightedShare / fillClip / makeupPrimary in " + m);
+    // Prompt 32 step 2 (DESIGN "Generator" 7): the tallies carry the weighted view BESIDE .target (which stays exactly
+    // { primary, backup }): weighted = P x wP + B x wB (the merged month's Silvis days), weightedShare = the member's
+    // impliedTargets weightedShare (null for a surgeon with no target that month)
+    IDS.forEach((id) => {
+      const tm = D.tallies[id].months[m], cP = monthDays(m).filter((d) => holder(view, d, P) === id).length, cB = monthDays(m).filter((d) => holder(view, d, B) === id).length;
+      eq([tm.primary, tm.backup], [cP, cB], CODE[id] + " tallies P / B in " + m + " = the merged month's Silvis days");
+      eq([tm.weighted, tm.weightedShare], [round1(SW.primary * cP + SW.backup * cB), I.members[id] ? I.members[id].weightedShare : null], CODE[id] + " tallies weighted / weightedShare in " + m);
+    });
     // J (fix stage, review finding 1) restated by WF: placeableAtTarget = sum over every targeted surgeon of max(0,
     // target - lockedHeld) per role = the room below the targets. With the water-filled share it is AT LEAST the open
     // slots of the role (every open slot is somebody's room) and exceeds them by heldAboveShare = sum of max(0,
@@ -805,7 +940,48 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   IDS.forEach((id) => {
     const sum = (role) => { let s = null; months.forEach((m) => { const t = D.tallies[id].months[m].target[role]; if (typeof t === "number") s = (s || 0) + t; }); return s === null ? null : round1(s); };
     eq(D.tallies[id].range.target, { primary: sum(P), backup: sum(B) }, CODE[id] + " tallies.range.target = per-role sums of the monthly targets");
+    // Prompt 32 step 2: the range row's weighted view - the range's own P x wP + B x wB and the sum of the monthly weighted shares
+    let ws = null; months.forEach((m) => { const v = D.tallies[id].months[m].weightedShare; if (typeof v === "number") ws = (ws || 0) + v; });
+    const rr = D.tallies[id].range;
+    eq([rr.weighted, rr.weightedShare], [round1(SW.primary * rr.primary + SW.backup * rr.backup), ws === null ? null : round1(ws)], CODE[id] + " tallies.range weighted / weightedShare");
   });
+  // Prompt 32 step 2 (DESIGN "Generator" 9; Faraz 10/11 decision 5): diagnostics.overSoftLimit = every in-range primary day that
+  // is the (L+1)th or later primary of its holder's calendar month in date order (the merged month: locked, published and
+  // out-of-range days count toward the ordinal), L = his soft limit (capOf(id).preferred - a surgeon without one, Burchett's hard
+  // 7 or Fierce's 14, is never listed), as plain { day, id, month, count, limit } in date order. Derived from the schedule.
+  // Prompt 32 step 4 (the ONE helper, rules.overSoftLimitDays, now behind it): restated in full - a day over the holder's
+  // HARD cap as well is a hard-cap breach that keeps its own wording (not listed), and a cap that counts East days counts his
+  // East primary-week days not held as Silvis primary first (no seed member has both a soft limit and either - Fierce's
+  // countsEastDays cap is a hard 14 - so on the seed these two clauses never fire; the rules suite pins them on variants).
+  // pin moved deliberately 10/12: Prompt 32 review fix - the list was the IN-RANGE days only, so a range ending mid-month
+  // (the 10/15-11/01 backfill, a custom end) left out the later held days of the month its placements pushed past the limit
+  // (the calendar badge and the Publish dialog showed them, the preview box and the Accept audit did not). Re-derived: every
+  // over-the-soft-limit primary day of the WHOLE calendar months the range touches (days outside the range listed too), kept
+  // only for a (holder, month) this run GAVE an in-range primary - the output's primary differs from the input's on an
+  // in-range day of that month, the way helpers.overSoftLimitForChanges trims the Publish dialog's list - so a month over
+  // the limit by held days alone (Acton's locked October / November) is not this run's doing and is not listed.
+  {
+    const gave = new Set();
+    days.forEach((d) => { const id = holder(view, d, P); if (id && id !== holder(INPUT, d, P)) gave.add(id + "|" + monthOf(d)); });
+    const expOver = [];
+    months.forEach((m) => monthDays(m).forEach((d) => {
+      const id = holder(view, d, P);
+      if (!id || !SR[id]) return;
+      const L = capOf(id).preferred, H = capOf(id).primary;
+      if (L === null) return;
+      const mc = SR[id].monthlyCap, countsE = !!(mc && typeof mc === "object" && (mc.countsEastDays === true || mc.countsEastDays === "distinct-days"));
+      const eastBase = countsE && id === FIERCE ? [...FIERCE_EAST_PRIMARY_DAYS].filter((x) => monthOf(x) === m && holder(view, x, P) !== id).length : 0;
+      const count = eastBase + monthDays(m).filter((x) => x <= d && holder(view, x, P) === id).length;
+      if (!(count > L && (H === null || count <= H))) return;
+      if (gave.has(id + "|" + m)) expOver.push({ day: d, id, month: m, count, limit: L });
+      else OVER_SEEN.trimmed++;
+    }));
+    ok(Array.isArray(D.overSoftLimit), "diagnostics.overSoftLimit is missing (Prompt 32 step 2): " + JSON.stringify(D.overSoftLimit));
+    eq(D.overSoftLimit, expOver, "diagnostics.overSoftLimit = the restated over-soft-limit primary days of the months the range touches, for the (holder, month) pairs this run gave an in-range primary (Prompt 32 review fix)");
+    ok(D.overSoftLimit.every((o) => Object.keys(o).join() === "day,id,month,count,limit"), "overSoftLimit entries are plain { day, id, month, count, limit }");
+    OVER_SEEN.n += D.overSoftLimit.length;
+    OVER_SEEN.outside += D.overSoftLimit.filter((o) => o.day < range.start || o.day > range.end).length;
+  }
   if (range.name.indexOf("R2") === 0 || range.name.indexOf("R4") === 0) {
     const nov = D.impliedTargets.months["2026-11"], NF = nov.members[FIERCE];
     eq(NF.lockedHeld, { primary: 0, backup: 8 }, "Fierce holds his 7 derived November days (confirmed by his explicit rows) + Mon 11/16 as BACKUP before generation (T)");
@@ -815,13 +991,23 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     ok(!D.warnings.some((w) => /^derived week 2026-11-09 /.test(w)), "T: no yield warning for the week of 11/9");
     // 9/22 (K review, restated per role by J): his held derived East-primary week is 7 locked BACKUPS - it never
     // inflates his primary target - and the cap adds those 7 days to his primary count, so his primary clip is
-    // 14 - 1 - 7 = 6; the primary target is min(level, 6) (nothing primary is locked), never the old 13 clip.
-    eq([NF.eastPrimaryDays, NF.clipPrimary], [7, 6], "Fierce November: 7 East primary-week days leave a primary clip of 6");
-    eq(NF.primaryTarget, round1(Math.max(0, Math.min(LEVEL["2026-11"].primary, 6))), "Fierce November primary target = min(level " + nov.primaryShare + ", clip 6)");
-    // WF (9/23): his 8 locked backups no longer lift his target - it is the water-filled share like everyone's, and he
+    // 14 - 7 = 7 (nothing primary is locked), never the old 13 clip.
+    // pin moved deliberately 10/11: Prompt 32 step 2 - the clip has no "- 1": 14 - 7 = 7 (was 14 - 1 - 7 = 6); his primary
+    // target is his restated share (the water fill over the fill clips, was min(level, 6)), his backup target the WEIGHTED
+    // share (was the plain backup level)
+    eq([NF.eastPrimaryDays, NF.clipPrimary], [7, 7], "Fierce November: 7 East primary-week days leave a primary clip of 14 - 7 = 7");
+    eq(NF.primaryTarget, round1(LEVEL["2026-11"].p[FIERCE]), "Fierce November primary target = his restated share (fill clip P " + LEVEL["2026-11"].fill[FIERCE].primary + ", level " + nov.primaryShare + ")");
+    // WF (9/23): his 8 locked backups no longer lift his target - it is the (now weighted) share like everyone's, and he
     // stands ABOVE it (the old rule 'target >= 7 to hold his locked backups' is gone on purpose)
-    eq(NF.backupTarget, round1(LEVEL["2026-11"].backup), "Fierce November backup target = the water level " + nov.backupShare + " (never floored at his 8 locked backups)");
-    ok(NF.lockedHeld.backup > NF.backupTarget, "Fierce November: his 8 locked backups sit above his backup target " + NF.backupTarget + " - the convex term keeps further backups away from him");
+    eq(NF.backupTarget, round1(LEVEL["2026-11"].b[FIERCE]), "Fierce November backup target = his weighted share (W* " + nov.weightedShare + "; never floored at his 8 locked backups)");
+    // pin moved deliberately 10/11: Prompt 32 step 2 - this read "his 8 locked backups sit above his backup target - the convex
+    // term keeps further backups away from him". He can hold only 2 November primaries (his fill clip = 2 allowed + 0 held; the
+    // other 5 pool members' clips fill the 28 slots at level 7), 5 below the primary level, so the weighted fill targets him at
+    // wP / wB = 2 backups per missing primary above the backup share: 3.3 + 2 x 5 = 13.3. His 8 locked backups now sit BELOW
+    // it and the generator gives him more (a member short of primaries makes it up in backups - Faraz 10/11, DESIGN "Generator" 4)
+    eq([nov.primaryShare, nov.backupShare, NF.fillClip.primary, NF.allowedPrimary, NF.backupTarget], [7, 3.3, 2, 2, 13.3], "Fierce November (Prompt 32 step 2): level 7 P / 3.3 B, his primary fill clip 2 (allowed 2), backup target 13.3");
+    eq(NF.backupTarget, round1(Math.min(NF.fillClip.backup, LEVEL["2026-11"].backup + (SW.primary / SW.backup) * (LEVEL["2026-11"].primary - LEVEL["2026-11"].p[FIERCE]))), "Fierce November backup target = the backup share + 2 per missing primary (" + LEVEL["2026-11"].backup + " + 2 x (" + LEVEL["2026-11"].primary + " - " + LEVEL["2026-11"].p[FIERCE] + "))");
+    ok(NF.lockedHeld.backup < NF.backupTarget, "Fierce November (Prompt 32 step 2): his 8 locked backups sit below his weighted backup target " + NF.backupTarget);
     ok(nov.heldAboveShare.backup >= NF.lockedHeld.backup - NF.backupTarget - 0.05, "November heldAboveShare.backup " + nov.heldAboveShare.backup + " must carry Fierce's excess " + round1(NF.lockedHeld.backup - NF.backupTarget));
   }
   // score (J): the lexicographic parts split the deviation per role - primary first - and targetDeviation is gone;
@@ -895,15 +1081,26 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     CUR.day = m;
     const mdays = monthDays(m);
     const placedIn = (id, role) => mdays.some((d) => out.schedule[d] && isPlaced(out, d, role) && out.schedule[d][role] === id);
-    // item 7 (9/22, Prompt 12 K): Burchett <= 8 PRIMARY days per month; his backups are
+    // item 7 (9/22, Prompt 12 K): Burchett <= his hard cap in PRIMARY days per month; his backups are
     // unbounded by the cap (no assertion on the backup count or the primary+backup total)
+    // pin moved deliberately 10/11: Prompt 32 Burchett's own cap is a hard 7 (was 8)
     const burPrimary = mdays.filter((d) => holder(view, d, P) === BURCHETT).length;
-    if (placedIn(BURCHETT, P)) ok(burPrimary <= 8, "Burchett " + burPrimary + " primary days in " + m);
-    // K: Philip <= 8 PRIMARY days per month (the group default; his backups fall under item 8 only)
-    const phPrimary = mdays.filter((d) => holder(view, d, P) === PHILIP).length;
-    if (placedIn(PHILIP, P)) ok(phPrimary <= DEFAULT_CAP, "Philip " + phPrimary + " primary days in " + m + " (default cap " + DEFAULT_CAP + ")");
-    // item 7: Acton / Khan uncapped -> the generator never cites a monthly cap for them
-    D.uncovered.forEach((u) => { if (monthOf(u.day) === m) [ACTON, KHAN].forEach((id) => ok(!u.reasons[id].some((r) => String(r).indexOf("monthly-cap") === 0), CODE[id] + " blocked by a monthly cap on " + u.day)); });
+    eq(capOf(BURCHETT).primary, 7, "Burchett's restated hard cap");
+    if (placedIn(BURCHETT, P)) ok(burPrimary <= 7, "Burchett " + burPrimary + " primary days in " + m + " (his hard 7)");
+    // Prompt 32: every member with a restated HARD cap stays at or under it in a month the generator placed one of his
+    // primaries (a countsEastDays cap adds his East primary-week days); a soft limit is never checked here - it is soft
+    IDS.forEach((id) => {
+      const cap = capOf(id).primary;
+      if (cap === null || !placedIn(id, P)) return;
+      const c = mdays.filter((d) => holder(view, d, P) === id || (id === FIERCE && SR[FIERCE].monthlyCap.countsEastDays === true && FIERCE_EAST_PRIMARY_DAYS.has(d))).length;
+      ok(c <= cap, CODE[id] + " " + c + " primary days (East primary-week days included where his cap counts them) in " + m + " - over his hard cap " + cap);
+    });
+    // item 7: a member with no HARD cap is never blocked by one - the generator never cites a monthly cap for him.
+    // pin moved deliberately 10/11: Prompt 32 the members without a hard cap are Khan / Acton / Philip / Sarkar (the group's
+    // soft 7; was Acton / Khan "uncapped", and Philip <= DEFAULT_CAP 8 above)
+    const NO_HARD_CAP = IDS.filter((id) => capOf(id).primary === null);
+    eq(NO_HARD_CAP, [KHAN, ACTON, PHILIP, SARKAR], "members without a hard monthly cap (Prompt 32)");
+    D.uncovered.forEach((u) => { if (monthOf(u.day) === m) NO_HARD_CAP.forEach((id) => ok(!(u.reasons[id] || []).some((r) => String(r).indexOf("monthly-cap") === 0), CODE[id] + " blocked by a monthly cap on " + u.day + " (he has no hard cap - the group's 7 is soft)")); });
     // item 8: Philip backup <= 7 days and <= 1 weekend per month
     const phBackups = mdays.filter((d) => holder(view, d, B) === PHILIP);
     const phWeekends = new Set(phBackups.filter(isWeekend).map(fridayOf));
@@ -1268,6 +1465,23 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
 {
   const DB = big.diagnostics, kb = DB.tallies[KHAN].range;
   ok(kb.target && typeof kb.target.backup === "number" && kb.target.backup > 0, "Khan must carry a Nov-Dec backup target (got " + JSON.stringify(kb.target) + ")");
+  // pin re-derived 10/11: Prompt 32 step 2 - the target this bound reads is now Khan's WEIGHTED backup target: November 3.25 ->
+  // 3.3 (he sits on the primary level 7, so he carries the backup share at that level) + December 6.2 (equal primaries -> the
+  // plain backup share) = 9.5 (was 5.8 + 6.2 = 12): the bound is 1.5 x 9.5 = 14.25 (was 18) - tighter, the same 1.5x
+  eq(kb.target.backup, 9.5, "Khan's Nov-Dec weighted backup target (Prompt 32 step 2): 3.3 + 6.2");
+  // Prompt 32 step 2 (DESIGN "Generator" 9): the milestone preview's over-soft-limit days, observed (seed 1, bestOf 200) and
+  // restated in checkRun: Acton's 8th November primary is his locked 11/18 (all eight are locks), Khan's 8th is the generated
+  // 11/30 - both against the group's soft 7; nobody is over it in December. Who takes such a day is step 4's tie-break.
+  // pin moved deliberately 10/12: Prompt 32 review fix - the list keeps only a (holder, month) the run gave an in-range
+  // primary (the Publish dialog's trim): the run gives Acton no November primary (all eight of his are the import's locks,
+  // already over the soft 7), so his held 11/18 is not this run's doing and leaves the list (was ["BDA 2026-11-18 #8/7",
+  // "FAK 2026-11-30 #8/7"]); Khan's generated 11/30 stays. The whole-schedule reading (the calendar badge) still names both.
+  eq(DB.overSoftLimit.map((o) => CODE[o.id] + " " + o.day + " #" + o.count + "/" + o.limit), ["FAK 2026-11-30 #8/7"], "milestone preview: diagnostics.overSoftLimit");
+  {
+    const bigView = makeView(big);
+    eq(daysList(RANGES[1].start, "2026-11-30").filter((d) => holder(bigView, d, P) === ACTON && holder(INPUT, d, P) !== ACTON), [], "milestone preview: the run gives Acton no November primary (his eight are the import's locks)");
+    eq(R.overSoftLimitDays(ctx, bigView, "2026-11-01", "2026-12-31").map((o) => CODE[o.id] + " " + o.day + " #" + o.count), ["BDA 2026-11-18 #8", "FAK 2026-11-30 #8"], "milestone preview: the whole-schedule reading (the calendar badge) still names Acton's held 11/18");
+  }
   ok(kb.backup <= 1.5 * kb.target.backup, "Khan holds " + kb.backup + " backups in Nov-Dec against a backup target of " + kb.target.backup + " - more than 1.5x, the backup sink is back");
   // WF (9/23): the target is the water-filled share, never floored at the locked days, so a member whose locks already
   // exceed it (Acton's 8 locked November primaries against a level near 5.6) cannot come down to it - the tolerance is
@@ -1321,7 +1535,7 @@ const soleCandidatePrimaries = (out, id, m) => monthDays(m).filter((d) => d >= R
 CUR.range = "all runs"; CUR.seed = "-"; CUR.day = "-";
 Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosened backup rule is not in force, or the runs changed - counts " + JSON.stringify(SAW) + ")"));
 // 9/22 opt-out with real data: the shipped seed opts nobody out, so run Nov-Dec once
-// with Acton (uncapped, a frequent backup filler) opted out - never placed as backup,
+// with Acton (no hard cap - the group's soft 7 since Prompt 32 - a frequent backup filler) opted out - never placed as backup,
 // still placed as primary, and every open backup slot names the opt-out for him.
 {
   const srOpt = JSON.parse(JSON.stringify(SA.seedToSurgeonRules(seed))); srOpt[ACTON].backupOptOut = true;
@@ -1388,7 +1602,7 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
 // counts toward his 14 (rules.js adds P.eastPrimaryDays whatever the Silvis schedule says), so the implied-target
 // clip must subtract exactly those East-ONLY days - here the backup of 11/09..11/15 is manually locked to Acton
 // (import/manual beats derived: the 7 derived locks are overridden with a warning), so the week is East-only:
-// eastOnly 7, clip 14 - 1 - 7 = 6, tallies.eastP 7. The held case (eastOnly 0 / clip 13) is pinned in checkRun.
+// eastOnly 7, clip 14 - 7 = 7 (Prompt 32 step 2: no "- 1"), tallies.eastP 7. The held case (eastOnly 0 / clip 14) is pinned in checkRun.
 // One November-only run at bestOf 1.
 {
   const inputOv = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
@@ -1410,8 +1624,9 @@ Object.keys(SAW).forEach((k) => ok(SAW[k] > 0, "never saw: " + k + " (the loosen
   eq(DOv.derivedConfirmed, [], "T: nothing confirmed once the whole week is someone else's");
   const NFOv = novOv.members[FIERCE];
   eq(NFOv.lockedHeld.primary + NFOv.lockedHeld.backup, heldOv, "Fierce holds " + heldOv + " November day(s) before generation (the overridden week is not his)");
-  eq([NFOv.eastPrimaryDays, NFOv.clipPrimary], [7, 14 - 1 - 7], "the overridden East primary week still counts: eastPrimaryDays 7, clipPrimary 6 (J: the same clip as when he holds the derived backup)");
-  ok(NFOv.primaryTarget <= 6 + 0.05, "Fierce November primary target " + NFOv.primaryTarget + " above his clip 6 (WF: a target is never floored at the locked days either)");
+  // pin moved deliberately 10/11: Prompt 32 step 2 - the clip has no "- 1": 14 - 7 = 7 (was 14 - 1 - 7 = 6)
+  eq([NFOv.eastPrimaryDays, NFOv.clipPrimary], [7, 14 - 7], "the overridden East primary week still counts: eastPrimaryDays 7, clipPrimary 7 (J: the same clip as when he holds the derived backup)");
+  ok(NFOv.primaryTarget <= 7 + 0.05 && NFOv.primaryTarget <= NFOv.fillClip.primary + 0.05, "Fierce November primary target " + NFOv.primaryTarget + " above his clip 7 or his fill clip " + NFOv.fillClip.primary + " (WF: a target is never floored at the locked days either)");
   eq(DOv.tallies[FIERCE].months["2026-11"].eastP, 7, "tallies.eastP still counts the East primary-week days he does not hold in Silvis");
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
@@ -1437,9 +1652,10 @@ function printTallies(out, title) {
   console.log("  implied targets (" + D.impliedTargets.rule + "):");
   Object.keys(D.impliedTargets.months).forEach((m) => {
     const I = D.impliedTargets.months[m];
-    console.log("    " + m + " primaryOpen " + I.primaryOpen + " - reserved " + I.reservedForWindows + " / pool " + I.poolSize + " = primaryShare " + I.primaryShare + "; backupOpen " + I.backupOpen + " / " + I.poolSize + " = backupShare " + I.backupShare + "; placeable at target " + I.placeableAtTarget.primary + " P / " + I.placeableAtTarget.backup + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" + (I.rangeDays < monthDays(m).length ? " (partial month: " + I.rangeDays + " days in range)" : ""));
-    console.log("      " + pad("member", 6, true) + pad("tgtP", 6) + pad("allwP", 6) + pad("lockP", 6) + pad("clipP", 6) + pad("tgtB", 6) + pad("allwB", 6) + pad("lockB", 6));
-    Object.keys(I.members || {}).forEach((id) => { const M = I.members[id]; console.log("      " + pad(CODE[id], 6, true) + pad(M.primaryTarget === null ? "-" : M.primaryTarget, 6) + pad(M.allowedPrimary, 6) + pad(M.lockedHeld.primary, 6) + pad(M.clipPrimary === null ? "-" : M.clipPrimary, 6) + pad(M.backupTarget === null ? "-" : M.backupTarget, 6) + pad(M.allowedBackup, 6) + pad(M.lockedHeld.backup, 6)); });
+    // Prompt 32 step 2: the pool slots, the primary level, the backup share at that level and the weighted level W*
+    console.log("    " + m + " pool slots " + I.poolSlots.primary + " P / " + I.poolSlots.backup + " B (" + I.primaryOpen + " - " + I.reservedForWindows + " reserved + " + I.heldByPool.primary + " held / " + I.backupOpen + " + " + I.heldByPool.backup + " held) over " + I.poolSize + ": primaryShare " + I.primaryShare + ", backupShare " + I.backupShare + " at that level, weighted level " + I.weightedShare + (I.makeupRounds ? " (" + I.makeupRounds + " makeup round(s))" : "") + "; placeable at target " + I.placeableAtTarget.primary + " P / " + I.placeableAtTarget.backup + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" + (I.rangeDays < monthDays(m).length ? " (partial month: " + I.rangeDays + " days in range)" : ""));
+    console.log("      " + pad("member", 6, true) + pad("tgtP", 6) + pad("allwP", 6) + pad("lockP", 6) + pad("clipP", 6) + pad("tgtB", 6) + pad("allwB", 6) + pad("lockB", 6) + pad("fillP", 6) + pad("fillB", 6) + pad("Wshr", 6) + pad("mkP", 5));
+    Object.keys(I.members || {}).forEach((id) => { const M = I.members[id]; console.log("      " + pad(CODE[id], 6, true) + pad(M.primaryTarget === null ? "-" : M.primaryTarget, 6) + pad(M.allowedPrimary, 6) + pad(M.lockedHeld.primary, 6) + pad(M.clipPrimary === null ? "-" : M.clipPrimary, 6) + pad(M.backupTarget === null ? "-" : M.backupTarget, 6) + pad(M.allowedBackup, 6) + pad(M.lockedHeld.backup, 6) + pad(M.fillClip ? M.fillClip.primary : "-", 6) + pad(M.fillClip ? M.fillClip.backup : "-", 6) + pad(M.weightedShare === null ? "-" : M.weightedShare, 6) + pad(M.makeupPrimary === null ? "-" : M.makeupPrimary, 5)); });
   });
   console.log("  uncovered slots (" + D.uncovered.length + "):");
   D.uncovered.forEach((u) => {
@@ -1658,7 +1874,8 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 // locked to a non-pool holder), A holding N locked days of a role - spread through the month and preceding the
 // range, peers free or B limited - A's lockedHeld = N, every target = the share of ALL the month's slots (10)
 // whatever N is, the month tally = N + generated, A receives nothing while the peers sit below share, and the
-// leftover days land on the lower count (finals within one day). Runs here so the CI chain covers it.
+// leftover days land on the lower count (finals within one day). Prompt 32 step 2: B limited is clipped at what the rules
+// let him hold (his target = that count) and A and C share the rest (13.5 / 14.5 / 15). Runs here so the CI chain covers it.
 {
   CUR.range = "NB (synthetic tally)"; CUR.seed = "-"; CUR.day = "-";
   const t0 = Date.now();
@@ -1666,6 +1883,311 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   const nbLines = NB.run({ R, GEN, ok }, { seeds: 5, bestOf: 2 });
   eq(nbLines.length, 80, "NB: synthetic runs (2 roles x 2 placements x 2 peer profiles x 2 N x 5 seeds)");
   console.log("  NB synthetic tally check: " + nbLines.length + " runs in " + (Date.now() - t0) + " ms; " + nbLines.filter((s) => /N=12 seed 1:/.test(s)).map((s) => s.replace(/^nov-backups /, "")).join(" || "));
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 32 step 4 (DESIGN "Generator" 8; Faraz 10/11 decision 5): who takes an unavoidable over-soft-limit day ----
+// "The generator fills them itself (soft penalty), giving the extra day to the eligible surgeon with the lowest weighted
+// load." Synthetic, independent of the seed: June 2026, a pool of a, b, c plus z (poolMember false, the backup filler).
+// Every slot is locked but the PRIMARY of Tue 6/30: c is unavailable for it (a dated row) and z holds its backup, so only a
+// and b can take it. Both carry the group's soft 7 (defaultMonthlyCap { preferred: 7 }) and the same explicit target
+// ({ primary: 7, backup: 3 }: the share term reads the same for both; no makeup), every bare-pool soft weight is 0 - so the
+// existing soft over-preferred-cap:7 (3) applies to BOTH and nothing else tells them apart but the tie-break: W.low x 0.1 x
+// his weighted load this month (P x 1 + B x 0.5, Silvis days), for a candidate at / over his soft limit ONLY, and
+// deterministic - such a candidate's score carries the term instead of the jitter (the rng is still drawn for him, so the
+// stream is unchanged). Restated outcomes:
+//   S1  a 7 P + 4 B (load 9), b 7 P + 2 B (load 8): b takes 6/30 (the lower load), on every seed with the default jitter 1
+//       too; diagnostics.overSoftLimit = [6/30 b #8 / 7].
+//   S1m the loads swapped: a takes it (the term follows the load, not the id order).
+//   S2  both BELOW the limit (5 P each, loads 7 / 6): no term - equal scores, the first id (a) takes it.
+//   S3  no soft limit (no defaultMonthlyCap): no term - the first id (a) takes it.
+//   S4  a WEEKEND unit (Fri 6/26 - Sun 6/28) open instead, c unavailable on it, a (load 9) and b (load 8) both at 7: every
+//       shape costs the same soft over-preferred-cap (three days over, 3 each) and the convex share term prefers a 1 + 2
+//       split of the days over a block; the term counts once per day a shape puts over his limit, so b (the lower load) takes
+//       TWO of the three days and a one - on every seed with the jitter 1 too. S4m: the loads swapped - a takes two.
+//   S5  a HOLIDAY unit (Mon 6/29 - Tue 6/30, minor) open instead, c unavailable on it: the unit has one holder, so both its
+//       days go over his limit - b (load 8) holds it over a (load 9), with the jitter 0 and 1 on every seed (genFillHoliday's
+//       term); S5m: the loads swapped - a holds it.
+//   S6  REPAIR only (genBestFor's term): 6/30's backup is open too; a and b cannot take it, z cannot take the day - the main
+//       pass gives the primary to c and leaves the backup open; the repair's swap moves c to the backup and refills the primary
+//       through genBestFor (no jitter): b (load 8) over a (load 9) on every seed, jitter 0 and 1; S6m: the loads swapped - a.
+//   S7  a cap that counts East days (countsEastDays + the soft 7): a placement on one of his East primary-week days adds no
+//       distinct day - the term counts the placement's days out of the East base (eligibility's monthPrimary and
+//       rules.overSoftLimitDays count distinct days); S7b / S7bm: the East base still counts his other East day.
+// Without the term (the code before step 4) S1 reads a with the jitter 0 and a coin flip per seed with the jitter 1; S4 reads
+// a on two days with the jitter 0 (the first 1 + 2 shape enumerated, the split a Fri + Sun / b Sat) - as it would with one
+// term per member instead of one per over-limit day ("a 1 + b 2" and "a 2 + b 1" would score the same). Without the holiday
+// unit's term S5 reads a,a (jitter 0 and seeds 1-2 with the jitter 1); without genBestFor's term S6 reads a/c on every seed;
+// with the placement's East day counted twice (the code before the step 4 minors) S7 reads b on every seed.
+const TB_RUNS = { n: 0 };
+{
+  CUR.range = "Prompt 32 step 4 tie-break fixture"; CUR.seed = "-"; CUR.day = "2026-06-30";
+  const MONTH = "2026-06", D = "2026-06-30";
+  const tbCtx = (o) => {
+    const roster = ["a", "b", "c", "z"].map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase() + id.toUpperCase() + id.toUpperCase(), active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    ["a", "b"].forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31, monthlyTarget: { primary: 7, backup: 3 } }; });
+    if (o.aTarget) surgeonRules.a.monthlyTarget = o.aTarget;
+    // S7: a's soft 7 counts his East PRIMARY-week days (countsEastDays); deriveFrom after the week, so the days count toward
+    // the cap but are not derived Silvis backup days (no derived lock - a Silvis primary placement on one stays possible)
+    if (o.eastA) { surgeonRules.a.monthlyCap = { preferred: 7, countsEastDays: true }; surgeonRules.a.eastFeed = { deriveFrom: "2026-07-06" }; }
+    surgeonRules.c = { poolMember: true, maxConsecutiveDays: 31, monthlyCap: "none" };
+    surgeonRules.z = { poolMember: false, maxConsecutiveDays: 31, monthlyCap: "none" };
+    const weights = { low: 1, medium: 3, strong: 10, preferred: -1, patternDaily: 0, patternMismatch: 0, backToBackWeekend: 0, backupAfterPrimary: 0, weekendContribution: 0, longRunPerDay: 0, smoothingTolerance: 2 };
+    if (o.jitter !== undefined) weights.jitter = o.jitter;
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, weights };
+    if (o.soft !== false) groupRules.defaultMonthlyCap = { preferred: 7 };
+    const schedule = {}, open = o.open || [D], openB = o.openB || [];
+    monthDays(MONTH).forEach((d) => {
+      const n = +d.slice(8, 10);
+      const e = { primary: null, backup: null, primaryLocked: false, backupLocked: true, source: "import", externalCover: null, note: null };
+      if (!open.includes(d)) { e.primary = o.pA.includes(n) ? "a" : o.pB.includes(n) ? "b" : "c"; e.primaryLocked = true; }
+      if (openB.includes(d)) e.backupLocked = false; // S6: an open backup slot
+      else e.backup = o.bA.includes(n) ? "a" : o.bB.includes(n) ? "b" : "z";
+      schedule[d] = e;
+    });
+    const availabilityRows = o.avail || open.map((d) => ({ person_id: "c", start_date: d, end_date: d, kind: "unavailable", role: P }));
+    const holidays = { units: o.holiday ? { "2026": [o.holiday] } : {} };
+    const eastDerived = o.eastA ? [{ surgeonId: "a", weekMonday: "2026-06-29", silvisRole: B }] : [];
+    return R.buildContext({ roster, surgeonRules, groupRules, holidays, timeOffRows: [], availabilityRows, schedule, eastDerived, rangeStart: MONTH + "-01", rangeEnd: D });
+  };
+  const SEVEN_A = [1, 5, 9, 13, 17, 21, 25], SEVEN_B = [2, 6, 10, 14, 18, 22, 26];
+  const tbRun = (o, seed) => {
+    const ctxT = tbCtx(o);
+    ok(ctxT.warnings.length === 0, "tie-break fixture: buildContext warnings " + JSON.stringify(ctxT.warnings));
+    CUR.seed = seed;
+    const out = GEN.generate(ctxT, MONTH + "-01", D, { seed, bestOf: 3 });
+    TB_RUNS.n++;
+    eq(out.diagnostics.uncovered, [], "tie-break fixture: the open primary day(s) " + (o.open || [D]).join(", ") + " are filled (a or b)");
+    eq(out.diagnostics.hardViolations, [], "tie-break fixture: no hard violation");
+    return out;
+  };
+  const s1 = { pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const o1 = tbRun(s1, 1);
+  eq(o1.schedule[D].primary, "b", "S1: a (7 P + 4 B = 9) and b (7 P + 2 B = 8) are both at the soft 7 - the lower weighted load (b) takes the over-limit day");
+  eq(o1.diagnostics.overSoftLimit, [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }], "S1: diagnostics.overSoftLimit names b's 6/30 as #8 of 7");
+  ok(o1.diagnostics.softPenalties.some((s) => s.day === D && s.id === "b" && s.reason === "over-preferred-cap:7" && s.weight === 3), "S1: the existing soft over-preferred-cap:7 (3) applies to the taker: " + JSON.stringify(o1.diagnostics.softPenalties.filter((s) => s.day === D)));
+  for (let sd = 1; sd <= 12; sd++) eq(tbRun(Object.assign({}, s1, { jitter: undefined }), sd).schedule[D].primary, "b", "S1 with the default jitter 1, seed " + sd + ": deterministic - b (the lower load) every time, never a coin flip");
+  eq(tbRun({ pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7], bB: [4, 8, 12, 16], jitter: 0 }, 1).schedule[D].primary, "a", "S1m: loads swapped (a 8, b 9) - a takes it");
+  eq(tbRun({ pA: [1, 5, 9, 13, 17], pB: [2, 6, 10, 14, 18], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 }, 1).schedule[D].primary, "a", "S2: both BELOW the soft limit (5 P; loads 7 / 6) - no term, equal scores, the first id (a) takes it");
+  const o3 = tbRun(Object.assign({}, s1, { soft: false }), 1);
+  eq([o3.schedule[D].primary, o3.diagnostics.overSoftLimit], ["a", []], "S3: no soft limit - no term (the first id takes it) and nothing is over a soft limit");
+  // S4 / S4m: a weekend unit - the lower load takes the larger share of the over-limit days
+  CUR.day = "2026-06-26";
+  const WK = ["2026-06-26", "2026-06-27", "2026-06-28"];
+  const s4 = { open: WK, pA: SEVEN_A, pB: [2, 6, 10, 14, 18, 22, 23], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const wkHeld = (out) => WK.map((d) => out.schedule[d].primary);
+  const wkSplit = (held) => [held.filter((x) => x === "a").length, held.filter((x) => x === "b").length];
+  const o4 = tbRun(s4, 1);
+  const h4 = wkHeld(o4);
+  eq(wkSplit(h4), [1, 2], "S4: a (load 9) and b (load 8) both at the soft 7 - b (the lower load) takes two of the weekend's three over-limit days, a one: " + h4.join(","));
+  {
+    const n = { a: 7, b: 7 };
+    const want = WK.map((d, i) => { n[h4[i]]++; return { day: d, id: h4[i], month: MONTH, count: n[h4[i]], limit: 7 }; });
+    eq(o4.diagnostics.overSoftLimit, want, "S4: diagnostics.overSoftLimit = the three weekend days, each its holder's #8 / #9 of 7");
+  }
+  for (let sd = 1; sd <= 6; sd++) eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { jitter: undefined }), sd))), [1, 2], "S4 with the default jitter 1, seed " + sd + ": b takes two, a one - every time");
+  eq(wkSplit(wkHeld(tbRun(Object.assign({}, s4, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1))), [2, 1], "S4m: loads swapped (a 8, b 9) - a takes two, b one");
+  // S5 / S5m: a HOLIDAY unit (genFillHoliday's own tie term) - the unit's one holder takes both over-limit days
+  CUR.day = "2026-06-29";
+  const HU = ["2026-06-29", "2026-06-30"];
+  const s5 = { open: HU, holiday: { name: "Fixture Day", tier: "minor", days: HU }, pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+  const huHeld = (out) => HU.map((d) => out.schedule[d].primary).join(",");
+  const o5 = tbRun(s5, 1);
+  eq(huHeld(o5), "b,b", "S5: a (load 9) and b (load 8) both at the soft 7 - b (the lower load) holds the holiday unit (both its days over his limit)");
+  eq(o5.diagnostics.overSoftLimit, [{ day: HU[0], id: "b", month: MONTH, count: 8, limit: 7 }, { day: HU[1], id: "b", month: MONTH, count: 9, limit: 7 }], "S5: diagnostics.overSoftLimit = b's 6/29 #8 and 6/30 #9 of 7");
+  for (let sd = 1; sd <= 6; sd++) eq(huHeld(tbRun(Object.assign({}, s5, { jitter: undefined }), sd)), "b,b", "S5 with the default jitter 1, seed " + sd + ": b (the lower load) holds the unit every time");
+  eq(huHeld(tbRun(Object.assign({}, s5, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1)), "a,a", "S5m: loads swapped (a 8, b 9) - a holds the unit");
+  // S6 / S6m: REPAIR only (genBestFor's term). 6/30's primary AND backup are open; a and b are unavailable for its backup and z
+  // for the whole day, so the main pass gives the primary to c (no soft limit: a and b carry over-preferred-cap:7) and the
+  // backup is left open (c holds the other role). The repair's swap moves c to the backup and refills the primary through
+  // genBestFor (no jitter): a and b, both at the soft 7 - the lower weighted load takes it. The backup = c proves the swap ran.
+  CUR.day = D;
+  const s6 = {
+    openB: [D], pA: SEVEN_A, pB: SEVEN_B, bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0,
+    avail: [{ person_id: "a", start_date: D, end_date: D, kind: "unavailable", role: B }, { person_id: "b", start_date: D, end_date: D, kind: "unavailable", role: B }, { person_id: "z", start_date: D, end_date: D, kind: "unavailable", role: "any" }]
+  };
+  const pb = (out) => out.schedule[D].primary + "/" + out.schedule[D].backup;
+  const o6 = tbRun(s6, 1);
+  eq(pb(o6), "b/c", "S6: the repair's swap - c to the backup, the primary to b (load 8) over a (load 9), both at the soft 7");
+  eq(o6.diagnostics.overSoftLimit, [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }], "S6: diagnostics.overSoftLimit names b's 6/30 as #8 of 7");
+  for (let sd = 1; sd <= 6; sd++) {
+    eq(pb(tbRun(s6, sd)), "b/c", "S6 with the jitter 0, seed " + sd + ": b takes the repaired primary");
+    eq(pb(tbRun(Object.assign({}, s6, { jitter: undefined }), sd)), "b/c", "S6 with the default jitter 1, seed " + sd + ": b takes the repaired primary every time");
+  }
+  eq(pb(tbRun(Object.assign({}, s6, { bA: [3, 7], bB: [4, 8, 12, 16] }), 1)), "a/c", "S6m: loads swapped (a 8, b 9) - a takes the repaired primary");
+  // S7 / S7b / S7bm: a cap that COUNTS East days (countsEastDays) - his East primary-week days 6/29 and 6/30 count toward his
+  // soft 7 as DISTINCT days (eligibility's monthPrimary, rules.overSoftLimitDays): a placement ON one of them adds no day.
+  //   S7  a 5 Silvis P + East 6/29 / 6/30 = 7 distinct; b 5 P. Taking 6/30 leaves a at 7 (not over) and b at 6: no term for
+  //       either - equal scores, the first id (a) takes it, nothing over. (Counting 6/30 twice - East base + placement - read
+  //       a at 8, gave him the term and handed the day to b.)
+  //   S7b a 6 Silvis P + East 6/29 / 6/30 = 8 distinct, target 6; b 7 P, target 7: both over at 6/30, the East base still
+  //       counts 6/29 (a's 6/30 is his #8) - the lower load (b 8 vs a 9) takes it; S7bm loads swapped - a takes it.
+  {
+    const s7 = { eastA: true, pA: [1, 5, 9, 13, 17], pB: [2, 6, 10, 14, 18], bA: [3, 7, 11, 15], bB: [4, 8], jitter: 0 };
+    const cE = tbCtx(s7), aP = cE.per.a;
+    eq([aP.countsEastDays, aP.capPreferred, aP.capPrimary, [...aP.eastPrimaryDays].filter((d) => d.slice(0, 7) === MONTH), Object.keys(aP.derived)], [true, 7, null, ["2026-06-29", "2026-06-30"], []], "S7 fixture: a's soft 7 counts his East primary days 6/29 / 6/30 (none derived)");
+    for (let sd = 1; sd <= 3; sd++) {
+      const o7 = tbRun(s7, sd);
+      eq([o7.schedule[D].primary, o7.diagnostics.overSoftLimit, o7.diagnostics.softPenalties.filter((s) => s.day === D)], ["a", [], []], "S7 seed " + sd + ": 6/30 is an East day of a's - his 7th distinct day, not over: no term, the first id (a) takes it");
+    }
+    const s7b = { eastA: true, aTarget: { primary: 6, backup: 3 }, pA: [1, 5, 9, 13, 17, 21], pB: SEVEN_B, bA: [3, 7, 11, 15, 19, 23], bB: [4, 8], jitter: 0 };
+    const o7b = tbRun(s7b, 1);
+    // pin moved deliberately 10/12: Prompt 32 review fix - a's locked 6/21 (his #8: East base 2 + six Silvis primaries) is no
+    // longer listed: the run gave a no June primary (b took 6/30, the only open slot), so his over-7 day is held, not this run's
+    // doing - the list keeps only a (holder, month) the run gave an in-range primary, as the Publish dialog's list does. The
+    // calendar badge still shows it (the whole-schedule reading below).
+    eq([o7b.schedule[D].primary, o7b.diagnostics.overSoftLimit], ["b", [{ day: D, id: "b", month: MONTH, count: 8, limit: 7 }]], "S7b: a (6 P + East 6/29 + 6/30 = 8, load 9) and b (7 P, load 8) both over at 6/30 - b takes it; a's held 6/21 is not this run's");
+    eq(R.overSoftLimitDays(tbCtx(s7b), Object.assign({}, tbCtx(s7b).schedule, o7b.schedule)).map((o) => o.day + " " + o.id + " #" + o.count), ["2026-06-21 a #8", D + " b #8"], "S7b: the whole-schedule reading (the calendar badge) still names a's held 6/21");
+    const o7bm = tbRun(Object.assign({}, s7b, { bA: [3, 7], bB: [4, 8, 12, 16, 20, 24] }), 1);
+    eq([o7bm.schedule[D].primary, o7bm.diagnostics.overSoftLimit], ["a", [{ day: D, id: "a", month: MONTH, count: 8, limit: 7 }]], "S7bm: loads swapped (a 7, b 10) - a takes 6/30, his #8 (6/29 still counts as an East day)");
+  }
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 32 review fix (10/12): diagnostics.overSoftLimit covers the WHOLE calendar months the range touches ----
+// The review finding, reproduced: three plain pool members on the group's soft 7 (defaultMonthlyCap { preferred: 7 }, no hard
+// cap), February 2027 (28 days, no holiday). a1 holds locked primaries 2/15-2/21 and a2 2/22-2/28 (seven each); the range is
+// 2/1-2/14 - it ends mid-month - and every slot of it is open. Twenty-eight primaries over three members clipped at 7: seven
+// days must go over somebody's 7 (each one the soft over-preferred-cap), and every in-range primary a1 or a2 takes comes
+// BEFORE his locked days in date order, so it pushes his locked LATER days past 7 - days outside the range. Before the fix the
+// list named the in-range over days only (a3's), while the calendar badge and the Publish dialog named a1's and a2's too.
+// Now: every over day of the months the range touches, for a (holder, month) this run gave an in-range primary (the output's
+// primary differs from the input's) - the trim helpers.overSoftLimitForChanges applies to the Publish dialog's list - so the
+// preview box, the Accept audit (overSoftLimitAudit of the list) and the Publish dialog name the same days. Restated from the
+// output alone (the ordinal walk, then the trim):
+//   F1  seeds 1-4: diagnostics.overSoftLimit = the restated list; it names out-of-range days on every seed and is longer than
+//       the in-range-only reading (the bug); it equals helpers.overSoftLimitForChanges(rules.overSoftLimitDays over the merged
+//       schedule, this run's primary changes) - the Publish dialog's list after accepting the run over this input.
+//   F2  the trim: a1 is unavailable for primary 2/1-2/14 and holds 2/15-2/22 (EIGHT - his 2/22 is #8, over 7 on held days
+//       alone), a2 2/23-2/28 (six): the run gives a1 nothing, so his 2/22 is not listed - the whole-month reading (the calendar
+//       badge) lists it; a2's and a3's over days are, each with his out-of-range ones.
+const OSL_WHOLE = { n: 0 };
+{
+  CUR.range = "Prompt 32 review fix: over-soft-limit days over the whole months"; CUR.seed = "-"; CUR.day = "-";
+  const H = require("../helpers.js");
+  const FEB = "2027-02", FROM = "2027-02-01", TO = "2027-02-14";
+  const span = (a, b) => monthDays(FEB).filter((d) => d >= a && d <= b);
+  const oslCtx = (lockA1, lockA2, avail) => {
+    const ids = ["a1", "a2", "a3"];
+    const roster = ids.map((id, i) => ({ id, name: "Fixture " + id, code: ["AAA", "BBB", "CCC"][i], active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    ids.forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, defaultMonthlyCap: { preferred: 7 } };
+    const schedule = {};
+    monthDays(FEB).forEach((d) => {
+      const who = lockA1.includes(d) ? "a1" : lockA2.includes(d) ? "a2" : null;
+      schedule[d] = { primary: who, backup: null, primaryLocked: !!who, backupLocked: false, source: who ? "import" : "generated", externalCover: null, note: null };
+    });
+    const c = R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows: avail || [], schedule, eastDerived: [], rangeStart: FROM, rangeEnd: TO });
+    ok(c.warnings.length === 0, "over-soft-limit whole-month fixture: buildContext warnings " + JSON.stringify(c.warnings));
+    return c;
+  };
+  // the restatement: merged month, ordinal walk per holder (soft 7, no hard cap, no East), then the (holder, month) trim
+  const oslRestate = (ctxF, out) => {
+    const input = ctxF.schedule, merged = Object.assign({}, input, out.schedule), gave = new Set(), changes = [], n = {}, whole = [], exp = [];
+    Object.keys(out.schedule).forEach((d) => {
+      const to = out.schedule[d].primary || null, from = (input[d] && input[d].primary) || null;
+      if (to && to !== from) { gave.add(to + "|" + d.slice(0, 7)); changes.push({ day: d, role: P, from, to }); }
+    });
+    monthDays(FEB).forEach((d) => {
+      const id = merged[d] && merged[d].primary;
+      if (!id) return;
+      n[id] = (n[id] || 0) + 1;
+      if (n[id] <= 7) return;
+      const o = { day: d, id, month: FEB, count: n[id], limit: 7 };
+      whole.push(o);
+      if (gave.has(id + "|" + FEB)) exp.push(o);
+    });
+    return { merged, changes, whole, exp };
+  };
+  const oslRun = (ctxF, seed) => {
+    CUR.seed = seed;
+    const out = GEN.generate(ctxF, FROM, TO, { seed, bestOf: 3 });
+    OSL_WHOLE.n++;
+    eq([out.diagnostics.uncovered.length, out.diagnostics.hardViolations], [0, []], "over-soft-limit whole-month fixture: every in-range slot filled, no hard violation");
+    return out;
+  };
+  for (let sd = 1; sd <= 4; sd++) {
+    const ctxF = oslCtx(span("2027-02-15", "2027-02-21"), span("2027-02-22", "2027-02-28"));
+    const out = oslRun(ctxF, sd), D = out.diagnostics, X = oslRestate(ctxF, out);
+    const tag = "F1 seed " + sd + " (" + D.overSoftLimit.map((o) => o.day.slice(5) + " " + o.id + " #" + o.count).join(", ") + ")";
+    eq(D.overSoftLimit, X.exp, tag + ": diagnostics.overSoftLimit = every over day of February for a holder this run gave an in-range primary");
+    ok(D.overSoftLimit.some((o) => o.day > TO), tag + ": the list names the out-of-range days the run's earlier placements pushed past 7");
+    ok(D.overSoftLimit.length > R.overSoftLimitDays(ctxF, X.merged, FROM, TO).length, tag + ": longer than the in-range-only reading (before the fix)");
+    eq(H.overSoftLimitForChanges(R.overSoftLimitDays(ctxF, X.merged), X.changes), D.overSoftLimit, tag + ": the Publish dialog's list over the same changes names the same days");
+    eq(H.overSoftLimitAudit(D.overSoftLimit), X.exp.map((o) => ({ day: o.day, id: o.id })), tag + ": the Accept audit row's detail.overSoftLimit names them too");
+    eq(D.overSoftLimit.length, 7, tag + ": seven days over the soft 7 (28 primaries, three members clipped at 7) - every one listed");
+  }
+  {
+    const avail = [{ person_id: "a1", start_date: FROM, end_date: TO, kind: "unavailable", role: P }];
+    const ctxF = oslCtx(span("2027-02-15", "2027-02-22"), span("2027-02-23", "2027-02-28"), avail);
+    const out = oslRun(ctxF, 1), D = out.diagnostics, X = oslRestate(ctxF, out);
+    const tag = "F2 (" + D.overSoftLimit.map((o) => o.day.slice(5) + " " + o.id + " #" + o.count).join(", ") + ")";
+    ok(!Object.keys(out.schedule).some((d) => out.schedule[d].primary === "a1"), tag + ": a1 takes no in-range primary (unavailable)");
+    ok(X.whole.some((o) => o.id === "a1" && o.day === "2027-02-22" && o.count === 8), tag + ": the whole-month reading (the calendar badge) names a1's held 2/22 as #8");
+    eq(D.overSoftLimit, X.exp, tag + ": diagnostics.overSoftLimit = the restated, trimmed list");
+    ok(!D.overSoftLimit.some((o) => o.id === "a1"), tag + ": a1's held over day is not this run's - not listed");
+    ok(D.overSoftLimit.some((o) => o.id === "a2" && o.day > TO), tag + ": a2's out-of-range over days are listed (the run gave him an in-range primary)");
+  }
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
+// ---- Prompt 32 review fix (10/12): Generate reads groupRules.shiftAccounting.weights (the blob's, not the defaults) ----
+// genWeightedFill is pinned with { primary: 1, backup: 0.25 } when called directly (WF fill unit, below); every generate() run
+// of the seed carries the default weights, so nothing pinned that generate() hands the fill the BLOB's weights (rules.shiftWeightsOf
+// (ctx.groupRules)) - a generate() with a constant { 1, 0.5 } in their place passed every suite. Synthetic, re-derived by hand:
+// February 2027 (28 days, no holiday), a pool of a, b, c, d, every slot open; c carries a hard cap of 4 primaries (monthlyCap 4 -
+// his primary clip), nobody else a cap or a soft limit (no defaultMonthlyCap). Primary water-fill: c 4, a / b / d (28 - 4) / 3 =
+// 8. Weighted backup fill over the 28 backups, nobody clamped (each backup fill clip is his 28 allowed days): b_i = (W* - wP x p_i)
+// / wB summing to 28 -> W* = (wB x 28 + wP x (8 + 8 + 8 + 4)) / 4:
+//   null (the defaults, primary 1 / backup 0.5): W* = (14 + 28) / 4 = 10.5; a / b / d (10.5 - 8) / 0.5 = 5, c (10.5 - 4) / 0.5 = 13:
+//        c carries 8 more backups for his 4 missing primaries - TWO per missing primary;
+//   { primary: 1, backup: 0.25 }: W* = (7 + 28) / 4 = 8.75 -> 8.8; a / b / d 0.75 / 0.25 = 3, c 4.75 / 0.25 = 19: 16 more - FOUR
+//        per missing primary;
+//   { primary: 2, backup: 1 } (the defaults' ratio, the primary weight read too): W* = (28 + 56) / 4 = 21; a / b / d (21 - 16) / 1 =
+//        5, c (21 - 8) / 1 = 13 - the default targets, every weighted figure doubled.
+// Each run: impliedTargets.weights and the month's weights = the blob's (the defaults for null); the month's weightedShare =
+// round1(W*), backupShare = the backup share at the primary level 8, no makeup round; every member's targets and weightedShare
+// (round1(wP x tP + wB x tB)); the tallies' weighted = wP x P + wB x B of the run's own counts and weightedShare = the member's.
+{
+  CUR.range = "Prompt 32 review fix: Generate reads shiftAccounting.weights"; CUR.seed = 1; CUR.day = "-";
+  const FEB = "2027-02", IDS4 = ["a", "b", "c", "d"], PSH = { a: 8, b: 8, c: 4, d: 8 };
+  const swRun = (weights) => {
+    const roster = IDS4.map((id) => ({ id, name: "Fixture " + id, code: id.toUpperCase().repeat(3), active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    IDS4.forEach((id) => { surgeonRules[id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+    surgeonRules.c.monthlyCap = 4;
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, shiftAccounting: { weights } };
+    const schedule = {};
+    monthDays(FEB).forEach((d) => { schedule[d] = { primary: null, backup: null, primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null }; });
+    const c = R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows: [], availabilityRows: [], schedule, eastDerived: [], rangeStart: FEB + "-01", rangeEnd: FEB + "-28" });
+    ok(c.warnings.length === 0, "shift-weights fixture: buildContext warnings " + JSON.stringify(c.warnings));
+    eq([c.per.c.capPrimary, c.per.c.capPreferred, c.per.a.capPrimary, c.per.a.capPreferred], [4, null, null, null], "shift-weights fixture: c's hard 4 is the only cap");
+    return GEN.generate(c, FEB + "-01", FEB + "-28", { seed: 1, bestOf: 1 });
+  };
+  const HAND = [
+    { weights: null, w: { primary: 1, backup: 0.5 }, W: 10.5, b: { a: 5, b: 5, c: 13, d: 5 }, perMissing: 2 },
+    { weights: { primary: 1, backup: 0.25 }, w: { primary: 1, backup: 0.25 }, W: 8.8, b: { a: 3, b: 3, c: 19, d: 3 }, perMissing: 4 },
+    { weights: { primary: 2, backup: 1 }, w: { primary: 2, backup: 1 }, W: 21, b: { a: 5, b: 5, c: 13, d: 5 }, perMissing: 2 }
+  ];
+  HAND.forEach((h) => {
+    const tag = "shift weights " + JSON.stringify(h.weights);
+    const D = swRun(h.weights).diagnostics, IT = D.impliedTargets, M = IT.months[FEB];
+    // re-derived: W* = (wB x 28 + wP x 28) / 4 (nobody clamped), b_i = (W* - wP x p_i) / wB
+    const Wstar = (h.w.backup * 28 + h.w.primary * 28) / 4;
+    eq(round1(Wstar), h.W, tag + ": the hand-derived W* (" + Wstar + ")");
+    IDS4.forEach((id) => eq((Wstar - h.w.primary * PSH[id]) / h.w.backup, h.b[id], tag + ": the hand-derived backup share of " + id));
+    eq(IT.weights, h.w, tag + ": impliedTargets.weights = the blob's shiftAccounting.weights (the defaults for null)");
+    eq([M.weights, M.primaryShare, M.backupShare, M.weightedShare, M.makeupRounds], [h.w, 8, h.b.a, h.W, 0], tag + ": the month's weights, primary level 8, backup share at that level, weightedShare = round1(W*), no makeup");
+    IDS4.forEach((id) => {
+      const m = M.members[id];
+      eq([m.primaryTarget, m.backupTarget, m.weightedShare], [PSH[id], h.b[id], round1(h.w.primary * PSH[id] + h.w.backup * h.b[id])], tag + ": " + id + "'s targets and weightedShare");
+      const t = D.tallies[id].months[FEB];
+      eq([t.weighted, t.weightedShare], [round1(h.w.primary * t.primary + h.w.backup * t.backup), m.weightedShare], tag + ": " + id + "'s tallies weighted (" + t.primary + " P, " + t.backup + " B) / weightedShare");
+    });
+    eq(M.members.c.backupTarget - M.members.a.backupTarget, h.perMissing * (PSH.a - PSH.c), tag + ": the member 4 primaries short carries " + h.perMissing + " backups per missing primary (wP / wB)");
+  });
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
@@ -1682,6 +2204,84 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   eq(GEN.genWaterFill([{ id: "a", clip: 2 }, { id: "b", clip: 9 }], 6), { level: 4, share: { a: 2, b: 4 } }, "genWaterFill: a clip above the level does not bind");
   eq(GEN.genWaterFill([{ id: "a", clip: null }, { id: "b", clip: null }], 0), { level: 0, share: { a: 0, b: 0 } }, "genWaterFill: no slots -> level 0 (a level exists, it is zero)");
   eq(GEN.genWaterFill([], 5), { level: null, share: {} }, "genWaterFill: empty pool -> level null");
+  // Prompt 32 step 2 (Faraz 10/11, DESIGN "Generator" 3-5): the WEIGHTED backup fill and the per-role + weighted shares.
+  // genWeightedFill(members [{ id, p, clip }], backupSlots, weights) -> { level: W*, share: { id: b } }, b = clamp((W* - w.primary
+  // x p) / w.backup, 0, clip) summing to the slots (bisection on W*, polished exact on the active set, snapped to 1e-9).
+  // genWeightedShares(fm [{ id, clipP, clipB, ovP, ovB }], { primary, backup }, weights) -> the primary water-fill, the weighted
+  // backup fill over it, and at most 3 deterministic reverse-makeup rounds (a member at his backup clip below the weighted level
+  // takes extra primaries up to his primary clip, from the unclipped pool).
+  {
+    const W12 = { primary: 1, backup: 0.5 };
+    const sumOf = (o) => Object.keys(o).reduce((s, k) => s + o[k], 0);
+    ok(typeof GEN.genWeightedFill === "function" && typeof GEN.genWeightedShares === "function", "Prompt 32 step 2: generator.js exports genWeightedFill and genWeightedShares (got " + typeof GEN.genWeightedFill + " / " + typeof GEN.genWeightedShares + ")");
+    if (typeof GEN.genWeightedFill === "function" && typeof GEN.genWeightedShares === "function") {
+      // (a) every p_i equal -> exactly the plain equal backup share (genWaterFill over the same clips and slots), whatever the
+      //     common p is - 21 / 4 = 5.25 is the rounding edge (5.3 both ways), [2, 3] over 10 has no level in either fill
+      [[[null, null, null, null, null], 29], [[null, 3, null, 7, null], 29], [[2, 2, null], 10], [[null, null, null, null], 21], [[2, 3], 10], [[null, null], 0], [[4, null, 1], 9]].forEach(([clips, slots]) => {
+        [0, 5.6, 7].forEach((p) => {
+          const mem = clips.map((c, i) => ({ id: "m" + i, clip: c }));
+          const plain = GEN.genWaterFill(mem, slots), wf = GEN.genWeightedFill(mem.map((m) => ({ id: m.id, p, clip: m.clip })), slots, W12);
+          const tag = "genWeightedFill equal p " + p + ", clips " + JSON.stringify(clips) + ", " + slots + " slots";
+          eq(wf.level === null, plain.level === null, tag + ": a level exists exactly when the plain fill has one");
+          mem.forEach((m) => ok(Math.abs(wf.share[m.id] - plain.share[m.id]) < 1e-9 && round1(wf.share[m.id]) === round1(plain.share[m.id]), tag + ": " + m.id + " " + wf.share[m.id] + " is not the plain equal share " + plain.share[m.id]));
+          if (plain.level !== null) { ok(Math.abs(sumOf(wf.share) - slots) < 1e-6, tag + ": shares sum " + sumOf(wf.share) + " != the slots"); ok(Math.abs(wf.level - (W12.primary * p + W12.backup * plain.level)) < 1e-9, tag + ": W* " + wf.level + " != p + 0.5 x the plain level"); }
+        });
+      });
+      // (b) a primary-short member takes TWO backups per missing primary (w.primary / w.backup = 2): three at p 5, one at 3,
+      //     20 backups -> W* = 7, b = 4 / 4 / 8 / 4; with backup weight 0.25 it is four per missing primary (W* 5.75, 3 / 11)
+      const sh = GEN.genWeightedFill([{ id: "a", p: 5, clip: null }, { id: "b", p: 5, clip: null }, { id: "c", p: 3, clip: null }, { id: "d", p: 5, clip: null }], 20, W12);
+      eq([sh.level, sh.share], [7, { a: 4, b: 4, c: 8, d: 4 }], "genWeightedFill: the member 2 primaries short carries 4 more backups (2 per missing primary), the sum is the 20 slots");
+      const sh4 = GEN.genWeightedFill([{ id: "a", p: 5, clip: null }, { id: "b", p: 5, clip: null }, { id: "c", p: 3, clip: null }, { id: "d", p: 5, clip: null }], 20, { primary: 1, backup: 0.25 });
+      eq([sh4.level, sh4.share], [5.75, { a: 3, b: 3, c: 11, d: 3 }], "genWeightedFill: backup weight 0.25 -> 4 backups per missing primary");
+      // a backup clip on the short member binds; the rest share the remainder at a common weighted level
+      const shc = GEN.genWeightedFill([{ id: "a", p: 5, clip: null }, { id: "b", p: 5, clip: null }, { id: "c", p: 3, clip: 6 }, { id: "d", p: 5, clip: null }], 20, W12);
+      eq([shc.level, shc.share], [7.333333333, { a: 4.666666667, b: 4.666666667, c: 6, d: 4.666666667 }], "genWeightedFill: the short member's backup clip 6 binds, the others share 14 at W* 7.33 (snapped to 1e-9)");
+      // (c) a backup-capped member gets extra primaries up to his primary clip and never over: a, b, c free, x with backup clip 1,
+      //     20 primaries / 20 backups. Round 0: p 5 each, x b 1, the others 19 / 3 -> W* = 5 + 19 / 6 = 8.17, x's load 5.5 -> he wants
+      //     5 + 2.67 primaries but his clip is 6: held at 6 (round 1); the others 14 / 3 = 4.67 P, W* 7.83 -> x still wants > 6 -> no
+      //     move -> stop. Sums stay the slots.
+      const fmX = (clipPx) => ["a", "b", "c"].map((id) => ({ id, clipP: 30, clipB: 30, ovP: null, ovB: null })).concat([{ id: "x", clipP: clipPx, clipB: 1, ovP: null, ovB: null }]);
+      const sx = GEN.genWeightedShares(fmX(6), { primary: 20, backup: 20 }, W12);
+      eq([sx.primary.share.x, sx.backup.share.x, sx.rounds, sx.makeup], [6, 1, 1, { x: 1.333333333 }], "genWeightedShares: the backup-capped member is held at his primary clip 6 (never over), one round; makeup = 6 - the others' level 4.67");
+      ok(Math.abs(sumOf(sx.primary.share) - 20) < 1e-6 && Math.abs(sumOf(sx.backup.share) - 20) < 1e-6, "genWeightedShares: primary / backup shares sum to the 20 / 20 slots: " + JSON.stringify([sumOf(sx.primary.share), sumOf(sx.backup.share)]));
+      eq([round1(sx.primary.level), round1(sx.backup.share.a), round1(sx.weightedLevel)], [4.7, 6.3, 7.8], "genWeightedShares: the others carry 14 / 3 primaries and 19 / 3 backups at W* 7.83");
+      // without the primary clip he converges on the fixed point x + 0.5 = (20 - x) / 3 + 19 / 6 -> x = 7: holds 7.67 (his
+      // backups drop to 0, W* 7.44) -> 6.94 -> 7.02 (three rounds, the most there are), deterministic
+      const su = GEN.genWeightedShares(fmX(30), { primary: 20, backup: 20 }, W12);
+      eq([su.rounds, round1(su.primary.share.x)], [3, 7], "genWeightedShares: no primary clip -> three rounds, x at 7.02 (the fixed point is 7)");
+      ok(Math.abs(su.primary.share.x - 7) < 0.1 && Math.abs(sumOf(su.primary.share) - 20) < 1e-6 && Math.abs(sumOf(su.backup.share) - 20) < 1e-6, "genWeightedShares: x within 0.1 of the fixed point 7, sums = the slots: " + JSON.stringify(su.primary.share));
+      // nobody capped and equal clips -> no makeup, the plain per-role equal shares, no round
+      const se = GEN.genWeightedShares(["a", "b", "c", "d"].map((id) => ({ id, clipP: 30, clipB: 30, ovP: null, ovB: null })), { primary: 22, backup: 21 }, W12);
+      eq([se.primary.level, se.backup.level, se.weightedLevel, se.rounds, se.makeup, round1(se.backup.share.a)], [5.5, 5.25, 8.125, 0, {}, 5.3], "genWeightedShares: no clip binds -> 22 / 4 P, 21 / 4 B (5.25 -> 5.3), W* = 5.5 + 2.625, no makeup");
+      // overrides keep today's handling: a primary override leaves the primary fill (its number off the slots) and the weighted fill
+      // places his backup at the primary level; a backup override leaves the backup fill; neither takes a makeup
+      const so = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: 3 }, { id: "x", clipP: 30, clipB: 1, ovP: null, ovB: null }], { primary: 20, backup: 20 }, W12);
+      ok(!("a" in so.primary.share) && !("c" in so.backup.share) && !("a" in so.makeup) && !("c" in so.makeup), "genWeightedShares: overridden members stay out of their role's fill and out of the makeup: " + JSON.stringify(so));
+      ok(Math.abs(sumOf(so.primary.share) - 18) < 1e-6 && Math.abs(sumOf(so.backup.share) - 17) < 1e-6, "genWeightedShares: an override's number comes off its role's slots (18 P / 17 B left): " + JSON.stringify([sumOf(so.primary.share), sumOf(so.backup.share)]));
+      // DESIGN "Generator" 6, the handling chosen for a PRIMARY-overridden member's backup (review fix 10/11): he stays IN the
+      // weighted backup fill and is weighed at the primary LEVEL (the unclipped members' primary share), never at his own override
+      // number - so his backup share is the backup share at the primary level, exactly what an unclipped member (b) carries, and
+      // the plain equal backup share whenever the primaries are equal (today's plain backup fill). Here x is held at 8.5 after
+      // three rounds, b / c share 9.5 -> level 4.75, W* 8.83 -> a = b = (8.83 - 4.75) / 0.5 = 8.17 (weighed at his override 2 he
+      // would carry 11.4 and b 4.7; in the equal case below 16.3 against 2.3 / 2.3)
+      eq([so.backup.share.a, round1(so.backup.share.a), round1(so.backup.level)], [so.backup.share.b, 8.2, 8.2], "genWeightedShares: the primary-overridden member's backup share is the backup share at the primary level (b's, 8.17), not one weighed at his override 2: " + JSON.stringify(so.backup));
+      ok(Math.abs(so.backup.share.a - so.backup.level) < 1e-6, "genWeightedShares: the primary-overridden member's backup share " + so.backup.share.a + " != the backup share at the primary level " + so.backup.level);
+      // equal primaries (no clip binds): his backup share is exactly the plain equal share - genWaterFill over the same clips, 21 / 3
+      const soe = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: null }], { primary: 20, backup: 21 }, W12);
+      const soePlain = GEN.genWaterFill(["a", "b", "c"].map((id) => ({ id, clip: 30 })), 21);
+      eq([soe.primary.level, soe.backup.share, soe.backup.level], [9, soePlain.share, soePlain.level], "genWeightedShares: primary override 2, the others at 9 -> his backup share is the plain equal share 7 (today's handling): " + JSON.stringify(soe));
+      // (d) deterministic and order-free: the same call twice is identical, a reversed member list gives the same shares
+      eq(GEN.genWeightedShares(fmX(30), { primary: 20, backup: 20 }, W12), su, "genWeightedShares: deterministic (same input, same output)");
+      const rev = GEN.genWeightedShares(fmX(30).slice().reverse(), { primary: 20, backup: 20 }, W12);
+      ["a", "b", "c", "x"].forEach((id) => ok(rev.primary.share[id] === su.primary.share[id] && rev.backup.share[id] === su.backup.share[id], "genWeightedShares: member order changed " + id + "'s shares"));
+      const rf = GEN.genWeightedFill([{ id: "d", p: 5, clip: null }, { id: "c", p: 3, clip: 6 }, { id: "b", p: 5, clip: null }, { id: "a", p: 5, clip: null }], 20, W12);
+      eq([rf.level, ["a", "b", "c", "d"].map((id) => rf.share[id])], [shc.level, ["a", "b", "c", "d"].map((id) => shc.share[id])], "genWeightedFill: member order does not change the level or a share");
+      // (e) the sums equal the slots on an uneven pool (fractional primaries, mixed clips) and every b sits in [0, clip]
+      const sm = GEN.genWeightedShares([{ id: "a", clipP: 4, clipB: 9, ovP: null, ovB: null }, { id: "b", clipP: 31, clipB: 2, ovP: null, ovB: null }, { id: "c", clipP: 31, clipB: 31, ovP: null, ovB: null }, { id: "d", clipP: 6, clipB: 31, ovP: null, ovB: null }, { id: "e", clipP: 31, clipB: 31, ovP: null, ovB: null }], { primary: 28, backup: 29 }, W12);
+      ok(Math.abs(sumOf(sm.primary.share) - 28) < 1e-6 && Math.abs(sumOf(sm.backup.share) - 29) < 1e-6, "genWeightedShares (uneven pool): sums " + JSON.stringify([sumOf(sm.primary.share), sumOf(sm.backup.share)]) + " != 28 / 29");
+      ok(sm.primary.share.a <= 4 && sm.primary.share.d <= 6 && sm.backup.share.b <= 2 && Object.keys(sm.backup.share).every((id) => sm.backup.share[id] >= 0), "genWeightedShares (uneven pool): a share over its clip or below 0: " + JSON.stringify(sm));
+    }
+  }
   // a rejected weights.deviationConvexity (below 1 here; the Setup weights input steps by 0.5) is named in the
   // warnings and the code default applies; a valid non-default value is honoured silently (review finding 9/23)
   const knobRun = (v) => {
@@ -1934,7 +2534,15 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
     checkRun(outDec, { name: "B10 Dec", start: "2026-12-01", end: "2026-12-31" }, 1, false, undefined, undefined, undefined, FIXP.offers);
     // the share: his December target is the same water-filled figure the run reads with no offers at all
     const outDecNo = GEN.generate(ctx, "2026-12-01", "2026-12-31", { seed: 1, bestOf: 2 });
-    eq(outDec.diagnostics.targets["2026-12"][ACTON], outDecNo.diagnostics.targets["2026-12"][ACTON], "B10: his December water-filled targets are identical with and without the offers input (the penalty never touched the share)");
+    // pin moved deliberately 10/11: Prompt 32 step 2 - this read "his December targets are identical with and without the
+    // offers input". The fill clips now add what the rules allow, and exhaustive Burchett may hold no December day under the
+    // offers (not-offered everywhere - burOpen = [] above): his fill clips are 0 / 0, his share goes to the others and Acton's
+    // target rises with everyone's. What B10 guards - the penalty never touches the share - is pinned on Acton himself: his fill
+    // clips and allowed counts are identical with and without the offers input (outside-offers is a score term, not a rule),
+    // and each run's targets are its own restated shares (checkRun above).
+    const aIn = outDec.diagnostics.impliedTargets.months["2026-12"].members[ACTON], aNo = outDecNo.diagnostics.impliedTargets.months["2026-12"].members[ACTON];
+    eq([aIn.fillClip, aIn.allowedPrimary, aIn.allowedBackup], [aNo.fillClip, aNo.allowedPrimary, aNo.allowedBackup], "B10: Acton's December fill clips / allowed counts are identical with and without the offers input (the penalty never touched his share's inputs)");
+    eq([outDec.diagnostics.impliedTargets.months["2026-12"].members[BURCHETT].fillClip, outDecNo.diagnostics.impliedTargets.months["2026-12"].members[BURCHETT].fillClip.primary > 0], [{ primary: 0, backup: 0 }, true], "B10 (Prompt 32 step 2): exhaustive Burchett's December fill clips are 0 / 0 under the offers (not-offered every day), positive without them");
   }
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
@@ -1955,7 +2563,13 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   const NOV = daysList("2026-11-02", "2026-11-30");
   const tol = seed.groupRules.weights.smoothingTolerance;
   eq(seed.groupRules.weights.offerBonusOverShare, 0, "seed: weights.offerBonusOverShare = 0 (the offered bonus stops at the share)");
-  const seedCtl = JSON.parse(JSON.stringify(seed)); seedCtl.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
+  // pin moved deliberately 10/11: Prompt 32 Acton's null now reads the group's SOFT 7, and his 8 locked November primaries
+  // already stand over it, so the soft over-preferred-cap term alone keeps the untapered control from buying him a ninth
+  // primary (measured on the seed: taper and control both 8 / 8 / 8 primary and 5 / 5 / 6 backup - no cell differs). To
+  // keep measuring what this block is for - the TAPER, not the cap - the taper / control pair runs with Acton's cap set to
+  // the explicit no-limit "none" (the uncapped reading it was built under); the seed's own reading is pinned after the loop.
+  const seedNoCap = JSON.parse(JSON.stringify(seed)); seedNoCap.surgeonRules[ACTON].monthlyCap = "none";
+  const seedCtl = JSON.parse(JSON.stringify(seedNoCap)); seedCtl.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
   const allActon = NOV.map((d) => ({ person_id: ACTON, day: d, role_pref: "either", source: "app", entered_by: ACTON, note: null }));
   const allOffers = FIXP.offers.filter((o) => o.person_id !== ACTON).concat(allActon);
   const countOf = (out, id, role) => NOV.filter((d) => out.schedule[d][role] === id).length;
@@ -1967,18 +2581,27 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
   // when nobody under-share could take it), his backup count is within tolerance of his target, the taper never places
   // him above the untapered control in TOTAL (both roles: the control buys him a ninth primary with the untapered bonus,
   // which costs him a backup day the taper run keeps - so the per-role reading may cross while the total may not) and
-  // places him below the control in at least one cell (measured on seeds 1-3 with the water-filled share: primary
+  // places him below the control in at least one cell (measured on seeds 1-3 with Acton at "none" and the Prompt 32 seed
+  // caps for the others, Prompt 32 step 2 (10/11, the fill clips + the weighted backup: T = 7 P / 3.3 B): primary 8 / 8 / 8
+  // against the control's 8 / 9 / 9, backup 3 / 3 / 3 against 4 / 3 / 3; Prompt 32 step 3 alone (T = 5.6 / 5.8): primary
+  // 8 / 8 / 8 against 8 / 9 / 9, backup 5 / 5 / 6 against 5 / 5 / 5;
+  // with the water-filled share before Prompt 32: primary
   // 8 / 8 / 8 against the control's 9 / 9 / 9, backup 5 / 5 / 6 against 4 / 5 / 5; before WF, with the locked floor
   // T = 8, it read primary 11 / 10 / 9 against 12 / 12 / 12 and backup 3 / 3 / 3 against 5 / 5 / 5; before the review
   // the untapered reading was the product).
   let overCtl = 0, fewer = 0;
+  const cellsP2 = []; // Prompt 32 step 2: role + seed, taper / control counts of Acton's November days
   const lines = [];
+  const genP = (out) => NOV.filter((d) => out.schedule[d].primary === ACTON && !out.schedule[d].primaryLocked);
+  const ctlGenPNone = {}; // seed -> the uncapped ("none") untapered control's generated primaries of Acton (the soft-7 block's contrast)
   [1, 2, 3].forEach((sd) => {
     CUR.range = "P2 review: Acton offers every November day"; CUR.seed = sd; CUR.day = "-";
-    const ctxA = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    const ctxA = R.buildContext(mkInputS(seedNoCap, { periods: [FIXP.period], offers: allOffers }));
     if (ctxA.warnings.length) fail("buildContext warnings (all-days offers): " + JSON.stringify(ctxA.warnings));
+    eq([R.monthlyCapFor(ctxA, ACTON).primary, R.monthlyCapFor(ctxA, ACTON).preferred], [null, null], "fixture: Acton has no cap or soft limit in the taper / control pair (\"none\")");
     const outA = GEN.generate(ctxA, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
     const outC = GEN.generate(R.buildContext(mkInputS(seedCtl, { periods: [FIXP.period], offers: allOffers })), "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+    ctlGenPNone[sd] = genP(outC);
     eq(outA.diagnostics.hardViolations, [], "all-days offers: no hard violation");
     eq(outA.diagnostics.uncovered.filter((u) => u.role === P).length, 0, "all-days offers: no open primary");
     const mm = outA.diagnostics.impliedTargets.months["2026-11"].members, m = mm[ACTON];
@@ -1988,8 +2611,14 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
       const c = countOf(outA, ACTON, role), cc = countOf(outC, ACTON, role);
       ok(typeof T === "number", "Acton carries a " + role + " target in November");
       totA += c; totC += cc;
-      if (cc > T + tol) overCtl++;
+      // pin moved deliberately 10/11: Prompt 32 step 2 - this counted cc > T + tol. The fill clips raised Acton's November
+      // share to 7 P / 3.3 B (Fierce can hold 2 primaries, Burchett / Philip 6, Khan 7 - the rest is Acton's), so share +
+      // tolerance (9 P) now sits ON the control's count. The over-share the untapered bonus buys is measured against what his
+      // share AND his locks justify: a whole day over max(T, locked) (8 locked primaries -> a 9th, generated, primary)
+      const lockedN = NOV.filter((d) => outA.schedule[d][role] === ACTON && outA.schedule[d][role + "Locked"]).length;
+      if (cc > Math.max(T, lockedN) + 0.5) overCtl++;
       if (c < cc) fewer++;
+      cellsP2.push(role[0].toUpperCase() + sd + " " + c + "/" + cc);
       if (role === B) ok(c <= T + tol, "an offer is not a demand: Acton (preferred, every day offered) holds " + c + " November backup days against a target of " + T + " (tolerance " + tol + ")");
       const gen = NOV.filter((d) => outA.schedule[d][role] === ACTON && !outA.schedule[d][role + "Locked"]);
       const cap = Math.max(0, Math.ceil(T - 0.5) - (c - gen.length));
@@ -1997,7 +2626,7 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
       gen.slice(cap).forEach((d) => {
         CUR.day = d;
         const view = makeView(outA); view[d] = Object.assign({}, view[d]); view[d][role] = null; // the slot read as open on the final schedule
-        const fin = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers, schedule: view }));
+        const fin = R.buildContext(mkInputS(seedNoCap, { periods: [FIXP.period], offers: allOffers, schedule: view }));
         const under = IDS.filter((id) => id !== ACTON && R.eligibility(fin, d, role, id).ok).filter((id) => { const t = mm[id][role + "Target"]; return typeof t === "number" && countOf(outA, id, role) < Math.ceil(t - 0.5); });
         eq(under, [], "an offer is not a demand: Acton's over-share " + d + " " + role + " is his only because no colleague below his own share was eligible for it");
       });
@@ -2012,8 +2641,32 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
     ok(!outC.diagnostics.softPenalties.some((s) => s.reason === "offered-over-share"), "control: no offered-over-share term when offerBonusOverShare = offerBonus (nothing to taper)");
   });
   console.log("P2 review (Acton offers all of November as 'either', bestOf 2): " + lines.join("; "));
-  ok(overCtl > 0, "control: with offerBonusOverShare = offerBonus (the pre-review reading) Acton ends over his share + tolerance in at least one role and seed (" + overCtl + " of 6 role/seed cells over)");
+  // pin moved deliberately 10/11: Prompt 32 step 2 - measured on seeds 1-3 (T = 7 P / 3.3 B, 8 P / 2 B locked): taper 8 / 8 / 8 P and
+  // 3 / 3 / 3 B against the control's 8 / 9 / 9 P and 4 / 3 / 3 B
+  eq(cellsP2, ["P1 8/8", "B1 3/4", "P2 8/9", "B2 3/3", "P3 8/9", "B3 3/3"], "P2 review (Prompt 32 step 2): Acton's November taper / control counts per role and seed");
+  ok(overCtl > 0, "control: with offerBonusOverShare = offerBonus (the pre-review reading) Acton ends a whole day over max(share, locked) in at least one role and seed (" + overCtl + " of 6 role/seed cells over)");
   ok(fewer > 0, "the taper places Acton below the control in at least one role and seed (" + fewer + " of 6 cells) - it is the taper that holds him, not the seed");
+  // Prompt 32 (10/11): under the seed's own reading (Acton on the group's soft 7) the soft limit holds him in November with
+  // or without the taper - the untapered control places no primary of his beyond his 8 locked days, and neither run gives
+  // him a generated primary at all. Run on seeds 1-3 like the taper loop: seeds 2 and 3 are the ones where the uncapped
+  // control (Acton at "none" above - what the pre-32 code made of his null) places 11/30, so the [[], []] pin binds there;
+  // on seed 1 the uncapped control gives him no generated primary either, so seed 1 alone proves nothing (review 10/11).
+  {
+    CUR.range = "P2 review: Acton offers every November day, the seed's soft 7"; CUR.seed = "-"; CUR.day = "-";
+    eq([1, 2, 3].map((sd) => ctlGenPNone[sd]), [[], ["2026-11-30"], ["2026-11-30"]], "contrast: the uncapped (\"none\") untapered control gives Acton a generated November primary (11/30) on seeds 2 and 3, none on seed 1");
+    const seedCtl7 = JSON.parse(JSON.stringify(seed)); seedCtl7.groupRules.weights.offerBonusOverShare = seed.groupRules.weights.offerBonus;
+    const ctx7 = R.buildContext(mkInputS(seed, { periods: [FIXP.period], offers: allOffers }));
+    const ctxC7 = R.buildContext(mkInputS(seedCtl7, { periods: [FIXP.period], offers: allOffers }));
+    eq([R.monthlyCapFor(ctx7, ACTON).primary, R.monthlyCapFor(ctx7, ACTON).preferred], [null, 7], "seed: Acton on the group's soft 7 (Prompt 32)");
+    [1, 2, 3].forEach((sd) => {
+      CUR.seed = sd;
+      const out7 = GEN.generate(ctx7, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+      const outC7 = GEN.generate(ctxC7, "2026-11-02", "2026-11-30", { seed: sd, bestOf: 2 });
+      eq([genP(out7), genP(outC7)], [[], []], "Prompt 32: on the seed neither the taper nor the untapered control gives Acton a generated November primary (his 8 locks are over the soft 7; the uncapped control gives " + JSON.stringify(ctlGenPNone[sd]) + ")");
+      eq(out7.diagnostics.hardViolations, [], "Prompt 32: the soft 7 makes no hard violation");
+    });
+    CUR.seed = "-";
+  }
   // (2) holiday-unit unplaced reason
   CUR.range = "P2 review: Christmas unit 2026-12-21..2026-12-27"; CUR.seed = 1; CUR.day = "2026-12-25";
   const decOffers = SR[BURCHETT].explicitAvailable["2026-12"].map((d) => ({ person_id: BURCHETT, day: d, role_pref: "either", source: "email-relay", entered_by: "scheduler", note: null }));
@@ -2109,7 +2762,9 @@ console.log("\nitem 14: covered by scripts/verify-rls.sh (DB trigger), not this 
 
 const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
+console.log("Prompt 32 overSoftLimit (every checked run): " + OVER_SEEN.n + " day(s) listed, " + OVER_SEEN.outside + " of them outside the range; " + OVER_SEEN.trimmed + " over day(s) of the touched months left out (the run gave the holder no primary that month)");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

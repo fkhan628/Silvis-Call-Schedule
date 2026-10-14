@@ -280,5 +280,102 @@ console.log("[M] ttOutsideSurgeons - the Totals 'Outside surgeons' section (Prom
   });
 }
 
+console.log("\n[W] Prompt 32 step 1 (Faraz 10/11) - weighted accounting: the ONE weights helper, the weighted load / share, the rounding fix");
+{
+  // Faraz 10/11 decision 9: the weighted load counts Silvis days only, primary 1, backup 0.5. The weights are data
+  // (groupRules.shiftAccounting.weights) read through ONE helper, rules.js shiftWeightsOf(groupRules), whose default
+  // { primary: 1, backup: 0.5 } stands in when the key is null / absent / not a positive number - never
+  // groupRules.weights (the soft-penalty table). rules.js holds it because the generator (Node: rules.js only) and the
+  // page (a global) both reach it there.
+  const fs = require("node:fs");
+  const R = require(path.join(__dirname, "..", "rules.js"));
+  const seed = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "docs", "silvis-seed.json"), "utf8"));
+  check("rules.js exports shiftWeightsOf and SHIFT_WEIGHT_DEFAULTS = { primary: 1, backup: 0.5 }", () => {
+    assert.strictEqual(typeof R.shiftWeightsOf, "function", "rules.js shiftWeightsOf");
+    assert.deepStrictEqual(R.SHIFT_WEIGHT_DEFAULTS, { primary: 1, backup: 0.5 });
+  });
+  check("the seed carries groupRules.shiftAccounting.weights = { primary: 1, backup: 0.5 } and the helper reads it", () => {
+    assert.deepStrictEqual(seed.groupRules.shiftAccounting.weights, { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(R.shiftWeightsOf(seed.groupRules), { primary: 1, backup: 0.5 });
+  });
+  check("null / absent / an empty object -> the default { primary: 1, backup: 0.5 } (the water-fill fixture's frozen null too)", () => {
+    const D = { primary: 1, backup: 0.5 };
+    [undefined, null, {}, { shiftAccounting: null }, { shiftAccounting: {} }, { shiftAccounting: { weights: null } }, { shiftAccounting: { weights: {} } }].forEach((g) => assert.deepStrictEqual(R.shiftWeightsOf(g), D, JSON.stringify(g)));
+    const fx = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "water-fill-2026-10-07-to-2027-01-03.json"), "utf8"));
+    assert.strictEqual(fx.input.groupRules.shiftAccounting.weights, null, "the frozen pre-publish blob keeps its null");
+    assert.deepStrictEqual(R.shiftWeightsOf(fx.input.groupRules), D, "the frozen fixture's null reads as the default");
+  });
+  check("a junk key falls back PER KEY (not a positive finite number: a string, 0, a negative, NaN, Infinity, an array, a boolean)", () => {
+    const w = (v) => R.shiftWeightsOf({ shiftAccounting: { weights: v } });
+    assert.deepStrictEqual(w("1/0.5"), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(w([1, 0.5]), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(w({ primary: "1", backup: 0.25 }), { primary: 1, backup: 0.25 });
+    assert.deepStrictEqual(w({ primary: 0, backup: -1 }), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(w({ primary: NaN, backup: Infinity }), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(w({ primary: true, backup: null }), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(w({ primary: 2, backup: 1 }), { primary: 2, backup: 1 }, "valid weights are read as given");
+    assert.deepStrictEqual(w({ backup: 0.25 }), { primary: 1, backup: 0.25 }, "a missing key reads the default, the other key is kept");
+  });
+  check("never read from groupRules.weights (the soft-penalty table) - a primary / backup key there changes nothing", () => {
+    assert.deepStrictEqual(R.shiftWeightsOf({ weights: { primary: 9, backup: 9 } }), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(R.shiftWeightsOf({ weights: { primary: 9 }, shiftAccounting: { weights: { primary: 2 } } }), { primary: 2, backup: 0.5 });
+  });
+  check("fresh copies: mutating a result leaves the default and the next read untouched", () => {
+    const a = R.shiftWeightsOf(null); a.primary = 99; a.backup = 99;
+    assert.deepStrictEqual(R.shiftWeightsOf(null), { primary: 1, backup: 0.5 });
+    assert.deepStrictEqual(R.SHIFT_WEIGHT_DEFAULTS, { primary: 1, backup: 0.5 });
+    const g = { shiftAccounting: { weights: { primary: 2, backup: 1 } } };
+    const b = R.shiftWeightsOf(g); b.primary = 7;
+    assert.deepStrictEqual(g.shiftAccounting.weights, { primary: 2, backup: 1 }, "the blob's own object is never handed out");
+  });
+  check("buildContext warns once on a present-but-unreadable shiftAccounting.weights (it fell back silently), never on null / absent / valid / the seed", () => {
+    const warn = (g) => R.buildContext({ roster: [{ id: "s1", name: "Khan", code: "FAK", active: true }], surgeonRules: {}, groupRules: g, schedule: {}, today: "2026-10-11" }).warnings.filter((x) => /shiftAccounting\.weights/.test(x));
+    assert.strictEqual(warn({ shiftAccounting: { weights: { primary: 0, backup: "half" } } }).length, 1, "one warning for a junk value");
+    assert.ok(/primary/.test(warn({ shiftAccounting: { weights: { primary: 0 } } })[0]), "the warning names the key");
+    assert.ok(/\{ primary: 1, backup: 0\.5 \}/.test(warn({ shiftAccounting: { weights: "x" } })[0]), "the warning names what it reads instead");
+    [{}, { shiftAccounting: { weights: null } }, { shiftAccounting: { weights: { primary: 1, backup: 0.5 } } }, { shiftAccounting: { weights: { backup: 0.25 } } }, seed.groupRules].forEach((g) => assert.strictEqual(warn(g).length, 0, JSON.stringify(g).slice(0, 80)));
+  });
+  check("ttWeightedLoad(P, B, weights) = P x w.primary + B x w.backup, rounded to one decimal; null without weights", () => {
+    const W = { primary: 1, backup: 0.5 };
+    assert.strictEqual(H.ttWeightedLoad(7, 3, W), 8.5, "Khan Nov 2026 (9/23 record): 7 P + 3 B");
+    assert.strictEqual(H.ttWeightedLoad(10, 3, W), 11.5, "Acton Nov 2026: 10 P + 3 B");
+    assert.strictEqual(H.ttWeightedLoad(0, 16, W), 8, "Fierce Nov 2026: 16 B");
+    assert.strictEqual(H.ttWeightedLoad(0, 0, W), 0);
+    assert.strictEqual(H.ttWeightedLoad(1, 1, { primary: 1, backup: 1 / 3 }), 1.3, "custom weights round to one decimal (1.333.. -> 1.3)");
+    assert.strictEqual(H.ttWeightedLoad(3, 3, { primary: 1.1, backup: 0.1 }), 3.6, "no float noise (3.3000000000000003 + 0.30000000000000004)");
+    assert.strictEqual(H.ttWeightedLoad(7, 3, null), null);
+    assert.strictEqual(H.ttWeightedLoad(7, 3, { primary: 1 }), null, "a weights object without both numbers is not guessed at (the default lives in rules.js only)");
+  });
+  check("ttWeightedShare(targetP, targetB, weights) = targetP x w.primary + targetB x w.backup (a missing role target reads 0, like the green mark's sum); null with no target or no weights", () => {
+    const W = { primary: 1, backup: 0.5 };
+    assert.strictEqual(H.ttWeightedShare(5.6, 5.8, W), 8.5);
+    assert.strictEqual(H.ttWeightedShare(6, 4, W), 8);
+    assert.strictEqual(H.ttWeightedShare(5, null, W), 5, "an explicit primary-only monthlyTarget");
+    assert.strictEqual(H.ttWeightedShare(null, 4, W), 2);
+    assert.strictEqual(H.ttWeightedShare(null, null, W), null, "no target -> no share");
+    assert.strictEqual(H.ttWeightedShare(5.6, 5.8, null), null);
+    assert.strictEqual(H.ttWeightedShare(5.7, 5.9, W), 8.7, "one decimal (8.65 -> 8.7, no float noise)");
+  });
+  check("ttDeviation rounds a non-integer difference to one decimal (no float noise); integer outputs unchanged", () => {
+    assert.strictEqual(H.ttDeviation(6, 5.6), "+0.4", "was +0.40000000000000036");
+    assert.strictEqual(H.ttDeviation(5, 5.6), "-0.6", "was -0.5999999999999996");
+    assert.strictEqual(H.ttDeviation(7, 5.6), "+1.4", "was +1.4000000000000004");
+    assert.strictEqual(H.ttDeviation(9, 5.6 + 0.5 * 5.8), "+0.5");
+    assert.strictEqual(H.ttDeviation(8.5, 8), "+0.5");
+    assert.strictEqual(H.ttDeviation(8, 8.5), "-0.5");
+    assert.strictEqual(H.ttDeviation(5.6, 5.6000000000000005), "0", "a float-noise difference reads 0, never -0");
+    assert.strictEqual(H.ttDeviation(5, 5.04), "0", "a difference that rounds to zero reads 0, never -0");
+    assert.deepStrictEqual([H.ttDeviation(9, 7), H.ttDeviation(5, 7), H.ttDeviation(7, 7), H.ttDeviation(0, 0), H.ttDeviation(7, null)], ["+2", "-2", "0", "0", "-"], "integer outputs unchanged");
+  });
+  check("the weighted helpers never touch pay: payForDay / payForMonth / payTotalsRows read no weight", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "helpers.js"), "utf8");
+    ["function payForDay(", "function payForMonth(", "function payTotalsRows("].forEach((fn) => {
+      const a = src.indexOf(fn); assert.ok(a > 0, fn);
+      const body = src.slice(a, src.indexOf("\n}\n", a));
+      assert.ok(!/weight|shiftWeightsOf|ttWeighted/i.test(body), fn + " reads a weight");
+    });
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

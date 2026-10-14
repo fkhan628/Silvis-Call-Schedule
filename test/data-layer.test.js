@@ -2469,7 +2469,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // Fix round (review 9/25): not a list of the old E / F expressions - the grid's ONLY badge is the confirm '?', so a
     // re-added E / F / f in any spelling (a literal data-badge="F", a scheduler-only data-badge="f", a badge() square
     // without a data-badge attribute) fails here.
-    assert.ok(!/data-badge=(?!"confirm")/.test(grid), "the grid cell renders a badge other than the confirm '?' (E / F / f are gone since Item E2, 9/25)");
+    // pin moved deliberately 10/11: Prompt 32 step 4 - the grid gains ONE more badge, the over-soft-limit "over 7"
+    // (data-badge="over-soft"; Faraz 10/11 decision 5 - flagged on the day, signed-in only), which is not an East marking;
+    // every other value - E / F / f in any spelling - still fails here, exactly as before
+    assert.ok(!/data-badge=(?!"confirm"|"over-soft")/.test(grid), "the grid cell renders a badge other than the confirm '?' and the over-soft-limit 'over 7' (E / F / f are gone since Item E2, 9/25)");
+    assert.strictEqual((grid.match(/data-badge="over-soft"/g) || []).length, 1, "exactly one over-soft-limit badge in the grid cell (Prompt 32 step 4)");
     assert.strictEqual((grid.match(/[^.\w]badge\(/g) || []).length, 1, "the grid cell calls badge() for something other than the confirm '?' (the only grid badge since Item E2, 9/25)");
     assert.ok(!/East-derived|East forecast/.test(grid), "the grid cell still carries 'East-derived' / 'East forecast' text (badge title or the 'East-derived: ...' hover bit)");
     // (2) the legend: no E / F line; the East-vacation line and the ordinary lines stay
@@ -2485,7 +2489,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count('titleBits.push("East-derived: "'), 0, "the 'East-derived: ...' hover bit is still pushed");
     // (4) kept: the confirm badge, the gutter, the East-vacation diamonds and their hover
     assert.strictEqual(count('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), 1, "the grid's confirm badge must stay");
-    assert.ok(grid.includes("const nBadges = awaitingConfirmation(a) ? 1 : 0;"), "nBadges counts the confirm badge (the only grid badge since Item E2)");
+    // pin moved deliberately 10/11: Prompt 32 step 4 - nBadges also counts the over-soft-limit badge, as two 15px widths
+    // ("over 7" at 8px is ~26px; the header keeps the holiday label clear of it); the confirm '?' still counts one
+    assert.ok(grid.includes("const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);"), "nBadges counts the confirm badge (one width) and the over-soft-limit badge (two widths, Prompt 32 step 4)");
     assert.ok(grid.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the header still reserves the holiday-label gutter from nBadges");
     assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of E2's scope; the scheduler's only since Item E3, 9/25) must stay");
     // (5) the day editor's East status and Setup > East feed are unchanged
@@ -2595,15 +2601,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(tcLines.every(l => /showEast|eastDetailsVisible/.test(l)), "a Totals line with East text outside showEast / eastDetailsVisible: " + tcLines.filter(l => !/showEast|eastDetailsVisible/.test(l)).join(" | ").slice(0, 300));
     // behaviour: the component's OWN transform block (lifted verbatim, review 9/25 - not a re-implementation) over a
     // header and two rows (a pool row, an outside row), with and without the flag
-    const H0 = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type"];
-    assert.ok(tc.includes('const headers = ["' + H0.join('", "') + '"];'), "the scheduler's CSV header is unchanged, column for column");
+    // pin moved deliberately 10/11: Prompt 32 step 1 APPENDS a "Weighted" column (primary x 1 + backup x 0.5, rules.js
+    // shiftWeightsOf) after "Type" - the 22 older columns keep their positions (the "new columns are APPENDED" rule), so the
+    // scheduler's file has 23 columns and everyone else's 22; the East transform is unchanged.
+    const H0 = ["Period", "From", "To", "Source", "Surgeon", "Code", "Primary", "Backup", "Total", "Weekend days", "Major holiday units", "Minor holiday units", "Max consecutive primary", "East days", "Cap (P) per month", "Target", "Deviation", "Max consecutive any role", "Counted vs cap (P + East P-week days)", "Target B", "Deviation B", "Type", "Weighted"];
+    assert.ok(tc.includes('const headers = ["' + H0.join('", "') + '"];'), "the scheduler's CSV header is the 22 older columns, column for column, plus Weighted appended (Prompt 32)");
     const txAt = tc.indexOf("if (!eastDetailsVisible) {"), txEnd = tc.indexOf("\n      }\n", txAt);
     assert.ok(txAt > 0 && txEnd > txAt, "the CSV transform block is where the pin expects it");
     const csvTx = new Function("headers", "data", "eastDetailsVisible", tc.slice(txAt, txEnd + 8));
     const mkCsv = () => ({ hd: H0.slice(), data: [H0.map((_, i) => "p" + i), H0.map((_, i) => "o" + i)] });
     const off = mkCsv(); csvTx(off.hd, off.data, false);
-    assert.ok(off.hd.length === 21 && !off.hd.some(h => /East/.test(h)) && off.hd[17] === "Counted vs cap", "non-scheduler CSV header: 21 columns, no East word, 'Counted vs cap': " + off.hd.join(" | "));
-    assert.ok(off.data.every(r => r.length === 21 && r.indexOf(r[0][0] + "13") < 0 && r[13] === r[0][0] + "14"), "non-scheduler CSV rows: the East cell is gone from EVERY row, so no value shifts under the wrong header: " + JSON.stringify(off.data));
+    assert.ok(off.hd.length === 22 && !off.hd.some(h => /East/.test(h)) && off.hd[17] === "Counted vs cap" && off.hd[21] === "Weighted", "non-scheduler CSV header: 22 columns (Prompt 32: + Weighted, the last), no East word, 'Counted vs cap': " + off.hd.join(" | "));
+    assert.ok(off.data.every(r => r.length === 22 && r.indexOf(r[0][0] + "13") < 0 && r[13] === r[0][0] + "14" && r[21] === r[0][0] + "22"), "non-scheduler CSV rows: the East cell is gone from EVERY row, so no value shifts under the wrong header (the Weighted cell stays under Weighted): " + JSON.stringify(off.data));
     const on = mkCsv(); csvTx(on.hd, on.data, true);
     assert.deepStrictEqual(on, mkCsv(), "the scheduler's CSV is untouched by the transform");
     // (6) overrides: no tag written; the strip regex and the audit rows stay
@@ -3039,6 +3048,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // the fallback: a softTag-only code reads its tag through reasonLabel; an unknown code and "not available" pass through
     assert.strictEqual(L.reasonLabel("back-to-back-weekend", nameOf), "back-to-back weekend");
     assert.strictEqual(L.reasonLabel("over-target:2", nameOf), "over target +2");
+    // Prompt 32 (Faraz 10/11): the preferred cap is the SOFT limit (the group's 7) - the tag and the label say so
+    assert.strictEqual(L.softTag({ reason: "over-preferred-cap:7", weight: 3 }), "over soft limit 7", "over-preferred-cap tag (was 'over preferred cap 7')");
+    assert.strictEqual(L.reasonLabel("over-preferred-cap:7", nameOf), "over soft limit 7", "over-preferred-cap label");
     assert.strictEqual(L.reasonLabel("no-such-code:x", nameOf), "no-such-code:x");
     assert.strictEqual(L.reasonLabel("not available", nameOf), "not available");
     // words that were there stay as they were (REASON_WORDS and the explicit cases win over the fallback)
@@ -3568,10 +3580,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("Implied shares (equal-share fairness"), 0, "the Implied shares heading still says equal-share fairness");
     assert.strictEqual(count("equal share of the month's open primary slots"), 0, "the shares paragraph / Totals titles still describe the flat open-slot share");
     assert.strictEqual(count("implied equal share of the open"), 0, "a Totals title (TotalsCard Target / Target B) still describes the flat open-slot share");
-    assert.ok(count("Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, cap)") === 1 && count("Backup-day target for the period: an explicit { backup } target in Setup, else min(level, backup cap)") === 1, "the Totals table's Target / Target B titles do not name min(level, cap)");
+    // pin moved deliberately 10/11: Prompt 32 step 2 - the Target title names min(level, clip) with the clip = the soft limit
+    // (else the hard cap) or what the rules allow (was min(level, cap)); the Target B title names the WEIGHTED share (was
+    // min(level, backup cap)) - the generator's backup target is no longer the plain per-role level
+    assert.ok(count("Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview") === 1 && count("Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview") === 1, "the Totals table's Target / Target B titles do not name min(level, clip) / the weighted share");
+    assert.strictEqual(count("else min(level, backup cap) from the last Generate preview"), 0, "the Totals Target B title still states the plain per-role backup level");
     const sharesHead = src.slice(src.indexOf('data-testid={"gen-shares-" + m}'), src.indexOf("</tr></thead>", src.indexOf('data-testid={"gen-shares-" + m}')));
     assert.ok(sharesHead.includes(">Held P</th>") && sharesHead.includes(">Held B</th>") && !sharesHead.includes("Locked P") && !sharesHead.includes("Locked B"), "the shares table still heads its held-day columns 'Locked P' / 'Locked B'");
     assert.ok(count("water-filled") >= 3, "the Generate panel and Totals name the water-filled share fewer than 3 times");
+  });
+  check("Generate panel (Prompt 32 step 2): the diagnostics show both views - the per-role targets and the weighted load / share beside them (tallies Weighted / W share for month and range, the shares head's weighted level, the shares table's fill clips, makeup and W share)", () => {
+    const gd = src.slice(src.indexOf("function GenDiagnostics("), src.indexOf("function GeneratePanel("));
+    assert.ok(gd.length > 0, "no GenDiagnostics");
+    const tallyHead = gd.slice(gd.indexOf('data-testid="gen-tallies"'), gd.indexOf("</tr></thead>", gd.indexOf('data-testid="gen-tallies"')));
+    assert.ok(tallyHead.includes(">Target B</th>") && tallyHead.indexOf(">Weighted</th>") > tallyHead.indexOf(">Target B</th>") && tallyHead.indexOf(">W share</th>") > tallyHead.indexOf(">Weighted</th>"), "the tallies table does not head Weighted / W share after Target B");
+    assert.ok(gd.includes('<td data-col="weighted">{num(x.weighted)}</td><td data-col="weighted-share">{num(x.weightedShare)}</td>') && gd.includes('<td data-col="weighted">{num(r.weighted)}</td><td data-col="weighted-share">{num(r.weightedShare)}</td>'), "the tallies month / range rows do not print weighted / weightedShare");
+    const head = gd.slice(gd.indexOf('data-testid={"gen-shares-head-" + m}'), gd.indexOf("</div>", gd.indexOf('data-testid={"gen-shares-head-" + m}')));
+    assert.ok(head.includes("I.weightedShare") && head.includes("weighted level"), "the shares head line does not print the weighted level");
+    const sharesHead = gd.slice(gd.indexOf('data-testid={"gen-shares-" + m}'), gd.indexOf("</tr></thead>", gd.indexOf('data-testid={"gen-shares-" + m}')));
+    assert.ok(sharesHead.includes(">Fill clip P / B</th>") && sharesHead.includes(">W share</th>"), "the shares table does not head Fill clip P / B and W share");
+    assert.ok(gd.includes("M.fillClip") && gd.includes("M.makeupPrimary") && gd.includes("num(M.weightedShare)"), "the shares rows do not print the fill clips, the makeup and the weighted share");
+    assert.ok(!/Clip P<\/th>/.test(sharesHead) || sharesHead.includes("soft limit"), "the Clip P title still describes min(preferred cap, cap - 1)");
+    assert.strictEqual(count("min(preferred cap, cap - 1)"), 0, "a title still states the cap - 1 clip");
   });
   // pin moved deliberately 10/1 (Prompt 24, Setup > Rules trimmed): the rules editor's fields are RuField (theme tokens) instead
   // of SuField; the select's label reads "Prefers" (was "Primary contribution") and offers Prompt 23's "weekdays" beside
@@ -3775,7 +3805,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const tc = src.slice(src.indexOf("function TotalsCard("), src.indexOf("function TotalsCard(") + 600);
     assert.ok(tc.includes('const T = THEME[dk ? "dark" : "light"];'), "TotalsCard resolves T from dk");
     assert.ok(src.includes('data-testid="fairness-track" style={{ flex: "1 1 220px", position: "relative", height: 18, background: T.barTrack'), "track uses T.barTrack");
-    assert.ok(src.includes('data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(r.t.total) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`'), "fill uses T.barStart -> T.barEnd");
+    // pin moved deliberately 10/11: Prompt 32 step 1 - the fill is the weighted load's PRIMARY part (pct(barP(r)), primary days
+    // x the primary weight; it was the raw total) and a striped backup part follows it in T.barEnd (the same token, so each stripe
+    // clears 3:1 on the track like the fill - checked below). Kept intent: theme tokens only, never a hard-wired light colour.
+    assert.ok(src.includes('data-testid="fairness-fill" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(barP(r)) + "%", background: overCap(r) ? "#c04040" : `linear-gradient(90deg,${T.barStart},${T.barEnd})`'), "fill uses T.barStart -> T.barEnd");
+    assert.ok(src.includes('data-testid="fairness-fill-b" style={{ position: "absolute", left: pct(barP(r)) + "%", top: 0, bottom: 0, width: Math.max(0, pct(barPB(r)) - pct(barP(r))) + "%", background: `repeating-linear-gradient(45deg,${T.barEnd} 0 3px,transparent 3px 6px)`'), "the backup part's stripes use T.barEnd");
     for (const th of ["light", "dark"]) { const T = styles.THEME[th]; for (const k of ["barTrack", "barStart", "barEnd"]) assert.match(T[k] || "", /^#[0-9A-F]{6}$/, th + "." + k);
       assert.ok(ratio(T.barStart, T.barTrack) >= 3, `${th} bar start ${T.barStart} on track ${T.barTrack} = ${ratio(T.barStart, T.barTrack).toFixed(2)}:1`);
       assert.ok(ratio(T.barEnd, T.barTrack) >= 3, `${th} bar end ${T.barEnd} on track ${T.barTrack} = ${ratio(T.barEnd, T.barTrack).toFixed(2)}:1`); }
@@ -4805,14 +4839,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
     const words = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules);
     const k = words("s1"); assert.ok(k.some(s => /^Weekdays: Mon, Wed \(offered automatically when East is clear\)\.$/.test(s)), JSON.stringify(k)); assert.ok(k.some(s => s === "Never primary on Tue, Thu within 56 days; allowed further ahead, with a soft penalty."), JSON.stringify(k)); /* Prompt 23 B4 (9/30): was "Never primary on Tue, Thu." - the notice key says how far ahead the rule is hard. Prompt 24 review 2 (10/1): was "...; further ahead only as a last resort." - wrong vs the engine (beyond the notice the soft +3 cancels the -3 weekday bonus: a far Tue/Thu competes with a colleague on equal terms, behind his own Mon/Wed) */ assert.ok(H.offerRulesWords(seed.surgeonRules.s1, Object.assign({}, seed.groupRules, { weights: Object.assign({}, seed.groupRules.weights, { hardNeverBeyondNotice: 0 }) })).some(s => s === "Never primary on Tue, Thu within 56 days; allowed further ahead."), "a 0 weight names no penalty (rules.js adds none)"); assert.ok(!k.some(s => /last resort/.test(s)), "no 'last resort'"); assert.ok(k.some(s => s === "Preferred: weekday primary (Mon-Thu, or a Friday on its own).") && k.some(s => s === "Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun - never a Saturday or Sunday alone.") && k.some(s => s === "At most 2 weekends a month, East weekends included (preferred, not a hard limit)."), "Prompt 23 B1-B3 in his words: " + JSON.stringify(k)); /* Prompt 23 review (10/1): was "A Friday may stand alone; Saturday and Sunday come as a pair (never one alone as primary)." beside "Weekends: Fri-Sun as one block." - one primary-shapes sentence, and his block style speaks of backup weekends only */ assert.ok(k.some(s => s === "Backup weekends: Fri-Sun as one block.") && !k.some(s => /^Weekends: /.test(s)), "the block style is his backup weekends': " + JSON.stringify(k)); assert.deepStrictEqual(H.offerRulesWords({ noLoneWeekendDay: true, weekendStyle: "block" }, {}).filter(s => /eekend|Saturday/.test(s)), ["Saturday and Sunday come as a pair (never one alone as primary).", "Weekends: Fri-Sun as one block."], "generic: the pair key alone keeps the style line for both roles"); assert.deepStrictEqual(H.offerRulesWords({ standaloneFriday: true, weekendStyle: "split" }, {}).filter(s => /eekend/.test(s)), ["Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun.", "Backup weekends: split with a partner."], "generic: standaloneFriday alone"); // hardNeverWeekdaysRoles ["primary"] in the seed (9/22: backup open Tue/Thu) assert.ok(k.some(s => /East \(Davenport\) call days block primary; the forecast stands in/.test(s)));
-    const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 8 primary days a month (7 preferred)."));
-    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "No monthly cap of your own."));
+    const b = words("s2"); assert.ok(b.some(s => s === "Available on the 2/4 Mon, the 1 Tue, the 2/4 Wed."), JSON.stringify(b)); assert.ok(b.some(s => s === "Cap: 7 primary days a month."), "Prompt 32: Burchett's own hard 7, no soft limit (pin moved deliberately 10/11: was 'Cap: 8 primary days a month (7 preferred).'): " + JSON.stringify(b));
+    const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "Soft limit: 7 primary days a month (the group's)."), "Prompt 32: Acton's null = the group default, the soft 7 (pin moved deliberately 10/11: was 'No monthly cap of your own.'): " + JSON.stringify(a));
     const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));
     const f = words("s5"); assert.ok(f.some(s => s === "Outside your East weeks: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f)); assert.ok(f.some(s => /East weeks derive your Silvis week/.test(s))); assert.ok(f.some(s => s === "Cap: 14 primary days a month, East primary-week days included."));
     const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15 (about 2 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
     assert.deepStrictEqual(H.offerRulesWords(null, seed.groupRules), ["No rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({}, {}), ["No recurring rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({ name: "X" }, { defaultMonthlyCap: { primary: 8 } }), ["Cap: the group default of 8 primary days a month."]);
+    // Prompt 32 (Faraz 10/11): absent and null both read the group default (soft and / or hard); "none" = no limit; an own
+    // hard cap carries no soft limit; an own soft limit keeps the group's hard cap; an unreadable value reads as the default
+    const G7 = { defaultMonthlyCap: { preferred: 7 } }, G97 = { defaultMonthlyCap: { primary: 9, preferred: 7 } };
+    const capLine = (r, g) => H.offerRulesWords(Object.assign({ name: "X" }, r), g).filter(s => /^(Cap|Soft limit|No monthly)/.test(s));
+    assert.deepStrictEqual(capLine({}, G7), ["Soft limit: 7 primary days a month (the group's)."], "absent under the soft group default");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, G7), ["Soft limit: 7 primary days a month (the group's)."], "null = the group default (was 'No monthly cap of your own.')");
+    assert.deepStrictEqual(capLine({ monthlyCap: "none" }, G7), ["No monthly limit."], "\"none\" = no limit");
+    assert.deepStrictEqual(capLine({ monthlyCap: 6 }, G7), ["Cap: 6 primary days a month."], "an own number: hard, no soft limit");
+    assert.deepStrictEqual(capLine({ monthlyCap: { primary: 6, preferred: 5 } }, G7), ["Cap: 6 primary days a month (soft limit 5)."], "own hard + own soft");
+    assert.deepStrictEqual(capLine({ monthlyCap: { preferred: 5 } }, G7), ["Soft limit: 5 primary days a month."], "an own soft limit, no hard cap anywhere");
+    assert.deepStrictEqual(capLine({ monthlyCap: { preferred: 5 } }, G97), ["Cap: the group default of 9 primary days a month (soft limit 5)."], "an own soft limit keeps the group's hard cap");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, G97), ["Cap: the group default of 9 primary days a month (soft limit 7, the group's)."], "null under a group hard + soft default");
+    assert.deepStrictEqual(capLine({ monthlyCap: { countsEastDays: true } }, G7), ["Soft limit: 7 primary days a month (the group's), East primary-week days included."], "an object with neither number = the group default");
+    assert.deepStrictEqual(capLine({ monthlyCap: "8" }, G7), ["Soft limit: 7 primary days a month (the group's)."], "an unreadable value reads as the group default (rules.js warns)");
+    assert.deepStrictEqual(capLine({ monthlyCap: null }, {}), [], "null with no group default at all: nothing to say");
     const all = ["s1", "s2", "s3", "s4", "s5", "s6"].flatMap(words).join(" ");
     assert.strictEqual(/@|\b\d{3}[-.]\d{3}[-.]\d{4}\b/.test(all), false, "rules words must never carry an address or phone");
   });
@@ -10240,7 +10289,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(pt.includes("const mode = pollTickMode({ signedIn: !!authUserRef.current, publicMode: isPublicMode, hidden: document.hidden });"), "the mode");
       assert.ok(pt.includes('const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current("poll");\n      await refreshNotifs();'), "the hidden head: ensureFresh / re-send, then notifications");
       assert.ok(src.includes("const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };"), "the catch-up reads document.hidden (the smoke's keepalive dispatches override hidden only)");
-      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 5, "the keepalive flush, A3's ensureFresh, the version check, the shift clock and the poll's");
+      // pin moved deliberately 10/12: push UX follow-up - a sixth, the Pop-ups / push-card permission re-read (push.test.js permRefreshCheck)
+      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 6, "the keepalive flush, A3's ensureFresh, the version check, the shift clock, the poll's and the push UX permission re-read");
+      assert.strictEqual(count('document.addEventListener("visibilitychange", onVisible);\n    return () => document.removeEventListener("visibilitychange", onVisible);\n  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);'), 1, "the sixth is the push UX permission re-read, removed on cleanup");
       const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
       assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
       assert.ok(!/loadEastTables\(true\)/.test(ra) && ra.includes("refreshEastTables()"), "the poll's East read goes through the 10-minute cadence");
@@ -10736,7 +10787,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       "Primary: Mon/Wed and Fri-Sun; never Tue/Thu within 8 weeks (further out allowed, soft); not on East call days; prefers weekdays - Mon-Thu or a Friday on its own (soft).",
       "Backup: Any day.",
       "Weekends: Prefers one Fri-Sun block (backup, soft); a Friday may stand alone (primary); never a lone Saturday or Sunday (primary); at most 2 weekends a month, East weekends included (soft).",
-      "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); no monthly cap; equal share.",
+      // pin moved deliberately 10/11: Prompt 32 his monthlyCap null reads the group default, the soft 7 (was "no monthly cap")
+      "Limits: At most 3 primary days in a row (a holiday unit counts as one), 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
       "East / Davenport: East call days block primary (shifts in East backup weeks count); the East forecast stands in while Davenport is unpublished; on East call every year: Christmas (12/24, 12/25).",
       "Holidays: No Christmas primary (standing East call).",
     ];
@@ -10749,7 +10801,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only the 2nd/4th Mon, the 1st Tue, the 2nd/4th Wed and Fri-Sun.",
         "Backup: Only the listed days in Nov-Dec 2026.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
-        "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 8 primary days a month, 7 preferred; equal share.",
+        // pin moved deliberately 10/11: Prompt 32 Burchett { primary: 7 } (was "cap 8 primary days a month, 7 preferred")
+        "Limits: At most 2 primary days in a row, 3 in any role (soft); cap 7 primary days a month; equal share.",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct-Dec 2026, backup only Oct 2026, unavailable Oct 2026), 3 vacations; with offer periods on, the available days of Nov-Dec 2026 become offers instead.",
       ],
       s3: [
@@ -10757,7 +10810,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Any day; never Tue, the 2nd/4th Mon until 12/31/2026, the 2nd Mon from 1/1/2027, the 2nd/4th Wed, the 3rd Wed from 1/1/2027; avoids the Sun before the 2nd/4th Mon until 12/31/2026 (medium), the Sun before the 2nd Mon from 1/1/2027 (medium).",
         "Backup: Any day.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
-        "Limits: At most 3 primary days in a row, 4 in any role (soft); no monthly cap; equal share.",
+        // pin moved deliberately 10/11: Prompt 32 Acton's null reads the group default, the soft 7 (was "no monthly cap")
+        "Limits: At most 3 primary days in a row, 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
         "Holidays: Never covers Thanksgiving (primary or backup).",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026), 2 vacations; with offer periods on, the offered days of Nov 2026 become offers.",
       ],
@@ -10766,7 +10820,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only in the listed weeks; not the day before a clinic day (the 1st/3rd Wed, the Fri in the week of the 3rd Wed); avoids clinic weeks (strong).",
         "Backup: Any day; at most 7 days and 1 weekend a month.",
         "Weekends: Prefers one Fri-Sun block (soft).",
-        "Limits: At most 4 primary days in a row, 4 in any role (soft); cap 8 primary days a month (group default); equal share.",
+        // pin moved deliberately 10/11: Prompt 32 the group default is the soft 7 (was "cap 8 primary days a month (group default)")
+        "Limits: At most 4 primary days in a row, 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
         "Holidays: At most 1 major holiday in 12 months.",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026), 1 vacation; with offer periods on, the listed weeks become offers.",
       ],
@@ -10782,7 +10837,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Primary: Only inside the date windows.",
         "Backup: Only inside the date windows.",
         "Weekends: A lone weekend day is fine; blocks and splits discouraged (strong).",
-        "Limits: At most 2 primary days in a row, 2 in any role (soft); cap 8 primary days a month (group default); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
+        // pin moved deliberately 10/11: Prompt 32 the group default is the soft 7 (was "cap 8 primary days a month (group default)")
+        "Limits: At most 2 primary days in a row, 2 in any role (soft); soft limit 7 primary days a month (the group's); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
       ],
     };
     const expectFor = (id) => SEED_LINES[id];
@@ -10825,7 +10881,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P24 summary: the engine defaults - an empty entry, the hardNeverWeekdays roles (primary while backup is open, both when it is closed, an empty list = the default), weekdays.autoOffer, aledo.hardAvoidDayBefore, eastBackupCountsAsBusy, neverThanksgiving, the group cap / run defaults", () => {
       assert.deepStrictEqual(lines({}, { groupRules: {} }), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); no monthly cap; equal share."]);
-      assert.deepStrictEqual(lines({}), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); equal share."]);
+      // pin moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7, no hard cap (was "cap 8 primary days a month (group default)")
+      assert.deepStrictEqual(lines({}), ["Primary: Any day.", "Backup: Any day.", "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); equal share."]);
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"] }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: Any day."]);
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: [] }).slice(0, 2), ["Primary: Any day; never Tue.", "Backup: Any day."], "an empty roles list is the default");
       assert.deepStrictEqual(lines({ hardNeverWeekdays: ["Tue"], hardNeverWeekdaysRoles: ["backup"] }).slice(0, 2), ["Primary: Any day.", "Backup: Never Tue."]);
@@ -10843,9 +10900,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(lines({ holidayRules: { neverThanksgiving: true } }).find(l => l.startsWith("Holidays")), "Holidays: Never covers Thanksgiving (primary or backup).", "neverThanksgiving alone reads as a Thanksgiving opt-out (rules.js), both roles");
       assert.deepStrictEqual(lines({ preferences: { maxMajorHolidays: 2 } }).find(l => l.startsWith("Holidays")), "Holidays: At most 2 major holidays in 12 months.", "the preferences fallback");
       assert.deepStrictEqual(lines({ maxConsecutiveDays: 5 }, { groupRules: { countBackupInConsecutive: true, defaultMonthlyCap: { total: 6 } } }).find(l => l.startsWith("Limits")), "Limits: At most 5 days on call in a row; cap 6 primary days a month (group default); equal share.", "a legacy group 'total' is the cap");
-      assert.deepStrictEqual(lines({ monthlyCap: { preferred: 5 } }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default), 5 preferred; equal share.");
-      assert.deepStrictEqual(lines({ monthlyTarget: 4, poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); target 4 primary days a month.");
-      assert.deepStrictEqual(lines({ poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); cap 8 primary days a month (group default); no share target.");
+      // pins moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 with no hard cap (these read "cap 8 ... (group default)")
+      assert.deepStrictEqual(lines({ monthlyCap: { preferred: 5 } }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 5 primary days a month; equal share.", "an own soft limit replaces the group's; no hard cap anywhere");
+      assert.deepStrictEqual(lines({ monthlyTarget: 4, poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 4 primary days a month.");
+      assert.deepStrictEqual(lines({ poolMember: false }).find(l => l.startsWith("Limits")), "Limits: At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); no share target.");
+      // Prompt 32 (Faraz 10/11): every cap shape in words - null = the group default, "none" = no limit, an own hard cap has
+      // no soft limit, an own soft limit keeps the group's hard cap, an object with neither number = the group default
+      const capFam = (r, g) => lines(r, g ? { names, holidayNames: HOL, groupRules: g } : undefined).find(l => l.startsWith("Limits")).split("; ")[1];
+      const G97 = { defaultMonthlyCap: { primary: 9, preferred: 7 } };
+      assert.strictEqual(capFam({ monthlyCap: null }), "soft limit 7 primary days a month (the group's)", "null = the group default (was 'no monthly cap')");
+      assert.strictEqual(capFam({ monthlyCap: "none" }), "no monthly cap (none - the group default does not apply)", "\"none\" = the explicit no-limit");
+      assert.strictEqual(capFam({ monthlyCap: 6 }), "cap 6 primary days a month", "an own number: hard, no soft limit");
+      assert.strictEqual(capFam({ monthlyCap: { primary: 6 } }), "cap 6 primary days a month", "an own hard cap does not inherit the group's soft limit");
+      assert.strictEqual(capFam({ monthlyCap: { primary: 6, preferred: 4 } }), "cap 6 primary days a month, soft limit 4", "own hard + own soft");
+      assert.strictEqual(capFam({ monthlyCap: {} }), "soft limit 7 primary days a month (the group's)", "an empty object = the group default");
+      assert.strictEqual(capFam({ monthlyCap: null }, G97), "cap 9 primary days a month (group default), soft limit 7 (the group's)", "null under a group hard + soft default");
+      assert.strictEqual(capFam({ monthlyCap: { preferred: 5 } }, G97), "cap 9 primary days a month (group default), soft limit 5", "an own soft limit keeps the group's hard cap");
+      assert.strictEqual(capFam({ monthlyCap: { countsEastDays: true } }, G97), "cap 9 primary days a month (group default), soft limit 7 (the group's), East primary-week days count");
+      assert.strictEqual(capFam({ monthlyCap: null }, { defaultMonthlyCap: { primary: 8 } }), "cap 8 primary days a month (group default)", "the pre-32 hard-only group default still reads");
     });
     check("P24 summary: the weekend cap's parts and a malformed one; the mode named only when nothing backs it; dated pattern bounds; split partner by name", () => {
       assert.deepStrictEqual(lines({ weekendCap: { perMonth: 1, roles: ["primary", "backup"], days: ["Fri", "Sat", "Sun"], weight: "medium" } }).find(l => l.startsWith("Weekends")), "Weekends: At most 1 weekend a month (primary or backup), counting Fri-Sun (soft, medium).");
@@ -10991,10 +11063,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(fam(H.suRuleFieldAdd(H.suRuleField("aledo"), {}), "Primary"), "Any day; a clinic-day rule with no clinic day set (no effect).");
       assert.strictEqual((H.suRulesSummary({ aledo: { weekdays: [] } }, { groupRules: { dayBeforeRules: { aledoDayBeforeRoles: ["primary", "backup"] } } }).find(l => l.family === "Backup") || {}).text, "Any day.", "no clinic day: nothing for backup either");
       assert.strictEqual(fam({ availableWeeks: ["2026-11-23"], availableWeeksFrom: "2026-11-15" }, "Availability"), "Primary only in 1 listed week, 11/23/2026 to the week of 11/23/2026 (from 11/15/2026; none after).");
-      assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); a monthly target without a number (ignored); equal share.");
-      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); cap 8 primary days a month (group default); target 3 backup days a month.");
-      assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - no cap applied); equal share.");
-      assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - no cap applied)");
+      // pins moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 (was "cap 8 ... (group default)"), and an
+      // unreadable cap reads as the group default with a buildContext warning (was "invalid - no cap applied": the silently-uncapped hole)
+      assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); a monthly target without a number (ignored); equal share.");
+      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 3 backup days a month.");
+      assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's)); equal share.");
+      assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))");
+      assert.strictEqual(fam({ monthlyCap: [8] }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))", "an array is not a cap object (rules.js warns)");
       assert.strictEqual(fam({ offeredDays: { "2026-11": ["2026-11-02"] }, timeOff: [{ start: "2026-11-01" }] }, "Seed lists"), "Read by the seed import, not the scheduler: 1 vacation; offered days of Nov 2026 (not imported - no offer tag).");
       assert.strictEqual(fam({ explicitAvailable: { "2026-10": ["2026-10-01"] }, explicitBackupUnavailable: { "2026-10": ["2026-10-02"] } }, "Seed lists"), "Read by the seed import, not the scheduler: availability rows (available Oct 2026, no backup Oct 2026).");
       assert.strictEqual(fam({ eastFeed: { enabled: true, eastBlocksPrimary: true }, eastStanding: [{ name: "Christmas", days: ["12-24", "12-25"] }] }, "Holidays"), "No Christmas primary (standing East call).");
@@ -11185,9 +11260,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       };
       // the merged seed (review fixes 10/1): Khan with Prompt 23's keys and Prompt 25's Christmas opt-out; backup fields last
       want.s1 = ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed", "holidaysOff"];
+      // pin moved deliberately 10/11: Prompt 32 Khan's and Acton's monthlyCap null reads the group default - the same as no key -
+      // so the Monthly cap field counts as unused for them (Burchett's { primary: 7 } and Fierce's 14 still use it)
+      want.s1 = want.s1.filter(id => id !== "monthlyCap"); want.s3 = want.s3.filter(id => id !== "monthlyCap");
       for (const id of Object.keys(want)) assert.deepStrictEqual(H.suRuleFieldsUsed(seed.surgeonRules[id]), want[id], id);
       assert.deepStrictEqual(H.suRuleFieldsUsed({ backupOptOut: false, holidayUnitCountsAsOneDay: false, preferAlternateDays: false, monthlyTarget: null, primaryContribution: "", weekendStyle: "", standaloneFriday: false, hardNeverWeekdaysRoles: ["primary"], hardNeverWeekdays: [] }), [], "explicit defaults are unused");
-      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: null }), ["monthlyCap"], "monthlyCap null (no cap) differs from no key (the group default)");
+      // pin moved deliberately 10/11: Prompt 32 monthlyCap null = no key = the group default (was "null (no cap) differs from no key");
+      // the explicit no-limit is the string "none", which the field does use
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: null }), [], "monthlyCap null is the same as no key (the group default, Prompt 32)");
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: "none" }), ["monthlyCap"], "monthlyCap \"none\" (no limit) differs from no key");
+      assert.deepStrictEqual(H.suRuleFieldsUsed({ monthlyCap: { primary: 7 } }), ["monthlyCap"]);
       assert.deepStrictEqual(H.suRuleFieldsUsed(P23_S1).filter(id => ["standaloneFriday", "noLoneWeekendDay", "weekendCap", "hardNeverWeekdays", "primaryContribution"].includes(id)), ["hardNeverWeekdays", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap"]);
       assert.deepStrictEqual(H.suRuleFieldsUsed({ hardNeverWeekdaysNoticeDays: 56 }), ["hardNeverWeekdays"], "a notice alone shows the never-on field");
       assert.deepStrictEqual(H.suRulesJsonOnly(seed.surgeonRules.s2), ["months a dated list governs", "seed list: available days", "seed list: backup-only days", "seed list: unavailable days", "offer sources", "seed vacations"]);
@@ -11233,7 +11315,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suRuleRemoveConfirm(f("hardNeverWeekdays"), S.s1, "Khan"), 'Remove the rule "Never on (weekdays)" for Khan? This deletes: Tue/Thu; applies to primary; hard only within (days) 56.');
       assert.strictEqual(H.suRuleRemoveConfirm(f("weekendCap"), S.s1, "Khan"), 'Remove the rule "Weekends per month" for Khan? This deletes: East weekends count; counts primary; weight strong.', "the start's perMonth 2 is not news; the rest is");
       assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), S.s4, "Philip"), 'Remove the rule "Most major holidays in 12 months" for Philip? This deletes: the setting "1"; most major holidays (older place) 1.');
-      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s3, "Acton"), 'Remove the rule "Monthly cap" for Acton? This deletes: the setting "none".', "a lone null never reads as 'deletes: none'");
+      // pin moved deliberately 10/11: Prompt 32 Acton's null is the group default (= no key) - removing it loses nothing, so nothing is asked
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s3, "Acton"), null, "Prompt 32: Acton's monthlyCap null = the group default - nothing to lose");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), S.s2, "Burchett"), 'Remove the rule "Monthly cap" for Burchett? This deletes: primary 7.', "Prompt 32: Burchett's own hard 7 is named");
       assert.ok(H.suRuleRemoveConfirm(f("aledo"), S.s4, "Philip").includes("clinic days the 1st/3rd Wed, the Fri in the week of the 3rd Wed"), "Philip's clinic days are named");
       assert.ok(H.suRuleRemoveConfirm(f("outsideDerivedWeeks"), S.s5, "Fierce").includes("weekday pattern for Mon-Sun"), "a per-weekday table reads as one item");
       const many = { availableWindows: Array.from({ length: 12 }, (_, i) => ({ start: "2027-0" + (1 + (i % 9)) + "-01", end: "2027-0" + (1 + (i % 9)) + "-05" })) };
@@ -11258,7 +11342,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyTarget"), S.s1, "Khan"), null, "Khan's monthlyTarget: null");
       assert.strictEqual(H.suRuleRemoveConfirm(f("weekendBlockPenalty"), { weekendBlockPenalty: null }, "X"), null, "rules.js reads a null penalty as none");
       assert.strictEqual(H.suRuleRemoveConfirm(f("maxMajorHolidays"), { holidayRules: { maxMajorHolidays: null }, preferences: { maxMajorHolidays: 2 } }, "X"), 'Remove the rule "Most major holidays in 12 months" for X? This deletes: most major holidays (older place) 2.', "the unread null is not an item; the older place still is");
-      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: null }, "X"), 'Remove the rule "Monthly cap" for X? This deletes: the setting "none".', "monthlyCap: null = no cap over the group default - still asks");
+      // pin moved deliberately 10/11: Prompt 32 monthlyCap null = the group default = no key (was "no cap over the group default - still
+      // asks"); the explicit no-limit "none" still asks, in the menu's own words
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: null }, "X"), null, "Prompt 32: monthlyCap null is the same as no key");
+      assert.strictEqual(H.suRuleRemoveConfirm(f("monthlyCap"), { monthlyCap: "none" }, "X"), 'Remove the rule "Monthly cap" for X? This deletes: the setting "no limit".', "Prompt 32: \"none\" still asks, in the cap menu's words");
+      for (const [v, w] of Object.entries(H.SU_RULE_VALUE_WORDS.monthlyCap)) assert.ok(SRC.includes('<option value="' + v + '">' + w + "</option>"), "the Monthly cap menu does not read '" + w + "' for " + v);
       assert.deepStrictEqual(H.suRuleFieldHeld(f("backupOptOut"), { backupOptOut: false }), ['the setting "off"'], "an explicit default is still a key Remove deletes");
     });
     check("P24 PatternListEditor kind switch (helpers.suPatternWithKind): keeps start / end, weight, note and any other key; the new kind's keys only; 'dates' drops the weekday", () => {
@@ -11317,7 +11405,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RE.includes("const [advOpen, setAdvOpen] = React.useState(false);") && RE.includes("const [weightsOpen, setWeightsOpen] = React.useState(false);"), "both collapsed by default");
       const adv = RE.indexOf('data-testid="rules-advanced"');
       assert.ok(adv > RE.indexOf('data-testid="rules-save"'), "Advanced sits below the surgeon's Save row");
-      for (const t of ['data-testid="rules-raw-toggle"', 'data-testid="rules-raw"', 'data-testid="rules-raw-apply"', 'data-testid="group-default-cap-primary"', 'data-testid="rules-weights"', 'data-testid="group-save"', 'data-testid="group-raw-toggle"', 'data-testid="group-raw"', 'data-testid="group-raw-apply"']) {
+      for (const t of ['data-testid="rules-raw-toggle"', 'data-testid="rules-raw"', 'data-testid="rules-raw-apply"', 'data-testid="group-default-cap-primary"', 'data-testid="group-default-cap-preferred"', 'data-testid="rules-weights"', 'data-testid="group-save"', 'data-testid="group-raw-toggle"', 'data-testid="group-raw"', 'data-testid="group-raw-apply"']) {
         assert.strictEqual(reCount(t), 1, t + " once");
         assert.ok(RE.indexOf(t) > adv && RE.indexOf(t) > RE.indexOf("{advOpen && <div"), t + " is not inside Advanced");
       }
@@ -11346,6 +11434,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(SRC.includes('data-testid="' + t + '"') || SRC.includes('testid="' + t + '"'), "testid " + t + " is gone");
       }
       for (const t of ["pattern-row", "pattern-preview", "pattern-error"]) assert.ok(SRC.includes('data-testid="' + t + '"'), t);
+      // Prompt 32 (Faraz 10/11): the cap editor - "group default" deletes the key, "no limit" writes "none" (never null, which is
+      // the group default now), "a number" writes { primary: N } from the group's soft limit (else 7) - no hard-coded 8; the
+      // group box edits the soft limit (preferred) and the optional hard cap (primary)
+      assert.ok(SRC.includes('data-testid="group-default-cap-preferred"'), "the group soft-limit field");
+      const capCase = SRC.slice(SRC.indexOf('case "monthlyCap": return ('), SRC.indexOf('case "preferAlternateDays":'));
+      assert.ok(capCase.length > 200, "the Monthly cap renderer");
+      assert.ok(capCase.includes('<option value="default">group default</option>') && capCase.includes('<option value="none">no limit</option>') && capCase.includes('<option value="number">a number</option>'), "the three cap modes");
+      assert.ok(capCase.includes('set("monthlyCap", "none")') && !capCase.includes('set("monthlyCap", null)'), "\"no limit\" writes the string none, never null");
+      assert.ok(!/\|\| 8\b/.test(capCase), "no hard-coded 8 in the cap editor");
+      assert.ok(SRC.includes("const capRaw = draft.monthlyCap;") && /const capMode = capRaw === undefined \|\| capRaw === null \? "default" : capRaw === "none" \? "none"/.test(SRC), "capMode reads absent / null as the group default and \"none\" as the no-limit mode");
       const ws = RE.indexOf('case "weekendStyle":'), pc = RE.indexOf('case "primaryContribution":'), mcd = RE.indexOf('case "maxConsecutiveDays":'), mca = RE.indexOf('case "maxConsecutiveAnyRole":');
       assert.ok(ws > 0 && pc > ws && mca > mcd, "renderer order");
       assert.ok(FIELD_IDS.indexOf("primaryContribution") === FIELD_IDS.indexOf("weekendStyle") + 1, "Prefers renders right after Weekend style");
@@ -13157,6 +13255,453 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "else if (nCancelT !== 1 || askedT[0] !== wantAsk || !cancelledT.card || cancelledT.count !== \"2 changes\" || cancelledT.editor || cancelledT.grid || !cancelledT.noReload) fail(",
         "else if (nOkT !== 2 || askedT[1] !== wantAsk || acceptedT.card || !acceptedT.grid || !acceptedT.editor || !acceptedT.title || !acceptedT.noReload) fail(",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+  }
+
+  /* ---------------- P32-1. Prompt 32 step 1 (Faraz 10/11): weighted accounting in Totals ---------------- */
+  // Faraz 10/11 decision 9: the weighted load counts Silvis days only, primary 1, backup 0.5 - read through ONE helper,
+  // rules.js shiftWeightsOf(groupRules) (groupRules.shiftAccounting.weights; the default when null / absent / junk), never
+  // groupRules.weights (the soft-penalty table). TotalsCard is lifted verbatim (TOTALS_MON .. the card's end), transpiled
+  // by the build's own Babel (preset-react, classic runtime) and RUN against a stand-in React whose createElement returns
+  // plain nodes, in a vm realm holding the real helpers.js, rules.js and app-styles.js (the rules context is a real
+  // buildContext). The table, the CSV and the fairness view are asserted as what they render.
+  console.log("\n[P32-1] Prompt 32 step 1 - Totals: the Weighted column (P x 1 + B x 0.5 through rules.js shiftWeightsOf), the CSV column, the fairness view's weighted load vs weighted share, the rounding fix");
+  {
+    const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const babel = require("@babel/core");
+    const t0 = SRC.indexOf("const TOTALS_MON = ["), t1 = SRC.indexOf("function SuField(");
+    const tcSrc = SRC.slice(SRC.indexOf("function TotalsCard({"), t1);
+    const stripComments = (s) => s.split("\n").map(l => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+    const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+    const byId = (n, id) => all(n, x => x.props && x.props["data-testid"] === id);
+    const byCol = (n, c) => all(n, x => x.props && x.props["data-col"] === c);
+    const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+    // November 2026: Khan 7 P (11/1-11/7) + 3 B (11/8-11/10) -> 8.5; Burchett 6 P (11/8-11/13) + 4 B (11/1-11/4) -> 8; Acton
+    // 3 P (11/14-11/16) + 1 B (11/11) -> 3.5; an outside locum 1 P (11/17). October: one more Khan primary (10/20) for the
+    // year-to-date / rolling ranges (8 P + 3 B -> 9.5).
+    const row = (p, b) => ({ primary: p, backup: b, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
+    const SCHED = { "2026-10-20": row("s1", null) };
+    const nov = (d) => "2026-11-" + String(d).padStart(2, "0");
+    for (let d = 1; d <= 7; d++) SCHED[nov(d)] = row("s1", d <= 4 ? "s2" : null);
+    for (let d = 8; d <= 13; d++) SCHED[nov(d)] = row("s2", d <= 10 ? "s1" : d === 11 ? "s3" : null);
+    for (let d = 14; d <= 16; d++) SCHED[nov(d)] = row("s3", null);
+    SCHED[nov(17)] = row("x1", null);
+    const ROSTER = [
+      { id: "s1", name: "Khan", code: "FAK", active: true }, { id: "s2", name: "Burchett", code: "MAB", active: true },
+      { id: "s3", name: "Acton", code: "BDA", active: true }, { id: "x1", name: "Locum", code: "LOC", active: true, type: "external" },
+    ];
+    // the last Generate preview's implied targets (diagnostics.tallies[id].months[m].target = { primary, backup }); Acton has none
+    const PREVIEW = { respectLocks: true, schedule: {}, diagnostics: { tallies: { s1: { months: { "2026-11": { target: { primary: 5.6, backup: 5.8 } } } }, s2: { months: { "2026-11": { target: { primary: 6.2, backup: 4.4 } } } } } } };
+    const lift = () => {
+      assert.ok(t0 > 0 && t1 > t0, "TOTALS_MON .. TotalsCard is one block before SuField");
+      const code = babel.transformSync(SRC.slice(t0, t1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = {
+        console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout, isNaN, isFinite,
+        atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+        localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+        fetch: () => Promise.reject(new Error("no network in this test")),
+        document: { activeElement: null, contains: () => false }, confirm: () => true,
+      };
+      box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+      vm.createContext(box);
+      for (const f of ["config.js", "helpers.js", "rules.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      const downloads = [], toasts = [];
+      let states = [];
+      Object.assign(box, {
+        React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" },
+        useState: (v) => { const o = states.shift(); return [o === undefined ? v : o, () => {}]; },
+        useEffect: () => {},
+        downloadTextFile: (txt, name) => { downloads.push({ text: txt, name }); return true; },
+      });
+      const TotalsCard = vm.runInContext(code + "\n;TotalsCard", box, { filename: "TotalsCard.jsx" });
+      const buildContext = vm.runInContext("buildContext", box);
+      const css = vm.runInContext("css", box);
+      const render = (o) => {
+        states = [o.mode || "month", o.year, o.month0]; // useState order: mode, year, month0, withPreview (year / month from today unless given)
+        const ctx = o.noCtx ? null : buildContext({ roster: ROSTER, surgeonRules: {}, groupRules: o.groupRules || {}, schedule: SCHED, today: "2026-11-15" });
+        return TotalsCard({
+          css, dk: false, roster: ROSTER, schedule: SCHED, ctx, surgeonRules: {}, preview: o.preview === undefined ? PREVIEW : o.preview, today: "2026-11-15",
+          nameOf: (id) => (ROSTER.find(r => r.id === id) || {}).name || id, Badge: function Badge() { return null; }, showToast: (m, k) => toasts.push([m, k]),
+          ytdFloors: { "2026": "2026-09-14" }, payVisible: false, payTotalsRole: null, payData: null, holidays: {}, payYear: 2026, onPayYear: () => {}, onPayRefresh: () => {},
+          loaded: true, daysUnread: false, eastDetailsVisible: o.east !== false,
+        });
+      };
+      const csvOf = (tree) => {
+        const btn = byId(tree, "totals-csv")[0];
+        assert.ok(btn && typeof btn.props.onClick === "function", "the Export CSV button");
+        downloads.length = 0; btn.props.onClick();
+        assert.strictEqual(downloads.length, 1, "one CSV download: " + JSON.stringify(toasts.slice(-1)));
+        return downloads[0].text.split("\r\n").filter(Boolean).map(l => l.split(","));
+      };
+      return { render, csvOf, box };
+    };
+    const SEEDW = { shiftAccounting: { weights: { primary: 1, backup: 0.5 } } };
+
+    check("P32-1 table (TotalsCard lifted and run): a 'Weighted' column right after Total, before Weekend days; each row's cell and data-weighted = P x 1 + B x 0.5 (Khan 7 + 3 -> 8.5, Burchett 6 + 4 -> 8, Acton 3 + 1 -> 3.5); the header names the weights; raw Primary / Backup / Total unchanged", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SEEDW });
+      const ths = all(byId(tree, "totals-table")[0], x => x.type === "th");
+      const heads = ths.map(text);
+      const iT = heads.indexOf("Total"), iW = heads.indexOf("Weighted");
+      assert.ok(iT > 0 && iW === iT + 1 && heads[iW + 1] === "Weekend days", "Weighted sits right after Total and before Weekend days: " + heads.join(" | "));
+      assert.deepStrictEqual(heads.slice(1, 4), ["Primary", "Backup", "Total"], "the raw columns keep their places");
+      const th = ths[iW];
+      assert.strictEqual(th.props["data-testid"], "totals-th-weighted");
+      assert.ok(/primary days x 1 \+ backup days x 0\.5/.test(th.props.title || "") && /Silvis days only/.test(th.props.title || ""), "the header's title names the weights and Silvis days only: " + th.props.title);
+      const want = { s1: [7, 3, 10, 8.5], s2: [6, 4, 10, 8], s3: [3, 1, 4, 3.5] };
+      Object.keys(want).forEach(id => {
+        const r = byId(tree, "totals-row-" + id)[0];
+        assert.ok(r, "row " + id);
+        const [p, b, tot, w] = want[id];
+        assert.deepStrictEqual([r.props["data-primary"], r.props["data-backup"], r.props["data-total"], r.props["data-weighted"]], [p, b, tot, w], id + " data-*");
+        const cell = byCol(r, "weighted");
+        assert.ok(cell.length === 1 && text(cell[0]) === String(w), id + " Weighted cell reads " + w + ": " + (cell[0] && text(cell[0])));
+        const tds = kids(r).filter(c => c.type === "td").map(text);
+        assert.deepStrictEqual(tds.slice(1, 5), [String(p), String(b), String(tot), String(w)], id + " visible Primary | Backup | Total | Weighted");
+      });
+      assert.ok(!/\$/.test(text(tree)), "no $ anywhere in the card");
+    });
+    check("P32-1 the weights are data through the ONE helper: { primary: 2, backup: 1 } -> Khan 17 and the header says so; a primary / backup key in groupRules.weights (the soft-penalty table) is never read; null / absent -> the default", () => {
+      const { render } = lift();
+      const t2 = render({ groupRules: { shiftAccounting: { weights: { primary: 2, backup: 1 } } } });
+      assert.strictEqual(byId(t2, "totals-row-s1")[0].props["data-weighted"], 17, "7 x 2 + 3 x 1");
+      assert.ok(/primary days x 2 \+ backup days x 1\b/.test(byId(t2, "totals-th-weighted")[0].props.title), "the title follows the data");
+      const tSoft = render({ groupRules: { weights: { primary: 9, backup: 9 } } });
+      assert.strictEqual(byId(tSoft, "totals-row-s1")[0].props["data-weighted"], 8.5, "groupRules.weights is not the shift weights");
+      assert.strictEqual(byId(render({ groupRules: { shiftAccounting: { weights: null } } }), "totals-row-s1")[0].props["data-weighted"], 8.5, "null -> the default");
+      assert.strictEqual(byId(render({ groupRules: {}, noCtx: true }), "totals-row-s1")[0].props["data-weighted"], 8.5, "no rules context -> the helper's default (Totals still counts)");
+    });
+    check("P32-1 the period line no longer says 'nothing weighted' - it states the weights (Weighted = primary x 1 + backup x 0.5, Silvis days only)", () => {
+      const { render } = lift();
+      const line = text(byId(render({ groupRules: SEEDW }), "totals-period")[0]);
+      assert.ok(!/nothing weighted/.test(line), line);
+      assert.ok(/Weighted = primary x 1 \+ backup x 0\.5 \(Silvis days only\)/.test(line), line);
+    });
+    check("P32-1 the rounding fix: Khan's implied primary target 5.6 -> Deviation '+1.4' (was +1.4000000000000004), backup 5.8 -> Deviation B '-2.8'; targets show one decimal with the '*'", () => {
+      const { render } = lift();
+      const r = byId(render({ groupRules: SEEDW }), "totals-row-s1")[0];
+      assert.deepStrictEqual(["target", "deviation", "targetb", "deviationb"].map(c => text(byCol(r, c)[0])), ["5.6*", "+1.4", "5.8*", "-2.8"]);
+    });
+    check("P32-1 year to date / rolling 12: the Weighted column follows the range (Khan 8 P + 3 B from 9/14 -> 9.5); the month view stays 8.5", () => {
+      const { render } = lift();
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "ytd" }), "totals-row-s1")[0].props["data-weighted"], 9.5, "ytd");
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "rolling" }), "totals-row-s1")[0].props["data-weighted"], 9.5, "rolling 12");
+      assert.strictEqual(byId(render({ groupRules: SEEDW, mode: "month" }), "totals-row-s1")[0].props["data-weighted"], 8.5, "month");
+    });
+    check("P32-1 CSV: 'Weighted' APPENDED as the last column (scheduler 23 columns, everyone else 22 - the East column dropped as before); Khan 8.5 / Burchett 8 / Acton 3.5; the outside surgeon's cell blank; the older columns where they were", () => {
+      const { render, csvOf } = lift();
+      const sch = csvOf(render({ groupRules: SEEDW }));
+      assert.strictEqual(sch[0].length, 23, "scheduler header: " + sch[0].join(" | "));
+      assert.strictEqual(sch[0][22], "Weighted");
+      assert.deepStrictEqual([sch[0][6], sch[0][7], sch[0][8], sch[0][9], sch[0][21]], ["Primary", "Backup", "Total", "Weekend days", "Type"], "the older columns keep their positions");
+      const line = (rows, name) => rows.find(r => r[4] === name);
+      assert.deepStrictEqual(["Khan", "Burchett", "Acton"].map(n => line(sch, n)[22]), ["8.5", "8", "3.5"]);
+      assert.deepStrictEqual(["Khan", "Burchett", "Acton"].map(n => [line(sch, n)[6], line(sch, n)[7]]), [["7", "3"], ["6", "4"], ["3", "1"]], "raw P / B unchanged");
+      const loc = line(sch, "Locum");
+      assert.ok(loc && loc.length === 23 && loc[21] === "outside" && loc[22] === "", "the outside row: counts only, the Weighted cell blank: " + JSON.stringify(loc));
+      assert.ok(sch.every(r => r.length === 23), "every line carries 23 fields");
+      const off = csvOf(render({ groupRules: SEEDW, east: false }));
+      assert.ok(off[0].length === 22 && off[0][21] === "Weighted" && !off[0].some(h => /East/.test(h)), "non-scheduler header: 22 columns, Weighted last: " + off[0].join(" | "));
+      assert.ok(off.every(r => r.length === 22) && line(off, "Khan")[21] === "8.5", "non-scheduler rows: 22 fields, Khan's Weighted 8.5");
+      assert.ok(sch.every(r => !r.some(c => /\$/.test(c))), "no $ in the CSV");
+    });
+    check("P32-1 fairness view: each row carries data-weighted (load) and data-weighted-share (primary target x 1 + backup target x 0.5) with the weighted deviation; the bar is the weighted load (solid primary part + lighter backup part), the green mark the weighted share; the raw text prefix stays", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SEEDW, mode: "fairness" });
+      const s1 = byId(tree, "fairness-row-s1")[0], s2 = byId(tree, "fairness-row-s2")[0], s3 = byId(tree, "fairness-row-s3")[0];
+      assert.deepStrictEqual([s1.props["data-total"], s1.props["data-weighted"], s1.props["data-weighted-share"], s1.props["data-deviation"], s1.props["data-deviation-b"], s1.props["data-deviation-w"]], [10, 8.5, 8.5, "+1.4", "-2.8", "0"], "Khan: 8.5 vs 5.6 + 0.5 x 5.8 = 8.5");
+      assert.deepStrictEqual([s2.props["data-weighted"], s2.props["data-weighted-share"], s2.props["data-deviation-w"]], [8, 8.4, "-0.4"], "Burchett: 8 vs 6.2 + 0.5 x 4.4 = 8.4");
+      assert.deepStrictEqual([s3.props["data-weighted"], s3.props["data-weighted-share"], s3.props["data-deviation-w"]], [3.5, undefined, "-"], "Acton: no target -> no weighted share");
+      const t1 = text(s1).replace(/\s+/g, " ");
+      assert.ok(/^10 total \(7 P \+ 3 B\) - weighted 8\.5 \/ share 8\.5\* \(0\) - target 5\.6\* - target B 5\.8\* /.test(t1), "Khan's row text: " + t1);
+      assert.ok(/^4 total \(3 P \+ 1 B\) - weighted 3\.5 - target - - target B - /.test(text(s3).replace(/\s+/g, " ")) && /no target/.test(text(s3)), "Acton's row text: " + text(s3));
+      // scale = the largest of (weighted load, weighted share, cap) = 8.5 (no cap in this context); pct = round(v / 8.5 x 100)
+      const pct = (v) => Math.min(100, Math.round((v / 8.5) * 100)) + "%";
+      const fill = (r) => byId(r, "fairness-fill")[0].props.style, fillB = (r) => byId(r, "fairness-fill-b")[0].props.style;
+      assert.deepStrictEqual([fill(s1).width, fillB(s1).left, fillB(s1).width], [pct(7), pct(7), (Math.round(8.5 / 8.5 * 100) - Math.round(7 / 8.5 * 100)) + "%"], "Khan: the solid part is the primary days x 1, the lighter part the backup days x 0.5");
+      assert.deepStrictEqual([fill(s2).width, fillB(s2).width], [pct(6), (Math.round(8 / 8.5 * 100) - Math.round(6 / 8.5 * 100)) + "%"], "Burchett: 6 + 2");
+      assert.deepStrictEqual([byId(s1, "fairness-target-mark")[0].props.style.left, byId(s2, "fairness-target-mark")[0].props.style.left], [pct(8.5), pct(8.4)], "the green mark sits at the weighted share");
+      assert.strictEqual(byId(s3, "fairness-target-mark").length, 0, "no share, no mark");
+      assert.ok(/primary target x 1 \+ backup target x 0\.5/.test(byId(s1, "fairness-target-mark")[0].props.title), "the mark's title says how the share is built: " + byId(s1, "fairness-target-mark")[0].props.title);
+      const intro = text(byId(tree, "fairness-view")[0].children[0]);
+      assert.ok(/Weighted load/.test(intro) && /primary days x 1 \+ backup days x 0\.5/.test(intro) && /weighted share/.test(intro), "the intro names the weighted view: " + intro.slice(0, 200));
+      assert.ok(!/\$/.test(text(tree)), "no $ in the fairness view");
+    });
+    check("P32-1 weights unreadable (rules.js not loaded): the card still renders - Weighted '-', the CSV cell blank, the fairness bar falls back to the raw days - never a guessed default", () => {
+      const { render, csvOf, box } = lift();
+      box.shiftWeightsOf = undefined;
+      const tree = render({ groupRules: SEEDW });
+      const r = byId(tree, "totals-row-s1")[0];
+      assert.strictEqual(r.props["data-weighted"], undefined);
+      assert.strictEqual(text(byCol(r, "weighted")[0]), "-");
+      assert.strictEqual(csvOf(tree).find(l => l[4] === "Khan")[22], "");
+      const f = byId(render({ groupRules: SEEDW, mode: "fairness" }), "fairness-row-s1")[0];
+      assert.strictEqual(f.props["data-weighted"], undefined);
+    });
+    check("P32-1 source pins: TotalsCard reads the shift weights ONLY through shiftWeightsOf(ctx ? ctx.groupRules : null) (no second default, never ctx.weights / groupRules.weights); its props are unchanged; PayTotalsPanel reads no weight", () => {
+      const code = stripComments(tcSrc);
+      assert.strictEqual((code.match(/shiftWeightsOf\(/g) || []).length, 1, "one helper call");
+      assert.ok(code.includes('const sw = typeof shiftWeightsOf === "function" ? shiftWeightsOf(ctx ? ctx.groupRules : null) : null;'), "the call");
+      // the code, minus its string literals (a tooltip may NAME the key so the scheduler can find it) - never a read of it
+      const codeOnly = code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+      assert.ok(!/ctx\.weights|groupRules\.weights|\.shiftAccounting\b/.test(codeOnly), "TotalsCard reads the soft-penalty table or the raw key");
+      assert.ok(!/\*\s*0?\.5\b|\b0?\.5\s*\*|backup:\s*0?\.5/.test(code), "TotalsCard hard-codes a 0.5 weight");
+      assert.ok(tcSrc.includes("function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, today, nameOf, Badge, showToast, ytdFloors, payVisible, payTotalsRole, payData, holidays, payYear, onPayYear, onPayRefresh, loaded, daysUnread, eastDetailsVisible })"), "the props are unchanged");
+      const pt = SRC.slice(SRC.indexOf("function PayTotalsPanel("), SRC.indexOf("\n}\n", SRC.indexOf("function PayTotalsPanel(")));
+      assert.ok(pt.length > 100 && !/\bweights?\b|weighted|shiftWeightsOf|ttWeighted/i.test(pt), "PayTotalsPanel reads a weight"); // (fontWeight is style, not a weight)
+    });
+    check("P32-1 smoke pins: the smoke reads the Weighted cell and data-weighted against P + 0.5 B and the CSV's last column, and counts 23 / 22 CSV fields", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      for (const t of [
+        "weighted: e.getAttribute(\"data-weighted\")",
+        "const wantW = x.primary + 0.5 * x.backup;",
+        "Totals Oct 2026 (Prompt 32): the Weighted column",
+        "const khanW = cols[cols.length - 1];",
+        "tS.csvHeader.length !== 23",
+        "tt.csvHeader.length !== 22",
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+    // ---- P32-4 (Prompt 32 step 4; Faraz 10/11 decision 5 / DESIGN "Totals" Over-7): Totals flags each MONTH whose primary
+    // count is over the holder's soft limit - rules.overSoftLimitMonths (the month's count; never cap x months) - on the cap
+    // cell ("over <L>", "over <L>: Oct, Nov" over a longer range) and at the end of the fairness row. Same lifted card as P32-1.
+    const SOFT6 = { defaultMonthlyCap: { preferred: 6 } }; // Khan's 7 November primaries are over a soft 6; Burchett's 6 are not
+    const flagOf = (tree, id) => byId(byId(tree, "totals-row-" + id)[0], "totals-over-soft");
+    check("P32-4 Totals: a month over the soft limit is flagged on the cap cell ('(over 6)', the title names the month and its count) and the row carries data-over-soft; at the limit or below - no flag", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SOFT6 });
+      const k = flagOf(tree, "s1");
+      assert.strictEqual(k.length, 1, "Khan's November (7 primaries) is over the soft 6: one flag");
+      assert.strictEqual(text(k[0]), " (over 6)", "the words: 'over <L>' (the soft limit), in brackets after the cap");
+      assert.ok(/Nov 2026 \(7\)/.test(k[0].props.title || "") && /soft limit of 6/.test(k[0].props.title || ""), "the title names the month, its count and the limit: " + k[0].props.title);
+      const capCell = byCol(byId(tree, "totals-row-s1")[0], "cap")[0];
+      assert.ok(capCell && byId(capCell, "totals-over-soft").length === 1 && text(capCell) === "- (over 6)", "the flag sits in the cap cell after the hard cap ('-' = none): " + (capCell && text(capCell)));
+      assert.strictEqual(capCell.props["data-flag"], undefined, "a soft-limit month is NOT the red hard-cap flag (no data-flag over on the cap cell)");
+      assert.strictEqual(byId(tree, "totals-row-s1")[0].props["data-over-soft"], "2026-11", "the row names the months over in data-over-soft");
+      ["s2", "s3"].forEach(id => { assert.strictEqual(flagOf(tree, id).length, 0, id + " (6 / 3 primaries) is not over the soft 6"); assert.strictEqual(byId(tree, "totals-row-" + id)[0].props["data-over-soft"], undefined); });
+    });
+    check("P32-4 Totals: year to date / rolling 12 name the MONTHS over (the month's own count - October holds 1, so only Nov), never cap x months", () => {
+      const { render } = lift();
+      ["ytd", "rolling"].forEach(mode => {
+        const k = flagOf(render({ groupRules: SOFT6, mode }), "s1");
+        assert.ok(k.length === 1 && text(k[0]) === " (over 6: Nov)", mode + ": " + (k[0] && text(k[0])));
+      });
+      // 8 primaries over Oct + Nov against a soft 6 is NOT 6 x 2 months: only the month whose own count is over it is named
+      const ytd = render({ groupRules: { defaultMonthlyCap: { preferred: 7 } }, mode: "ytd" });
+      assert.strictEqual(flagOf(ytd, "s1").length, 0, "soft 7: November holds exactly 7 - not over, whatever the range total (8)");
+    });
+    check("P32-4 Totals: the flag is the PERIOD's - a month view of October (Khan 1 primary) shows no flag and no data-over-soft on the table or the fairness row although his November (7) is over the soft 6 in the same schedule; November's own view does", () => {
+      const { render } = lift();
+      const oct = render({ groupRules: SOFT6, year: 2026, month0: 9 });
+      const r = byId(oct, "totals-row-s1")[0];
+      assert.ok(r && r.props["data-primary"] === 1, "the view is October 2026 (Khan's one primary, 10/20): " + (r && r.props["data-primary"]));
+      assert.strictEqual(flagOf(oct, "s1").length, 0, "October is not over the soft 6: no totals-over-soft (November is outside the period on screen)");
+      assert.strictEqual(r.props["data-over-soft"], undefined, "no data-over-soft on October's row");
+      assert.strictEqual(text(byCol(r, "cap")[0]), "-", "the cap cell reads the bare '-' (no '(over 6)')");
+      const fo = byId(render({ groupRules: SOFT6, mode: "fairness", year: 2026, month0: 9 }), "fairness-row-s1")[0];
+      assert.ok(fo && byId(fo, "fairness-over-soft").length === 0, "October's fairness row carries no 'over 6'");
+      // the control: the same schedule, November named explicitly - flagged on both
+      const nov = byId(render({ groupRules: SOFT6, year: 2026, month0: 10 }), "totals-row-s1")[0];
+      assert.ok(nov && nov.props["data-over-soft"] === "2026-11" && byId(nov, "totals-over-soft").length === 1, "November's view: flagged");
+      const fn = byId(render({ groupRules: SOFT6, mode: "fairness", year: 2026, month0: 10 }), "fairness-row-s1")[0];
+      assert.ok(fn && byId(fn, "fairness-over-soft").length === 1, "November's fairness row: flagged");
+    });
+    check("P32-4 Totals: no soft limit -> no flag; a hard cap only keeps its own red cap cell (the hard-cap wording), never 'over N'; no rules context -> no flag; the CSV is unchanged", () => {
+      const { render, csvOf } = lift();
+      assert.strictEqual(flagOf(render({ groupRules: {} }), "s1").length, 0, "no soft limit");
+      const hard = render({ groupRules: { defaultMonthlyCap: { primary: 6 } } });
+      const capCell = byCol(byId(hard, "totals-row-s1")[0], "cap")[0];
+      assert.ok(flagOf(hard, "s1").length === 0 && capCell.props["data-flag"] === "over" && text(capCell) === "6", "a hard 6: the existing red cap cell, no soft flag: " + text(capCell));
+      assert.strictEqual(flagOf(render({ groupRules: SOFT6, noCtx: true }), "s1").length, 0, "no rules context");
+      const csv = csvOf(render({ groupRules: SOFT6 }));
+      assert.ok(csv[0].length === 23 && csv[0][22] === "Weighted" && !csv.some(r => r.some(c => /over 6/.test(c))), "the CSV keeps its 23 columns and carries no flag text");
+    });
+    check("P32-4 fairness view: the row ends with ' - over 6' after the deviation (the text prefix unchanged)", () => {
+      const { render } = lift();
+      const tree = render({ groupRules: SOFT6, mode: "fairness" });
+      const s1 = byId(tree, "fairness-row-s1")[0];
+      const f = byId(s1, "fairness-over-soft");
+      assert.ok(f.length === 1 && text(f[0]) === " - over 6", "Khan's fairness row: " + (f[0] && text(f[0])));
+      assert.ok(/^10 total \(7 P \+ 3 B\) - weighted 8\.5/.test(text(s1).replace(/\s+/g, " ")), "the row text still starts as the smoke reads it: " + text(s1));
+      assert.ok(/ - over 6$/.test(text(s1)), "...and ends with the flag: " + text(s1));
+      assert.strictEqual(byId(byId(tree, "fairness-row-s2")[0], "fairness-over-soft").length, 0, "Burchett: none");
+    });
+  }
+
+  /* ---------------- P32-4. Prompt 32 step 4 (Faraz 10/11 decision 5): over the soft limit ---------------- */
+  // A primary day is "over the soft limit" when it is the (L+1)th or later primary of its holder's calendar month in date order
+  // (L = his soft limit; the group's 7). The DAYS come from ONE helper, rules.js overSoftLimitDays (generator diagnostics, the
+  // badge, the Generate preview, the Publish dialog, the Accept audit row) - derived, never stored; helpers.js only words,
+  // indexes and trims the plain list. Signed-in roles only: never on ?public=1.
+  console.log("\n[P32-4] Prompt 32 step 4 - over the soft limit: the helpers' words, the day badge (calendar / day summary / day editor, signed-in only), Totals' month flag (above), the Generate preview and the Publish dialog listing the days first, the Accept audit row");
+  {
+    const O1 = { day: "2026-11-18", id: "s3", month: "2026-11", count: 8, limit: 7 };
+    const O2 = { day: "2026-11-30", id: "s1", month: "2026-11", count: 8, limit: 7 };
+    const O3 = { day: "2026-12-05", id: "s3", month: "2026-12", count: 9, limit: 7 };
+    check("P32-4 helpers: the words - 'over 7' / 'over <L>'; the line 'Wed 11/18 P Acton - 8th primary day of November (over 7)'; the title; the ordinals", () => {
+      ["overSoftLimitWords", "overSoftLimitLine", "overSoftLimitTitle", "overSoftLimitIndex", "overSoftLimitForChanges", "overSoftLimitAudit", "overSoftLimitLegend", "overSoftLimitMonthsText"].forEach(f => assert.strictEqual(typeof H[f], "function", "helpers." + f + " is not exported (Prompt 32 step 4)"));
+      assert.strictEqual(H.overSoftLimitWords(7), "over 7", "the group's 7");
+      assert.strictEqual(H.overSoftLimitWords(9), "over 9", "an own soft limit");
+      assert.strictEqual(H.overSoftLimitWords(null), "over the soft limit", "no number");
+      assert.strictEqual(H.overSoftLimitLine(O1, nameOf), "Wed 11/18 P Acton - 8th primary day of November (over 7)");
+      assert.strictEqual(H.overSoftLimitLine(O3, nameOf), "Sat 12/5 P Acton - 9th primary day of December (over 7)");
+      assert.strictEqual(H.overSoftLimitTitle(O2, nameOf), "Khan: 8th primary day of November 2026 - over the soft limit of 7 primary days a month");
+      assert.deepStrictEqual([1, 2, 3, 4, 8, 11, 12, 13, 21, 22, 23, 31].map(n => H.overSoftLimitLine(Object.assign({}, O1, { count: n }), nameOf).split(" - ")[1].split(" ")[0]), ["1st", "2nd", "3rd", "4th", "8th", "11th", "12th", "13th", "21st", "22nd", "23rd", "31st"], "ordinals");
+      assert.ok(!/\$/.test(H.overSoftLimitLine(O1, nameOf) + H.overSoftLimitTitle(O1, nameOf)), "no $");
+    });
+    check("P32-4 helpers: overSoftLimitIndex (day -> entry), overSoftLimitAudit ([{ day, id }] only), overSoftLimitMonthsText; junk never throws", () => {
+      assert.deepStrictEqual(H.overSoftLimitIndex([O1, O2]), { "2026-11-18": O1, "2026-11-30": O2 });
+      assert.deepStrictEqual([H.overSoftLimitIndex(null), H.overSoftLimitIndex("x"), H.overSoftLimitIndex([null, { id: "s1" }])], [{}, {}, {}], "junk -> {}");
+      assert.deepStrictEqual(H.overSoftLimitAudit([O1, O2]), [{ day: "2026-11-18", id: "s3" }, { day: "2026-11-30", id: "s1" }], "ids and days only");
+      assert.ok(H.overSoftLimitAudit([O1]).every(o => Object.keys(o).join() === "day,id"), "never the count, the limit, the month or a name");
+      assert.deepStrictEqual([H.overSoftLimitAudit(undefined), H.overSoftLimitAudit([null])], [[], []]);
+      const m10 = { id: "s3", month: "2026-10", count: 10, limit: 7 }, m11 = { id: "s3", month: "2026-11", count: 10, limit: 7 };
+      assert.deepStrictEqual(H.overSoftLimitMonthsText([m11], 1), { text: "over 7", title: "Primary days over the soft limit of 7 a month: Nov 2026 (10)" }, "one month");
+      assert.deepStrictEqual(H.overSoftLimitMonthsText([m10, m11], 3), { text: "over 7: Oct, Nov", title: "Primary days over the soft limit of 7 a month: Oct 2026 (10), Nov 2026 (10)" }, "a longer range names the months");
+      assert.strictEqual(H.overSoftLimitMonthsText([], 1), null, "nothing over -> null");
+      // the calendar legend names the limits the grid's badges carry - never a hard-coded 7
+      assert.strictEqual(H.overSoftLimitLegend([O1, O2]), "over 7", "two badges on the group's 7: 'over 7' once");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: 9 }), O2, Object.assign({}, O3, { limit: 6 })]), "over 6 / over 7 / over 9", "different soft limits: ascending, each once");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: 6 })]), "over 6", "a group soft 6: 'over 6', not 'over 7'");
+      assert.strictEqual(H.overSoftLimitLegend([Object.assign({}, O1, { limit: null })]), "over the soft limit", "no number");
+      assert.deepStrictEqual([H.overSoftLimitLegend([]), H.overSoftLimitLegend(null), H.overSoftLimitLegend([null, { id: "s1" }])], ["", "", ""], "nothing valid -> ''");
+    });
+    check("P32-4 helpers: overSoftLimitForChanges - the Publish dialog's list: the days of a (holder, month) this publish GAVE a primary to (a later day moved up to #8 by an earlier new one included); a backup change, or a primary taken away, does not count", () => {
+      const ch = (day, role, from, to) => ({ day, role, from, to });
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-30", "primary", null, "s1")]), [O2], "the new 11/30 primary of Khan is his #8");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-02", "primary", "s2", "s3")]), [O1], "a NEW earlier November primary of Acton pushes his unchanged 11/18 to #8 - listed");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-11-10", "backup", null, "s3"), ch("2026-12-01", "primary", "s3", "s2"), ch("2026-11-30", "lock", "", "P")]), [], "a backup change, a primary taken FROM him and a lock change give him no primary");
+      assert.deepStrictEqual(H.overSoftLimitForChanges([O1, O2, O3], [ch("2026-12-20", "primary", null, "s3"), ch("2026-11-30", "primary", "s2", "s1")]), [O2, O3], "date order kept; two holders");
+      assert.deepStrictEqual([H.overSoftLimitForChanges(null, []), H.overSoftLimitForChanges([O1], null)], [[], []], "junk -> []");
+    });
+    check("P32-4 GenDiagnostics (lifted and run): the over-soft-limit days are listed FIRST - their own box above the score, one line each in date order; 'None' when the run lists none; absent from an older preview -> no box", () => {
+      const babel = require("@babel/core");
+      const g0 = src.indexOf("function GenDiagnostics({"), g1 = src.indexOf("// RF2 a (9/23): the merged map's");
+      assert.ok(g0 > 0 && g1 > g0, "GenDiagnostics is where the test expects it");
+      const code = babel.transformSync(src.slice(g0, g1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = { console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Set, Map, isNaN, isFinite };
+      box.window = box;
+      vm.createContext(box);
+      vm.runInContext(fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), box, { filename: "helpers.js" });
+      Object.assign(box, { React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" }, mono: "monospace", LIGHT: { warnText: "#7a4a10", accentText: "#C2410C" }, reasonLabel: (c) => String(c), softTag: () => null });
+      const GD = vm.runInContext(code + "\n;GenDiagnostics", box, { filename: "GenDiagnostics.jsx" });
+      const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+      const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+      const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+      const css = { subT: {}, tableWrap: {} };
+      const dg = { range: { months: ["2026-11", "2026-12"] }, tallies: {}, score: { total: 1 }, uncovered: [], softPenalties: [], candidatesTried: 1, bestOf: 1, overSoftLimit: [O1, O2, O3] };
+      const tree = GD({ css, dg, nameOf, roster: [] });
+      assert.strictEqual(tree.props["data-over-soft-count"], 3, "the root says how many");
+      const boxes = kids(tree);
+      assert.strictEqual(boxes[0].props["data-testid"], "gen-over-soft", "the over-soft-limit box is the FIRST thing in the diagnostics (above the score)");
+      assert.ok(/Over the soft limit \(3\)/.test(text(boxes[0])), "its heading counts them: " + text(boxes[0]).slice(0, 80));
+      const lines = all(boxes[0], n => n.props && n.props["data-over-soft"]).map(n => [n.props["data-over-soft"], text(n)]);
+      assert.deepStrictEqual(lines, [["2026-11-18:s3", H.overSoftLimitLine(O1, nameOf)], ["2026-11-30:s1", H.overSoftLimitLine(O2, nameOf)], ["2026-12-05:s3", H.overSoftLimitLine(O3, nameOf)]], "one line per day, date order, the helper's words");
+      const none = GD({ css, dg: Object.assign({}, dg, { overSoftLimit: [] }), nameOf, roster: [] });
+      assert.ok(kids(none)[0].props["data-testid"] === "gen-over-soft" && /None/.test(text(kids(none)[0])), "no day over -> the box says None");
+      const old = GD({ css, dg: Object.assign({}, dg, { overSoftLimit: undefined }), nameOf, roster: [] });
+      assert.strictEqual(all(old, n => n.props && n.props["data-testid"] === "gen-over-soft").length, 0, "a preview without the list shows no box");
+    });
+    check("P32-4 DayEditor (lifted and run): the 'over 7' badge on the primary row - the summary (every signed-in role) and the scheduler's editor; never on ?public=1 (not even computed); never on a day the helper does not list", () => {
+      const babel = require("@babel/core");
+      const a0 = src.lastIndexOf("const AWAITING_CONFIRMATION_MARKER = ");
+      const a1 = src.indexOf("// --- Client versions", a0);
+      const d0 = src.indexOf("function DayEditor(props) {"), d1 = src.indexOf("// ===================== SETUP VIEW COMPONENTS");
+      const code = babel.transformSync(src.slice(a0, a1) + "\n" + src.slice(d0, d1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = {
+        console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout,
+        atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+        localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+        fetch: () => Promise.reject(new Error("no network in this test")), document: { activeElement: null, contains: () => false }, confirm: () => true,
+      };
+      box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+      vm.createContext(box);
+      for (const f of ["config.js", "helpers.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      const OVER_DAY = "2099-01-06";
+      const FAKECTX = { holidayByDay: {}, schedule: { [OVER_DAY]: { primary: "s2" } } };
+      const calls = [];
+      Object.assign(box, {
+        React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment", useMemo: (f) => f(), useState: (v) => [typeof v === "function" ? v() : v, () => {}], useRef: (v) => ({ current: v === undefined ? null : v }), useEffect: () => {} },
+        safeBuildContext: () => ({ ctx: FAKECTX, error: null }), isHolidayDay: () => null, eastStatusLines: () => [],
+        eligibility: () => ({ ok: true, hard: [], soft: [] }), offerState: () => null, offerCandidateWords: () => null, reasonLabel: (c) => String(c), softTag: () => null,
+        overSoftLimitDays: (ctx, sched, from, to) => { calls.push([ctx, sched, from, to]); return from === OVER_DAY && to === OVER_DAY ? [{ day: OVER_DAY, id: "s2", month: "2099-01", count: 8, limit: 7 }] : []; },
+      });
+      const DayEditor = vm.runInContext(code + "\n;DayEditor", box, { filename: "DayEditor.jsx" });
+      const roster = [{ id: "s1", name: "Khan", code: "FAK", fullName: "Faraz Khan", active: true }, { id: "s2", name: "Burchett", code: "MAB", fullName: "Michael Burchett", active: true }];
+      const colorOf = vm.runInContext("(roster) => (id) => rosterColors(roster.find(r => r.id === id), 0)", box)(roster);
+      const render = (o) => DayEditor({
+        day: o.day || OVER_DAY, entry: { primary: "s2", backup: "s1", primaryLocked: false, backupLocked: false, source: "generated", externalCover: null, note: null },
+        roster, ctxInputs: { schedule: {} }, ctxError: null, canEdit: !!o.canEdit, eastDetailsVisible: !!o.canEdit, rulesImported: true, isPublicMode: !!o.pub,
+        nameOf: (id) => (roster.find(r => r.id === id) || {}).name || id, codeOf: (id) => id, colorOf, mySurgeon: o.me || "", vacationNames: [],
+        onSave: () => {}, onCancel: () => {}, onNav: () => {}, onTrade: () => {}, suggestTrade: () => null, css: vm.runInContext("css", box), dk: false, focusExternal: false,
+        onGive: () => {}, onOpenShifts: () => {}, openOnBoard: () => false,
+      });
+      const kids = (n) => (n && typeof n === "object" && !Array.isArray(n) ? n.children : Array.isArray(n) ? n : []).flat(Infinity);
+      const all = (n, out = []) => { if (Array.isArray(n)) { n.forEach(c => all(c, out)); return out; } if (n && typeof n === "object") { out.push(n); if (typeof n.type !== "function") kids(n).forEach(c => all(c, out)); } return out; };
+      const text = (n) => Array.isArray(n) ? n.map(text).join("") : n === null || n === undefined || n === false || n === true ? "" : typeof n === "object" ? (typeof n.type === "function" ? "" : kids(n).map(text).join("")) : String(n);
+      const by = (tree, id) => all(tree).filter(n => n.props["data-testid"] === id);
+      [["the summary (a viewer)", {}], ["the summary (a surgeon on another's day)", { me: "s1" }], ["the scheduler's editor", { canEdit: true }]].forEach(([who, o]) => {
+        calls.length = 0;
+        const tree = render(o);
+        const pBlock = by(tree, "editor-primary-block")[0], bBlock = by(tree, "editor-backup-block")[0];
+        const b = by(pBlock, "editor-over-soft");
+        assert.ok(b.length === 1 && text(b[0]) === "over 7", who + ": one 'over 7' badge on the primary row: " + (b[0] && text(b[0])));
+        assert.ok(/8th primary day/.test(b[0].props.title || "") && /soft limit of 7/.test(b[0].props.title || ""), who + ": the title explains it: " + b[0].props.title);
+        assert.strictEqual(by(bBlock, "editor-over-soft").length, 0, who + ": never on the backup row");
+        assert.ok(calls.length >= 1 && calls.every(c => c[0] === FAKECTX && c[1] === FAKECTX.schedule && c[2] === OVER_DAY && c[3] === OVER_DAY), who + ": the helper reads the editor's own (draft) ctx and its schedule, for this day only: " + JSON.stringify(calls.map(c => c.slice(2))));
+      });
+      calls.length = 0;
+      const pub = render({ pub: true });
+      assert.strictEqual(by(pub, "editor-over-soft").length, 0, "?public=1: no badge");
+      assert.strictEqual(calls.length, 0, "?public=1: the helper is never even called");
+      assert.strictEqual(by(render({ day: "2099-01-07" }), "editor-over-soft").length, 0, "a day the helper does not list: no badge");
+    });
+    check("P32-4 source pins: the App derives the over-soft-limit days ONCE for the calendar (signed-in only - never ?public=1 - over the displayed schedule, the preview overlaid), the grid cell draws the 'over N' badge (data-badge over-soft) with its title, the gutter counts it, the legend explains it", () => {
+      const at = src.indexOf("const overSoftByDay = useMemo(");
+      assert.ok(at > 0, "the App's overSoftByDay memo");
+      const memo = src.slice(at, src.indexOf("}, [", at) + 120);
+      assert.ok(/if \(isPublicMode \|\| !authUser \|\| !rulesCtx \|\| typeof overSoftLimitDays !== "function"\) return \{\};/.test(memo), "gated: never on ?public=1, never without a signed-in user / the rules engine: " + memo.slice(0, 300));
+      assert.ok(memo.includes("overSoftLimitIndex(overSoftLimitDays(rulesCtx, shown))") && memo.includes("previewGen && previewGen.schedule ? { ...(schedule || {}), ...previewGen.schedule } : (schedule || {})"), "ONE helper over the displayed schedule (the preview overlaid like the cells)");
+      const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), legendAt = src.indexOf('<div className="cal-legend"');
+      const grid = src.slice(gridAt, legendAt);
+      assert.ok(grid.includes("const ovS = overSoftByDay[d] || null;"), "the cell reads the memo");
+      assert.ok(grid.includes('{ovS && <span data-badge="over-soft" data-testid="over-soft-badge" data-over-soft-id={ovS.id} title={overSoftLimitTitle(ovS, nameOf)} style={overSoftBadgeStyle}><span className="cal-os-long">{overSoftLimitWords(ovS.limit)}</span><span className="cal-os-short">{">" + ovS.limit}</span></span>}'), "the badge: 'over 7' (a phone: '>7'), the helper's title");
+      assert.ok(grid.includes("const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);"), "the header's gutter makes room for it (two badge widths)");
+      assert.ok(grid.includes("if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));"), "the cell's hover names it");
+      const legend = src.slice(legendAt, src.indexOf('<Collapsible css={css} ck="cal_weekrows"'));
+      assert.ok(legend.includes('{gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft">'), "the legend explains the badge when one shows");
+      const legLine = legend.slice(legend.indexOf('<span data-testid="legend-over-soft">'));
+      assert.ok(legLine.includes("{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}") && !/>over \d/.test(legLine.slice(0, legLine.indexOf("</span>}"))), "the legend's words name the limits the grid's badges carry (overSoftLimitLegend) - never a hard-coded 'over 7'");
+      assert.ok(src.includes(".cal-os-short { display: none; }") && /@media \(max-width: 600px\) \{[\s\S]*?\.cal-os-long \{ display: none; \}[\s\S]*?\.cal-os-short \{ display: inline; \}/.test(src), "phone: the short '>7' stands in for 'over 7'");
+    });
+    check("P32-4 source pins: the Publish dialog lists the over-soft-limit days FIRST (a short section above the month groups) from the ONE helper trimmed to this publish's changes; the Accept audit row names them as [{ day, id }]", () => {
+      const op = src.slice(src.indexOf("const openPublishDialog = () => {"), src.indexOf("publishRef.current = openPublishDialog;"));
+      assert.ok(op.includes("setPublishOverSoft(overSoftLimitForChanges(rulesCtx && typeof overSoftLimitDays === \"function\" ? overSoftLimitDays(rulesCtx, schedule) : [], changes));"), "openPublishDialog derives the list from the helper and this publish's changes");
+      const dlgAt = src.indexOf('{showPublishDialog && !isPublicMode && (');
+      const dlg = src.slice(dlgAt, src.indexOf('data-testid="publish-skip"', dlgAt));
+      const osAt = dlg.indexOf('data-testid="publish-over-soft"'), grpAt = dlg.indexOf("describePublishDiff(publishChanges, nameOf).map");
+      assert.ok(osAt > 0 && grpAt > osAt, "the over-soft-limit section comes BEFORE the month groups");
+      assert.ok(dlg.includes("{publishOverSoft.map(o => <div key={o.day + o.id} data-over-soft={o.day + \":\" + o.id}"), "one line per day");
+      assert.ok(dlg.includes("overSoftLimitLine(o, nameOf)"), "in the helper's words");
+      const acc = src.slice(src.indexOf("const acceptMerged = async (pv, cur, next, snap) => {"), src.indexOf("// --- Holiday plan (Prompt 25 steps 3-5"));
+      assert.ok(acc.includes("overSoftLimit: overSoftLimitAudit(pv.diagnostics.overSoftLimit)"), "the Accept audit detail gains overSoftLimit: [{ day, id }]");
+      assert.ok(acc.indexOf("overSoftLimit: overSoftLimitAudit(") > acc.indexOf('logAudit("schedule.generate_accept"'), "...inside the schedule.generate_accept row");
+    });
+    check("P32-4 smoke pins: the smoke checks the badge is absent on ?public=1, the Accept audit row's overSoftLimit = the preview's days as { day, id }", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      for (const t of [
+        "Prompt 32 step 4: the over-soft-limit badge",
+        "[data-testid=over-soft-badge]",
+        "genAudit.detail.overSoftLimit",
+        'genOverSoft.firstId !== "gen-over-soft"',
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+    });
+    check("P32-4 the CLI preview (scripts/preview-generate.js) lists the over-soft-limit days FIRST - its own section after the score, before the calendar, in the helper's words", () => {
+      const pg = fs.readFileSync(path.join(ROOT, "scripts", "preview-generate.js"), "utf8");
+      const osAt = pg.indexOf('L.push("## Over the soft limit (" + dg.overSoftLimit.length + ")")'), calAt = pg.indexOf("// calendar as week rows over the merged schedule");
+      assert.ok(osAt > 0 && calAt > osAt, "the section comes before the calendar");
+      assert.ok(pg.indexOf('L.push("## Score")') < osAt, "...and after the score");
+      assert.ok(pg.includes('dg.overSoftLimit.forEach((o) => L.push("- " + md(H.overSoftLimitLine(o, nameOf))))'), "one line per day in the helper's words");
     });
   }
 
