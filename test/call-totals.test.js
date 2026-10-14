@@ -35,10 +35,11 @@
 //      weighted total into "?", never zeros; malformed inputs and a throwing read give ok:false, never a throw (the
 //      card renders inside the app - a throw would take the whole app to the crash screen); the device date
 //   T11 the card model: titles, periods, row ids / labels / order, cell text ("-", "7.5", "?"), sub rows, the month list
-//      (with "?" for months before the cache's first Davenport week and for months ending after its last - the gap
-//      scenario: the refresh caches the weeks ahead only while contiguous), notes, the data line ("its last cached
-//      week") and the footnote - the text hand-transcribed in the shapes fixture's expectedCells; every string ASCII,
-//      never "East" or "DSG"
+//      (with "?" for months before the cache's first Davenport week; months ending after its last print the counter's
+//      numbers, as the Davenport card does (item 11), under the chips' note naming that week - the gap scenario: the
+//      refresh caches the weeks ahead only while contiguous), notes, the data line ("its last cached week") and the
+//      footnote - the text hand-transcribed in the shapes fixture's expectedCells; every string ASCII, never "East" or
+//      "DSG"
 //   T12 the docs (B5): the build guide's "My call - Silvis + Davenport" section, found by its title with its number
 //      derived (24 since the 10/14 merge of main, whose Prompt 32 section is 23; the next free number after any later
 //      merge - the guide's section numbers unique and ascending)
@@ -656,16 +657,17 @@ check("T10 callTotalsCardFor on the shapes fixture: every period row's and every
     p.rows.forEach(r => { const k = KEY[r.id]; if (!r.num || r.num.worked !== e.worked[k] || r.num.scheduled !== e.scheduled[k] || r.num.all !== e.worked[k] + e.scheduled[k]) bad.push(pk + " " + r.id + " " + JSON.stringify(r.num)); });
   });
   const COL = { silvisP: "silvisP", silvisB: "silvisB", dav: "dsg", davB: "dsgB", total: "total", weighted: "weighted" };
-  // pin moved deliberately 10/14: Prompt 31 Part B review minors - a month that ends AFTER the last cached Davenport week
-  // (the counter's range.dsgTo, 12/27/2026 here) reads "?" in its Davenport, Dav. backup, Total and Wtd cells, as a month
-  // before the cache does: 12/28-12/31/2026 are not cached, so December's copied numbers are a lower bound the card must
-  // not print as a count. The Silvis cells, and every other month, keep the copied `expected` numbers.
-  const AFTER = ["2026-12"], NOT_SILVIS = ["dav", "davB", "total", "weighted"];
+  // pin moved deliberately 10/14: Prompt 31 Part B merge review fixes - item 11 parity: the Davenport app's card prints
+  // the counter's numbers for EVERY month, so a month that ends after the last cached Davenport week (the counter's
+  // range.dsgTo, 12/27/2026 here) prints them too - December is the copied `expected`'s 8 / 4 again (design 4.1), still
+  // flagged afterCache (its note names the week; T11). Every month and every cell is the copied `expected` exactly.
+  const AFTER = ["2026-12"];
   fx.expected.months.forEach((e, i) => {
     const x = m.months[i];
     if (!x || x.month !== e.month || x.pending !== (e.scheduled.total > 0)) { bad.push(e.month + " month"); return; }
     if (x.afterCache !== AFTER.includes(e.month)) bad.push(e.month + " afterCache " + x.afterCache);
-    Object.keys(COL).forEach(c => { const v = e.worked[COL[c]] + e.scheduled[COL[c]]; const t = AFTER.includes(e.month) && NOT_SILVIS.includes(c) ? "?" : v === 0 ? "-" : (Number.isInteger(v) ? String(v) : v.toFixed(1)); if (x.cells[c] !== t) bad.push(e.month + " " + c + " " + x.cells[c] + " != " + t); });
+    if (x.beforeCache !== false) bad.push(e.month + " beforeCache " + x.beforeCache);
+    Object.keys(COL).forEach(c => { const v = e.worked[COL[c]] + e.scheduled[COL[c]]; const t = v === 0 ? "-" : (Number.isInteger(v) ? String(v) : v.toFixed(1)); if (x.cells[c] !== t) bad.push(e.month + " " + c + " " + x.cells[c] + " != " + t); });
   });
   assert.deepStrictEqual(bad, []);
 });
@@ -896,7 +898,13 @@ const gapScenario = () => {
   const schedule = Object.assign(copy(SH.schedule), { "2027-11-10": { primary: "s1", backup: "s2" }, "2027-12-05": { primary: "s3", backup: "s1" } });
   return { win, sel, cachedMondays: cached.map(w => w.weekMonday), args: { feedRows, schedule, today: GAP_TODAY } };
 };
-check("T11 months that END after the last cached Davenport week show ? (Davenport, Dav. backup, Total, Wtd) - never a '-' that reads as no call - with a note naming that week; the chips say so; the data line names the last cached week. Today 2027-03-01, Davenport published 2025-12-29..2027-09-27 plus a separate 2027-11-01..2027-12-27 block (never cached - the weeks ahead only while contiguous): October (cached to 10/3 only), November and December read ?", () => {
+// pin moved deliberately 10/14: Prompt 31 Part B merge review fixes - item 11 parity: a month that ends after the last
+// cached Davenport week prints the counter's numbers (the Davenport app's card prints them for every month; "?" there
+// made the two cards differ in the normal case, Davenport published only through the cache's last week), and the month
+// list carries the chips' own note "Davenport weeks are cached through M/D/YYYY - nothing later is counted." in place
+// of "? = after the last cached Davenport week ...". Re-derived from the scenario: October = the 9/27 week's weekend
+// 10/1-10/3 = 3; November = the Silvis primary 11/10 = 1 (weighted 1); December = the Silvis backup 12/5 = 1 (weighted 0.5).
+check("T11 months that END after the last cached Davenport week show the counter's numbers - as the Davenport card does for every month (item 11) - with the chips' note naming that week under the month list, still flagged afterCache; the chips say so; the data line names the last cached week. Today 2027-03-01, Davenport published 2025-12-29..2027-09-27 plus a separate 2027-11-01..2027-12-27 block (never cached - the weeks ahead only while contiguous): October counts 10/1-10/3, November and December the Silvis days only, and the note says the cache stops at 10/3/2027", () => {
   const G = gapScenario();
   assert.deepStrictEqual([G.win.main.from, G.win.main.to, G.win.extra.from], ["2027-02-01", "2027-08-30", "2026-02-23"]);
   assert.deepStrictEqual([G.sel.past, G.sel.ahead, G.sel.skipped], [49, 4, 9], "the extra leg caches 49 weeks back and 4 ahead, and skips the 9 weeks past the gap");
@@ -905,7 +913,7 @@ check("T11 months that END after the last cached Davenport week show ? (Davenpor
   assert.ok(out && out.ok === true, NONE);
   assert.strictEqual(out.range.dsgTo, "2027-10-03");
   const davOf = (i) => ["dsg", "dsgB"].reduce((a, k) => a + out.months[i].worked[k] + out.months[i].scheduled[k], 0);
-  assert.deepStrictEqual([davOf(9), davOf(10), davOf(11)], [3, 0, 0], "the counter's own October holds only 10/1-10/3, November and December nothing - a '-' there would read as no call");
+  assert.deepStrictEqual([davOf(9), davOf(10), davOf(11)], [3, 0, 0], "the counter's own October holds only 10/1-10/3, November and December nothing (the block past the gap is not cached) - the note says so");
   const m = cardFor(G.args);
   assert.ok(m && m.ok === true && m.davenportKnown === true && m.silvisKnown === true, NOA + " " + JSON.stringify(m).slice(0, 160));
   assert.deepStrictEqual(monthsOf(m), [
@@ -918,12 +926,13 @@ check("T11 months that END after the last cached Davenport week show ? (Davenpor
     ["2027-07", "Jul *", "-", "-", "4", "-", "4", "4"],
     ["2027-08", "Aug *", "-", "-", "5", "-", "5", "5"],
     ["2027-09", "Sep *", "-", "-", "4", "-", "4", "4"],
-    ["2027-10", "Oct *", "-", "-", "?", "?", "?", "?"],
-    ["2027-11", "Nov *", "1", "-", "?", "?", "?", "?"],
-    ["2027-12", "Dec *", "-", "1", "?", "?", "?", "?"],
+    ["2027-10", "Oct *", "-", "-", "3", "-", "3", "3"],
+    ["2027-11", "Nov *", "1", "-", "-", "-", "1", "1"],
+    ["2027-12", "Dec *", "-", "1", "-", "-", "1", "0.5"],
   ]);
   assert.deepStrictEqual([m.months.filter(x => x.afterCache).map(x => x.month), m.months.filter(x => x.beforeCache).map(x => x.month)], [["2027-10", "2027-11", "2027-12"], []]);
-  assert.deepStrictEqual(m.monthNotes, ["* includes scheduled days (after today)", "? = after the last cached Davenport week (10/3/2027) - not counted."]);
+  assert.deepStrictEqual(m.monthNotes, ["* includes scheduled days (after today)", "Davenport weeks are cached through 10/3/2027 - nothing later is counted."]);
+  assert.ok(!m.months.some(x => Object.values(x.cells).includes("?")), "no month cell reads ? when both sites are known and the cache starts before the year");
   assert.deepStrictEqual(m.periods.map(p => [p.key, p.startsNote]), [["month", ""], ["ytd", ""], ["year", "Davenport weeks are cached through 10/3/2027 - nothing later is counted."], ["rolling12", "Silvis days start 9/14/2026."]]);
   assert.strictEqual(m.dataLine, "Data: Silvis from 9/14/2026 to 12/5/2027; Davenport from 12/29/2025 to 10/3/2027 (its last cached week; cache refreshed 3/1/2027).");
   assert.deepStrictEqual(m.notes, [], "a cache end is a note on the months and chips, not an unavailable site");

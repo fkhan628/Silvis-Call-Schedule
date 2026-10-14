@@ -10,10 +10,12 @@
     "expectedCells is the card's text HAND-TRANSCRIBED from that `expected` (cells: worked / scheduled / total; months:",
     "Silvis P, Silvis B, Davenport, Dav. backup, Total, Wtd). Variants: Davenport unknown (eastIdByCode null), Silvis",
     "unknown (scheduleKnown false), and a cache whose first week is 2026-08-31 (months before it show ?).",
-    "pin moved deliberately 10/14: Prompt 31 Part B review minors - a month that ends after the last cached Davenport week",
-    "(12/27/2026 here) shows ? in its Davenport, Dav. backup, Total and Wtd cells (December: 12/28-12/31 are not cached),",
-    "with the note '? = after the last cached Davenport week (12/27/2026) - not counted.'; the full year's chip note adds",
-    "'Davenport weeks are cached through 12/27/2026 - nothing later is counted.'; the data line says 'its last cached week'."
+    "pin moved deliberately 10/14: Prompt 31 Part B merge review fixes (item 11 parity) - a month that ends after the last",
+    "cached Davenport week (12/27/2026 here; December) prints the counter's numbers, as the Davenport app's card does for",
+    "every month - December is the copied `expected`'s Dav. backup 8, Total 8, Wtd 4 (design 4.1) - and the month list",
+    "carries the full year chip's note 'Davenport weeks are cached through 12/27/2026 - nothing later is counted.' (it read",
+    "? with '? = after the last cached Davenport week (12/27/2026) - not counted.' after the review minors); the data line",
+    "says 'its last cached week'."
   ],
   "expectedFrom": "test/fixtures/call-totals-card-synthetic-2026-10-14.json",
   "today": "2026-10-14",
@@ -145,9 +147,9 @@
       ["2026-09","Sep","1","1","10","1","13","12"],
       ["2026-10","Oct *","2","2","8","3","15","12.5"],
       ["2026-11","Nov *","-","1","3","-","4","3.5"],
-      ["2026-12","Dec *","-","-","?","?","?","?"]
+      ["2026-12","Dec *","-","-","-","8","8","4"]
     ],
-    "monthNotes": ["* includes scheduled days (after today)","? = after the last cached Davenport week (12/27/2026) - not counted."],
+    "monthNotes": ["* includes scheduled days (after today)","Davenport weeks are cached through 12/27/2026 - nothing later is counted."],
     "notes": [],
     "dataLine": "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 12/29/2025 to 12/27/2026 (its last cached week; cache refreshed 10/14/2026).",
     "footnote": "Worked = on or before 10/14/2026 (this device's date); scheduled = after it. Every number counts role-days, so one date can count twice (a Davenport day-call day and a weeknight, or a Davenport day and a Silvis day). Davenport days are counted the way the Davenport app's Stats > Billing counts them: each day of a service week, each weeknight, Fri + Sat + Sun for a weekend, 2 days for a covered holiday; backup-week roles are listed apart. Silvis: one 07:00-07:00 day = 1. Weighted: every backup role (Silvis backup days, Davenport backup-week days) counts 0.5.",
@@ -214,7 +216,7 @@
         ["2026-09","Sep","?","?","10","1","?","?"],
         ["2026-10","Oct *","?","?","8","3","?","?"],
         ["2026-11","Nov *","?","?","3","-","?","?"],
-        ["2026-12","Dec *","?","?","?","?","?","?"]
+        ["2026-12","Dec *","?","?","-","8","?","?"]
       ],
       "dataLine": "Data: Silvis: not available (the Silvis schedule is not loaded); Davenport from 12/29/2025 to 12/27/2026 (its last cached week; cache refreshed 10/14/2026)."
     },
@@ -232,9 +234,9 @@
         ["2026-09","Sep","1","1","10","1","13","12"],
         ["2026-10","Oct *","2","2","8","3","15","12.5"],
         ["2026-11","Nov *","-","1","3","-","4","3.5"],
-        ["2026-12","Dec *","-","-","?","?","?","?"]
+        ["2026-12","Dec *","-","-","-","8","8","4"]
       ],
-      "monthNotes": ["* includes scheduled days (after today)","? = before the first cached Davenport week (8/31/2026) - not counted.","? = after the last cached Davenport week (12/27/2026) - not counted."],
+      "monthNotes": ["* includes scheduled days (after today)","? = before the first cached Davenport week (8/31/2026) - not counted.","Davenport weeks are cached through 12/27/2026 - nothing later is counted."],
       "ytdStartsNote": "Davenport weeks are cached from 8/31/2026 - nothing earlier is counted. Silvis days start 9/14/2026.",
       "dataLine": "Data: Silvis from 9/14/2026 to 1/3/2027; Davenport from 8/31/2026 to 12/27/2026 (its last cached week; cache refreshed 10/14/2026)."
     }

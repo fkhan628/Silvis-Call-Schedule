@@ -261,11 +261,14 @@ function callTotalsInputs(args) {
 //   strong, sub, top, worked, scheduled, all, num }] }], monthCols:[{ id, label }], months:[{ month, label, pending,
 //   beforeCache, afterCache, cells:{ colId: text } }], monthNotes, notes, dataLine, footnote }.
 //   Cells are text ("?", "-", "3", "7.5"); `num` holds the numbers ({ worked, scheduled, all }) of a known row, else null.
-//   A month that starts before the first cached Davenport week, or ends after the last one (range.dsgTo, its Sunday),
-//   shows "?" in its Davenport cells and totals (the cache does not reach all of it - a "-" or a part count there would
-//   read as the month's call); the period chips say so in their start note. The cache's last week is not always
-//   Davenport's last published one: the in-app refresh caches the weeks ahead only while contiguous (eastExtraWeeks),
-//   so the data line says "its last cached week".
+//   A month that starts before the first cached Davenport week (range.dsgFrom; beforeCache) shows "?" in its Davenport
+//   cells and totals: the Davenport app holds weeks there that the cache lacks, so a "-" or a part count would read as
+//   the month's call. A month that ends after the last cached week (range.dsgTo, its Sunday; afterCache) shows the
+//   counter's numbers, as the Davenport app's card does for every month (item 11: the same numbers for the same
+//   period), and the month list carries the period chips' own note naming that week (merge review 10/14). The cache's
+//   last week is not always Davenport's last published one: the in-app refresh caches the weeks ahead only while
+//   contiguous (eastExtraWeeks), so the data line says "its last cached week" and, past such a gap, those months and
+//   chips count the cached weeks only - the note says where they stop.
 function callTotalsCardModel(totals, inputs) {
   if (!totals || totals.ok !== true) return { ok: false, title: CT_TITLE, subtitle: CT_SUBTITLE, error: totals && totals.error ? String(totals.error) : "the count was refused" };
   const inp = inputs || {};
@@ -274,6 +277,7 @@ function callTotalsCardModel(totals, inputs) {
   const davFrom = dav && ctIsDay(range.dsgFrom) ? range.dsgFrom : null;
   const davTo = dav && ctIsDay(range.dsgTo) ? range.dsgTo : null;
   const known = (site) => (site === "s" ? sil : site === "d" ? dav : sil && dav);
+  const throughNote = davTo ? "Davenport weeks are cached through " + ctMdy(davTo) + " - nothing later is counted." : "";
   const periods = CT_PERIODS.map(([key, label]) => {
     const p = totals.periods[key];
     const subsOn = dav && p.worked.dsgB + p.scheduled.dsgB > 0;
@@ -284,7 +288,7 @@ function callTotalsCardModel(totals, inputs) {
     });
     const starts = [];
     if (davFrom && davFrom > p.from) starts.push("Davenport weeks are cached from " + ctMdy(davFrom) + " - nothing earlier is counted.");
-    if (davTo && davTo < p.to) starts.push("Davenport weeks are cached through " + ctMdy(davTo) + " - nothing later is counted.");
+    if (davTo && davTo < p.to) starts.push(throughNote);
     if (sil && ctIsDay(range.silvisFrom) && range.silvisFrom > p.from) starts.push("Silvis days start " + ctMdy(range.silvisFrom) + ".");
     return { key, label, from: p.from, to: p.to, rangeText: ctMdy(p.from) + " - " + ctMdy(p.to), startsNote: starts.join(" "), rows };
   });
@@ -296,12 +300,12 @@ function callTotalsCardModel(totals, inputs) {
     if (beforeCache) anyBefore = true;
     if (afterCache) anyAfter = true;
     const cells = {};
-    CT_MONTH_COLS.forEach(c => { cells[c.id] = ctCell(m.worked[c.k] + m.scheduled[c.k], known(c.site) && !((beforeCache || afterCache) && c.site !== "s")); });
+    CT_MONTH_COLS.forEach(c => { cells[c.id] = ctCell(m.worked[c.k] + m.scheduled[c.k], known(c.site) && !(beforeCache && c.site !== "s")); });
     return { month: m.month, label: CT_MONTH_NAMES[Number(m.month.slice(5, 7)) - 1] + (pending ? " *" : ""), pending, beforeCache, afterCache, cells };
   });
   const monthNotes = ["* includes scheduled days (after today)"];
   if (anyBefore) monthNotes.push("? = before the first cached Davenport week (" + ctMdy(davFrom) + ") - not counted.");
-  if (anyAfter) monthNotes.push("? = after the last cached Davenport week (" + ctMdy(davTo) + ") - not counted.");
+  if (anyAfter) monthNotes.push(throughNote);
   const davWhy = (inp.davenport && inp.davenport.why) || "no data", silWhy = (inp.silvis && inp.silvis.why) || "no data";
   const notes = [];
   if (!dav) notes.push("Davenport numbers unavailable - " + davWhy + "; its cells and the totals show ?.");

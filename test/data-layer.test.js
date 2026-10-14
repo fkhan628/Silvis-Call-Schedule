@@ -4395,7 +4395,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(byId(t, "ct-month-note").map(text), m.monthNotes);
       assert.strictEqual(byId(t, "ct-months-toggle")[0].props["aria-expanded"], true);
     });
-    checkC("P31B CallTotalsCard behaviour: Davenport unknown (the cache read failed) - the reason as a ct-note, every Davenport cell and the totals '?', the Silvis cells unchanged; a month before the first cached week, and one ending after the last, reads '?' with its note", () => {
+    checkC("P31B CallTotalsCard behaviour: Davenport unknown (the cache read failed) - the reason as a ct-note, every Davenport cell and the totals '?', the Silvis cells unchanged; a month before the first cached week reads '?' with its note; one ending after the last prints its numbers (item 11 parity) under the note naming the last cached week", () => {
       const m = modelOf({ feedState: "failed" });
       const t = render(m, false);
       assert.deepStrictEqual(byId(t, "ct-note").map(text), ["Davenport numbers unavailable - the Davenport cache could not be read; its cells and the totals show ?."]);
@@ -4407,10 +4407,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const jan = byId(lt, "ct-month").find(r => r.props["data-month"] === "2026-01");
       assert.deepStrictEqual(cells(jan), ["Jan", "-", "-", "?", "?", "?", "?"], "a month before the cache reads ? for Davenport and the totals");
       assert.ok(byId(lt, "ct-month-note").map(text).some(s => /before the first cached Davenport week \(8\/31\/2026\)/.test(s)), "and its note names the first cached week");
-      // Prompt 31 Part B review minors (10/14): a month ending after the last cached week (12/27/2026) reads ? too
+      // pin moved deliberately 10/14: Prompt 31 Part B merge review fixes - item 11 parity: a month ending after the last
+      // cached week (12/27/2026) prints the counter's numbers, as the Davenport app's card does for every month (it read ?
+      // after the review minors); December = the 12/21 backup week: Dav. backup 8 (day call 6 + Christmas 2), Total 8,
+      // Wtd 4; still marked data-after-cache, under the chips' note naming the last cached week
       const dec = byId(lt, "ct-month").find(r => r.props["data-month"] === "2026-12");
-      assert.deepStrictEqual([cells(dec), dec.props["data-after-cache"], jan.props["data-before-cache"], jan.props["data-after-cache"]], [["Dec *", "-", "-", "?", "?", "?", "?"], "1", "1", "0"], "December (12/28-12/31 not cached) reads ? for Davenport and the totals, marked data-after-cache");
-      assert.ok(byId(lt, "ct-month-note").map(text).some(s => /after the last cached Davenport week \(12\/27\/2026\)/.test(s)), "and its note names the last cached week");
+      assert.deepStrictEqual([cells(dec), dec.props["data-after-cache"], jan.props["data-before-cache"], jan.props["data-after-cache"]], [["Dec *", "-", "-", "-", "8", "8", "4"], "1", "1", "0"], "December (12/28-12/31 not cached) prints the counter's numbers, marked data-after-cache");
+      assert.ok(byId(lt, "ct-month-note").map(text).includes("Davenport weeks are cached through 12/27/2026 - nothing later is counted."), "and the note under the month list names the last cached week");
+      assert.ok(!byId(lt, "ct-month-note").map(text).some(s => /after the last cached/.test(s)), "no '? = after the last cached ...' note is left");
     });
     checkC("P31B CallTotalsCard behaviour: a refused count (no roster entry) and a page whose modules are older (model null) render ONE 'Totals unavailable - <reason>' line (data-state unavailable) - no table, no chip, no number", () => {
       const refusedWithRows = Object.assign(modelOf(), { ok: false, error: "the count was refused (harness)" }); // ok:false wins over any periods it carries

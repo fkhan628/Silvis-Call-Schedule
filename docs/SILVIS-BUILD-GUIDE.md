@@ -2688,12 +2688,18 @@ report and apply). The binding design is `PART-B-DESIGN.md` with its critic corr
   "ends before", so a month never undercounts silently) - with a note naming that week; each period's range line adds
   "Davenport weeks are cached from M/D/YYYY - nothing earlier is counted." when the cache starts after the period does, and
   "Silvis days start M/D/YYYY." likewise.
-- **Months after the cache** (review 10/14): likewise a month that ends after the last cached Davenport week (the counter's
-  `range.dsgTo`, that week's Sunday) reads "?" in the same four cells - a month the cache reaches only in part too - with
-  the note "? = after the last cached Davenport week (M/D/YYYY) - not counted."; the range line of a period that ends
-  after it adds "Davenport weeks are cached through M/D/YYYY - nothing later is counted." (`afterCache` in the model,
-  `data-after-cache` on the row). On 3/1/2027 with Davenport published through the 9/27/2027 week and again from
-  11/1/2027 after a gap, the cache ends 10/3/2027 and October, November and December read "?", never "-" (pinned).
+- **Months after the cache** (merge review 10/14 - item 11 parity): a month that ends after the last cached Davenport week
+  (the counter's `range.dsgTo`, that week's Sunday) prints the counter's numbers, exactly as the Davenport app's card prints
+  them for every month - in the normal case (the cache reaches Davenport's last published week) nothing later is published,
+  so the two cards agree month by month. The month list then carries the note "Davenport weeks are cached through M/D/YYYY -
+  nothing later is counted.", the same sentence the range line of a period that ends after it adds (`afterCache` in the
+  model, `data-after-cache` on the row). Only months BEFORE the cache read "?": the Davenport app holds weeks there that
+  the cache lacks. (The 10/14 review minors had made these months "?" too; that put "?" in Khan's live November and
+  December 2026 where the Davenport card prints numbers, so it was reverted - a decision for Faraz to confirm, 24.6.) Past
+  a gap the numbers are the cached weeks only and the note says where they stop: on 3/1/2027 with Davenport published
+  through the 9/27/2027 week and again from 11/1/2027, the cache ends 10/3/2027; October counts 10/1-10/3, November and
+  December count no Davenport day - there, and on the Full year chip, the Silvis card is lower than the Davenport card
+  (pinned).
 - **The data line** is built from the counter's own ranges and the cache's newest published `fetched_at` - never a
   hard-coded date: "Data: Silvis from <first day> to <last day>; Davenport from <first Monday> to <last Sunday> (its last
   cached week; cache refreshed <date>)." Expected live after the first Refresh: Silvis from 9/14/2026, Davenport from
@@ -2792,8 +2798,13 @@ report and apply). The binding design is `PART-B-DESIGN.md` with its critic corr
   min(week_monday), max(week_monday), count(*), max(fetched_at) from east_feed;` - a cache starting later than 74 days before
   today would also give Khan's `?east=1` feed past Davenport events after the backfill); merge -> CI builds and deploys;
   then **Setup > East feed > Refresh from Davenport** once (the backfill). Until Part A's daily server job lands, the card is
-  as fresh as the last Refresh. Cowork then compares the two live cards for 2026 (item 11); the Davenport card counts Silvis
-  through its own Silvis feed, which must reach the whole year.
+  as fresh as the last Refresh. Cowork then compares the two live cards for 2026 (item 11) - the four chips and all twelve
+  month rows; the Davenport card counts Silvis through its own Silvis feed, which must reach the whole year. Once the
+  backfill has run, a difference is expected only where a note names it: a "?" month row before the cache's first week
+  (none for 2026 after the backfill), and, when the Davenport app has published a block past a gap that the refresh does
+  not cache (24.5), the months and chips after the last cached week the note names (the Silvis card counts the cached
+  weeks only).
 - **Defaults taken, for Faraz to confirm** (the design's section 7): the device date; the gate = `eastVacationPerson` (Khan
   only); the fixed 0.5; the extra leg 12 months back and ahead only while contiguous (3 years at most); no delete of a week
-  the Davenport app removed (Part A); the data line from the real ranges.
+  the Davenport app removed (Part A); the data line from the real ranges; the month rows after the last cached Davenport
+  week print the counter's numbers under a note (parity with the Davenport card), not "?" (24.3, merge review 10/14).
