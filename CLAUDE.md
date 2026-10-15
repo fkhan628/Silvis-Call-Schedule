@@ -36,9 +36,15 @@ One calendar day = one 24-hour shift (07:00 → 07:00). Two roles per day: `prim
 In-memory schedule: `{ "YYYY-MM-DD": { primary, backup, primaryLocked, backupLocked, source, externalCover, note } }`.
 Persisted one row per day in `schedule_days` with compare-and-swap on `version`. Fri/Sat/Sun form a *weekend unit*
 (block / split / daily). Fairness is an **equal share per role** — of the open primary slots and, separately, of the open
-backup slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22). Fill primary
-first, then backup.
-One 24-h day = **one shift** — no partial or weighted shifts; totals are a running yearly tally. Time off is
+backup slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22), balanced across
+roles by a **weighted load** (primary 1, backup 0.5 - `groupRules.shiftAccounting.weights`, read only through
+`rules.shiftWeightsOf`; Prompt 32, Faraz 10/9-10/11): a surgeon short of his primary share makes it up in backups, two per
+primary, and the reverse - never pushed over a primary limit. Monthly caps: the group's **soft 7** primary days a month
+(`defaultMonthlyCap { preferred: 7 }`, no hard group cap; `null` / an absent key = the group default, `"none"` = no limit; a
+surgeon's own number is hard - Burchett 7, Fierce 14 with East days); days over 7 are flagged ("over 7"), never refused.
+Fill primary first, then backup.
+One 24-h day = **one shift** — no partial shifts; totals are a running yearly tally (raw per role, plus the weighted load
+beside them since Prompt 32). Time off is
 **vacations only** (no no-call days), self-entered with **no approval**, refused over a day the surgeon is already on call
 (DB trigger + client check — trade first), and refused when fewer than `groupRules.vacations.minSurgeonsAround` (default 2)
 active surgeons would stay around on one of its days — the vacation guard (Prompt 27, 9/30): the scheduler may override after a
@@ -61,7 +67,9 @@ roster ids / days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
 every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
 applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
-approvals, weighted accounting.
+approvals, Davenport's split-shift accounting (Silvis weighs whole days instead - the weighted load above, Prompt 32).
+The East-code surgeon (Khan today) sees a "My call - Silvis + Davenport" card in Mine (Prompt 31 Part B): Silvis days plus
+Davenport call counted by `call-totals.js`, the Davenport app's own counter ported verbatim, so both apps' cards agree.
 Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
 worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30. Its database part was applied, the VAPID keys set and
 send-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client.
@@ -83,14 +91,19 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
 ## Deploy path — repo (the PWA)
 
 - Edit **only** `index-source.html` (one `<script type="text/babel">` JSX block) and the plain-JS modules
-  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `app-styles.js`, the push worker `sw.js`).
+  (`config.js`, `rules.js`, `generator.js`, `east-feed.js`, `helpers.js`, `importer.js`, `app-styles.js`, the push worker
+  `sw.js`, and `call-totals.js` - its verbatim block is the Davenport app's call-totals counter, ported from Davenport commit
+  eff3b81; never edit that block here - change Davenport first, re-port, and run `CT_REQUIRE_CLONE=1 node
+  test/call-totals.test.js` beside the davenport-ref clone; guide §24).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on a push to `main` that touches a runtime
   input (build.yml's paths filter; a test/docs-only push runs only test.yml), commits back with `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 22 suites: rules, east-feed, data-layer,
-  contrast, schema, importer, week-rows, exports, totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts, offers,
-  offers-timeline, edge-functions, ci, privacy, push, water-fill — then the generator regression as the 23rd, then the build; `test/ci.test.js` keeps the chain and
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 24 suites: rules, east-feed, data-layer,
+  contrast, schema, importer, week-rows, exports, totals, call-totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts,
+  offers, offers-timeline, edge-functions, ci, privacy, push, water-fill, painting — then the generator regression as the 25th, then the build; `test/ci.test.js` keeps the chain and
   build.yml's steps aligned and pins build.yml's paths filter to exactly the runtime inputs (`.github/workflows/test.yml`
-  runs the chain on every push and PR since 10/2), so trust it over this list);
+  runs the chain on every push and PR since 10/2), so trust it over this list; since 10/13, on the new laptop where
+  `test/schema.test.js` takes 10+ hours, the FEATURE branch is pushed and test.yml's green run of the whole chain stands in for
+  the local schema run - every other suite, the regression and the build still run locally before main moves);
   every gate must pass (one babel block, classic React runtime, zero injected imports, no jsx-runtime artifacts, no mojibake).
   For anything touching index-source.html also run `npm run smoke` (Playwright smoke harness, test/ui/smoke.mjs). `build.js`
   writes `index.html` locally as a byproduct — `git restore index.html` before committing (CI owns it).
