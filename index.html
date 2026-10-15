@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-marN6ND3oBWnnAH9yYhjxqlPx0fKXUJabR2qYt8px7s=' 'sha256-4Ckm8DRDM7k/7A4w/6OdRJPDSOez7XGdffqytPJAAcY=' 'sha256-DP6UyBMreyRTj/H4mNuy+Lyet/dYyBQVS2Mz67ch8G4=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-UpVD5XenpMCzd8kSmvPV15evQourrGgJ2byjmckW9U4=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-T5ldFuD3uw+tdX933uC7zfcBjHEOrcogbDgQz9Gw9UE=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -186,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.14a";
+    var APP_VERSION = "2026.10.14b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -293,8 +293,9 @@
     // Cache-bust uses APP_VERSION (defined at the top of this file). The vendored
     // libraries come first (React before ReactDOM; supabase.js before config.js,
     // which captures its global) - vendor/README.md records versions and hashes.
+    // call-totals.js comes last (Prompt 31 Part B): it reuses helpers.js's fmt / parse / addD.
     var _v = APP_VERSION;
-    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js'].forEach(function(f) {
+    ['vendor/react.production.min.js','vendor/react-dom.production.min.js','vendor/supabase.js','config.js','helpers.js','rules.js','east-feed.js','generator.js','importer.js','app-styles.js','call-totals.js'].forEach(function(f) {
       document.write('<script src="'+f+'?v='+_v+'"><\/script>');
     });
   </script>
@@ -1268,6 +1269,7 @@ function CallSchedule() {
   };
   const payVisible = !isPublicMode && !profileLoadFailed && (isScheduler || isCoordinator || (userProfile === null || userProfile === void 0 ? void 0 : userProfile.role) === "surgeon" && !!mySurgeon);
   const payTotalsRole = payVisible && isScheduler ? "scheduler" : payVisible && isCoordinator ? "office" : null;
+  const callTotalsShown = !isPublicMode && !profileLoadFailed && !!authUser && !!mySurgeon && !isCoordinator && !isViewer && eastVacationPerson(surgeons.find(s => s.id === mySurgeon), surgeonRules && surgeonRules[mySurgeon] ? surgeonRules[mySurgeon].eastFeed : null);
   const [paySettingsRow, setPaySettingsRow] = useState(null);
   const [payLogRows, setPayLogRows] = useState([]);
   const [payState, setPayState] = useState({
@@ -4073,8 +4075,10 @@ function CallSchedule() {
     if (!isScheduler) return;
     setEastRefreshing(true);
     try {
-      const fromMon = fmt(monOf(addD(parse(todayCentral()), -28)));
-      const toMon = fmt(addD(parse(fromMon), 7 * 30));
+      const eastWin = eastRefreshWindows(todayCentral());
+      if (!eastWin) throw new Error("no refresh window for " + todayCentral());
+      const fromMon = eastWin.main.from;
+      const toMon = eastWin.main.to;
       const vacationCodes = surgeons.filter(s => {
         const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
         return eastVacationPerson(s, ef);
@@ -4188,12 +4192,52 @@ function CallSchedule() {
           }
         }
       }
+      const extra = {
+        from: eastWin.extra.from,
+        to: eastWin.extra.to,
+        weeks: 0,
+        past: 0,
+        ahead: 0,
+        skipped: 0,
+        error: null
+      };
+      if (cacheRows) {
+        try {
+          const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});
+          const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);
+          extra.skipped = sel.skipped;
+          const extraRows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => _objectSpread(_objectSpread({}, r), {}, {
+            fetched_at: more.fetchedAt
+          }));
+          if (extraRows.length) {
+            const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, {
+              method: "POST",
+              headers: _objectSpread(_objectSpread({}, dbAuthHeaders()), {}, {
+                Prefer: "resolution=merge-duplicates,return=minimal"
+              }),
+              body: JSON.stringify(extraRows)
+            });
+            if (!res.ok) {
+              const t = await res.text().catch(() => "");
+              throw new Error("couldn't cache them: " + describeDbError(t));
+            }
+            extra.weeks = extraRows.length;
+            extra.past = sel.past;
+            extra.ahead = sel.ahead;
+            await loadEastTables();
+          }
+        } catch (e) {
+          console.warn("East feed: the Davenport weeks outside the refresh window were not cached - cache kept", e);
+          extra.error = errText(e).slice(0, 200);
+        }
+      } else extra.error = "the cache did not reload - skipped";
       const resetText = x => `${fmtMD(x.start)}-${fmtMD(x.end)} (was ${x.decision}; ${x.reason === "changed" ? "dates changed" : "removed from Davenport"})`;
       const resetWord = reviewResets.length || reviewResetFailures.length ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.` : "";
       const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)" : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted" : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)" : "forecast prune FAILED";
       const rewrittenWord = rewrittenRows.length ? `; ${rewrittenRows.length} older cached week(s) rewritten (East vacation ranges re-hosted or cleared)` : "";
       const vacationSummary = !vacationCodes.length ? "no East vacation codes" : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept" : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}` : `no East vacations read${unresolvedWord}`;
-      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}`, {
+      const extraSummary = extra.error ? `; Davenport weeks outside the window NOT cached: ${extra.error}` : `; ${extra.weeks} more published week(s) cached (${extra.from}..${extra.to}${extra.skipped ? `; ${extra.skipped} after a gap skipped` : ""})`;
+      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${extraSummary}`, {
         from: fromMon,
         to: toMon,
         weeks: weekRows.length,
@@ -4209,11 +4253,13 @@ function CallSchedule() {
           error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null
         },
         reviewResets,
-        reviewResetFailures
+        reviewResetFailures,
+        extra
       });
       const pruneWord = !publishedCoverage ? "" : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.` : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.` : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
       const vacationWord = !vacationCodes.length ? "" : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}` : feed.vacations ? plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.` : ` No East vacations read${unresolvedWord}.`;
-      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}` : `East feed refreshed: Davenport has no published weeks in that window - the cached weeks are unchanged.${vacationWord}${resetWord}`, feed.vacationsError || reviewResetFailures.length ? "error" : weekRows.length ? forecastDeleteError ? "error" : "success" : "info");
+      const extraWord = extra.error ? ` Davenport weeks outside the refresh window could NOT be cached (the call totals may undercount): ${extra.error}.` : (extra.weeks ? ` ${extra.weeks} more published week(s) cached.` : "") + (extra.skipped ? ` ${extra.skipped} later week(s) after a gap in Davenport's published weeks not cached (they follow once the weeks between are published).` : "");
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${resetWord}${extraWord}`, feed.vacationsError || reviewResetFailures.length || extra.error ? "error" : weekRows.length ? forecastDeleteError ? "error" : "success" : "info");
     } catch (e) {
       console.warn("East feed refresh failed", e);
       showToast("East feed refresh FAILED - the cached weeks are unchanged. " + errText(e).slice(0, 120), "error");
@@ -13215,6 +13261,20 @@ function CallSchedule() {
       onUpdate: updatePayLog,
       onDelete: deletePayLog,
       onRefresh: () => loadPay(payYear, true)
+    }), callTotalsShown && pid === mySurgeon && React.createElement(CallTotalsCard, {
+      key: "ct-" + pid,
+      css: css,
+      dk: dk,
+      model: typeof callTotalsCardFor === "function" ? callTotalsCardFor({
+        feedRows: eastFeedRows,
+        feedState: eastLoadState.feed,
+        idByCode: eastIdByCode,
+        schedule,
+        scheduleKnown: daysShown,
+        roster: surgeons,
+        personId: mySurgeon,
+        today: callTotalsDeviceToday()
+      }) : null
     }), React.createElement("div", {
       style: css.card,
       "data-testid": "mine-offers"
@@ -21059,6 +21119,262 @@ function PayTotalsPanel({
     style: td
   }, payMoney(r.ytd.projectedCents))))))));
 }
+function CallTotalsCard({
+  css,
+  dk,
+  model
+}) {
+  const T = THEME[dk ? "dark" : "light"];
+  const [pick, setPick] = React.useState("month");
+  const [showMonths, setShowMonths] = React.useState(false);
+  const ok = !!(model && model.ok === true && Array.isArray(model.periods) && model.periods.length);
+  const small = {
+    fontSize: 11,
+    color: T.muted,
+    lineHeight: 1.5
+  };
+  const head = React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "baseline",
+      gap: 8,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.cardT), {}, {
+      margin: 0
+    })
+  }, model && model.title ? model.title : "My call"), model && model.subtitle && React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: T.muted
+    }
+  }, model.subtitle));
+  if (!ok) return React.createElement("div", {
+    style: css.card,
+    "data-testid": "call-totals-card",
+    "data-state": "unavailable"
+  }, head, React.createElement("div", {
+    "data-testid": "ct-unavailable",
+    style: {
+      fontSize: 12,
+      color: T.open,
+      lineHeight: 1.5
+    }
+  }, "Totals unavailable - ", model ? model.error || "the count was refused" : "this page is older than its modules - reload the app"));
+  const period = model.periods.find(p => p && p.key === pick) || model.periods[0];
+  const rows = Array.isArray(period.rows) ? period.rows : [];
+  const months = Array.isArray(model.months) ? model.months : [];
+  const cols = Array.isArray(model.monthCols) ? model.monthCols : [];
+  const th = {
+    textAlign: "right",
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    padding: "4px 4px",
+    whiteSpace: "nowrap"
+  };
+  const pad = "5px 4px";
+  return React.createElement("div", {
+    style: css.card,
+    "data-testid": "call-totals-card",
+    "data-state": "ok",
+    "data-period": period.key,
+    "data-today": model.today
+  }, head, React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      marginBottom: 6
+    }
+  }, model.periods.map(p => React.createElement("button", {
+    key: p.key,
+    type: "button",
+    "data-testid": "ct-period-" + p.key,
+    "aria-pressed": p.key === period.key,
+    onClick: () => setPick(p.key),
+    style: css.mini(p.key === period.key)
+  }, p.label))), React.createElement("div", {
+    "data-testid": "ct-range",
+    style: small
+  }, period.rangeText, period.startsNote ? " - " + period.startsNote : ""), (model.notes || []).map((n, i) => React.createElement("div", {
+    key: i,
+    "data-testid": "ct-note",
+    style: {
+      fontSize: 12,
+      color: T.warnText,
+      lineHeight: 1.5,
+      marginTop: 4
+    }
+  }, n)), React.createElement("table", {
+    "data-testid": "ct-table",
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      fontSize: 12,
+      marginTop: 8
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: _objectSpread(_objectSpread({}, th), {}, {
+      textAlign: "left"
+    })
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, period.label)), React.createElement("th", {
+    style: th
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, "Worked")), React.createElement("th", {
+    style: th
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, "Scheduled")), React.createElement("th", {
+    style: th
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, "Total")))), React.createElement("tbody", null, rows.map(r => {
+    const rule = r.top ? "1px solid " + T.border : undefined;
+    const text = v => React.createElement("span", {
+      style: {
+        color: r.sub ? T.muted : T.text,
+        fontWeight: r.strong ? 700 : 400,
+        fontSize: r.sub ? 11 : 12
+      }
+    }, v);
+    const num = {
+      textAlign: "right",
+      whiteSpace: "nowrap",
+      fontVariantNumeric: "tabular-nums",
+      padding: r.sub ? "2px 4px" : pad,
+      borderTop: rule
+    };
+    return React.createElement("tr", {
+      key: r.id,
+      "data-testid": "ct-row",
+      "data-row": r.id,
+      "data-worked": r.worked,
+      "data-scheduled": r.scheduled,
+      "data-all": r.all,
+      "data-sub": r.sub ? "1" : "0"
+    }, React.createElement("td", {
+      style: {
+        whiteSpace: "normal",
+        padding: r.sub ? "2px 4px 2px 16px" : pad,
+        borderTop: rule
+      }
+    }, text(r.label)), React.createElement("td", {
+      style: num
+    }, text(r.worked)), React.createElement("td", {
+      style: num
+    }, text(r.scheduled)), React.createElement("td", {
+      style: num
+    }, text(r.all)));
+  }))), React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement("button", {
+    type: "button",
+    "data-testid": "ct-months-toggle",
+    "aria-expanded": showMonths,
+    onClick: () => setShowMonths(v => !v),
+    style: css.mini(showMonths)
+  }, "Month by month (", model.year, ")")), showMonths && React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "table-wrap",
+    style: _objectSpread(_objectSpread({}, css.tableWrap), {}, {
+      marginTop: 6
+    })
+  }, React.createElement("table", {
+    "data-testid": "ct-months",
+    style: {
+      width: "100%",
+      minWidth: 320,
+      borderCollapse: "collapse",
+      fontSize: 11.5
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: _objectSpread(_objectSpread({}, th), {}, {
+      textAlign: "left",
+      padding: "4px 6px"
+    })
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, "Month")), cols.map(c => React.createElement("th", {
+    key: c.id,
+    style: _objectSpread(_objectSpread({}, th), {}, {
+      padding: "4px 6px"
+    })
+  }, React.createElement("span", {
+    style: {
+      color: T.muted
+    }
+  }, c.label))))), React.createElement("tbody", null, months.map(mo => React.createElement("tr", {
+    key: mo.month,
+    "data-testid": "ct-month",
+    "data-month": mo.month,
+    "data-pending": mo.pending ? "1" : "0",
+    "data-before-cache": mo.beforeCache ? "1" : "0",
+    "data-after-cache": mo.afterCache ? "1" : "0"
+  }, React.createElement("td", {
+    style: {
+      whiteSpace: "nowrap",
+      padding: "4px 6px",
+      borderTop: "1px solid " + T.border
+    }
+  }, React.createElement("span", {
+    style: {
+      color: T.text,
+      fontWeight: 600
+    }
+  }, mo.label)), cols.map(c => React.createElement("td", {
+    key: c.id,
+    "data-col": c.id,
+    style: {
+      textAlign: "right",
+      whiteSpace: "nowrap",
+      fontVariantNumeric: "tabular-nums",
+      padding: "4px 6px",
+      borderTop: "1px solid " + T.border
+    }
+  }, React.createElement("span", {
+    style: {
+      color: T.text
+    }
+  }, mo.cells ? mo.cells[c.id] : "?")))))))), (model.monthNotes || []).map((n, i) => React.createElement("div", {
+    key: i,
+    "data-testid": "ct-month-note",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      fontSize: 10.5,
+      marginTop: 2
+    })
+  }, n))), React.createElement("div", {
+    "data-testid": "ct-data-line",
+    style: _objectSpread(_objectSpread({}, small), {}, {
+      marginTop: 10
+    })
+  }, model.dataLine), React.createElement("div", {
+    "data-testid": "ct-footnote",
+    style: {
+      fontSize: 10.5,
+      color: T.muted,
+      lineHeight: 1.5,
+      marginTop: 4
+    }
+  }, model.footnote));
+}
 function RosterEditor({
   css,
   roster,
@@ -24752,7 +25068,11 @@ function EastFeedCard({
   const meta = ctxInputs && ctxInputs.eastMeta || {};
   const busyIds = Object.keys(meta).filter(id => meta[id].busyDays);
   const forecast = typeof forecastFromFeedRows === "function" && typeof forecastOutsideCoverage === "function" ? forecastOutsideCoverage(forecastFromFeedRows(forecastRows || []), cov) : {};
-  const fcInsideCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to).length : 0;
+  const fcWin = typeof eastRefreshWindows === "function" ? eastRefreshWindows(today) : null;
+  const fcInCov = cov ? (forecastRows || []).filter(r => r && r.week_monday >= cov.from && r.week_monday <= cov.to) : [];
+  const fcPastWin = fcWin ? fcInCov.filter(r => r.week_monday > fcWin.main.to).length : 0;
+  const fcBeforeWin = fcWin ? fcInCov.filter(r => r.week_monday < fcWin.main.from).length : 0;
+  const fcInsideCov = fcInCov.length - fcPastWin - fcBeforeWin;
   const fcGenerated = (forecastRows || []).map(r => r.generated_at || r.data && r.data.generatedAt).filter(Boolean).sort().slice(-1)[0] || null;
   const fcRuns = (forecastRows || []).map(r => r.data && r.data.runs).filter(x => typeof x === "number")[0];
   const horizon = suAddDays(today, 90);
@@ -24841,7 +25161,13 @@ function EastFeedCard({
     style: {
       color: "#a83232"
     }
-  }, " (", fcInsideCov, " inside the published coverage (ignored) - refresh the feed to delete them)") : null, "; days at or above ", Math.round((threshold || 0.5) * 100), "% in the next 90 days: ", fcDays.length === 0 ? "none" : null, fcDays.length > 0 && React.createElement("div", {
+  }, " (", fcInsideCov, " inside the published coverage (ignored) - Refresh from Davenport deletes them)") : null, fcPastWin > 0 ? React.createElement("span", {
+    "data-testid": "east-forecast-past-window"
+  }, " (", fcPastWin, " in cached weeks past the refresh window (ignored by the rules) - deleted once the refresh window reaches them)") : null, fcBeforeWin > 0 ? React.createElement("span", {
+    style: {
+      color: "#a83232"
+    }
+  }, " (", fcBeforeWin, " in cached weeks before the refresh window (ignored by the rules) - no refresh deletes them; delete them by hand)") : null, "; days at or above ", Math.round((threshold || 0.5) * 100), "% in the next 90 days: ", fcDays.length === 0 ? "none" : null, fcDays.length > 0 && React.createElement("div", {
     "data-testid": "east-forecast-days",
     style: {
       fontFamily: mono,
@@ -24857,7 +25183,7 @@ function EastFeedCard({
     style: {
       fontFamily: mono
     }
-  }, "node scripts/east-forecast.js --sql"), " on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes forecast rows for weeks that are now published; the forecast only ever fills weeks Davenport has not published.")), React.createElement("div", {
+  }, "node scripts/east-forecast.js --sql"), " on the dev machine and paste the printed upserts into the Supabase SQL editor (the script itself never writes). Refreshing the feed caches Davenport's published weeks and deletes the forecast rows for the published weeks inside its refresh window (the Monday 4 weeks back through 30 weeks on); a forecast row for a cached week past that window is ignored by the rules and deleted once the window reaches it. The forecast only ever fills weeks Davenport has not published.")), React.createElement("div", {
     style: {
       border: "1px solid " + ((conflicts || []).length ? "#e0b4b4" : "#e8ecf0"),
       borderRadius: 8,
