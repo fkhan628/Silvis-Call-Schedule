@@ -4223,7 +4223,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   })();
   const P31C_GATE = "const callTotalsShown = !isPublicMode && !profileLoadFailed && !!authUser && !!mySurgeon && !isCoordinator && !isViewer\n"
     + "    && eastVacationPerson(surgeons.find(s => s.id === mySurgeon), surgeonRules && surgeonRules[mySurgeon] ? surgeonRules[mySurgeon].eastFeed : null);";
-  const P31C_MOUNT = '<CallTotalsCard key={pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>';
+  // pin moved deliberately 10/14 (smoke: the "My pay (switched off)" step found two pay cards): the card's key must differ from its
+  // sibling PayCard's key={pid} - a duplicate sibling key made React keep a stale pay card when the scheduler's picker changed person
+  const P31C_MOUNT = '<CallTotalsCard key={"ct-" + pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>';
   check("P31B card gate: exactly one `const callTotalsShown = ` - signed in, linked to a roster entry, not the office / a viewer / a failed profile / ?public=1, and eastVacationPerson(his roster entry, his surgeonRules eastFeed) - declared right after the pay gates", () => {
     assert.strictEqual(count("const callTotalsShown = "), 1, "one gate");
     assert.strictEqual(P31C.decl, P31C_GATE, "the gate expression (design 3.2)");
@@ -4280,6 +4282,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(appAt > 0 && folAt > appAt && payAt > folAt, "the APP and Following returns come before the own Mine (and My pay)");
     assert.ok(mAt > payAt && cardAt > mAt && offersAt > cardAt, `the card sits after My pay and before My offers, as the operand of the gate (pay ${payAt}, gate ${mAt}, card ${cardAt}, offers ${offersAt})`);
     assert.ok(P31C.mount.startsWith("{callTotalsShown && pid === mySurgeon && (") && P31C.mount.includes(P31C_MOUNT), "the mount's exact props (design 3.2)");
+    // 10/14 smoke ("My pay (switched off)" found two pay cards): the sibling PayCard is keyed {pid}; the card must never share it
+    assert.ok(!P31C.mount.includes("key={pid}") && count("<PayCard key={pid} ") === 1, "the card's React key differs from its sibling PayCard's key={pid}");
     for (const banned of ["previewGen", "eastForecastRows", "eastOverrideRows", "rulesCtx", "ctxInputs", "todayStr", "todayCentral", "lastPublished", "statedWeeks", "deriveKhanBusyDays"]) assert.ok(!P31C.mount.includes(banned), "the mount must not read " + banned);
     assert.strictEqual(count("callTotalsFor("), 0, "one call path: callTotalsCardFor (the adapter) - the page never calls the counter itself");
     assert.strictEqual(count("callTotalsCardFor("), 1, "the model is computed at the mount only");

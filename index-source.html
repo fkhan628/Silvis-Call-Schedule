@@ -8241,7 +8241,7 @@ function CallSchedule() {
                 only (the schedule map and the east_feed cache rows - never the Generate preview, a forecast or an override),
                 counted by call-totals.js (the Davenport app's counter, ported verbatim) to this device's date. */}
             {callTotalsShown && pid === mySurgeon && (
-              <CallTotalsCard key={pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>
+              <CallTotalsCard key={"ct-" + pid} css={css} dk={dk} model={typeof callTotalsCardFor === "function" ? callTotalsCardFor({ feedRows: eastFeedRows, feedState: eastLoadState.feed, idByCode: eastIdByCode, schedule, scheduleKnown: daysShown, roster: surgeons, personId: mySurgeon, today: callTotalsDeviceToday() }) : null}/>
             )}
             <div style={css.card} data-testid="mine-offers">
               {(() => {
