@@ -1037,7 +1037,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/count unknown/.test(fn), "the audit / toast must say 'count unknown' when the delete succeeded without a representation");
     const toasts = fn.match(/couldn't delete the forecast rows/g) || [];
     assert.strictEqual(toasts.length, 1, "exactly one toast carries the prune failure (found " + toasts.length + ")");
-    assert.ok(fn.lastIndexOf("couldn't delete the forecast rows") > fn.indexOf('logAudit("east.refresh"'), "the failure text must be in the FINAL toast (after the audit row), not in an earlier toast that the summary toast overwrites");
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - anchored on the RUN's audit row (const auditDone = ...): a refresh stopped by a failed cache read writes its own east.refresh row (const stopDone = ...) earlier in the function
+    assert.ok(fn.lastIndexOf("couldn't delete the forecast rows") > fn.indexOf('const auditDone = logAudit("east.refresh"'), "the failure text must be in the FINAL toast (after the audit row), not in an earlier toast that the summary toast overwrites");
     assert.ok(/forecastDeleteError \? "error" : "success"/.test(fn), "the final toast's tone is 'error' when the prune failed");
   });
   check("C.1/C.3: the ctx builder passes the forecast pruned to unpublished weeks (forecastOutsideCoverage) and east_overrides grouped per person as input.eastOverrides", () => {
@@ -4129,7 +4130,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(winAt > 0 && rb.indexOf("const fromMon = eastWin.main.from;") > winAt && rb.indexOf("const toMon = eastWin.main.to;") > winAt, "fromMon / toMon read eastWin.main");
     assert.ok(rb.indexOf("if (!eastWin) throw new Error(") > winAt && rb.indexOf("if (!eastWin) throw new Error(") < rb.indexOf("const fromMon = eastWin.main.from;"), "no window -> the refresh fails loudly (the outer catch's toast), never a read of an undefined window");
     assert.strictEqual(count("feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes });"), 1, "the main read (weeks + vacations) keeps the main window");
-    assert.ok(rb.includes("planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon })"), "the vacation plan keeps the main window's floor");
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - the plan runs over cacheBefore, the cache read just
+    // before Davenport (never the state's copy, which a failed east_feed load leaves at [])
+    assert.ok(rb.includes("planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon })"), "the vacation plan keeps the main window's floor");
     assert.ok(rb.includes("st.review.end >= fromMon"), "the review-reset floor stays fromMon");
     assert.ok(rb.includes("const publishedCoverage = coverageOf(feed.weeks);"), "the forecast prune stays over the MAIN read's coverage");
   });
@@ -4141,7 +4144,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // runs after the cache reload and after that call
     const rrAt = rb.indexOf("const rr = await runEastReviewResets(");
     assert.ok(rrAt > 0 && legAt > rb.indexOf("const cacheRows = ") && legAt > rrAt, "the leg runs after the cache reload and the review resets (they read the cache the main leg wrote)");
-    assert.ok(endAt > legAt && rb.indexOf('logAudit("east.refresh"') > endAt, "the leg runs before the audit row and the toast text");
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - anchored on the RUN's audit row (const auditDone = ...): a refresh stopped by a failed cache read writes its own east.refresh row (const stopDone = ...) earlier in the function
+    assert.ok(endAt > legAt && rb.indexOf('const auditDone = logAudit("east.refresh"') > endAt, "the leg runs before the audit row and the toast text");
     assert.ok(leg.startsWith("const extra = { from: eastWin.extra.from, to: eastWin.extra.to, weeks: 0, past: 0, ahead: 0, skipped: 0, error: null };"), "extra starts as an empty record of the window");
     assert.ok(leg.includes("if (cacheRows) {") && leg.includes('} else extra.error = "the cache did not reload - skipped";'), "a failed cache reload skips the leg, named");
     assert.ok(leg.includes("const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});"), "weeks only: the extra read asks no vacation code (no time off read)");
@@ -4155,10 +4159,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   });
   check("P31B item 7: the extra leg is named in the audit row (summary + detail.extra) and in the ONE final toast (both branches; tone error when it failed) - the C.2 prune pins stay as they were", () => {
     const { rb } = P31I7;
-    const au = rb.slice(rb.indexOf('logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - anchored on the RUN's audit row (const auditDone = ...): a refresh stopped by a failed cache read writes its own east.refresh row (const stopDone = ...) earlier in the function
+    const au = rb.slice(rb.indexOf('const auditDone = logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
     assert.ok(au.includes("${extraSummary}"), "the audit summary carries the extra leg");
     assert.ok(/reviewResets, reviewResetFailures, extra \}\);/.test(au), "the audit detail carries the extra record");
-    const es = rb.slice(rb.indexOf("const extraSummary = "), rb.indexOf('logAudit("east.refresh"'));
+    const es = rb.slice(rb.indexOf("const extraSummary = "), rb.indexOf('const auditDone = logAudit("east.refresh"'));
     assert.ok(es.includes("NOT cached") && es.includes("more published week(s) cached") && es.includes("extra.skipped"), "the summary names a failure, the weeks cached and the weeks skipped after a gap");
     const toast = rb.slice(rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"), rb.indexOf("} catch (e) {", rb.indexOf("showToast(weekRows.length ? `East feed refreshed:")));
     assert.strictEqual((toast.match(/\$\{extraWord\}/g) || []).length, 2, "both toast branches carry extraWord");
@@ -14087,11 +14092,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P31A3 pins: the display - derivedVacMap is empty for the scheduler (he keeps the diamond, decision 6), on ?public=1 and signed out; the dots / 'Off:' read vacShown = vacations + derivedVacMap; the lists read vacListExtra (the scheduler: vacEastAway, his JS picture with the state - critic A5); NEVER timeOffRows / vacations / share / print", () => {
       assert.ok(src.includes("const derivedVacMap = useMemo(() => (isPublicMode || !authUser || eastDetailsVisible) ? {} : derivedVacationMap(derivedVacRows), [derivedVacRows, isPublicMode, authUser, eastDetailsVisible]);"), "the display map's gate");
-      assert.ok(src.includes("const vacShown = useMemo(() => vacationMapWithExtra(vacations, derivedVacMap), [vacations, derivedVacMap]);"), "the dots / names map");
-      const vb = src.slice(src.indexOf("const vacByDay = useMemo(() => {"), src.indexOf("const vacNamesOn = "));
+      // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - vacShown feeds the dots only; the day editor's names
+      // read vacListMap (the lists' picture), so the scheduler's editor names Khan on his East days (pinned and run below)
+      assert.ok(src.includes("const vacShown = useMemo(() => vacationMapWithExtra(vacations, derivedVacMap), [vacations, derivedVacMap]);"), "the dots' map");
+      const vb = src.slice(src.indexOf("const vacByDay = useMemo(() => {"), src.indexOf("}, [vacShown, gridDays]);") + 30);
       assert.ok(vb.includes("Object.keys(vacShown).forEach(pid => (vacShown[pid] || []).forEach(([vs, ve]) => {") && vb.includes("}, [vacShown, gridDays]);"), "the dots read vacShown");
       assert.ok(vb.includes("if (map[ds].indexOf(pid) < 0) map[ds].push(pid);"), "one dot per person a day (a time_off row and a derived range may overlap)");
-      assert.ok(src.includes("const vacNamesOn = (d) => Object.keys(vacShown).filter(pid => onVac(pid, d, vacShown)).map(nameOf);"), "the day summary's names");
+      assert.ok(src.includes("const vacNamesOn = (d) => Object.keys(vacListMap).filter(pid => onVac(pid, d, vacListMap)).map(nameOf);"), "the day summary's names: the lists' map");
       assert.ok(src.includes("const vacListExtra = useMemo(() => isPublicMode ? {} : eastDetailsVisible ? vacEastAway : derivedVacMap, [isPublicMode, eastDetailsVisible, vacEastAway, derivedVacMap]);"), "the lists' extra ranges");
       assert.ok(src.includes("const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations, vacListExtra);"), "renderVacationList");
       assert.ok(src.includes("const pidVacs = groupVacationRows(vacations, [pid], todayStr, false, vacListExtra).reduce((n, g) => n + g.upcoming, 0);"), "Mine's count = its list");
@@ -14142,12 +14149,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P31A3 pins: the in-app refresh - the A7 guard before the plan, a trusted read only plans / resets, the ONE reset through runEastReviewResets (the RPC, the loop while it is missing), ok / error / errors / source 'app' / trusted / guard / reviewResetVia in the audit, the guard and a failed reset turn the toast to error; the newest east.refresh row re-read after", () => {
       const rb = src.slice(src.indexOf("const refreshEastFeed = async () => {"), src.indexOf("const saveEastOverride = async"));
-      const gAt = rb.indexOf("const vacGuard = eastVacationReadGuard(feed, eastFeedRows, vacationCodes, fromMon);");
-      assert.ok(gAt > 0 && rb.indexOf("const vacTrusted = vacGuard.ok && !!feed.vacations;") > gAt, "the guard over the cache as this client holds it");
-      assert.ok(rb.includes("const plan = vacTrusted ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };"), "untrusted -> every week keeps its cached list");
+      // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - the guard and the plan read cacheBefore (the cache
+      // read just before Davenport; a failed read stops the refresh), never the state's eastFeedRows
+      const gAt = rb.indexOf("const vacGuard = eastVacationReadGuard(feed, cacheBefore, vacationCodes, fromMon);");
+      assert.ok(gAt > 0 && rb.indexOf("const vacTrusted = vacGuard.ok && !!feed.vacations;") > gAt, "the guard over the cache as the database held it just before");
+      assert.ok(rb.includes("const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };"), "untrusted -> every week keeps its cached list");
       assert.ok(rb.includes("const rr = await runEastReviewResets({ trusted: vacTrusted, cacheRows, vacationCodes, fromMon, feed });"), "the ONE reset");
       assert.ok(rb.indexOf("const rr = await runEastReviewResets(") > rb.indexOf("const cacheRows = ") && rb.indexOf("const extra = { from: eastWin.extra.from") > rb.indexOf("const rr = await runEastReviewResets("), "after the reload, before the extra leg");
-      const au = rb.slice(rb.indexOf('logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
+      // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - anchored on the RUN's audit row (const auditDone = ...): a refresh stopped by a failed cache read writes its own east.refresh row (const stopDone = ...) earlier in the function
+      const au = rb.slice(rb.indexOf('const auditDone = logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
       assert.ok(au.includes("ok: refreshErrors.length === 0, error: refreshErrors[0] || null, errors: refreshErrors, source: \"app\","), "ok / error / errors / source");
       assert.ok(au.includes("trusted: vacTrusted, guard: vacGuard.problems"), "the guard in the detail");
       assert.ok(au.includes("reviewResetVia: rr.via, reviewResetError: rr.error, reviewResetSkipped: rr.skipped,"), "how the reset ran");
@@ -14191,6 +14201,132 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const rl = src.slice(src.indexOf("const renderVacationList = (personIds, allowEdit) => {"), src.indexOf("const renderVacationForm = (personChoices) => ("));
       const failLine = (/<p data-testid="vac-derived-failed"[^>]*>([^<]*)<\/p>/.exec(rl) || [])[1] || "";
       assert.ok(failLine.length > 10 && !EASTWORD.test(failLine), "the failed-read sentence: " + failLine);
+    });
+    // A3 review (10/16), finding 1: the scheduler's day editor said "Vacations: nobody off" on Khan's East vacation days while
+    // its own "Not eligible" lines and his vacation lists named him - vacNamesOn read vacShown, and derivedVacMap is {} for the
+    // scheduler. The names follow the LISTS' picture now (time_off + vacListExtra: the scheduler's vacEastAway, everyone
+    // else's derived rows, nothing on ?public=1); the calendar dots stay on vacShown (decision 6: the scheduler's diamond only).
+    await acheckA("P31A3 review (lifted, 10/16): the day editor's names = the lists' picture per role - the scheduler 'Vacations: ... Khan' on his away / unreviewed East day (none on a 'home' one), the coordinator 'Off: Khan' from the derived rows, ?public=1 and signed out nobody; each person once; the dots stay on vacShown (no s1 dot for the scheduler, one for the coordinator)", async () => {
+      const EF = require(path.join(ROOT, "east-feed.js"));
+      const a = src.indexOf("  const derivedVacMap = useMemo(");
+      const b = src.indexOf("\n", src.indexOf("  const vacNamesOn = ", a));
+      assert.ok(a > 0 && b > a, "the display block (derivedVacMap .. vacNamesOn)");
+      const block = src.slice(a, b + 1);
+      const DAY = "2027-04-07", R = { start: "2027-04-06", end: "2027-04-09" };
+      const feedRows = [{ week_monday: "2027-04-05", data: { vacations: [{ code: "FAK", start: R.start, end: R.end }] } }];
+      const roster = [{ id: "s1", name: "Khan", code: "FAK", active: true }, { id: "s2", name: "Burchett", code: "MAB", active: true }];
+      const names = { s1: "Khan", s2: "Burchett" };
+      const run = (o) => {
+        const fn = new Function("useMemo", "isPublicMode", "authUser", "eastDetailsVisible", "derivedVacationMap", "derivedVacRows", "vacationMapWithExtra", "vacations",
+          "gridDays", "parse", "fmt", "addD", "onVac", "nameOf", "rulesCtx", "suCoverageGlance", "schedule", "todayStr", "ctxInputs", "coverageOf", "eastFeedRows",
+          "eastVacations", "derivedEastVacations", "surgeons", "surgeonRules", "eastVacationPerson", "eastVacationReviewRows",
+          block + "\nreturn { vacNamesOn, vacByDay };");
+        return fn((f) => f(), !!o.pub, o.pub || o.signedOut ? null : { id: "u1" }, !!o.sched, H.derivedVacationMap, o.derived || [], H.vacationMapWithExtra, o.vacations || {},
+          [DAY], H.parse, H.fmt, H.addD, H.onVac, (id) => names[id] || id, null, () => ({}), {}, "2026-10-16", {}, EF.coverageOf, feedRows,
+          EF.eastVacations, H.derivedEastVacations, roster, { s1: { eastFeed: { enabled: true } } }, (s, ef) => !!(ef && ef.enabled), o.reviews || []);
+      };
+      const derived = [{ person_id: "s1", start_date: R.start, end_date: R.end }];
+      let r = run({ sched: true, derived });
+      assert.deepStrictEqual(r.vacNamesOn(DAY), ["Khan"], "the scheduler's editor names Khan on his unreviewed East day ('Vacations: Khan', decision 8)");
+      assert.deepStrictEqual(r.vacByDay[DAY] || [], [], "the scheduler's grid draws no s1 dot there (the diamond only, decision 6)");
+      assert.deepStrictEqual(run({ sched: true, reviews: [{ person_id: "s1", start: R.start, end: R.end, decision: "away" }] }).vacNamesOn(DAY), ["Khan"], "an away review: named");
+      assert.deepStrictEqual(run({ sched: true, reviews: [{ person_id: "s1", start: R.start, end: R.end, decision: "home" }] }).vacNamesOn(DAY), [], "a 'home' review: not off, not named");
+      r = run({ sched: true, vacations: { s1: [[R.start, R.start, "t1", null]], s2: [[DAY, DAY, "t2", null]] } });
+      assert.deepStrictEqual(r.vacNamesOn(DAY).slice().sort(), ["Burchett", "Khan"], "a Silvis vacation beside: each person once");
+      assert.deepStrictEqual(run({ sched: true }).vacNamesOn("2027-04-12"), [], "outside the range: nobody");
+      r = run({ derived });
+      assert.deepStrictEqual([r.vacNamesOn(DAY), r.vacByDay[DAY]], [["Khan"], ["s1"]], "everyone else: 'Off: Khan' and the dot, from the derived rows (unchanged)");
+      assert.deepStrictEqual(run({ derived: [] }).vacNamesOn(DAY), [], "everyone else without a derived row (home, or not read yet): nobody - never the scheduler's JS picture");
+      assert.deepStrictEqual(run({ pub: true, derived }).vacNamesOn(DAY), [], "?public=1: time_off only");
+      assert.deepStrictEqual(run({ signedOut: true, derived }).vacNamesOn(DAY), [], "signed out: time_off only");
+    });
+    // A3 review (10/16), finding 2: the in-app A7 guard read the state's eastFeedRows, which stays [] (or older rows) when the
+    // east_feed load failed - that unknown cache read as empty, an RLS-blocked Davenport 200 + [] was trusted, the plan
+    // wrote the window's weeks with empty lists and the reset RPC (over the just-overwritten DB cache) deleted every review as
+    // 'removed'. The refresh now READS the cache first (loadEastTables(true), before Davenport - the server's order) and plans
+    // over that; a failed read stops the whole refresh (writing a week needs its cached list, or the upsert clears it).
+    await acheckA("P31A3 review (lifted refreshEastFeed, 10/16): the cache is READ FIRST (loadEastTables(true), before Davenport) and the guard / plan run over it, never the state's copy; a failed read STOPS the refresh - no Davenport read, no write, no reset, an ok:false east.refresh row, an error toast; a fresh cache holding a range Davenport answers 0 for -> untrusted (the week keeps its list, no reset) while the state's copy is []; an agreeing read -> trusted, planned, ONE reset", async () => {
+      const body = liftA("  const refreshEastFeed = async () => {", "\n  };\n");
+      const EF = require(path.join(ROOT, "east-feed.js"));
+      const WEEK = "2026-11-02", RANGE = { code: "FAK", start: "2026-11-03", end: "2026-11-06" };
+      const cache = [{ week_monday: WEEK, data: { days: {}, vacations: [RANGE] }, fetched_at: "2026-10-15T10:30:00Z" }];
+      const run = async ({ cacheRead, davFAK }) => {
+        const log = { order: [], posts: [], resets: [], audits: [], toasts: [], warns: [], refreshAuditReads: 0 };
+        let tableReads = 0;
+        const fn = new Function("isScheduler", "setEastRefreshing", "eastRefreshWindows", "todayCentral", "surgeons", "surgeonRules", "eastVacationPerson", "fetchEastWeeks",
+          "console", "showToast", "errText", "eastVacationReadGuard", "eastFeedRows", "planVacationCache", "keepCachedVacations", "toEastFeedRows", "fetch", "SUPABASE_URL",
+          "dbAuthHeaders", "describeDbError", "coverageOf", "setEastIdByCode", "loadEastTables", "runEastReviewResets", "eastExtraWeeks", "fmtMD", "eastGuardText", "logAudit",
+          "loadEastRefreshAudit", body + "\nreturn refreshEastFeed;")(
+          true, () => {}, EF.eastRefreshWindows, () => "2026-10-16", [{ id: "s1", code: "FAK", active: true }], { s1: { eastFeed: { enabled: true } } }, (s, ef) => !!(ef && ef.enabled),
+          async (from, to, opts) => {
+            log.order.push(opts && opts.vacationCodes ? "davenport main" : "davenport extra");
+            if (opts && opts.vacationCodes) return { weeks: [{ weekMonday: WEEK, data: { days: {} } }], vacations: { FAK: davFAK.map(x => ({ start: x.start, end: x.end })) }, vacationsTo: "2027-10-16", vacationCodesUnresolved: [], fetchedAt: "2026-10-16T12:00:00Z", roster: [] };
+            return { weeks: [], fetchedAt: "2026-10-16T12:00:01Z" };
+          },
+          { warn: (...x) => log.warns.push(x.map(String).join(" ")) }, (m, t) => log.toasts.push([String(m), t]), (e) => String(e && e.message || e), EF.eastVacationReadGuard,
+          [] /* the state's copy: a failed east_feed load left it at [] */, EF.planVacationCache, EF.keepCachedVacations, EF.toEastFeedRows,
+          async (url, init) => {
+            const method = (init && init.method) || "GET";
+            log.order.push(method + " " + String(url).replace("https://x.test/rest/v1/", "").split("?")[0]);
+            if (method === "POST") log.posts.push({ url: String(url), rows: JSON.parse(init.body) });
+            return { ok: true, status: 200, json: async () => [], text: async () => "" };
+          },
+          "https://x.test", () => ({}), (t) => String(t), EF.coverageOf, () => {},
+          async (quiet) => {
+            tableReads++;
+            log.order.push("loadEastTables(" + (quiet === undefined ? "" : String(quiet)) + ")");
+            return tableReads === 1 ? cacheRead : { ok: true, feedRows: plainA(cache) };
+          },
+          async (x) => {
+            log.resets.push({ trusted: x.trusted, cacheRows: !!x.cacheRows });
+            if (x.trusted && x.cacheRows) log.order.push("rpc reset");
+            return { via: x.trusted && x.cacheRows ? "rpc" : null, resets: [], failures: [], error: null, skipped: x.trusted ? null : "the East vacation read is not trusted - the cached East vacations are kept" };
+          },
+          EF.eastExtraWeeks, (d) => d, EF.eastGuardText,
+          (action, summary, detail) => { log.audits.push({ action, summary, detail: plainA(detail) }); return Promise.resolve(true); },
+          async () => { log.refreshAuditReads++; });
+        await fn();
+        await new Promise(r => setTimeout(r, 0));
+        return log;
+      };
+      // (1) the cache read FAILS (the state's copy is []), Davenport would answer FAK: [] - the exact A7 case
+      let L = await run({ cacheRead: { ok: false, feedRows: null }, davFAK: [] });
+      assert.deepStrictEqual(L.order, ["loadEastTables(true)"], "a failed cache read stops the refresh before Davenport: nothing else runs - " + JSON.stringify(L.order));
+      assert.deepStrictEqual([L.posts.length, L.resets.length], [0, 0], "no east_feed write, no reset");
+      assert.strictEqual(L.audits.length, 1, "ONE east.refresh row");
+      assert.ok(L.audits[0].action === "east.refresh" && L.audits[0].detail.ok === false && L.audits[0].detail.source === "app" && /could not be read/.test(L.audits[0].detail.error) && L.audits[0].detail.errors[0] === L.audits[0].detail.error, "ok:false, source app, the error named: " + JSON.stringify(L.audits[0]));
+      assert.ok(L.toasts.length === 1 && L.toasts[0][1] === "error" && /STOPPED/.test(L.toasts[0][0]) && /nothing was (fetched or )?written/.test(L.toasts[0][0]), "an error toast says nothing was written: " + JSON.stringify(L.toasts));
+      assert.strictEqual(L.refreshAuditReads, 1, "Setup's last-refresh line follows the row");
+      // (2) the cache read works and holds FAK's range; the state's copy is []; Davenport answers FAK: [] (a blocked read)
+      L = await run({ cacheRead: { ok: true, feedRows: plainA(cache) }, davFAK: [] });
+      assert.ok(L.order.indexOf("loadEastTables(true)") === 0 && L.order.indexOf("davenport main") === 1, "the cache first, then Davenport: " + JSON.stringify(L.order));
+      assert.strictEqual(L.posts.length, 1, "the main upsert");
+      const wk = L.posts[0].rows.find(x => x.week_monday === WEEK);
+      assert.deepStrictEqual(wk && wk.data.vacations, [RANGE], "untrusted: the week keeps its cached list (never cleared by a blocked read)");
+      assert.deepStrictEqual(L.resets, [{ trusted: false, cacheRows: true }], "the reset is told 'not trusted' (no RPC)");
+      assert.ok(L.order.indexOf("rpc reset") < 0, "no reset RPC");
+      const d2 = L.audits.find(x => x.action === "east.refresh").detail;
+      assert.ok(d2.ok === false && d2.vacations.trusted === false && d2.vacations.guard.length === 1 && d2.vacations.guard[0].why === "empty-while-cached", "the audit says untrusted (empty-while-cached): " + JSON.stringify(d2.vacations));
+      // (3) the control: Davenport agrees -> trusted, planned, ONE reset
+      L = await run({ cacheRead: { ok: true, feedRows: plainA(cache) }, davFAK: [RANGE] });
+      const wk3 = L.posts[0].rows.find(x => x.week_monday === WEEK);
+      assert.deepStrictEqual(wk3 && wk3.data.vacations, [RANGE], "trusted: the planned list");
+      assert.deepStrictEqual(L.resets, [{ trusted: true, cacheRows: true }], "ONE reset over the reloaded cache");
+      assert.ok(L.order.indexOf("rpc reset") > L.order.indexOf("loadEastTables()"), "the reset after the reload");
+      assert.strictEqual(L.audits.find(x => x.action === "east.refresh").detail.ok, true, "ok");
+    });
+    check("P31A3 review pins (10/16): the day editor's names read the lists' map (vacListMap = time_off + vacListExtra), declared after vacListExtra; the dots stay on vacShown; refreshEastFeed reads the cache first and never the state's eastFeedRows", () => {
+      assert.ok(src.includes("const vacListMap = useMemo(() => vacationMapWithExtra(vacations, vacListExtra), [vacations, vacListExtra]);"), "the lists' map");
+      assert.ok(src.includes("const vacNamesOn = (d) => Object.keys(vacListMap).filter(pid => onVac(pid, d, vacListMap)).map(nameOf);"), "the names read it");
+      assert.ok(src.indexOf("const vacNamesOn = ") > src.indexOf("const vacListMap = useMemo(") && src.indexOf("const vacListMap = useMemo(") > src.indexOf("const vacListExtra = useMemo("), "declared after vacListExtra");
+      assert.ok(src.includes('{canEdit ? <div data-testid="editor-vacations">Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div>'), "the scheduler's line carries a testid (the smoke reads it)");
+      const rb = src.slice(src.indexOf("const refreshEastFeed = async () => {"), src.indexOf("const runEastReviewResets = async"));
+      assert.ok(!/\beastFeedRows\b/.test(rb.replace(/\/\/[^\n]*/g, "")), "refreshEastFeed never reads the state's eastFeedRows");
+      const readAt = rb.indexOf("const cacheRead = await loadEastTables(true);");
+      assert.ok(readAt > 0 && readAt < rb.indexOf("feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes });") && readAt > rb.indexOf("const vacationCodes = "), "the cache read: after the codes, before Davenport");
+      assert.ok(rb.includes("const cacheBefore = cacheRead && Array.isArray(cacheRead.feedRows) ? cacheRead.feedRows : null;") && rb.indexOf("if (!cacheBefore) {") > readAt, "a failed read stops the refresh");
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      assert.ok(smoke.includes("P31A A3 (scheduler): the day editor on ") && smoke.includes("[data-testid=day-editor] [data-testid=editor-vacations]"), "the smoke reads the scheduler's 'Vacations:' line on EV[0].start");
     });
   }
 

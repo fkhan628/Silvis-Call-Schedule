@@ -3763,6 +3763,23 @@ function CallSchedule() {
         const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
         return eastVacationPerson(s, ef);
       }).map(s => String(s.code).toUpperCase());
+      // A3 review (10/16): the cache this refresh plans over is READ HERE, before Davenport (the server refresh reads its
+      // east_feed first too), never the state's copy - a failed east_feed load leaves that at [] (or older rows), and the A7
+      // guard below would read an unknown cache as empty: a blocked 200 + [] trusted, the window's weeks written with empty
+      // lists, every review reset as 'removed'. A failed read STOPS the refresh: writing a week needs its cached list (the
+      // upsert replaces the payload), so nothing is fetched or written and no review is reset; the audit row says ok:false.
+      const cacheRead = await loadEastTables(true);
+      const cacheBefore = cacheRead && Array.isArray(cacheRead.feedRows) ? cacheRead.feedRows : null;
+      if (!cacheBefore) {
+        const why = "the cached East weeks could not be read - stopped before Davenport: nothing was written and no review was reset";
+        console.warn("East feed refresh stopped: " + why);
+        const stopDone = logAudit("east.refresh", "East feed refresh STOPPED: " + why,
+          { ok: false, error: why, errors: [why], source: "app", from: fromMon, to: toMon, weeks: 0, stopped: "cache-read",
+            vacations: { codes: vacationCodes, trusted: false, guard: [] }, reviewResetSkipped: "the cache could not be read" });
+        showToast("East feed refresh STOPPED - the cached East weeks could not be read, so nothing was fetched or written and no review was reset (a refresh over an unknown cache could clear the cached East vacations). Refresh again.", "error");
+        stopDone.then(() => loadEastRefreshAudit());
+        return;
+      }
       let feed;
       try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }
       catch (e) {
@@ -3776,8 +3793,8 @@ function CallSchedule() {
       // (east-feed.js eastVacationReadGuard; the server refresh runs the same guard, pinned behaviour-equal). A blocked read
       // answers 200 + [] - trusted, it would clear the cached ranges and the reset below would delete every review as
       // 'removed'. Untrusted: every fetched week keeps its cached list (the failure path), no review is reset, the audit row
-      // says ok:false and the toast says why.
-      const vacGuard = eastVacationReadGuard(feed, eastFeedRows, vacationCodes, fromMon);
+      // says ok:false and the toast says why. Over cacheBefore - the cache as the database held it just before (A3 review).
+      const vacGuard = eastVacationReadGuard(feed, cacheBefore, vacationCodes, fromMon);
       const vacTrusted = vacGuard.ok && !!feed.vacations;
       if (!vacGuard.ok) console.warn("East vacation read not trusted - the cached East vacations are kept and no review is reset", vacGuard.problems);
       // Review fix (E1 finding 1, 9/23): the split and the ride-on host rule run
@@ -3785,7 +3802,7 @@ function CallSchedule() {
       // cached row outside the window whose list changed is upserted too (its own
       // payload, its own fetched_at) - so a ride-on range Davenport cancelled or
       // shortened is cleared from its old host, even when 0 weeks were fetched.
-      const plan = vacTrusted ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
+      const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };
       const vacationCount = feed.vacations ? Object.keys(feed.vacations).reduce((acc, c) => acc + feed.vacations[c].length, 0) : null;
       const unresolvedWord = (feed.vacationCodesUnresolved || []).length ? ` (${feed.vacationCodesUnresolved.join(", ")} not in the Davenport roster)` : "";
       const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));
@@ -6223,7 +6240,8 @@ function CallSchedule() {
   // database's derived rows (helpers.derivedVacationMap: { id: [{ start, end }] } - no state, no East word) for everyone
   // signed in but the scheduler; {} for the scheduler (he keeps the diamond and his own picture with the review state -
   // decision 6; vacListExtra below), on ?public=1 and signed out. vacShown = the time_off map + derivedVacMap
-  // (helpers.vacationMapWithExtra - a new map, neither input changed): the grid's dots and the day summary's "Off:" names.
+  // (helpers.vacationMapWithExtra - a new map, neither input changed): the grid's dots. (The day editor's names read the
+  // lists' map, vacListMap below - A3 review 10/16.)
   // Never timeOffRows / vacations: ?public=1, the share page, print, the ER export, the feeds, the digest, e-mails and pay keep
   // reading time_off only (item 4).
   const derivedVacMap = useMemo(() => (isPublicMode || !authUser || eastDetailsVisible) ? {} : derivedVacationMap(derivedVacRows), [derivedVacRows, isPublicMode, authUser, eastDetailsVisible]);
@@ -6241,7 +6259,6 @@ function CallSchedule() {
     }));
     return map;
   }, [vacShown, gridDays]);
-  const vacNamesOn = (d) => Object.keys(vacShown).filter(pid => onVac(pid, d, vacShown)).map(nameOf);
   // Item E2 (Faraz 9/25: "remove the east specific markings on the calendar because it makes it busy ...
   // just want to improve readability"): the month grid carries NO East-derived / forecast marking for anyone, the
   // scheduler included - the E (East-derived week) and F / f (East forecast at / above the threshold, 20% or more)
@@ -6310,6 +6327,13 @@ function CallSchedule() {
   // derivedVacMap ("set by the scheduler", decision 12); the scheduler: vacEastAway, his own picture WITH the review state
   // (critic A5 - the derived rows carry none) under the East marker, "decide in Setup > East feed". {} on ?public=1.
   const vacListExtra = useMemo(() => isPublicMode ? {} : eastDetailsVisible ? vacEastAway : derivedVacMap, [isPublicMode, eastDetailsVisible, vacEastAway, derivedVacMap]);
+  // A3 review (10/16): the day editor's names (the scheduler's "Vacations: ...", everyone else's "Off: ...") read the LISTS'
+  // picture - time_off + vacListExtra - so the scheduler's editor names Khan on his away / unreviewed East days as his lists
+  // and the editor's own "Not eligible ... on vacation" lines do (decision 8: "Vacations: Khan"; it read vacShown, where
+  // derivedVacMap is {} for him, and said "nobody off"). Everyone else's names are unchanged (vacListExtra = derivedVacMap;
+  // {} on ?public=1 and signed out). The dots stay on vacShown (decision 6: the scheduler's diamond only).
+  const vacListMap = useMemo(() => vacationMapWithExtra(vacations, vacListExtra), [vacations, vacListExtra]);
+  const vacNamesOn = (d) => Object.keys(vacListMap).filter(pid => onVac(pid, d, vacListMap)).map(nameOf);
   // Review 10/1 item 1: while the East review rows are not loaded (eastVacReviewState other than 'ok' - pending, skipped, failed,
   // missing) a range may be reviewed 'home' unseen, so another surgeon's East range does not count toward a refusal
   // (eastReviewsLoaded false: the scheduler's line shows it "(East - reviews not loaded)", everyone else's leaves it out); the
@@ -10756,7 +10780,7 @@ function DayEditor(props) {
           {eastDetailsVisible && (east.length === 0 ? <div>East: {rulesImported ? "no East features configured" : "rules not imported yet"}</div> : east.map(l => <div key={l.id + l.text} data-testid="east-status" data-eastvac={l.eastVac || undefined} style={{color: l.tone === "busy" ? "#a83232" : l.tone === "warn" ? "#8a5a10" : l.tone === "home" ? "#1a8040" : sub}}>{l.eastVac ? <span style={{...eastVacMarkStyle(l.eastVac, dk, sub),marginRight:6,verticalAlign:"middle"}}/> : null}East - {l.text}</div>))}
           {/* Prompt 31 Part A (A3, item 2): the East person's own range on this day breaks the vacation minimum or holds a published day here - the scheduler's warning, never a block */}
           {eastDetailsVisible && (eastVacWarn || []).map((w, i) => <div key={"evw" + i} data-testid="east-vac-warn" data-kind={w.kind} data-person={w.id} style={{color:"#a83232",fontWeight:700}}>East - {eastVacationWarnLine(w, nameOf)}</div>)}
-          {canEdit ? <div>Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div> : vacationNames.length > 0 && <div data-testid="editor-off">Off: {vacationNames.join(", ")}</div>}
+          {canEdit ? <div data-testid="editor-vacations">Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div> : vacationNames.length > 0 && <div data-testid="editor-off">Off: {vacationNames.join(", ")}</div>}
           {canEdit && ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
           {canEdit && !rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
           {/* Item E3 (9/25): a derived-week row's source "east-derived" reads "generated" (the generator wrote it) to everyone but the scheduler.

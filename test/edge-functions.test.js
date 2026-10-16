@@ -3192,13 +3192,16 @@ async function erClientExpect(w0) {
   const RealDate = global.Date, realFetch = globalThis.fetch;
   global.Date = erFakeDate(ER_NOW); globalThis.fetch = erFetch(w);
   try {
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - the in-app refresh reads the cache FIRST
+    // (loadEastTables(true), before Davenport - this function's order) and plans over that read (cacheBefore), never its
+    // state's copy; a failed read stops it (data-layer [P31A3] runs that lifted)
+    const cacheBefore = erClone(w.cache);
     const feed = await ef.fetchEastWeeks(win.main.from, win.main.to, { vacationCodes: codes });
-    const eastFeedRows = erClone(w.cache);
     // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app refresh runs the same A7 guard now (east-feed.js
     // eastVacationReadGuard) before its plan; the re-statement follows the app's lines (pinned below)
-    const vacGuard = ef.eastVacationReadGuard(feed, eastFeedRows, codes, win.main.from);
+    const vacGuard = ef.eastVacationReadGuard(feed, cacheBefore, codes, win.main.from);
     const vacTrusted = vacGuard.ok && !!feed.vacations;
-    const plan = vacTrusted ? ef.planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
+    const plan = vacTrusted ? ef.planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };
     const weekRows = ef.toEastFeedRows(plan.weeks).map((r) => ({ ...r, fetched_at: feed.fetchedAt }));
     const rewrittenRows = plan.rewritten.map((x) => ({ week_monday: x.weekMonday, data: x.data, fetched_at: x.fetchedAt || feed.fetchedAt }));
     const mainRows = weekRows.concat(rewrittenRows);
@@ -3549,8 +3552,10 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
     "try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }",
     // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app refresh runs the A7 guard (east-feed.js
     // eastVacationReadGuard, behaviour-equal to this function's) and plans only a trusted vacation read
-    "const vacGuard = eastVacationReadGuard(feed, eastFeedRows, vacationCodes, fromMon);",
-    "const plan = vacTrusted ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };",
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 review (10/16) - both over cacheBefore, the cache read before
+    // Davenport (this function's order), never the state's eastFeedRows
+    "const vacGuard = eastVacationReadGuard(feed, cacheBefore, vacationCodes, fromMon);",
+    "const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };",
     "const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));",
     "const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));",
     "Prefer: \"resolution=merge-duplicates,return=minimal\" }, body: JSON.stringify(rows) });",
@@ -3564,6 +3569,13 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
   let at = -1;
   lines.forEach((l) => { const k = f.indexOf(l); assert.ok(k > at, "in order: " + l); at = k; });
   assert.ok(f.indexOf(APP_CODES_LINES.trim()) > 0 && f.indexOf(APP_CODES_LINES.trim()) < f.indexOf(lines[1]), "the codes come before the read");
+  // A3 review (10/16): the cache is read after the codes and before Davenport (this function reads east_feed before its
+  // Davenport reads too); a failed read returns before any fetch or write; the state's eastFeedRows is never read here
+  const cacheAt = f.indexOf("const cacheRead = await loadEastTables(true);"), stopAt = f.indexOf("if (!cacheBefore) {");
+  assert.ok(cacheAt > f.indexOf(APP_CODES_LINES.trim()) && cacheAt < f.indexOf(lines[1]) && stopAt > cacheAt && stopAt < f.indexOf(lines[1]), "the cache read and its stop sit between the codes and the Davenport read");
+  const stop = f.slice(stopAt, f.indexOf("\n      }\n", stopAt));
+  assert.ok(/\n\s*return;$/.test(stop) && !/fetch\(|fetchEastWeeks|runEastReviewResets|derivedVacDb/.test(stop), "the stop writes nothing but its audit row and returns");
+  assert.ok(!/\beastFeedRows\b/.test(f.replace(/\/\/[^\n]*/g, "")), "refreshEastFeed never reads the state's eastFeedRows");
   // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app reset runs through ONE call, runEastReviewResets (defined
   // right after refreshEastFeed): the database's east_vacation_reset_stale(fromMon) - this function's own RPC and p_from -
   // with the 9/23 loop (st.review.end >= fromMon) only while the RPC is missing; only on a trusted read

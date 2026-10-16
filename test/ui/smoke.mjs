@@ -9659,6 +9659,11 @@ try {
         const evw = await page.$$eval("[data-testid=day-editor] [data-testid=east-vac-warn]", els => els.map(e => ({ kind: e.getAttribute("data-kind"), who: e.getAttribute("data-person"), text: e.textContent.replace(/\s+/g, " ").trim() })));
         if (!evw.some(w => w.kind === "short" && w.who === "s1" && /around this day - under the minimum of \d+ \(a Davenport range is never refused\)/.test(w.text))) fail(`P31A A3 (scheduler): the day editor on ${offDay} has no East own-range line under the minimum: ` + JSON.stringify(evw));
         else ok(`P31A A3 (scheduler): day editor ${offDay}: '${evw.find(w => w.kind === "short").text.slice(0, 120)}'`);
+        // A3 review (10/16): the scheduler's "Vacations:" line names Khan on his own East day (decision 8 - it said "nobody off"
+        // while his lists and the editor's "Not eligible" lines named him); it reads the lists' picture, never a new literal
+        const vacLine = await page.$eval("[data-testid=day-editor] [data-testid=editor-vacations]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+        if (!vacLine || !/^Vacations: /.test(vacLine) || !/\bKhan\b/.test(vacLine)) fail(`P31A A3 (scheduler): the day editor on ${offDay} should read 'Vacations: ...Khan' (his East range), saw ` + JSON.stringify(vacLine));
+        else ok(`P31A A3 (scheduler): the day editor on ${offDay} reads '${vacLine}'`);
         await page.keyboard.press("Escape");
         await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
         // Setup > East feed: the box lists the day; the last-refresh line
