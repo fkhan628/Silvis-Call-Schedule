@@ -87,12 +87,20 @@ function vacRangeLabel(start, end, todayStr) {
 // Each group = { pid, upcoming, past, rows }: rows sorted by start, each
 // { pid, vs, ve, id, note, past }; past rows (end < today) are counted on the
 // group and listed only with showPast. A person with nothing to show is omitted.
-function groupVacationRows(vacations, personIds, todayStr, showPast) {
+// Prompt 31 Part A (A3, 10/16): `extra` { id: [{ start, end, state? }] } - the East person's away / unreviewed ranges for
+// the signed-in display (the App's vacListExtra: the derived rows for everyone but the scheduler, his own picture with the
+// review state for him). Each becomes a READ-ONLY row { pid, vs, ve, id: null, note: null, past, derived: true, state }
+// (no time_off id: no Edit / Remove) in the person's block, counted like any other; on a start tie the time_off row comes
+// first. A junk extra range is skipped; without extra the rows are exactly the 9/23 ones.
+function groupVacationRows(vacations, personIds, todayStr, showPast, extra) {
   const out = [];
   (personIds || []).forEach(pid => {
     const list = (vacations && vacations[pid]) || [];
+    const more = extra && typeof extra === "object" && Array.isArray(extra[pid]) ? extra[pid] : [];
     const rows = list.map(([vs, ve, id, note]) => ({ pid, vs, ve, id, note, past: ve < todayStr }))
-      .sort((x, y) => x.vs < y.vs ? -1 : x.vs > y.vs ? 1 : 0);
+      .concat(more.filter(r => r && typeof r === "object" && suIsIso(r.start) && suIsIso(r.end) && r.end >= r.start)
+        .map(r => ({ pid, vs: r.start, ve: r.end, id: null, note: null, past: r.end < todayStr, derived: true, state: typeof r.state === "string" ? r.state : null })))
+      .sort((x, y) => x.vs < y.vs ? -1 : x.vs > y.vs ? 1 : (x.derived ? 1 : 0) - (y.derived ? 1 : 0));
     const upcoming = rows.filter(r => !r.past).length, past = rows.length - upcoming;
     const shown = showPast ? rows : rows.filter(r => !r.past);
     if (shown.length) out.push({ pid, upcoming, past, rows: shown });
@@ -2464,6 +2472,9 @@ function suLockedSlotChanges(current, next) {
 }
 // suSetupIssues(input) -> [warning strings]. Pure; the Setup issues card renders them.
 //   input: { roster, surgeonRules, groupRules, holidays, schedule, eastFeedRows, eastForecastRows, today }
+// EAST_FEED_STALE_DAYS (Prompt 31 Part A, Faraz 10/14 decision 5): the East feed cache is called stale once its newest
+// fetched_at is more than 2 days old - the server refresh runs daily (it was 14 while only the scheduler's button wrote it).
+const EAST_FEED_STALE_DAYS = 2;
 function suSetupIssues(input) {
   const i = input || {};
   const out = [];
@@ -2494,7 +2505,7 @@ function suSetupIssues(input) {
   }
   const feedAges = (i.eastFeedRows || []).map(r => suAgeDays(r.fetched_at, i.nowMs)).filter(a => a !== null);
   if (!(i.eastFeedRows || []).length) out.push("East feed cache is empty - refresh it in Setup > East feed");
-  else if (feedAges.length && Math.min.apply(null, feedAges) > 14) out.push("East feed coverage is " + Math.min.apply(null, feedAges) + " days old - refresh it");
+  else if (feedAges.length && Math.min.apply(null, feedAges) > EAST_FEED_STALE_DAYS) out.push("East feed coverage is " + Math.min.apply(null, feedAges) + " days old - refresh it");
   const fcAges = (i.eastForecastRows || []).map(r => suAgeDays(r.generated_at || (r.data && r.data.generatedAt), i.nowMs)).filter(a => a !== null);
   if ((i.eastForecastRows || []).length && fcAges.length && Math.min.apply(null, fcAges) > 7) out.push("East forecast is " + Math.min.apply(null, fcAges) + " days old - rerun scripts/east-forecast.js");
   const openP = suOpenPrimaryDays(sched, today, 60);
@@ -4258,12 +4269,19 @@ const OFFER_CONFIRM_WORDS = {
 // offerDayWhy(hard) -> { block: words | null, confirm: words | null, codes: { block: [...], confirm: [...] } } for one
 // role's hard reasons (rules.eligibility(...).hard). block wins the row when set; confirm is the one-line reason the
 // confirmation names; the first code of each family gives the words (holiday-opt-out carries the unit's name).
-function offerDayWhy(hard) {
+// Prompt 31 Part A (A3, Faraz 10/14 decision 11): offerDayWhy(hard, { eastDetails: false }) - the painter of everyone but
+// the scheduler (a surgeon painting his own days, the office relaying them): the four East block codes
+// (OFFER_EAST_BLOCK_CODES - the App's EAST_HARD_REASON_KEYS, the board's Item E4 list) read OFFER_EAST_HIDDEN_WORDS ("not
+// available"); the day stays greyed and the code is kept in codes.block. Without the option the words are as before.
+const OFFER_EAST_BLOCK_CODES = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"];
+const OFFER_EAST_HIDDEN_WORDS = "not available";
+function offerDayWhy(hard, opts) {
   const list = Array.isArray(hard) ? hard : [];
+  const hideEast = !!(opts && opts.eastDetails === false);
   const out = { block: null, confirm: null, codes: { block: [], confirm: [] } };
   list.forEach(code => {
     const s = String(code || ""); const i = s.indexOf(":"); const core = i < 0 ? s : s.slice(0, i); const arg = i < 0 ? "" : s.slice(i + 1);
-    if (OFFER_BLOCK_WORDS[core]) { out.codes.block.push(s); if (!out.block) out.block = core === "holiday-opt-out" && arg ? "you opted out of " + arg : OFFER_BLOCK_WORDS[core]; }
+    if (OFFER_BLOCK_WORDS[core]) { out.codes.block.push(s); if (!out.block) out.block = core === "holiday-opt-out" && arg ? "you opted out of " + arg : hideEast && OFFER_EAST_BLOCK_CODES.indexOf(core) >= 0 ? OFFER_EAST_HIDDEN_WORDS : OFFER_BLOCK_WORDS[core]; }
     else if (OFFER_CONFIRM_WORDS[core]) { out.codes.confirm.push(s); if (!out.confirm) out.confirm = OFFER_CONFIRM_WORDS[core]; }
   });
   return out;
@@ -4842,6 +4860,144 @@ function vacationGuardOverride(g) {
 function vacationGuardOverrideText(ov) {
   if (!ov || typeof ov !== "object") return "";
   return "under the minimum on " + ov.days + " (" + ov.around + " of " + ov.active + " around, minimum " + ov.minimum + ")";
+}
+// ---- Prompt 31 Part A (A3, Faraz 10/9 items 1-2; decisions 10/14): the East person's away / unreviewed vacation ranges for
+// everyone signed in, and the scheduler's warning for his own range ----
+// derivedVacationMap(rows) -> { person_id: [{ start, end }] } from the rows of the database's silvis_derived_vacations()
+//   ({ person_id, start_date, end_date } - the away / unreviewed ranges; no state, no code, no East column): sorted by start
+//   (then end), an exact duplicate once, a row without a person id or with a non-ISO / inverted date dropped, the date
+//   columns cut to the day. Not an array -> {}. The App's display map for everyone but the scheduler - never time_off.
+function derivedVacationMap(rows) {
+  const m = {};
+  (Array.isArray(rows) ? rows : []).forEach((r) => {
+    if (!r || typeof r !== "object") return;
+    const id = r.person_id === undefined || r.person_id === null ? "" : String(r.person_id);
+    const s = vgIso(r.start_date), e = vgIso(r.end_date);
+    if (!id || !s || !e || e < s) return;
+    const list = m[id] = m[id] || [];
+    if (!list.some((x) => x.start === s && x.end === e)) list.push({ start: s, end: e });
+  });
+  Object.keys(m).forEach((id) => m[id].sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0));
+  return m;
+}
+// derivedVacationSignature(rows) -> the rows as a set, "s1:2027-04-06..2027-04-09|s5:..." in id then start order ("" for
+//   none): the App reloads the East tables when it changes after the first read (decision 13 - an away / home tap or a
+//   refresh then reaches this client's east_feed copy, the rules and the editor, on the same poll).
+function derivedVacationSignature(rows) {
+  const m = derivedVacationMap(rows);
+  return Object.keys(m).sort().map((id) => m[id].map((r) => id + ":" + r.start + ".." + r.end).join("|")).filter(Boolean).join("|");
+}
+// vacationMapWithExtra(vacations, extra) -> a NEW map in the time_off map's shape { id: [[start, end, rowId, note], ...] }
+//   with the extra ranges ({ id: [{ start, end }] }) appended as [start, end, null, null]; neither input is changed; a junk
+//   extra entry is skipped. The calendar's dots and the day summary's "Off:" names read it (vacations + the derived map) and
+//   so does the vacation painter's existing-off shading - never the share page, print, a feed or anything written.
+function vacationMapWithExtra(vacations, extra) {
+  const out = {};
+  const base = vacations && typeof vacations === "object" ? vacations : {};
+  Object.keys(base).forEach((id) => { out[id] = (Array.isArray(base[id]) ? base[id] : []).slice(); });
+  const ex = extra && typeof extra === "object" && !Array.isArray(extra) ? extra : {};
+  Object.keys(ex).forEach((id) => {
+    if (!Array.isArray(ex[id])) return;
+    ex[id].forEach((r) => {
+      if (!r || typeof r !== "object" || !suIsIso(r.start) || !suIsIso(r.end) || r.end < r.start) return;
+      (out[id] = out[id] || []).push([r.start, r.end, null, null]);
+    });
+  });
+  return out;
+}
+// eastVacationOwnWarnings({ eastAway, timeOffRows, roster, groupRules, eastReviewsLoaded, conflicts, today }) ->
+//   [{ id, start, end, state, shortDays: [{ day, around }], held: [{ day, role, trailingEdge }], active, minimum }]
+//   Item 2 (report 10/13 section 3): an East person's own away / unreviewed range cannot be refused - Davenport owns it - so
+//   the scheduler is WARNED instead. Per range of eastAway (the App's vacEastAway { id: [{ start, end, state }] }) that ends
+//   today or later: shortDays = vacationGuard run for HIM over the range's days from today on with his OWN East ranges taken
+//   out of eastAway (else his own range would exempt every day; everyone else's counts, unless the reviews are not loaded) -
+//   its over days; held = the conflict rows (rules.eastVacationConflicts { day, role, surgeonId, state, trailingEdge }) of
+//   that person from today on inside the range, or the trailing-edge day right before its start, by day. Only ranges with a
+//   short or a held day are listed. A home range and junk are skipped. Never a block, a dropped range or a moved lock.
+function eastVacationOwnWarnings(o) {
+  const opts = o && typeof o === "object" ? o : {};
+  const ea = opts.eastAway && typeof opts.eastAway === "object" && !Array.isArray(opts.eastAway) ? opts.eastAway : {};
+  const today = suIsIso(opts.today) ? opts.today : null;
+  const conflicts = Array.isArray(opts.conflicts) ? opts.conflicts : [];
+  const out = [];
+  Object.keys(ea).forEach((id) => {
+    if (!Array.isArray(ea[id])) return;
+    const others = {};
+    Object.keys(ea).forEach((k) => { if (k !== id) others[k] = ea[k]; });
+    ea[id].forEach((r) => {
+      if (!r || typeof r !== "object" || r.state === "home") return;
+      const s = vgIso(r.start), e = vgIso(r.end);
+      if (!s || !e || e < s || (today && e < today)) return;
+      const g = vacationGuard({ personId: id, start: today && s < today ? today : s, end: e, timeOffRows: opts.timeOffRows, eastAway: others, roster: opts.roster, groupRules: opts.groupRules, eastReviewsLoaded: opts.eastReviewsLoaded });
+      const shortDays = g.tooLong ? [] : g.overDays.map((x) => ({ day: x.day, around: x.around }));
+      const before = suAddDays(s, -1);
+      const held = conflicts.filter((c) => c && typeof c === "object" && String(c.surgeonId) === id && suIsIso(c.day) && (!today || c.day >= today) && (c.trailingEdge ? c.day === before : c.day >= s && c.day <= e))
+        .map((c) => ({ day: c.day, role: c.role, trailingEdge: !!c.trailingEdge }))
+        .sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : String(a.role) < String(b.role) ? -1 : String(a.role) > String(b.role) ? 1 : 0);
+      if (shortDays.length || held.length) out.push({ id, start: s, end: e, state: r.state === "away" ? "away" : "unreviewed", shortDays, held, active: g.active, minimum: g.minAround });
+    });
+  });
+  return out;
+}
+// eastVacationWarnDays(warnings) -> { day: [items] } for the day editor's East lines, in the warnings' order: a short day
+//   { kind: "short", id, start, end, state, around, active, minimum }, a held day { kind: "held", id, start, end, state, role,
+//   trailingEdge }. Junk -> {}.
+function eastVacationWarnDays(warnings) {
+  const m = {};
+  (Array.isArray(warnings) ? warnings : []).forEach((w) => {
+    if (!w || typeof w !== "object") return;
+    const base = { id: w.id, start: w.start, end: w.end, state: w.state };
+    (Array.isArray(w.shortDays) ? w.shortDays : []).forEach((x) => { if (x && suIsIso(x.day)) (m[x.day] = m[x.day] || []).push(Object.assign({ kind: "short" }, base, { around: x.around, active: w.active, minimum: w.minimum })); });
+    (Array.isArray(w.held) ? w.held : []).forEach((h) => { if (h && suIsIso(h.day)) (m[h.day] = m[h.day] || []).push(Object.assign({ kind: "held" }, base, { role: h.role, trailingEdge: !!h.trailingEdge })); });
+  });
+  return m;
+}
+// eastVacationWarnText(w, nameOf) -> one warning for the scheduler's boxes (Setup > East feed, the Time off East card):
+//   "Khan 4/6-4/9 (unreviewed): under the vacation minimum on 4/7, 4/8 (1 of 6 around, minimum 2); published day(s) held:
+//   4/5 primary (the day before), 4/6 primary". Dates only - no reason. "" for junk.
+function eastVacationWarnText(w, nameOf) {
+  if (!w || typeof w !== "object" || !suIsIso(w.start) || !suIsIso(w.end)) return "";
+  const name = typeof nameOf === "function" ? nameOf(w.id) : w.id;
+  const parts = [];
+  const sd = (Array.isArray(w.shortDays) ? w.shortDays : []).filter((x) => x && suIsIso(x.day));
+  if (sd.length) parts.push("under the vacation minimum on " + vgDaysLabel(sd.map((x) => x.day)) + " (" + sd.reduce((m, x) => Math.min(m, x.around), Infinity) + " of " + w.active + " around, minimum " + w.minimum + ")");
+  const hd = (Array.isArray(w.held) ? w.held : []).filter((h) => h && suIsIso(h.day));
+  if (hd.length) parts.push("published day(s) held: " + hd.map((h) => fmtMD(h.day) + " " + h.role + (h.trailingEdge ? " (the day before)" : "")).join(", "));
+  return name + " " + vgRangeLabel(w.start, w.end) + " (" + w.state + ")" + (parts.length ? ": " + parts.join("; ") : "");
+}
+// eastVacationWarnLine(item, nameOf) -> one day item of eastVacationWarnDays for the scheduler's day editor:
+//   "Khan's East vacation 4/6-4/9 (unreviewed): 1 of 6 around this day - under the minimum of 2 (a Davenport range is never
+//   refused)" / "...: Khan holds primary this day - inside it; decide home or trade the day" (a trailing-edge day: "- the day
+//   before it (the 07:00 handoff)"). "" for junk.
+function eastVacationWarnLine(item, nameOf) {
+  if (!item || typeof item !== "object" || !suIsIso(item.start) || !suIsIso(item.end)) return "";
+  const name = typeof nameOf === "function" ? nameOf(item.id) : item.id;
+  const head = name + "'s East vacation " + vgRangeLabel(item.start, item.end) + " (" + item.state + "): ";
+  if (item.kind === "short") return head + item.around + " of " + item.active + " around this day - under the minimum of " + item.minimum + " (a Davenport range is never refused)";
+  if (item.kind === "held") return head + name + " holds " + item.role + " this day - " + (item.trailingEdge ? "the day before it (the 07:00 handoff)" : "inside it") + "; decide home or trade the day";
+  return "";
+}
+// eastRefreshStatus(rows, fmtTs) -> { latest, lastServer } for Setup > East feed: from audit_log east.refresh rows (any
+//   order; other actions and junk ignored), the newest row and the newest row of the daily server refresh (actor_id 'cron' /
+//   detail.source 'cron'), each { at, server, ok, text } or null. ok = detail.ok when it is a boolean; an older in-app row
+//   (written on success only, before 10/14 - no ok key) reads ok. text: "Server refresh (daily) <time>: ok - N published
+//   week(s) cached" / "In-app refresh by <name> <time>: FAILED - <error> - the cached weeks were kept" (a failed run keeps
+//   the cache: east-feed-refresh and the in-app refresh both). fmtTs: the time's words (default suFmtTs).
+function eastRefreshStatus(rows, fmtTs) {
+  const ts = typeof fmtTs === "function" ? fmtTs : suFmtTs;
+  const list = (Array.isArray(rows) ? rows : []).filter((r) => r && typeof r === "object" && r.action === "east.refresh" && typeof r.created_at === "string")
+    .slice().sort((a, b) => a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
+  const line = (r) => {
+    if (!r) return null;
+    const d = r.detail && typeof r.detail === "object" ? r.detail : {};
+    const server = d.source === "cron" || r.actor_id === "cron";
+    const ok = typeof d.ok === "boolean" ? d.ok : true;
+    const who = server ? "Server refresh (daily)" : "In-app refresh" + (r.actor_name ? " by " + r.actor_name : "");
+    const err = String(d.error || (Array.isArray(d.errors) && d.errors.length ? d.errors[0] : "") || "").slice(0, 200);
+    const text = who + " " + ts(r.created_at) + ": " + (ok ? "ok - " + (typeof d.weeks === "number" ? d.weeks : 0) + " published week(s) cached" : "FAILED - " + (err || "see the Activity log") + " - the cached weeks were kept");
+    return { at: r.created_at, server, ok, text };
+  };
+  return { latest: line(list[0] || null), lastServer: line(list.find((r) => (r.detail && r.detail.source === "cron") || r.actor_id === "cron") || null) };
 }
 // tradesWaitingOn(rows, personId, today, tagOf) -> the PENDING trade / give proposals addressed to personId (the ones only
 // they can answer: Accept / Decline), ONE row per proposal, in the order given. [] without a person. With `tagOf` (the
@@ -7018,5 +7174,7 @@ if (typeof module !== "undefined" && module.exports) {
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
     VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, VG_MAX_DAYS, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuard, vacationGuardLine,
     vacationGuardOverride, vacationGuardOverrideText,
+    derivedVacationMap, derivedVacationSignature, vacationMapWithExtra, eastVacationOwnWarnings, eastVacationWarnDays, eastVacationWarnText,
+    eastVacationWarnLine, eastRefreshStatus, OFFER_EAST_BLOCK_CODES, OFFER_EAST_HIDDEN_WORDS, EAST_FEED_STALE_DAYS,
   };
 }

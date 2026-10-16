@@ -2962,6 +2962,36 @@ check("A2 (critic A7): eastVacationReadGuard - the vacation leg is trusted only 
     if (p.code) assert.ok(t.indexOf(p.code) >= 0, "it names the code: " + t);
   });
 });
+// Prompt 31 Part A (A3, 10/16): the in-app refresh runs the same silent-empty guard - east-feed.js eastVacationReadGuard /
+// eastGuardText, the client's copy - so the two refreshes trust (and word) a Davenport read alike: behaviour equality on the
+// fixtures above and on 3000 generated cases (codes, caches with forecast rows and junk, empty / failed / unresolved reads,
+// windows); string comparisons only, so no time-zone variant is needed.
+check("A3 (critic A7): the @eastRefresh guard equals east-feed.js eastVacationReadGuard / eastGuardText (the in-app refresh's) on fixtures and 3000 generated reads", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  assert.strictEqual(typeof ef.eastVacationReadGuard, "function", "east-feed.js exports eastVacationReadGuard");
+  assert.strictEqual(typeof ef.eastGuardText, "function", "east-feed.js exports eastGuardText");
+  let seed = 3131;
+  const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const day = () => "2026-" + String(1 + Math.floor(rnd() * 12)).padStart(2, "0") + "-" + String(1 + Math.floor(rnd() * 28)).padStart(2, "0");
+  const range = () => { const a = day(), b = day(); return a <= b ? { start: a, end: b } : { start: b, end: a }; };
+  const CODES = ["FAK", "MAB", "fak", "NF", ""];
+  let compared = 0;
+  for (let i = 0; i < 3000; i++) {
+    const cache = Array.from({ length: Math.floor(rnd() * 4) }, () => ({ week_monday: day(), data: Object.assign(rnd() < 0.15 ? { isForecast: true } : {}, { vacations: rnd() < 0.1 ? "junk" : Array.from({ length: Math.floor(rnd() * 3) }, () => Object.assign({ code: pick(CODES) }, range())) }) }));
+    const codes = Array.from({ length: Math.floor(rnd() * 3) }, () => pick(CODES));
+    const vac = rnd() < 0.2 ? null : {};
+    if (vac) codes.forEach(c => { if (c && rnd() < 0.8) vac[c.toUpperCase()] = rnd() < 0.5 ? [] : [range()]; });
+    const feed = rnd() < 0.05 ? null : { weeks: [], vacations: vac, vacationsError: rnd() < 0.1 ? "east-feed: GET time_off failed: HTTP " + pick([401, 500, 503]) : null, vacationsTo: rnd() < 0.2 ? null : day(), vacationCodesUnresolved: rnd() < 0.15 ? [pick(CODES)] : [] };
+    const from = rnd() < 0.1 ? null : day();
+    const a = ER.eastVacationReadGuard(feed, cache, codes, from), b = ef.eastVacationReadGuard(feed, cache, codes, from);
+    assert.deepStrictEqual(a, b, "case " + i + ": " + JSON.stringify({ feed, cache, codes, from }));
+    a.problems.forEach(p => assert.strictEqual(ER.eastGuardText(p), ef.eastGuardText(p), "the guard text of " + JSON.stringify(p)));
+    compared++;
+  }
+  [null, undefined, { why: "read-failed" }, { code: "FAK", why: "other", cached: 2 }].forEach(p => assert.strictEqual(ER.eastGuardText(p), ef.eastGuardText(p), "the guard text of " + JSON.stringify(p)));
+  assert.strictEqual(compared, 3000);
+});
 check("A2 (report section 3, critic A12): the warning days - eastNewRanges keeps the derived rows that are not exactly a range the cache held before (and end today or later); eastShortDays keeps the days silvis_vacation_short_days lists inside a new range with that person off through a derived row only; eastHeldDays lists the published days he holds inside a new range plus a trailing-edge-role day before it; dates only, sorted, from today", () => {
   if (!ER) throw new Error("the @eastRefresh block did not load");
   const roster = [{ id: "s1", code: "FAK" }, { id: "s2", code: "MAB" }];
@@ -3164,7 +3194,11 @@ async function erClientExpect(w0) {
   try {
     const feed = await ef.fetchEastWeeks(win.main.from, win.main.to, { vacationCodes: codes });
     const eastFeedRows = erClone(w.cache);
-    const plan = feed.vacations ? ef.planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app refresh runs the same A7 guard now (east-feed.js
+    // eastVacationReadGuard) before its plan; the re-statement follows the app's lines (pinned below)
+    const vacGuard = ef.eastVacationReadGuard(feed, eastFeedRows, codes, win.main.from);
+    const vacTrusted = vacGuard.ok && !!feed.vacations;
+    const plan = vacTrusted ? ef.planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
     const weekRows = ef.toEastFeedRows(plan.weeks).map((r) => ({ ...r, fetched_at: feed.fetchedAt }));
     const rewrittenRows = plan.rewritten.map((x) => ({ week_monday: x.weekMonday, data: x.data, fetched_at: x.fetchedAt || feed.fetchedAt }));
     const mainRows = weekRows.concat(rewrittenRows);
@@ -3361,7 +3395,11 @@ acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the 
   const cachedLists = {};
   erWorld().cache.forEach((x) => { cachedLists[x.week_monday] = x.data.vacations; });
   w.upserts[0].forEach((x) => assert.deepStrictEqual(x.data.vacations, cachedLists[x.week_monday], "week " + x.week_monday + " keeps its cached list"));
-  assert.deepStrictEqual(exp.mainRows.find((x) => x.week_monday === "2026-10-26").data.vacations, [], "the in-app plan over the same answer would have cleared it (why the guard exists)");
+  // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app refresh runs the same guard now, so its plan over the same
+  // answer keeps the cached list too (it cleared it before A3 - why the guard exists); the two refreshes agree row for row
+  assert.deepStrictEqual(exp.mainRows.find((x) => x.week_monday === "2026-10-26").data.vacations, cachedLists["2026-10-26"], "the in-app plan over the same answer keeps it too (the same guard)");
+  assert.ok(cachedLists["2026-10-26"].length > 0, "a cached list that a trusted empty answer would have cleared");
+  assert.deepStrictEqual(w.upserts[0], exp.mainRows, "the main upsert = what the in-app refresh writes for the same world");
   assert.strictEqual(w.upserts.length, 2, "the extra leg still runs");
   assert.strictEqual(r.body.ok, false);
   assert.ok(/FAK/.test(r.body.error) && /kept/.test(r.body.error), r.body.error);
@@ -3509,7 +3547,10 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
   const lines = [
     "const eastWin = eastRefreshWindows(todayCentral());",
     "try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }",
-    "const plan = feed.vacations ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };",
+    // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app refresh runs the A7 guard (east-feed.js
+    // eastVacationReadGuard, behaviour-equal to this function's) and plans only a trusted vacation read
+    "const vacGuard = eastVacationReadGuard(feed, eastFeedRows, vacationCodes, fromMon);",
+    "const plan = vacTrusted ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };",
     "const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));",
     "const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));",
     "Prefer: \"resolution=merge-duplicates,return=minimal\" }, body: JSON.stringify(rows) });",
@@ -3523,9 +3564,13 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
   let at = -1;
   lines.forEach((l) => { const k = f.indexOf(l); assert.ok(k > at, "in order: " + l); at = k; });
   assert.ok(f.indexOf(APP_CODES_LINES.trim()) > 0 && f.indexOf(APP_CODES_LINES.trim()) < f.indexOf(lines[1]), "the codes come before the read");
-  assert.ok(/st\.review\.end >= fromMon|p_from: fromMon/.test(f), "the in-app reset floor is fromMon (= the main window's Monday, the server's p_from)");
-  const resetAt = f.search(/st\.review\.end >= fromMon|east_vacation_reset_stale/);
-  assert.ok(resetAt > f.indexOf(lines[8]) && resetAt < f.indexOf(lines[9]), "the reset sits after the reload and before the extra leg");
+  // pin moved deliberately 10/14: Prompt 31 Part A A3 - the in-app reset runs through ONE call, runEastReviewResets (defined
+  // right after refreshEastFeed): the database's east_vacation_reset_stale(fromMon) - this function's own RPC and p_from -
+  // with the 9/23 loop (st.review.end >= fromMon) only while the RPC is missing; only on a trusted read
+  const rr = appSrc.slice(appSrc.indexOf("  const runEastReviewResets = async ({ trusted, cacheRows, vacationCodes, fromMon, feed }) => {"), appSrc.indexOf("  const saveEastOverride = async"));
+  assert.ok(rr.length > 200 && rr.includes("const rpc = await derivedVacDb.resetStale(fromMon);") && rr.includes("st.review.end >= fromMon") && rr.includes("if (!trusted) return"), "the in-app reset floor is fromMon (= the main window's Monday, the server's p_from), the RPC first, a trusted read only");
+  const resetAt = f.indexOf("const rr = await runEastReviewResets({ trusted: vacTrusted, cacheRows, vacationCodes, fromMon, feed });");
+  assert.ok(resetAt > f.indexOf(lines[9]) && resetAt < f.indexOf(lines[10]), "the reset sits after the reload and before the extra leg");
 });
 check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), section 3's record (PREPARED, NOT deployed: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, NOT scheduled yet), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
   assert.ok(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*NOT deployed[^\n]*\| never \|$/m.test(readme), "the table row");

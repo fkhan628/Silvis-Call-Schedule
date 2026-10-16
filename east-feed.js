@@ -620,6 +620,43 @@ function eastVacations(rows, code) {
   return eastMergeRanges(all);
 }
 
+// eastVacationReadGuard(feed, cachedRows, codes, from) -> { ok, problems } - Prompt 31 Part A (critic A7, the silent-empty
+//   guard). The vacation leg of a refresh is trusted only when: the time_off read did not fail ('read-failed'); every code
+//   resolved in the Davenport roster ('unresolved'); a list came back for every code ('missing'); and no code answered 0
+//   ranges while the cache holds ranges of it inside the read's window [from, feed.vacationsTo] ('empty-while-cached' - a
+//   blocked read answers 200 + [], and the review reset after it would delete every review as 'removed'). A cached range
+//   outside that window does not count (the read could not see it). No codes -> ok. Untrusted: the caller keeps every
+//   week's cached list (keepCachedVacations), resets no review and records the run as not ok. The in-app refresh's copy;
+//   the server refresh (edge-functions/east-feed-refresh) carries the same function in its @eastRefresh block, pinned
+//   behaviour-equal by test/edge-functions.test.js. eastGuardText(problem) -> its words (<= 200 characters).
+function eastVacationReadGuard(feed, cachedRows, codes, from) {
+  const problems = [];
+  const asked = [];
+  (codes || []).forEach(c => { const u = String(c || "").toUpperCase(); if (u && asked.indexOf(u) < 0) asked.push(u); });
+  if (!asked.length) return { ok: true, problems };
+  const f = feed || {};
+  if (f.vacationsError) return { ok: false, problems: [{ code: null, why: "read-failed", detail: String(f.vacationsError).slice(0, 120) }] };
+  const unresolved = (f.vacationCodesUnresolved || []).map(c => String(c || "").toUpperCase());
+  asked.forEach(code => {
+    if (unresolved.indexOf(code) >= 0) { problems.push({ code, why: "unresolved" }); return; }
+    const list = f.vacations && Object.prototype.hasOwnProperty.call(f.vacations, code) ? f.vacations[code] : null;
+    if (!Array.isArray(list)) { problems.push({ code, why: "missing" }); return; }
+    if (list.length) return;
+    const to = efIsDateStr(f.vacationsTo) ? f.vacationsTo : null;
+    const cached = eastVacations(cachedRows, code).filter(r => (!efIsDateStr(from) || r.end >= from) && (!to || r.start <= to)).length;
+    if (cached) problems.push({ code, why: "empty-while-cached", cached });
+  });
+  return { ok: problems.length === 0, problems };
+}
+function eastGuardText(p) {
+  const tail = " - the cached East vacations are kept and no review is reset";
+  if (!p) return "the East vacation read is not trusted" + tail;
+  if (p.why === "read-failed") return ("East time_off read FAILED" + tail + ": " + (p.detail || "")).slice(0, 200);
+  if (p.why === "unresolved") return (p.code + " is not in the Davenport roster" + tail).slice(0, 200);
+  if (p.why === "missing") return ("no vacation list came back for " + p.code + tail).slice(0, 200);
+  return ("Davenport answered no vacation for " + p.code + " while the cache holds " + p.cached + " range(s) in the read's window" + tail + " (a blocked read answers the same way)").slice(0, 200);
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     EAST_PROJECT, eastGetJson, eastResolveFakId, fetchEastWeeks,
@@ -629,5 +666,6 @@ if (typeof module !== "undefined") {
     eastMergeRanges, vacationsFromTimeOff, attachVacationsToWeeks, keepCachedVacations, planVacationCache, eastVacations,
     EAST_VACATIONS_HORIZON_DAYS, efFmt, efParse, efAddD, efDayOffsets,
     EAST_AHEAD_DAYS, efMonday, eastRefreshWindows, eastExtraWeeks,
+    eastVacationReadGuard, eastGuardText,
   };
 }

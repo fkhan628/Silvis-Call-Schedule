@@ -1073,7 +1073,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(card.includes("refresh the feed to delete them"), false, "the blanket 'refresh the feed to delete them' is still there");
     // Fix round (finding 13): My schedule's F badge (badgesFor - the month grid has drawn none since Item E2, 9/25) honours an override busy:false.
     const bs = src.indexOf("const badgesFor = (d, who) => {"); // Prompt 20 F3: badgesFor reads the shown surgeon's ctx (who || pid)
-    const badges = src.slice(bs, src.indexOf("return out;", bs));
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 11) - badgesFor now returns early for everyone but the
+    // scheduler (the East badges are his), so its first "return out;" is that gate; the body is read to its end (the
+    // countdown helper right after it) - the same F-badge line is checked
+    const badges = src.slice(bs, src.indexOf("const countdown = (d) =>", bs));
     assert.ok(badges.includes("P.eastOverrides[d] === false"), "badgesFor must skip the F badge on an override busy:false day");
   });
   check("P31B review (10/14): EastFeedCard names the forecast rows inside the published coverage by what deletes them - inside the refresh's MAIN window (Refresh from Davenport deletes them), in cached weeks past it (ignored by the rules, deleted once the window reaches them) and before it (no refresh deletes them) - from the same eastRefreshWindows(today) the refresh reads; the extra leg gains no prune; the lifted lines run on east-feed.js", () => {
@@ -1319,7 +1322,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const rv = src.indexOf("const renderVacationList = (personIds, allowEdit) => {");
     const body = src.slice(rv, src.indexOf("const renderVacationForm = ", rv));
     assert.ok(rv > 0 && body.length > 0, "renderVacationList body");
-    assert.ok(body.includes("const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations);"), "the grouping is the pure helper");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3) - the helper also takes the read-only extra ranges (vacListExtra: the
+    // East person's away / unreviewed ranges for the signed-in display); the time_off rows group exactly as before
+    assert.ok(body.includes("const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations, vacListExtra);"), "the grouping is the pure helper");
     assert.ok(body.includes('data-testid={"vac-group-" + g.pid}'), "the header carries vac-group-<id>");
     assert.ok(body.includes("const withHeader = personIds.length > 1;"), "a single person's own view shows just the lines");
     assert.ok(body.includes("{withHeader && (") , "the header is conditional");
@@ -2546,10 +2551,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(strip.includes("{eastDetailsVisible && eastVacPeople.length > 0 && ("), "the unreviewed East vacations item is gated (scheduler only - it was the scheduler's and Khan's)");
     assert.ok(!/eastVacById\[mySurgeon\]/.test(strip), "no Khan-as-surgeon branch left in the strip");
     // what is left once the three gated items are cut out must say nothing East
-    const evAt = strip.indexOf("{eastDetailsVisible && eastVacPeople.length > 0 && (");
-    const evEnd = strip.indexOf("</button>", evAt);
-    assert.ok(evAt > 0 && evEnd > evAt, "the gated East-vacation item is where the pin expects it");
-    const ungated = (strip.slice(0, evAt) + strip.slice(evEnd)).split("\n").filter(l => !/^\s*\{eastDetailsVisible && /.test(l)).join("\n");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, item 2) - a second gated East-vacation button follows the first (the
+    // East person's own-range warnings, cov-eastvac-warn); EVERY "{eastDetailsVisible && eastVacPeople.length > 0 && (" ..
+    // "</button>" block is cut (there are two), the rest must still say nothing East
+    let stripCut = strip, evCuts = 0;
+    for (let evAt = stripCut.indexOf("{eastDetailsVisible && eastVacPeople.length > 0 && ("); evAt >= 0; evAt = stripCut.indexOf("{eastDetailsVisible && eastVacPeople.length > 0 && (")) {
+      const evEnd = stripCut.indexOf("</button>", evAt);
+      assert.ok(evEnd > evAt, "a gated East-vacation item without its button end");
+      stripCut = stripCut.slice(0, evAt) + stripCut.slice(evEnd + "</button>".length);
+      evCuts++;
+    }
+    assert.strictEqual(evCuts, 2, "the two gated East-vacation items (unreviewed count, own-range warnings) are where the pin expects them");
+    const ungated = stripCut.split("\n").filter(l => !/^\s*\{eastDetailsVisible && /.test(l)).join("\n");
     assert.ok(!/East|Davenport|forecast/.test(ungated), "the coverage strip says something East outside the gated items: " + (ungated.split("\n").filter(l => /East|Davenport|forecast/.test(l)).join(" | ")).slice(0, 300));
     assert.ok(src.includes(`Rules not imported yet: holiday units{eastDetailsVisible ? " (and the day editor's East status)" : ""} appear`), "the rules-not-imported line names the East status to the scheduler only");
     // (4) the day editor: the prop, the East block, the locked-holder line, the Source masking
@@ -2812,7 +2825,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const media = src.slice(src.indexOf("@media (max-width: 600px) {", src.indexOf(".cal-grid {")), src.indexOf("</style>"));
     assert.ok(media.includes(".editor-kbd-hint { display: none; }"), "the keyboard hint hides at <= 600px");
     const de = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
-    assert.ok(de.includes("focusExternal, onGive, onOpenShifts, openOnBoard } = props;"), "DayEditor reads onGive / onOpenShifts / openOnBoard");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, item 2) - the props line also reads eastVacWarn (the scheduler's East
+    // own-range warnings for the day) after the three
+    assert.ok(de.includes("focusExternal, onGive, onOpenShifts, openOnBoard, eastVacWarn } = props;"), "DayEditor reads onGive / onOpenShifts / openOnBoard");
     assert.ok(de.includes("{!isPublicMode && !canEdit && myRole && day >= todayC && typeof onGive === \"function\" && (") && de.includes("{!isPublicMode && !canEdit && mySurgeon && !myRole && boardRoles.length > 0 && typeof onOpenShifts === \"function\" && ("), "Give away is today onward; the board link needs a board-listed OPEN slot on a day he does not hold");
     assert.ok(de.includes("    if (!canEdit) return null; // day-click summary") && de.indexOf("    if (!canEdit) return null; // day-click summary") < de.indexOf("    return period ? { period, items } : null;\n  }, [ctx, day, roster, draft]);"), "the offers read returns early for non-editors (the memo's pinned tail kept)");
     assert.ok(de.includes('const opts = React.useMemo(() => canEdit ? { primary: evalRole("primary"), backup: evalRole("backup") } : { primary: [], backup: [] }, [ctx, day, draft, roster, canEdit]);'), "the eligibility sweeps run for the scheduler only");
@@ -2886,24 +2901,29 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const noComments = (t) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
     // (1) the helper, lifted verbatim with the label functions, and run
     const helperSrc = e4Lift("const EAST_HARD_REASON_KEYS = [", "\n}\n");
-    assert.ok(helperSrc.includes("function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {"), "the helper's signature");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - the third argument (the eastVacation gloss) is gone: an East vacation
+    // day reads "on vacation" to everyone, exactly like a Silvis one
+    assert.ok(helperSrc.includes("function eastMaskedReasons(list, eastDetailsVisible) {"), "the helper's signature");
     const labelsSrc = e4Lift("const REASON_WORDS = {", "\n};\n") + "\n" + e4Lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + e4Lift("function softTag(soft) {", "\n}\n");
     const E = new Function(labelsSrc + "\n" + helperSrc + "\nreturn { EAST_HARD_REASON_KEYS, EAST_SOFT_REASON_KEYS, EAST_NOT_AVAILABLE, eastMaskedReasons, reasonLabel, softTag };")();
     const m = E.eastMaskedReasons;
     assert.strictEqual(E.EAST_NOT_AVAILABLE, "not available");
     // the scheduler: the SAME array back (hard and soft) - every string built from it is byte for byte the pre-E4 one
     const hardS = ["east-busy", "time-off:2026-10-12"], softS = [{ reason: "east-forecast:0.25", weight: 3 }, { reason: "preferred", weight: -2 }];
-    assert.strictEqual(m(hardS, true, "unreviewed"), hardS, "the scheduler's hard list is returned as is (identity)");
+    assert.strictEqual(m(hardS, true), hardS, "the scheduler's hard list is returned as is (identity)");
     assert.strictEqual(m(softS, true), softS, "the scheduler's soft list is returned as is (identity)");
     assert.strictEqual(E.reasonLabel(m(["east-busy"], true)[0], nameOf), "on East (Davenport) call", "the scheduler still reads the East wording");
     assert.strictEqual(E.softTag(m([{ reason: "east-forecast:0.25" }], true)[0]), "East 25%");
     // everyone else: each East hard code reads 'not available', once, where the first stood; the rest verbatim, in order
     ["east-busy", "east-forecast-busy:0.62", "derived-lock:backup", "derived-lock-held:s5", "east-busy@2026-11-26"].forEach(c => assert.deepStrictEqual(m([c], false), ["not available"], c + " -> 'not available'"));
     assert.deepStrictEqual(m(["monthly-cap:4", "east-busy", "holds-other-role", "derived-lock:primary", "east-forecast-busy:0.70"], false), ["monthly-cap:4", "not available", "holds-other-role"], "deduplicated in the place of the first East code; other codes verbatim, in order");
-    // a derived East vacation (the eastVacation gloss) is East-derived; a Silvis vacation (no gloss) stays 'on vacation'
-    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, "unreviewed"), ["not available"], "an East-vacation time-off reads 'not available' (and dedupes with east-busy)");
-    assert.deepStrictEqual(m(["day-before-vacation"], false, "away"), ["not available"], "the trailing edge of an East vacation too");
-    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, null), ["time-off:2026-10-12", "not available"], "a Silvis vacation (no gloss) keeps its own code");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - a derived East vacation's time-off / day-before-vacation is no
+    // longer masked - it reads "on vacation" / "vacation starts the next morning" like a Silvis one (it was "not available");
+    // an extra argument (an old caller's gloss) changes nothing
+    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, "unreviewed"), ["time-off:2026-10-12", "not available"], "an East-vacation time-off keeps its own code (the East busy code still masked)");
+    assert.deepStrictEqual(m(["day-before-vacation"], false, "away"), ["day-before-vacation"], "the trailing edge of an East vacation too");
+    assert.strictEqual(E.reasonLabel(m(["day-before-vacation"], false)[0], nameOf), "vacation starts the next morning");
+    assert.deepStrictEqual(m(["time-off:2026-10-12", "east-busy"], false, null), ["time-off:2026-10-12", "not available"], "a Silvis vacation keeps its own code");
     assert.strictEqual(E.reasonLabel(m(["time-off:2026-10-12"], false)[0], nameOf), "on vacation");
     // soft East notes are dropped - the same objects kept for the rest
     const softMix = [{ reason: "east-forecast:0.25", weight: 3 }, { reason: "preferred", weight: -2 }, { reason: "east-unknown", weight: 2 }, { reason: "east-clear", weight: -2 }, { reason: "outside-offers", weight: 4 }];
@@ -2920,7 +2940,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const EAST_TEXT = /\beast\b|davenport|derived/i;
     R.HARD_REASONS.forEach(code => {
       const c = code.endsWith(":") ? code + "x" : code;
-      const out = m([c], false, "unreviewed").map(x => E.reasonLabel(x, nameOf));
+      const out = m([c], false).map(x => E.reasonLabel(x, nameOf));
       assert.ok(!out.some(t => EAST_TEXT.test(t)), "rules.HARD_REASONS " + code + " still reads East to a non-scheduler: " + out.join(" | "));
     });
     // (2) the key lists = what rules.js pushes and what helpers.js reads as 'not available'
@@ -2938,17 +2958,22 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const pushedSoft = Array.from(new Set((rulesSrc.match(/soft\.push\(\{ reason: "([a-z-]+)/g) || []).map(s => /"([a-z-]+)$/.exec(s)[1]).filter(k => /east/.test(k)))).sort();
     assert.deepStrictEqual(pushedSoft, E.EAST_SOFT_REASON_KEYS.slice().sort(), "EAST_SOFT_REASON_KEYS = every East soft.push(...) reason in rules.js");
     assert.ok(!/"east-vacation|"east-id-unresolved/.test(rulesSrc), "rules.js grew an east-vacation / east-id-unresolved reason code - add it to the helper (an East vacation reuses time-off / day-before-vacation with the eastVacation gloss today)");
-    assert.ok(rulesSrc.includes('hard.push("time-off:" + date); if (P.eastVacationDays[date]) res.eastVacation = P.eastVacationDays[date];') && rulesSrc.includes('hard.push("day-before-vacation"); if (P.eastDayBefore[date]) res.eastVacation = P.eastDayBefore[date];') && rulesSrc.includes("if (st.eastVacation) out.eastVacation = st.eastVacation;"), "the eastVacation gloss the helper's third argument reads (rules.js static layer + glossed())");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - rules.js keeps the gloss (the scheduler's day editor
+    // reads it: "on vacation (East vacation, unreviewed ...)"); the helper no longer does
+    assert.ok(rulesSrc.includes('hard.push("time-off:" + date); if (P.eastVacationDays[date]) res.eastVacation = P.eastVacationDays[date];') && rulesSrc.includes('hard.push("day-before-vacation"); if (P.eastDayBefore[date]) res.eastVacation = P.eastDayBefore[date];') && rulesSrc.includes("if (st.eastVacation) out.eastVacation = st.eastVacation;"), "the eastVacation gloss rules.js gives the scheduler's editor (static layer + glossed())");
     // (3) every reason the board and the trade card render reads through the helper
     const app = src.slice(src.indexOf("function CallSchedule() {"), src.indexOf("function MonthPainterSheet("));
     const appCode = noComments(app);
-    assert.ok(appCode.includes('const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible, r.eastVacation)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";'), "tradeReasonText (the trade-to / trade-return boxes, the Blocked / Can't accept toasts, the scheduler's confirms)");
-    assert.ok(appCode.includes('showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible, gate.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");'), "the claim-gate toast");
-    assert.ok(appCode.includes("soft: r.soft || [], eastVacation: r.eastVacation || null };"), "boardElig carries the eastVacation gloss");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - the four hard-reason call sites pass no gloss
+    assert.ok(appCode.includes('const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";'), "tradeReasonText (the trade-to / trade-return boxes, the Blocked / Can't accept toasts, the scheduler's confirms)");
+    assert.ok(appCode.includes('showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");'), "the claim-gate toast");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - nothing reads the gloss on the board any more, so its row
+    // no longer carries it
+    assert.ok(appCode.includes("soft: r.soft || [] };") && !appCode.includes("eastVacation: r.eastVacation"), "boardElig no longer carries the eastVacation gloss");
     assert.ok(appCode.includes("const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? \"allowed - \" + soft.map(x => reasonLabel(x.reason, nameOf)).join(\"; \") : \"no rule warnings\"}"), "the board's eligible chip hover");
-    assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");'), "the Take button's title");
+    assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon");'), "the Take button's title");
     assert.ok(appCode.includes("setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });") && (appCode.match(/setClaimSheet\(\{/g) || []).length === 1, "the claim sheet's list is masked where the sheet is opened (its one setClaimSheet({...}))");
-    assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
+    assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
     assert.ok(appCode.includes("const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];") && appCode.includes("Allowed with a note: {toNotes.map(softTag).join(\", \")}."), "the trade card's 'Allowed with a note'");
     assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 7, "seven call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note) - a new one needs its pin here");
     // nothing on those surfaces reads a reason around the helper: no hard[0] left in the App, every reasonLabel( there takes
@@ -4073,7 +4098,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const rb = src.slice(rs, src.indexOf("const saveEastOverride = async", rs));
     assert.ok(rb.includes("const newRanges = eastVacations(cacheRows, code);"), "the stale list must be computed from the reloaded cache (eastVacations(cacheRows, code))");
     assert.strictEqual(rb.includes("feed.vacations[code] || []"), false, "never against the raw fetched list (a kept-unseen range joined in the cache would reset the review on every refresh)");
-    assert.ok(rb.includes("feed.vacations && cacheRows &&"), "a failed cache reload resets nothing");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 4) - the reset moved into runEastReviewResets (the RPC, the
+    // 9/23 loop while it is missing); "no reloaded cache -> nothing reset" is its own early return now (the trusted read - the
+    // A7 guard - replaced the feed.vacations half)
+    assert.ok(rb.includes('if (!cacheRows) return { via: null, resets, failures, error: null, skipped: "the cache did not reload" };'), "a failed cache reload resets nothing");
   });
   // Prompt 31 Part B item 7 (10/13): the in-app refresh's windows come from east-feed.js eastRefreshWindows(todayCentral()).
   // The MAIN window is the old one exactly (the vacations read, the review-reset floor and the forecast prune keep it); a
@@ -4108,7 +4136,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("P31B item 7: the weeks-only extra leg - after the reloaded cache and the resets, before resetText; only when the cache reloaded (else a named skip); fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {}) (no vacation codes); eastExtraWeeks(feed.weeks, more.weeks, eastWin) picks the weeks; keepCachedVacations over the RELOADED cache; one merge-duplicates upsert through dbAuthHeaders, then a reload; its own try / catch (console.warn + extra.error); no review reset, forecast prune, vacation plan or stale state inside", () => {
     const { rb, legAt, endAt, leg } = P31I7;
     assert.ok(leg.length > 0, "no `const extra = {` .. `const resetText` leg in refreshEastFeed");
-    assert.ok(legAt > rb.indexOf("const cacheRows = ") && legAt > rb.lastIndexOf("reviewResetFailures).push("), "the leg runs after the cache reload and the review resets (they read the cache the main leg wrote)");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 4) - the resets run through ONE call, runEastReviewResets (its
+    // body - the RPC, the 9/23 loop - is defined after refreshEastFeed, so "reviewResetFailures).push(" is gone); the leg still
+    // runs after the cache reload and after that call
+    const rrAt = rb.indexOf("const rr = await runEastReviewResets(");
+    assert.ok(rrAt > 0 && legAt > rb.indexOf("const cacheRows = ") && legAt > rrAt, "the leg runs after the cache reload and the review resets (they read the cache the main leg wrote)");
     assert.ok(endAt > legAt && rb.indexOf('logAudit("east.refresh"') > endAt, "the leg runs before the audit row and the toast text");
     assert.ok(leg.startsWith("const extra = { from: eastWin.extra.from, to: eastWin.extra.to, weeks: 0, past: 0, ahead: 0, skipped: 0, error: null };"), "extra starts as an empty record of the window");
     assert.ok(leg.includes("if (cacheRows) {") && leg.includes('} else extra.error = "the cache did not reload - skipped";'), "a failed cache reload skips the leg, named");
@@ -4130,7 +4162,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(es.includes("NOT cached") && es.includes("more published week(s) cached") && es.includes("extra.skipped"), "the summary names a failure, the weeks cached and the weeks skipped after a gap");
     const toast = rb.slice(rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"), rb.indexOf("} catch (e) {", rb.indexOf("showToast(weekRows.length ? `East feed refreshed:")));
     assert.strictEqual((toast.match(/\$\{extraWord\}/g) || []).length, 2, "both toast branches carry extraWord");
-    assert.ok(toast.includes('feed.vacationsError || reviewResetFailures.length || extra.error ? "error"'), "a failed extra leg turns the toast's tone to error");
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3, critic A7 / decision 4) - an untrusted vacation read (!vacGuard.ok) and
+    // a failed reset RPC (rr.error) turn the tone to error too; the extra leg's failure still does
+    assert.ok(toast.includes('feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error"'), "a failed extra leg turns the toast's tone to error");
     const ew = rb.slice(rb.indexOf("const extraWord = "), rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"));
     assert.ok(ew.includes("could NOT be cached") && ew.includes("more published week(s) cached.") && ew.includes("extra.skipped"), "the toast names a failure, the weeks cached and the weeks skipped after a gap");
   });
@@ -4978,7 +5012,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx,"), "the sheet takes the availability prop after schedule");
       assert.ok(src.includes("const np = React.useMemo(() => noPrimaryDays(availability, pid), [availability, pid]);"), "own / range days through helpers.noPrimaryDays");
       const filt = src.indexOf("const hard = elig ? elig.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [];");
-      assert.ok(filt > 0 && src.indexOf("const why = offerDayWhy(hard);") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
+      // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 11) - the call passes { eastDetails } (the East block words
+      // read "not available" to everyone but the scheduler); the filter still runs first
+      assert.ok(filt > 0 && src.indexOf("const why = offerDayWhy(hard, { eastDetails: !!eastDetails });") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
       assert.ok(src.includes("if (row.npRange && !row.block.primary) row.block.primary = NO_PRIMARY_RANGE_WORDS;"), "a range day blocks primary with the range words");
       assert.ok(src.includes("row.holdsPrimary = !!pid && row.holders.primary === pid;"), "held primary comes from the schedule the sheet already gets");
       assert.ok(src.includes("const out = offerPaintCell(cellOf(r), brush, { single });"), "every paint goes through helpers.offerPaintCell");
@@ -9438,6 +9474,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         countdown: () => "in 3 days", roleWord: (r) => r === "primary" ? "Primary" : "Backup",
         nameOf: (id) => nameOf(id), holderLabel: (v, nm) => v ? nm(v) : "OPEN",
         badgesFor: () => [], offerTagOf: () => null, Padlock,
+        // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 11) - the lifted daysBlock reads the flag for its badge
+        // legend (the E / F / EV words are the scheduler's); these rows checks run as a non-scheduler
+        eastDetailsVisible: false,
         proposeTradeForDay: (d, r) => calls.push(["trade", d, r]), proposeGiveForDay: (d, r, w) => calls.push(["give", d, r, w]),
         DAYS: [],
       };
@@ -9657,8 +9696,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // a case sets it (opt.closureScheduler) - so a read of it fails every toast check below instead of passing unseen.
       "isSchedulerRef", "resyncPendingRef",
       // Prompt 29 (the merge with main, 10/2): the APP-day read joins the batch through its ref, with the collector (key appDays)
-      "loadAppDaysRef"];
-    const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews", "app_call_days"];
+      "loadAppDaysRef",
+      // pin moved deliberately 10/14: Prompt 31 Part A (A3) - the derived East vacations join the batch (quiet: no collector, a
+      // console line only - the display keeps today's picture without them); one more read in flight from the start
+      "loadDerivedVacations"];
+    const READS = ["blob", "days", "shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "time_off", "availability", "east", "east_vacation_reviews", "app_call_days", "derived_vacations"];
     const LOUD = ["time_off", "availability", "east", "east_vacation_reviews", "app_call_days"]; // the loaders that hand a sentence to the collector (the APP-day read since the merge with main, 10/2)
     const FAILMSG = {
       days: "Couldn't load the latest data - check your connection and reload.",
@@ -9701,7 +9743,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         loader("time_off"), loader("availability"), loader("east"), loader("east_vacation_reviews"),
         H.combinedLoadToast, (m, tone) => st.toasts.push(tone + " " + m),
         (v) => st.loaded.push({ v, pending: READS.filter(n => !st.settled.includes(n)) }),
-        refs.daysReadOkRef, refs.isSchedulerRef, refs.resyncPendingRef, ref(loader("app_call_days")));
+        refs.daysReadOkRef, refs.isSchedulerRef, refs.resyncPendingRef, ref(loader("app_call_days")),
+        (q) => { st.quiet.derived_vacations = q; return defer("derived_vacations"); });
       const OK = { blob: { data: { data: { roster: [] }, updated_at: opt.rowTs || "t-blob" } }, days: { sched: {}, vers: {}, count: 0 }, shift_trade_requests: [], notifications: [], call_offers: true, call_periods: true, client_versions: [] };
       st.ok = (name) => st.d[name].res(OK[name] !== undefined ? OK[name] : {});
       st.failRead = (name) => (LOUD.includes(name) ? st.d[name].res({ fail: true }) : st.d[name].rej(new Error("HTTP 500 harness")));
@@ -9772,7 +9815,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       st.failRead("blob"); await tick();
       assert.deepStrictEqual(st.toasts, [], "no toast while reads are still out (each failure used to toast at once, replacing the one before)");
       // the APP-day read (in the batch since Prompt 29's merge with main, 10/2) lands like the others here
-      ["shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "availability", "app_call_days"].forEach(n => st.ok(n));
+      // pin moved deliberately 10/14: Prompt 31 Part A (A3) - so does the derived East vacations read (quiet: never in the toast)
+      ["shift_trade_requests", "notifications", "call_offers", "call_periods", "client_versions", "availability", "app_call_days", "derived_vacations"].forEach(n => st.ok(n));
       await tick();
       assert.strictEqual(st.loaded.length, 0, "the days read is still out");
       st.failRead("days");
@@ -10171,7 +10215,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const auth = { ensureFresh: async () => { st.reads.push("ensureFresh"); return { ok: true, refreshed: !!opt.refreshed }; }, sessionExpired: false };
       const fns = new Function("auth", "resyncPendingRef", "refreshOwnProfile", "refreshBlobRow", "refreshDays", "refreshTradeReqs", "refreshNotifs", "refreshMinVersion",
         "loadTimeOff", "loadAvailability", "loadEastTables", "loadEastVacationReviews", "loadOffers", "loadPeriods", "blobDirtyRef", "authUserRef", "isPublicMode", "document", "Date",
-        "pollTickMode", "pollCatchUpDue", "eastPollDue", "pollFullRecent", "loadAppDaysRef",
+        "pollTickMode", "pollCatchUpDue", "eastPollDue", "pollFullRecent", "loadAppDaysRef", "loadDerivedVacations",
         pollSrc + "\nreturn { refreshAll, refreshEastTables, pollTick, onPollVisibility, clocks: () => ({ lastFullPollAt, lastEastPollAt }) };")(
         auth, refs.resyncPendingRef, async () => { st.reads.push("profile"); }, rd("blob"), rd("days"), rd("trades"), rd("notifications"), rd("minVersion"),
         async (q) => { st.reads.push("time_off:" + q); }, async (q) => { st.reads.push("availability:" + q); },
@@ -10181,12 +10225,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         async (q) => { st.reads.push("reviews:" + q); }, async (q) => { st.reads.push("offers:" + q); }, async (q) => { st.reads.push("periods:" + q); },
         refs.blobDirtyRef, refs.authUserRef, !!opt.publicMode, doc, clock, H.pollTickMode, H.pollCatchUpDue, H.eastPollDue, H.pollFullRecent,
         // Prompt 29 (the merge with main, 10/2): refreshAll reads the APP days through the ref - quiet (false); the stub records the argument
-        ref(async (q) => { st.reads.push("appdays:" + q); }));
+        ref(async (q) => { st.reads.push("appdays:" + q); }),
+        // pin moved deliberately 10/14: Prompt 31 Part A (A3) - refreshAll reads the derived East vacations on every full run (the
+        // loader itself returns at once on ?public=1); the stub records the call
+        async () => { st.reads.push("derived"); });
       st.take = () => { const r = st.reads.slice(); st.reads.length = 0; return r; };
       return { st, refs, doc, fns };
     };
     // Prompt 29 (the merge with main, 10/2): a full refresh also reads the APP days, quietly ("appdays:false"); a hidden tick never does
-    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all:true", "reviews:true", "offers:true", "periods:true", "appdays:false"];
+    // pin moved deliberately 10/14: Prompt 31 Part A (A3) - the derived East vacations ("derived") join every full run
+    const FULL_FIRST = ["ensureFresh", "profile", "blob", "days", "trades", "notifications", "minVersion", "time_off:true", "availability:true", "east:all:true", "reviews:true", "derived", "offers:true", "periods:true", "appdays:false"];
     const sorted = (a) => a.slice().sort();
     const flush = () => new Promise(r => setImmediate(r));
 
@@ -10751,7 +10799,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(vf.indexOf('renderVacGuard("vac",') > vf.indexOf('data-testid="vac-add"') && vf.indexOf('renderVacGuard("vac",') < vf.indexOf('data-testid="vac-conflict"'), "under the Add button, before the on-call refusal");
       const rl = src.slice(src.indexOf("const renderVacationList = (personIds, allowEdit) => {"), src.indexOf("const renderVacationForm = (personChoices) => ("));
       assert.ok(rl.includes('{renderVacGuard("vac-edit", vacEditGuardPreview, vacRefusalShown(vacEditGuardRefusal && vacEditGuardRefusal.rowId === editVac.rowId ? vacEditGuardRefusal : null, editVac.sid, editVac.start, editVac.end, vacEditGuardPreview), () => setVacEditGuardRefusal(null))}'), "an Edit row (review 10/1 item 2): prefix vac-edit, the same line and box for the row being edited");
-      assert.ok(rl.indexOf('renderVacGuard("vac-edit",') > rl.indexOf("<button onClick={saveEditVac}") && rl.indexOf('renderVacGuard("vac-edit",') < rl.indexOf("vacRangeLabel(r.vs, r.ve, todayStr)"), "...inside the Edit branch, after Save / Cancel");
+      // pin moved deliberately 10/14: Prompt 31 Part A (A3) - a read-only derived line (the East person's away / unreviewed range,
+      // no Edit) now renders first with its own vacRangeLabel; the Edit branch sits in the time_off line, before ITS label (the last)
+      assert.ok(rl.indexOf('renderVacGuard("vac-edit",') > rl.indexOf("<button onClick={saveEditVac}") && rl.indexOf('renderVacGuard("vac-edit",') < rl.lastIndexOf("vacRangeLabel(r.vs, r.ve, todayStr)"), "...inside the Edit branch, after Save / Cancel");
       assert.strictEqual(count("renderVacGuard("), 2, "one renderer (const renderVacGuard = ...), two call sites");
       assert.strictEqual(count('data-testid="vac-guard-note"'), 1, "one card sentence");
       assert.ok(src.includes('{!isViewer && <p style={sectionNote} data-testid="vac-guard-note">At least {vacationRules(groupRules).minSurgeonsAround} surgeons must stay around on every day: an entry that would leave fewer is refused'), "the Time off card's sentence reads the minimum from the data");
@@ -13710,6 +13760,437 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(osAt > 0 && calAt > osAt, "the section comes before the calendar");
       assert.ok(pg.indexOf('L.push("## Score")') < osAt, "...and after the score");
       assert.ok(pg.includes('dg.overSoftLimit.forEach((o) => L.push("- " + md(H.overSoftLimitLine(o, nameOf))))'), "one line per day in the helper's words");
+    });
+  }
+
+  /* ---------------- P31A3. Prompt 31 Part A step A3 (10/16): Khan's East vacations for everyone signed in - the client ---------------- */
+  // Faraz 10/9 items 1-6, the 10/13 report (decision (a), the derived SQL function) and its critic (A5 / A7 / A8), the 10/14
+  // decisions: ONE signed-in read of silvis_derived_vacations() (config.js derivedVacDb - the readAuthOnlyTable contract; a
+  // missing function reads "unavailable" = today's picture) feeding a DISPLAY map for everyone but the scheduler (the dots, the
+  // "Off:" line, the vacation lists, Mine, the painter's shading) - never timeOffRows / vacations / ?public=1 / share / print;
+  // the scheduler keeps his JS picture with the review state (critic A5) and gets the warnings for Khan's own range; the
+  // board / claim / trade reasons read "on vacation"; every East word non-schedulers saw goes under eastDetailsVisible; the
+  // in-app refresh runs the A7 guard and the ONE reset RPC (the client loop only while the RPC is missing).
+  console.log("\n[P31A3] Prompt 31 Part A (A3): the derived East vacations - helpers, config.js derivedVacDb, the App's display / warnings / refresh");
+  {
+    const plainA = (v) => JSON.parse(JSON.stringify(v));
+    const acheckA = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    const liftA = (a, end) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(end, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 70) + "' not found"); return src.slice(i, j + end.length); };
+    const appA = src.slice(src.indexOf("function CallSchedule() {"), src.indexOf("function MonthPainterSheet("));
+    check("P31A3 helpers: the A3 helpers are exported (derivedVacationMap, derivedVacationSignature, vacationMapWithExtra, eastVacationOwnWarnings, eastVacationWarnDays, eastVacationWarnText, eastVacationWarnLine, eastRefreshStatus, OFFER_EAST_BLOCK_CODES, EAST_FEED_STALE_DAYS)", () => {
+      ["derivedVacationMap", "derivedVacationSignature", "vacationMapWithExtra", "eastVacationOwnWarnings", "eastVacationWarnDays", "eastVacationWarnText", "eastVacationWarnLine", "eastRefreshStatus"].forEach(f => assert.strictEqual(typeof H[f], "function", "helpers." + f));
+      assert.deepStrictEqual(H.OFFER_EAST_BLOCK_CODES, ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"]);
+      assert.strictEqual(H.EAST_FEED_STALE_DAYS, 2, "decision 5: the Setup staleness warning at 2 days (a daily server refresh)");
+    });
+    check("P31A3 derivedVacationMap: { person_id: [{ start, end }] } sorted by start, an exact duplicate once, junk (no id, a non-ISO / inverted date, a non-object) dropped, the date columns cut to the day; signature = the rows as a set", () => {
+      const rows = [
+        { person_id: "s1", start_date: "2027-05-04", end_date: "2027-05-07" },
+        { person_id: "s1", start_date: "2027-04-06T00:00:00", end_date: "2027-04-09" },
+        { person_id: "s1", start_date: "2027-05-04", end_date: "2027-05-07" },
+        { person_id: "s5", start_date: "2027-04-08", end_date: "2027-04-08" },
+        { person_id: "", start_date: "2027-01-01", end_date: "2027-01-02" }, { person_id: "s2", start_date: "2027-02-03", end_date: "2027-02-01" },
+        { person_id: "s2", start_date: "junk", end_date: "2027-02-01" }, null, 7, "x",
+      ];
+      assert.deepStrictEqual(plainA(H.derivedVacationMap(rows)), { s1: [{ start: "2027-04-06", end: "2027-04-09" }, { start: "2027-05-04", end: "2027-05-07" }], s5: [{ start: "2027-04-08", end: "2027-04-08" }] });
+      assert.deepStrictEqual(plainA(H.derivedVacationMap(null)), {}, "no rows -> {}");
+      assert.deepStrictEqual(plainA(H.derivedVacationMap({ person_id: "s1" })), {}, "not an array -> {}");
+      const sig = H.derivedVacationSignature(rows);
+      assert.strictEqual(sig, "s1:2027-04-06..2027-04-09|s1:2027-05-04..2027-05-07|s5:2027-04-08..2027-04-08");
+      assert.strictEqual(H.derivedVacationSignature(rows.slice().reverse()), sig, "the order of the rows does not matter");
+      assert.strictEqual(H.derivedVacationSignature(rows.slice(1)), sig, "dropping one of two exact duplicates changes nothing (a set)");
+      assert.strictEqual(H.derivedVacationSignature([rows[1], rows[3]]), "s1:2027-04-06..2027-04-09|s5:2027-04-08..2027-04-08", "a range less changes it");
+      assert.notStrictEqual(H.derivedVacationSignature([{ person_id: "s1", start_date: "2027-04-06", end_date: "2027-04-10" }]), H.derivedVacationSignature([{ person_id: "s1", start_date: "2027-04-06", end_date: "2027-04-09" }]), "an end day moved changes it");
+      assert.strictEqual(H.derivedVacationSignature([]), "", "none -> ''");
+    });
+    check("P31A3 vacationMapWithExtra: the time_off map's shape ([start, end, id, note]) with the extra ranges appended as [start, end, null, null] per person; the inputs untouched; junk extra ignored", () => {
+      const vac = { s2: [["2027-04-07", "2027-04-08", "row-2", "conference"]] };
+      const vacBefore = JSON.stringify(vac);
+      const extra = { s1: [{ start: "2027-04-06", end: "2027-04-09", state: "unreviewed" }, { start: "bad", end: "2027-04-09" }, null], s2: [{ start: "2027-06-01", end: "2027-06-02" }], s9: "junk" };
+      const m = H.vacationMapWithExtra(vac, extra);
+      assert.deepStrictEqual(plainA(m), { s2: [["2027-04-07", "2027-04-08", "row-2", "conference"], ["2027-06-01", "2027-06-02", null, null]], s1: [["2027-04-06", "2027-04-09", null, null]] });
+      assert.strictEqual(JSON.stringify(vac), vacBefore, "the time_off map is not mutated");
+      assert.ok(m !== vac && m.s2 !== vac.s2, "a new map and new lists");
+      assert.deepStrictEqual(plainA(H.vacationMapWithExtra(vac, null)), plainA(vac), "no extra -> the same picture");
+      assert.deepStrictEqual(plainA(H.vacationMapWithExtra(null, { s1: [{ start: "2027-04-06", end: "2027-04-06" }] })), { s1: [["2027-04-06", "2027-04-06", null, null]] });
+      assert.strictEqual(H.onVac("s1", "2027-04-07", m), true, "helpers.onVac reads the merged map (the day summary's names)");
+    });
+    check("P31A3 groupVacationRows(vacations, ids, today, showPast, extra): extra ranges become read-only rows { derived: true, id null, note null, state } in the person's block, sorted by start (time_off first on a tie), counted in upcoming / past; without extra the rows are unchanged", () => {
+      const vac = { s1: [["2027-04-06", "2027-04-07", "t1", null]], s2: [["2026-01-02", "2026-01-03", "t2", "x"]] };
+      const extra = { s1: [{ start: "2027-04-06", end: "2027-04-09", state: "unreviewed" }, { start: "2026-02-01", end: "2026-02-02", state: "away" }], s3: [{ start: "2027-05-01", end: "2027-05-02" }] };
+      const g = plainA(H.groupVacationRows(vac, ["s1", "s2", "s3"], "2026-10-16", true, extra));
+      assert.deepStrictEqual(g.map(x => [x.pid, x.upcoming, x.past]), [["s1", 2, 1], ["s2", 0, 1], ["s3", 1, 0]]);
+      assert.deepStrictEqual(g[0].rows.map(r => [r.vs, r.ve, r.id, !!r.derived, r.state || null]), [["2026-02-01", "2026-02-02", null, true, "away"], ["2027-04-06", "2027-04-07", "t1", false, null], ["2027-04-06", "2027-04-09", null, true, "unreviewed"]], "sorted by start, the time_off row first on a tie");
+      assert.deepStrictEqual(g[2].rows[0], { pid: "s3", vs: "2027-05-01", ve: "2027-05-02", id: null, note: null, past: false, derived: true, state: null }, "a derived row of the display map (no state)");
+      const without = plainA(H.groupVacationRows(vac, ["s1", "s2"], "2026-10-16", true));
+      assert.deepStrictEqual(without, plainA(H.groupVacationRows(vac, ["s1", "s2"], "2026-10-16", true, {})), "no extra = an empty extra");
+      assert.ok(without.every(gr => gr.rows.every(r => !("derived" in r))), "a time_off row carries no derived key (the Item B pins' shape)");
+      assert.deepStrictEqual(plainA(H.groupVacationRows({}, ["s1"], "2026-10-16", false, { s1: [{ start: "2026-01-01", end: "2026-01-02" }] })), [], "only a past derived range and showPast off -> no group");
+    });
+    // the warning for the East person's own range (item 2)
+    const roster6 = ["s1", "s2", "s3", "s4", "s5", "s6"].map(id => ({ id, name: nameOf(id), code: id.toUpperCase(), active: true }));
+    const toRows = [
+      { id: "t2", person_id: "s2", start_date: "2027-04-07", end_date: "2027-04-08" },
+      { id: "t3", person_id: "s3", start_date: "2027-04-07", end_date: "2027-04-08" },
+      { id: "t4", person_id: "s4", start_date: "2027-04-07", end_date: "2027-04-08" },
+      { id: "t5", person_id: "s5", start_date: "2027-04-07", end_date: "2027-04-07" },
+    ];
+    const away = { s1: [{ start: "2027-04-06", end: "2027-04-09", state: "unreviewed" }, { start: "2027-05-04", end: "2027-05-07", state: "away" }, { start: "2026-01-01", end: "2026-01-03", state: "away" }, { start: "2027-06-01", end: "2027-06-02", state: "home" }], s5: [{ start: "2027-04-08", end: "2027-04-08", state: "away" }] };
+    const confl = [
+      { day: "2027-04-06", role: "primary", surgeonId: "s1", state: "unreviewed" },
+      { day: "2027-04-05", role: "primary", surgeonId: "s1", state: "unreviewed", trailingEdge: true },
+      { day: "2027-04-06", role: "backup", surgeonId: "s2", state: "away" },
+      { day: "2026-01-02", role: "backup", surgeonId: "s1", state: "away" },
+    ];
+    const W = (over) => plainA(H.eastVacationOwnWarnings(Object.assign({ eastAway: away, timeOffRows: toRows, roster: roster6, groupRules: {}, eastReviewsLoaded: true, conflicts: confl, today: "2026-10-16" }, over || {})));
+    check("P31A3 eastVacationOwnWarnings: per upcoming away / unreviewed range of an East person - the days under the vacation minimum with him off (vacationGuard over the range with HIS OWN East ranges taken out, everyone else's counted) and the published days he holds inside it (+ the trailing-edge day before); only ranges with either; home and past ranges never", () => {
+      const w = W();
+      assert.deepStrictEqual(w.map(x => [x.id, x.start, x.end, x.state]), [["s1", "2027-04-06", "2027-04-09", "unreviewed"], ["s5", "2027-04-08", "2027-04-08", "away"]], "s1's 4/6-4/9 and s5's 4/8; s1's 5/4-5/7 (nobody else off, nothing held), the past and the home range are not listed");
+      assert.deepStrictEqual(w[0].shortDays, [{ day: "2027-04-07", around: 1 }, { day: "2027-04-08", around: 1 }], "4/7: s2-s5 off by time_off; 4/8: s2-s4 by time_off + s5 by HIS East range -> 1 of 6 around, under the minimum of 2");
+      assert.deepStrictEqual(w[0].held, [{ day: "2027-04-05", role: "primary", trailingEdge: true }, { day: "2027-04-06", role: "primary", trailingEdge: false }], "his own conflicts only, by day: the primary the day before (trailing edge) and the primary inside");
+      assert.deepStrictEqual([w[0].active, w[0].minimum], [6, 2]);
+      assert.deepStrictEqual(w[1].shortDays, [{ day: "2027-04-08", around: 1 }], "s5's own range: s1's East range counts for HIM (only his own is taken out)");
+      assert.deepStrictEqual(w[1].held, []);
+      const pend = W({ eastReviewsLoaded: false });
+      assert.deepStrictEqual(pend.map(x => [x.id, x.shortDays.map(d => d.day)]), [["s1", ["2027-04-07"]]], "reviews not loaded: another person's East range is not counted (never a warning on a guess) - 4/8 is then 2 around");
+      const later = W({ today: "2027-04-07" });
+      assert.deepStrictEqual(later.map(x => [x.id, x.shortDays.map(d => d.day), x.held.map(h => h.day)]), [["s1", ["2027-04-07", "2027-04-08"], []], ["s5", ["2027-04-08"], []]], "a range under way is checked from today; held days before today are dropped");
+      assert.deepStrictEqual(W({ groupRules: { vacations: { minSurgeonsAround: 1 } }, conflicts: [] }), [], "a minimum of 1 and no held day -> no warning");
+      assert.deepStrictEqual(plainA(H.eastVacationOwnWarnings(null)), [], "junk never throws");
+      assert.deepStrictEqual(W({ eastAway: { s1: "x", s2: [null, { start: "2027-04-07" }] } }), [], "junk ranges are skipped");
+    });
+    check("P31A3 eastVacationWarnDays / eastVacationWarnText / eastVacationWarnLine: the day map for the day editor and the words (dates only - no reason, no figure)", () => {
+      const w = W();
+      const days = plainA(H.eastVacationWarnDays(w));
+      assert.deepStrictEqual(Object.keys(days).sort(), ["2027-04-05", "2027-04-06", "2027-04-07", "2027-04-08"]);
+      assert.deepStrictEqual(days["2027-04-07"], [{ kind: "short", id: "s1", start: "2027-04-06", end: "2027-04-09", state: "unreviewed", around: 1, active: 6, minimum: 2 }]);
+      assert.deepStrictEqual(days["2027-04-08"].map(x => x.id + ":" + x.kind), ["s1:short", "s5:short"]);
+      assert.deepStrictEqual(days["2027-04-05"], [{ kind: "held", id: "s1", start: "2027-04-06", end: "2027-04-09", state: "unreviewed", role: "primary", trailingEdge: true }]);
+      assert.strictEqual(H.eastVacationWarnText(w[0], nameOf), "Khan 4/6-4/9 (unreviewed): under the vacation minimum on 4/7, 4/8 (1 of 6 around, minimum 2); published day(s) held: 4/5 primary (the day before), 4/6 primary");
+      assert.strictEqual(H.eastVacationWarnText(w[1], nameOf), "Fierce 4/8 (away): under the vacation minimum on 4/8 (1 of 6 around, minimum 2)");
+      assert.strictEqual(H.eastVacationWarnLine(days["2027-04-07"][0], nameOf), "Khan's East vacation 4/6-4/9 (unreviewed): 1 of 6 around this day - under the minimum of 2 (a Davenport range is never refused)");
+      assert.strictEqual(H.eastVacationWarnLine(days["2027-04-05"][0], nameOf), "Khan's East vacation 4/6-4/9 (unreviewed): Khan holds primary this day - the day before it (the 07:00 handoff); decide home or trade the day");
+      assert.strictEqual(H.eastVacationWarnLine(days["2027-04-06"][0], nameOf), "Khan's East vacation 4/6-4/9 (unreviewed): Khan holds primary this day - inside it; decide home or trade the day");
+      assert.deepStrictEqual(plainA(H.eastVacationWarnDays(null)), {});
+      assert.strictEqual(H.eastVacationWarnText(null, nameOf), "");
+      assert.strictEqual(H.eastVacationWarnLine(null, nameOf), "");
+    });
+    check("P31A3 eastRefreshStatus: the newest east.refresh audit row and the newest server (cron) row as { at, server, ok, text } - ok / FAILED with the error and 'the cached weeks were kept'; an older in-app row (no ok key, written on success only) reads ok", () => {
+      const ts = (iso) => "T(" + iso + ")";
+      const cron = { actor_id: "cron", actor_name: "east-feed-refresh (cron)", action: "east.refresh", created_at: "2026-10-16T10:30:05Z", detail: { source: "cron", ok: true, weeks: 30 } };
+      const cronBad = { actor_id: "cron", actor_name: "east-feed-refresh (cron)", action: "east.refresh", created_at: "2026-10-17T10:30:05Z", detail: { source: "cron", ok: false, error: "Davenport read failed - the cached weeks are kept: HTTP 503", weeks: null } };
+      const app = { actor_id: "s1", actor_name: "Faraz Khan", action: "east.refresh", created_at: "2026-10-15T14:00:00Z", detail: { weeks: 29 } };
+      const appBad = { actor_id: "s1", actor_name: "Faraz Khan", action: "east.refresh", created_at: "2026-10-18T09:00:00Z", detail: { source: "app", ok: false, error: "Davenport answered no vacation for FAK while the cache holds 1 range(s)", errors: ["x"], weeks: 30 } };
+      let s = plainA(H.eastRefreshStatus([app, cron], ts));
+      assert.deepStrictEqual(s.latest, { at: cron.created_at, server: true, ok: true, text: "Server refresh (daily) T(2026-10-16T10:30:05Z): ok - 30 published week(s) cached" });
+      assert.deepStrictEqual(s.lastServer, s.latest, "the newest row is the server's");
+      s = plainA(H.eastRefreshStatus([cronBad, appBad, app, cron], ts));
+      assert.deepStrictEqual(s.latest, { at: appBad.created_at, server: false, ok: false, text: "In-app refresh by Faraz Khan T(2026-10-18T09:00:00Z): FAILED - Davenport answered no vacation for FAK while the cache holds 1 range(s) - the cached weeks were kept" }, "the rows are sorted newest first whatever the order given");
+      assert.deepStrictEqual(s.lastServer, { at: cronBad.created_at, server: true, ok: false, text: "Server refresh (daily) T(2026-10-17T10:30:05Z): FAILED - Davenport read failed - the cached weeks are kept: HTTP 503 - the cached weeks were kept" });
+      s = plainA(H.eastRefreshStatus([app], ts));
+      assert.deepStrictEqual(s, { latest: { at: app.created_at, server: false, ok: true, text: "In-app refresh by Faraz Khan T(2026-10-15T14:00:00Z): ok - 29 published week(s) cached" }, lastServer: null }, "no server row on record");
+      assert.deepStrictEqual(plainA(H.eastRefreshStatus([{ action: "east.refresh", actor_id: "cron", created_at: "2026-10-19T10:30:00Z", detail: { source: "cron", ok: false } }], ts)).latest.text, "Server refresh (daily) T(2026-10-19T10:30:00Z): FAILED - see the Activity log - the cached weeks were kept", "no error text");
+      assert.deepStrictEqual(plainA(H.eastRefreshStatus([{ action: "east.override", created_at: "2026-10-19T00:00:00Z", detail: {} }, null, 3], ts)), { latest: null, lastServer: null }, "other actions and junk are ignored");
+      assert.strictEqual(typeof H.eastRefreshStatus([cron]).latest.text, "string", "the default formatter is suFmtTs");
+    });
+    check("P31A3 offerDayWhy(hard, { eastDetails: false }): the painter's East block words ('East busy', 'East forecast busy', 'your East/Silvis week') read 'not available' for everyone but the scheduler (decision 11); the day stays greyed; without the option (or eastDetails true) the words are as before", () => {
+      ["east-busy", "east-forecast-busy:0.75", "derived-lock:backup", "derived-lock-held:s5"].forEach(c => {
+        const masked = H.offerDayWhy([c], { eastDetails: false });
+        assert.strictEqual(masked.block, "not available", c + " -> 'not available'");
+        assert.deepStrictEqual(plainA(masked.codes.block), [c], "the code itself is kept (it still greys the day)");
+        assert.ok(/East/.test(H.offerDayWhy([c]).block) && H.offerDayWhy([c], { eastDetails: true }).block === H.offerDayWhy([c]).block, c + ": the scheduler (and the default) keeps the East words");
+      });
+      assert.strictEqual(H.offerDayWhy(["time-off:2027-04-06"], { eastDetails: false }).block, "on your vacation", "an East vacation day already reads as a vacation (critic A10)");
+      assert.strictEqual(H.offerDayWhy(["holiday-opt-out:Thanksgiving", "east-busy"], { eastDetails: false }).block, "you opted out of Thanksgiving", "the first code still gives the words");
+      assert.strictEqual(H.offerDayWhy(["east-busy", "time-off:2027-04-06"], { eastDetails: false }).block, "not available");
+      const EASTWORD = /\beast\b|davenport|\bdsg\b/i;
+      Object.keys(H.OFFER_BLOCK_WORDS).forEach(k => { if (EASTWORD.test(H.OFFER_BLOCK_WORDS[k])) assert.ok(H.OFFER_EAST_BLOCK_CODES.indexOf(k) >= 0, k + " names East but is not masked for non-schedulers"); });
+      const appKeys = /const EAST_HARD_REASON_KEYS = (\[[^\]]*\]);/.exec(src);
+      assert.ok(appKeys, "the App's EAST_HARD_REASON_KEYS");
+      assert.deepStrictEqual(JSON.parse(appKeys[1]), plainA(H.OFFER_EAST_BLOCK_CODES), "the same four codes the board masks (Item E4)");
+    });
+    check("P31A3 suSetupIssues: the East feed is stale after EAST_FEED_STALE_DAYS (2) days - a daily server refresh keeps it under that (decision 5; it was 14)", () => {
+      const base = { roster: [{ id: "s1", name: "Khan", code: "FAK" }], surgeonRules: { s1: {} }, groupRules: {}, holidays: { units: { "2026": ["x"] } }, schedule: { "2026-11-02": { primary: "s1" } } };
+      const now = Date.parse("2026-10-16T12:00:00Z");
+      const at = (days) => new Date(now - days * 86400000 - 3600000).toISOString();
+      const stale = (days) => H.suSetupIssues(Object.assign({}, base, { eastFeedRows: [{ fetched_at: at(days) }], nowMs: now, today: "2026-10-16" })).filter(t => /East feed coverage is/.test(t));
+      assert.deepStrictEqual(stale(1), []);
+      assert.deepStrictEqual(stale(2), [], "2 days old: not yet");
+      assert.deepStrictEqual(stale(3), ["East feed coverage is 3 days old - refresh it"]);
+      assert.deepStrictEqual(stale(15), ["East feed coverage is 15 days old - refresh it"]);
+    });
+    // ---- config.js derivedVacDb in the [D] sandbox ----
+    const dv = vm.runInContext("typeof derivedVacDb === 'undefined' ? null : derivedVacDb", sandbox);
+    const b64A = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "");
+    const FRESH_A = "h." + b64A({ sub: "00000000-0000-4000-8000-0000000000a3", exp: Math.floor(Date.now() / 1000) + 3600 }) + ".s";
+    const STALE_A = "h." + b64A({ sub: "00000000-0000-4000-8000-0000000000a3", exp: Math.floor(Date.now() / 1000) - 60 }) + ".s";
+    const resA = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => (typeof body === "string" ? JSON.parse(body) : body), text: async () => (typeof body === "string" ? body : JSON.stringify(body)) });
+    const callsA = [];
+    const serveA = (fn) => { callsA.length = 0; sandbox.__fetch = async (url, init) => { callsA.push({ url: String(url), init: init || {} }); return fn(String(url), init || {}); }; };
+    const lsA = sandbox.localStorage._m;
+    const DROWS = [{ person_id: "s1", start_date: "2027-04-06", end_date: "2027-04-09" }];
+    await acheckA("P31A3 derivedVacDb.load: no token / a stale token -> 'skipped' and NO request (never an anon read: the function is revoked from anon, and an RLS-style empty answer must never read as 'no vacations')", async () => {
+      assert.ok(dv && typeof dv.load === "function" && typeof dv.resetStale === "function", "config.js derivedVacDb { load, resetStale }");
+      serveA(() => resA(200, DROWS));
+      sandbox.localStorage._m = {};
+      assert.strictEqual((await dv.load()).state, "skipped");
+      sandbox.localStorage._m = { "silvis-auth-token": STALE_A };
+      assert.strictEqual((await dv.load()).state, "skipped");
+      assert.strictEqual(callsA.length, 0);
+    });
+    await acheckA("P31A3 derivedVacDb.load: ok = ONE GET of rpc/silvis_derived_vacations (stable - read-only; the three columns, ordered) with the user's JWT, no body; an empty answer is a real empty ok", async () => {
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH_A };
+      serveA(() => resA(200, DROWS));
+      const r = await dv.load();
+      assert.strictEqual(r.state, "ok");
+      assert.deepStrictEqual(plainA(r.rows), DROWS);
+      assert.strictEqual(callsA.length, 1);
+      assert.match(callsA[0].url, /\/rest\/v1\/rpc\/silvis_derived_vacations\?select=person_id,start_date,end_date&order=person_id\.asc,start_date\.asc,end_date\.asc$/);
+      assert.strictEqual(callsA[0].init.method || "GET", "GET");
+      assert.ok(!callsA[0].init.body, "no body");
+      assert.strictEqual(callsA[0].init.headers.Authorization, "Bearer " + FRESH_A);
+      serveA(() => resA(200, []));
+      const e = await dv.load();
+      assert.deepStrictEqual([e.state, e.rows.length], ["ok", 0]);
+    });
+    await acheckA("P31A3 derivedVacDb.load: 'unavailable' on the function's 404 PGRST202 (the revision x apply not run yet - today's picture, never an empty ok); 'failed' on a 500, a 401 / 403, a non-array body and a network error", async () => {
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH_A };
+      serveA(() => resA(404, '{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.silvis_derived_vacations without parameters in the schema cache"}'));
+      assert.strictEqual((await dv.load()).state, "unavailable");
+      for (const [st, body] of [[500, "boom"], [403, '{"code":"42501","message":"permission denied for function silvis_derived_vacations"}'], [401, '{"code":"PGRST301","message":"JWT expired"}'], [200, { not: "a list" }]]) {
+        serveA(() => resA(st, body));
+        const r = await dv.load();
+        assert.strictEqual(r.state, "failed", st + " -> failed");
+      }
+      serveA(() => { throw new Error("offline"); });
+      const n = await dv.load();
+      assert.strictEqual(n.state, "failed");
+      assert.match(n.error, /offline/);
+    });
+    await acheckA("P31A3 derivedVacDb.resetStale(p_from): ONE POST rpc/east_vacation_reset_stale { p_from } with the user's JWT; ok -> the reset rows { person_id, start, end, decision, reason }; 404 PGRST202 -> 'unavailable' (the client loop runs); EV001 / a 500 / junk -> 'failed' with the words; no first day -> 'failed' and NO request", async () => {
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH_A };
+      serveA(() => resA(200, [{ person_id: "s1", start_date: "2027-04-20", end_date: "2027-04-23", decision: "away", reason: "changed" }, { person_id: "s1", start_date: "2027-05-04", end_date: "2027-05-07", decision: "home", reason: "removed" }]));
+      const r = await dv.resetStale("2026-09-14");
+      assert.strictEqual(r.state, "ok");
+      assert.deepStrictEqual(plainA(r.rows), [{ person_id: "s1", start: "2027-04-20", end: "2027-04-23", decision: "away", reason: "changed" }, { person_id: "s1", start: "2027-05-04", end: "2027-05-07", decision: "home", reason: "removed" }]);
+      assert.strictEqual(callsA.length, 1);
+      assert.match(callsA[0].url, /\/rest\/v1\/rpc\/east_vacation_reset_stale$/);
+      assert.strictEqual(callsA[0].init.method, "POST");
+      assert.deepStrictEqual(JSON.parse(callsA[0].init.body), { p_from: "2026-09-14" });
+      assert.strictEqual(callsA[0].init.headers.Authorization, "Bearer " + FRESH_A);
+      serveA(() => resA(404, '{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.east_vacation_reset_stale(p_from) in the schema cache"}'));
+      assert.strictEqual((await dv.resetStale("2026-09-14")).state, "unavailable");
+      serveA(() => resA(400, '{"code":"EV001","details":null,"hint":null,"message":"EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)"}'));
+      const f = await dv.resetStale("2026-09-14");
+      assert.deepStrictEqual([f.state, f.status], ["failed", 400]);
+      assert.match(f.error, /EAST_RESET_NOT_ALLOWED/);
+      serveA(() => resA(500, "boom"));
+      assert.strictEqual((await dv.resetStale("2026-09-14")).state, "failed");
+      serveA(() => resA(200, { not: "a list" }));
+      assert.strictEqual((await dv.resetStale("2026-09-14")).state, "failed");
+      serveA(() => { throw new Error("offline"); });
+      assert.strictEqual((await dv.resetStale("2026-09-14")).state, "failed");
+      serveA(() => resA(200, []));
+      for (const bad of [null, "", "2026-9-14", undefined]) assert.strictEqual((await dv.resetStale(bad)).state, "failed", JSON.stringify(bad));
+      assert.strictEqual(callsA.length, 0, "no request without a first day (EV002 is the database's own refusal)");
+    });
+    sandbox.localStorage._m = lsA;
+    // ---- the App: the loader, the reset, the refresh-audit line - lifted verbatim and run against stubs ----
+    await acheckA("P31A3 loadDerivedVacations (lifted): ok adopts the rows; a signature change AFTER the first adoption reloads the East tables (decision 13), the first adoption does not; 'unavailable' clears the rows (today's picture); 'failed' keeps them; 'skipped' only marks a session that read nothing yet; ?public=1 never reads", async () => {
+      const body = liftA("  const loadDerivedVacations = async () => {", "\n  };\n");
+      const make = (answers, publicMode) => {
+        const st = { rows: null, state: "unread", reloads: 0, reads: 0, warns: [] };
+        const sigRef = { current: null };
+        const db = { load: async () => { st.reads++; return answers.shift(); } };
+        const fn = new Function("isPublicMode", "derivedVacDb", "derivedVacationSignature", "derivedVacSigRef", "setDerivedVacRows", "setDerivedVacState", "loadEastTables", "console", body + "\nreturn loadDerivedVacations;")(
+          !!publicMode, db, H.derivedVacationSignature, sigRef, (r) => { st.rows = r; }, (v) => { st.state = typeof v === "function" ? v(st.state) : v; }, async (q) => { st.reloads++; st.reloadQuiet = q; }, { warn: (...a) => st.warns.push(a.join(" ")) });
+        return { st, fn, sigRef };
+      };
+      const A = [{ person_id: "s1", start_date: "2027-04-06", end_date: "2027-04-09" }], B = [{ person_id: "s1", start_date: "2027-04-06", end_date: "2027-04-10" }];
+      const t = make([{ state: "ok", rows: A }, { state: "ok", rows: A }, { state: "ok", rows: B }, { state: "failed", error: "HTTP 500" }, { state: "skipped" }, { state: "unavailable" }]);
+      assert.strictEqual(await t.fn(), "ok"); assert.deepStrictEqual([t.st.rows, t.st.state, t.st.reloads], [A, "ok", 0], "the first adoption: no reload");
+      assert.strictEqual(await t.fn(), "ok"); assert.strictEqual(t.st.reloads, 0, "the same rows: no reload");
+      assert.strictEqual(await t.fn(), "ok"); assert.deepStrictEqual([t.st.rows, t.st.reloads, t.st.reloadQuiet], [B, 1, true], "a changed signature: ONE quiet reload of the East tables");
+      assert.strictEqual(await t.fn(), "failed"); assert.deepStrictEqual([t.st.rows, t.st.state], [B, "failed"], "a failed read keeps the rows");
+      assert.ok(t.st.warns.some(w => /silvis_derived_vacations read failed/.test(w)), "console.warn only - no toast");
+      assert.strictEqual(await t.fn(), "skipped"); assert.strictEqual(t.st.state, "failed", "skipped never overwrites a state already reached");
+      assert.strictEqual(await t.fn(), "unavailable"); assert.deepStrictEqual([t.st.rows, t.st.state, t.sigRef.current], [[], "unavailable", null], "the function missing (or rolled back): no rows, the signature forgotten");
+      const s = make([{ state: "skipped" }]);
+      assert.strictEqual(await s.fn(), "skipped"); assert.strictEqual(s.st.state, "skipped", "unread -> skipped");
+      const p = make([{ state: "ok", rows: A }], true);
+      assert.strictEqual(await p.fn(), "none"); assert.deepStrictEqual([p.st.reads, p.st.rows], [0, null], "?public=1: no read at all");
+    });
+    await acheckA("P31A3 runEastReviewResets (lifted): untrusted read or no reloaded cache -> nothing reset (and NO request); the RPC first (ok -> its rows, the reviews re-read, the client writes nothing); its absence (404) -> the 9/23 client loop through saveEastVacationReview (rows ending before fromMon kept); any other failure -> nothing reset, the error named (never a fallback)", async () => {
+      const body = liftA("  const runEastReviewResets = async ({ trusted, cacheRows, vacationCodes, fromMon, feed }) => {", "\n  };\n");
+      const EF = require(path.join(ROOT, "east-feed.js"));
+      const reviews = [
+        { person_id: "s1", start: "2027-04-06", end: "2027-04-09", decision: "away" },   // still exact -> kept
+        { person_id: "s1", start: "2027-04-20", end: "2027-04-23", decision: "away" },   // changed (now ..04-24)
+        { person_id: "s1", start: "2027-05-04", end: "2027-05-07", decision: "home" },   // removed
+        { person_id: "s1", start: "2026-08-03", end: "2026-08-07", decision: "away" },   // before fromMon -> kept
+      ];
+      const cache = [{ week_monday: "2027-04-05", data: { vacations: [{ code: "FAK", start: "2027-04-06", end: "2027-04-09" }, { code: "FAK", start: "2027-04-20", end: "2027-04-24" }] } }];
+      const run = async (rpcAnswer, args) => {
+        const log = { rpc: [], saves: [], reloads: 0, warns: [] };
+        const db = { resetStale: async (p) => { log.rpc.push(p); return rpcAnswer; } };
+        const fn = new Function("derivedVacDb", "loadEastVacationReviews", "describeDbError", "derivedEastVacations", "eastVacations", "surgeons", "eastVacationReviewRows", "suIsIso", "saveEastVacationReview", "console", body + "\nreturn runEastReviewResets;")(
+          db, async () => { log.reloads++; return true; }, (t) => "words(" + String(t).slice(0, 40) + ")", H.derivedEastVacations, EF.eastVacations, [{ id: "s1", code: "FAK" }, { id: "s2", code: "MAB" }], reviews, H.suIsIso,
+          async (pid, range, decision, opts) => { log.saves.push([pid, range.start, range.end, decision, opts && opts.reason]); return { ok: true, removed: 1 }; }, { warn: (...a) => log.warns.push(a.join(" ")) });
+        const out = await fn(Object.assign({ trusted: true, cacheRows: cache, vacationCodes: ["FAK"], fromMon: "2026-09-14", feed: { vacations: { FAK: [] } } }, args || {}));
+        return { out: plainA(out), log };
+      };
+      let r = await run({ state: "ok", rows: [] }, { trusted: false });
+      assert.deepStrictEqual([r.out.via, r.out.resets, r.out.failures, r.out.error, r.log.rpc.length, r.log.saves.length], [null, [], [], null, 0, 0], "untrusted: no RPC, no write");
+      assert.match(r.out.skipped, /not trusted/);
+      r = await run({ state: "ok", rows: [] }, { trusted: false, vacationCodes: [] });
+      assert.strictEqual(r.out.skipped, "no East vacation codes");
+      r = await run({ state: "ok", rows: [] }, { cacheRows: null });
+      assert.deepStrictEqual([r.out.skipped, r.log.rpc.length], ["the cache did not reload", 0]);
+      r = await run({ state: "ok", rows: [{ person_id: "s1", start: "2027-04-20", end: "2027-04-23", decision: "away", reason: "changed" }] });
+      assert.deepStrictEqual(r.out, { via: "rpc", resets: [{ person_id: "s1", start: "2027-04-20", end: "2027-04-23", reason: "changed", decision: "away" }], failures: [], error: null, skipped: null });
+      assert.deepStrictEqual([r.log.rpc, r.log.reloads, r.log.saves.length], [["2026-09-14"], 1, 0], "ONE RPC with p_from = fromMon, the reviews re-read, no client delete / audit");
+      r = await run({ state: "unavailable", status: 404 });
+      assert.strictEqual(r.out.via, "client");
+      assert.deepStrictEqual(r.log.saves, [["s1", "2027-04-20", "2027-04-23", "unreviewed", "changed"], ["s1", "2027-05-04", "2027-05-07", "unreviewed", "removed"]], "the client loop: changed + removed through the normal write path; the exact range and the one ending before fromMon kept");
+      assert.deepStrictEqual(r.out.resets.map(x => x.start + ":" + x.reason + ":" + x.decision), ["2027-04-20:changed:away", "2027-05-04:removed:home"]);
+      r = await run({ state: "unavailable", status: 404 }, { feed: { vacations: {} } });
+      assert.deepStrictEqual([r.out.via, r.log.saves.length], ["client", 0], "the loop resets only codes the read answered for (as on 9/23)");
+      r = await run({ state: "failed", status: 400, error: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}' });
+      assert.deepStrictEqual([r.out.via, r.out.resets.length, r.log.saves.length], ["rpc", 0, 0], "a failed RPC resets nothing and never falls back to the loop");
+      assert.match(r.out.error, /^words\(/);
+      assert.ok(r.log.warns.some(w => /east_vacation_reset_stale failed/.test(w)));
+    });
+    await acheckA("P31A3 loadEastRefreshAudit (lifted): the scheduler's read of the newest east.refresh audit rows through readAuthOnlyTable (eq action, newest first, 10); null (no fresh token) keeps what was read; a failure is marked, never an empty list; nobody else reads", async () => {
+      const body = liftA("  const loadEastRefreshAudit = async () => {", "\n  };\n");
+      const make = (sched, pub, answer) => {
+        const st = { v: { state: "unread", rows: [] }, reads: [] };
+        const fn = new Function("isScheduler", "isPublicMode", "readAuthOnlyTable", "setEastRefreshAudit", "console", body + "\nreturn loadEastRefreshAudit;")(
+          sched, pub, async (t, o) => { st.reads.push([t, o]); if (answer instanceof Error) throw answer; return answer; }, (v) => { st.v = typeof v === "function" ? v(st.v) : v; }, { warn: () => {} });
+        return { st, fn };
+      };
+      const ROW = [{ action: "east.refresh", created_at: "2026-10-16T10:30:05Z", actor_id: "cron", detail: { ok: true } }];
+      let m = make(true, false, ROW);
+      await m.fn();
+      assert.deepStrictEqual(plainA(m.st.reads), [["audit_log", { eq: { action: "east.refresh" }, order: "created_at.desc", limit: 10 }]]);
+      assert.deepStrictEqual(plainA(m.st.v), { state: "ok", rows: ROW });
+      m = make(true, false, null); await m.fn();
+      assert.deepStrictEqual(plainA(m.st.v), { state: "skipped", rows: [] });
+      m = make(true, false, new Error("HTTP 500")); await m.fn();
+      assert.strictEqual(m.st.v.state, "failed");
+      for (const [sc, pb] of [[false, false], [true, true]]) { m = make(sc, pb, ROW); await m.fn(); assert.strictEqual(m.st.reads.length, 0, "no read for " + (sc ? "?public=1" : "a non-scheduler")); }
+    });
+    check("P31A3 pins: the read - state + loader, the mount load and the 60 s poll call it, ?public=1 never; never a plain db.query of the function", () => {
+      assert.ok(src.includes('const [derivedVacRows, setDerivedVacRows] = useState([]);') && src.includes('const [derivedVacState, setDerivedVacState] = useState("unread");') && src.includes("const derivedVacSigRef = useRef(null);"), "the state");
+      assert.ok(src.includes('loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")), loadDerivedVacations(),'), "the mount load reads it (quiet: console only - the display keeps today's picture without it)");
+      assert.ok(src.includes("loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadDerivedVacations(),"), "the 60 s poll reads it");
+      assert.ok(!/db\.query(All)?\("rpc\/silvis_derived_vacations"/.test(src) && !/rpc\/silvis_derived_vacations/.test(src), "the App never builds the URL itself (config.js derivedVacDb, the user's JWT)");
+      assert.ok(!/rpc\/east_vacation_reset_stale/.test(appA) && appA.includes("const rpc = await derivedVacDb.resetStale(fromMon);"), "nor the reset's (derivedVacDb.resetStale)");
+    });
+    check("P31A3 pins: the display - derivedVacMap is empty for the scheduler (he keeps the diamond, decision 6), on ?public=1 and signed out; the dots / 'Off:' read vacShown = vacations + derivedVacMap; the lists read vacListExtra (the scheduler: vacEastAway, his JS picture with the state - critic A5); NEVER timeOffRows / vacations / share / print", () => {
+      assert.ok(src.includes("const derivedVacMap = useMemo(() => (isPublicMode || !authUser || eastDetailsVisible) ? {} : derivedVacationMap(derivedVacRows), [derivedVacRows, isPublicMode, authUser, eastDetailsVisible]);"), "the display map's gate");
+      assert.ok(src.includes("const vacShown = useMemo(() => vacationMapWithExtra(vacations, derivedVacMap), [vacations, derivedVacMap]);"), "the dots / names map");
+      const vb = src.slice(src.indexOf("const vacByDay = useMemo(() => {"), src.indexOf("const vacNamesOn = "));
+      assert.ok(vb.includes("Object.keys(vacShown).forEach(pid => (vacShown[pid] || []).forEach(([vs, ve]) => {") && vb.includes("}, [vacShown, gridDays]);"), "the dots read vacShown");
+      assert.ok(vb.includes("if (map[ds].indexOf(pid) < 0) map[ds].push(pid);"), "one dot per person a day (a time_off row and a derived range may overlap)");
+      assert.ok(src.includes("const vacNamesOn = (d) => Object.keys(vacShown).filter(pid => onVac(pid, d, vacShown)).map(nameOf);"), "the day summary's names");
+      assert.ok(src.includes("const vacListExtra = useMemo(() => isPublicMode ? {} : eastDetailsVisible ? vacEastAway : derivedVacMap, [isPublicMode, eastDetailsVisible, vacEastAway, derivedVacMap]);"), "the lists' extra ranges");
+      assert.ok(src.includes("const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations, vacListExtra);"), "renderVacationList");
+      assert.ok(src.includes("const pidVacs = groupVacationRows(vacations, [pid], todayStr, false, vacListExtra).reduce((n, g) => n + g.upcoming, 0);"), "Mine's count = its list");
+      assert.ok(src.includes('summary={cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false, vacListExtra).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations"))}'), "Setup's summary");
+      assert.ok(src.includes("vacations={vacationMapWithExtra(vacations, vacListExtra)}"), "the vacation painter's existing-off shading");
+      assert.ok(src.includes("const buildSharePage = () => generateShareHTML(schedule, surgeons, { months: toolMonthList(), holidays, vacations, generatedAt") && src.includes("const html = buildPrintableCalendarHTML({ startYear: calYear, startMonth: calMonth, numMonths: toolMonths, schedule, roster: surgeons, holidays, vacations, today"), "share and print: time_off only (item 4)");
+      assert.ok(!/setTimeOffRows\([^)]*derived/i.test(src) && !/setVacations\([^)]*derived/i.test(src) && !/timeOffRows\.concat\([^)]*derived/i.test(src), "the derived rows never reach timeOffRows / vacations");
+      assert.ok(src.includes("const vacGuardFor = (personId, start, end, excludeId, extraRows) => vacationGuard({ personId, start, end, timeOffRows: extraRows && extraRows.length ? timeOffRows.concat(extraRows) : timeOffRows, eastAway: vacEastAway,"), "critic A5: the guard keeps vacEastAway (JS, with the state)");
+    });
+    check("P31A3 pins: renderVacationList's derived lines - read-only (no Edit / Remove: no time_off id), 'set by the scheduler' for everyone but the scheduler (decision 12), the East marker + 'decide in Setup > East feed' for him; a failed read is said in place for the others", () => {
+      const rl = src.slice(src.indexOf("const renderVacationList = (personIds, allowEdit) => {"), src.indexOf("const renderVacationForm = (personChoices) => ("));
+      assert.ok(rl.includes("{g.rows.map(r => r.derived ? ("), "derived rows render their own line");
+      const dl = rl.slice(rl.indexOf("{g.rows.map(r => r.derived ? ("), rl.indexOf(") : (", rl.indexOf("{g.rows.map(r => r.derived ? (")));
+      assert.ok(dl.includes('data-derived="1"') && dl.includes('data-testid={"vac-line-" + r.pid + "-" + r.vs}'), "the line (data-derived)");
+      assert.ok(dl.includes('{eastDetailsVisible ? "East vacation (" + (r.state || "unreviewed") + ") - decide in Setup > East feed" : "set by the scheduler"}'), "the words");
+      assert.ok(dl.includes("{eastDetailsVisible && <span data-testid=\"vac-line-eastmark\""), "the East marker is the scheduler's");
+      assert.ok(!/Edit|Remove|rmVac|setEditVac/.test(dl), "no Edit / Remove on a derived line");
+      assert.ok(rl.includes('{!eastDetailsVisible && derivedVacState === "failed" && <p data-testid="vac-derived-failed"'), "a failed derived read is said under the list (never the look of 'no vacations')");
+    });
+    check("P31A3 pins: the board / claim / trade reasons - eastMaskedReasons(list, eastDetailsVisible) no longer masks an East vacation's time-off / day-before-vacation (decision 7: 'on vacation' for everyone); seven call sites, none passes the gloss", () => {
+      assert.ok(src.includes("function eastMaskedReasons(list, eastDetailsVisible) {"), "two arguments");
+      assert.ok(!/eastMaskedReasons\([^)]*\.eastVacation\)/.test(src), "no call passes the eastVacation gloss");
+      assert.strictEqual((appA.match(/eastMaskedReasons\(/g) || []).length, 7);
+    });
+    check("P31A3 pins: every East / Davenport word non-schedulers saw goes under eastDetailsVisible (decision 11) - the Mine / Following E / O / F / EV badges and their legend, the two East vacation cards (titles and all), the offer painter's East block words", () => {
+      const bf = src.slice(src.indexOf("const badgesFor = (d, who) => {"), src.indexOf("const countdown = (d) =>"));
+      const hAt = bf.indexOf('out.push({ k: "H"'), gate = bf.indexOf("if (!eastDetailsVisible) return out;");
+      assert.ok(hAt > 0 && gate > hAt && bf.indexOf('k: "E"') > gate && bf.indexOf('k: "O"') > gate && bf.indexOf('k: "F"') > gate && bf.indexOf('k: "V"') > gate, "the holiday badge for everyone, the East badges after the gate");
+      assert.ok(src.includes('<span style={muted}>H holiday unit{eastDetailsVisible ? " - E East-derived week - F East forecast busy - EV East (Davenport) vacation" : ""}</span>'), "the legend");
+      assert.ok(src.includes("{eastDetailsVisible && eastVacById[pid] && ("), "Mine's East card");
+      assert.ok(src.includes("{eastDetailsVisible && eastVacPeople.length > 0 && (\n            <div style={css.card} data-testid=\"eastvac-timeoff\">"), "Time off's East card");
+      assert.ok(!src.includes("My East (Davenport) vacations\" : \"") && !src.includes('isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"'), "no non-scheduler East title left");
+      assert.ok(src.includes("eastDetails={eastDetailsVisible}") && src.includes("const why = offerDayWhy(hard, { eastDetails: !!eastDetails });"), "the painter");
+      assert.ok(/function OfferPainterSheet\(\{[^}]*\beastDetails \}\)/.test(src), "the sheet's prop");
+    });
+    check("P31A3 pins: the scheduler's warning for the East person's own range (item 2) - eastVacationOwnWarnings over vacEastAway / timeOffRows / eastVacConflictRows, the scheduler's only; Setup > East feed, the Time off East card, the coverage strip's count (opens the panel) and the day editor's East lines", () => {
+      const wm = src.slice(src.indexOf("const eastVacWarnings = useMemo("), src.indexOf("const eastVacWarnByDay = "));
+      assert.ok(wm.includes("eastDetailsVisible ? eastVacationOwnWarnings({ eastAway: vacEastAway, timeOffRows, roster: surgeons, groupRules, eastReviewsLoaded: eastVacReviewState === \"ok\", conflicts: eastVacConflictRows, today: todayStr }) : []"), "the helper, gated");
+      assert.ok(src.includes("const eastVacWarnByDay = useMemo(() => eastVacationWarnDays(eastVacWarnings), [eastVacWarnings]);"));
+      assert.ok(src.includes("eastVacWarnings={eastVacWarnings}") && /function EastFeedCard\(\{[^}]*\beastVacWarnings\b/.test(src), "Setup > East feed");
+      const efc = src.slice(src.indexOf("function EastFeedCard("), src.indexOf("\nfunction ", src.indexOf("function EastFeedCard(") + 10));
+      assert.ok(efc.includes('<EastVacWarnBox css={css} dk={dk} warnings={eastVacWarnings || []} nameOf={nameOf} onEditDay={onEditDay} testid="eastvac-warnings"/>'), "the box in the East vacations section");
+      assert.ok(src.includes('<EastVacWarnBox css={css} dk={dk} warnings={eastVacWarnings} nameOf={nameOf} onEditDay={goToDay} testid="eastvac-timeoff-warnings"/>'), "the Time off East card");
+      assert.ok(src.includes('{eastDetailsVisible && eastVacPeople.length > 0 && (\n                    <button type="button" data-testid="cov-eastvac-warn" data-count={eastVacWarnings.length} onClick={openEastVacPanel}'), "the strip's count");
+      assert.ok(src.includes("eastVacWarn={eastDetailsVisible ? (eastVacWarnByDay[editorDay] || []) : []}"), "the day editor gets the day's items");
+      const de = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf("function DayEditor(props) {") + 60000);
+      assert.ok(de.includes('{eastDetailsVisible && (eastVacWarn || []).map((w, i) => <div key={"evw" + i} data-testid="east-vac-warn" data-kind={w.kind}'), "its East lines");
+    });
+    check("P31A3 pins: the in-app refresh - the A7 guard before the plan, a trusted read only plans / resets, the ONE reset through runEastReviewResets (the RPC, the loop while it is missing), ok / error / errors / source 'app' / trusted / guard / reviewResetVia in the audit, the guard and a failed reset turn the toast to error; the newest east.refresh row re-read after", () => {
+      const rb = src.slice(src.indexOf("const refreshEastFeed = async () => {"), src.indexOf("const saveEastOverride = async"));
+      const gAt = rb.indexOf("const vacGuard = eastVacationReadGuard(feed, eastFeedRows, vacationCodes, fromMon);");
+      assert.ok(gAt > 0 && rb.indexOf("const vacTrusted = vacGuard.ok && !!feed.vacations;") > gAt, "the guard over the cache as this client holds it");
+      assert.ok(rb.includes("const plan = vacTrusted ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };"), "untrusted -> every week keeps its cached list");
+      assert.ok(rb.includes("const rr = await runEastReviewResets({ trusted: vacTrusted, cacheRows, vacationCodes, fromMon, feed });"), "the ONE reset");
+      assert.ok(rb.indexOf("const rr = await runEastReviewResets(") > rb.indexOf("const cacheRows = ") && rb.indexOf("const extra = { from: eastWin.extra.from") > rb.indexOf("const rr = await runEastReviewResets("), "after the reload, before the extra leg");
+      const au = rb.slice(rb.indexOf('logAudit("east.refresh"'), rb.indexOf("const pruneWord"));
+      assert.ok(au.includes("ok: refreshErrors.length === 0, error: refreshErrors[0] || null, errors: refreshErrors, source: \"app\","), "ok / error / errors / source");
+      assert.ok(au.includes("trusted: vacTrusted, guard: vacGuard.problems"), "the guard in the detail");
+      assert.ok(au.includes("reviewResetVia: rr.via, reviewResetError: rr.error, reviewResetSkipped: rr.skipped,"), "how the reset ran");
+      assert.ok(rb.includes('feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error"'), "the toast's tone");
+      assert.ok(rb.includes("auditDone.then(() => loadEastRefreshAudit());"), "the card's line follows");
+      assert.ok(rb.includes(": !vacTrusted && feed.vacations ? ` ${vacGuard.problems.map(eastGuardText).join(\" \")}`"), "the toast says the read was not trusted");
+    });
+    check("P31A3 pins: EastFeedCard shows the newest east.refresh row (eastRefreshStatus: ok / FAILED - the cached weeks were kept) and the newest server run; the card reads them when Setup opens", () => {
+      assert.ok(src.includes("refreshAudit={eastRefreshAudit}") && /function EastFeedCard\(\{[^}]*\brefreshAudit\b/.test(src), "the prop");
+      const efc = src.slice(src.indexOf("function EastFeedCard("), src.indexOf("\nfunction ", src.indexOf("function EastFeedCard(") + 10));
+      assert.ok(efc.includes("const refreshStatus = eastRefreshStatus((refreshAudit && refreshAudit.rows) || []);"), "the helper");
+      assert.ok(efc.includes('data-testid="east-refresh-status"'), "the line");
+      assert.ok(src.includes('useEffect(() => { if (view === "setup" && isScheduler && !isPublicMode) loadEastRefreshAudit(); }, [view, isScheduler, isPublicMode]);'), "read when Setup opens");
+    });
+    check("P31A3 smoke pins: the smoke answers both functions on EVERY page (routeSupabase - never passed through: the reset POST would be a live write, critic A8), the refresh-reset step's assertions moved to ONE reset POST (no client DELETE, no client eastvac.review row), the scheduler / office / ?public=1 checks exist", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8").replace(/\r\n/g, "\n");
+      const rsAt = smoke.indexOf("const routeSupabase = async (route, scope) => {");
+      const route = smoke.slice(rsAt, smoke.indexOf("\nawait page.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);", rsAt));
+      const dAt = route.indexOf('if (url.pathname === "/rest/v1/rpc/silvis_derived_vacations") {'), rAt = route.indexOf('if (url.pathname === "/rest/v1/rpc/east_vacation_reset_stale") {');
+      const passAt = route.indexOf('return route.continue({ headers });');
+      assert.ok(dAt > 0 && rAt > 0 && passAt > rAt && passAt > dAt, "both answered in routeSupabase before its anon passthrough");
+      assert.ok(route.slice(dAt, rAt).includes("return json(200, p31aDerivedRows());") && route.slice(rAt, rAt + 1600).includes("return json(200, gone.map(g =>"), "each answered by the harness");
+      assert.ok(!/route\.continue|route\.fetch/.test(route.slice(dAt, route.indexOf("// Prompt 31 Part A (A3): Setup > East feed's last-refresh read", rAt))), "neither branch passes the request on");
+      assert.ok(smoke.includes("const p31aDerivedRows = () => p31aMerge(eastVacFeed)") && smoke.includes('x.decision === "home"'), "the derived rows = the SQL's reading of the harness picture");
+      for (const t of [
+        "East refresh reset: expected exactly ONE POST rpc/east_vacation_reset_stale",
+        "East refresh reset: the client deleted review rows itself (the reset is the database's now)",
+        "East refresh reset: the client wrote eastvac.review audit rows (the database writes them on the RPC path)",
+        "East refresh (P31A A3): expected exactly ONE POST rpc/east_vacation_reset_stale",
+        "P31A A3 (scheduler): the own-range warning count did not rise",
+        "P31A A3 (scheduler): Setup > East feed's last-refresh line should name the newest in-app run",
+        "P31A A3 (office): the derived read should be a GET with the office account's own token",
+        "P31A A3 (office): its Time off list should show Khan's",
+        "?public=1 (P31A A3): the public page called a Prompt 31 Part A function",
+      ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
+      assert.ok(!smoke.includes("East refresh reset: expected exactly two east_vacation_reviews DELETEs by the exact old triples"), "the old two-DELETE assertion is gone (moved, critic A8)");
+    });
+    check("P31A3 pins: no East word reaches the non-scheduler surfaces A3 adds to - the derived line's words, the 'Off:' line (names only), the failed-read sentence", () => {
+      const EASTWORD = /\beast\b|davenport|\bdsg\b/i;
+      assert.ok(!EASTWORD.test("set by the scheduler"));
+      const rl = src.slice(src.indexOf("const renderVacationList = (personIds, allowEdit) => {"), src.indexOf("const renderVacationForm = (personChoices) => ("));
+      const failLine = (/<p data-testid="vac-derived-failed"[^>]*>([^<]*)<\/p>/.exec(rl) || [])[1] || "";
+      assert.ok(failLine.length > 10 && !EASTWORD.test(failLine), "the failed-read sentence: " + failLine);
     });
   }
 

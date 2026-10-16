@@ -1009,6 +1009,52 @@ const appDaysDb = {
   },
 };
 
+// Prompt 31 Part A (A3, 10/16): the two functions of the revision x apply (sql/migrations/2026-10-14-east-vacations.sql) the
+// client calls - nothing else in the App builds their URLs.
+//   derivedVacDb.load()          GET rpc/silvis_derived_vacations (stable: PostgREST runs it read-only) - the East person's
+//                                away / unreviewed ranges as (person_id, start_date, end_date), no East column; security
+//                                definer, EXECUTE for authenticated only. readAuthOnlyTable's contract: no fresh token ->
+//                                { state: "skipped" } and NO request (never an anon read); 2xx array -> { state: "ok", rows };
+//                                the function missing (404 PGRST202 - the apply not run yet, or rolled back) ->
+//                                { state: "unavailable" } (the App then shows today's picture - never an empty list read as
+//                                "no vacations"); anything else -> { state: "failed", error } (the App keeps its last rows).
+//   derivedVacDb.resetStale(day) POST rpc/east_vacation_reset_stale { p_from } through authFetch (the scheduler's JWT; the
+//                                body refuses everyone else EV001) - the ONE review reset both refreshes run, with its own
+//                                eastvac.review audit rows; ok -> { state: "ok", rows: [{ person_id, start, end, decision,
+//                                reason }] } (the deleted rows); 404 PGRST202 -> { state: "unavailable" } (the caller runs its
+//                                9/23 loop); anything else -> { state: "failed", status, error }. No ISO first day ->
+//                                { state: "failed" } and NO request.
+const derivedVacDb = {
+  async load() {
+    let token = null;
+    try { token = localStorage.getItem("silvis-auth-token"); } catch (e) { token = null; }
+    if (!token || !jwtIsFresh(token)) return { state: "skipped" };
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/silvis_derived_vacations?select=person_id,start_date,end_date&order=person_id.asc,start_date.asc,end_date.asc`, { headers: dbAuthHeaders() });
+      if (!res.ok) { const body = await res.text().catch(() => ""); return { state: appDaysReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` }; }
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return { state: "failed", error: "unexpected response body (silvis_derived_vacations)" };
+      return { state: "ok", rows };
+    } catch (e) {
+      return { state: "failed", error: String((e && e.message) || e) };
+    }
+  },
+  async resetStale(pFrom) {
+    if (typeof pFrom !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(pFrom)) return { state: "failed", status: 0, error: "no first day for the review reset" };
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/east_vacation_reset_stale`, { method: "POST", body: JSON.stringify({ p_from: pFrom }) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { state: pushRpcMissing(res.status, text) ? "unavailable" : "failed", status: res.status, error: text || `HTTP ${res.status}` };
+      let rows = null;
+      try { rows = JSON.parse(text); } catch (e) { rows = null; }
+      if (!Array.isArray(rows)) return { state: "failed", status: res.status, error: "unexpected response from east_vacation_reset_stale: " + text.slice(0, 160) };
+      return { state: "ok", rows: rows.filter(r => r && typeof r === "object").map(r => ({ person_id: r.person_id, start: String(r.start_date || "").slice(0, 10), end: String(r.end_date || "").slice(0, 10), decision: r.decision, reason: r.reason })) };
+    } catch (e) {
+      return { state: "failed", status: 0, error: String((e && e.message) || e) };
+    }
+  },
+};
+
 function payloadLooksWiped(p) {
   if (typeof payloadLooksWipedDaily === "function") return payloadLooksWipedDaily(p);
   // helpers.js not loaded (should never happen in the app - the loader order

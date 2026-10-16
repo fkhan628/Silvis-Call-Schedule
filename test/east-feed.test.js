@@ -527,6 +527,36 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   eq(ef.eastExtraWeeks(mainLive, extraLive, null), { weeks: [], past: 0, ahead: 0, skipped: 0 }, "P31B item 7: no windows -> nothing");
   eq(ef.eastExtraWeeks(null, null, win), { weeks: [], past: 0, ahead: 0, skipped: 0 }, "P31B item 7: no weeks -> nothing");
 }
+// ---- Prompt 31 Part A (A3, critic A7): the silent-empty guard of the in-app refresh (the server refresh mirrors it) ----
+// eastVacationReadGuard(feed, cachedRows, codes, from) -> { ok, problems }: the vacation leg of a refresh is trusted only
+// when the time_off read worked, every code resolved, a list came back for every code and no code answered 0 ranges while
+// the cache holds ranges of it inside the read's window [from, feed.vacationsTo] (an RLS-blocked read answers 200 + []).
+{
+  ok(typeof ef.eastVacationReadGuard === "function" && typeof ef.eastGuardText === "function", "P31A A3: east-feed.js exports eastVacationReadGuard and eastGuardText");
+  const cache = [
+    { week_monday: "2026-08-03", data: { vacations: [{ code: "FAK", start: "2026-08-03", end: "2026-08-07" }] } },
+    { week_monday: "2026-10-26", data: { vacations: [{ code: "FAK", start: "2026-10-26", end: "2026-10-29" }, { code: "MAB", start: "2026-10-27", end: "2026-10-28" }] } },
+    { week_monday: "2026-11-02", data: { isForecast: true, vacations: [{ code: "XYZ", start: "2026-11-03", end: "2026-11-04" }] } },
+  ];
+  const feed = (over) => Object.assign({ weeks: [], vacations: { FAK: [{ start: "2026-10-26", end: "2026-10-30" }] }, vacationsError: null, vacationsTo: "2028-04-17", vacationCodesUnresolved: [] }, over);
+  const g = (f, codes, from) => ef.eastVacationReadGuard(f, cache, codes, from || "2026-09-14");
+  eq(g(feed(), ["FAK"]), { ok: true, problems: [] }, "P31A A3 guard: a normal read is trusted");
+  eq(g(feed({ vacations: { FAK: [] } }), ["FAK"]), { ok: false, problems: [{ code: "FAK", why: "empty-while-cached", cached: 1 }] }, "P31A A3 guard: 0 ranges while the cache holds 2026-10-26..29 in the window -> NOT trusted");
+  eq(g(feed({ vacations: { FAK: [] } }), ["FAK"], "2026-11-02").ok, true, "P31A A3 guard: the cached range ends before the read's window -> a real 'no vacations'");
+  eq(g(feed({ vacations: { FAK: [] }, vacationsTo: "2026-10-25" }), ["FAK"]).ok, true, "P31A A3 guard: the cached range starts after the read's horizon -> trusted");
+  eq(ef.eastVacationReadGuard(feed({ vacations: { FAK: [] } }), [], ["FAK"], "2026-09-14").ok, true, "P31A A3 guard: an empty cache -> trusted");
+  eq(g(feed({ vacations: null, vacationsError: "east-feed: GET time_off failed: HTTP 500" }), ["FAK"]).problems, [{ code: null, why: "read-failed", detail: "east-feed: GET time_off failed: HTTP 500" }], "P31A A3 guard: a failed read");
+  eq(g(feed({ vacations: null, vacationCodesUnresolved: ["FAK"] }), ["fak"]).problems, [{ code: "FAK", why: "unresolved" }], "P31A A3 guard: an unresolved code (codes compared upper-cased)");
+  eq(g(feed({ vacations: { FAK: [] } }), ["FAK", "MAB"]).problems.map(p => p.code + ":" + p.why), ["FAK:empty-while-cached", "MAB:missing"], "P31A A3 guard: per code - FAK empty while cached, MAB asked but no list came back");
+  eq(g(feed({ vacations: { FAK: [{ start: "2026-10-26", end: "2026-10-30" }], MAB: [] } }), ["FAK", "MAB"]).problems, [{ code: "MAB", why: "empty-while-cached", cached: 1 }], "P31A A3 guard: the other code's empty answer trips on its own cached range");
+  eq(g(feed({ vacations: { XYZ: [] } }), ["XYZ"]), { ok: true, problems: [] }, "P31A A3 guard: a forecast row's entries are not cache");
+  eq(g(feed({ vacations: null }), []), { ok: true, problems: [] }, "P31A A3 guard: no codes -> nothing to guard");
+  eq(g(feed({ vacations: { FAK: [] } }), ["FAK", "fak", ""]).problems.length, 1, "P31A A3 guard: a code asked twice (any case) or empty is one code");
+  eq(ef.eastVacationReadGuard(null, cache, ["FAK"], "2026-09-14").problems, [{ code: "FAK", why: "missing" }], "P31A A3 guard: no feed at all -> nothing came back (never trusted)");
+  const texts = [{ code: "FAK", why: "empty-while-cached", cached: 1 }, { code: null, why: "read-failed", detail: "HTTP 500" }, { code: "FAK", why: "unresolved" }, { code: "MAB", why: "missing" }].map(ef.eastGuardText);
+  texts.forEach(t => ok(typeof t === "string" && t.length > 20 && t.length <= 200 && /kept/.test(t) && /no review (is )?reset/.test(t), "P31A A3 guard text: says the cache is kept and no review is reset (<= 200 characters): " + t));
+  ok(texts[0].indexOf("FAK") >= 0 && texts[2].indexOf("FAK") >= 0 && texts[3].indexOf("MAB") >= 0, "P31A A3 guard text: names the code");
+}
 // fetchEastWeeks with a stubbed fetch: the time_off read is scoped to the
 // resolved ids, kind vacation, the window; its failure is NOT the weeks' failure.
 {

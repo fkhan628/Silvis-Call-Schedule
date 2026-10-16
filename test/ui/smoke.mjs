@@ -339,10 +339,23 @@
 //     -> East feed (the card's collapse flag set to '0' first, so the click is
 //     what opens it); My schedule and the Time off view list the same three
 //     decisions (mine-eastvac.png). Fix round: a Refresh whose mocked Davenport
-//     answer moved one range and dropped another DELETEs the two old review rows
-//     by their exact triples (+ audit eastvac.review reset, reason changed /
-//     removed), names both in the refresh toast and keeps the unchanged range's
-//     row; the panel then lists the moved range unreviewed.
+//     answer moved one range and dropped another resets the two old review rows
+//     (reason changed / removed), names both in the refresh toast and keeps the
+//     unchanged range's row; the panel then lists the moved range unreviewed.
+//     Prompt 31 Part A (A3, 10/16; critic A8 - moved deliberately): the reset is
+//     ONE POST rpc/east_vacation_reset_stale { p_from } (the harness deletes the
+//     stale rows like the SQL and answers them) - no client DELETE, no client
+//     eastvac.review row. Every page's silvis_derived_vacations read and every
+//     reset POST are answered by the harness, never passed through (the functions
+//     are not on the live database before the apply; the POST would be a live
+//     write). Then: the scheduler's Time off list shows Khan's East range as a
+//     read-only line with the East marker; five harness-only vacations on its
+//     first day raise the strip's own-range warning count, list the day in Setup
+//     -> East feed's box and the day editor's East line (nothing written); the
+//     last-refresh line names the newest in-app run and the harness's server
+//     run; an office page reads the derived rows with its own token and shows
+//     Khan's dot (no diamond), "Off: Khan" and a read-only "set by the scheduler"
+//     line (p31a-office-timeoff.png); ?public=1 never calls either function.
 //   - smoke clean on main (Faraz 9/29): no premise is a dated fact about a
 //     surgeon or a day - each is derived from the rows / blob / East tables the
 //     harness reads or serves (rulesHardOn reads the rules' own picture on a
@@ -485,6 +498,31 @@ const eastVacReviewStore = [
 // What Davenport currently says (the mocked time_off AND the east_feed overlay the reload reads): the fix round's
 // refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
 let eastVacFeed = EASTVAC_RANGES;
+// Prompt 31 Part A (A3, 10/16): the two functions of the revision x apply the client calls - silvis_derived_vacations() (GET,
+// every signed-in page, the mount load and the 60 s poll) and east_vacation_reset_stale(p_from) (POST, the scheduler's Refresh
+// from Davenport) - are answered by the harness on EVERY page and NEVER passed through: the functions are not on the live
+// database before Faraz's apply, and an unmocked reset POST would be a live write (critic A8). The derived rows are the SQL's
+// reading of the harness's own picture: the ranges Davenport says (eastVacFeed, merged when they overlap or touch - the
+// east_feed overlay every page reads) not reviewed exactly 'home' in eastVacReviewStore, as (person_id s1, start_date,
+// end_date). The reset deletes the store's rows of s1 ending on or after p_from whose exact range is no longer a merged range
+// (reason changed when one still overlaps, removed otherwise) and answers them - its eastvac.review audit rows are the
+// database's own (the client writes none on this path). Each request is recorded (p31aDerivedServed / writes).
+const p31aAddDay = (iso, n) => new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) + n * 86400000).toISOString().slice(0, 10);
+const p31aMerge = (ranges) => {
+  const out = [];
+  ranges.slice().sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0).forEach(r => {
+    const last = out[out.length - 1];
+    if (last && r.start <= p31aAddDay(last.end, 1)) { if (r.end > last.end) last.end = r.end; } else out.push({ start: r.start, end: r.end });
+  });
+  return out;
+};
+const p31aDerivedRows = () => p31aMerge(eastVacFeed)
+  .filter(r => !eastVacReviewStore.some(x => x.person_id === "s1" && x.start === r.start && x.end === r.end && x.decision === "home"))
+  .map(r => ({ person_id: "s1", start_date: r.start, end_date: r.end }));
+const p31aDerivedServed = []; // { page, auth, at } per answered silvis_derived_vacations request
+// the daily server refresh's audit row the harness serves with the in-app ones (Setup > East feed's last-refresh line): a
+// successful run six hours before the smoke started - older than every in-app Refresh the run makes
+const P31A_CRON_ROW = { id: "harness-east-refresh-cron", actor_id: "cron", actor_name: "east-feed-refresh (cron)", action: "east.refresh", created_at: new Date(Date.now() - 6 * 3600000).toISOString(), detail: { summary: "Server refresh of the East feed (cron): harness row", source: "cron", ok: true, error: null, errors: [], weeks: 30 } };
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 // The tokens minted here, at the start, live 4 h (review of the merge of main into fix/do-first-6-9, 10/2): with 1 h a run
 // slowed past an hour by memory pressure (72 min on the 8 GB machine) failed late steps on an expired session (the
@@ -1681,6 +1719,35 @@ const routeSupabase = async (route, scope) => {
   }
   // Prompt 29: the APP table and its two functions - answered here, never passed through to the live project (appRoute)
   if (APP_PATH_RE.test(url.pathname)) return appRoute(route, req, url, method, json);
+  // Prompt 31 Part A (A3): the derived East vacations and the shared review reset - answered here on every page (see
+  // p31aDerivedRows above), never passed through to the live project
+  if (url.pathname === "/rest/v1/rpc/silvis_derived_vacations") {
+    let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
+    p31aDerivedServed.push({ page: pg, method, auth: req.headers()["authorization"] || "", at: Date.now() });
+    if (method !== "GET") return json(405, { code: "PGRST117", message: "Unsupported HTTP method", details: null, hint: null });
+    return json(200, p31aDerivedRows());
+  }
+  if (url.pathname === "/rest/v1/rpc/east_vacation_reset_stale") {
+    const body = req.postData() || "";
+    writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", at: Date.now() });
+    if (method !== "POST") return json(405, { code: "PGRST117", message: "Unsupported HTTP method", details: null, hint: null });
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
+    if (!b.p_from) return json(400, { code: "EV002", message: "EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)", details: null, hint: null });
+    const cur = p31aMerge(eastVacFeed);
+    const gone = eastVacReviewStore.filter(x => x.person_id === "s1" && x.end >= b.p_from && !cur.some(c => c.start === x.start && c.end === x.end))
+      .sort((x, y) => x.start < y.start ? -1 : x.start > y.start ? 1 : 0);
+    gone.forEach(g => eastVacReviewStore.splice(eastVacReviewStore.indexOf(g), 1));
+    return json(200, gone.map(g => ({ person_id: g.person_id, start_date: g.start, end_date: g.end, decision: g.decision, reason: cur.some(c => c.start <= g.end && c.end >= g.start) ? "changed" : "removed" })));
+  }
+  // Prompt 31 Part A (A3): Setup > East feed's last-refresh read (audit_log, action east.refresh - the scheduler's audit_read):
+  // the in-app east.refresh rows this run wrote (newest first) and the harness's server row, never the live table's
+  if (method === "GET" && url.pathname === "/rest/v1/audit_log" && (url.searchParams.get("action") || "") === "eq.east.refresh") {
+    const rows = writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/audit_log"))
+      .map(w => { let b = null; try { b = JSON.parse(w.body); } catch (e) { b = null; } return b && b.action === "east.refresh" ? { id: "harness-east-refresh-" + w.at, actor_id: b.actor_id, actor_name: b.actor_name, action: b.action, detail: b.detail, created_at: new Date(w.at || Date.now()).toISOString() } : null; })
+      .filter(Boolean).concat([P31A_CRON_ROW])
+      .sort((a, b) => a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
+    return json(200, rows.slice(0, Number(url.searchParams.get("limit") || rows.length)));
+  }
   // Slice G: shift_trade_requests is readable by AUTHENTICATED users only, so the
   // anon passthrough would answer 200 + [] and wipe the list on every refresh.
   // The harness keeps the rows the app writes (POST -> row with id, PATCH ->
@@ -9242,6 +9309,15 @@ try {
         const evDel = writesSince(before2, "/rest/v1/east_vacation_reviews").filter(w => w.method === "DELETE");
         if (evDel.length || auditSince(before2, "eastvac.review") || /East vacation review\(s\) reset/.test(txt2)) fail("East refresh (P15): an unchanged Davenport range must keep its review - saw " + evDel.length + " east_vacation_reviews DELETE(s), audit " + JSON.stringify(auditSince(before2, "eastvac.review")) + ", toast reset word " + /East vacation review\(s\) reset/.test(txt2));
         else ok("East refresh (P15): both review rows match unchanged ranges - no east_vacation_reviews DELETE, no eastvac.review audit, no reset word in the toast");
+        // Prompt 31 Part A (A3, decision 4; critic A7 / A8): the reset is ONE POST rpc/east_vacation_reset_stale { p_from = the
+        // refresh's main window Monday } (the harness's answer: nothing stale - []), after the read was trusted (the mocked
+        // Davenport time_off answered the ranges the cache holds); the audit row says how it ran and that it was trusted
+        const rpc2 = writesSince(before2, "/rest/v1/rpc/east_vacation_reset_stale");
+        const rpc2Body = rpc2[0] ? bodyOf(rpc2[0]) : null;
+        const d2 = (refreshAudit2 && refreshAudit2.detail) || {};
+        if (rpc2.length !== 1 || rpc2[0].method !== "POST" || !rpc2Body || JSON.stringify(Object.keys(rpc2Body)) !== '["p_from"]' || rpc2Body.p_from !== d2.from) fail("East refresh (P31A A3): expected exactly ONE POST rpc/east_vacation_reset_stale { p_from: " + d2.from + " }, saw " + JSON.stringify(rpc2.map(w => w.method + " " + w.path + " " + w.body)));
+        else if (d2.reviewResetVia !== "rpc" || !d2.vacations || d2.vacations.trusted !== true || (d2.vacations.guard || []).length || d2.source !== "app" || typeof d2.ok !== "boolean") fail("East refresh (P31A A3): audit east.refresh detail should say reviewResetVia rpc, vacations.trusted true with no guard problem, source app and an ok flag: " + JSON.stringify({ via: d2.reviewResetVia, vacations: d2.vacations, source: d2.source, ok: d2.ok }).slice(0, 400));
+        else ok(`East refresh (P31A A3): ONE POST rpc/east_vacation_reset_stale { p_from: ${d2.from} } (nothing stale - no reset), the read trusted (no guard problem); audit detail reviewResetVia rpc, source app, ok ${d2.ok}`);
         // Prompt 12 C.4: the conflict report over the published schedule lives in the card.
         const conflicts = await page.$eval("[data-testid=east-conflicts]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => null);
         if (conflicts === null) fail("East card (C.4): no [data-testid=east-conflicts] conflict report");
@@ -9489,9 +9565,13 @@ try {
       if (!listOk(toRs)) fail("Time off view: the East vacation list should show the 3 ranges with their decisions: " + JSON.stringify(toRs.map(x => x.start + " " + x.state))); else ok("Time off view: East (Davenport) vacations listed with the same three decisions");
       const toText = await page.$eval("[data-testid=eastvac-timeoff]", el => el.innerText);
       if (!noAddress(toText)) fail("Time off view: the East vacation card renders an email address");
-      // ---- Refresh resets (fix round, E3 review finding 1): a Davenport range that MOVED or DISAPPEARED deletes the
-      //      person's review row through the same write path (DELETE by the exact old triple, audit eastvac.review reset with
-      //      the reason changed / removed) and the ONE refresh toast names both; an unchanged range keeps its row. Fixture:
+      // ---- Refresh resets (fix round, E3 review finding 1): a Davenport range that MOVED or DISAPPEARED loses the person's
+      //      review row and the ONE refresh toast names both; an unchanged range keeps its row. Prompt 31 Part A (A3, decision 4;
+      //      critic A8 - these assertions moved deliberately 10/14): the reset is the database's ONE function now - ONE POST
+      //      rpc/east_vacation_reset_stale { p_from = the refresh's main window Monday } (the harness deletes the stale rows like
+      //      the SQL, reason changed / removed, and answers them; the database writes their eastvac.review audit rows) - so NO
+      //      client DELETE of east_vacation_reviews and NO client-written eastvac.review row (the 9/23 loop runs only while the
+      //      function is missing - test/data-layer.test.js runs it lifted). Fixture:
       //      EV[0] gets an away row first (the row that must survive), then the mocked Davenport time_off and the east_feed
       //      overlay the reload reads answer EV[0] unchanged, EV[1] ending one day later (changed) and EV[2] gone (removed).
       {
@@ -9510,25 +9590,148 @@ try {
         await page.waitForTimeout(600);
         const dels = writesSince(beforeR, "/rest/v1/east_vacation_reviews").filter(w => w.method === "DELETE").map(w => w.path);
         const resetAudits = writesSince(beforeR, "/rest/v1/audit_log").map(bodyOf).filter(b => b && b.action === "eastvac.review");
+        const rpcR = writesSince(beforeR, "/rest/v1/rpc/east_vacation_reset_stale");
+        const rpcRBody = rpcR[0] ? bodyOf(rpcR[0]) : null;
         const refreshAudit = auditSince(beforeR, "east.refresh");
         const toastR = await bodyText();
-        const wantDel = [`/rest/v1/east_vacation_reviews?person_id=eq.s1&start=eq.${EV[1].start}&end=eq.${EV[1].end}`, `/rest/v1/east_vacation_reviews?person_id=eq.s1&start=eq.${EV[2].start}&end=eq.${EV[2].end}`];
         const wantToast = `East vacation review(s) reset: ${md(EV[1].start)}-${md(EV[1].end)} (was away; dates changed), ${md(EV[2].start)}-${md(EV[2].end)} (was home; removed from Davenport).`;
         const keptRow = eastVacReviewStore.find(r => r.person_id === "s1" && r.start === EV[0].start && r.end === EV[0].end);
+        const staleLeft = eastVacReviewStore.filter(r => r.person_id === "s1" && [EV[1], EV[2]].some(x => x.start === r.start && x.end === r.end));
         const afterRs = await readRanges("[data-testid=eastvac-list]");
         const st = (s, e) => (afterRs.find(x => x.start === s && (!e || x.end === e)) || {}).state;
-        if (dels.length !== 2 || wantDel.some(p => dels.indexOf(p) < 0)) fail("East refresh reset: expected exactly two east_vacation_reviews DELETEs by the exact old triples (" + wantDel.join(" and ") + "), saw " + JSON.stringify(dels));
+        const rd = (refreshAudit && refreshAudit.detail) || {};
+        if (rpcR.length !== 1 || rpcR[0].method !== "POST" || !rpcRBody || JSON.stringify(Object.keys(rpcRBody)) !== '["p_from"]' || rpcRBody.p_from !== rd.from) fail("East refresh reset: expected exactly ONE POST rpc/east_vacation_reset_stale { p_from: " + rd.from + " } (the database's reset), saw " + JSON.stringify(rpcR.map(w => w.method + " " + w.path + " " + w.body)));
+        else if (dels.length) fail("East refresh reset: the client deleted review rows itself (the reset is the database's now): " + JSON.stringify(dels));
+        else if (resetAudits.length) fail("East refresh reset: the client wrote eastvac.review audit rows (the database writes them on the RPC path): " + JSON.stringify(resetAudits.map(a => a.detail)));
         else if (!keptRow || keptRow.decision !== "away") fail("East refresh reset: the UNCHANGED range " + EV[0].start + ".." + EV[0].end + " must keep its away row - store has " + JSON.stringify(keptRow || null));
-        else if (resetAudits.length !== 2 || !resetAudits.some(a => a.detail && a.detail.decision === "reset" && a.detail.reason === "changed" && a.detail.start === EV[1].start && a.detail.end === EV[1].end && a.detail.removed === 1) || !resetAudits.some(a => a.detail && a.detail.decision === "reset" && a.detail.reason === "removed" && a.detail.start === EV[2].start && a.detail.end === EV[2].end && a.detail.removed === 1)) fail("East refresh reset: expected two audit eastvac.review rows { decision reset, reason changed / removed, removed 1 }: " + JSON.stringify(resetAudits.map(a => a.detail)));
+        else if (staleLeft.length) fail("East refresh reset: the moved / removed ranges' rows are still in the store (the RPC did not reset them): " + JSON.stringify(staleLeft));
         else if (toastR.indexOf(wantToast) < 0) fail("East refresh reset: the refresh toast must name both resets - wanted '" + wantToast + "' in: " + (toastR.match(/East feed refreshed[^\n]*/) || [toastR.slice(0, 300)])[0]);
-        else if (!refreshAudit || !refreshAudit.detail || !Array.isArray(refreshAudit.detail.reviewResets) || refreshAudit.detail.reviewResets.length !== 2 || (refreshAudit.detail.reviewResetFailures || []).length) fail("East refresh reset: audit east.refresh detail.reviewResets should list the 2 resets (no failures): " + JSON.stringify(refreshAudit && refreshAudit.detail && { reviewResets: refreshAudit.detail.reviewResets, reviewResetFailures: refreshAudit.detail.reviewResetFailures }));
+        else if (!Array.isArray(rd.reviewResets) || rd.reviewResets.length !== 2 || (rd.reviewResetFailures || []).length || rd.reviewResetVia !== "rpc" || rd.reviewResetError) fail("East refresh reset: audit east.refresh detail should list the 2 resets from the RPC (reviewResetVia rpc, no failure, no error): " + JSON.stringify({ reviewResets: rd.reviewResets, reviewResetFailures: rd.reviewResetFailures, via: rd.reviewResetVia, error: rd.reviewResetError }));
+        else if (!rd.reviewResets.some(x => x.reason === "changed" && x.decision === "away" && x.start === EV[1].start && x.end === EV[1].end) || !rd.reviewResets.some(x => x.reason === "removed" && x.decision === "home" && x.start === EV[2].start && x.end === EV[2].end)) fail("East refresh reset: the audit's resets should be EV[1] changed (was away) and EV[2] removed (was home): " + JSON.stringify(rd.reviewResets));
         else if (afterRs.length !== 2 || st(EV[0].start, EV[0].end) !== "away" || st(moved.start, moved.end) !== "unreviewed") fail("East refresh reset: the panel should now list " + EV[0].start + " away and the moved range " + moved.start + ".." + moved.end + " unreviewed: " + JSON.stringify(afterRs.map(x => x.start + ".." + x.end + " " + x.state)));
-        else ok(`East refresh reset: ${EV[1].start}..${EV[1].end} moved + ${EV[2].start}..${EV[2].end} removed from Davenport -> 2 DELETEs by the exact old triples + 2 audit eastvac.review resets (changed / removed, removed 1 each); toast '${wantToast}'; the unchanged ${EV[0].start} range kept its away row; panel lists 2 ranges (away, moved unreviewed)`);
+        else ok(`East refresh reset: ${EV[1].start}..${EV[1].end} moved + ${EV[2].start}..${EV[2].end} removed from Davenport -> ONE POST rpc/east_vacation_reset_stale { p_from: ${rd.from} } (the database's reset; no client DELETE, no client eastvac.review row); toast '${wantToast}'; audit reviewResets 2 via rpc; the unchanged ${EV[0].start} range kept its away row; panel lists 2 ranges (away, moved unreviewed)`);
         eastVacFeed = EASTVAC_RANGES; // restore for whatever follows (the app's cache picture follows on its next reload)
       }
       await page.click('button[data-tab="setup"]');
       await page.waitForTimeout(300);
     } catch (e) { fail("East vacations (Prompt 15 part 3) harness exception: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-eastvac.png"), fullPage: true }); } catch (e2) {} eastVacFeed = EASTVAC_RANGES; await page.setViewportSize({ width: 1180, height: 900 }).catch(() => {}); }
+
+    // ---- Prompt 31 Part A (A3, 10/16): the East person's away / unreviewed ranges for everyone signed in, the scheduler's
+    //      own-range warning, Setup > East feed's last-refresh line ----
+    // The harness answers silvis_derived_vacations() on every page (p31aDerivedRows - after the reset step above the store
+    // holds EV[0]'s away row only, so EV[0..2] are all derived: away / unreviewed / unreviewed). Checked:
+    //  (a) the scheduler (main page): his Time off list carries EV[0] as a READ-ONLY line (data-derived, the East marker, no
+    //      button); the coverage strip's own-range warning count; then five other surgeons' vacations on EV[0].start, served
+    //      by the harness only (extraTimeOff, a Realtime INSERT frame to re-read time_off - never written): the strip's count
+    //      rises, Setup > East feed's box lists the day, the day editor's East line says the minimum - and nothing is written;
+    //      Setup > East feed's last-refresh line names the newest in-app run and the harness's server run;
+    //  (b) the office coordinator: the derived read went out with ITS token; an s1 dot (no diamond) on EV[0].start; the day
+    //      summary "Off: Khan"; its Time off list's s1 line "set by the scheduler" with no button (item 3 - it may edit every
+    //      time_off row, never these); no East card; no East word there. (A surgeon's Time off list shows his own vacations only.)
+    {
+      const EV = EASTVAC_RANGES;
+      const EASTWORD_A3 = /\beast\b|davenport|\bdsg\b/i;
+      // (a) the scheduler
+      try {
+        await page.click('button[data-tab="timeoff"]');
+        await page.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+        await page.waitForTimeout(400);
+        const dl = await page.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-line-eastmark]") })).catch(() => null);
+        if (!dl) fail(`P31A A3 (scheduler): no read-only derived line for Khan's ${EV[0].start} East range in his Time off list`);
+        else if (dl.buttons || !dl.mark || !/East vacation \((away|unreviewed)\) - decide in Setup > East feed/.test(dl.text)) fail("P31A A3 (scheduler): the derived line should carry the East marker, its state and 'decide in Setup > East feed', and no Edit / Remove: " + JSON.stringify(dl));
+        else ok(`P31A A3 (scheduler): Time off lists Khan's ${EV[0].start} East range read-only - '${dl.text}' with the East marker, no button`);
+        await showMonth(2027, 3);
+        const warn0 = Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "-1"));
+        if (!(warn0 >= 0)) fail("P31A A3 (scheduler): no [data-testid=cov-eastvac-warn] item in the coverage strip");
+        // five other surgeons off on EV[0].start, served by the harness only: Khan's East range then leaves fewer than 2 around
+        const offDay = EV[0].start;
+        extraTimeOff = ["s2", "s3", "s4", "s5", "s6"].map((pid, i) => ({ id: "harness-p31a-vac-" + i, person_id: pid, start_date: offDay, end_date: offDay, note: null, public: false, created_at: new Date().toISOString() }));
+        const wA = writes.length;
+        if (!rtSendRow("time_off", extraTimeOff[0], "INSERT")) throw new Error("the realtime mock is not joined - the mocked vacations cannot reach the page");
+        const rose = await waitFor(async () => Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "0")) > warn0, 15000);
+        const warn1 = Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "-1"));
+        if (!rose) fail(`P31A A3 (scheduler): the own-range warning count did not rise (${warn0} -> ${warn1}) with five other surgeons off on ${offDay} inside Khan's East range`);
+        else ok(`P31A A3 (scheduler): the coverage strip's 'East vacation warnings' rose ${warn0} -> ${warn1} with the others off on ${offDay}`);
+        // the day editor's East line on that day
+        await page.click(`[data-day="${offDay}"]`);
+        await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+        await page.waitForTimeout(300);
+        const evw = await page.$$eval("[data-testid=day-editor] [data-testid=east-vac-warn]", els => els.map(e => ({ kind: e.getAttribute("data-kind"), who: e.getAttribute("data-person"), text: e.textContent.replace(/\s+/g, " ").trim() })));
+        if (!evw.some(w => w.kind === "short" && w.who === "s1" && /around this day - under the minimum of \d+ \(a Davenport range is never refused\)/.test(w.text))) fail(`P31A A3 (scheduler): the day editor on ${offDay} has no East own-range line under the minimum: ` + JSON.stringify(evw));
+        else ok(`P31A A3 (scheduler): day editor ${offDay}: '${evw.find(w => w.kind === "short").text.slice(0, 120)}'`);
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+        // Setup > East feed: the box lists the day; the last-refresh line
+        await page.click('button[data-tab="setup"]');
+        await openCard("setup_east");
+        await page.waitForSelector("[data-testid=eastvac-warnings]", { timeout: 8000 });
+        const box = await page.$eval("[data-testid=eastvac-warnings]", el => ({ n: Number(el.getAttribute("data-count")), rows: Array.from(el.querySelectorAll("[data-testid=eastvac-warning]")).map(r => ({ who: r.getAttribute("data-person"), start: r.getAttribute("data-start"), short: r.getAttribute("data-short"), text: r.innerText.replace(/\s+/g, " ").trim() })) }));
+        const row = box.rows.find(r => r.who === "s1" && r.start === EV[0].start);
+        if (!row || (row.short || "").split(",").indexOf(offDay) < 0 || !/under the vacation minimum on/.test(row.text)) fail("P31A A3 (scheduler): Setup > East feed's warning box does not list " + offDay + " for Khan's " + EV[0].start + " range: " + JSON.stringify(box));
+        else ok(`P31A A3 (scheduler): Setup > East feed's box (${box.n}): '${row.text.slice(0, 140)}'`);
+        if (writesSince(wA).some(w => /\/rest\/v1\/(time_off|east_vacation_reviews|schedule_days)\b/.test(w.path))) fail("P31A A3 (scheduler): the warning wrote something: " + JSON.stringify(writesSince(wA).map(w => w.method + " " + w.path)));
+        else ok("P31A A3 (scheduler): the own-range warning is a warning only - no time_off, review or schedule_days write");
+        const rs = await page.$eval("[data-testid=east-refresh-status]", el => ({ state: el.getAttribute("data-state"), latest: (el.querySelector("[data-testid=east-refresh-latest]") || {}).textContent || "", server: (el.querySelector("[data-testid=east-refresh-server]") || {}).textContent || "" })).catch(() => null);
+        if (!rs || rs.state !== "ok" || !/^In-app refresh by .+: (ok - \d+ published week\(s\) cached|FAILED - .+ - the cached weeks were kept)$/.test(rs.latest.trim()) || !/^Server refresh \(daily\) .+: ok - 30 published week\(s\) cached$/.test(rs.server.trim())) fail("P31A A3 (scheduler): Setup > East feed's last-refresh line should name the newest in-app run and the harness's server run: " + JSON.stringify(rs));
+        else ok(`P31A A3 (scheduler): last-refresh line - '${rs.latest.trim().slice(0, 90)}' / '${rs.server.trim()}'`);
+      } catch (e) { fail("P31A A3 (scheduler) harness exception: " + errLine(e)); try { await page.keyboard.press("Escape"); } catch (e2) {} }
+      finally {
+        const had = extraTimeOff.slice();
+        extraTimeOff = [];
+        had.forEach(r => rtSendRow("time_off", r, "DELETE"));
+        await page.waitForTimeout(600);
+      }
+      // (b) the office coordinator (no roster link): every surgeon's vacations are listed to it, and it may edit any time_off row -
+      //     never a derived line (item 3: "Coordinators see the ranges but cannot edit or delete them")
+      const A3S_UID = "00000000-0000-4000-8000-0000000031a3";
+      const A3S_PROFILE = { id: A3S_UID, person_id: null, role: "coordinator", display_name: "Office (P31A)", email: null, created_at: "2026-10-16T00:00:00Z" };
+      const A3S_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: A3S_UID, role: "authenticated", email: "office-a3@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
+      const sa = await context.newPage();
+      watchPage(sa, "office-p31a");
+      await sa.setViewportSize({ width: 1180, height: 900 });
+      await sa.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, A3S_JWT);
+      await sa.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await sa.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(A3S_PROFILE));
+      sa.on("dialog", (d) => d.accept());
+      try {
+        await loadWithRetry(sa, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "office page (P31A A3)");
+        await sa.waitForSelector("text=Synced", { timeout: 30000 });
+        await waitFor(() => p31aDerivedServed.some(x => x.page === sa), 15000);
+        const served = p31aDerivedServed.filter(x => x.page === sa);
+        if (!served.length || served.some(x => x.method !== "GET" || x.auth !== "Bearer " + A3S_JWT)) fail("P31A A3 (office): the derived read should be a GET with the office account's own token: " + JSON.stringify(served.map(x => ({ method: x.method, auth: x.auth.slice(0, 20) }))));
+        else ok(`P31A A3 (office): silvis_derived_vacations read ${served.length}x with its own token (GET)`);
+        await sa.click('button[data-tab="calendar"]');
+        await sa.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+        await sa.selectOption("[data-testid=cal-month-select]", "3");
+        if ((await sa.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2027") await sa.fill("[data-testid=cal-year-input]", "2027");
+        await sa.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "April 2027"; }, null, { timeout: 10000 });
+        await sa.waitForTimeout(400);
+        const cell = await sa.$eval(`[data-day="${EV[0].start}"]`, el => ({ dot: !!el.querySelector("[data-vac=s1]"), diamond: el.querySelectorAll("[data-eastvac]").length, dotsTitle: ((el.querySelector(".cal-dots") || {}).getAttribute ? el.querySelector(".cal-dots").getAttribute("title") : "") || "" })).catch(() => null);
+        if (!cell || !cell.dot || cell.diamond || !/On vacation: .*Khan/.test(cell.dotsTitle) || EASTWORD_A3.test(cell.dotsTitle)) fail(`P31A A3 (office): ${EV[0].start} should carry Khan's round vacation dot (no diamond, no East word): ` + JSON.stringify(cell));
+        else ok(`P31A A3 (office): ${EV[0].start} carries Khan's vacation dot ('${cell.dotsTitle}') - no diamond, no East word`);
+        await sa.click(`[data-day="${EV[0].start}"]`);
+        await sa.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+        await sa.waitForTimeout(300);
+        const off = await sa.$eval("[data-testid=day-editor] [data-testid=editor-off]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+        const dlgText = await sa.$eval("[data-testid=day-editor] [role=dialog]", el => el.innerText).catch(() => "");
+        if (!off || !/^Off: .*Khan/.test(off)) fail(`P31A A3 (office): the day summary of ${EV[0].start} should say 'Off: Khan': ` + JSON.stringify(off));
+        else if (EASTWORD_A3.test(dlgText)) fail(`P31A A3 (office): the day summary of ${EV[0].start} names East: ` + dlgText.replace(/\s+/g, " ").slice(0, 200));
+        else ok(`P31A A3 (office): day summary ${EV[0].start} - '${off}', no East word`);
+        await sa.keyboard.press("Escape");
+        await sa.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+        await sa.click('button[data-tab="timeoff"]');
+        await sa.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
+        await sa.waitForTimeout(300);
+        const line = await sa.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-line-eastmark]") })).catch(() => null);
+        const eastCard = await sa.$("[data-testid=eastvac-timeoff]");
+        if (!line || line.buttons || line.mark || !/set by the scheduler/.test(line.text) || EASTWORD_A3.test(line.text)) fail("P31A A3 (office): its Time off list should show Khan's " + EV[0].start + " range read-only, 'set by the scheduler', no marker, no button, no East word: " + JSON.stringify(line));
+        else if (eastCard) fail("P31A A3 (office): the East (Davenport) vacations card shows to the office");
+        else ok(`P31A A3 (office): Time off lists '${line.text}' read-only (no button, no East word); no East card`);
+        await sa.screenshot({ path: path.join(OUT, "p31a-office-timeoff.png"), fullPage: true });
+        ok("screenshot test/ui/out/p31a-office-timeoff.png");
+      } catch (e) { fail("P31A A3 (office) harness exception: " + errLine(e)); }
+      await sa.close();
+    }
 
     // ---- Generate: the default range STARTS at the first open slot on or after today (Central) - Faraz 9/22
     //      late, Prompt 12 AB (decided 9/22 late; the wave-7 open question "the default start may change to the
@@ -12402,6 +12605,10 @@ try {
   const pubErrors = [];
   pub.on("pageerror", (e) => pubErrors.push(String(e && e.message || e)));
   pub.on("requestfailed", (r) => failedRequests.push(`public: ${r.method()} ${r.url()} -> ${(r.failure() || {}).errorText || "failed"}`));
+  // Prompt 31 Part A (A3, item 4): ?public=1 never calls the two functions of the revision x apply (the derived East vacations
+  // are a signed-in display; the page keeps reading time_off only) - every request to either is recorded here
+  const pubP31a = [];
+  pub.on("request", (r) => { if (/\/rest\/v1\/rpc\/(silvis_derived_vacations|east_vacation_reset_stale)/.test(r.url())) pubP31a.push(r.method() + " " + r.url()); });
   await pub.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
     const req = route.request();
     if (req.method() !== "GET") { writes.push({ method: req.method(), path: new URL(req.url()).pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
@@ -12428,6 +12635,8 @@ try {
     const filled = pubCells.filter(c => c.p || c.ext);
     if (!loadedPublic || !filled.length) fail(`?public=1: the schedule never loaded (every cell empty/OPEN - the same picture an RLS-blocked anon read gives): ${pubCells.length} cells, filled ${filled.length}, banner: ${(await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "?")).slice(0, 80)}`);
     else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
+    if (pubP31a.length) fail("?public=1 (P31A A3): the public page called a Prompt 31 Part A function: " + JSON.stringify(pubP31a.slice(0, 4)));
+    else ok("?public=1 (P31A A3): no call of silvis_derived_vacations / east_vacation_reset_stale - the public page shows time_off only");
     const pubBanner = await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "");
     if (/loading/i.test(pubBanner)) fail("?public=1: today banner still shows the loading placeholder: " + pubBanner); else ok("?public=1: today banner shows real holders: " + pubBanner.replace(/\s+/g, " ").slice(0, 90));
     // Do first 3 (review 9/27): the public banner follows the same shift day (the page's shiftDayCentral(new Date())).
