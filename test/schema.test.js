@@ -2952,9 +2952,13 @@ ok(vgFn.includes("     where not exists (select 1 from off_before o where o.day 
   eq(sql("3/16-3/18 only 1", 6, 3), H.vacationGuardMessage([{ day: "2027-03-16", around: 1 }, { day: "2027-03-17", around: 1 }, { day: "2027-03-18", around: 1 }], 6, 3), "the SQL text = helpers.vacationGuardMessage (a run of three);");
 }
 
-step("vacation guard: schema.sql mirrors every statement (the function byte for byte, the trigger after the on-call trigger), revision s 'applied 2026-10-01 16:53:33Z' after revision r");
-vgStmts.forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this vacation guard statement byte for byte:\n" + st.slice(0, 300)));
-ok(functionText(schema, "time_off_vacation_guard") === vgFn, "time_off_vacation_guard(): schema.sql differs from the migration");
+step("vacation guard: schema.sql mirrors the trigger statements (after the on-call trigger) and, since revision x, the re-created function of sql/migrations/2026-10-14-east-vacations.sql; revision s 'applied 2026-10-01 16:53:33Z' after revision r");
+// pin moved deliberately 10/14: Prompt 31 Part A re-creates time_off_vacation_guard() (sql/migrations/2026-10-14-east-vacations.sql, revision x -
+// its East leg reads silvis_derived_vacations()), so schema.sql mirrors THAT body (the newest migration touching it); the 9/30 file stays as it
+// ran (sha256-pinned above) and its two trigger statements stay mirrored byte for byte. Re-derived exactly: the Prompt 31 Part A step below
+// pins the new body = the 9/30 body with its five East-leg edits.
+vgStmts.slice(1).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this vacation guard statement byte for byte:\n" + st.slice(0, 300)));
+ok(functionText(schema, "time_off_vacation_guard") !== vgFn && functionText(schema, "time_off_vacation_guard") === functionText(read(path.join(ROOT, "sql", "migrations", "2026-10-14-east-vacations.sql")), "time_off_vacation_guard"), "time_off_vacation_guard(): schema.sql must mirror the revision x body (sql/migrations/2026-10-14-east-vacations.sql), not the 9/30 one");
 {
   const onCall = schema.indexOf("  for each row execute function public.time_off_no_call_conflict();");
   // pins moved deliberately 10/1 (the record step): the block comment and revision s read applied 2026-10-01 16:53:33Z
@@ -4641,7 +4645,10 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   const revW = header.slice(wAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
   ok(/Davenport's look, Silvis's own push/.test(revW) && /push_subscriptions/.test(revW) && /column grant/.test(revW) && /PS001-PS007/.test(revW) && /anon holds nothing/.test(revW) && /trade_updates_push \/ schedule_updates_push/.test(revW) && /Not in the realtime publication/.test(revW) && /Letter u stays taken by the weekend pair claim/.test(revW), "revision w names the decision, the table, the column grant, the codes, never anon, the two columns, not realtime and the taken letter u");
   // pin moved deliberately 10/3 (the record step): the four places read applied (they read 'report-first, NOT yet applied' before)
-  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && (schema.match(/report-first, NOT yet applied/g) || []).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left");
+  // pin moved deliberately 10/14: Prompt 31 Part A - revision x is prepared, not applied, so its own three schema.sql lines (the revision line,
+  // the derived-functions block, the guard's revision-x paragraph) read 'report-first, NOT yet applied'; kept intent: no OTHER line does (every
+  // one left names sql/migrations/2026-10-14-east-vacations.sql, and the record step turns them applied)
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !/sql\/migrations\/2026-10-14-east-vacations\.sql/.test(l)).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but revision x's own (prepared, not applied)");
 }
 
 step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
@@ -4763,7 +4770,9 @@ ok(/\nline=\$\(curl -s -o \$T\/vr19i\.json -w 'HTTP %\{http_code\}' "\$URL\/func
   // pins moved deliberately 10/3 (the record step): the header still names section 19, its anon checks (19i among them now) and 19f;
   // the header and --help no longer name either flag - --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE, then only another
   // prepared migration's SILVIS_*_APPLIED flag (the merge-tolerant form of the section 15 pin)
-  ok(/phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e, 19i\)/.test(head) && /surgeon reads \([^)]*19f;/.test(head), "verify-rls.sh's header names section 19, its anon checks (19a-19e, 19i) and 19f");
+  // pin moved deliberately 10/14: Prompt 31 Part A (section 20) - 20a-20d may follow 19i in the anon-checks list and 20e may follow 19f in the
+  // surgeon reads; kept intent: the header names section 19, 19a-19e, 19i and 19f
+  ok(/phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e, 19i[,)]/.test(head) && /surgeon reads \([^)]*19f[,;]/.test(head), "verify-rls.sh's header names section 19, its anon checks (19a-19e, 19i) and 19f");
   ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED dropped)");
 }
 {
@@ -5002,5 +5011,357 @@ ok(!/^\|[^\n]*(push_subscriptions|Prompt 30|push\.save)[^\n]*NOT APPLIED/m.test(
   [readmeAll, guideAll, onboarding, claudeMd].forEach((t, i) => ok(!/not live yet|Not live yet|not pushed yet/i.test(t.split("\n").filter((l) => /Prompt 30|phone push|Phone notifications|send-notification v1[0-2]/i.test(l)).join("\n")), ["README", "guide", "ONBOARDING", "CLAUDE.md"][i] + ": no Prompt 30 line says 'not live yet' / 'not pushed yet' (Prompt 29's rule: true before and after the client push)"));
 }
 console.log("- Prompt 30: notification_preferences *_push + push_subscriptions + save / delete / status RPCs (report-first, applied 2026-10-03 16:30:43Z; the file kept as it ran, sha256-pinned; keys rotated by setup-push-keys.sh --rotate, started 16:35:42Z; send-notification v12 16:37:59 UTC), mirrored (revision w), probe (51) + pre-check + verify-rls section 19 (strict, 19i every run, the key printed as its 8-character prefix) graded against a faked CLI (the fakes proven first), apply scripts kept outside the repo, docs pinned (the observed paragraphs frozen)");
+
+// ---- Prompt 31 Part A (2026-10-14; Faraz 10/9 "Every East range reviewed 'away', and every range still 'unreviewed', shows to every
+// signed-in role exactly like a Silvis vacation"; Faraz 10/14 decision (a): ONE derived SQL function) - the database half ----
+// sql/migrations/2026-10-14-east-vacations.sql (REPORT-FIRST, NOT APPLIED; revision x - u stays reserved for the weekend pair claim):
+// silvis_east_people() / silvis_east_ranges() (internal: the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and the exact
+// review match; EXECUTE for the service role only), silvis_derived_vacations() (security definer, stable: the away / unreviewed ranges as
+// (person_id, start_date, end_date) - authenticated and the service role, never anon), east_vacation_reset_stale(p_from) (the ONE review
+// reset of both feed refreshes: the scheduler or a no-user session, EV001 / EV002, one eastvac.review audit row per deleted row) and
+// time_off_vacation_guard() re-created to read the derived rows for its East leg (the 9/30 body otherwise - derived exactly below).
+// schema.sql mirrors it; sql/probes/east-vacations-probe.sql proves it (rolled back, 2031 fixtures), sql/probes/east-vacations-precheck.sql
+// prints the facts, verify-rls.sh section 20 grades it (section 15 re-runs unchanged). The JS <-> SQL parity, the mutants and the probe
+// were run on PGlite outside the repo (the PGlite package is never a dependency of this repo).
+const XV_FILE = "2026-10-14-east-vacations.sql";
+const XV_MIGRATION = path.join(ROOT, "sql", "migrations", XV_FILE);
+const XV_PROBE = path.join(ROOT, "sql", "probes", "east-vacations-probe.sql");
+const XV_PRECHECK = path.join(ROOT, "sql", "probes", "east-vacations-precheck.sql");
+const XV_GATE_BEFORE = "people_fn=no ranges_fn=no derived_fn=no reset_fn=no guard=yes guard_derived=no";
+const XV_GATE_AFTER = "people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes guard=yes guard_derived=yes";
+const XV_FNS = {
+  silvis_east_people: { sig: "silvis_east_people()", exec: ["service_role"],
+    head: "create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)\nlanguage sql stable security invoker set search_path = public, pg_temp as $$\n" },
+  silvis_east_ranges: { sig: "silvis_east_ranges()", exec: ["service_role"],
+    head: "create or replace function public.silvis_east_ranges() returns table (person_id text, code text, start_date date, end_date date, state text)\nlanguage sql stable security invoker set search_path = public, pg_temp as $$\n" },
+  silvis_derived_vacations: { sig: "silvis_derived_vacations()", exec: ["authenticated", "service_role"],
+    head: "create or replace function public.silvis_derived_vacations() returns table (person_id text, start_date date, end_date date)\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n" },
+  east_vacation_reset_stale: { sig: "east_vacation_reset_stale(date)", exec: ["authenticated", "service_role"],
+    head: "create or replace function public.east_vacation_reset_stale(p_from date) returns table (person_id text, start_date date, end_date date, decision text, reason text)\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as $$\n" },
+};
+const XV_ORDER = ["silvis_east_people", "silvis_east_ranges", "silvis_derived_vacations", "east_vacation_reset_stale"];
+const xvGrants = (f) => {
+  const s = XV_FNS[f].sig;
+  return ["revoke all on function public." + s + " from public;", "revoke all on function public." + s + " from anon;"]
+    .concat(XV_FNS[f].exec.includes("authenticated") ? [] : ["revoke all on function public." + s + " from authenticated;"])
+    .concat(XV_FNS[f].exec.map((r) => "grant execute on function public." + s + " to " + r + ";")).join("\n");
+};
+const XV_TEXT = {
+  EV001: "EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)",
+  EV002: "EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)",
+};
+const xvRaise = (c) => "raise exception '" + XV_TEXT[c] + "' using errcode = '" + c + "';";
+const XV_VG = (days) => "ERR VG001 VACATION_TOO_FEW_AROUND: on " + days + " only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler";
+const XV_ROLLBACK = [
+  "supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-30-vacation-guard.sql   (the 9/30 guard body; idempotent)",
+  "drop function if exists public.east_vacation_reset_stale(date);",
+  "drop function if exists public.silvis_derived_vacations();",
+  "drop function if exists public.silvis_east_ranges();",
+  "drop function if exists public.silvis_east_people();",
+  "notify pgrst, 'reload schema';",
+];
+// the probe's contract: every case and its AFTER string (["eq", value] / ["err", sqlstate, message])
+const XV_PROBE_CASES = {
+  P1: ["eq", "active=6 min=2"], P2: ["eq", "east=yes"],
+  P3: ["eq", "people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile paths=4"],
+  P4: ["eq", "public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset"],
+  P5: ["eq", "result=TABLE(person_id text, start_date date, end_date date)"],
+  P6: ["eq", "triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t derived=yes"],
+  D1: ["eq", "range=02-03..02-04 state=unreviewed derived=yes"], D2: ["eq", "range=02-06..02-07 state=away derived=yes"],
+  D3: ["eq", "range=02-10..02-11 state=home derived=no"], D4: ["eq", "range=02-13..02-14 state=unreviewed derived=yes"],
+  D5: ["eq", "range=02-17..02-21 state=home derived=no"], D6: ["eq", "range=02-24..02-27 state=unreviewed derived=yes"],
+  D7: ["eq", "range=none"], D8: ["eq", "range=none others=0"], D9: ["eq", "range=03-05..03-06 state=unreviewed derived=yes"],
+  D10: ["eq", "ranges=8 derived=6 malformed_days=0"],
+  A1: ["eq", "rows=6"], A2: ["eq", "rows=6"], A3: ["eq", "rows=6"],
+  A4: ["err", "42501", "permission denied for function silvis_east_ranges"], A5: ["err", "42501", "permission denied for function silvis_east_people"],
+  A6: ["err", "42501", "permission denied for function silvis_derived_vacations"], A7: ["err", "42501", "permission denied for function east_vacation_reset_stale"],
+  A8: ["err", "42501", "permission denied for function silvis_east_ranges"],
+  G1: ["eq", XV_VG("2/3")], G2: ["eq", XV_VG("2/6")], G3: ["eq", "ok"], G4: ["eq", XV_VG("2/13")], G5: ["eq", "ok"], G6: ["eq", XV_VG("2/25")],
+  G7: ["eq", "ok"], G8: ["eq", XV_VG("3/5")], G9: ["eq", "ok"], G10: ["eq", XV_VG("2/6, 2/7")], G11: ["eq", "ok"],
+  R1: ["eq", "ERR EV001 " + XV_TEXT.EV001], R2: ["eq", "ERR EV001 " + XV_TEXT.EV001], R3: ["eq", "ERR EV001 " + XV_TEXT.EV001], R4: ["eq", "ERR EV001 " + XV_TEXT.EV001],
+  R5: ["eq", "ERR EV002 " + XV_TEXT.EV002],
+  R6: ["eq", "n=1 03-25..03-26/away/removed"],
+  R7: ["eq", "audit=1 actor=self name=probe admin sum=East vacation 2031-03-25..2031-03-26 <E>: reset (removed) keys=decision,end,person_id,reason,removed,start,summary,was was=away"],
+  R8: ["eq", "n=2 02-12..02-15/home/changed,02-24..02-26/home/changed"],
+  R9: ["eq", "audit=2 actor=cron name=east-feed-refresh (cron)"],
+  R10: ["eq", "n=1 01-27..01-28/away/removed"],
+  R11: ["eq", "audit=1 actor=cron name=no signed-in user (SQL)"],
+  R12: ["eq", "n=0 audit=0"],
+  R13: ["eq", "kept=E 02-06..02-07 away,E 02-10..02-11 home,E 02-17..02-21 home,n2 02-05..02-05 away"],
+  R14: ["eq", "time_off=same east_feed=same ranges=8 derived=6"],
+};
+const XV_CASES = Object.keys(XV_PROBE_CASES);
+const xvFull = (k) => XV_PROBE_CASES[k][0] === "eq" ? XV_PROBE_CASES[k][1] : "ERR " + XV_PROBE_CASES[k][1] + " " + XV_PROBE_CASES[k][2];
+const xvEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+eq(XV_CASES.length, 49, "the contract's 49 probe cases;");
+
+step("Prompt 31 Part A: the migration - four NEW functions (silvis_east_people / silvis_east_ranges internal, silvis_derived_vacations for every signed-in role, east_vacation_reset_stale EV001 / EV002) + time_off_vacation_guard re-created to read the derived rows; report-first NOT APPLIED; ends with the schema-cache reload");
+const xvMig = read(XV_MIGRATION);
+ok(!/\r/.test(xvMig) && /^[\x00-\x7f]*$/.test(xvMig), "the East vacations migration is LF and ASCII");
+ok(migFiles.includes(XV_FILE) && !PREPARED_NOT_MIRRORED.includes(XV_FILE), "sql/migrations/" + XV_FILE + " is a mirrored migration (not exempt)");
+const xvHdr = xvMig.slice(0, xvMig.indexOf("\n-- ============================================================================\n\n"));
+const xvHdrFlat = xvHdr.replace(/\n-- ?/g, " ");
+ok(xvHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(xvHdr), "the migration header must say REPORT-FIRST, NOT APPLIED");
+ok(xvHdrFlat.includes("\"Every East range reviewed 'away', and every range still 'unreviewed', shows to every signed-in role exactly like a Silvis vacation\"") && xvHdrFlat.includes("Faraz 10/14 chose (a)"), "the header quotes Faraz's item 1 and his 10/14 decision (a)");
+ok(xvHdr.includes("\n--   bash <run folder>/apply-east-vacations.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-14-east-vacations.sql   (what it runs)\n"), "the header carries the two apply lines (the one command - its script kept outside the repo - and what it runs)");
+ok(!/bash scripts\/apply-/.test(xvHdr), "the migration header names no in-repo apply script");
+ok(/What changes\./.test(xvHdr) && /Who it binds\./.test(xvHdr) && /Behaviour change \(the guard only/.test(xvHdr) && /Blast radius\./.test(xvHdr) && xvHdrFlat.includes("ONE implicit transaction"), "the header states what changes, whom it binds, the behaviour change, the blast radius and that the file runs as one transaction");
+ok(xvHdrFlat.includes("sql/probes/east-vacations-precheck.sql") && xvHdrFlat.includes(XV_GATE_BEFORE) && xvHdrFlat.includes(XV_GATE_AFTER) && xvHdrFlat.includes("sql/probes/vacation-guard-overlimit.sql (the days already under the minimum") && xvHdrFlat.includes("PROBE_SETUP: silvis_derived_vacations is absent") && xvHdrFlat.includes("probe AFTER (49 cases") && xvHdrFlat.includes("SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh") && xvHdrFlat.includes("section 15's 20 cases unchanged") && xvHdrFlat.includes("docs/SCHEMA-REVIEW.md \"2026-10-14 - East vacations\""), "the header gives the order: pre-check (its gate) + the over-limit query, the absent check, probe BEFORE (PROBE_SETUP), the file, the gate after, probe AFTER (49), strict verify-rls with section 15 unchanged, the record step");
+["EV001", "EV002"].forEach((c) => ok(xvHdrFlat.includes(c + " " + XV_TEXT[c]), "the header lists " + c + " with its exact message"));
+ok(xvHdrFlat.includes("(review 10/13, critic A7) is the CALLER's") && xvHdrFlat.includes("must not call the reset"), "the header says the silent-empty guard (critic A7) is the caller's: a failed, unresolved or empty-but-cached read never calls the reset");
+ok(xvHdrFlat.includes("a 'home' row that merely covers a day") && xvHdrFlat.includes("no longer exempts the day") && xvHdrFlat.includes("Stricter in that one case only, never more lenient") && xvHdrFlat.includes("decision 3"), "the header states the guard's one behaviour change (a covering, non-exact 'home' row no longer exempts - decision 3)");
+ok(xvHdrFlat.includes("Supabase grants it to anon by default on every new function"), "the header says why anon's EXECUTE is revoked explicitly (critic A6)");
+{
+  const rbText = XV_ROLLBACK.map((l) => "--   " + l).join("\n");
+  ok((xvHdr + "\n").includes("\n" + rbText + "\n"), "the header's rollback must read exactly (the 9/30 file re-run first - the guard calls the derived rows - then the four drops, the reload):\n" + rbText);
+}
+ok(!/^-- supersedes:/m.test(xvMig) && !/^-- PREPARED FOLLOW-UP/m.test(xvMig), "the East vacations migration has no supersedes line (no SAME-DAY migration redefines the guard) and is not a NOT-MIRRORED follow-up");
+eq((xvMig.match(/^create or replace function/gm) || []).length, 5, "the migration creates or replaces exactly five functions;");
+const xvCode = xvMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+ok(!/\b(create|alter|drop) (table|policy|trigger|index|publication|view)\b|drop function|read_all|security_invoker/i.test(xvCode), "the migration creates, alters and drops no table, policy, trigger, index, view or publication and drops no function");
+ok(xvMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST must learn the new RPCs before the client push)");
+const xvStmts = psTopStatements(xvMig);
+ok(!xvStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row (no insert / update / delete outside function bodies)");
+eq(xvStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [].concat(...XV_ORDER.map((f) => [XV_FNS[f].head.split("\n")[0]].concat(xvGrants(f).split("\n"), ["comment on function public." + XV_FNS[f].sig + " is ..."])),
+  ["create or replace function public.time_off_vacation_guard() returns trigger", "notify pgrst, 'reload schema';"]),
+  "the migration is exactly: the four functions in call order (people, ranges, derived, reset), each with its grants and comment, the re-created guard, the reload;");
+function checkEastVacations(n, s) {
+  XV_ORDER.forEach((f) => {
+    const isSql = f !== "east_vacation_reset_stale";
+    const fn = (isSql ? sqlFunctionText : functionText)(s, f);
+    ok(fn && fn.startsWith(XV_FNS[f].head), n + ": " + f + " must read `" + XV_FNS[f].head.trim() + "`");
+    ok(s.indexOf(xvGrants(f)) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "() grants must read exactly (after the function):\n" + xvGrants(f));
+    ok(!new RegExp("grant [^\\n]*on function public\\." + xvEsc(f) + "\\([^)]*\\) to [^\\n]*\\b(anon|public)\\b").test(s), n + ": no EXECUTE on " + f + " for anon / public");
+    ok(new RegExp("^comment on function public\\." + xvEsc(XV_FNS[f].sig) + " is 'Prompt 31 Part A \\(revision x\\): [^\\n]*';$", "m").test(s), n + ": " + f + " carries a Prompt 31 Part A comment");
+  });
+  const people = sqlFunctionText(s, "silvis_east_people") || "";
+  ok(people.includes("coalesce(e.r -> 'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r ->> 'type', '') <> 'external'") && people.includes("and coalesce(e.r ->> 'code', '') <> ''") &&
+     people.includes("(c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'enabled']) = 'true'::jsonb") && people.includes("(c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb") && people.includes("or (c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb)") && people.includes("upper(e.r ->> 'code')"),
+    n + ": silvis_east_people is the 9/30 guard's East predicate (an active, non-external roster surgeon with a code whose eastFeed is enabled and blocks a role - JSON true) with the code upper-cased");
+  const ranges = sqlFunctionText(s, "silvis_east_ranges") || "";
+  ok(ranges.includes("from public.silvis_east_people() p") && ranges.includes("where (f.data -> 'isForecast') is distinct from 'true'::jsonb") && ranges.includes("and jsonb_typeof(v.r) = 'object'") && ranges.includes("and upper(coalesce(v.r ->> 'code', '')) = p.code"), n + ": silvis_east_ranges reads every cached week's entries of each East person's code (upper-cased), forecast rows and non-objects skipped");
+  ["s", "e"].forEach((k) => ok(ranges.includes("case when coalesce(x." + k + ", '') ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' and substr(x." + k + ", 1, 4) <> '0000'\n                then case when substr(x." + k + ", 9, 2)::int <= extract(day from (substr(x." + k + ", 1, 7) || '-01')::date + interval '1 month - 1 day')::int\n                          then x." + k + "::date end end"), n + ": silvis_east_ranges casts " + (k === "s" ? "start" : "end") + " only after the shape and the day of the month are checked (nested CASE: an impossible date is dropped, never a cast error in the guard)"));
+  ok(ranges.includes("where d.sd is not null and d.ed is not null and d.sd <= d.ed"), n + ": an entry with no start / end or an end before its start is dropped (eastMergeRanges' efValidRange)");
+  ok(ranges.includes("case when max(g.ed) over (partition by g.person_id order by g.sd, g.ed rows between unbounded preceding and 1 preceding) >= g.sd - 1\n                then 0 else 1 end as brk"), n + ": ranges merge when they overlap OR touch (end + 1 day >= the next start - eastMergeRanges), sorted by start then end");
+  ok(ranges.includes("left join public.east_vacation_reviews w on w.person_id = m.person_id and w.\"start\" = m.start_date and w.\"end\" = m.end_date") && ranges.includes("case w.decision when 'away' then 'away' when 'home' then 'home' else 'unreviewed' end"), n + ": the review state is the EXACT match of the same person's row (reviewStateFor); no row = unreviewed");
+  const derived = sqlFunctionText(s, "silvis_derived_vacations") || "";
+  ok(derived.includes("  select r.person_id, r.start_date, r.end_date\n    from public.silvis_east_ranges() r\n   where r.state <> 'home'\n"), n + ": silvis_derived_vacations = the ranges not reviewed home, (person_id, start_date, end_date) only");
+  const reset = functionText(s, "east_vacation_reset_stale") || "";
+  {
+    const g1 = reset.indexOf("    if v_role in ('anon', 'authenticated') then\n      " + xvRaise("EV001"));
+    const g2 = reset.indexOf("  elsif not public.silvis_is_sched() then\n    " + xvRaise("EV001"));
+    const g3 = reset.indexOf("  if p_from is null then\n    " + xvRaise("EV002"));
+    const lock = reset.indexOf("  perform pg_advisory_xact_lock(hashtext('east_vacation_reviews:reset'));");
+    const firstWrite = reset.search(/\n\s*(delete from|insert into|update) public\./);
+    ok(g1 > 0 && g2 > g1 && g3 > g2 && lock > g3 && firstWrite > lock, n + ": the reset refuses EV001 (a no-user session with an anon / authenticated role claim, then anyone signed in but the scheduler), then EV002, then takes its lock - all before any write (" + [g1, g2, g3, lock, firstWrite] + ")");
+    eq((reset.match(/using errcode = 'EV00/g) || []).length, 3, n + ": three EV raises (EV001 twice, EV002 once);");
+    ok(reset.includes("v_role   text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');") && reset.includes("  me       uuid := auth.uid();"), n + ": the reset reads auth.uid() and the JWT role claim");
+    ok(reset.includes("    v_actor := 'cron';\n    v_name := case when v_role = 'service_role' then 'east-feed-refresh (cron)' else 'no signed-in user (SQL)' end;") && reset.includes("    v_actor := coalesce(public.silvis_person_id(), me::text);"), n + ": the audit actor: 'cron' (east-feed-refresh (cron) for the service role, 'no signed-in user (SQL)' otherwise) or the scheduler as logAudit writes him");
+    ok(reset.includes("      join ppl q on q.pid = w.person_id\n     where w.\"end\" >= p_from\n       and not exists (select 1 from cur c where c.pid = w.person_id and c.s = w.\"start\" and c.e = w.\"end\")"), n + ": only East people's rows ending on or after p_from whose exact range is no merged range are stale");
+    ok(reset.includes("case when exists (select 1 from cur c where c.pid = w.person_id and c.s <= w.\"end\" and c.e >= w.\"start\")\n                then 'changed' else 'removed' end as why"), n + ": the reason: changed when the row still overlaps one of his merged ranges, removed otherwise (derivedEastVacations)");
+    ok(reset.includes("    delete from public.east_vacation_reviews d where d.id = x.rid;\n    get diagnostics n = row_count;\n    continue when n = 0;"), n + ": each stale row is deleted by its id; a row already gone writes nothing");
+    ok(reset.includes("'eastvac.review',\n            jsonb_build_object('summary', 'East vacation ' || to_char(x.s, 'YYYY-MM-DD') || '..' || to_char(x.e, 'YYYY-MM-DD') || ' ' || x.pname || ': reset (' || x.why || ')',\n                               'person_id', x.pid, 'start', x.s, 'end', x.e, 'decision', 'reset', 'reason', x.why, 'removed', 1, 'was', x.dec)"), n + ": one eastvac.review audit row per deleted row in the client's shape (+ was, the deleted decision)");
+    eq((reset.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).sort(), ["delete from public.east_vacation_reviews", "insert into public.audit_log"], n + ": the reset deletes review rows and writes audit rows - nothing else;");
+  }
+}
+checkEastVacations("East vacations migration", xvMig);
+{
+  // the re-created guard = the 9/30 body (vgFn, sha256-pinned above) with exactly these five edits - the time_off leg, the UPDATE exit,
+  // the lock, the scheduler / no-user exit, the minimum, the counting and the VG001 text stay byte for byte
+  const once = (str, a, b) => { const i = str.indexOf(a); ok(i >= 0 && str.indexOf(a, i + 1) < 0, "the 9/30 guard body holds this anchor exactly once: " + a.slice(0, 120)); return i < 0 ? str : str.slice(0, i) + b + str.slice(i + a.length); };
+  const cut = (str, a, b) => { const i = str.indexOf(a), j = str.indexOf(b, i + 1); ok(i >= 0 && j > i, "the 9/30 guard body could not be sliced at " + a.slice(0, 80)); return str.slice(i, j); };
+  let want = vgFn;
+  want = once(want, "  east_ids    text[];\n  east_codes  text[];\n", "");
+  want = once(want, cut(vgFn, "  -- the ACTIVE roster (active is not false, not an outside surgeon) in roster order; among them", "  -- a person who is not an active roster surgeon changes nobody's count\n"),
+    "  -- the ACTIVE roster (active is not false, not an outside surgeon) in roster order; the East people and their ranges are\n  -- silvis_derived_vacations()'s (Prompt 31 Part A, revision x)\n  select coalesce(array_agg(x.id order by x.ord), '{}')\n    into active\n    from (select e.r->>'id' as id, e.ord\n            from jsonb_array_elements(case when jsonb_typeof(blob->'roster') = 'array' then blob->'roster' else '[]'::jsonb end) with ordinality as e(r, ord)\n           where jsonb_typeof(e.r) = 'object' and coalesce(e.r->>'id', '') <> ''\n             and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external') x;\n");
+  want = once(want, "  -- per checked day: who else is off WITHOUT this row, then the days this row takes the person off and how many stay around\n",
+    "  -- per checked day: who else is off WITHOUT this row, then the days this row takes the person off and how many stay around;\n  -- off = a time_off row (inline: earlier rows of a multi-row insert count) or a derived East vacation row (away / unreviewed,\n  -- the merged range, a 'home' review only when it is exactly that range)\n");
+  want = once(want, "     where o_start is null or g::date not between o_start and o_end\n  ),\n",
+    "     where o_start is null or g::date not between o_start and o_end\n  ),\n  east_off as materialized (\n    select dv.person_id, dv.start_date, dv.end_date from public.silvis_derived_vacations() dv\n  ),\n");
+  want = once(want, cut(vgFn, "        or (a.id = any(east_ids)\n", "\n  ),\n  per_day as ("),
+    "        or exists (select 1 from east_off eo\n                    where eo.person_id = a.id and d.day between eo.start_date and eo.end_date)");
+  eq(functionText(xvMig, "time_off_vacation_guard"), want, "time_off_vacation_guard (revision x) = the 9/30 body with the five East-leg edits (no east_ids / east_codes, the active roster only, the comment, the east_off CTE over silvis_derived_vacations(), the derived-row leg) - nothing else moves;");
+  const g = functionText(xvMig, "time_off_vacation_guard") || "";
+  ok(!/east_feed|east_vacation_reviews|east_ids|east_codes/.test(g), "the re-created guard reads neither east_feed nor the reviews itself - only the derived rows");
+}
+
+step("Prompt 31 Part A: schema.sql mirrors the migration (the four functions with grants and comments after the east_vacation_reviews table, the guard re-created in its 9/30 block, revision x after w)");
+checkEastVacations("schema.sql", schema);
+XV_ORDER.concat(["time_off_vacation_guard"]).forEach((f) => {
+  const isSql = f !== "east_vacation_reset_stale" && f !== "time_off_vacation_guard";
+  ok((isSql ? sqlFunctionText : functionText)(schema, f) === (isSql ? sqlFunctionText : functionText)(xvMig, f), f + "(): schema.sql differs from sql/migrations/" + XV_FILE);
+});
+xvStmts.filter((st) => !/^notify pgrst/.test(st)).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this East vacations statement byte for byte:\n" + st.slice(0, 300)));
+{
+  const at = (t) => schema.indexOf(t);
+  const blockAt = at("\n-- ---------- East vacations, derived (Prompt 31 Part A, revision x; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied)\n");
+  ok(blockAt > at("create index if not exists east_vacation_reviews_person_idx on public.east_vacation_reviews(person_id, \"start\");") && blockAt < at("-- ---------- trades (there is NO vacation_requests table") &&
+     at("create or replace function public.silvis_east_people()") > blockAt && at(xvGrants("east_vacation_reset_stale")) < at("-- ---------- trades (there is NO vacation_requests table"), "the four functions sit in their own block right after the east_vacation_reviews table and index, before the trades (the sql bodies need east_feed and the reviews to exist)");
+  XV_ORDER.forEach((f, i) => { if (i) ok(at("create or replace function public." + XV_ORDER[i - 1] + "(") < at("create or replace function public." + f + "("), "schema.sql creates " + XV_ORDER[i - 1] + " before " + f + " (a sql body is validated at create time)"); });
+  ok(at("create or replace function public.time_off_vacation_guard()") > at("-- ---------- vacation guard (2026-09-30, Faraz 9/30 - Prompt 27;") && at("create or replace function public.time_off_vacation_guard()") < at("create trigger time_off_vacation_guard_trg"), "the re-created guard stays in its 9/30 block, before its trigger");
+  ok(schema.includes("\n-- Revision x (2026-10-14, Prompt 31 Part A; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied) re-creates\n-- the function: an East-feature surgeon is off on a day one of his silvis_derived_vacations() rows covers"), "the vacation guard block comment names revision x and the new East leg");
+  const xAt = header.search(/^-- Revision 2026-10-14 x \(East vacations, sql\/migrations\/2026-10-14-east-vacations\.sql, report-first, NOT yet applied\): /m);
+  const wAt = header.search(/^-- Revision 2026-10-03 w /m);
+  ok(wAt > 0 && xAt > wAt, "schema.sql's header must record revision 2026-10-14 x (East vacations; 'report-first, NOT yet applied' until the record step turns it 'applied <ts> after the probe') after revision w");
+  const revX = header.slice(xAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(/Faraz 10\/9 \(Prompt 31 Part A\)/.test(revX) && /chose \(a\), a derived SQL function/.test(revX) && /silvis_east_people\(\) and silvis_east_ranges\(\)/.test(revX) && /silvis_derived_vacations\(\)/.test(revX) && /east_vacation_reset_stale\(p_from\)/.test(revX) && /EV001 \/ EV002/.test(revX) && /time_off_vacation_guard\(\) is re-created/.test(revX) && /never anon/.test(revX) && /No table, column, policy, trigger, row or anon surface changes/.test(revX) && /Letter u stays taken by the weekend pair claim/.test(revX), "revision x names the decision, the four functions, the codes, the re-created guard, never anon, what does not change and the taken letter u");
+}
+
+step("Prompt 31 Part A: the probe - self-rolling-back, PROBE_SETUP (absent) first, the partly-applied checks next, then the collision guard, four throwaway users, 2031 fixtures, 49 cases each stating its AFTER string in the header, the live roster read and never written");
+const xvProbe = read(XV_PROBE);
+ok(!/\r/.test(xvProbe) && /^[\x00-\x7f]*$/.test(xvProbe), "the East vacations probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(xvProbe), "the East vacations probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(xvProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ngrant insert, select on probe_results to anon;\ncreate temp table probe_ctx (k text primary key, v text);\ngrant select on probe_ctx to authenticated;\ngrant select on probe_ctx to anon;"), "the probe collects into probe_results (granted to authenticated and anon - A6-A8 run as anon) and keeps its context in probe_ctx");
+{
+  const lastDo = xvProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(xvProbe.slice(lastDo)), "the probe's last DO block raises 'PROBE_RESULTS %;END'");
+  const absentAt = xvProbe.indexOf("raise exception 'PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied';");
+  const partAt = xvProbe.indexOf("raise exception 'PROBE_SETUP: silvis_east_people / silvis_east_ranges / east_vacation_reset_stale is absent - sql/migrations/2026-10-14-east-vacations.sql is partly applied';");
+  const guardAt = xvProbe.indexOf("raise exception 'PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql/migrations/2026-10-14-east-vacations.sql is partly applied';");
+  const colAt = xvProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in 2031-01 .. 2031-04");
+  const usersAt = xvProbe.indexOf("insert into auth.users");
+  ok(absentAt > 0 && partAt > absentAt && guardAt > partAt && colAt > guardAt && usersAt > colAt, "the setup raises PROBE_SETUP absent first, then the two partly-applied checks, then the collision guard, before any fixture (" + [absentAt, partAt, guardAt, colAt, usersAt] + ")");
+  const code = xvProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ok(code.includes("if to_regprocedure('public.silvis_derived_vacations()') is null then"), "the absent check is to_regprocedure of the derived rows");
+  ok(code.includes("or exists (select 1 from public.east_vacation_reviews where \"end\" >= '2031-01-01')") && code.includes("coalesce(v.r->>'end', '') >= '2030-12-31'"), "the collision guard: any review ending in 2031 or later (the resets read every review from 2031-01-01) and any cached range reaching 2030-12-31 (it could merge with a fixture)");
+  ok(code.includes("'probe-eastvac31-' || u || '@example.test'") && !/'probe-eastvac31-[^'|]*@/.test(code), "the throwaway users are probe-eastvac31-<uuid>@example.test, the email built with || (no literal email in the file)");
+  ok(code.includes("update public.user_profiles set person_id = n[1], role = 'surgeon' where id = u1;") && code.includes("update public.user_profiles set role = 'coordinator' where id = u2;") && code.includes("update public.user_profiles set role = 'admin', display_name = 'probe admin' where id = u3;") && code.includes("update public.user_profiles set role = 'viewer' where id = u4;"), "the four users: U1 surgeon n1, U2 an unlinked coordinator, U3 an unlinked admin 'probe admin', U4 an unlinked viewer");
+  ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(code) && code.includes("select c.data into blob from public.call_schedule_data c where c.id = 'main';"), "the probe reads the live roster and never writes the blob (not even inside its transaction)");
+  ok(!/(update|insert into|delete from)\s+public\.(schedule_days|availability|call_offers|notifications|app_call_days|push_subscriptions)\b/.test(code), "the probe never writes the schedule, availability, offers, the feed, APP days or push rows");
+  const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{1,2}-[0-9]{2})'/g)).map((m) => m[1]);
+  ok(days.length > 40 && days.every((d) => d.slice(0, 4) === "2031" || d === "2030-12-29" || d === "2030-12-31" || d === "2099-01-01"), "every fixture day is a far-future 2031 day (the guard's 2030-12-29 / 2030-12-31 edges, A7's 2099-01-01): " + days.filter((d) => !(d.slice(0, 4) === "2031" || d === "2030-12-29" || d === "2030-12-31" || d === "2099-01-01")).join(", "));
+  ok(code.includes("'probe-eastvac31 fixture'") && code.includes("jsonb_build_object('probe', 'eastvac31',") && (code.match(/'probe-eastvac31'\)/g) || []).length >= 8, "every fixture carries the probe's identity: time_off notes 'probe-eastvac31 ...', east_feed data.probe 'eastvac31', reviews decided_by 'probe-eastvac31'");
+  ok(code.includes("perform set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);") && code.includes("perform set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);") && !/set local role service_role/.test(code), "the service role and an anon claim are a role claim on a no-user postgres session (no SET ROLE to service_role)");
+  XV_CASES.forEach((k) => ok(code.includes("('" + k + "', ") || code.includes("values ('" + k + "', "), "the probe lacks case " + k));
+}
+const xvProbeHdr = xvProbe.slice(0, xvProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(xvProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(xvProbeHdr) && /\n-- 49 cases\.\n/.test(xvProbeHdr), "the probe header: report-first / not applied, nothing persisted, 49 cases");
+const XV_AFTER = {};
+xvProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+)\s+.* -> (.*)$/); if (m) XV_AFTER[m[1]] = m[2]; });
+eq(Object.keys(XV_AFTER).sort(), XV_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
+XV_CASES.forEach((k) => ok(XV_AFTER[k] === xvFull(k), "the probe header's AFTER for " + k + " (" + XV_AFTER[k] + ") must be " + xvFull(k)));
+
+step("Prompt 31 Part A: the pre-check - ONE read-only SELECT (the objects gate, the guard body md5, the feed, the reviews, the new reading when it exists, cron, pg_net, the realtime facts - counts, dates and catalog facts only)");
+const xvPre = read(XV_PRECHECK);
+ok(!/\r/.test(xvPre) && /^[\x00-\x7f]*$/.test(xvPre), "the pre-check is LF and ASCII");
+{
+  const hdr = xvPre.slice(0, xvPre.indexOf("with objects as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr) && hdr.includes("sql/probes/vacation-guard-overlimit.sql"), "the pre-check's header says READ-ONLY, when to run it and that the over-limit days are the 9/30 query's");
+  ok(hdr.includes(XV_GATE_BEFORE) && hdr.includes(XV_GATE_AFTER), "the header states the gate before and after the apply");
+  const code = xvPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code.replace(/query_to_xml\('[^\n]*', false, true, ''\)/, "query_to_xml(...)")), "the pre-check writes, locks and changes nothing");
+  ["silvis_east_people()", "silvis_east_ranges()", "silvis_derived_vacations()", "east_vacation_reset_stale(date)", "time_off_vacation_guard()"].forEach((sig) => ok(code.includes("to_regprocedure('public." + sig + "')"), "row 1 looks up " + sig + " by its exact signature"));
+  ok(code.includes("p.prosrc like '%public.silvis_derived_vacations()%'") && code.includes("md5(p.prosrc)"), "rows 1 / 2: whether the guard reads the derived rows, and the md5 of its body (the apply script compares it with the 9/30 body's)");
+  ok(code.includes("case when to_regprocedure('public.silvis_east_ranges()') is null or to_regprocedure('public.silvis_derived_vacations()') is null then 'functions=absent'") && !/from public\.(silvis_|east_vacation_reset_stale)/.test(code.replace(/query_to_xml\('[^\n]*', false, true, ''\)/, "")), "row 5 runs the new functions only through query_to_xml after to_regprocedure finds them (the pre-check runs before the apply)");
+  ["'objects'::text", "'guard'::text", "'feed'::text", "'reviews'::text", "'ranges'::text", "'cron'::text", "'pg_net'::text", "'realtime'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  ok(!/display_name|email|\bnote\b|\.detail\b/.test(code), "facts only: no display name, no email, no note, no audit detail is read");
+}
+
+step("Prompt 31 Part A: verify-rls.sh section 20 - anon REST (20a the derived rows, 20b the reset, 20c / 20d the internal functions), 20e as a surgeon, the graded probe (49), leftovers (20g), section 15 re-run unchanged; PROBE_SETUP / 404 pass as not applied unless SILVIS_EAST_VACATIONS_APPLIED=1; graded against a faked CLI and curl");
+ok(/^echo "== 20\. East vacations \(2026-10-14, Prompt 31 Part A\): silvis_derived_vacations \+ east_vacation_reset_stale \+ the re-created vacation guard - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 20 (East vacations)");
+const s20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
+ok(s20.length > 0 && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 19. ') && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 20 could not be sliced out (after section 19, up to the next section header or the RESULT line)");
+ok(/^# Section 20 \(17 = the weekend pair claim, taken on its own branch; 19 = Prompt 30's phone push, the section above\)\.$/m.test(s20), "section 20's comment says why it is 20 (17 is on its own branch, 19 the section above)");
+ok(s20.replace(/\n# ?/g, " ").includes("section 15 above re-runs its 20 cases unchanged, which proves the re-created trigger kept its behaviour"), "section 20's comment says section 15 is the re-run that proves the re-created guard (section 15 itself does not change)");
+const s20code = s20.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+ok(s20code.includes('EVSTRICT20="${SILVIS_EAST_VACATIONS_APPLIED:-}"'), "section 20 reads SILVIS_EAST_VACATIONS_APPLIED");
+eq((s20code.match(/curl /g) || []).length, 6, "section 20 makes exactly six REST calls (20a-20d anon, 20e two as a surgeon);");
+{
+  const posts = s20code.match(/curl [^\n]*-X POST[^\n]*/g) || [];
+  ok(posts.length === 6 && posts.every((p) => /rest\/v1\/rpc\/(silvis_derived_vacations|east_vacation_reset_stale|silvis_east_ranges|silvis_east_people)"/.test(p) && /Bearer \$ANON"|Bearer \$SILVIS_SURGEON_JWT"/.test(p)), "every REST call in section 20 is an anon or surgeon POST to one of the four RPCs");
+  ok(posts.filter((p) => /rpc\/east_vacation_reset_stale/.test(p)).every((p) => p.includes("-d '{\"p_from\":\"2099-01-01\"}'")) && posts.filter((p) => /rpc\/east_vacation_reset_stale/.test(p)).length === 2, "both reset calls ask for p_from 2099-01-01 (even a body that ran could reset nothing)");
+  ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s20code) && !/-X (PATCH|DELETE|PUT)/.test(s20code) && !/SERVICE_ROLE/.test(s20code), "section 20 never sends the scheduler's token or a service-role key and never PATCHes / DELETEs over REST");
+}
+ok((s20code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s20code.match(/"HTTP 404"\) if \[ "\$EVSTRICT20" = "1" \]; then bad /g) || []).length === 6, "20a-20d: 401/403 PASS; a 404 PASSes unless strict (then FAIL; 20e's two too); anything else FAILs");
+ok(/if \[ -n "\$\{SILVIS_SURGEON_JWT:-\}" \]; then/.test(s20code) && s20code.includes('echo "   SKIP 20e (set SILVIS_SURGEON_JWT=') && s20code.includes("grep -q '^\\['") && s20code.includes("if grep -q 'EV001' $T/vr20e2.json; then ok "), "20e runs only with SILVIS_SURGEON_JWT (a SKIP line otherwise): the derived rows must be a JSON array, the reset refused EV001");
+ok(/PROBE20="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/east-vacations-probe\.sql"/.test(s20code), "20f runs sql/probes/east-vacations-probe.sql through the linked CLI");
+ok(/if \[ "\$EVSTRICT20" = "1" \]; then bad "East vacations probe: PROBE_SETUP - silvis_derived_vacations is absent with SILVIS_EAST_VACATIONS_APPLIED=1/.test(s20code) && /else ok "East vacations probe: silvis_derived_vacations is absent \(before the migration: PROBE_SETUP\)"/.test(s20code) && /elif echo "\$out" \| grep -q 'PROBE_SETUP: '; then\n\s+bad "East vacations probe: /.test(s20code), "20f: PROBE_SETUP absent is the not-applied picture (a PASS) unless strict; every other PROBE_SETUP (partly applied, a collision, the roster) FAILs always");
+ok(s20code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'") && s20code.includes('case_val20()   { CV20=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV20="${l#"$1="}"; return 0;; esac; done <<< "$lines20"; }'), "section 20 decodes the results ONCE (R7's <E> arrives as \\u003c / \\u003e) and reads each case in plain bash (no process per case)");
+ok(s20code.includes('VGA20="ERR VG001 VACATION_TOO_FEW_AROUND: on "') && s20code.includes('VGZ20=" only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"') && s20code.includes('EV001_20="ERR EV001 ' + XV_TEXT.EV001 + '"'), "section 20's shared strings are the probe's (VG001 around the days, EV001)");
+XV_CASES.forEach((k) => {
+  const [kind, a, b] = XV_PROBE_CASES[k];
+  let lit;
+  if (kind === "err") lit = "expect_err20 " + k.padEnd(3) + " " + a + " \"" + b + "\" ";
+  else if (a.startsWith("ERR VG001 ")) lit = "expect_eq20  " + k.padEnd(3) + " \"${VGA20}" + a.slice("ERR VG001 VACATION_TOO_FEW_AROUND: on ".length, a.indexOf(" only 1 of 6")) + "${VGZ20}\" ";
+  else if (a === "ERR EV001 " + XV_TEXT.EV001) lit = "expect_eq20  " + k.padEnd(3) + " \"$EV001_20\" ";
+  else lit = "expect_eq20  " + k.padEnd(3) + " \"" + a + "\" ";
+  ok(s20code.includes("\n    " + lit), "section 20 must grade " + k + " as `" + lit.trim() + " ...`");
+});
+eq((s20code.match(/\n    expect_(eq|err)20 /g) || []).length, XV_CASES.length, "section 20 grades exactly the 49 cases;");
+ok(s20code.includes("LEFTOVER20_SQL=\"select ((select count(*) from auth.users where email like 'probe-eastvac31-%@example.test') + (select count(*) from public.time_off where note like 'probe-eastvac31%') + (select count(*) from public.east_feed where data->>'probe' = 'eastvac31') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastvac31') + (select count(*) from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30'))::int as leftover\"") && /LEFT ROWS BEHIND/.test(s20code), "20g counts leftovers by the probe's identity (its users, time_off notes, east_feed rows, reviews and 2031 eastvac.review audit rows) and fails on non-zero");
+ok(["delete from public.time_off where note like 'probe-eastvac31%';", "delete from public.east_feed where data->>'probe' = 'eastvac31';", "delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';", "delete from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30';", "delete from auth.users where email like 'probe-eastvac31-%@example.test';   -- user_profiles rows cascade"].every((d) => s20code.includes("echo \"      " + d + "\"")), "20g prints DELETEs for the probe's rows only");
+ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 20f / 20g skip (20a-20e still run)");
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d) and 20e");
+  ok(head.includes("#   SILVIS_EAST_VACATIONS_APPLIED=1                         grade section 20 strictly (the probe's PROBE_SETUP and the 404s = FAIL): only on the run right after sql/migrations/2026-10-14-east-vacations.sql is applied; the record step makes strict the default and drops this variable"), "verify-rls.sh's header documents SILVIS_EAST_VACATIONS_APPLIED");
+  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_EAST_VACATIONS_APPLIED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_EAST_VACATIONS_APPLIED");
+}
+{
+  const code20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
+  const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
+  const run20 = (cliOut, opts) => {
+    const o = Object.assign({ strict: false, surgeon: false, leftover: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", eDer: "200", eDerBody: "[]", eRes: "400", eResBody: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}' }, opts || {});
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  {\\n    \"leftover\": " + o.leftover + "\\n  }\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + o.leftover + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      "SILVIS_EAST_VACATIONS_APPLIED='" + (o.strict ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      "q() { " + qBody + "; }\n" +
+      "curl() { local of='' prev='' code='' sur='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; " +
+      "case \"$u\" in " +
+      "*rpc/silvis_derived_vacations*) if [ -n \"$sur\" ]; then code=" + o.eDer + "; body=" + sq(o.eDerBody) + "; else code=" + o.a + "; fi;; " +
+      "*rpc/east_vacation_reset_stale*) if [ -n \"$sur\" ]; then code=" + o.eRes + "; body=" + sq(o.eResBody) + "; else code=" + o.b + "; fi;; " +
+      "*rpc/silvis_east_ranges*) code=" + o.c + ";; " +
+      "*rpc/silvis_east_people*) code=" + o.d + ";; " +
+      "esac; [ -n \"$of\" ] && printf '%s' \"$body\" > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + fakesGuard(["linked", "q", "supabase", "curl"]) + code20 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 20: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 20's faked run: a fake did not resolve to a bash function - aborted before the section ran");
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = {};
+  XV_CASES.forEach((k) => { after[k] = xvFull(k); });
+  // the CLI's error body as the live apply logs show it (a JSON message; '<' / '>' escaped as \u003c / \u003e; CONTEXT after the sentinel)
+  const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"').replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
+  const N20 = XV_CASES.length + 5;   // 20a-20d + 49 cases + 20g
+  const ra = run20(msgOf(after));
+  eq(ra.result, [N20, 0], "section 20 against the AFTER picture (20a-20d 401, every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  ok(/SKIP 20e/.test(ra.out), "... 20e skipped without a surgeon token");
+  eq(run20(msgOf(after), { surgeon: true }).result, [N20 + 2, 0], "with SILVIS_SURGEON_JWT 20e adds two PASSes (the derived rows a JSON array, the reset 400 EV001);");
+  const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied\\nCONTEXT:  ..."}';
+  const beforePic = { a: "404", b: "404", c: "404", d: "404" };
+  eq(run20(setup, beforePic).result, [6, 0], "section 20 before the apply (four 404s, PROBE_SETUP): passes as not applied, the leftover check too;");
+  eq(run20(setup, Object.assign({ strict: true }, beforePic)).result, [1, 5], "section 20 with SILVIS_EAST_VACATIONS_APPLIED=1: the four 404s and PROBE_SETUP are FAILs;");
+  eq(run20(setup, Object.assign({ strict: true, surgeon: true, eDer: "404", eRes: "404" }, beforePic)).result, [1, 7], "... and 20e's two 404s too;");
+  const rb = run20(msgOf(Object.assign({}, after, { G4: "ok", A6: "rows=6 (NO refusal)", R2: "n=2 (NO refusal)", R13: "kept=E 02-06..02-07 away" })), { b: "400" });
+  eq(rb.result, [N20 - 5, 5], "section 20 must fail the 9/30 leniency (G4 ok), anon reading the derived rows, the coordinator resetting, a non-East row touched and an anon reset reaching the body (400) - exactly those five (" + fails(rb) + ");");
+  eq(run20(msgOf(after), { a: "200" }).result, [N20 - 1, 1], "an anon 200 on the derived rows FAILs;");
+  eq(run20(msgOf(after), { surgeon: true, eRes: "200", eResBody: "[]" }).result, [N20 + 1, 1], "a surgeon's reset that answers 200 FAILs (a surgeon ran it);");
+  eq(run20(msgOf(after), { surgeon: true, eDerBody: '{"code":"x"}' }).result, [N20 + 1, 1], "a surgeon's derived-rows answer that is not a JSON array FAILs;");
+  const rq = run20(msgOf(after), { leftover: 3, shape: "bare" });
+  eq(rq.result, [N20 - 1, 1], "section 20 fails a non-zero leftover count (read from a plain terminal's bare-array -o json the same as the agent envelope);");
+  ok(/LEFT ROWS BEHIND/.test(rq.out) && rq.out.includes("delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';") && rq.out.includes("delete from auth.users where email like 'probe-eastvac31-%@example.test';"), "section 20 names the leftovers and prints their DELETEs");
+  eq(run20(msgOf(after), { shape: "error" }).result, [N20 - 1, 1], "20g fails a leftover count it cannot read;");
+  eq(run20('{"message": "connection refused"}').result, [5, 1], "section 20 fails a run with no sentinel-terminated PROBE_RESULTS (20a-20d and the leftover check still run);");
+  const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql/migrations/2026-10-14-east-vacations.sql is partly applied\\nCONTEXT:  ..."}';
+  const rp = run20(part);
+  eq(rp.result, [5, 1], "the partly-applied raise is a FAIL even before the apply's flag;");
+  ok(/FAIL  East vacations probe: PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql\/migrations\/2026-10-14-east-vacations\.sql is partly applied/.test(rp.out), "... and the FAIL line names the raise");
+  const col = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in 2031-01 .. 2031-04 (x) - the probe fixtures would collide\\nCONTEXT:  ..."}';
+  eq(run20(col).result, [5, 1], "a collision raise is a FAIL;");
+}
+
+step("Prompt 31 Part A: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - no apply-east-vacations.sh under scripts/, no tracked file runs one from scripts/");
+{
+  ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-east-vacations.sh")), "scripts/apply-east-vacations.sh must not be in the repo (it lives outside it; test/ci.test.js keeps verify-rls.sh the only shell script)");
+  [XV_MIGRATION, XV_PROBE, XV_PRECHECK, path.join(ROOT, "sql", "schema.sql"), path.join(ROOT, "scripts", "verify-rls.sh")].forEach((p) =>
+    ok(!/bash scripts\/apply-|scripts\/apply-east-vacations\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
+}
+console.log("- Prompt 31 Part A: four NEW functions (silvis_east_people / silvis_east_ranges / silvis_derived_vacations / east_vacation_reset_stale) + time_off_vacation_guard re-created to read the derived rows (report-first, NOT applied; revision x), mirrored, probe (49) + pre-check + verify-rls section 20 graded against a faked CLI");
 
 console.log("schema.test.js: " + N + " assertions passed");

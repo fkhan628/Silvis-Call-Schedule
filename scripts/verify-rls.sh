@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
-#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f; a SURGEON-role user's access token)
+#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
+#   SILVIS_EAST_VACATIONS_APPLIED=1                         grade section 20 strictly (the probe's PROBE_SETUP and the 404s = FAIL): only on the run right after sql/migrations/2026-10-14-east-vacations.sql is applied; the record step makes strict the default and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -16,7 +17,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_EAST_VACATIONS_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1583,6 +1584,162 @@ case "$line" in
   "HTTP 401") ok "send-notification refuses an unauthenticated test push (401 - the function's own caller check)";;
   *) bad "send-notification POST ?push=test without a session: $line (expected 401)";;
 esac
+
+echo "== 20. East vacations (2026-10-14, Prompt 31 Part A): silvis_derived_vacations + east_vacation_reset_stale + the re-created vacation guard - anon refused, rolled-back probe =="
+# Section 20 (17 = the weekend pair claim, taken on its own branch; 19 = Prompt 30's phone push, the section above).
+# sql/migrations/2026-10-14-east-vacations.sql (report-first, NOT applied; revision x): silvis_east_people / silvis_east_ranges (internal - EXECUTE for
+# the service role only), silvis_derived_vacations (security definer, stable - EXECUTE for authenticated and the service role, never anon) and
+# east_vacation_reset_stale (security definer, volatile - EXECUTE for authenticated, whose body refuses everyone but the scheduler EV001; never anon);
+# time_off_vacation_guard re-created to read the derived rows for its East leg - section 15 above re-runs its 20 cases unchanged, which proves the
+# re-created trigger kept its behaviour. 20a-20d go over REST as anon and write nothing: 401/403 = the function exists and anon holds no EXECUTE; a
+# 404 = not applied yet (a PASS unless SILVIS_EAST_VACATIONS_APPLIED=1, the run right after the apply - then a FAIL); a 200 or a 400 means anon
+# reached the body - a FAIL. 20b asks the reset for p_from 2099-01-01, so even a body that ran could reset nothing. 20e (only with
+# SILVIS_SURGEON_JWT) reads the derived rows as a surgeon (200 with a JSON array) and asks the reset for 2099-01-01 (refused 400 EV001 - never a
+# write). 20f runs sql/probes/east-vacations-probe.sql through the linked CLI (rolls itself back; 49 cases graded by name - its header lists each
+# AFTER string); BEFORE the apply it raises PROBE_SETUP: silvis_derived_vacations is absent - a PASS unless SILVIS_EAST_VACATIONS_APPLIED=1; its
+# partly-applied and collision raises are always FAILs. 20g counts the probe's leftovers either way, by the probe's identity only: its auth users,
+# its time_off notes, its east_feed rows (data.probe eastvac31), its review rows (decided_by probe-eastvac31) and the eastvac.review audit rows
+# whose start lies in 2031-01 .. 2031-04 - rows only the probe writes, so each gets its DELETE.
+EVSTRICT20="${SILVIS_EAST_VACATIONS_APPLIED:-}"
+# 20a. anon may not execute silvis_derived_vacations (the signed-in display's rows - never the ?public=1 page's)
+line=$(curl -s -o $T/vr20a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_derived_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
+echo "   20a anon rpc silvis_derived_vacations: $line  body: $(head -c 160 $T/vr20a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc silvis_derived_vacations refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_derived_vacations: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_derived_vacations: HTTP 404 - not applied yet (before the migration)"; fi;;
+  *) bad "anon rpc silvis_derived_vacations: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+esac
+# 20b. anon may not execute east_vacation_reset_stale (p_from 2099-01-01: even a body that ran would find nothing to reset)
+line=$(curl -s -o $T/vr20b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/east_vacation_reset_stale" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01"}')
+echo "   20b anon rpc east_vacation_reset_stale: $line  body: $(head -c 160 $T/vr20b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc east_vacation_reset_stale refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc east_vacation_reset_stale: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (PGRST202: the schema cache does not know the function) - do NOT push the Part A client"; else ok "anon rpc east_vacation_reset_stale: HTTP 404 - not applied yet (do not push the Part A client before the apply)"; fi;;
+  *) bad "anon rpc east_vacation_reset_stale: $line (expected 401/403, or 404 before the apply; a 400 means anon reached the body - its EV001 refused it, but the revoke did not take)";;
+esac
+# 20c / 20d. anon may not execute the two internal functions (the review states and the East people never leave the database)
+line=$(curl -s -o $T/vr20c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_east_ranges" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
+echo "   20c anon rpc silvis_east_ranges: $line  body: $(head -c 160 $T/vr20c.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc silvis_east_ranges refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_east_ranges: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_east_ranges: HTTP 404 - not applied yet (before the migration)"; fi;;
+  *) bad "anon rpc silvis_east_ranges: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+esac
+line=$(curl -s -o $T/vr20d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_east_people" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
+echo "   20d anon rpc silvis_east_people: $line  body: $(head -c 160 $T/vr20d.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc silvis_east_people refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_east_people: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_east_people: HTTP 404 - not applied yet (before the migration)"; fi;;
+  *) bad "anon rpc silvis_east_people: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+esac
+# 20e. as a surgeon (read-only): the derived rows answer 200 with a JSON array; the reset is refused EV001 (p_from 2099-01-01 - never a write)
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o $T/vr20e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_derived_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{}')
+  echo "   20e surgeon rpc silvis_derived_vacations: $line  body: $(head -c 160 $T/vr20e.json)"
+  case "$line" in
+    "HTTP 200") if tr -d ' \r\n' < $T/vr20e.json | grep -q '^\['; then ok "a surgeon reads the derived vacation rows (200, a JSON array)"; else bad "surgeon rpc silvis_derived_vacations: HTTP 200 without a JSON array ($(head -c 160 $T/vr20e.json))"; fi;;
+    "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "surgeon rpc silvis_derived_vacations: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1"; else ok "surgeon rpc silvis_derived_vacations: HTTP 404 - not applied yet"; fi;;
+    *) bad "surgeon rpc silvis_derived_vacations: $line (expected 200 with a JSON array)";;
+  esac
+  line=$(curl -s -o $T/vr20e2.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/east_vacation_reset_stale" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01"}')
+  echo "   20e surgeon rpc east_vacation_reset_stale: $line  body: $(head -c 160 $T/vr20e2.json)"
+  case "$line" in
+    "HTTP 400") if grep -q 'EV001' $T/vr20e2.json; then ok "a surgeon's reset is refused EV001 EAST_RESET_NOT_ALLOWED (nothing deleted)"; else bad "surgeon rpc east_vacation_reset_stale: HTTP 400 without EV001 ($(head -c 160 $T/vr20e2.json))"; fi;;
+    "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "surgeon rpc east_vacation_reset_stale: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1"; else ok "surgeon rpc east_vacation_reset_stale: HTTP 404 - not applied yet"; fi;;
+    *) bad "surgeon rpc east_vacation_reset_stale: $line (expected 400 EV001 - a 200 means a surgeon ran the reset)";;
+  esac
+else
+  echo "   SKIP 20e (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment)"
+fi
+if linked; then
+  PROBE20="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/east-vacations-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE20" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if echo "$out" | grep -q 'PROBE_SETUP: silvis_derived_vacations is absent'; then
+    if [ "$EVSTRICT20" = "1" ]; then bad "East vacations probe: PROBE_SETUP - silvis_derived_vacations is absent with SILVIS_EAST_VACATIONS_APPLIED=1 (the functions should exist after the apply)"; else ok "East vacations probe: silvis_derived_vacations is absent (before the migration: PROBE_SETUP)"; fi
+  elif echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "East vacations probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, a fixture collision or the roster - ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "East vacations probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results20=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results20" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE (< / > / & - R7's <E>; the backslashes of an escaped double
+    # quote); the graders then read a case in plain bash (no process per case - 49 of them)
+    lines20=$(echo "$results20" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val20()   { CV20=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV20="${l#"$1="}"; return 0;; esac; done <<< "$lines20"; }
+    expect_eq20()  { case_val20 "$1"; v="$CV20"; [ "$v" = "$2" ] && ok "East vacations probe $1: $3" || bad "East vacations probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err20() { case_val20 "$1"; v="$CV20"; case "$v" in "ERR $2 "*"$3"*) ok "East vacations probe $1: $4";; *) bad "East vacations probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
+    VGA20="ERR VG001 VACATION_TOO_FEW_AROUND: on "
+    VGZ20=" only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"
+    EV001_20="ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)"
+    expect_eq20  P1  "active=6 min=2" "the live roster has six active surgeons and the default minimum 2 (the expected strings below rest on it)"
+    expect_eq20  P2  "east=yes" "the live roster has an East person (the D / G / R cases exercise his ranges)"
+    expect_eq20  P3  "people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile paths=4" "the two internal functions are security invoker, the derived rows and the reset security definer; the reset volatile (POST only); search_path public, pg_temp on all four"
+    expect_eq20  P4  "public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset" "EXECUTE: never PUBLIC or anon; authenticated the derived rows and the reset (its body refuses all but the scheduler); the service role all four"
+    expect_eq20  P5  "result=TABLE(person_id text, start_date date, end_date date)" "the derived rows carry the person and the dates only - no state, no code, no East column"
+    expect_eq20  P6  "triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t derived=yes" "time_off keeps the on-call trigger then the vacation guard (security definer), whose body now reads the derived rows"
+    expect_eq20  D1  "range=02-03..02-04 state=unreviewed derived=yes" "an unreviewed range is a derived row (counts as away)"
+    expect_eq20  D2  "range=02-06..02-07 state=away derived=yes" "a range reviewed away (exact) is a derived row"
+    expect_eq20  D3  "range=02-10..02-11 state=home derived=no" "a range reviewed home (exact) is not"
+    expect_eq20  D4  "range=02-13..02-14 state=unreviewed derived=yes" "a home review that covers a range but is not it does not decide it (the exact match)"
+    expect_eq20  D5  "range=02-17..02-21 state=home derived=no" "copies in two cached weeks that touch merge into one range; its home review exempts it"
+    expect_eq20  D6  "range=02-24..02-27 state=unreviewed derived=yes" "overlapping copies and a duplicate merge; a home review of one copy is stale"
+    expect_eq20  D7  "range=none" "an entry of a forecast row is never read"
+    expect_eq20  D8  "range=none others=0" "a non-East surgeon's code and a code on no roster are never read"
+    expect_eq20  D9  "range=03-05..03-06 state=unreviewed derived=yes" "the code is compared upper-cased (as eastVacations does)"
+    expect_eq20  D10 "ranges=8 derived=6 malformed_days=0" "the malformed entries (end before start, not YYYY-MM-DD, no such day, no start, not an object, not a list) are dropped without an error"
+    expect_eq20  A1  "rows=6" "a surgeon reads the derived rows"
+    expect_eq20  A2  "rows=6" "the coordinator reads the derived rows"
+    expect_eq20  A3  "rows=6" "a viewer reads the derived rows"
+    expect_err20 A4  42501 "permission denied for function silvis_east_ranges" "a signed-in user cannot read the review states"
+    expect_err20 A5  42501 "permission denied for function silvis_east_people" "a signed-in user cannot read the East people"
+    expect_err20 A6  42501 "permission denied for function silvis_derived_vacations" "anon cannot read the derived rows"
+    expect_err20 A7  42501 "permission denied for function east_vacation_reset_stale" "anon cannot run the reset"
+    expect_err20 A8  42501 "permission denied for function silvis_east_ranges" "anon cannot read the review states"
+    expect_eq20  G1  "${VGA20}2/3${VGZ20}" "the guard counts an unreviewed East range (the 5th off)"
+    expect_eq20  G2  "${VGA20}2/6${VGZ20}" "the guard counts an East range reviewed away"
+    expect_eq20  G3  "ok" "the guard does not count an East range reviewed home (exact)"
+    expect_eq20  G4  "${VGA20}2/13${VGZ20}" "a covering, non-exact home review no longer exempts the day (the 9/30 guard let it through)"
+    expect_eq20  G5  "ok" "a home review of the merged range exempts the day of either copy"
+    expect_eq20  G6  "${VGA20}2/25${VGZ20}" "a home review of one copy of an overlapping pair is stale - the day counts (the 9/30 guard let it through)"
+    expect_eq20  G7  "ok" "the guard never counts a forecast row's entry"
+    expect_eq20  G8  "${VGA20}3/5${VGZ20}" "the guard counts a lower-case code's range"
+    expect_eq20  G9  "ok" "the guard counts neither a non-East surgeon's code nor a code on no roster"
+    expect_eq20  G10 "${VGA20}2/6, 2/7${VGZ20}" "the office coordinator is refused the same way"
+    expect_eq20  G11 "ok" "the scheduler may enter the 5th (the client asks him first)"
+    expect_eq20  R1  "$EV001_20" "a surgeon cannot reset reviews"
+    expect_eq20  R2  "$EV001_20" "the coordinator cannot reset reviews"
+    expect_eq20  R3  "$EV001_20" "a viewer cannot reset reviews"
+    expect_eq20  R4  "$EV001_20" "a no-user session with an anon role claim cannot reset reviews (defence in depth behind the revoke)"
+    expect_eq20  R5  "ERR EV002 EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)" "the reset needs its floor"
+    expect_eq20  R6  "n=1 03-25..03-26/away/removed" "the scheduler's reset deletes only the rows ending on or after p_from (a removed range)"
+    expect_eq20  R7  "audit=1 actor=self name=probe admin sum=East vacation 2031-03-25..2031-03-26 <E>: reset (removed) keys=decision,end,person_id,reason,removed,start,summary,was was=away" "... with one eastvac.review audit row as the scheduler, in the client's shape plus the deleted decision"
+    expect_eq20  R8  "n=2 02-12..02-15/home/changed,02-24..02-26/home/changed" "the server refresh's reset (service role) deletes the changed rows, in start order"
+    expect_eq20  R9  "audit=2 actor=cron name=east-feed-refresh (cron)" "... audited as the cron job"
+    expect_eq20  R10 "n=1 01-27..01-28/away/removed" "a lower floor brings an older row into scope"
+    expect_eq20  R11 "audit=1 actor=cron name=no signed-in user (SQL)" "... a no-user session's rows name it"
+    expect_eq20  R12 "n=0 audit=0" "a reset with nothing stale deletes and audits nothing"
+    expect_eq20  R13 "kept=E 02-06..02-07 away,E 02-10..02-11 home,E 02-17..02-21 home,n2 02-05..02-05 away" "exact reviews stay, and a non-East surgeon's row is never touched"
+    expect_eq20  R14 "time_off=same east_feed=same ranges=8 derived=6" "the resets write no vacation and no cache row; the derived rows are unchanged"
+  fi
+  # 20g. leftovers, by the probe's identity only (every count here is a row only the probe writes)
+  LEFTOVER20_SQL="select ((select count(*) from auth.users where email like 'probe-eastvac31-%@example.test') + (select count(*) from public.time_off where note like 'probe-eastvac31%') + (select count(*) from public.east_feed where data->>'probe' = 'eastvac31') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastvac31') + (select count(*) from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30'))::int as leftover"
+  r=$(q "$LEFTOVER20_SQL")
+  if ! echo "$r" | grep -q '"leftover"'; then
+    bad "East vacations probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  elif echo "$r" | tr -d ' \n' | grep -qE '"leftover":"?0"?[,}]'; then
+    ok "East vacations probe persisted nothing (leftover count 0: auth.users probe-eastvac31-* / time_off probe-eastvac31 notes / east_feed data.probe eastvac31 / east_vacation_reviews decided_by probe-eastvac31 / eastvac.review audit rows starting in 2031-01 .. 2031-04)"
+  else
+    bad "East vacations probe LEFT ROWS BEHIND ($(echo "$r" | tr -d ' \n' | grep -oE '"leftover":[0-9]+')): the batch did not run as one transaction. Clean up NOW, then report:"
+    echo "      delete from public.time_off where note like 'probe-eastvac31%';"
+    echo "      delete from public.east_feed where data->>'probe' = 'eastvac31';"
+    echo "      delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';"
+    echo "      delete from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30';"
+    echo "      delete from auth.users where email like 'probe-eastvac31-%@example.test';   -- user_profiles rows cascade"
+  fi
+else
+  echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"
+fi
 
 echo
 echo "RESULT: $pass passed, $fail failed"

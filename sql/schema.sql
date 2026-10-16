@@ -128,6 +128,17 @@
 -- gains trade_updates_push / schedule_updates_push (boolean not null default true; prefs_own unchanged). Not in the realtime publication,
 -- not in the read_all loop; no existing table, policy, function or trigger changes. Letter u stays taken by the weekend pair claim
 -- (prepared, unmerged on its own branch).
+-- Revision 2026-10-14 x (East vacations, sql/migrations/2026-10-14-east-vacations.sql, report-first, NOT yet applied): Faraz 10/9 (Prompt 31
+-- Part A) - every East vacation range reviewed away, and every one still unreviewed, is seen by every signed-in role like a Silvis vacation;
+-- Faraz 10/14 chose (a), a derived SQL function. Four NEW functions (search_path public, pg_temp): silvis_east_people() and silvis_east_ranges()
+-- (internal, security invoker, stable; EXECUTE for the service role only - the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and
+-- the exact review match), silvis_derived_vacations() (security definer, stable: the away / unreviewed ranges as (person_id, start_date,
+-- end_date), no East column; EXECUTE for authenticated and the service role, never anon) and east_vacation_reset_stale(p_from) (security
+-- definer, volatile: the ONE review reset of both feed refreshes - the scheduler or a no-user session only, EV001 / EV002 refuse before any
+-- write; one eastvac.review audit row per deleted row). time_off_vacation_guard() is re-created: its East leg reads silvis_derived_vacations()
+-- (the merged ranges; a 'home' review exempts only its exact range - stricter than 9/30 for a stale covering review); the time_off leg and
+-- everything else are the 9/30 body. No table, column, policy, trigger, row or anon surface changes. Letter u stays taken by the weekend pair
+-- claim; w is the last applied.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -302,6 +313,10 @@ create trigger time_off_no_call_conflict_trg
 -- so ON_CALL_CONFLICT still answers first. Known gap: only a time_off write is checked - an East review turned 'away' or a new
 -- Davenport range from the feed refresh can leave a day under the minimum (sql/probes/vacation-guard-overlimit.sql lists such
 -- days). Reviewed in docs/SCHEMA-REVIEW.md "2026-09-30 - vacation guard".
+-- Revision x (2026-10-14, Prompt 31 Part A; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied) re-creates
+-- the function: an East-feature surgeon is off on a day one of his silvis_derived_vacations() rows covers - the MERGED cached range,
+-- away or unreviewed; a 'home' review exempts only when it is exactly that range (the app's reading - a covering, stale 'home' row no
+-- longer exempts). The trigger, the time_off leg and everything else are the 9/30 body's.
 create or replace function public.time_off_vacation_guard() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
@@ -309,8 +324,6 @@ declare
   min_around  int := 2;
   m           numeric;
   active      text[];
-  east_ids    text[];
-  east_codes  text[];
   o_start     date;
   o_end       date;
   ex_old      uuid;
@@ -342,17 +355,11 @@ begin
       min_around := m::int;
     end if;
   end if;
-  -- the ACTIVE roster (active is not false, not an outside surgeon) in roster order; among them the people whose East feature
-  -- reads busy days (the app's eastVacationPerson: eastFeed.enabled and a blocked role, a roster code) with their codes
-  select coalesce(array_agg(x.id order by x.ord), '{}'),
-         coalesce(array_agg(x.id order by x.ord) filter (where x.east), '{}'),
-         coalesce(array_agg(x.code order by x.ord) filter (where x.east), '{}')
-    into active, east_ids, east_codes
-    from (select e.r->>'id' as id, upper(coalesce(e.r->>'code', '')) as code, e.ord,
-                 coalesce(e.r->>'code', '') <> ''
-                   and (blob #> array['surgeonRules', e.r->>'id', 'eastFeed', 'enabled']) = 'true'::jsonb
-                   and ((blob #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb
-                     or (blob #> array['surgeonRules', e.r->>'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb) as east
+  -- the ACTIVE roster (active is not false, not an outside surgeon) in roster order; the East people and their ranges are
+  -- silvis_derived_vacations()'s (Prompt 31 Part A, revision x)
+  select coalesce(array_agg(x.id order by x.ord), '{}')
+    into active
+    from (select e.r->>'id' as id, e.ord
             from jsonb_array_elements(case when jsonb_typeof(blob->'roster') = 'array' then blob->'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
            where jsonb_typeof(e.r) = 'object' and coalesce(e.r->>'id', '') <> ''
              and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external') x;
@@ -360,11 +367,16 @@ begin
   if not (new.person_id = any(active)) then
     return new;
   end if;
-  -- per checked day: who else is off WITHOUT this row, then the days this row takes the person off and how many stay around
+  -- per checked day: who else is off WITHOUT this row, then the days this row takes the person off and how many stay around;
+  -- off = a time_off row (inline: earlier rows of a multi-row insert count) or a derived East vacation row (away / unreviewed,
+  -- the merged range, a 'home' review only when it is exactly that range)
   with days as (
     select g::date as day
       from generate_series(new.start_date::timestamp, new.end_date::timestamp, interval '1 day') as g
      where o_start is null or g::date not between o_start and o_end
+  ),
+  east_off as materialized (
+    select dv.person_id, dv.start_date, dv.end_date from public.silvis_derived_vacations() dv
   ),
   off_before as (
     select d.day, a.id
@@ -372,19 +384,8 @@ begin
      where exists (select 1 from public.time_off t
                     where t.person_id = a.id and t.id <> new.id and t.id is distinct from ex_old
                       and d.day between t.start_date and t.end_date)
-        or (a.id = any(east_ids)
-            and exists (select 1
-                          from public.east_feed f
-                          cross join lateral jsonb_array_elements(case when jsonb_typeof(f.data->'vacations') = 'array' then f.data->'vacations' else '[]'::jsonb end) as v(r)
-                         where (f.data->'isForecast') is distinct from 'true'::jsonb
-                           and jsonb_typeof(v.r) = 'object'
-                           and upper(coalesce(v.r->>'code', '')) = east_codes[array_position(east_ids, a.id)]
-                           and coalesce(v.r->>'start', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                           and coalesce(v.r->>'end', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-                           and v.r->>'start' <= v.r->>'end'
-                           and to_char(d.day, 'YYYY-MM-DD') between v.r->>'start' and v.r->>'end')
-            and not exists (select 1 from public.east_vacation_reviews w
-                             where w.person_id = a.id and w.decision = 'home' and d.day between w."start" and w."end"))
+        or exists (select 1 from east_off eo
+                    where eo.person_id = a.id and d.day between eo.start_date and eo.end_date)
   ),
   per_day as (
     select d.day, cardinality(active) - 1 - (select count(*) from off_before o where o.day = d.day)::int as around
@@ -489,6 +490,165 @@ create table if not exists public.east_vacation_reviews (
   unique (person_id, "start", "end")
 );
 create index if not exists east_vacation_reviews_person_idx on public.east_vacation_reviews(person_id, "start");
+
+-- ---------- East vacations, derived (Prompt 31 Part A, revision x; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied)
+-- The ONE SQL reading of the cached East vacation ranges (Faraz 10/14, decision (a)): silvis_east_people() - the East people of the blob,
+-- silvis_east_ranges() - their cached ranges merged (east-feed.js eastVacations + eastMergeRanges) with the exact-match review state (both
+-- internal: EXECUTE for the service role only), silvis_derived_vacations() - the away / unreviewed ranges as (person_id, start_date, end_date)
+-- for every signed-in role and the vacation guard above (security definer; never anon), east_vacation_reset_stale(p_from) - the ONE review
+-- reset of both feed refreshes (the scheduler or a no-user session: EV001 / EV002; one eastvac.review audit row per deleted row). Kept after
+-- east_feed and the reviews: a sql body is validated when it is created.
+create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)
+language sql stable security invoker set search_path = public, pg_temp as $$
+  select e.r ->> 'id', upper(e.r ->> 'code'), coalesce(nullif(btrim(e.r ->> 'name'), ''), e.r ->> 'id'), e.ord
+    from public.call_schedule_data c
+    cross join lateral jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
+   where c.id = 'main'
+     and jsonb_typeof(e.r) = 'object' and coalesce(e.r ->> 'id', '') <> ''
+     and coalesce(e.r -> 'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r ->> 'type', '') <> 'external'
+     and coalesce(e.r ->> 'code', '') <> ''
+     and (c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'enabled']) = 'true'::jsonb
+     and ((c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb
+       or (c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb)
+   order by e.ord;
+$$;
+revoke all on function public.silvis_east_people() from public;
+revoke all on function public.silvis_east_people() from anon;
+revoke all on function public.silvis_east_people() from authenticated;
+grant execute on function public.silvis_east_people() to service_role;
+comment on function public.silvis_east_people() is 'Prompt 31 Part A (revision x): the East people of the blob - an active roster surgeon with a code whose eastFeed is enabled and blocks a role (the app''s eastVacationPerson, strict JSON true). Internal: EXECUTE for the service role only; the definer functions call it.';
+
+create or replace function public.silvis_east_ranges() returns table (person_id text, code text, start_date date, end_date date, state text)
+language sql stable security invoker set search_path = public, pg_temp as $$
+  with entries as (
+    select p.person_id, p.code, p.ord, v.r ->> 'start' as s, v.r ->> 'end' as e
+      from public.silvis_east_people() p
+      cross join public.east_feed f
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(f.data -> 'vacations') = 'array' then f.data -> 'vacations' else '[]'::jsonb end) as v(r)
+     where (f.data -> 'isForecast') is distinct from 'true'::jsonb
+       and jsonb_typeof(v.r) = 'object'
+       and upper(coalesce(v.r ->> 'code', '')) = p.code
+  ),
+  dated as (
+    select x.person_id, x.code, x.ord,
+           case when coalesce(x.s, '') ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' and substr(x.s, 1, 4) <> '0000'
+                then case when substr(x.s, 9, 2)::int <= extract(day from (substr(x.s, 1, 7) || '-01')::date + interval '1 month - 1 day')::int
+                          then x.s::date end end as sd,
+           case when coalesce(x.e, '') ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' and substr(x.e, 1, 4) <> '0000'
+                then case when substr(x.e, 9, 2)::int <= extract(day from (substr(x.e, 1, 7) || '-01')::date + interval '1 month - 1 day')::int
+                          then x.e::date end end as ed
+      from entries x
+  ),
+  valid as (
+    select d.person_id, d.code, d.ord, d.sd, d.ed from dated d where d.sd is not null and d.ed is not null and d.sd <= d.ed
+  ),
+  marked as (
+    select g.person_id, g.code, g.ord, g.sd, g.ed,
+           case when max(g.ed) over (partition by g.person_id order by g.sd, g.ed rows between unbounded preceding and 1 preceding) >= g.sd - 1
+                then 0 else 1 end as brk
+      from valid g
+  ),
+  islands as (
+    select k.person_id, k.code, k.ord, k.sd, k.ed,
+           sum(k.brk) over (partition by k.person_id order by k.sd, k.ed rows between unbounded preceding and current row) as isl
+      from marked k
+  ),
+  merged as (
+    select i.person_id, min(i.code) as code, min(i.ord) as ord, min(i.sd) as start_date, max(i.ed) as end_date
+      from islands i
+     group by i.person_id, i.isl
+  )
+  select m.person_id, m.code, m.start_date, m.end_date,
+         case w.decision when 'away' then 'away' when 'home' then 'home' else 'unreviewed' end
+    from merged m
+    left join public.east_vacation_reviews w on w.person_id = m.person_id and w."start" = m.start_date and w."end" = m.end_date
+   order by m.ord, m.start_date;
+$$;
+revoke all on function public.silvis_east_ranges() from public;
+revoke all on function public.silvis_east_ranges() from anon;
+revoke all on function public.silvis_east_ranges() from authenticated;
+grant execute on function public.silvis_east_ranges() to service_role;
+comment on function public.silvis_east_ranges() is 'Prompt 31 Part A (revision x): the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and helpers.js reviewStateFor - per East person the cached vacation ranges merged (overlapping or touching), each with its exact-match review state (away / home / unreviewed). Internal: EXECUTE for the service role only; read through silvis_derived_vacations and east_vacation_reset_stale.';
+
+create or replace function public.silvis_derived_vacations() returns table (person_id text, start_date date, end_date date)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select r.person_id, r.start_date, r.end_date
+    from public.silvis_east_ranges() r
+   where r.state <> 'home'
+   order by r.person_id, r.start_date;
+$$;
+revoke all on function public.silvis_derived_vacations() from public;
+revoke all on function public.silvis_derived_vacations() from anon;
+grant execute on function public.silvis_derived_vacations() to authenticated;
+grant execute on function public.silvis_derived_vacations() to service_role;
+comment on function public.silvis_derived_vacations() is 'Prompt 31 Part A (revision x): the derived vacation rows every signed-in role sees beside time_off - (person_id, start_date, end_date), dates only, no state and no source column. Security definer, stable (GET or POST); EXECUTE for authenticated / service_role, never anon. The vacation guard reads the same rows.';
+
+create or replace function public.east_vacation_reset_stale(p_from date) returns table (person_id text, start_date date, end_date date, decision text, reason text)
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me       uuid := auth.uid();
+  v_role   text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_actor  text;
+  v_name   text;
+  x        record;
+  n        int;
+begin
+  if me is null then
+    if v_role in ('anon', 'authenticated') then
+      raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+    end if;
+    v_actor := 'cron';
+    v_name := case when v_role = 'service_role' then 'east-feed-refresh (cron)' else 'no signed-in user (SQL)' end;
+  elsif not public.silvis_is_sched() then
+    raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+  else
+    v_actor := coalesce(public.silvis_person_id(), me::text);
+    v_name := coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                       (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                         where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                       'Unknown');
+  end if;
+  if p_from is null then
+    raise exception 'EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)' using errcode = 'EV002';
+  end if;
+  -- one reset at a time (the in-app refresh and the server refresh may meet)
+  perform pg_advisory_xact_lock(hashtext('east_vacation_reviews:reset'));
+  for x in
+    with cur as materialized (
+      select r.person_id as pid, r.start_date as s, r.end_date as e from public.silvis_east_ranges() r
+    ),
+    ppl as materialized (
+      select p.person_id as pid, p.name as pname, p.ord from public.silvis_east_people() p
+    )
+    select w.id as rid, w.person_id as pid, w."start" as s, w."end" as e, w.decision as dec, q.pname,
+           case when exists (select 1 from cur c where c.pid = w.person_id and c.s <= w."end" and c.e >= w."start")
+                then 'changed' else 'removed' end as why
+      from public.east_vacation_reviews w
+      join ppl q on q.pid = w.person_id
+     where w."end" >= p_from
+       and not exists (select 1 from cur c where c.pid = w.person_id and c.s = w."start" and c.e = w."end")
+     order by q.ord, w."start", w."end"
+  loop
+    delete from public.east_vacation_reviews d where d.id = x.rid;
+    get diagnostics n = row_count;
+    continue when n = 0;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (v_actor, v_name, 'eastvac.review',
+            jsonb_build_object('summary', 'East vacation ' || to_char(x.s, 'YYYY-MM-DD') || '..' || to_char(x.e, 'YYYY-MM-DD') || ' ' || x.pname || ': reset (' || x.why || ')',
+                               'person_id', x.pid, 'start', x.s, 'end', x.e, 'decision', 'reset', 'reason', x.why, 'removed', 1, 'was', x.dec));
+    person_id := x.pid;
+    start_date := x.s;
+    end_date := x.e;
+    decision := x.dec;
+    reason := x.why;
+    return next;
+  end loop;
+end $$;
+revoke all on function public.east_vacation_reset_stale(date) from public;
+revoke all on function public.east_vacation_reset_stale(date) from anon;
+grant execute on function public.east_vacation_reset_stale(date) to authenticated;
+grant execute on function public.east_vacation_reset_stale(date) to service_role;
+comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x): the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them. The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon. The caller skips it when its Davenport read failed or came back empty while the cache holds ranges.';
 
 -- ---------- trades (there is NO vacation_requests table — vacations need no approval)
 create table if not exists public.shift_trade_requests (
