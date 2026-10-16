@@ -130,12 +130,14 @@
 -- (prepared, unmerged on its own branch).
 -- Revision 2026-10-14 x (East vacations, sql/migrations/2026-10-14-east-vacations.sql, report-first, NOT yet applied): Faraz 10/9 (Prompt 31
 -- Part A) - every East vacation range reviewed away, and every one still unreviewed, is seen by every signed-in role like a Silvis vacation;
--- Faraz 10/14 chose (a), a derived SQL function. Four NEW functions (search_path public, pg_temp): silvis_east_people() and silvis_east_ranges()
+-- Faraz 10/14 chose (a), a derived SQL function. Five NEW functions (search_path public, pg_temp): silvis_east_people() and silvis_east_ranges()
 -- (internal, security invoker, stable; EXECUTE for the service role only - the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and
 -- the exact review match), silvis_derived_vacations() (security definer, stable: the away / unreviewed ranges as (person_id, start_date,
--- end_date), no East column; EXECUTE for authenticated and the service role, never anon) and east_vacation_reset_stale(p_from) (security
+-- end_date), no East column; EXECUTE for authenticated and the service role, never anon), east_vacation_reset_stale(p_from) (security
 -- definer, volatile: the ONE review reset of both feed refreshes - the scheduler or a no-user session only, EV001 / EV002 refuse before any
--- write; one eastvac.review audit row per deleted row). time_off_vacation_guard() is re-created: its East leg reads silvis_derived_vacations()
+-- write; one eastvac.review audit row per deleted row) and silvis_vacation_short_days(p_from, p_to) (security invoker, stable; EXECUTE for
+-- the service role only - the ONE SQL definition of the days under the vacation minimum by the guard's reading, which the server refresh's
+-- east.refresh audit reads; critic A12). time_off_vacation_guard() is re-created: its East leg reads silvis_derived_vacations()
 -- (the merged ranges; a 'home' review exempts only its exact range - stricter than 9/30 for a stale covering review); the time_off leg and
 -- everything else are the 9/30 body. No table, column, policy, trigger, row or anon surface changes. Letter u stays taken by the weekend pair
 -- claim; w is the last applied.
@@ -317,6 +319,8 @@ create trigger time_off_no_call_conflict_trg
 -- the function: an East-feature surgeon is off on a day one of his silvis_derived_vacations() rows covers - the MERGED cached range,
 -- away or unreviewed; a 'home' review exempts only when it is exactly that range (the app's reading - a covering, stale 'home' row no
 -- longer exempts). The trigger, the time_off leg and everything else are the 9/30 body's.
+-- The days already under the minimum by this reading: silvis_vacation_short_days() (sql/probes/vacation-short-days.sql); the over-limit
+-- query above keeps the 9/30 reading.
 create or replace function public.time_off_vacation_guard() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
@@ -496,8 +500,10 @@ create index if not exists east_vacation_reviews_person_idx on public.east_vacat
 -- silvis_east_ranges() - their cached ranges merged (east-feed.js eastVacations + eastMergeRanges) with the exact-match review state (both
 -- internal: EXECUTE for the service role only), silvis_derived_vacations() - the away / unreviewed ranges as (person_id, start_date, end_date)
 -- for every signed-in role and the vacation guard above (security definer; never anon), east_vacation_reset_stale(p_from) - the ONE review
--- reset of both feed refreshes (the scheduler or a no-user session: EV001 / EV002; one eastvac.review audit row per deleted row). Kept after
--- east_feed and the reviews: a sql body is validated when it is created.
+-- reset of both feed refreshes (the scheduler or a no-user session: EV001 / EV002; one eastvac.review audit row per deleted row),
+-- silvis_vacation_short_days(p_from, p_to) - the ONE SQL definition of the days under the vacation minimum by the guard's reading (time_off
+-- rows plus the derived rows; the service role only - the server refresh's east.refresh audit and sql/probes/vacation-short-days.sql read it;
+-- critic A12). Kept after east_feed, the reviews and time_off: a sql body is validated when it is created.
 create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)
 language sql stable security invoker set search_path = public, pg_temp as $$
   select e.r ->> 'id', upper(e.r ->> 'code'), coalesce(nullif(btrim(e.r ->> 'name'), ''), e.r ->> 'id'), e.ord
@@ -649,6 +655,59 @@ revoke all on function public.east_vacation_reset_stale(date) from anon;
 grant execute on function public.east_vacation_reset_stale(date) to authenticated;
 grant execute on function public.east_vacation_reset_stale(date) to service_role;
 comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x): the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them. The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon. The caller skips it when its Davenport read failed or came back empty while the cache holds ranges.';
+
+create or replace function public.silvis_vacation_short_days(p_from date, p_to date) returns table (day date, around int, active int, minimum int, off_ids text[], derived_only_ids text[])
+language sql stable security invoker set search_path = public, pg_temp as $$
+  with blob as (
+    select c.data from public.call_schedule_data c where c.id = 'main'
+  ),
+  min_n as (
+    select coalesce((select case when jsonb_typeof(b.data #> '{groupRules,vacations,minSurgeonsAround}') = 'number'
+                                 then case when (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric between 0 and 99
+                                            and (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric = trunc((b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric)
+                                           then (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric::int end end
+                       from blob b), 2) as n
+  ),
+  roster as (
+    select e.r ->> 'id' as id, e.ord
+      from blob b
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(b.data -> 'roster') = 'array' then b.data -> 'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
+     where jsonb_typeof(e.r) = 'object' and coalesce(e.r ->> 'id', '') <> ''
+       and coalesce(e.r -> 'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r ->> 'type', '') <> 'external'
+  ),
+  active_n as (
+    select count(*)::int as n from roster
+  ),
+  sources as (
+    select t.person_id as id, t.start_date as s, t.end_date as e, false as derived from public.time_off t
+    union all
+    select dv.person_id, dv.start_date, dv.end_date, true from public.silvis_derived_vacations() dv
+  ),
+  off_days as (
+    select g::date as d, x.id, x.derived
+      from sources x
+      cross join lateral generate_series(greatest(x.s, coalesce(p_from, '-infinity'::date))::timestamp,
+                                         least(x.e, coalesce(p_to, 'infinity'::date))::timestamp, interval '1 day') as g
+     where x.id in (select a.id from roster a)
+  ),
+  off_people as (
+    select o.d, o.id, bool_and(o.derived) as derived_only, (select min(a.ord) from roster a where a.id = o.id) as ord
+      from off_days o
+     group by o.d, o.id
+  )
+  select p.d, (select n from active_n) - count(*)::int, (select n from active_n), (select n from min_n),
+         array_agg(p.id order by p.ord, p.id),
+         coalesce(array_agg(p.id order by p.ord, p.id) filter (where p.derived_only), '{}'::text[])
+    from off_people p
+   group by p.d
+  having (select n from active_n) - count(*)::int < (select n from min_n)
+   order by p.d;
+$$;
+revoke all on function public.silvis_vacation_short_days(date, date) from public;
+revoke all on function public.silvis_vacation_short_days(date, date) from anon;
+revoke all on function public.silvis_vacation_short_days(date, date) from authenticated;
+grant execute on function public.silvis_vacation_short_days(date, date) to service_role;
+comment on function public.silvis_vacation_short_days(date, date) is 'Prompt 31 Part A (revision x): the ONE SQL definition of the days under the vacation minimum (critic A12) - by the guard''s reading (the active roster, groupRules.vacations.minSurgeonsAround, off = a time_off row or a silvis_derived_vacations row), one row per day in [p_from, p_to] (a null bound is open) with someone off and fewer than the minimum around. The server refresh''s east.refresh audit and sql/probes/vacation-short-days.sql read it. EXECUTE for the service role only.';
 
 -- ---------- trades (there is NO vacation_requests table — vacations need no approval)
 create table if not exists public.shift_trade_requests (

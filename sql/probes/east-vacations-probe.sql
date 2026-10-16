@@ -1,8 +1,8 @@
 -- ============================================================================
 -- Silvis Call Schedule - East vacations PROBE (2026-10-14, Faraz 10/9 - Prompt 31 Part A: Khan's East vacations seen by everyone
 -- signed in; sql/migrations/2026-10-14-east-vacations.sql, REPORT-FIRST, NOT APPLIED). Proves silvis_east_people(),
--- silvis_east_ranges(), silvis_derived_vacations(), east_vacation_reset_stale() and the re-created time_off_vacation_guard() on the
--- LIVE database WITHOUT PERSISTING ANYTHING.
+-- silvis_east_ranges(), silvis_derived_vacations(), east_vacation_reset_stale(), silvis_vacation_short_days() and the re-created
+-- time_off_vacation_guard() on the LIVE database WITHOUT PERSISTING ANYTHING.
 --
 -- Same mechanism as the other probes: run the whole file as ONE batch through the linked Supabase CLI (the Management API runs it
 -- in a single implicit transaction; there is no BEGIN/COMMIT here on purpose). Every case records its observation in a temp table
@@ -15,7 +15,7 @@
 --
 -- The setup raises, in this order and before any fixture is written: BEFORE the migration 'PROBE_SETUP: silvis_derived_vacations is
 -- absent - sql/migrations/2026-10-14-east-vacations.sql is not applied' (nothing else runs - that is every case's BEFORE result); one
--- of the other three functions absent, or the vacation guard not reading the derived rows, 'PROBE_SETUP: ... - ... is partly
+-- of the other four functions absent, or the vacation guard not reading the derived rows, 'PROBE_SETUP: ... - ... is partly
 -- applied'; the collision guard 'PROBE_SETUP: live rows already sit in 2031-01 .. 2031-04 ...' (a time_off, schedule_days, east_feed
 -- week or review row in the fixture window, a review row ending on or after 2031-01-01 - the reset cases read every review from
 -- 2031-01-01 on - or a cached East vacation entry ending on or after 2030-12-31 - it could merge with a fixture range); the roster
@@ -58,12 +58,17 @@
 -- would be around (minimum 2) - pick other dates or ask the scheduler'. reset(d) = public.east_vacation_reset_stale(d); its rows are
 -- written 'MM-DD..MM-DD/<decision>/<reason>' in its order. Audit readbacks are read AS POSTGRES over the eastvac.review rows whose
 -- detail start lies in 2031; 'sum=' writes E's roster name as <E>; 'actor=self' when the actor_id is the caller's uuid text.
+-- short(f, t) = public.silvis_vacation_short_days(f, t) read as postgres; its days are written 'MM-DD/<around>' in day order and the
+-- people off as E / n1..n5. The S cases run after the G cases (G3 / G5 / G7 / G9 / G11 entered n1 on 02-10, 02-20, 03-11, 02-05 and
+-- 02-03..02-04) and before the R cases; S3 enters n1 on 02-13 and 02-25 (the days G4 / G6 refused him) and an id on no roster on 02-14
+-- as postgres with no signed-in user (the guard lets the session through), every row noted 'probe-eastvac31 S3'. So every day the
+-- guard refused n1 for is listed once he is off on it anyway, and every day it let him through is not (the guard's reading, one truth).
 --
 -- Cases (BEFORE the migration: every case - PROBE_SETUP, nothing runs; AFTER the migration - the string after '->'):
 --   P1  postgres: the live roster's active count and minimum -> active=6 min=2
 --   P2  postgres: an East person on the roster -> east=yes
---   P3  postgres: the four functions' security, volatility and search_path -> people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile paths=4
---   P4  postgres: who may EXECUTE them -> public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset
+--   P3  postgres: the five functions' security, volatility and search_path -> people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile short=invoker/stable paths=5
+--   P4  postgres: who may EXECUTE them -> public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset,short
 --   P5  postgres: the derived rows' columns -> result=TABLE(person_id text, start_date date, end_date date)
 --   P6  postgres: time_off's triggers in firing order, the guard's security and its East leg -> triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t derived=yes
 --   D1  range(02-03): an unreviewed range -> range=02-03..02-04 state=unreviewed derived=yes
@@ -95,6 +100,13 @@
 --   G9  U1 enters n1 02-05 (n2's code and a code on no roster - nobody else counted) -> ok
 --   G10 U2 (coordinator) enters n1 02-06..02-07 -> ERR VG001 VACATION_TOO_FEW_AROUND: on 2/6, 2/7 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
 --   G11 U3 (admin = the scheduler) enters n1 02-03..02-04 -> ok
+--   S1  postgres: short('2031-01-01', '2031-04-30') - G11's n1 inside E's unreviewed 02-03..02-04; 02-05, 02-10, 02-20, 03-11 stay at 2 -> days=02-03/1,02-04/1
+--   S2  postgres: its 02-03 row - the counts, who is off (roster order) and who only through a derived row -> active=6 min=2 off=E,n1,n3,n4,n5 derived_only=E roster_order=yes
+--   S3  postgres, no signed-in user: n1 entered on 02-13 and 02-25 and an id on no roster on 02-14, then short('2031-02-01', '2031-03-31') - a covering, non-exact or one-copy home exempts nothing (the 9/30 over-limit query would list neither day); a non-roster row counts for nobody -> days=02-03/1,02-04/1,02-13/1,02-25/1
+--   S4  postgres: the bounds - (null, 02-28) from 2031-01-01 on, (02-04, null) through 2031-04-30, (02-04, 02-04), (02-05, 02-04) -> lo=02-03,02-04,02-13,02-25 hi=02-04,02-13,02-25 one=02-04 none=0
+--   S5  postgres: its columns -> result=TABLE(day date, around integer, active integer, minimum integer, off_ids text[], derived_only_ids text[])
+--   S6  U1 (surgeon): short('2031-01-01', '2031-04-30') -> ERR 42501 permission denied for function silvis_vacation_short_days
+--   S7  anon: short('2031-01-01', '2031-04-30') -> ERR 42501 permission denied for function silvis_vacation_short_days
 --   R1  U1 (surgeon): reset('2031-02-01') -> ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
 --   R2  U2 (coordinator): reset('2031-02-01') -> ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
 --   R3  U4 (viewer): reset('2031-02-01') -> ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
@@ -109,7 +121,7 @@
 --   R12 postgres, no signed-in user: reset('2031-01-01') again -> n=0 audit=0
 --   R13 the fixture reviews left (n2's never touched) -> kept=E 02-06..02-07 away,E 02-10..02-11 home,E 02-17..02-21 home,n2 02-05..02-05 away
 --   R14 the resets wrote no time_off / east_feed row; the derived rows are unchanged -> time_off=same east_feed=same ranges=8 derived=6
--- 49 cases.
+-- 56 cases.
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -140,8 +152,8 @@ begin
     raise exception 'PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied';
   end if;
   if to_regprocedure('public.silvis_east_people()') is null or to_regprocedure('public.silvis_east_ranges()') is null
-     or to_regprocedure('public.east_vacation_reset_stale(date)') is null then
-    raise exception 'PROBE_SETUP: silvis_east_people / silvis_east_ranges / east_vacation_reset_stale is absent - sql/migrations/2026-10-14-east-vacations.sql is partly applied';
+     or to_regprocedure('public.east_vacation_reset_stale(date)') is null or to_regprocedure('public.silvis_vacation_short_days(date, date)') is null then
+    raise exception 'PROBE_SETUP: silvis_east_people / silvis_east_ranges / east_vacation_reset_stale / silvis_vacation_short_days is absent - sql/migrations/2026-10-14-east-vacations.sql is partly applied';
   end if;
   if not exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.time_off_vacation_guard()') and p.prosrc like '%public.silvis_derived_vacations()%') then
     raise exception 'PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql/migrations/2026-10-14-east-vacations.sql is partly applied';
@@ -191,7 +203,8 @@ begin
   update public.user_profiles set role = 'viewer' where id = u4;
   insert into probe_ctx values ('u1', u1::text), ('u2', u2::text), ('u3', u3::text), ('u4', u4::text),
     ('n1', n[1]), ('n2', n[2]), ('east', e_id), ('ename', e_name),
-    ('active', cardinality(act)::text), ('min', min_around::text);
+    ('active', cardinality(act)::text), ('min', min_around::text),
+    ('n3', n[3]), ('n4', n[4]), ('n5', n[5]), ('act', array_to_string(act, ','));
   -- the fixtures (no signed-in user: the guard lets postgres through)
   perform set_config('request.jwt.claims', '{}', true);
   insert into public.time_off (person_id, start_date, end_date, note) values
@@ -243,16 +256,18 @@ do $$ declare tv text; d boolean; tv2 text; begin   -- (no variable named v or k
   begin
     select string_agg(f.k2 || '=' || case when p.prosecdef then 'definer' else 'invoker' end || '/' || case p.provolatile when 's' then 'stable' when 'v' then 'volatile' else 'immutable' end, ' ' order by f.o)
       into tv
-      from (values (1, 'people', 'public.silvis_east_people()'), (2, 'ranges', 'public.silvis_east_ranges()'), (3, 'derived', 'public.silvis_derived_vacations()'), (4, 'reset', 'public.east_vacation_reset_stale(date)')) as f(o, k2, sig)
+      from (values (1, 'people', 'public.silvis_east_people()'), (2, 'ranges', 'public.silvis_east_ranges()'), (3, 'derived', 'public.silvis_derived_vacations()'), (4, 'reset', 'public.east_vacation_reset_stale(date)'),
+                   (5, 'short', 'public.silvis_vacation_short_days(date, date)')) as f(o, k2, sig)
       join pg_proc p on p.oid = f.sig::regprocedure;
     select count(*)::text into tv2
-      from (values ('public.silvis_east_people()'), ('public.silvis_east_ranges()'), ('public.silvis_derived_vacations()'), ('public.east_vacation_reset_stale(date)')) as f(sig)
+      from (values ('public.silvis_east_people()'), ('public.silvis_east_ranges()'), ('public.silvis_derived_vacations()'), ('public.east_vacation_reset_stale(date)'), ('public.silvis_vacation_short_days(date, date)')) as f(sig)
       join pg_proc p on p.oid = f.sig::regprocedure
      where p.proconfig @> array['search_path=public, pg_temp'];
     insert into probe_results values ('P3', tv || ' paths=' || tv2);
   exception when others then insert into probe_results values ('P3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   begin
-    with f(k2, sig) as (values ('people', 'public.silvis_east_people()'), ('ranges', 'public.silvis_east_ranges()'), ('derived', 'public.silvis_derived_vacations()'), ('reset', 'public.east_vacation_reset_stale(date)'))
+    with f(k2, sig) as (values ('people', 'public.silvis_east_people()'), ('ranges', 'public.silvis_east_ranges()'), ('derived', 'public.silvis_derived_vacations()'), ('reset', 'public.east_vacation_reset_stale(date)'),
+                               ('short', 'public.silvis_vacation_short_days(date, date)'))
     select 'public=' || coalesce((select string_agg(f.k2, ',' order by f.k2) from f join pg_proc p on p.oid = f.sig::regprocedure
                                    where exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee = 0 and a.privilege_type = 'EXECUTE')), 'none')
         || ' anon=' || coalesce((select string_agg(f.k2, ',' order by f.k2) from f where has_function_privilege('anon', f.sig::regprocedure, 'execute')), 'none')
@@ -379,6 +394,66 @@ do $$ declare u text; n1 text; begin
     insert into probe_results values ('G11', 'ok');
   exception when others then insert into probe_results values ('G11', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
+end $$;
+
+-- S1-S7: the days under the minimum (silvis_vacation_short_days) - as postgres (S3 enters n1 on G4 / G6's days with no signed-in
+-- user first), then as the surgeon U1 and as anon (no EXECUTE)
+do $$ declare n1 text; u text; tv text; tv2 text; tv3 text; tv4 text; n int; begin
+  select c.v into n1 from probe_ctx c where c.k = 'n1';
+  perform set_config('request.jwt.claims', '{}', true);
+  begin
+    select string_agg(to_char(s.day, 'MM-DD') || '/' || s.around, ',' order by s.day) into tv
+      from public.silvis_vacation_short_days('2031-01-01', '2031-04-30') s;
+    insert into probe_results values ('S1', 'days=' || coalesce(tv, 'none'));
+  exception when others then insert into probe_results values ('S1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    select 'active=' || s.active || ' min=' || s.minimum
+        || ' off=' || coalesce((select string_agg(l.lbl, ',' order by l.lbl) from unnest(s.off_ids) as x(id)
+                                  cross join lateral (select coalesce((select case c.k when 'east' then 'E' else c.k end from probe_ctx c
+                                                                        where c.k in ('east', 'n1', 'n2', 'n3', 'n4', 'n5') and c.v = x.id limit 1), '?') as lbl) l), 'none')
+        || ' derived_only=' || coalesce((select string_agg(l.lbl, ',' order by l.lbl) from unnest(s.derived_only_ids) as x(id)
+                                  cross join lateral (select coalesce((select case c.k when 'east' then 'E' else c.k end from probe_ctx c
+                                                                        where c.k in ('east', 'n1', 'n2', 'n3', 'n4', 'n5') and c.v = x.id limit 1), '?') as lbl) l), 'none')
+        || ' roster_order=' || case when s.off_ids = (select array_agg(a.id order by a.o) from unnest(string_to_array((select c.v from probe_ctx c where c.k = 'act'), ',')) with ordinality as a(id, o)
+                                                        where a.id = any(s.off_ids)) then 'yes' else 'no' end
+      into tv
+      from public.silvis_vacation_short_days('2031-02-03', '2031-02-03') s;
+    insert into probe_results values ('S2', coalesce(tv, 'no row'));
+  exception when others then insert into probe_results values ('S2', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into public.time_off (person_id, start_date, end_date, note) values
+      (n1, '2031-02-13', '2031-02-13', 'probe-eastvac31 S3'), (n1, '2031-02-25', '2031-02-25', 'probe-eastvac31 S3'),
+      ('probe-eastvac31-nobody', '2031-02-14', '2031-02-14', 'probe-eastvac31 S3');
+    select string_agg(to_char(s.day, 'MM-DD') || '/' || s.around, ',' order by s.day) into tv
+      from public.silvis_vacation_short_days('2031-02-01', '2031-03-31') s;
+    insert into probe_results values ('S3', 'days=' || coalesce(tv, 'none'));
+  exception when others then insert into probe_results values ('S3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    select string_agg(to_char(s.day, 'MM-DD'), ',' order by s.day) into tv from public.silvis_vacation_short_days(null, '2031-02-28') s where s.day >= '2031-01-01';
+    select string_agg(to_char(s.day, 'MM-DD'), ',' order by s.day) into tv2 from public.silvis_vacation_short_days('2031-02-04', null) s where s.day <= '2031-04-30';
+    select string_agg(to_char(s.day, 'MM-DD'), ',' order by s.day) into tv3 from public.silvis_vacation_short_days('2031-02-04', '2031-02-04') s;
+    select count(*)::text into tv4 from public.silvis_vacation_short_days('2031-02-05', '2031-02-04') s;
+    insert into probe_results values ('S4', 'lo=' || coalesce(tv, 'none') || ' hi=' || coalesce(tv2, 'none') || ' one=' || coalesce(tv3, 'none') || ' none=' || tv4);
+  exception when others then insert into probe_results values ('S4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into probe_results values ('S5', 'result=' || pg_get_function_result('public.silvis_vacation_short_days(date, date)'::regprocedure));
+  exception when others then insert into probe_results values ('S5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  select c.v into u from probe_ctx c where c.k = 'u1';
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into n from public.silvis_vacation_short_days('2031-01-01', '2031-04-30');
+    insert into probe_results values ('S6', 'rows=' || n || ' (NO refusal)');
+  exception when others then insert into probe_results values ('S6', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'reset role';
+  execute 'set local role anon';
+  perform set_config('request.jwt.claims', '', true);
+  begin
+    select count(*) into n from public.silvis_vacation_short_days('2031-01-01', '2031-04-30');
+    insert into probe_results values ('S7', 'rows=' || n || ' (NO refusal)');
+  exception when others then insert into probe_results values ('S7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'reset role';
+  perform set_config('request.jwt.claims', '{}', true);
 end $$;
 
 -- R1-R3: the surgeon, the coordinator and the viewer may not reset; R4 / R5: postgres with an anon role claim, and with no p_from

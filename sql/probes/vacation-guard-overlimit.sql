@@ -7,8 +7,9 @@
 --
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/vacation-guard-overlimit.sql
 --
--- The same reading as the trigger: the ACTIVE roster surgeons of the blob (call_schedule_data 'main'; active not false, type
--- not 'external'), the minimum groupRules.vacations.minSurgeonsAround (a whole number 0-99, absent / junk -> 2); a surgeon is
+-- The 9/30 trigger's reading (sql/migrations/2026-09-30-vacation-guard.sql - the guard live until revision x is applied): the
+-- ACTIVE roster surgeons of the blob (call_schedule_data 'main'; active not false, type not 'external'), the minimum
+-- groupRules.vacations.minSurgeonsAround (a whole number 0-99, absent / junk -> 2); a surgeon is
 -- off on a day inside one of his time_off rows, or inside one of his East (Davenport) vacation ranges cached in the east_feed
 -- payload (an East-feature surgeon: eastFeed.enabled and a blocked role, a roster code; matched by code, forecast rows
 -- skipped) on a day no 'home' east_vacation_reviews row covers (unreviewed counts as away). One row per day on which fewer
@@ -18,6 +19,12 @@
 -- listed too (they are history; the trigger checks only the days a new or widened vacation takes someone off). Also the check
 -- for the trigger's known gap: an East review turned 'away' or a new Davenport range from the feed refresh is never refused, so
 -- a day can fall under the minimum without any time_off write - run this after such a change when in doubt.
+-- Revision x (sql/migrations/2026-10-14-east-vacations.sql, Prompt 31 Part A) re-creates the guard to read
+-- silvis_derived_vacations() - the merged ranges, a 'home' review exempting only its exact range - so from its apply on this query is
+-- more lenient than the guard: a covering, non-exact 'home' row still exempts a day here but no longer in the guard. After that apply
+-- run sql/probes/vacation-short-days.sql instead (public.silvis_vacation_short_days - the guard's own reading, the ONE SQL definition
+-- of these days, critic A12). This query stays as it ran on 10/1 (docs/SCHEMA-REVIEW.md carries it verbatim) and is revision x's
+-- BEFORE picture.
 -- ============================================================================
 
 with blob as (

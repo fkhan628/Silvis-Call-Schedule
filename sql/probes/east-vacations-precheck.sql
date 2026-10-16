@@ -3,17 +3,18 @@
 -- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record, only the first one is a gate.
 -- It runs before the migration, so it never names the new functions outside catalog lookups (to_regprocedure, pg_proc) and the
--- query_to_xml text of row 5, which runs only when the functions exist. The days already under the minimum are
--- sql/probes/vacation-guard-overlimit.sql's (the apply script runs it beside this file).
+-- query_to_xml text of row 5, which runs only when the functions exist. The days already under the minimum are, before the apply,
+-- sql/probes/vacation-guard-overlimit.sql's (the 9/30 reading - the apply script runs it beside this file) and after it, by the new
+-- reading, sql/probes/vacation-short-days.sql's (public.silvis_vacation_short_days - the apply script runs it after probe AFTER).
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/east-vacations-precheck.sql
 --
 -- Columns: ord, section, role, detail - ordered by ord, role (counts, dates and catalog facts only: no name, no email, no reason):
---   1 objects   people_fn=<yes|no> ranges_fn=<yes|no> derived_fn=<yes|no> reset_fn=<yes|no> guard=<yes|no> guard_derived=<yes|no> -
---               the apply gate (the four functions by their exact signatures; guard_derived = the vacation guard's body reads
---               public.silvis_derived_vacations()): before the apply it reads
---               people_fn=no ranges_fn=no derived_fn=no reset_fn=no guard=yes guard_derived=no,
---               after it people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes guard=yes guard_derived=yes
+--   1 objects   people_fn=<yes|no> ranges_fn=<yes|no> derived_fn=<yes|no> reset_fn=<yes|no> short_fn=<yes|no> guard=<yes|no>
+--               guard_derived=<yes|no> - the apply gate (the five functions by their exact signatures; guard_derived = the vacation
+--               guard's body reads public.silvis_derived_vacations()): before the apply it reads
+--               people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no,
+--               after it people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes short_fn=yes guard=yes guard_derived=yes
 --   2 guard     trigger=<yes|no> definer=<t|f> body_md5=<md5 of the guard's body> (the apply script compares the md5 with the
 --               9/30 body's before the apply)
 --   3 feed      rows=<n> forecast=<n> first=<week> last=<week> fetched_max=<UTC time> vacation_entries=<n> (the east_feed cache)
@@ -30,6 +31,7 @@ with objects as (
       || ' ranges_fn=' || case when to_regprocedure('public.silvis_east_ranges()') is null then 'no' else 'yes' end
       || ' derived_fn=' || case when to_regprocedure('public.silvis_derived_vacations()') is null then 'no' else 'yes' end
       || ' reset_fn=' || case when to_regprocedure('public.east_vacation_reset_stale(date)') is null then 'no' else 'yes' end
+      || ' short_fn=' || case when to_regprocedure('public.silvis_vacation_short_days(date, date)') is null then 'no' else 'yes' end
       || ' guard=' || case when to_regprocedure('public.time_off_vacation_guard()') is null then 'no' else 'yes' end
       || ' guard_derived=' || case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.time_off_vacation_guard()')
                                                    and p.prosrc like '%public.silvis_derived_vacations()%') then 'yes' else 'no' end as detail
