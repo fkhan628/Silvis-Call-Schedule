@@ -868,18 +868,24 @@ and quote the 200 body in the deploy record (section 3).
 curl.exe -s -i -X POST "$URL/east-feed-refresh" | Select-Object -First 1
 # a WRONG secret -> the same 401 (the constant-time compare of the other cron functions)
 curl.exe -s -i -X POST "$URL/east-feed-refresh" -H "x-cron-secret: wrong" | Select-Object -First 1
-# past the gate: not POST -> 405; dryRun not a boolean -> 400 (nothing read either way)
+# The JSON body goes through stdin (--data-binary "@-"), never as a -d argument: Windows PowerShell 5.1 strips the
+# inner double quotes of a native argument, so a -d body of {"dryRun":true} reaches the function as {dryRun:true}
+# (observed 10/16 on PS 5.1.26100). The function answers a body that does not parse 400 and never runs it live; the
+# pipe adds a byte-order mark and CRLF around the JSON, which it accepts.
+# past the gate: not POST -> 405; a body other than {} or {"dryRun":<boolean>} -> 400 (nothing read either way)
 curl.exe -s -i "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" | Select-Object -First 1
-curl.exe -s -i -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":"yes"}' | Select-Object -First 1
+'{"dryRun":"yes"}' | curl.exe -s -i -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" --data-binary "@-" | Select-Object -First 1
 # dry run: reads Silvis and the other project, plans, writes NOTHING (no east_feed row, no prune, no reset, no audit row)
-curl.exe -s -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
+'{"dryRun":true}' | curl.exe -s -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" --data-binary "@-"
 #   -> 200 {"dryRun":true,"ok":true,"error":null,"errors":[],"failed":false,"source":"cron","today":"YYYY-MM-DD","from":"<Monday>","to":"<that Monday + 210 days>",
 #       "weeks":N,"coverage":{"from":...,"to":...},...,"vacations":{"codes":["FAK"],"ranges":N,...,"trusted":true,"guard":[]},...,
 #       "extra":{"from":...,"to":...,"weeks":N,...},"newRanges":[...],...,"would":{"upsert":N,"weekRows":N,"rewrittenRows":N,"prune":{...},"reset":{"p_from":"<Monday>"},"extra":N}}
 ```
 A LIVE call (`{}`) writes what the in-app Refresh from Davenport writes (`east_feed` rows, the forecast prune, the
-review reset, one `east.refresh` audit row) and never mails; the daily cron job is its intended caller. The pg_net
-proof in section 3 is the same dry run with the secret read from Vault, never typed into a shell.
+review reset, one `east.refresh` audit row) and never mails; the daily cron job is its intended caller. Only `{}` and
+`{"dryRun":true|false}` run: any other body - one that does not parse, an array, null, a string or number, an unknown
+key - is a 400 with nothing read. The pg_net proof in section 3 is the same dry run with the secret read from Vault,
+never typed into a shell.
 
 ## 6. Invocations that CAN send real mail - wait for Faraz
 

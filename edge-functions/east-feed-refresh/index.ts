@@ -39,12 +39,15 @@
 //   Never: a delete of a cached week (east_feed rows are only upserted), a write to the other project, a mail or a
 //   push, a contact read, a write to time_off.
 //
-// Body: {} (the cron) or { "dryRun": true } - a boolean only; anything else is a 400 and nothing is read. dryRun reads
-// everything (steps 1-4 and the extra leg's read), plans, and writes NOTHING (no east_feed row, no prune, no reset, no
-// audit row); the answer says what a live run would write - the post-deploy proof.
+// Body: {} (the cron) or { "dryRun": true } - a boolean only; anything else is a 400 and nothing is read. The body fails
+// CLOSED (refreshBody, A2 review 10/16): text that does not parse, an array, null, a primitive or an unknown key is a
+// 400, never read as {} - a dry run mangled on its way (Windows PowerShell 5.1 strips the inner quotes of curl.exe
+// -d '{"dryRun":true}') must never run live. dryRun reads everything (steps 1-4 and the extra leg's read), plans, and
+// writes NOTHING (no east_feed row, no prune, no reset, no audit row); the answer says what a live run would write - the
+// post-deploy proof.
 //
-// Answers: 401 (the gate), 405 (not POST), 400 (dryRun not a boolean), 500 (SUPABASE_URL / the service key missing);
-// 502 when a read the plan needs failed (the Silvis blob or cache, the weeks or the roster blob of the other project) or
+// Answers: 401 (the gate), 405 (not POST), 400 (a body other than {} or { "dryRun": <boolean> }), 500 (SUPABASE_URL /
+// the service key missing); 502 when a read the plan needs failed (the Silvis blob or cache, the weeks or the roster blob of the other project) or
 // the east_feed upsert failed - nothing was written to the cache, and a live run's audit row says ok:false with the
 // error; otherwise 200 with ok true / false (false: the time_off read, the guard, the prune, the re-read, the reset, the
 // extra leg or the warning reads failed or were skipped for safety - each one named in errors, each <= 200 characters).
@@ -775,6 +778,25 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
   }
 }
 
+// refreshBody(text) -> { dryRun } or { error }: the request body, failing CLOSED (A2 review, 10/16). Only a JSON object
+// with no key but dryRun (a boolean) is a request: {} (the cron's body) or { "dryRun": true | false }. Anything else -
+// text that does not parse (Windows PowerShell 5.1 strips the inner quotes of curl.exe -d '{"dryRun":true}', so the
+// function receives {dryRun:true}), an empty body, an array, null, a string, a number, a boolean, an unknown key (a typo
+// of dryRun) - is an error, answered 400 before any read: a dry run that arrived mangled must never run live (a parse
+// failure read as {} would have). One leading byte-order mark and white space around the JSON are accepted (PowerShell's
+// pipe adds both - edge-functions/README.md section 5 sends the body through stdin).
+function refreshBody(text: unknown): { dryRun: boolean; error: string | null } {
+  const no = (why: string) => ({ dryRun: false, error: "the body must be {} or {\"dryRun\":true} (" + why + "); nothing was read or written" });
+  if (typeof text !== "string") return no("it could not be read");
+  let body: any;
+  try { body = JSON.parse(text.replace(/^\uFEFF/, "")); } catch (_e) { return no("it is not JSON"); }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return no("got " + (body === null ? "null" : Array.isArray(body) ? "an array" : typeof body));
+  const other = Object.keys(body).filter(k => k !== "dryRun");
+  if (other.length) return no("unknown key " + JSON.stringify(other[0]).slice(0, 40));
+  if ("dryRun" in body && typeof body.dryRun !== "boolean") return { dryRun: false, error: "dryRun must be a boolean; nothing was read or written" };
+  return { dryRun: body.dryRun === true, error: null };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -789,12 +811,11 @@ serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "POST only" });
   try {
     if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json(500, { error: "function misconfigured: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing" });
-    const body = await req.json().catch(() => ({}));
-    if (body && typeof body === "object" && "dryRun" in body && typeof body.dryRun !== "boolean") {
-      return json(400, { error: "dryRun must be a boolean; nothing was read or written" });
-    }
-    const dryRun: boolean = !!(body && typeof body === "object" && body.dryRun === true);
-    return await runRefresh(dryRun);
+    // the body as text, failing closed (refreshBody): never req.json() with a fallback - a body that does not parse
+    // must be a 400, not a live run
+    const body = refreshBody(await req.text().catch(() => null));
+    if (body.error) return json(400, { error: body.error });
+    return await runRefresh(body.dryRun);
   } catch (e) {
     const message = errText(e);
     console.error(`[east-feed-refresh] error: ${message}`);

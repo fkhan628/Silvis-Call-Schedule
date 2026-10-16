@@ -3144,7 +3144,10 @@ async function erCall(w, opts) {
   const h = erHandler(env, w, o.now || ER_NOW, o.patch);
   const headers = new Headers();
   if (o.secret !== null) headers.set("x-cron-secret", o.secret === undefined ? SECRET : o.secret);
-  const req = { method: o.method || "POST", url: ER_URL + "/functions/v1/east-feed-refresh", headers, json: async () => { w.jsonReads++; return o.body === undefined ? {} : o.body; } };
+  // the body as the wire carries it: o.raw (exact text - a mangled or non-object body) or JSON of o.body ({} by default,
+  // the cron's); text() and json() behave like Deno's Request (json() rejects on text that does not parse) and count reads
+  const raw = o.raw !== undefined ? o.raw : JSON.stringify(o.body === undefined ? {} : o.body);
+  const req = { method: o.method || "POST", url: ER_URL + "/functions/v1/east-feed-refresh", headers, text: async () => { w.jsonReads++; return raw; }, json: async () => { w.jsonReads++; return JSON.parse(raw); } };
   const res = await h(req);
   const text = await res.text();
   let body = null;
@@ -3209,6 +3212,81 @@ acheck("A2 handler: the x-cron-secret gate comes FIRST and fails closed - no hea
     const r = await erCall(w, opts);
     assert.strictEqual(r.status, status, label + ": " + r.text.slice(0, 200));
     assert.strictEqual(w.calls.length, 0, label + ": nothing fetched");
+  }
+});
+acheck("A2 handler (A2 review, 10/16): the body fails CLOSED - text that does not parse (what Windows PowerShell 5.1 hands curl.exe for -d '{\"dryRun\":true}' and -d '{\"dryRun\":\"yes\"}', observed: {dryRun:true} / {dryRun:yes}), an empty body, an array, null, a string, a number, a boolean, an unknown key (a typo of dryRun) and a dryRun that is not a boolean are each a 400 with the body read once, nothing fetched, nothing written - never a live run; {} runs live, and the README's piped dry run (observed on PS 5.1: a byte-order mark, the JSON, CRLF) is a dry run", async () => {
+  for (const [label, raw] of [
+    ["PS 5.1's {dryRun:true}", "{dryRun:true}"], ["PS 5.1's {dryRun:yes}", "{dryRun:yes}"], ["PS 5.1's {mode:digest,dryRun:true}", "{mode:digest,dryRun:true}"],
+    ["truncated JSON", "{\"dryRun\":tr"], ["an empty body", ""], ["white space only", " \r\n"], ["a byte-order mark only", "\uFEFF"],
+    ["an array", "[]"], ["an array holding the object", "[{\"dryRun\":true}]"], ["null", "null"], ["a string", "\"x\""], ["a number", "1"], ["true", "true"],
+    ["a typo of dryRun", "{\"dryrun\":true}"], ["dryRun and an unknown key", "{\"dryRun\":true,\"mode\":\"x\"}"], ["an unknown key alone", "{\"mode\":\"digest\"}"],
+    ["dryRun null", "{\"dryRun\":null}"], ["dryRun \"true\"", "{\"dryRun\":\"true\"}"],
+  ]) {
+    const w = erWorld();
+    const r = await erCall(w, { raw });
+    assert.strictEqual(r.status, 400, label + ": " + r.text.slice(0, 200));
+    assert.ok(r.body && typeof r.body.error === "string" && /nothing was read or written$/.test(r.body.error) && r.body.error.length <= 200, label + ": " + r.text.slice(0, 200));
+    assert.strictEqual(w.jsonReads, 1, label + ": the body is read once");
+    assert.deepStrictEqual([w.calls.length, w.upserts.length, w.audit.length, w.rpc.length], [0, 0, 0, 0], label + ": nothing fetched, nothing written");
+    assert.ok(r.text.indexOf(SECRET) < 0 && r.text.indexOf(ER_KEY) < 0, label + ": no secret in the answer");
+  }
+  const w = erWorld();
+  const r = await erCall(w, { raw: "\uFEFF{\"dryRun\":true}\r\n" });
+  assert.strictEqual(r.status, 200, "the piped dry run: " + r.text.slice(0, 200));
+  assert.strictEqual(r.body.dryRun, true, "it is a dry run");
+  assert.deepStrictEqual([w.upserts.length, w.audit.length, w.rpc.length], [0, 0, 0], "the piped dry run writes nothing");
+  const w2 = erWorld();
+  const r2 = await erCall(w2, { raw: " {\"dryRun\":false}\r\n" });
+  assert.deepStrictEqual([r2.status, r2.body.dryRun, w2.audit.length], [200, false, 1], "dryRun false (white space around it) is the live run");
+  const w3 = erWorld();
+  const r3 = await erCall(w3, { raw: "{}" });
+  assert.deepStrictEqual([r3.status, r3.body.dryRun, w3.upserts.length, w3.audit.length], [200, false, 2, 1], "{} (the cron's body) is the live run");
+});
+// Review A2 finding 2: an older cached week whose list planVacationCache rewrote (the main upsert carries it) is
+// re-fetched by the extra leg, which must keep the list of the RE-READ cache (the cleared one), never the stale one.
+const ER_REWRITE_OLD = "2026-09-01T08:00:00+00:00";
+async function erRewriteScenario(patch) {
+  const w = erWorld();
+  const span = [{ code: "FAK", start: "2026-09-10", end: "2026-09-16" }];
+  w.cache.forEach((x) => {
+    if (x.week_monday === "2026-09-07" || x.week_monday === "2026-09-14") x.data.vacations = erClone(span);
+    if (x.week_monday === "2026-09-07") x.fetched_at = ER_REWRITE_OLD;
+  });
+  w.reviews.push({ person_id: "s1", start: "2026-09-10", end: "2026-09-16", decision: "away" });
+  w.davTimeOff.push({ person_id: "s6", kind: "vacation", start_date: "2026-09-14", end_date: "2026-09-16" });
+  const exp = await erClientExpect(w);
+  assert.deepStrictEqual(exp.plan.rewritten.map((x) => x.weekMonday), ["2026-09-07"], "fixture: the in-app plan rewrites the older week 09-07");
+  const r = await erCall(w, { patch });
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(erAt(w), ER_LIVE_ORDER, "the order");
+  erCommon(w, r, "rewritten");
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.errors));
+  assert.deepStrictEqual(w.upserts[0], exp.mainRows, "the main upsert = the in-app refresh's rows, the rewritten older week included");
+  const old = w.upserts[0].find((x) => x.week_monday === "2026-09-07");
+  assert.ok(old, "the rewritten older week 09-07 is in the main upsert");
+  assert.deepStrictEqual(old.data.vacations, [], "its list is cleared (Davenport now says 09-14..09-16)");
+  assert.strictEqual(old.fetched_at, ER_REWRITE_OLD, "it keeps its own fetched_at (the week itself was not fetched)");
+  assert.strictEqual(r.body.vacations.rewrittenWeeks, 1, "the answer counts it");
+  assert.deepStrictEqual(r.body.reviewResets.filter((x) => x.start === "2026-09-10"), [{ person_id: "s1", start: "2026-09-10", end: "2026-09-16", reason: "changed", decision: "away" }], "the old review is reset");
+  assert.deepStrictEqual(w.upserts[1], exp.extraRows, "the extra upsert = the in-app extra leg over the RE-READ cache");
+  assert.deepStrictEqual(w.upserts[1].find((x) => x.week_monday === "2026-09-07").data.vacations, [], "the extra leg re-fetches 09-07 and keeps the cleared list");
+  assert.deepStrictEqual(w.cache.find((x) => x.week_monday === "2026-09-07").data.vacations, [], "the final cache's 09-07 list is cleared - the stale list is not written back");
+  assert.deepStrictEqual(ef.eastVacations(w.cache, "FAK").filter((x) => x.end >= "2026-09-01" && x.start <= "2026-09-30"), [{ start: "2026-09-14", end: "2026-09-16" }], "the merged range is exactly Davenport's (no stale 09-10..09-16 coming back unreviewed)");
+  assert.ok(!w.reviews.some((x) => x.start === "2026-09-10"), "the old review stays deleted");
+}
+acheck("A2 handler (A2 review, 10/16): Davenport shortens a range that spans the week before the main window (the cache holds FAK 09-10..09-16 on 09-07 and 09-14, Davenport now says 09-14..09-16) - the main upsert carries the rewritten older week 09-07 (cleared, its own fetched_at), the reset deletes the old review, and the extra leg re-fetches 09-07 over the RE-READ cache, so the final cache holds exactly 09-14..09-16; the three mutants the review found surviving (the extra leg over the stale cache, the rewritten rows dropped, the rewritten row's fetched_at replaced) each fail it", async () => {
+  await erRewriteScenario(null);
+  const swap = (from, to) => (js) => {
+    const k = js.indexOf(from);
+    assert.ok(k > 0 && js.indexOf(from, k + 1) < 0, "the mutant's patch point exists once: " + from);
+    return js.slice(0, k) + to + js.slice(k + from.length);
+  };
+  for (const [label, patch] of [
+    ["L1: the extra leg over the cache read BEFORE the upsert", swap("const x = eastExtraPlan(feed, more, win, cacheRows);", "const x = eastExtraPlan(feed, more, win, cacheBefore);")],
+    ["L2: the rewritten rows dropped from the main upsert", swap("rows: weekRows.concat(rewrittenRows)", "rows: weekRows")],
+    ["M1: the rewritten row's fetched_at replaced by the run's", swap("fetched_at: w.fetchedAt || feed.fetchedAt", "fetched_at: feed.fetchedAt")],
+  ]) {
+    await assert.rejects(erRewriteScenario(patch), assert.AssertionError, label + " survives the scenario");
   }
 });
 acheck("A2 handler: a live run reads and writes in the in-app order (Silvis blob + cache, Davenport weeks / roster / time_off, the east_feed upsert, the forecast prune, the cache re-read, the ONE reset RPC with p_from = the main window's Monday, the extra leg's Davenport read + upsert, the warning reads, the audit row); the two upserts EQUAL what the in-app refresh writes for the same world (east-feed.js over the app's own lines), the Davenport requests are fetchEastWeeks' own, request for request", async () => {
@@ -3405,7 +3483,11 @@ check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET fr
   const first = h.slice(h.indexOf("{") + 1).trimStart();
   assert.ok(/^\/\/[^\n]*\n\s*(\/\/[^\n]*\n\s*)*const CRON_SECRET = Deno\.env\.get\("CRON_SECRET"\) \|\| "";\n\s*if \(!\(await cronSecretMatches\(req\.headers\.get\("x-cron-secret"\), CRON_SECRET\)\)\) \{/.test(first) || /^const CRON_SECRET = Deno\.env\.get\("CRON_SECRET"\) \|\| "";\n\s*if \(!\(await cronSecretMatches\(req\.headers\.get\("x-cron-secret"\), CRON_SECRET\)\)\) \{/.test(first), "the gate is the handler's first statement: " + first.slice(0, 200));
   const gate = h.indexOf("cronSecretMatches(");
-  ["req.method", "req.json", "try {"].forEach((s) => assert.ok(h.indexOf(s) > gate, s + " comes after the gate"));
+  // pin moved deliberately 10/14: Prompt 31 Part A A2 review - the body is read as text (req.text) and fails closed
+  // in refreshBody; req.json() with a fallback read a mangled body as {} and ran live
+  ["req.method", "req.text()", "try {"].forEach((s) => assert.ok(h.indexOf(s) > gate, s + " comes after the gate"));
+  const hCode = h.replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/req\.json/.test(erSrc.replace(/\/\/[^\n]*/g, "")) && /const body = refreshBody\(await req\.text\(\)\.catch\(\(\) => null\)\);\n\s*if \(body\.error\) return json\(400, \{ error: body\.error \}\);\n\s*return await runRefresh\(body\.dryRun\);/.test(hCode), "the body: refreshBody over req.text(), its error a 400 before runRefresh; no req.json anywhere in the code");
   assert.ok(/json\(401, \{ error: "unauthorized" \}\)/.test(h.slice(gate, gate + 300)), "the refusal is 401 unauthorized");
   assert.ok(!/OPTIONS|Access-Control-Allow/.test(erSrc), "no CORS: a browser never calls this function");
   assert.ok(/^const DAVENPORT_TIMEOUT_MS = 8000;/m.test(erSrc) && /signal: AbortSignal\.timeout\(DAVENPORT_TIMEOUT_MS\)/.test(erSrc), "every Davenport read is capped at 8 s");
@@ -3466,6 +3548,14 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6."));
   assert.ok(readme.indexOf("### east-feed-refresh") > readme.indexOf("### daily-reminder"), "section 5's east-feed-refresh checks follow daily-reminder's");
   assert.ok(/401/.test(s5) && /\{"dryRun":true\}/.test(s5) && /405/.test(s5) && /400/.test(s5), "section 5: 401, the dryRun, 405, 400");
+  // A2 review (10/16): Windows PowerShell 5.1 strips the inner quotes of a -d '{...}' argument (observed: {dryRun:true}),
+  // so every JSON body in section 5's east-feed-refresh block goes through stdin; no command line passes JSON with -d
+  const s5cmds = s5.slice(s5.indexOf("```powershell"), s5.indexOf("```", s5.indexOf("```powershell") + 5)).split("\n").filter((l) => /^\s*[^#\s]/.test(l) && /curl\.exe/.test(l));
+  assert.ok(s5cmds.length >= 5, "section 5's east-feed-refresh commands: " + s5cmds.length);
+  s5cmds.forEach((l) => assert.ok(!/\s-d\s|--data(-raw|-ascii|-urlencode)?\s/.test(l), "no -d / --data argument (PowerShell 5.1 mangles the JSON): " + l));
+  assert.ok(s5cmds.some((l) => l.indexOf("'{\"dryRun\":true}' | curl.exe -s -X POST \"$URL/east-feed-refresh\" -H \"x-cron-secret: $SECRET\" -H \"Content-Type: application/json\" --data-binary \"@-\"") === 0), "the dry run pipes its body through stdin");
+  assert.ok(s5cmds.some((l) => l.indexOf("'{\"dryRun\":\"yes\"}' | curl.exe") === 0 && /--data-binary "@-" \| Select-Object -First 1$/.test(l)), "the 400 check pipes its body too");
+  assert.ok(/a body other than \{\} or \{"dryRun":<boolean>\} -> 400/.test(s5) && /Windows PowerShell 5\.1 strips/.test(s5), "section 5 says why, and what is a 400");
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("select cron.unschedule('silvis-east-feed-daily');") > 0 && s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp") > s7.indexOf("select cron.unschedule('silvis-east-feed-daily');"), "the rollback: unschedule first, then the function");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
