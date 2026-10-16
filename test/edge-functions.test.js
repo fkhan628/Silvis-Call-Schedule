@@ -243,7 +243,11 @@ const drSrc = read("edge-functions/daily-reminder/index.ts");
 const onSrc = read("edge-functions/office-notifications/index.ts");
 const appSrc = read("index-source.html");
 const MAIL_FNS = { "send-notification": snSrc, "daily-reminder": drSrc, "office-notifications": onSrc };
-const CRON_FNS = { "daily-reminder": drSrc, "office-notifications": onSrc };
+// Prompt 31 Part A (A2, 10/16): the daily server refresh of the East feed is the third cron function - its @cronSecret block
+// is byte-identical to the other two. Read defensively, so each check below fails on its own while the file is missing.
+const ER_PATH = path.join(ROOT, "edge-functions", "east-feed-refresh", "index.ts");
+const erSrc = fs.existsSync(ER_PATH) ? read("edge-functions/east-feed-refresh/index.ts") : "";
+const CRON_FNS = { "daily-reminder": drSrc, "office-notifications": onSrc, "east-feed-refresh": erSrc };
 const ASYNC = [];
 const acheck = (name, fn) => ASYNC.push([name, fn]);
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2661,6 +2665,810 @@ acheck("P30 equality table: for every input (prefs on / off / missing, every e-m
   const w0 = p30World();
   const r0 = await p30Call(p30Handler(env, w0), w0, { token: "tok-admin", body: { type: "schedule_published", data: { message: "m" }, targetIds: [] } });
   assert.deepStrictEqual(r0.body, { sent: 0, failed: 0, skipped_no_email: 0, skipped_pref_off: 0, results: [] }, "the empty short circuit is unchanged (no push key)");
+});
+
+/* =====================================================================
+   Prompt 31 Part A (A2, 10/16) - the daily server refresh of the East feed: edge-functions/east-feed-refresh/index.ts
+   (report 10/13 section 4, its critic A1 / A7 / A9 / A12, PART A DECISIONS 10/14 items 4, 5, 14, 15 and 16).
+   1. the '@cronSecret' block is byte-identical to the other two cron functions (CRON_FNS above), and the gate is the
+      handler's first statement - ahead of the method, the body and every read;
+   2. the plain-JS '@eastRefresh' mirror block is east-feed.js rewritten with UTC date arithmetic (Deno cannot load the
+      classic script). Critic A9: not byte identity (the arithmetic differs on purpose) but BEHAVIOUR - every ported
+      function against east-feed.js over generated fixtures in child processes under six time zones, the mirror's own
+      output identical in all six, and a mutant (getUTCDay -> getDay) the zones west of UTC must catch;
+   3. the server-only pieces (the codes = the app's predicate, the A7 silent-empty guard, the warning days) on fixtures;
+   4. the real handler, types stripped (Node's stripTypeScriptTypes, as the P30 harness does), against a fake Silvis and
+      a fake Davenport: the gate, dryRun, the in-app order of the writes, rows equal to what the in-app refresh writes
+      (re-stated with east-feed.js from the app's own lines, pinned), every failure path, never a delete of a week;
+   5. edge-functions/README.md: NOT deployed, the deploy order, the cron line with timeout_milliseconds 60000, the
+      dryRun proof and the rollback.
+   ===================================================================== */
+const cp = require("child_process");
+const ER_API = ["EAST_AHEAD_DAYS", "EAST_VACATIONS_HORIZON_DAYS", "efPad2", "efFmt", "efParse", "efAddD", "efIsDateStr", "efMonday",
+  "eastRefreshWindows", "eastExtraWeeks", "efIsForecastRow", "efValidRange", "eastMergeRanges", "vacationsFromTimeOff",
+  "attachVacationsToWeeks", "keepCachedVacations", "planVacationCache", "eastVacations", "toEastFeedRows", "coverageOf",
+  "eastResolveFakId", "eastFetchWeeks", "eastFeedPerson", "eastVacationCodes", "eastVacationReadGuard", "eastGuardText",
+  "eastMainPlan", "eastExtraPlan", "eastCacheAfter", "eastRangeRows", "eastNewRanges", "eastShortDays", "eastTrailingRoles",
+  "eastHeldSpan", "eastHeldDays", "centralYmd", "eastRefreshResult", "eastRefreshSummary"];
+let ER = null;
+check("A2: east-feed-refresh carries a plain-JS '@eastRefresh' mirror block defining the ported east-feed.js pieces (UTC), the codes, the A7 guard, the plans, the warning days, centralYmd and the summary", () => {
+  assert.ok(erSrc.length > 0, "edge-functions/east-feed-refresh/index.ts exists");
+  const b = blockOf(erSrc, "east-feed-refresh", "eastRefresh");
+  plainJs(b, "east-feed-refresh eastRefresh");
+  const api = new Function(b + "\nreturn { " + ER_API.join(", ") + " };")();
+  ER_API.forEach((k) => assert.ok(api[k] !== undefined, k + " is defined"));
+  assert.strictEqual(api.EAST_AHEAD_DAYS, ef.EAST_AHEAD_DAYS, "EAST_AHEAD_DAYS = east-feed.js's");
+  assert.strictEqual(api.EAST_VACATIONS_HORIZON_DAYS, ef.EAST_VACATIONS_HORIZON_DAYS, "EAST_VACATIONS_HORIZON_DAYS = east-feed.js's");
+  assert.ok(!/getDay\(\)|getDate\(\)|getMonth\(\)|getFullYear\(\)|new Date\(\s*[a-z]/.test(b.replace(/\/\/[^\n]*/g, "")), "UTC arithmetic only inside the block (no local getDay / getDate / getMonth / getFullYear, no new Date(y, m, d))");
+  ER = api;
+});
+// The child-process battery (critic A9). Serialized with Function.prototype.toString and run with node -e under each TZ.
+async function erParityChild() {
+  const fs = require("fs"), path = require("path"), crypto = require("crypto");
+  const ROOT = process.argv[1], MUTANT = process.argv[2] === "mutant";
+  const J = (x) => JSON.stringify(x);
+  try {
+    const ef = require(path.join(ROOT, "east-feed.js"));
+    const src = fs.readFileSync(path.join(ROOT, "edge-functions", "east-feed-refresh", "index.ts"), "utf8").replace(/\r\n/g, "\n");
+    const S = "\n// @eastRefresh-mirror-start\n", E = "\n// @eastRefresh-mirror-end\n";
+    const i = src.indexOf(S), j = src.indexOf(E);
+    if (i < 0 || j < i) { process.stdout.write(J({ error: "no @eastRefresh block" })); return; }
+    let block = src.slice(i + S.length, j);
+    if (MUTANT) block = block.split("getUTCDay()").join("getDay()");
+    const M = new Function(block + "\nreturn { " + ER_API.join(", ") + " };")();
+    let seed = 3101;
+    const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const int = (n) => Math.floor(rnd() * n);
+    const pick = (a) => a[int(a.length)];
+    const ymd = (k) => new Date(Date.UTC(2025, 11, 1 + k)).toISOString().slice(0, 10);   // 2025-12-01 is a Monday
+    const mon = (w) => ymd(7 * w);
+    const idx = (s) => Math.round((Date.parse(s + "T00:00:00Z") - Date.UTC(2025, 11, 1)) / 86400000);
+    const clone = (x) => (x === undefined ? undefined : JSON.parse(J(x)));
+    const mm = [], outs = [];
+    let n = 0;
+    const note = (label, ja, jb) => { n++; if (ja !== jb) mm.push(label + ": mirror " + String(ja).slice(0, 180) + " | east-feed.js " + String(jb).slice(0, 180)); outs.push(label.split(" ")[0] + ":" + ja); };
+    const same = (fn, args) => {
+      const a1 = clone(args), a2 = clone(args), before = J(args);
+      let ja, jb;
+      try { ja = J(M[fn].apply(null, a1)); } catch (e) { ja = "throws"; }
+      try { jb = J(ef[fn].apply(null, a2)); } catch (e) { jb = "throws"; }
+      note(fn + " " + before.slice(0, 140), ja, jb);
+      if (J(a1) !== before) mm.push(fn + " (mirror) mutated its input: " + before.slice(0, 120));
+    };
+    // 1. the windows (every day 2025-10-02 .. 2031-03-15), efMonday, the date steps
+    for (let k = -60; k <= 1930; k++) { const d = ymd(k); same("eastRefreshWindows", [d]); same("efMonday", [d]); }
+    [null, "", "2026-02-30", "2026-13-01", "20261013", "2026-10-13T00:00", 20261013, {}, "2028-02-29", "2027-02-29", "0099-01-01", "2026-00-10"].forEach((v) => same("eastRefreshWindows", [v]));
+    for (let k = 0; k < 1930; k += 37) [-400, -28, -1, 0, 1, 6, 7, 210, 365, 1095].forEach((dn) => { const d = ymd(k); note("efAddD " + d + " " + dn, M.efFmt(M.efAddD(M.efParse(d), dn)), ef.efFmt(ef.efAddD(ef.efParse(d), dn))); });
+    // 2. ranges: valid, inverted, malformed, adjacent (touching -> one range), overlapping, a gap of one day, month / year / leap edges
+    const rr = () => {
+      const t = int(24);
+      if (t === 0) return null;
+      if (t === 1) return { start: "2026-2-3", end: "2026-02-05" };
+      if (t === 2) return { start: ymd(int(1200)) };
+      if (t === 3) return "x";
+      if (t === 4) { const s = int(1200), len = 1 + int(9); return { start: ymd(s + len), end: ymd(s) }; }
+      if (t === 5) return pick([{ start: "2028-02-27", end: "2028-02-29" }, { start: "2028-03-01", end: "2028-03-04" }, { start: "2026-12-30", end: "2027-01-02" }, { start: "2026-10-31", end: "2026-11-01" }]);
+      const s = int(1200);
+      return { start: ymd(s), end: ymd(s + int(t < 10 ? 3 : 25)) };
+    };
+    const ranges = (max) => {
+      const out = [], k = int(max + 1);
+      for (let q = 0; q < k; q++) {
+        const r = rr(); out.push(r);
+        if (r && typeof r === "object" && r.start && r.end && r.start <= r.end && rnd() < 0.35) { const e = idx(r.end); out.push({ start: ymd(e + pick([1, 1, 2, 0])), end: ymd(e + 1 + int(8)) }); }
+      }
+      return out;
+    };
+    for (let t = 0; t < 500; t++) same("eastMergeRanges", [ranges(6)]);
+    same("eastMergeRanges", [null]); same("eastMergeRanges", [[]]);
+    // 3. Davenport time_off rows -> per-code ranges
+    const toRow = () => {
+      if (rnd() < 0.05) return null;
+      const r = rr(), s = r && r.start ? r.start : ymd(int(1200)), e = r && r.end ? r.end : s;
+      return { person_id: pick(["s6", "s6", "s2", "s9", null]), kind: pick(["vacation", "vacation", "vacation", "nocall", undefined]), start_date: s + pick(["", "", "T00:00:00"]), end_date: e + pick(["", "", "T00:00:00+00:00"]) };
+    };
+    for (let t = 0; t < 300; t++) { const rows = []; const k = int(8); for (let q = 0; q < k; q++) rows.push(toRow()); same("vacationsFromTimeOff", [rows, pick([{ FAK: "s6" }, { FAK: "s6", mab: "s2" }, { FAK: "s6", XYZ: null }, {}, null, { fak: "s6", FAK: "s2" }])]); }
+    // 4. weeks: the per-week split, the ride-on host, the failure path, the write plan, the read path, the cache rows, coverage
+    const vacList = () => { const out = [], k = int(4); for (let q = 0; q < k; q++) { const r = rr(); out.push(r && typeof r === "object" && r.start ? { code: pick(["FAK", "fak", "MAB", ""]), start: r.start, end: r.end } : r); } return out; };
+    const weekData = () => { const d = { dayCall: pick(["s6", "s2", "s3"]) }; if (rnd() < 0.55) d.vacations = vacList(); if (rnd() < 0.05) d.isForecast = true; return d; };
+    const weeks = (key) => {
+      const out = [], k = int(12), base = int(170) - 20;
+      for (let q = 0; q < k; q++) { const r = { data: weekData() }; r[key] = mon(base + q + (rnd() < 0.2 ? int(6) : 0)); if (key === "week_monday" && rnd() < 0.6) r.fetched_at = "2026-10-0" + (1 + int(9)) + "T12:00:00+00:00"; out.push(r); }
+      if (rnd() < 0.1) out.push(null);
+      if (rnd() < 0.1) { const r = { data: {} }; r[key] = "bad"; out.push(r); }
+      if (rnd() < 0.05) out.push({ data: { vacations: vacList() } });
+      return out;
+    };
+    const vbc = () => pick([null, { FAK: ranges(4) }, { FAK: ranges(3), MAB: ranges(2) }, { fak: ranges(2) }, { FAK: [] }, "x"]);
+    for (let t = 0; t < 400; t++) {
+      const ws = weeks("weekMonday"), cached = weeks("week_monday");
+      same("attachVacationsToWeeks", [ws, vbc()]);
+      same("keepCachedVacations", [ws, cached]);
+      same("planVacationCache", [cached, ws, vbc(), pick([undefined, {}, { from: ymd(int(1200)) }, { from: "bad" }])]);
+      same("eastVacations", [pick([ws, cached]), pick(["FAK", "fak", "MAB", "", null, "ZZZ"])]);
+      same("toEastFeedRows", [ws]);
+      same("coverageOf", [pick([ws, cached])]);
+      ws.forEach((w) => same("efIsForecastRow", [w]));
+    }
+    // 5. the extra leg's selection (past weeks, ahead only while contiguous, duplicates, forecast / malformed rows, bad windows)
+    for (let t = 0; t < 400; t++) {
+      const win = ef.eastRefreshWindows(ymd(int(1500)));
+      const m0 = idx(win.main.from) / 7, m1 = idx(win.main.to) / 7, x0 = idx(win.extra.from) / 7, x1 = idx(win.extra.to) / 7;
+      const mainW = [], extraW = [];
+      const ms = m0 + int(4), me = ms + int(m1 - ms + 3);
+      for (let w = ms; w <= me; w++) if (rnd() < 0.95) mainW.push({ weekMonday: mon(w), data: { dayCall: "s6" } });
+      if (rnd() < 0.1) mainW.push({ weekMonday: mon(ms), data: { isForecast: true } });
+      let w = x0 - int(5);
+      while (w <= x1 + 5 && extraW.length < 400) { if (rnd() < 0.85) extraW.push({ weekMonday: mon(w), data: { dayCall: "s2" } }); w += rnd() < 0.9 ? 1 : 1 + int(4); }
+      if (rnd() < 0.2 && extraW.length) extraW.push(clone(extraW[int(extraW.length)]));
+      if (rnd() < 0.1) extraW.push(null, { weekMonday: "bad", data: {} }, { weekMonday: mon(x0 + 3), data: { isForecast: true } });
+      same("eastExtraWeeks", [mainW, extraW, pick([win, win, win, win, null, {}, { main: win.main }])]);
+    }
+    // 6. a roster code -> its Davenport id
+    [[{ id: "s6", name: "FAK" }, { id: "s2", name: "mab" }], [{ id: "s9" }, null, { id: "s3", name: 5 }, { id: "s6", name: "Fak" }], [], null]
+      .forEach((ro) => ["FAK", "fak", "MAB", "", null, "XYZ"].forEach((c) => same("eastResolveFakId", [ro, c])));
+    // 7. the three Davenport reads: the same requests in the same order and the same result (fetchedAt aside), failures alike
+    const RAW = ef.EAST_PROJECT.url + "/rest/v1/";
+    const respond = (sc, p) => {
+      const parts = p.split("?"), table = parts[0], q = new URLSearchParams(parts[1] || "");
+      if (table === "schedule_weeks") {
+        if (sc.weeksStatus !== 200) return { status: sc.weeksStatus, body: "boom" };
+        const lim = q.getAll("week_monday");
+        return { status: 200, body: sc.weeks.filter((r) => r.week_monday >= lim[0].slice(4) && r.week_monday <= lim[1].slice(4)) };
+      }
+      if (table === "call_schedule_data") {
+        const surgeons = [{ id: "s6", name: "FAK" }, { id: "s2", name: "MAB" }, { id: "s3", name: "bda" }];
+        if (sc.roster === "missing") return { status: 200, body: [] };
+        if (sc.roster === "string") return { status: 200, body: [{ data: J({ surgeons }) }] };
+        if (sc.roster === "badjson") return { status: 200, body: [{ data: "{bad" }] };
+        if (sc.roster === "none") return { status: 200, body: [{ data: {} }] };
+        if (sc.roster === "fail") return { status: 503, body: "down" };
+        return { status: 200, body: [{ data: { surgeons } }] };
+      }
+      if (table === "time_off") {
+        if (sc.timeOffStatus === "nonarray") return { status: 200, body: { x: 1 } };
+        if (sc.timeOffStatus !== 200) return { status: sc.timeOffStatus, body: "nope" };
+        return { status: 200, body: sc.timeOff };
+      }
+      return { status: 404, body: "no table" };
+    };
+    for (let t = 0; t < 120; t++) {
+      const base = int(150) - 10, len = int(40);
+      const sc = {
+        weeks: Array.from({ length: 30 }, (_, q) => ({ week_monday: mon(base - 5 + q * (rnd() < 0.9 ? 1 : 2)), data: rnd() < 0.2 ? J({ dayCall: "s6" }) : { dayCall: pick(["s6", "s2"]) } })),
+        roster: pick(["ok", "ok", "ok", "string", "missing", "badjson", "none", "fail"]),
+        weeksStatus: pick([200, 200, 200, 200, 200, 500]),
+        timeOffStatus: pick([200, 200, 200, 200, 500, "nonarray"]),
+        timeOff: Array.from({ length: int(6) }, () => toRow()).filter(Boolean),
+      };
+      const from = pick([mon(base), mon(base), "2026-1-5"]), to = mon(base + len);
+      const opts = pick([undefined, {}, { vacationCodes: ["FAK"] }, { codes: ["FAK"], vacationCodes: ["fak", "XYZ"] }, { codes: ["mab"] },
+        { vacationCodes: ["FAK"], vacationsTo: pick([null, "bad", ymd(idx(to) + 5), ymd(idx(to) + 6), ymd(idx(to) + 400)]) }]);
+      const efCalls = [], mCalls = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (url, init) => {
+        const p = String(url).slice(RAW.length);
+        efCalls.push(((init && init.method) || "GET") + " " + p);
+        const r = respond(sc, p), text = typeof r.body === "string" ? r.body : J(r.body);
+        return { ok: r.status >= 200 && r.status < 300, status: r.status, text: async () => text, json: async () => JSON.parse(text) };
+      };
+      let a, b;
+      try { a = await ef.fetchEastWeeks(from, to, clone(opts)); } catch (e) { a = "throws"; } finally { globalThis.fetch = realFetch; }
+      const getJson = async (p) => { mCalls.push("GET " + p); const r = respond(sc, p); if (r.status < 200 || r.status >= 300) throw new Error("HTTP " + r.status); if (!Array.isArray(r.body)) throw new Error("non-array"); return clone(r.body); };
+      try { b = await M.eastFetchWeeks(from, to, clone(opts), getJson); } catch (e) { b = "throws"; }
+      const strip = (x) => { if (!x || typeof x !== "object") return x; const c = clone(x); delete c.fetchedAt; if (c.vacationsError) c.vacationsError = "error"; return c; };
+      note("fetch " + from + ".." + to + " " + J(opts), J(strip(b)), J(strip(a)));
+      note("requests " + from + ".." + to, J(mCalls), J(efCalls));
+      if (b && typeof b === "object" && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(b.fetchedAt)) mm.push("eastFetchWeeks: fetchedAt is not an ISO stamp: " + b.fetchedAt);
+    }
+    // 8. Central today (helpers.js todayCentral reads toLocaleDateString en-CA, America/Chicago) - both DST days, year ends
+    const inst = [];
+    for (let h = 0; h < 96; h++) inst.push(Date.UTC(2026, 2, 7, h), Date.UTC(2026, 9, 31, h), Date.UTC(2026, 11, 31, h), Date.UTC(2027, 2, 13, h));
+    for (let t = 0; t < 400; t++) inst.push(Date.UTC(2025, 0, 1) + int(6 * 365) * 86400000 + int(86400) * 1000);
+    inst.forEach((ms) => note("centralYmd " + new Date(ms).toISOString(), J(M.centralYmd(new Date(ms))), J(new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/Chicago" }))));
+    const off = [new Date(2026, 0, 15).getTimezoneOffset(), new Date(2026, 6, 15).getTimezoneOffset()];
+    process.stdout.write(J({ off, n, count: mm.length, mismatches: mm.slice(0, 8), digest: crypto.createHash("sha256").update(outs.join("\n")).digest("hex") }));
+  } catch (e) { process.stdout.write(J({ error: String(e && e.stack || e).slice(0, 600) })); }
+}
+const ER_CHILD = "const ER_API = " + JSON.stringify(ER_API) + ";\n(" + erParityChild.toString() + ")();";
+const ER_ZONES = [["UTC", [0, 0]], ["America/Chicago", [360, 300]], ["Asia/Tokyo", [-540, -540]], ["Pacific/Kiritimati", [-840, -840]], ["Pacific/Pago_Pago", [660, 660]], ["Australia/Lord_Howe", [-660, -630]]];
+const erInZone = (tz, mutant) => {
+  const r = cp.spawnSync(process.execPath, ["-e", ER_CHILD, ROOT].concat(mutant ? ["mutant"] : []), { env: Object.assign({}, process.env, { TZ: tz }), encoding: "utf8", maxBuffer: 1 << 24, timeout: 300000 });
+  assert.strictEqual(r.status, 0, "the " + tz + " child ran: " + String(r.stderr || "").slice(0, 400));
+  const out = JSON.parse(r.stdout);
+  assert.ok(!out.error, tz + ": " + out.error);
+  return out;
+};
+check("A2 (critic A9): behaviour equality - the @eastRefresh mirror equals east-feed.js (eastRefreshWindows / efMonday / the date steps every day 2025-10-02..2031-03-15, eastMergeRanges, vacationsFromTimeOff, attachVacationsToWeeks, keepCachedVacations, planVacationCache, eastVacations, toEastFeedRows, coverageOf, efIsForecastRow, eastExtraWeeks, eastResolveFakId, fetchEastWeeks' three reads request for request) and centralYmd equals todayCentral's reading, in child processes under UTC, America/Chicago, Asia/Tokyo, Pacific/Kiritimati (+14), Pacific/Pago_Pago (-11) and Australia/Lord_Howe (+10:30 / +11); the mirror's own output is identical in all six", () => {
+  const digests = [];
+  ER_ZONES.forEach(([tz, off]) => {
+    const out = erInZone(tz, false);
+    assert.deepStrictEqual(out.off, off, "the child really runs in " + tz + " (its January / July offsets)");
+    assert.ok(out.n > 10000, tz + ": the battery is real (" + out.n + " comparisons)");
+    assert.deepStrictEqual(out.mismatches, [], tz + ": " + out.count + " mismatch(es)");
+    digests.push([tz, out.digest]);
+  });
+  digests.forEach(([tz, d]) => assert.strictEqual(d, digests[0][1], "the mirror's output under " + tz + " equals its output under " + digests[0][0] + " (UTC arithmetic: no zone dependence)"));
+});
+check("A2 (critic A9): the time-zone variants have teeth - a mutant mirror with a local getDay() in efMonday is caught under America/Chicago and Pacific/Pago_Pago (west of UTC) and passes under UTC (where local = UTC), so the zones, not luck, carry the proof", () => {
+  assert.ok(/d\.getUTCDay\(\)/.test(blockOf(erSrc, "east-feed-refresh", "eastRefresh")), "efMonday reads getUTCDay() (the mutation target)");
+  ["America/Chicago", "Pacific/Pago_Pago"].forEach((tz) => assert.ok(erInZone(tz, true).count > 0, "the mutant is caught under " + tz));
+  assert.strictEqual(erInZone("UTC", true).count, 0, "under UTC the mutant is indistinguishable (local = UTC)");
+});
+// The app's own predicate and expression, evaluated as written in index-source.html.
+const appEastVacationPerson = (() => { const m = /function eastVacationPerson\(s, ef\) \{\n[^\n]*\n\}/.exec(appSrc); return m ? new Function(m[0] + "\nreturn eastVacationPerson;")() : null; })();
+const APP_CODES_LINES = "      const vacationCodes = surgeons.filter(s => {\n        const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;\n        return eastVacationPerson(s, ef);\n      }).map(s => String(s.code).toUpperCase());";
+check("A2: eastFeedPerson / eastVacationCodes = the in-app refresh's vacationCodes (the app's eastVacationPerson over its roster, in roster order, upper-cased) and @eastCalendar's eastFeedPerson, over a roster family (Khan, Fierce's derived-weeks feature, an outside surgeon, no code, an inactive East person, lower-case codes)", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  assert.ok(appEastVacationPerson, "index-source.html's eastVacationPerson is found");
+  assert.ok(appSrc.includes(APP_CODES_LINES), "the in-app refresh still computes vacationCodes with exactly these lines");
+  const appCodes = new Function("surgeons", "surgeonRules", "eastVacationPerson", APP_CODES_LINES + "\nreturn vacationCodes;");
+  const rosters = [
+    [{ id: "s1", code: "FAK" }, { id: "s2", code: "MAB" }, { id: "s5", code: "NF" }],
+    [{ id: "s1", code: "fak", active: false }, { id: "x1", code: "LOC", type: "external" }, { id: "s3", code: "" }, { id: "s4", code: "afp" }],
+    [],
+  ];
+  const rules = [
+    { s1: { eastFeed: { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: false } }, s5: { eastFeed: { enabled: true } } },
+    { s1: { eastFeed: { enabled: true, eastBlocksPrimary: true } }, x1: { eastFeed: { enabled: true, eastBlocksPrimary: true } }, s3: { eastFeed: { enabled: true, eastBlocksBackup: true } }, s4: { eastFeed: { enabled: true, eastBlocksBackup: true } } },
+    {}, null,
+  ];
+  rosters.forEach((ro) => rules.forEach((sr) => {
+    assert.deepStrictEqual(ER.eastVacationCodes(ro, sr), appCodes(ro, sr, appEastVacationPerson), "codes for " + JSON.stringify([ro, sr]).slice(0, 160));
+    ro.forEach((s) => {
+      const efx = sr && sr[s.id] && sr[s.id].eastFeed;
+      assert.strictEqual(ER.eastFeedPerson(s, efx), appEastVacationPerson(s, efx), "predicate for " + JSON.stringify(s));
+      if (eastApi) assert.strictEqual(ER.eastFeedPerson(s, efx), eastApi.eastFeedPerson(s, efx), "= @eastCalendar's eastFeedPerson for " + JSON.stringify(s));
+    });
+  }));
+  assert.deepStrictEqual(ER.eastVacationCodes(rosters[1], rules[1]), ["FAK", "AFP"], "an inactive East person is still read (the in-app refresh reads him too); the outside surgeon and the empty code are not");
+});
+const RULES_SRC = read("rules.js");
+check("A2: eastTrailingRoles = rules.js buildContext's reading (groupRules.dayBeforeRules.trailingEdgeRoles, default [\"primary\"])", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  assert.ok(RULES_SRC.includes("  var dayBefore = groupRules.dayBeforeRules || {};") && RULES_SRC.includes("    trailingEdgeRoles: dayBefore.trailingEdgeRoles || [\"primary\"],"), "rules.js still reads the trailing-edge roles this way");
+  assert.deepStrictEqual(ER.eastTrailingRoles(undefined), ["primary"]);
+  assert.deepStrictEqual(ER.eastTrailingRoles({}), ["primary"]);
+  assert.deepStrictEqual(ER.eastTrailingRoles({ dayBeforeRules: {} }), ["primary"]);
+  assert.deepStrictEqual(ER.eastTrailingRoles({ dayBeforeRules: { trailingEdgeRoles: ["primary", "backup"] } }), ["primary", "backup"]);
+  assert.deepStrictEqual(ER.eastTrailingRoles({ dayBeforeRules: { trailingEdgeRoles: [] } }), [], "an empty list is the scheduler's choice (no trailing edge)");
+});
+check("A2 (critic A7): eastVacationReadGuard - the vacation leg is trusted only when the time_off read worked, every code resolved, and no code answered 0 ranges while the cache holds ranges of it inside the read's window [from, vacationsTo]; a cached range outside that window, an empty cache or a non-empty answer passes; no codes -> nothing to guard", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  const cache = [
+    { week_monday: "2026-08-03", data: { vacations: [{ code: "FAK", start: "2026-08-03", end: "2026-08-07" }] } },
+    { week_monday: "2026-10-26", data: { vacations: [{ code: "FAK", start: "2026-10-26", end: "2026-10-29" }, { code: "MAB", start: "2026-10-27", end: "2026-10-28" }] } },
+    { week_monday: "2026-11-02", data: { isForecast: true, vacations: [{ code: "XYZ", start: "2026-11-03", end: "2026-11-04" }] } },
+  ];
+  const feed = (over) => Object.assign({ weeks: [], vacations: { FAK: [{ start: "2026-10-26", end: "2026-10-30" }] }, vacationsError: null, vacationsTo: "2028-04-17", vacationCodesUnresolved: [] }, over);
+  const g = (f, codes, from) => ER.eastVacationReadGuard(f, cache, codes, from || "2026-09-14");
+  assert.deepStrictEqual(g(feed(), ["FAK"]), { ok: true, problems: [] }, "a normal read");
+  const empty = g(feed({ vacations: { FAK: [] } }), ["FAK"]);
+  assert.strictEqual(empty.ok, false, "0 ranges while the cache holds 2026-10-26..29 in the window -> not trusted");
+  assert.deepStrictEqual(empty.problems, [{ code: "FAK", why: "empty-while-cached", cached: 1 }]);
+  assert.strictEqual(g(feed({ vacations: { FAK: [] } }), ["FAK"], "2026-11-02").ok, true, "the cached range ends before the read's window -> a real 'no vacations' (passes)");
+  assert.strictEqual(g(feed({ vacations: { FAK: [] }, vacationsTo: "2026-10-25" }), ["FAK"]).ok, true, "the cached range starts after the read's horizon -> passes");
+  assert.strictEqual(ER.eastVacationReadGuard(feed({ vacations: { FAK: [] } }), [], ["FAK"], "2026-09-14").ok, true, "an empty cache -> passes");
+  assert.deepStrictEqual(g(feed({ vacations: null, vacationsError: "east-feed: GET time_off failed: HTTP 500" }), ["FAK"]).problems, [{ code: null, why: "read-failed", detail: "east-feed: GET time_off failed: HTTP 500" }], "a failed read");
+  assert.deepStrictEqual(g(feed({ vacations: null, vacationCodesUnresolved: ["FAK"] }), ["fak"]).problems, [{ code: "FAK", why: "unresolved" }], "an unresolved code (the codes compared upper-cased)");
+  assert.deepStrictEqual(g(feed({ vacations: { FAK: [] } }), ["FAK", "MAB"]).problems.map((p) => p.code + ":" + p.why), ["FAK:empty-while-cached", "MAB:missing"], "per code: FAK empty while cached, MAB asked but no list came back");
+  assert.deepStrictEqual(g(feed({ vacations: { FAK: [{ start: "2026-10-26", end: "2026-10-30" }], MAB: [] } }), ["FAK", "MAB"]).problems, [{ code: "MAB", why: "empty-while-cached", cached: 1 }], "the other code's empty answer trips on its own cached range");
+  assert.deepStrictEqual(g(feed({ vacations: { XYZ: [] } }), ["XYZ"]), { ok: true, problems: [] }, "a forecast row's entries are not cache (eastVacations skips them)");
+  assert.deepStrictEqual(g(feed({ vacations: null }), []), { ok: true, problems: [] }, "no codes -> nothing asked, nothing to guard");
+  empty.problems.concat([{ code: null, why: "read-failed", detail: "HTTP 500" }, { code: "FAK", why: "unresolved" }, { code: "MAB", why: "missing" }]).forEach((p) => {
+    const t = ER.eastGuardText(p);
+    assert.ok(typeof t === "string" && t.length > 20 && t.length <= 200, "a guard text for " + p.why + " (<= 200 characters): " + t);
+    assert.ok(/kept/.test(t) && /no review (is )?reset/.test(t), "it says the cache is kept and no review is reset: " + t);
+    if (p.code) assert.ok(t.indexOf(p.code) >= 0, "it names the code: " + t);
+  });
+});
+check("A2 (report section 3, critic A12): the warning days - eastNewRanges keeps the derived rows that are not exactly a range the cache held before (and end today or later); eastShortDays keeps the days silvis_vacation_short_days lists inside a new range with that person off through a derived row only; eastHeldDays lists the published days he holds inside a new range plus a trailing-edge-role day before it; dates only, sorted, from today", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  const roster = [{ id: "s1", code: "FAK" }, { id: "s2", code: "MAB" }];
+  const before = [{ week_monday: "2026-10-26", data: { vacations: [{ code: "FAK", start: "2026-10-26", end: "2026-10-29" }, { code: "FAK", start: "2026-12-21", end: "2026-12-31" }] } }];
+  const derived = [{ person_id: "s1", start_date: "2026-10-26", end_date: "2026-10-30" }, { person_id: "s1", start_date: "2026-12-21", end_date: "2026-12-31" }, { person_id: "s1", start_date: "2026-09-01", end_date: "2026-09-04" }, { person_id: "s9", start_date: "2026-11-02", end_date: "2026-11-03" }];
+  const nr = ER.eastNewRanges(derived, before, roster, "2026-10-16");
+  assert.deepStrictEqual(nr, [{ person_id: "s1", start: "2026-10-26", end: "2026-10-30" }, { person_id: "s9", start: "2026-11-02", end: "2026-11-03" }], "the changed range and a person the roster cannot map (no 'before' for him); the unchanged range and the past one are not new");
+  const short = [{ day: "2026-10-27", derived_only_ids: ["s1"] }, { day: "2026-10-28", derived_only_ids: [] }, { day: "2026-10-29", derived_only_ids: ["s2"] }, { day: "2026-11-20", derived_only_ids: ["s1"] }, { day: "2026-12-22", derived_only_ids: ["s1"] }];
+  assert.deepStrictEqual(ER.eastShortDays(short, nr.slice(0, 1)), ["2026-10-27"], "only a day inside the new range with him off through the derived row alone");
+  const sched = [{ day: "2026-10-25", primary_id: "s1", backup_id: "s3" }, { day: "2026-10-28", primary_id: "s2", backup_id: "s1" }, { day: "2026-10-29", primary_id: "s2", backup_id: "s3" }, { day: "2026-12-22", primary_id: "s1", backup_id: "s2" }];
+  assert.deepStrictEqual(ER.eastHeldDays(nr.slice(0, 1), sched, ["primary"], "2026-10-16"), ["2026-10-25", "2026-10-28"], "his backup day inside the range and his primary the day before");
+  assert.deepStrictEqual(ER.eastHeldDays(nr.slice(0, 1), [{ day: "2026-10-25", primary_id: "s2", backup_id: "s1" }], ["primary"], "2026-10-16"), [], "a BACKUP the day before is no trailing edge by default");
+  assert.deepStrictEqual(ER.eastHeldDays(nr.slice(0, 1), [{ day: "2026-10-25", primary_id: "s2", backup_id: "s1" }], ["primary", "backup"], "2026-10-16"), ["2026-10-25"], "... unless the scheduler's trailing-edge roles include backup");
+  assert.deepStrictEqual(ER.eastHeldDays(nr.slice(0, 1), sched, ["primary"], "2026-10-26"), ["2026-10-28"], "days before today are not listed");
+  assert.deepStrictEqual(ER.eastHeldSpan(nr.slice(0, 1)), { from: "2026-10-25", to: "2026-10-30" }, "the schedule read covers the day before the first start through the last end");
+  assert.strictEqual(ER.eastHeldSpan([]), null);
+});
+check("A2: eastCacheAfter = the cache after a merge-duplicates upsert on week_monday (the planned rows replace their weeks, new weeks join, sorted); eastRangeRows reads the merged ranges per East person (the dryRun's planned picture)", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  const after = ER.eastCacheAfter([{ week_monday: "2026-10-26", data: { a: 1 }, fetched_at: "x" }, { week_monday: "2026-10-12", data: { b: 1 }, fetched_at: "y" }], [{ week_monday: "2026-10-26", data: { a: 2 }, fetched_at: "z" }, { week_monday: "2026-11-02", data: { c: 1 }, fetched_at: "z" }]);
+  assert.deepStrictEqual(after.map((r) => r.week_monday + ":" + JSON.stringify(r.data) + ":" + r.fetched_at), ["2026-10-12:{\"b\":1}:y", "2026-10-26:{\"a\":2}:z", "2026-11-02:{\"c\":1}:z"]);
+  const rows = ER.eastRangeRows([{ week_monday: "2026-10-26", data: { vacations: [{ code: "FAK", start: "2026-10-26", end: "2026-10-29" }, { code: "fak", start: "2026-10-30", end: "2026-10-30" }] } }], [{ id: "s1", code: "FAK" }, { id: "s2", code: "MAB" }], { s1: { eastFeed: { enabled: true, eastBlocksPrimary: true } } });
+  assert.deepStrictEqual(rows, [{ person_id: "s1", start_date: "2026-10-26", end_date: "2026-10-30" }], "merged (touching ranges are one), East people only");
+});
+
+/* ---- the real handler, types stripped, against a fake Silvis + a fake Davenport ---- */
+const ER_URL = "https://fake-project.supabase.test";
+const ER_DAV = ef.EAST_PROJECT.url;
+const ER_KEY = "service-role-key-for-tests";
+const ER_NOW = "2026-10-16T10:30:00.000Z";   // the cron's minute: 05:30 CDT
+const erClone = (x) => JSON.parse(JSON.stringify(x));
+const erMon = (k) => ef.efFmt(ef.efAddD(ef.efParse("2025-12-29"), 7 * k));   // Davenport's first week + k weeks
+let ER_JS = null;
+function erHandlerJs() {
+  if (ER_JS) return ER_JS;
+  const { stripTypeScriptTypes } = require("node:module");
+  assert.strictEqual(typeof stripTypeScriptTypes, "function", "Node's stripTypeScriptTypes runs the TypeScript handler here");
+  const imp = /^import \{ serve \} from "https:\/\/deno\.land\/std@[0-9.]+\/http\/server\.ts";$/m;
+  assert.ok(imp.test(erSrc), "the one import is the std serve");
+  assert.strictEqual((erSrc.match(/^import /mg) || []).length, 1, "no other import");
+  const orig = process.emitWarning;
+  process.emitWarning = function (w, ...rest) { const t = typeof rest[0] === "string" ? rest[0] : rest[0] && rest[0].type; if (t === "ExperimentalWarning") return; return orig.call(process, w, ...rest); };
+  try { ER_JS = stripTypeScriptTypes(erSrc.replace(imp, "")); } finally { process.emitWarning = orig; }
+  return ER_JS;
+}
+function erFakeDate(iso) {
+  const FIXED = Date.parse(iso), RealDate = Date;
+  return class FakeDate extends RealDate { constructor(...a) { if (a.length === 0) super(FIXED); else super(...a); } static now() { return FIXED; } };
+}
+function erHandler(env, w, nowIso, patch) {
+  let handler = null;
+  const say = (...a) => w.logs.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+  const Deno = { env: { get: (k) => (Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined) } };
+  const js = patch ? patch(erHandlerJs()) : erHandlerJs();
+  new Function("Deno", "serve", "fetch", "console", "Date", js)(Deno, (h) => { handler = h; }, erFetch(w), { log: say, warn: say, error: say, info: say }, erFakeDate(nowIso));
+  assert.strictEqual(typeof handler, "function", "the handler registered with serve");
+  return handler;
+}
+const ER_DAV_WEEKS = Array.from({ length: 46 }, (_, k) => ({ week_monday: erMon(k), data: { dayCall: ["s2", "s6", "s3", "s4"][k % 4], nights: { mon: "s6", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: "s7", isBackup: k === 40, isFierceBackup: false, holidayCoverage: null } }));
+const erCachedVac = (m) => (m === "2026-08-03" ? [{ code: "FAK", start: "2026-08-03", end: "2026-08-07" }] : m === "2026-10-26" ? [{ code: "FAK", start: "2026-10-26", end: "2026-10-29" }] : m === "2026-11-09" ? [{ code: "FAK", start: "2026-12-21", end: "2026-12-31" }] : []);
+function erWorld(over) {
+  const w = Object.assign({
+    blob: {
+      roster: [["s1", "Khan", "FAK"], ["s2", "Burchett", "MAB"], ["s3", "Acton", "BDA"], ["s4", "Philip", "AFP"], ["s5", "Fierce", "NF"], ["s6", "Sarkar", "SRK"]].map(([id, name, code]) => ({ id, name, code, active: true })),
+      surgeonRules: { s1: { eastFeed: { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: false } }, s5: { eastFeed: { enabled: true } } },
+      groupRules: { vacations: { minSurgeonsAround: 2 } },
+    },
+    // the cache: Mondays 2026-06-01 .. 2026-11-09, an older payload (dayCall s3), FAK's ranges as an earlier refresh left them
+    cache: Array.from({ length: 24 }, (_, i) => { const m = erMon(22 + i); return { week_monday: m, data: Object.assign({}, ER_DAV_WEEKS[22 + i].data, { dayCall: "s3", vacations: erCachedVac(m) }), fetched_at: "2026-10-10T12:00:00+00:00" }; }),
+    forecast: ["2026-11-02", "2026-11-16", "2026-12-07"].map((m) => ({ week_monday: m, data: { isForecast: true, runs: 100 } })),
+    reviews: [{ person_id: "s1", start: "2026-10-26", end: "2026-10-29", decision: "away" }, { person_id: "s1", start: "2026-08-03", end: "2026-08-07", decision: "home" }, { person_id: "s1", start: "2026-12-21", end: "2026-12-31", decision: "home" }],
+    schedule: [{ day: "2026-10-25", primary_id: "s1", backup_id: "s3" }, { day: "2026-10-28", primary_id: "s2", backup_id: "s1" }, { day: "2026-10-29", primary_id: "s2", backup_id: "s3" }, { day: "2026-12-22", primary_id: "s1", backup_id: "s2" }],
+    shortDays: [{ day: "2026-10-27", around: 1, active: 6, minimum: 2, off_ids: ["s1", "s2", "s3", "s4"], derived_only_ids: ["s1"] }, { day: "2026-10-28", around: 1, active: 6, minimum: 2, off_ids: ["s1", "s2", "s3", "s4"], derived_only_ids: [] }, { day: "2026-11-20", around: 1, active: 6, minimum: 2, off_ids: ["s1", "s2", "s3", "s4"], derived_only_ids: ["s1"] }],
+    davWeeks: ER_DAV_WEEKS,
+    davRoster: [{ id: "s2", name: "MAB" }, { id: "s3", name: "BDA" }, { id: "s4", name: "AFP" }, { id: "s5", name: "NF" }, { id: "s6", name: "FAK" }, { id: "s7", name: "XYZ" }],
+    davTimeOff: [
+      { person_id: "s6", kind: "vacation", start_date: "2026-10-26", end_date: "2026-10-30" },   // changed (the cache has ..10-29)
+      { person_id: "s6", kind: "vacation", start_date: "2026-12-21", end_date: "2026-12-31" },   // rides on the last published week
+      { person_id: "s6", kind: "vacation", start_date: "2026-08-03", end_date: "2026-08-07" },   // ends before the main window
+      { person_id: "s6", kind: "nocall", start_date: "2026-11-03", end_date: "2026-11-03" },
+      { person_id: "s2", kind: "vacation", start_date: "2026-10-26", end_date: "2026-10-30" },   // not asked
+      { person_id: "s6", kind: "vacation", start_date: "2028-06-05", end_date: "2028-06-09" },   // past the read's horizon
+    ],
+    fail: {},
+  }, over || {});
+  ["blob", "cache", "forecast", "reviews", "schedule", "shortDays", "davWeeks", "davRoster", "davTimeOff"].forEach((k) => { w[k] = erClone(w[k]); });
+  w.calls = []; w.logs = []; w.upserts = []; w.audit = []; w.rpc = []; w.feedDeletes = []; w.jsonReads = 0; w.davWeeksReads = 0;
+  return w;
+}
+// the A1 SQL contract, re-stated in JS over the fake tables: the East people, their merged ranges with the exact-match state
+function erPeople(w) {
+  const sr = w.blob.surgeonRules || {};
+  return (w.blob.roster || []).filter((s) => {
+    const e = s && sr[s.id] && sr[s.id].eastFeed;
+    return s && s.id && s.active !== false && s.type !== "external" && s.code && e && e.enabled === true && (e.eastBlocksPrimary === true || e.eastBlocksBackup === true);
+  }).map((s) => ({ id: s.id, code: String(s.code).toUpperCase() }));
+}
+function erRanges(w) {
+  const out = [];
+  erPeople(w).forEach((p) => ef.eastVacations(w.cache, p.code).forEach((r) => {
+    const rv = w.reviews.find((x) => x.person_id === p.id && x.start === r.start && x.end === r.end);
+    out.push({ person_id: p.id, start: r.start, end: r.end, state: rv ? rv.decision : "unreviewed" });
+  }));
+  return out;
+}
+function erReset(w, pFrom) {
+  const cur = erRanges(w), out = [];
+  erPeople(w).forEach((p) => w.reviews.filter((x) => x.person_id === p.id && x.end >= pFrom).sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0)).forEach((x) => {
+    if (cur.some((c) => c.person_id === p.id && c.start === x.start && c.end === x.end)) return;
+    const reason = cur.some((c) => c.person_id === p.id && c.start <= x.end && c.end >= x.start) ? "changed" : "removed";
+    w.reviews = w.reviews.filter((y) => y !== x);
+    out.push({ person_id: x.person_id, start_date: x.start, end_date: x.end, decision: x.decision, reason });
+  }));
+  return out;
+}
+function erFetch(w) {
+  return async (url, init) => {
+    const o = init || {}, u = new URL(String(url)), method = String(o.method || "GET").toUpperCase();
+    const hdr = (k) => { const h = o.headers || {}; const key = Object.keys(h).find((x) => x.toLowerCase() === k.toLowerCase()); return key ? h[key] : null; };
+    const where = u.origin === ER_DAV ? "dav:" : u.origin === ER_URL ? "" : u.origin + " ";
+    w.calls.push({ at: method + " " + where + u.pathname.replace(/^\/rest\/v1\//, ""), origin: u.origin, search: decodeURIComponent(u.search), body: o.body === undefined ? undefined : String(o.body), prefer: hdr("Prefer"), apikey: hdr("apikey"), auth: hdr("Authorization"), signal: o.signal });
+    const out = (x, status) => new Response(x === null ? null : JSON.stringify(x), { status: status || 200, headers: { "Content-Type": "application/json" } });
+    const f = w.fail;
+    if (u.origin === ER_DAV && u.pathname.indexOf("/rest/v1/") === 0) {
+      if (method !== "GET") throw new Error("a write to Davenport: " + method + " " + u.pathname);
+      const table = u.pathname.slice(9), q = u.searchParams;
+      if (table === "schedule_weeks") {
+        w.davWeeksReads++;
+        if (f["dav:weeks"] || f["dav:weeks#" + w.davWeeksReads]) return out({ message: "boom" }, f["dav:weeks"] || f["dav:weeks#" + w.davWeeksReads]);
+        const lim = q.getAll("week_monday").map((x) => x.slice(4));
+        return out(erClone(w.davWeeks.filter((r) => r.week_monday >= lim[0] && r.week_monday <= lim[1])));
+      }
+      if (table === "call_schedule_data") { if (f["dav:roster"]) return out({ message: "boom" }, f["dav:roster"]); return out([{ data: { surgeons: erClone(w.davRoster) } }]); }
+      if (table === "time_off") {
+        if (f["dav:time_off"] === "empty") return out([]);
+        if (f["dav:time_off"]) return out({ message: "boom" }, f["dav:time_off"]);
+        assert.strictEqual(q.get("kind"), "eq.vacation", "the time_off read asks for vacations only");
+        const ids = q.get("person_id").slice(4, -1).split(","), gte = q.get("end_date").slice(4), lte = q.get("start_date").slice(4);
+        return out(erClone(w.davTimeOff.filter((r) => r.kind === "vacation" && ids.indexOf(r.person_id) >= 0 && r.end_date >= gte && r.start_date <= lte)));
+      }
+      throw new Error("the fake Davenport does not serve " + table);
+    }
+    if (u.origin === ER_URL && u.pathname.indexOf("/rest/v1/") === 0) {
+      const table = u.pathname.slice(9), q = u.searchParams, body = o.body ? JSON.parse(o.body) : null;
+      const within = (lim, m) => m >= lim[0] && m <= lim[1];
+      if (table === "call_schedule_data" && method === "GET") { if (f.blob) return out({ message: "boom" }, f.blob); return out([{ data: erClone(w.blob) }]); }
+      if (table === "east_feed" && method === "GET") { if (f.cache) return out({ message: "boom" }, f.cache); if (f.reload && w.calls.filter((c) => c.at === "GET east_feed").length > 1) return out({ message: "boom" }, f.reload); return out(erClone(w.cache).sort((a, b) => (a.week_monday < b.week_monday ? -1 : 1))); }
+      if (table === "east_feed" && method === "POST") {
+        w.upserts.push(erClone(body));
+        if (f["upsert#" + w.upserts.length]) return out({ message: "boom" }, f["upsert#" + w.upserts.length]);
+        assert.ok(/resolution=merge-duplicates/.test(o.headers.Prefer || ""), "the cache write is a merge-duplicates upsert");
+        body.forEach((r) => { const i = w.cache.findIndex((x) => x.week_monday === r.week_monday); if (i >= 0) w.cache[i] = erClone(r); else w.cache.push(erClone(r)); });
+        return new Response(null, { status: 201 });
+      }
+      if (table === "east_feed") { w.feedDeletes.push(method + " " + u.search); return out([]); }
+      if (table === "east_forecast" && method === "DELETE") {
+        if (f.prune) return out({ message: "boom" }, f.prune);
+        const lim = q.getAll("week_monday").map((x) => x.slice(4));
+        const gone = w.forecast.filter((r) => within(lim, r.week_monday));
+        w.forecast = w.forecast.filter((r) => !within(lim, r.week_monday));
+        return out(erClone(gone));
+      }
+      if (table === "rpc/east_vacation_reset_stale" && method === "POST") {
+        w.rpc.push(["reset", body]);
+        if (f.reset) return out({ code: "PGRST202", message: "Could not find the function public.east_vacation_reset_stale(p_from) in the schema cache" }, f.reset);
+        return out(erReset(w, body.p_from));
+      }
+      if (table === "rpc/silvis_derived_vacations" && method === "POST") { w.rpc.push(["derived", body]); if (f.derived) return out({ message: "boom" }, f.derived); return out(erRanges(w).filter((r) => r.state !== "home").map((r) => ({ person_id: r.person_id, start_date: r.start, end_date: r.end }))); }
+      if (table === "rpc/silvis_vacation_short_days" && method === "POST") { w.rpc.push(["short", body]); return out(erClone(w.shortDays)); }
+      if (table === "schedule_days" && method === "GET") { const lim = q.getAll("day").map((x) => x.slice(4)); return out(erClone(w.schedule.filter((r) => within(lim, r.day)))); }
+      if (table === "audit_log" && method === "POST") { w.audit.push(body); if (f.audit) return out({ message: "boom" }, f.audit); return new Response(null, { status: 201 }); }
+      throw new Error("the fake PostgREST does not serve " + method + " " + table + u.search);
+    }
+    throw new Error("unexpected fetch " + method + " " + u.href);
+  };
+}
+async function erCall(w, opts) {
+  const o = opts || {};
+  const env = Object.assign({ SUPABASE_URL: ER_URL, SUPABASE_SERVICE_ROLE_KEY: ER_KEY, CRON_SECRET: SECRET }, o.env || {});
+  const h = erHandler(env, w, o.now || ER_NOW, o.patch);
+  const headers = new Headers();
+  if (o.secret !== null) headers.set("x-cron-secret", o.secret === undefined ? SECRET : o.secret);
+  const req = { method: o.method || "POST", url: ER_URL + "/functions/v1/east-feed-refresh", headers, json: async () => { w.jsonReads++; return o.body === undefined ? {} : o.body; } };
+  const res = await h(req);
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch (e) { body = null; }
+  return { status: res.status, text, body };
+}
+// What the IN-APP refresh writes for the same world, re-stated with east-feed.js from the app's own lines (pinned below).
+async function erClientExpect(w0) {
+  const w = erWorld(erClone({ blob: w0.blob, cache: w0.cache, forecast: w0.forecast, reviews: w0.reviews, schedule: w0.schedule, shortDays: w0.shortDays, davWeeks: w0.davWeeks, davRoster: w0.davRoster, davTimeOff: w0.davTimeOff, fail: w0.fail }));
+  const win = ef.eastRefreshWindows("2026-10-16");
+  const codes = new Function("surgeons", "surgeonRules", "eastVacationPerson", APP_CODES_LINES + "\nreturn vacationCodes;")(w.blob.roster, w.blob.surgeonRules, appEastVacationPerson);
+  const RealDate = global.Date, realFetch = globalThis.fetch;
+  global.Date = erFakeDate(ER_NOW); globalThis.fetch = erFetch(w);
+  try {
+    const feed = await ef.fetchEastWeeks(win.main.from, win.main.to, { vacationCodes: codes });
+    const eastFeedRows = erClone(w.cache);
+    const plan = feed.vacations ? ef.planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };
+    const weekRows = ef.toEastFeedRows(plan.weeks).map((r) => ({ ...r, fetched_at: feed.fetchedAt }));
+    const rewrittenRows = plan.rewritten.map((x) => ({ week_monday: x.weekMonday, data: x.data, fetched_at: x.fetchedAt || feed.fetchedAt }));
+    const mainRows = weekRows.concat(rewrittenRows);
+    const cacheRows = erClone(w.cache);
+    mainRows.forEach((r) => { const i = cacheRows.findIndex((x) => x.week_monday === r.week_monday); if (i >= 0) cacheRows[i] = erClone(r); else cacheRows.push(erClone(r)); });
+    const more = await ef.fetchEastWeeks(win.extra.from, win.extra.to, {});
+    const sel = ef.eastExtraWeeks(feed.weeks, more.weeks, win);
+    const extraRows = ef.toEastFeedRows(ef.keepCachedVacations(sel.weeks, cacheRows)).map((r) => ({ ...r, fetched_at: more.fetchedAt }));
+    return { win, codes, feed, plan, mainRows, coverage: ef.coverageOf(feed.weeks), extraRows, sel, davCalls: w.calls.map((c) => c.at + c.search) };
+  } finally { global.Date = RealDate; globalThis.fetch = realFetch; }
+}
+const erAt = (w) => w.calls.map((c) => c.at);
+const erCommon = (w, r, label) => {
+  w.calls.forEach((c) => {
+    if (c.origin === ER_DAV) {
+      assert.ok(/^GET /.test(c.at), label + ": Davenport is read only: " + c.at);
+      assert.strictEqual(c.apikey, ef.EAST_PROJECT.anonKey, label + ": Davenport with its public anon key (the same as east-feed.js)");
+      assert.strictEqual(c.auth, "Bearer " + ef.EAST_PROJECT.anonKey, label + ": Davenport Authorization");
+      assert.ok(c.signal instanceof AbortSignal, label + ": every Davenport read carries a timeout signal: " + c.at);
+    } else {
+      assert.strictEqual(c.origin, ER_URL, label + ": no other host: " + c.at);
+      assert.ok(c.apikey === ER_KEY && c.auth === "Bearer " + ER_KEY, label + ": Silvis with the service role: " + c.at);
+      assert.ok(c.signal instanceof AbortSignal, label + ": every Silvis call carries a timeout signal: " + c.at);
+    }
+  });
+  assert.deepStrictEqual(w.feedDeletes, [], label + ": never a delete of a cached week");
+  const all = r.text + JSON.stringify(w.audit) + w.logs.join("\n");
+  assert.ok(all.indexOf(SECRET) < 0 && all.indexOf(ER_KEY) < 0, label + ": no secret in the answer, the audit row or the log");
+};
+const ER_LIVE_ORDER = ["GET call_schedule_data", "GET east_feed", "GET dav:schedule_weeks", "GET dav:call_schedule_data", "GET dav:time_off",
+  "POST east_feed", "DELETE east_forecast", "GET east_feed", "POST rpc/east_vacation_reset_stale",
+  "GET dav:schedule_weeks", "GET dav:call_schedule_data", "POST east_feed",
+  "POST rpc/silvis_derived_vacations", "POST rpc/silvis_vacation_short_days", "GET schedule_days", "POST audit_log"];
+acheck("A2 handler: the x-cron-secret gate comes FIRST and fails closed - no header, a wrong one, an empty one, an unset CRON_SECRET (even with an empty header) and an OPTIONS preflight all answer 401 with nothing fetched and the body unread; past the gate a GET is 405, a non-boolean dryRun 400 and a missing service configuration 500, each with nothing fetched", async () => {
+  for (const [label, opts] of [["no header", { secret: null }], ["a wrong header", { secret: "b-32-character-secret-for-tests!" }], ["an empty header", { secret: "" }],
+    ["CRON_SECRET unset, an empty header", { secret: "", env: { CRON_SECRET: "" } }], ["CRON_SECRET unset, a header", { env: { CRON_SECRET: undefined } }], ["an OPTIONS preflight", { secret: null, method: "OPTIONS" }]]) {
+    const w = erWorld();
+    const r = await erCall(w, opts);
+    assert.strictEqual(r.status, 401, label);
+    assert.deepStrictEqual(r.body, { error: "unauthorized" }, label + ": nothing else is said");
+    assert.strictEqual(w.calls.length + w.jsonReads, 0, label + ": nothing fetched, the body not read");
+  }
+  for (const [label, opts, status] of [["GET", { method: "GET" }, 405], ["dryRun a string", { body: { dryRun: "yes" } }, 400], ["dryRun 1", { body: { dryRun: 1 } }, 400], ["no SUPABASE_URL", { env: { SUPABASE_URL: "" } }, 500], ["no service key", { env: { SUPABASE_SERVICE_ROLE_KEY: "" } }, 500]]) {
+    const w = erWorld();
+    const r = await erCall(w, opts);
+    assert.strictEqual(r.status, status, label + ": " + r.text.slice(0, 200));
+    assert.strictEqual(w.calls.length, 0, label + ": nothing fetched");
+  }
+});
+acheck("A2 handler: a live run reads and writes in the in-app order (Silvis blob + cache, Davenport weeks / roster / time_off, the east_feed upsert, the forecast prune, the cache re-read, the ONE reset RPC with p_from = the main window's Monday, the extra leg's Davenport read + upsert, the warning reads, the audit row); the two upserts EQUAL what the in-app refresh writes for the same world (east-feed.js over the app's own lines), the Davenport requests are fetchEastWeeks' own, request for request", async () => {
+  const w = erWorld(), exp = await erClientExpect(w);
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(erAt(w), ER_LIVE_ORDER, "the order");
+  erCommon(w, r, "live");
+  assert.deepStrictEqual(w.calls.filter((c) => c.origin === ER_DAV).map((c) => c.at + c.search), exp.davCalls, "the Davenport requests = fetchEastWeeks' (main with the codes, then the extra window without)");
+  assert.deepStrictEqual(exp.codes, ["FAK"], "fixture: Khan is the East vacation person (Fierce's derived-weeks feature is not)");
+  assert.deepStrictEqual(w.upserts[0], exp.mainRows, "the main upsert = the in-app refresh's rows (the weeks fetched with their vacations + the rewritten older rows)");
+  assert.deepStrictEqual(w.upserts[1], exp.extraRows, "the extra upsert = the in-app extra leg's rows (12 months back, each keeping its cached list)");
+  assert.strictEqual(w.upserts[0].length, 9, "fixture: the nine published weeks 2026-09-14 .. 2026-11-09");
+  assert.strictEqual(w.upserts[1].length, 37, "fixture: the 37 published weeks 2025-12-29 .. 2026-09-07");
+  assert.deepStrictEqual(w.upserts[0].find((x) => x.week_monday === "2026-10-26").data.vacations, [{ code: "FAK", start: "2026-10-26", end: "2026-10-30" }], "the changed range is cached");
+  assert.deepStrictEqual(w.upserts[0].find((x) => x.week_monday === "2026-11-09").data.vacations, [{ code: "FAK", start: "2026-12-21", end: "2026-12-31" }], "the range past the published weeks rides on the last one");
+  assert.deepStrictEqual(w.upserts[1].find((x) => x.week_monday === "2026-08-03").data.vacations, [{ code: "FAK", start: "2026-08-03", end: "2026-08-07" }], "an older week keeps its cached list");
+  assert.ok(w.upserts[1].filter((x) => x.week_monday < "2026-06-01").every((x) => x.data.vacations === undefined), "a week new to the cache gets no vacations key");
+  assert.ok(w.upserts[0].every((x) => x.fetched_at === ER_NOW), "fetched_at = the run's clock");
+  const del = w.calls.find((c) => c.at === "DELETE east_forecast");
+  assert.strictEqual(del.search, "?week_monday=gte.2026-09-14&week_monday=lte.2026-11-15", "the prune is the published coverage of the weeks fetched");
+  assert.strictEqual(del.prefer, "return=representation", "the deleted rows come back to be counted");
+  assert.deepStrictEqual(w.forecast.map((x) => x.week_monday), ["2026-11-16", "2026-12-07"], "the forecast outside the coverage stays");
+  assert.deepStrictEqual(w.rpc.find((x) => x[0] === "reset")[1], { p_from: "2026-09-14" }, "the reset floor = the main window's Monday (the in-app refresh's fromMon)");
+  assert.deepStrictEqual(w.reviews.map((x) => x.start + ".." + x.end + ":" + x.decision), ["2026-08-03..2026-08-07:home", "2026-12-21..2026-12-31:home"], "the stale 'away' review of the changed range is reset; the one before the floor and the exact one stay");
+  assert.deepStrictEqual(w.rpc.find((x) => x[0] === "short")[1], { p_from: "2026-10-16", p_to: null }, "the short days from today on");
+  assert.strictEqual(w.calls.find((c) => c.at === "GET schedule_days").search, "?select=day,primary_id,backup_id&day=gte.2026-10-25&day=lte.2026-10-30&order=day.asc", "the published days around the new range");
+  const b = r.body;
+  assert.strictEqual(b.ok, true, "ok: " + JSON.stringify(b.errors));
+  assert.strictEqual(b.error, null);
+  assert.strictEqual(b.dryRun, false);
+  assert.deepStrictEqual([b.today, b.from, b.to, b.weeks, b.forecastRowsDeleted], ["2026-10-16", "2026-09-14", "2027-04-12", 9, 1]);
+  assert.deepStrictEqual(b.reviewResets, [{ person_id: "s1", start: "2026-10-26", end: "2026-10-29", reason: "changed", decision: "away" }]);
+  assert.deepStrictEqual([b.extra.from, b.extra.to, b.extra.weeks, b.extra.past, b.extra.ahead, b.extra.skipped, b.extra.error], ["2025-10-13", "2029-10-15", 37, 37, 0, 0, null]);
+  assert.deepStrictEqual(b.newRanges, [{ person_id: "s1", start: "2026-10-26", end: "2026-10-30" }]);
+  assert.deepStrictEqual(b.shortDays, ["2026-10-27"]);
+  assert.deepStrictEqual(b.heldDays, ["2026-10-25", "2026-10-28"]);
+  assert.deepStrictEqual(b.vacations, { codes: ["FAK"], ranges: 2, to: exp.feed.vacationsTo, rewrittenWeeks: 0, unresolved: [], error: null, trusted: true, guard: [] });
+  assert.strictEqual(b.audit, "inserted");
+  assert.strictEqual(w.audit.length, 1, "ONE audit row");
+  const a = w.audit[0];
+  assert.deepStrictEqual([a.actor_id, a.actor_name, a.action], ["cron", "east-feed-refresh (cron)", "east.refresh"], "the cron's audit row");
+  assert.ok(typeof a.detail.summary === "string" && /^Server refresh of the East feed \(cron\): 9 published week\(s\) between 2026-09-14 and 2027-04-12/.test(a.detail.summary), a.detail.summary);
+  assert.ok(!("dryRun" in a.detail) && !("audit" in a.detail), "the detail carries the result, not the run's own flags");
+  ["source", "ok", "error", "errors", "today", "from", "to", "weeks", "coverage", "forecastRowsDeleted", "forecastDeleteError", "vacations", "reviewResets", "extra", "newRanges", "shortDays", "heldDays", "fetchedAt"].forEach((k) => assert.ok(k in a.detail, "the audit detail carries " + k));
+  assert.strictEqual(a.detail.source, "cron");
+  assert.strictEqual(a.detail.ok, true);
+  assert.strictEqual(a.detail.fetchedAt, ER_NOW);
+  assert.ok(JSON.stringify(a.detail).length < 8000, "a small row");
+});
+acheck("A2 handler: dryRun reads everything (Silvis, Davenport's main and extra windows), plans, and writes NOTHING - no upsert, no prune, no reset, no warning reads, no audit row; it answers what a live run would write (the same row counts) and the planned new ranges", async () => {
+  const w = erWorld(), exp = await erClientExpect(w);
+  const r = await erCall(w, { body: { dryRun: true } });
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(erAt(w), ["GET call_schedule_data", "GET east_feed", "GET dav:schedule_weeks", "GET dav:call_schedule_data", "GET dav:time_off", "GET dav:schedule_weeks", "GET dav:call_schedule_data"], "reads only");
+  erCommon(w, r, "dryRun");
+  assert.deepStrictEqual([w.upserts.length, w.audit.length, w.rpc.length], [0, 0, 0], "nothing written, no RPC");
+  assert.ok(/^\{"dryRun":true,/.test(r.text), "the answer starts with \"dryRun\":true (the post-deploy proof reads the first 400 characters)");
+  assert.deepStrictEqual(r.body.would, { upsert: exp.mainRows.length, weekRows: 9, rewrittenRows: 0, prune: { from: "2026-09-14", to: "2026-11-15" }, reset: { p_from: "2026-09-14" }, extra: exp.extraRows.length });
+  assert.deepStrictEqual(r.body.newRanges, [{ person_id: "s1", start: "2026-10-26", end: "2026-10-30" }], "the planned new range (review state not applied in a dry run)");
+  assert.strictEqual(r.body.ok, true);
+  assert.ok(/^Server refresh of the East feed, DRY RUN \(nothing written\)/.test(r.body.summary), r.body.summary);
+  assert.strictEqual(r.body.audit, undefined, "no audit row in a dry run");
+});
+acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the cache holds his ranges in the window (an RLS-blocked read looks the same) - the cache keeps every list (the in-app plan would have cleared them), no review is reset, the weeks and the extra leg still refresh, ok:false names FAK; a cached range only BEFORE the window is a real 'none' (trusted, the reset runs)", async () => {
+  const w = erWorld({ fail: { "dav:time_off": "empty" } }), exp = await erClientExpect(w);
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  erCommon(w, r, "A7");
+  assert.ok(!w.rpc.some((x) => x[0] === "reset"), "no reset RPC");
+  assert.strictEqual(w.reviews.length, 3, "every review stays");
+  const cachedLists = {};
+  erWorld().cache.forEach((x) => { cachedLists[x.week_monday] = x.data.vacations; });
+  w.upserts[0].forEach((x) => assert.deepStrictEqual(x.data.vacations, cachedLists[x.week_monday], "week " + x.week_monday + " keeps its cached list"));
+  assert.deepStrictEqual(exp.mainRows.find((x) => x.week_monday === "2026-10-26").data.vacations, [], "the in-app plan over the same answer would have cleared it (why the guard exists)");
+  assert.strictEqual(w.upserts.length, 2, "the extra leg still runs");
+  assert.strictEqual(r.body.ok, false);
+  assert.ok(/FAK/.test(r.body.error) && /kept/.test(r.body.error), r.body.error);
+  assert.deepStrictEqual(r.body.vacations.guard, [{ code: "FAK", why: "empty-while-cached", cached: 2 }]);
+  assert.strictEqual(r.body.vacations.trusted, false);
+  assert.ok(/not trusted/.test(r.body.reviewResetSkipped), r.body.reviewResetSkipped);
+  assert.strictEqual(w.audit[0].detail.ok, false, "the audit row says so");
+  // only a range before the window: a real 'no vacations' - trusted, the reset runs
+  const w2 = erWorld({ fail: { "dav:time_off": "empty" } });
+  w2.cache.forEach((x) => { if (x.week_monday !== "2026-08-03") x.data.vacations = []; });
+  w2.reviews = w2.reviews.filter((x) => x.start === "2026-08-03");
+  const r2 = await erCall(w2, {});
+  assert.strictEqual(r2.body.ok, true, JSON.stringify(r2.body.errors));
+  assert.ok(w2.rpc.some((x) => x[0] === "reset"), "the reset runs");
+});
+acheck("A2 handler: Davenport's time_off read fails (HTTP 500) or the code is not in the Davenport roster - the in-app failure path (each fetched week keeps its cached list - the same rows the in-app refresh writes), no reset, ok:false naming it; the weeks and the extra leg still refresh", async () => {
+  for (const [label, over, re] of [["time_off 500", { fail: { "dav:time_off": 500 } }, /time_off read FAILED/], ["FAK unresolved", { davRoster: [{ id: "s2", name: "MAB" }] }, /FAK is not in the Davenport roster/]]) {
+    const w = erWorld(over), exp = await erClientExpect(w);
+    const r = await erCall(w, {});
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 300));
+    erCommon(w, r, label);
+    assert.deepStrictEqual(w.upserts[0], exp.mainRows, label + ": the in-app failure path's rows");
+    assert.ok(!w.rpc.some((x) => x[0] === "reset"), label + ": no reset");
+    assert.strictEqual(w.upserts.length, 2, label + ": the extra leg runs");
+    assert.strictEqual(r.body.ok, false, label);
+    assert.ok(re.test(r.body.error), label + ": " + r.body.error);
+  }
+});
+acheck("A2 handler: a failed read the plan needs (Davenport's weeks or roster, the Silvis blob or cache) or a failed cache write answers 502 with NOTHING written to the cache - no prune, no reset - and the audit row ok:false with the error (<= 200 characters); a failed audit write is in the answer and the log, never silent", async () => {
+  for (const [label, over, order, re] of [
+    ["Davenport weeks 500", { fail: { "dav:weeks": 500 } }, ["GET call_schedule_data", "GET east_feed", "GET dav:schedule_weeks", "POST audit_log"], /Davenport read failed[^\n]*HTTP 500/],
+    ["Davenport roster 503", { fail: { "dav:roster": 503 } }, ["GET call_schedule_data", "GET east_feed", "GET dav:schedule_weeks", "GET dav:call_schedule_data", "POST audit_log"], /Davenport read failed[^\n]*HTTP 503/],
+    ["the Silvis blob 500", { fail: { blob: 500 } }, ["GET call_schedule_data", "POST audit_log"], /Silvis read failed/],
+    ["the cache read 500", { fail: { cache: 500 } }, ["GET call_schedule_data", "GET east_feed", "POST audit_log"], /Silvis read failed/],
+    ["the upsert 500", { fail: { "upsert#1": 500 } }, ["GET call_schedule_data", "GET east_feed", "GET dav:schedule_weeks", "GET dav:call_schedule_data", "GET dav:time_off", "POST east_feed", "POST audit_log"], /couldn't cache them/],
+  ]) {
+    const w = erWorld(over), cache0 = erClone(w.cache);
+    const r = await erCall(w, {});
+    assert.strictEqual(r.status, 502, label + ": " + r.text.slice(0, 300));
+    assert.deepStrictEqual(erAt(w), order, label + ": the order");
+    erCommon(w, r, label);
+    assert.deepStrictEqual(w.cache, cache0, label + ": the cache is unchanged");
+    assert.strictEqual(r.body.ok, false);
+    assert.ok(re.test(r.body.error) && r.body.error.length <= 200, label + ": " + r.body.error);
+    assert.strictEqual(w.audit.length, 1, label + ": the audit row");
+    assert.deepStrictEqual([w.audit[0].actor_id, w.audit[0].detail.ok, w.audit[0].detail.error], ["cron", false, r.body.error], label + ": the audit row carries ok:false and the error");
+    assert.ok(/FAILED/.test(w.audit[0].detail.summary), label + ": " + w.audit[0].detail.summary);
+  }
+  const w = erWorld({ fail: { "dav:weeks": 500, audit: 500 } });
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 502);
+  assert.ok(/^failed: /.test(r.body.audit), "the answer names the failed audit write: " + r.body.audit);
+  assert.ok(w.logs.some((l) => /audit_log insert failed/.test(l)), "and the log");
+});
+acheck("A2 handler: the failure that stops a run leads errors and error even after a guard problem was recorded (A7 trip, then the upsert fails -> 502, error = the upsert's); an UNEXPECTED exception inside the run answers 500 and still writes its ok:false audit row (FAILED, 'unexpected error'); a dry run that stops writes no audit row", async () => {
+  const w = erWorld({ fail: { "dav:time_off": "empty", "upsert#1": 500 } });
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 502, r.text.slice(0, 300));
+  assert.ok(/^fetched 9 week\(s\) but couldn't cache them/.test(r.body.error), "the stop leads: " + r.body.error);
+  assert.ok(/FAK/.test(r.body.errors[1]), "the guard problem follows: " + r.body.errors[1]);
+  assert.strictEqual(w.audit.length, 1);
+  const boom = (js) => { const at = "const main = eastMainPlan(feed, cacheBefore, codes, win);"; assert.ok(js.indexOf(at) > 0, "the patch point exists"); return js.replace(at, "if (feed) throw new TypeError(\"boom-test\");\n" + at); };
+  const w2 = erWorld();
+  const r2 = await erCall(w2, { patch: boom });
+  assert.strictEqual(r2.status, 500, r2.text.slice(0, 300));
+  assert.ok(/^unexpected error - the run stopped here: boom-test/.test(r2.body.error), r2.body.error);
+  assert.strictEqual(w2.upserts.length, 0, "nothing written after the throw");
+  assert.strictEqual(w2.audit.length, 1, "the audit row");
+  assert.deepStrictEqual([w2.audit[0].detail.ok, w2.audit[0].detail.failed], [false, true]);
+  assert.ok(/FAILED/.test(w2.audit[0].detail.summary), w2.audit[0].detail.summary);
+  erCommon(w2, r2, "unexpected");
+  const w3 = erWorld();
+  const r3 = await erCall(w3, { patch: boom, body: { dryRun: true } });
+  assert.strictEqual(r3.status, 500);
+  assert.strictEqual(w3.audit.length, 0, "a dry run never writes the audit row");
+  assert.strictEqual(r3.body.dryRun, true);
+});
+acheck("A2 handler: the later steps fail on their own and the run goes on - the forecast prune (the count unknown or failed), the cache re-read (no reset, no extra leg, no warning), the reset RPC (the database apply missing: 404), the extra leg's Davenport read, the warning reads; each is named in errors and the run answers 200 ok:false with its audit row", async () => {
+  const cases = [
+    ["the prune 500", { fail: { prune: 500 } }, (w, b) => { assert.ok(b.forecastDeleteError && /forecast prune FAILED/.test(b.error)); assert.strictEqual(w.forecast.length, 3); assert.ok(w.rpc.some((x) => x[0] === "reset")); }],
+    ["the re-read 500", { fail: { reload: 500 } }, (w, b) => { assert.ok(/re-read failed/.test(b.error)); assert.ok(!w.rpc.length, "no RPC at all"); assert.strictEqual(w.upserts.length, 1, "no extra upsert"); assert.strictEqual(b.extra.error, "the cache did not reload - skipped"); }],
+    ["the reset RPC 404", { fail: { reset: 404 } }, (w, b) => { assert.ok(/review reset FAILED[^\n]*east_vacation_reset_stale/.test(b.error), b.error); assert.ok(b.reviewResetError); assert.strictEqual(w.upserts.length, 2, "the extra leg still runs"); assert.strictEqual(w.reviews.length, 3); }],
+    ["the extra read 500", { fail: { "dav:weeks#2": 500 } }, (w, b) => { assert.ok(/outside the window were NOT cached/.test(b.error)); assert.ok(b.extra.error); assert.strictEqual(w.upserts.length, 1); }],
+    ["the extra upsert 500", { fail: { "upsert#2": 500 } }, (w, b) => { assert.ok(/outside the window were NOT cached/.test(b.error)); assert.strictEqual(b.extra.weeks, 0); }],
+    ["the derived read 500", { fail: { derived: 500 } }, (w, b) => { assert.ok(/vacation-minimum \/ held-day check failed/.test(b.error)); assert.ok(b.warningsError); assert.deepStrictEqual([b.shortDays, b.heldDays], [[], []]); }],
+  ];
+  for (const [label, over, more] of cases) {
+    const w = erWorld(over);
+    const r = await erCall(w, {});
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 300));
+    erCommon(w, r, label);
+    assert.strictEqual(r.body.ok, false, label);
+    assert.ok(r.body.errors.length >= 1 && r.body.errors.every((e) => e.length <= 200), label + ": " + JSON.stringify(r.body.errors));
+    assert.ok(r.body.error.length <= 200, label);
+    more(w, r.body);
+    assert.strictEqual(w.audit.length, 1, label + ": the audit row");
+    assert.strictEqual(w.audit[0].detail.ok, false, label);
+    assert.ok(/NOT OK/.test(w.audit[0].detail.summary), label + ": " + w.audit[0].detail.summary);
+  }
+});
+acheck("A2 handler: 'today' is the Central date - at 04:30 UTC (23:30 CDT the day before) the run reads the same windows as at 10:30 UTC the day before; no East vacation code at all still refreshes the weeks (nothing to guard, no reset)", async () => {
+  const w = erWorld();
+  const r = await erCall(w, { now: "2026-10-17T04:30:00.000Z", body: { dryRun: true } });
+  assert.deepStrictEqual([r.body.today, r.body.from, r.body.to], ["2026-10-16", "2026-09-14", "2027-04-12"]);
+  const w2 = erWorld();
+  w2.blob.surgeonRules = {};
+  const r2 = await erCall(w2, {});
+  assert.strictEqual(r2.status, 200);
+  assert.strictEqual(r2.body.ok, true, JSON.stringify(r2.body.errors));
+  assert.ok(!w2.calls.some((c) => c.at === "GET dav:time_off"), "no time_off read without a code");
+  assert.ok(!w2.rpc.some((x) => x[0] === "reset"), "no reset");
+  assert.strictEqual(r2.body.reviewResetSkipped, "no East vacation codes");
+  assert.strictEqual(w2.upserts[0].length, 9, "the weeks refresh");
+});
+check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET from the environment, await cronSecretMatches(req.headers.get(\"x-cron-secret\"), CRON_SECRET), 401 unauthorized) - ahead of the method check, the body and the try; no CORS answer; Davenport reads with AbortSignal.timeout(DAVENPORT_TIMEOUT_MS = 8000), GET only; the service-role calls touch exactly east_feed (GET, merge-duplicates POST), east_forecast (DELETE), the three revision x RPCs, schedule_days / call_schedule_data (GET) and audit_log; nothing reads a contact, mails, pushes or writes time_off; no DELETE of east_feed anywhere; NOT deployed in the header", () => {
+  assert.ok(erSrc.length > 0, "the file exists");
+  const h = erSrc.slice(erSrc.indexOf("serve(async (req) =>"));
+  assert.ok(h.length > 100, "the handler");
+  const first = h.slice(h.indexOf("{") + 1).trimStart();
+  assert.ok(/^\/\/[^\n]*\n\s*(\/\/[^\n]*\n\s*)*const CRON_SECRET = Deno\.env\.get\("CRON_SECRET"\) \|\| "";\n\s*if \(!\(await cronSecretMatches\(req\.headers\.get\("x-cron-secret"\), CRON_SECRET\)\)\) \{/.test(first) || /^const CRON_SECRET = Deno\.env\.get\("CRON_SECRET"\) \|\| "";\n\s*if \(!\(await cronSecretMatches\(req\.headers\.get\("x-cron-secret"\), CRON_SECRET\)\)\) \{/.test(first), "the gate is the handler's first statement: " + first.slice(0, 200));
+  const gate = h.indexOf("cronSecretMatches(");
+  ["req.method", "req.json", "try {"].forEach((s) => assert.ok(h.indexOf(s) > gate, s + " comes after the gate"));
+  assert.ok(/json\(401, \{ error: "unauthorized" \}\)/.test(h.slice(gate, gate + 300)), "the refusal is 401 unauthorized");
+  assert.ok(!/OPTIONS|Access-Control-Allow/.test(erSrc), "no CORS: a browser never calls this function");
+  assert.ok(/^const DAVENPORT_TIMEOUT_MS = 8000;/m.test(erSrc) && /signal: AbortSignal\.timeout\(DAVENPORT_TIMEOUT_MS\)/.test(erSrc), "every Davenport read is capped at 8 s");
+  const code = erSrc.replace(/\/\/[^\n]*/g, "");
+  const restPaths = Array.from(code.matchAll(/\brest\(\s*[`"]([a-z_\/]+)/g)).map((m) => m[1]);
+  const allowed = ["call_schedule_data", "east_feed", "east_forecast", "rpc/east_vacation_reset_stale", "rpc/silvis_derived_vacations", "rpc/silvis_vacation_short_days", "schedule_days", "audit_log"];
+  assert.ok(restPaths.length >= 8, "the service-role calls are found: " + restPaths.join(", "));
+  restPaths.forEach((p) => assert.ok(allowed.indexOf(p) >= 0, "a service-role call to " + p));
+  assert.ok(!/user_profiles|notification|resend|push_subscriptions|office_contacts|email/i.test(code), "no contact read, no mail, no push");
+  assert.ok(!/east_feed[^\n]*"DELETE"|"DELETE"[^\n]*east_feed/.test(code), "no DELETE of east_feed");
+  assert.strictEqual((code.match(/method: "DELETE"/g) || []).length, 1, "the one DELETE is the forecast prune");
+  assert.ok(/NOT DEPLOYED/.test(erSrc.split("\n").slice(0, 12).join("\n")), "the header says NOT DEPLOYED");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(erSrc), "the source is ASCII");
+});
+check("A2 pins on the in-app refresh this function mirrors (index-source.html refreshEastFeed) - the lines the re-statement above runs: the main read with the codes, the plan (planVacationCache or keepCachedVacations), the two row maps, the merge-duplicates upsert, coverageOf + the forecast prune, the reload, the reset floor fromMon, the extra leg (fetchEastWeeks over eastWin.extra, eastExtraWeeks, keepCachedVacations over the reloaded cache) - and their order", () => {
+  const i = appSrc.indexOf("  const refreshEastFeed = async () => {"), j = appSrc.indexOf("\n  };\n", i);
+  assert.ok(i > 0 && j > i, "refreshEastFeed");
+  const f = appSrc.slice(i, j);
+  const lines = [
+    "const eastWin = eastRefreshWindows(todayCentral());",
+    "try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }",
+    "const plan = feed.vacations ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, eastFeedRows), rewritten: [], carriers: 0 };",
+    "const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));",
+    "const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));",
+    "Prefer: \"resolution=merge-duplicates,return=minimal\" }, body: JSON.stringify(rows) });",
+    "const publishedCoverage = coverageOf(feed.weeks);",
+    "east_forecast?week_monday=gte.${publishedCoverage.from}&week_monday=lte.${publishedCoverage.to}`, { method: \"DELETE\", headers: { ...dbAuthHeaders(), Prefer: \"return=representation\" } });",
+    "const reloaded = await loadEastTables();",
+    "const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});",
+    "const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);",
+    "const extraRows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }));",
+  ];
+  let at = -1;
+  lines.forEach((l) => { const k = f.indexOf(l); assert.ok(k > at, "in order: " + l); at = k; });
+  assert.ok(f.indexOf(APP_CODES_LINES.trim()) > 0 && f.indexOf(APP_CODES_LINES.trim()) < f.indexOf(lines[1]), "the codes come before the read");
+  assert.ok(/st\.review\.end >= fromMon|p_from: fromMon/.test(f), "the in-app reset floor is fromMon (= the main window's Monday, the server's p_from)");
+  const resetAt = f.search(/st\.review\.end >= fromMon|east_vacation_reset_stale/);
+  assert.ok(resetAt > f.indexOf(lines[8]) && resetAt < f.indexOf(lines[9]), "the reset sits after the reload and before the extra leg");
+});
+check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), section 3's record (PREPARED, NOT deployed: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, NOT scheduled yet), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
+  assert.ok(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*NOT deployed[^\n]*\| never \|$/m.test(readme), "the table row");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
+  assert.ok(i > 0, "section 3's record");
+  const rec = s3.slice(i, s3.indexOf("\n### ", i + 10));
+  assert.ok(/^### Deploy record - Prompt 31 Part A \(east-feed-refresh[^\n]*\) - PREPARED, NOT deployed$/m.test(rec), "the heading says PREPARED, NOT deployed");
+  assert.ok(rec.indexOf("supabase functions deploy east-feed-refresh --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt") > 0, "the deploy command");
+  assert.ok(/apply-east-vacations\.sh/.test(rec) && /east_vacation_reset_stale/.test(rec) && /silvis_vacation_short_days/.test(rec), "the database apply comes first (the function calls its functions)");
+  const order = ["apply-east-vacations.sh", "supabase functions deploy east-feed-refresh", "401", "'{\"dryRun\":true}'::jsonb", "silvis-east-feed-daily"].map((s) => rec.indexOf(s));
+  order.forEach((k, n) => assert.ok(k > 0 && (n === 0 || k > order[n - 1]), "the order: apply, deploy, 401, dryRun proof, cron (step " + n + ")"));
+  assert.ok(rec.indexOf("select status_code, left(content::text, 400) from net._http_response order by created desc limit 1;") > 0 && /"dryRun":true/.test(rec), "the dryRun proof and what to expect");
+  assert.ok(/<cli-workdir>/.test(rec) && !/[A-Za-z]:\\Users\\/.test(rec), "placeholders, no machine path");
+  const s4 = readme.slice(readme.indexOf("## 4."), readme.indexOf("## 5."));
+  const CRON = "select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$\n  select net.http_post(\n    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',\n    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',\n      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),\n    body := '{}'::jsonb,\n    timeout_milliseconds := 60000);\n$$);";
+  assert.ok(s4.indexOf(CRON) > 0, "section 4 carries the report's cron statement");
+  assert.ok(s4.indexOf(CRON) > s4.indexOf("expect four rows after this whole block"), "outside the four-job block");
+  assert.ok(/NOT scheduled yet/.test(s4), "marked NOT scheduled yet");
+  const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6."));
+  assert.ok(readme.indexOf("### east-feed-refresh") > readme.indexOf("### daily-reminder"), "section 5's east-feed-refresh checks follow daily-reminder's");
+  assert.ok(/401/.test(s5) && /\{"dryRun":true\}/.test(s5) && /405/.test(s5) && /400/.test(s5), "section 5: 401, the dryRun, 405, 400");
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(s7.indexOf("select cron.unschedule('silvis-east-feed-daily');") > 0 && s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp") > s7.indexOf("select cron.unschedule('silvis-east-feed-daily');"), "the rollback: unschedule first, then the function");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
 });
 
 (async () => {

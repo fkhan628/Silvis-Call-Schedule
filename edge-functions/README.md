@@ -10,6 +10,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, NOT deployed and no cron job yet (section 3's "Deploy record - Prompt 31 Part A") | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -71,6 +72,17 @@ SQL path - a table migration, not a function deploy, and no cron change. The
 office digest, the daily reminder (both modes) and `calendar-sync` are unchanged
 on purpose: they show assignments, not availability, and a derived East
 vacation is never an assignment.
+
+**Prompt 31 Part A (2026-10-16): a fifth function, `east-feed-refresh`, is in this folder - NOT deployed, no cron job.**
+It is the daily server refresh of the East feed cache (`east_feed`), so the cache stays fresh without anyone pressing
+Refresh from Davenport (the in-app refresh stays). One run is the in-app refresh, unattended: the same windows, the
+same plan, the writes in the same order, the review reset through the one SQL function both refreshes call. It adds
+the guard an unattended run needs: when the other project answers no vacation for a code while the cache holds
+ranges of it in the read's window, the cache is kept, no review is reset and the run records ok:false. Cron-only
+(`x-cron-secret`, like `daily-reminder`); it never mails. It calls three functions of the revision x database apply,
+so the order is that apply, then the deploy, the dryRun proof and the cron job: section 3's "Deploy record - Prompt 31
+Part A", section 4's statement, section 5's checks, section 7's rollback. Until then every sentence here about the
+four functions and the four jobs stays true.
 
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
@@ -195,6 +207,61 @@ calendar-sync check in section 5.
 After deploying, follow the Davenport convention: `supabase functions download
 <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
 the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+
+### Deploy record - Prompt 31 Part A (east-feed-refresh, the daily East feed refresh) - PREPARED, NOT deployed
+
+Source `edge-functions/east-feed-refresh/index.ts`, a new slug (nothing to back up; its header says what one run
+does). No new secret: `CRON_SECRET` is the one the live jobs use, and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are
+injected. It is the in-app Refresh from Davenport, unattended: the same windows (`eastRefreshWindows`, mirrored in
+UTC), the same write plan, the same order (the `east_feed` upsert, the `east_forecast` prune inside the published
+coverage, the review reset through `east_vacation_reset_stale`, the weeks outside the window, ONE `east.refresh` audit
+row with `actor_id` `cron`), never a delete of a cached week. `test/edge-functions.test.js` runs the real handler
+against a fake Silvis and a fake other project, and pins the UTC mirror against `east-feed.js` by behaviour under six
+time zones.
+
+The order (Faraz, one step at a time; the expected result in brackets):
+
+1. The database first - `apply-east-vacations.sh` (revision x, `sql/migrations/2026-10-14-east-vacations.sql`), then
+   its record step. The function calls three of its functions - `east_vacation_reset_stale`,
+   `silvis_derived_vacations` and `silvis_vacation_short_days` - so before the apply a live run answers ok:false with
+   each call's 404 in `errors`, and no review is reset.
+2. The Part A client, on Faraz's go (Setup > East feed then shows the server refresh's audit rows). The function does
+   not depend on it.
+3. Deploy (PowerShell, a CLI workdir linked to the Silvis project - section 0):
+   ```powershell
+   $wd = "<cli-workdir>"
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp
+   New-Item -ItemType Directory -Force "$wd\supabase\functions\east-feed-refresh" | Out-Null
+   Copy-Item "<your clone>\edge-functions\east-feed-refresh\index.ts" "$wd\supabase\functions\east-feed-refresh\index.ts" -Force
+   supabase functions deploy east-feed-refresh --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp
+   curl.exe -s -o NUL -w "%{http_code}" -X POST "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh"
+   ```
+   [`east-feed-refresh` v1 ACTIVE, the other four unchanged; then `401` - the gate, nothing read.] Then download it
+   back and byte-compare it with the repo copy, as for the others.
+4. The dryRun proof, through pg_net in the SQL editor (no cron job needed; nothing is written - no `east_feed` row, no
+   prune, no reset, no audit row):
+   ```sql
+   select net.http_post(
+     url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',
+     headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+       coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+     body := '{"dryRun":true}'::jsonb,
+     timeout_milliseconds := 60000);
+   -- pg_net answers asynchronously: wait 20-30 s, then
+   select status_code, left(content::text, 400) from net._http_response order by created desc limit 1;
+   ```
+   [`200` and content starting `{"dryRun":true,"ok":true,`; its `"would"` names what a live run writes - the
+   published weeks of the main window, the weeks outside it, the forecast prune, the reset's `p_from`. `"ok":false`
+   names the problem in `"errors"` - settle it before step 5.]
+5. The cron job `silvis-east-feed-daily` - section 4's statement in the SQL editor, then
+   `select jobid, jobname, schedule, active from cron.job;` [five rows]. The first run is the next 10:30 UTC.
+6. The next morning: Setup > East feed shows the server refresh (with the Part A client), or in the SQL editor
+   `select created_at, detail->>'ok', detail->>'summary' from audit_log where action = 'east.refresh' and actor_id = 'cron' order by created_at desc limit 3;`
+   [`true` and "Server refresh of the East feed (cron): N published week(s) ..."]. Paste back; the record step then
+   fills this record (versions, times, the proofs) and rewords the sentences about the four functions and jobs.
+
+Rollback: section 7.
 
 ### Deploy record - Prompt 30 (phone push) - DEPLOYED 2026-10-03 16:37:59 UTC by Faraz (v11 -> v12)
 
@@ -586,6 +653,26 @@ Notes
   inputs listed in section 6 (a linked account whose reminder hour matches;
   rows in `office_contacts` plus a non-empty digest diff).
 
+Prompt 31 Part A - the fifth job, the daily server refresh of the East feed cache. NOT scheduled yet: run this only
+after `east-feed-refresh` is deployed and its dryRun proof passed (section 3, "Deploy record - Prompt 31 Part A").
+10:30 UTC = 05:30 CDT / 04:30 CST, before the Monday 11:00 UTC digest (it reads `east_feed`) and the 13:00 UTC offers
+job. `timeout_milliseconds` is set because pg_net's default is a few seconds while one run makes up to five reads of
+the other project (8 s cap each); none of the four live jobs sets it. The same Vault secret, the same fail-closed
+`unset`.
+
+```sql
+-- Prompt 31 Part A: the daily East feed refresh, 10:30 UTC (NOT scheduled yet - see above)
+select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$
+  select net.http_post(
+    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+    body := '{}'::jsonb,
+    timeout_milliseconds := 60000);
+$$);
+select jobid, jobname, schedule, active from cron.job;   -- five rows once this job exists
+```
+
 ## 5. Verification - safe steps (no mail can result)
 
 Placeholders: `$URL = "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1"`,
@@ -775,6 +862,25 @@ admin accounts); on any other day it reads and answers `sent: 0`. Proof after
 deploying: one dryRun POST through pg_net from the SQL editor (or the curl above)
 and quote the 200 body in the deploy record (section 3).
 
+### east-feed-refresh (Prompt 31 Part A - NOT deployed; these hold once it is)
+```powershell
+# no secret -> 401 before any work (nothing read; a preflight gets the same 401)
+curl.exe -s -i -X POST "$URL/east-feed-refresh" | Select-Object -First 1
+# a WRONG secret -> the same 401 (the constant-time compare of the other cron functions)
+curl.exe -s -i -X POST "$URL/east-feed-refresh" -H "x-cron-secret: wrong" | Select-Object -First 1
+# past the gate: not POST -> 405; dryRun not a boolean -> 400 (nothing read either way)
+curl.exe -s -i "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" | Select-Object -First 1
+curl.exe -s -i -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":"yes"}' | Select-Object -First 1
+# dry run: reads Silvis and the other project, plans, writes NOTHING (no east_feed row, no prune, no reset, no audit row)
+curl.exe -s -X POST "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
+#   -> 200 {"dryRun":true,"ok":true,"error":null,"errors":[],"failed":false,"source":"cron","today":"YYYY-MM-DD","from":"<Monday>","to":"<that Monday + 210 days>",
+#       "weeks":N,"coverage":{"from":...,"to":...},...,"vacations":{"codes":["FAK"],"ranges":N,...,"trusted":true,"guard":[]},...,
+#       "extra":{"from":...,"to":...,"weeks":N,...},"newRanges":[...],...,"would":{"upsert":N,"weekRows":N,"rewrittenRows":N,"prune":{...},"reset":{"p_from":"<Monday>"},"extra":N}}
+```
+A LIVE call (`{}`) writes what the in-app Refresh from Davenport writes (`east_feed` rows, the forecast prune, the
+review reset, one `east.refresh` audit row) and never mails; the daily cron job is its intended caller. The pg_net
+proof in section 3 is the same dry run with the secret read from Vault, never typed into a shell.
+
 ## 6. Invocations that CAN send real mail - wait for Faraz
 
 - `office-notifications` `{mode:"publish"}` - every active office contact.
@@ -824,3 +930,11 @@ Redeploying an older `index.ts` from git history with the same commands is the
 rollback. Keep the convention: before overwriting a deployed function, download
 it to `edge-functions/deployed-backup-<date>/<slug>/index.ts` (untracked or in a
 PR), byte-diff after deploying.
+
+`east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
+`select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)
+or delete it: `supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp`. The data needs no
+rollback: a run writes only what the in-app refresh writes (cached weeks, the forecast prune), and every review it
+reset is in its `eastvac.review` audit row (the dates and the decision) and can be entered again by hand. The
+database half has its own rollback (the header of `sql/migrations/2026-10-14-east-vacations.sql`); run it only after
+the job is stopped - the function calls those SQL functions.
