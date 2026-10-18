@@ -1550,13 +1550,29 @@ measured Acton offering every November day, seeds 1–3: 12 primaries / 5 backup
 taper, 11 / 10 / 9 primaries and 3 backups after it — his eight primary locks already equal his target and November's
 open primaries exceed the sum of everyone's targets, so every over-share day of his is one no colleague below his own
 share could take, which is the invariant the regression pins; caps stay hard; a surgeon with no target — a windows
-surgeon — is never tapered). `diagnostics.offers`
+surgeon — is never tapered). ⟶ **Painting fix B (Faraz 10/18; Prompt 32 step 5 (b)) — the taper's mirror:** a
+preferred colleague's `outside-offers` term is **waived while the placement still brings him towards his share** and
+stands beyond it. Same capacity (`genOfferCapacity`: `ceil(T − 0.5)` − his count), his **offered days consume it first,
+then his outside days**: in the fill `genOfferTaper` subtracts `weights.outsideOffers` for each outside day within what
+the offered days leave of it; in the evaluation `genTaperSoftList` counts his generated offered slots first (whatever
+their dates; `genOfferedPlaced`) and drops the `outside-offers` terms of his first outside days (date order) within the
+remainder — a zero-weight term never stays in the list. The days in scope come from **`rules.outsideOffersOn(ctx, day,
+role, id)`**, the ONE reading of B10's per-month scope (preferred, submitted, a month he painted in, the role not offered
+that day) — `rdStatic`'s soft push reads it for its preferred leg too, so the rule and the waiver cannot drift; the
+generator never reads `P.offerMonths` itself (its browser rules API lists the helper). Exhaustive is untouched (the
+helper answers false; its claim-result term is never waived); a surgeon with no target for the role is neither tapered
+nor waived; `eligibility()` itself always carries the term (the day editor and the board still read "preferred days:
+penalty"). Why: before it a full painter kept winning placements up to about share + 3 against a partial painter
+(the +6 never stopped; smoothing tolerance 2 < 6 never moved them back). Measured on the painting fixture (§23): p1 / p2
+99 / 100 and 99 / 99 primaries / backups over 16 months (were 110 / 123 and 111 / 122), max weighted excess +1.2 / +0.7
+(were +2.6 / +2.6), every surgeon within share + 1 per role; both controls unchanged. `diagnostics.offers`
 = the periods touching the range, `byPerson[id] = { status, mode, offered, placed, unplaced: [{ day, role, reason,
 holidayUnit }] }` (unplaced offers carry the slot's reason — `slot-locked:<id>`, `holds-other-role`, `held-by:<id>`…;
 on a holiday-unit day the cause, `holiday-unit:<name> <day> <reason>`, the unit's other day he fails, because one
 holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
 (every generated placement of a submitted surgeon on a day he did not list — the publish email of part 4/6 reads it:
-"you were placed on 11/5, a day you did not list — trade if needed"); an open slot inside a period carries
+"you were placed on 11/5, a day you did not list — trade if needed"; a REPORT built from the schedule, not from the
+soft list: since fix B it still lists every such placement, its term waived below his share or standing beyond it); an open slot inside a period carries
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
 6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [14, 3] since 9/30 - [42, 14, 3] from 9/27; `lengthMonths` 6 since 9/30), end = the last day of the Nth month
@@ -2593,7 +2609,19 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   measures painters who offer every day against partial painters and two controls. Prompt 32's soft 7 holds every painter-month
   at 7 primaries, but a full painter still ends above his weighted share (backup up to about share + 2.8) because a partial
   painter's untapered `outside-offers` term (+6) protects the colleague's unpainted days; the engine is unchanged and a fix is
-  a decision for Faraz (the private report).
+  a decision for Faraz (the private report). ⟶ **10/18: fix B applied (Faraz: "go ahead with ... painting fix")** - the
+  taper's mirror, §17: a preferred colleague's `outside-offers` term is waived while the placement still brings him towards
+  his share (offered days consume the capacity first), stands beyond it; `rules.outsideOffersOn` is the one reading of the
+  scope. The fixture's partial pins moved to the prototype's row, reproduced exactly (p1 99 / 100, p2 99 / 99; max weighted
+  +1.2 / +0.7, mean +0.46 / +0.43; the partial painters at a mean weighted -0.19 / -0.35 / -0.35; everyone within share + 1
+  per role), the two control pins did not move. The suite now also restates fix B per run, colleague, month and role from
+  the fixture's own offers (the terms left = the outside days beyond the capacity; `diagnostics.offers.outsideOffers` still
+  reports all of them - 268 waived and 3 standing over the 8 seeds) and runs an order fixture (two surgeons; one is forced past
+  his explicit target of 3, his two painted days late in the month) that pins the offered-days-first count against a
+  date-ranked reading. The regression's P2 offers fixture moved exactly one pin: Acton's one off-list November placement lies
+  below his share, so it carries no term (was "one term per off-list placement") - restated from the fixture with the same
+  capacity rule; `test/rules.test.js` pins the helper, its equivalence with eligibility's term, and the source contract;
+  `test/data-layer.test.js` pins the new Periods and painter words.
 - **Tests.** `test/rules.test.js` (the cap reading table, `"none"`, unreadable values, the weights helper, the over-soft-limit
   walk), `test/generator-regression.js` (§12 items 7 and 15), `test/water-fill.test.js` and `test/nov-backups.test.js`
   (re-pinned), `test/totals.test.js`, `test/exports.test.js`, `test/importer.test.js` (the seed's values), `test/publish.test.js`,

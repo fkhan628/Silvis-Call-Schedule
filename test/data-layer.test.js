@@ -5236,6 +5236,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sec.includes('"Generate this period" places what was offered first (offered days first, gaps by each surgeon\'s rules) over the period\'s range') && src.includes("Generate the period when you are ready - offered days are placed first, the gaps by each surgeon's rules.") && sec.includes("offered days first, the gaps by the rules; Accept & Publish is below"), "the Periods copy (intro, Close-now toast, Generate title) must say offers are placed first now that offerRows / periodRows are in ctxInputs");
       assert.strictEqual(/standing rules - offers are not placed first yet|lands with the engine wiring/.test(src), false, "stale 'not offers-first yet' copy left behind");
     });
+    // Painting fix B (Faraz 10/18): the generator waives a preferred surgeon's outside-offers penalty while a placement still
+    // brings him towards his share, and keeps it beyond (generator.js genOfferTaper / genTaperSoftList, rules.outsideOffersOn).
+    // The old words ("only when a slot would otherwise stay open") never described the engine (a soft +6, not an open-slot
+    // rule); the Periods intro (the scheduler) and the painter's preferred-mode line (the surgeon) now say what it does.
+    check("fix B words: the Periods intro and the painter's preferred-mode line say painted days first, no extra cost below the fair share, kept to the painted days beyond it", () => {
+      const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
+      assert.ok(sec.length > 2000, "PeriodsSection body not found");
+      assert.ok(sec.includes('a surgeon in "only these days" mode is never placed outside them; a "preferred days" surgeon\'s painted days are placed first, and until he reaches his fair share for the month a day he did not paint costs him nothing extra - beyond his share he is kept to his painted days unless no colleague can reasonably take the slot. The diagnostics list every placement outside a surgeon\'s painted days.'), "the Periods intro says what fix B does (scheduler words)");
+      assert.ok(src.includes('"Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint, at no extra cost; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. Your publish e-mail names every day you did not paint - trade if needed. (The default.)"'), "the painter's preferred-mode line says what fix B does (surgeon words)");
+      assert.strictEqual(/surgeon only when a slot would otherwise stay open|when a slot would otherwise stay open your ordinary rules may place you on another day/.test(src), false, "the old 'only when a slot would otherwise stay open' words are gone");
+    });
 
     // 9/27 (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
     // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar; the nav's count badge was
