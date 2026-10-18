@@ -5277,6 +5277,66 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sec.includes('"Generate this period" places what was offered first (offered days first, gaps by each surgeon\'s rules) over the period\'s range') && src.includes("Generate the period when you are ready - offered days are placed first, the gaps by each surgeon's rules.") && sec.includes("offered days first, the gaps by the rules; Accept & Publish is below"), "the Periods copy (intro, Close-now toast, Generate title) must say offers are placed first now that offerRows / periodRows are in ctxInputs");
       assert.strictEqual(/standing rules - offers are not placed first yet|lands with the engine wiring/.test(src), false, "stale 'not offers-first yet' copy left behind");
     });
+    // Painting fix B (Faraz 10/18): the generator waives a preferred surgeon's outside-offers penalty while a placement still
+    // brings him towards his share, and keeps it beyond (generator.js genOfferTaper / genTaperSoftList, rules.outsideOffersOn).
+    // The old words ("only when a slot would otherwise stay open") never described the engine (a soft +6, not an open-slot
+    // rule); the Periods intro (the scheduler) and the painter's preferred-mode line (the surgeon) now say what it does.
+    // Review 10/18 round 2: both pointed at surfaces that do not show the off-list days - no publish e-mail reads
+    // diagnostics.offers.outsideOffers yet (build guide section 17: still open) and GenDiagnostics never rendered it (fix B
+    // took the waived terms out of the soft-penalty list, its only other trace). The painter now points at My schedule's
+    // 'not offered' tag (the one surgeon-facing mark that exists), the Periods intro at the preview's new "Placed outside
+    // painted days" list (gen-outside-offers, pinned below).
+    check("fix B words: the Periods intro and the painter's preferred-mode line say painted days first, Generate not holding an unpainted day against him below the fair share, kept to the painted days beyond it, in each month he painted a day of the period - and name the surfaces that show the off-list days", () => {
+      const sec = src.slice(src.indexOf("\nfunction PeriodsSection("), src.indexOf("\nfunction GeneratePanel("));
+      assert.ok(sec.length > 2000, "PeriodsSection body not found");
+      assert.ok(sec.includes('a surgeon in "only these days" mode is never placed outside them; a "preferred days" surgeon\'s painted days are placed first, and until he reaches his fair share for the month Generate does not hold a day he did not paint against him - beyond his share he is kept to his painted days unless no colleague can reasonably take the slot (in each month where he painted at least one day of the period); his listed weeks, or the days he listed for a month, still stand - painting only adds days. The Generate preview lists every placement outside a surgeon\'s painted days ("Placed outside painted days"), below his share or beyond it.'), "the Periods intro says what fix B does and where the off-list placements are listed (scheduler words)");
+      assert.ok(src.includes('"Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. This applies in each month where you painted at least one day of this period. Your listed weeks, or the days you listed for a month, still apply - painting only adds days. My schedule marks each day you did not paint \'not offered\' - trade if needed. (The default.)"'), "the painter's preferred-mode line says what fix B does, that his listed weeks / months still apply (10/18, \"List always stands\") and where his off-list days are marked (surgeon words)");
+      assert.ok(src.includes('return { kind: "outside", text: "not offered", title: "Placed on a day you did not offer ('), "My schedule's 'not offered' tag - the surface the painter's line names - still exists");
+      assert.strictEqual(/surgeon only when a slot would otherwise stay open|when a slot would otherwise stay open your ordinary rules may place you on another day/.test(src), false, "the old 'only when a slot would otherwise stay open' words are gone");
+      assert.strictEqual(/Your publish e-mail names every day you did not paint|The diagnostics list every placement outside a surgeon's painted days/.test(src), false, "no word promises a publish e-mail list or a diagnostics list the app does not show");
+      // 10/18 polish: the app also tracks call pay, so the painting words never use cost words that read as money - checked in
+      // the app and in the docs that describe painting, whitespace collapsed so a phrase split across .md lines is caught; and
+      // no "as usual" promise for an unpainted month (written when a painted period set the dated lists aside; since 10/18 they
+      // stand and the painter / Periods text says so directly - the phrase stays out as imprecise: a painted month is not "as usual")
+      const COST = /at no extra cost|costs? (him |you )?nothing extra/;
+      for (const f of ["index-source.html", "docs/SILVIS-CALL-RULES.md", "docs/ONBOARDING.md", "docs/SILVIS-BUILD-GUIDE.md"]) {
+        const flat = fs.readFileSync(path.join(ROOT, f), "utf8").replace(/\s+/g, " ");
+        assert.strictEqual(COST.test(flat), false, "no money-sounding 'extra cost' words in the painting text of " + f);
+      }
+      assert.strictEqual(/(painted|listed) no day,? (your|his) (ordinary )?rules place (you|him) as usual/.test(src.replace(/\s+/g, " ") + fs.readFileSync(path.join(ROOT, "docs/ONBOARDING.md"), "utf8").replace(/\s+/g, " ")), false, "no 'as usual' promise for a month he painted nothing");
+    });
+    check("fix B review (10/18 round 2): GenDiagnostics (lifted and run) lists diagnostics.offers.outsideOffers - every off-list placement, waived or not - when a period touches the range; 'None' when empty; no box without a period or in an older preview", () => {
+      const babel = require("@babel/core");
+      const g0 = src.indexOf("function GenDiagnostics({"), g1 = src.indexOf("// RF2 a (9/23): the merged map's");
+      assert.ok(g0 > 0 && g1 > g0, "GenDiagnostics is where the test expects it");
+      const code = babel.transformSync(src.slice(g0, g1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = { console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Set, Map, isNaN, isFinite };
+      box.window = box;
+      vm.createContext(box);
+      vm.runInContext(fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), box, { filename: "helpers.js" });
+      Object.assign(box, { React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" }, mono: "monospace", LIGHT: { warnText: "#7a4a10", accentText: "#C2410C" }, reasonLabel: (c) => String(c), softTag: () => null });
+      const GD = vm.runInContext(code + "\n;GenDiagnostics", box, { filename: "GenDiagnostics.jsx" });
+      const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+      const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+      const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+      const css = { subT: {}, tableWrap: {} };
+      const per = { key: "p", id: "p", label: "Nov 2026 - Jan 2027", start: "2026-11-02", end: "2027-01-03", status: "closed" };
+      // two off-list placements: one waived (no soft term left) and one standing (its outside-offers term in the soft list)
+      const OO = [{ day: "2026-11-12", role: "primary", id: "s3" }, { day: "2026-11-30", role: "backup", id: "s3" }];
+      const dg = { range: { months: ["2026-11"] }, tallies: {}, score: { total: 1 }, uncovered: [], candidatesTried: 1, bestOf: 1, softPenalties: [{ day: "2026-11-12", role: "primary", id: "s3", reason: "outside-offers", weight: 6 }], offers: { periods: [per], byPerson: {}, outsideOffers: OO } };
+      const boxOf = (tree) => all(tree, n => n.props && n.props["data-testid"] === "gen-outside-offers");
+      const b1 = boxOf(GD({ css, dg, nameOf, roster: [] }));
+      assert.strictEqual(b1.length, 1, "one 'Placed outside painted days' box when a period touches the range");
+      assert.strictEqual(b1[0].props["data-count"], 2, "the box says how many");
+      assert.ok(/Placed outside painted days \(2\)/.test(text(b1[0])), "its heading counts every off-list placement - the waived one too: " + text(b1[0]).slice(0, 80));
+      assert.ok(/Below his fair share for the month - or in a month he painted no day of that day's period - it carries no off-list penalty; beyond it the off-list penalty stands/.test(text(b1[0])) && /My schedule marks the day "not offered"/.test(text(b1[0])), "its note says what the list is (waived below the share, standing beyond) and where the surgeon sees it");
+      const lines = all(b1[0], n => n.props && n.props["data-outside-offer"]).map(n => [n.props["data-outside-offer"], text(n)]);
+      assert.deepStrictEqual(lines, [["2026-11-12:primary:s3", box.fmtMD("2026-11-12") + " primary - Acton"], ["2026-11-30:backup:s3", box.fmtMD("2026-11-30") + " backup - Acton"]], "one line per placement in the report's order: day, role, surgeon");
+      const none = boxOf(GD({ css, dg: Object.assign({}, dg, { offers: { periods: [per], byPerson: {}, outsideOffers: [] } }), nameOf, roster: [] }));
+      assert.ok(none.length === 1 && /None - nobody who painted days is placed on a day he did not paint/.test(text(none[0])) && none[0].props["data-count"] === 0, "a period touches the range and nobody is off his list -> the box says None");
+      assert.strictEqual(boxOf(GD({ css, dg: Object.assign({}, dg, { offers: { periods: [], byPerson: {}, outsideOffers: [] } }), nameOf, roster: [] })).length, 0, "no period touches the range -> no box");
+      assert.strictEqual(boxOf(GD({ css, dg: Object.assign({}, dg, { offers: undefined }), nameOf, roster: [] })).length, 0, "an older preview without diagnostics.offers -> no box");
+    });
 
     // 9/27 (Faraz: "a 6 week warning for choosing shifts so that the new schedule can be produced at least 4-6 weeks
     // before"): the surgeon's offer deadline notice (My schedule, urgent rows on the Calendar; the nav's count badge was

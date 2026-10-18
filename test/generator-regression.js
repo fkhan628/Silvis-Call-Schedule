@@ -523,7 +523,9 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   const vacHas = (id, d) => VAC[id].has(d) || !!(extraVac && extraVac[id] && extraVac[id].has(d));
   // extraOffers (Prompt 14 P2 x WF, found rebasing offers onto the water-filled share 9/23): call_offers rows a fixture run
   // handed the generator. An offer is a dated available row for its date and role(s): it lifts the weekday pattern (W)
-  // and, for the submitted surgeon inside the period, the whitelist-month / available-weeks lists are not applied.
+  // and the whitelist-month / available-weeks lists on its own date - the per-date lift restated below. Since 10/18 that is
+  // exact for a PREFERRED surgeon (his lists stand everywhere else - Faraz, "List always stands"); an EXHAUSTIVE surgeon's
+  // lists are set aside period-wide, but his hard not-offered keeps Generate off every day he did not offer.
   const offerLifts = (id, d, role) => (extraOffers || []).some((o) => o.person_id === id && o.day === d && (o.role_pref === role || o.role_pref === "either"));
   const edgeHas = (id, d) => DAY_BEFORE_VAC[id].has(d) || (!!(extraVac && extraVac[id] && extraVac[id].has(addDays(d, 1))) && !vacHas(id, d));
   // a fixture's dated UNAVAILABLE row for that surgeon, date and role closes the slot to him (the allowed-slot counts below)
@@ -2467,7 +2469,38 @@ const OSL_WHOLE = { n: 0 };
   console.log("P2 (offers fixture, seed 1 bestOf 2): Khan (rules_only) holds " + khanGen.length + " generated day(s); " + khanDiff.length + " day(s) differ from the no-offers run of the same seed (other surgeons' offers move the rest of the board - his rules, not his placements, are what stays unchanged): " + khanDiff.join(", "));
   // the terms are in force for the two submitters only
   eq(DP.softPenalties.filter((s) => (s.reason === "offered" || s.reason === "outside-offers") && s.id !== BURCHETT && s.id !== ACTON), [], "no offered / outside-offers term on a rules_only or not_started surgeon");
-  eq(DP.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === ACTON).length, actOutside.length, "one outside-offers term (+6) per Acton placement off his list");
+  // pin moved deliberately 10/18 (painting fix B, Faraz 10/18). Before fix B this read "one outside-offers term (+6) per
+  // Acton placement off his list" (terms = actOutside.length) - and on 393d5ec this run gave Acton NO off-list November
+  // placement (actOutside [], terms 0: the old pin compared 0 with 0; observed with a probe on 393d5ec's own regression,
+  // review 10/18 round 2). What fix B moved is the SCHEDULE, not a standing term: a preferred surgeon's outside-offers term
+  // is now waived while the placement still brings him towards his share - per role, capacity = ceil(T - 0.5) - his
+  // November days held before the run (the locks in the range, 11/1 from the input outside it), and every day he holds
+  // counts against it (his days with neither term first - none here: one period covers the range and he painted November
+  // - then his generated OFFERED days, then his OUTSIDE days); beyond it the +6 stands. So the fill now gives him Mon 11/30
+  // backup, a day he did not list but below his November backup share (capacity 1, no offered backup generated), with no
+  // term - and diagnostics.offers.outsideOffers (a report, pinned above) still names it. The day itself is pinned, so a
+  // later shift of the schedule shows up as a stated move, not a silent one. Restated from the fixture and the run (never
+  // from rules.js); the standing-beyond-share half is pinned in test/painting.test.js.
+  {
+    const actMem = DP.impliedTargets.months["2026-11"].members[ACTON];
+    let actExpected = 0;
+    const actWhy = [];
+    ROLES.forEach((role) => {
+      const T = role === P ? actMem.primaryTarget : actMem.backupTarget;
+      const before = (ctxP.schedule["2026-11-01"] && ctxP.schedule["2026-11-01"][role] === ACTON ? 1 : 0) + pDays.filter((d) => outP.schedule[d][role] === ACTON && outP.schedule[d][role + "Locked"]).length;
+      eq(before, actMem.lockedHeld[role], "fix B: Acton's November " + role + " days held before the run (the locks + 11/1) = impliedTargets lockedHeld");
+      const gen = pDays.filter((d) => outP.schedule[d][role] === ACTON && !outP.schedule[d][role + "Locked"]).length;
+      const offGen = pDays.filter((d) => outP.schedule[d][role] === ACTON && !outP.schedule[d][role + "Locked"] && offeredIn(ACTON, d, role)).length;
+      const outGen = actOutside.filter((x) => x.endsWith(" " + role)).length;
+      eq(gen, offGen + outGen, "fix B: every generated November " + role + " day of Acton's is offered or off his list in a month he painted - no day with neither term (one period covers the range), so the capacity below counts every day he holds");
+      const cap = Math.max(0, Math.ceil(T - 0.5) - before), exp = Math.max(0, outGen - Math.max(0, cap - offGen));
+      actExpected += exp;
+      actWhy.push(role + ": target " + T + ", held before " + before + ", capacity " + cap + ", offered generated " + offGen + ", outside generated " + outGen + " -> " + exp + " standing");
+    });
+    eq(DP.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === ACTON).length, actExpected, "fix B: Acton's outside-offers terms = his outside placements beyond his capacity, every held day counted, offered days before outside days (" + actWhy.join("; ") + ")");
+    eq(actOutside, ["2026-11-30 backup"], "fix B: Acton's one off-list November placement is Mon 11/30 backup - on 393d5ec this run gave him none; the waiver lets the fill place him there below his backup share (" + actWhy.join("; ") + ")");
+    eq(actExpected, 0, "fix B: that placement lies below his share, so it carries no outside-offers term; diagnostics.offers.outsideOffers (the report) still names it (" + actWhy.join("; ") + ")");
+  }
   DP.softPenalties.filter((s) => s.reason === "outside-offers").forEach((s) => ok(s.weight === seed.groupRules.weights.outsideOffers, "outside-offers weight = groupRules.weights.outsideOffers"));
   // an offered day beats a rules-only candidate on a real slot: Philip (not_started above) offers Mon 11/30 as 'either' - a day he
   // holds in NEITHER role without the offer (pinned first, so the claim is not vacuous) - and then holds it
@@ -2485,6 +2518,18 @@ const OSL_WHOLE = { n: 0 };
   console.log("P2 (Philip " + PH_DAY + " 'either' offer): without it P " + (outP.schedule[PH_DAY].primary ? CODE[outP.schedule[PH_DAY].primary] : "open") + " / B " + (outP.schedule[PH_DAY].backup ? CODE[outP.schedule[PH_DAY].backup] : "open") + "; with it P " + (e19.primary ? CODE[e19.primary] : "open") + " / B " + (e19.backup ? CODE[e19.backup] : "open"));
   checkRun(outPh, RP, 1, false, undefined, undefined, undefined, FIXP.offers.concat([FIXP.philipOpenSlotOffer]));
   CUR.range = RP.name; CUR.seed = 1; CUR.day = "-";
+  // 10/18 (Faraz, "List always stands"): restated from the seed's own weeks list - with Philip PREFERRED and submitted by his
+  // one 11/30 offer, every day of the period outside his listed weeks but that offered one carries outside-available-weeks for
+  // primary (from 9/23 'submitted' set the list aside for the whole period, so none of them did - and since painting fix B the
+  // outside-offers penalty that stood in for it is waived below his share); the offered 11/30, off his weeks, is lifted by the
+  // offer (a dated row) - painting adds days. The reasons are read from hard + conflicts, so a day he holds by lock counts too.
+  {
+    const hasWeeks = (e) => (e.hard || []).concat(e.conflicts || []).some((r) => String(r).split("@")[0] === "outside-available-weeks");
+    const outside = daysList(FIXP.period.start_day, FIXP.period.end_day).filter((d) => d >= PHILIP_WEEKS_FROM && !PHILIP_WEEK_DAYS.has(d) && d !== PH_DAY);
+    ok(outside.length > 20, "10/18: the restatement is not vacuous (" + outside.length + " period days outside his weeks)");
+    eq(outside.filter((d) => !hasWeeks(R.eligibility(ctxPh, d, P, PHILIP))), [], "10/18: Philip (preferred, one 11/30 offer) carries outside-available-weeks on every period day outside his weeks but the offered one");
+    eq(hasWeeks(R.eligibility(ctxPh, PH_DAY, P, PHILIP)), false, "10/18: ...and his offered " + PH_DAY + " (off his weeks) is lifted by the offer - painting adds days");
+  }
   // open slot nobody offered and nobody's rules allow: Khan's W control day (Tue 12/1 with the four unavailable rows) inside the period
   const FIXW2 = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "khan-dated-row-2026-12-01.json"), "utf8"));
   const inputOpen = mkInput({ periods: [FIXP.period], offers: FIXP.offers });

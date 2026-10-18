@@ -147,18 +147,29 @@
 //                 mode the day is also the hard 'not-offered' whatever the
 //                 month, so the soft surfaces only on a claim result
 //                 (opts.claim) and names the day as outside his offers for the
-//                 open-shifts board. Every
+//                 open-shifts board. outsideOffersOn(ctx, day, role, id) is the
+//                 ONE reading of that preferred-mode month scope (painting fix B,
+//                 10/18): eligibility always carries the term, and the generator
+//                 waives it while a placement still brings him towards his
+//                 share (the mirror of the offered taper). Every
 //                 offer is folded into P.avail as a dated available row for
 //                 its role (item W: it lifts the weekday-pattern family incl.
 //                 hardNeverWeekdays for that date and role; obligations never
 //                 lift) - one code path decides. The dated lists
-//                 (whitelist-month, outside-available-weeks) are NOT applied
-//                 to a submitted surgeon inside the period (offers supersede
-//                 them); for rules_only / not_started surgeons, and on any day
+//                 (whitelist-month, outside-available-weeks) are set aside
+//                 for a submitted EXHAUSTIVE surgeon inside the period (his
+//                 not-offered governs) and STAND for a preferred one (10/18,
+//                 Faraz: "List always stands" - painting only adds days; an
+//                 offer, a dated row, lifts them on its own date and role);
+//                 for rules_only / not_started surgeons, and on any day
 //                 outside every period, today's rules apply byte for byte.
-//                 opts.claim (a Prompt 13 claim = an offer made on the spot)
-//                 skips the exhaustive 'not-offered' only. offerState(ctx,
-//                 day, id) / offeredOn(ctx, day, role, id) expose the facts;
+//                 opts.claim (a Prompt 13 claim = an offer made on the spot;
+//                 the board's claims and every trade path) skips the
+//                 exhaustive 'not-offered' and, for a surgeon submitted for
+//                 the period (either mode), his dated lists (10/18, Faraz:
+//                 "taking it counts as painting it"). offerState(ctx,
+//                 day, id) / offeredOn(ctx, day, role, id) / outsideOffersOn(ctx,
+//                 day, role, id) expose the facts;
 //                 malformed rows and periods warn and are dropped (fail
 //                 closed: a dropped offer never widens anyone's days).
 //   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
@@ -1235,6 +1246,27 @@ function offeredOn(ctx, day, role, surgeonId) {
   var st = offerState(ctx, day, surgeonId);
   return !!(st && st.status === "submitted" && st.roles.indexOf(role) >= 0);
 }
+// outsideOffersOn(ctx, day, role, surgeonId) -> true when a PREFERRED-mode surgeon's
+// soft 'outside-offers' term applies to that day and role: the day lies inside a
+// period he is 'submitted' for, his mode there is 'preferred', he did not offer that
+// role that day, and he offered at least one day OF THAT PERIOD in the day's calendar
+// month (B10, 9/23 - P.offerMonths, keyed per period). The ONE reading of B10's
+// per-month scope (painting fix B, Faraz 10/18): rdStatic's soft push (its preferred
+// leg) and the generator's waiver (genOfferTaper / genTaperSoftList - the term is
+// waived while a placement still brings him towards his share) both call it, so the
+// two can never drift. Exhaustive answers false: his day is the hard 'not-offered',
+// and the soft term rdStatic pushes for him (period-wide, for the claim result) is
+// its own leg - never waived. Read-only; false (never a throw) for an unknown
+// surgeon, a role other than primary / backup, or a day outside every period.
+function outsideOffersOn(ctx, day, role, surgeonId) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  var k = ctx && ctx.periodOfDay ? ctx.periodOfDay[day] : undefined;
+  if (!P || k === undefined || (role !== "primary" && role !== "backup")) return false;
+  var key = ctx.periods[k].key;
+  if (P.offerStatus[key] !== "submitted" || P.offerMode[key] !== "preferred") return false;
+  if ((P.offers[day] || 0) & RD_MASK[role]) return false;
+  return !!P.offerMonths[key + ":" + day.slice(0, 7)];
+}
 
 /* ------------------------------------------------------------ helpers */
 
@@ -1579,15 +1611,22 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // is true and the weekday-pattern family below is lifted for it - W) earns the
   // 'offered' bonus in either mode; a non-offered day is 'not-offered' (hard, applied
   // by eligibility() unless the caller claims) in exhaustive mode and 'outside-offers'
-  // (soft) under the ordinary rules in preferred mode. offersGovern also switches the
-  // dated lists (whitelist-month, outside-available-weeks) off for him inside the
-  // period. rules_only / not_started, or a day outside every period: nothing here.
-  var offersGovern = false;
+  // (soft) under the ordinary rules in preferred mode. In EXHAUSTIVE mode the dated lists
+  // (whitelist-month, outside-available-weeks) are set aside for him inside the period
+  // (listsAside - his not-offered governs every day he did not paint). In PREFERRED mode
+  // they stand (10/18, Faraz: "List always stands" - painting only adds days; an offer is
+  // a dated row, so it lifts them on its own date and role): from 9/23 'submitted' set
+  // them aside in both modes, so nothing kept a weeks-list surgeon to his weeks - in a
+  // month he painted nothing (no outside-offers there, B10) and, since painting fix B,
+  // in a painted month below his share (the term waived). rules_only / not_started, or a
+  // day outside every period: nothing here.
+  var offersGovern = false, listsAside = false;
   var perIdx = ctx.periodOfDay[date];
   if (perIdx !== undefined) {
     var perKey = ctx.periods[perIdx].key;
     if (P.offerStatus[perKey] === "submitted") {
       offersGovern = true;
+      listsAside = P.offerMode[perKey] === "exhaustive";
       if ((P.offers[date] || 0) & mask) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
       else {
         if (P.offerMode[perKey] === "exhaustive") res.notOffered = true;   // hard unless the caller claims (eligibility)
@@ -1595,8 +1634,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
         // only in a calendar month where he offered at least one day OF THIS PERIOD (P.offerMonths, keyed per period);
         // in a month he did not paint at all he competes on the equal share like a rules-only colleague. Status / mode
         // stay period-wide. Exhaustive is untouched: the day is outside "only these days" whatever the month, so the
-        // label stays for the claim result.
-        if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || P.offerMonths[perKey + ":" + date.slice(0, 7)])) soft.push({ reason: "outside-offers", weight: W.outsideOffers });
+        // label stays for the claim result. Painting fix B (10/18): the preferred leg reads outsideOffersOn - the ONE
+        // reading of this month scope, the same the generator's waiver reads (the term is waived there while a
+        // placement still brings him towards his share; eligibility itself always carries it).
+        if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || outsideOffersOn(ctx, date, role, id))) soft.push({ reason: "outside-offers", weight: W.outsideOffers });
       }
     }
   }
@@ -1664,17 +1705,26 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // lifts (edit the window in Setup instead) - unlike the weeks whitelist.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
-  var governed = !!((P.governedMonths[info.month] || 0) & mask) && !offersGovern; // P2: offers supersede the dated lists for a submitted surgeon
-  if (governed) {
-    if (!rowAvail) datedBlock = "whitelist-month";
-  } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
+  // the recurring whitelist's own answer, read whether or not a month list governs: it speaks whenever the month is not
+  // governed - and, for a claim (below), whenever the dated lists are set aside
+  var recurringOff = false;
+  if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
     var wa = rules.weekendsAvailable;
     var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
-    if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
+    if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) recurringOff = true;
   }
-  if (isPrimary && !offersGovern && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
+  var governed = !!((P.governedMonths[info.month] || 0) & mask) && !listsAside; // P2: exhaustive offers set the dated lists aside; 10/18: a preferred surgeon's lists stand
+  if (governed) {
+    if (!rowAvail) datedBlock = "whitelist-month";
+  } else if (recurringOff) notRecurring = true;
+  if (isPrimary && !listsAside && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
   if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
+  // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade by a surgeon submitted for the period reads his
+  // day as if his dated lists did not exist - exactly the pre-10/18 reading, where they were set aside: the month is then
+  // not governed, so the recurring whitelist speaks, and neither list code appears. eligibility() uses it for opts.claim
+  // (rdStatic's memo has no claim key). Exhaustive needs none - its lists are aside already (listsAside).
+  if (offersGovern && !listsAside) res.claimHard = hard.concat(recurringOff && !waive ? ["not-recurring-available"] : []);
   if (notRecurring && !waive) hard.push("not-recurring-available");
   // Small items (9/22): an EXPLICIT dated list stays HARD on a holiday-unit day -
   // the holiday waiver (waive, above) lifts the recurring weekday patterns only,
@@ -1723,10 +1773,15 @@ function rdAssumeMap(assume) {
 //                    are unaffected by the flag.
 //   skipPatternSoft - weekendUnitPatterns adds the style mismatch and the weekend-contribution
 //                    term (weekend-primary / weekend-backup) itself, once per pattern.
-//   claim          - a Prompt 13 claim is an offer made on the spot (Prompt 14 P2): a submitted
+//   claim          - a Prompt 13 claim is an offer made on the spot (Prompt 14 P2): the board's
+//                    Take, every trade path and the painter's day check pass it. A submitted
 //                    surgeon in exhaustive mode may claim a non-offered day when every other
-//                    hard rule passes - the flag skips 'not-offered' only (the result still
-//                    carries the soft 'outside-offers' so the board can say so).
+//                    hard rule passes (the flag skips 'not-offered'; the result still carries the
+//                    soft 'outside-offers' so the board can say so), and - 10/18, Faraz "taking
+//                    it counts as painting it" - a surgeon submitted for the day's period, either
+//                    mode, is read as if his dated lists did not exist (st.claimHard: no list
+//                    code, his recurring whitelist where the month list stood). Every other hard
+//                    rule stands; one who never painted keeps his lists.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1753,7 +1808,12 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   }
   var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
   if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
-  hard = hard.concat(st.hard);
+  // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade (opts.claim) by a surgeon SUBMITTED for the day's
+  // period - either mode - is his own choice, like painting that day (claim_open_slot also records the offer), so it is read
+  // as if his dated lists did not exist: st.claimHard (preferred - the pre-10/18 reading, the recurring whitelist included
+  // where his month list stood); an exhaustive surgeon's st.hard has its lists aside already. Generate (no claim flag)
+  // still never places a preferred surgeon off his list, and a surgeon who never painted keeps his lists on claims too.
+  hard = hard.concat(opts.claim && st.claimHard ? st.claimHard : st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
   // Prompt 23 review (10/1): hardNeverWeekdaysNoticeDays measures a NEW placement from ctx.today. A slot he already
   // holds on the STANDING schedule was placed when the notice allowed it - the held slot is a fact as far as the notice
@@ -2580,6 +2640,7 @@ if (typeof module !== "undefined") {
     eastBusyOn: function (ctx, id, d) { var P = ctx && ctx.per ? ctx.per[id] : null; return !!P && rdEastBusyOn(ctx, P, d); },
     offerState: offerState,
     offeredOn: offeredOn,
+    outsideOffersOn: outsideOffersOn, // painting fix B (10/18): the ONE reading of B10's per-month scope (preferred mode)
     rdFmt: rdFmt,
     rdParse: rdParse,
     rdAddDays: rdAddDays,

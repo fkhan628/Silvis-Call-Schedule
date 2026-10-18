@@ -1543,22 +1543,33 @@ where `not-offered` is skipped, so the board can name the day as outside his off
 rows feed, so it is a dated row in item W's sense: it lifts the weekday-pattern family (hardNeverWeekdays included)
 for that date and role and never an obligation — vacations and the trailing edge, East busy / forecast / standing days,
 derived-week locks, windows, backupOptOut, caps, runs, the other role all still apply on an offered day. The dated
-lists (`whitelist-month`, `outside-available-weeks`) are not applied to a submitted surgeon inside the period (offers
-supersede them — one mechanism); rules-only and silent surgeons, and every day outside a period, get today's rules
+lists (`whitelist-month`, `outside-available-weeks`) are set aside for a submitted **exhaustive** surgeon inside the
+period (`listsAside` — his `not-offered` governs every day he did not paint) and **stand** for a preferred one (Faraz
+10/18, "List always stands": painting only adds days — an offer, a dated row, lifts them on its own date and role; from
+9/23 being submitted set them aside in both modes, so nothing held a preferred weeks-list surgeon to his weeks — rules doc §8);
+rules-only and silent surgeons, and every day outside a period, get today's rules
 byte for byte (the whole regression runs unchanged with `periods: []`). This is the answer to the Tue/Thu gap (rules
-doc §8 item 12): Acton's and Philip's rules allow those days even when their lists do not name them. A Prompt 13
+doc §8 item 15): Acton's and Philip's rules allow those days even when their painting does not name them — since 10/18
+not a day a dated list of theirs excludes (Philip's weeks) unless they painted it. A Prompt 13
 claim is an offer made on the spot: `eligibility(ctx, day, role, id, { claim: true })` skips the exhaustive
-`not-offered` only, and `claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
+`not-offered` and — for a surgeon submitted for the period, either mode — his dated lists (Faraz 10/18, "taking it
+counts as painting it"; the trade paths pass the same flag; a surgeon who never painted keeps his lists on claims), and
+`claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
 applied after the open-shifts branch; the freeze guard yields to a claim in progress, transaction-locally) — except
 for a claimer listed in the period's `rules_only_ids`: he chose "go by my rules", one offer row would flip his derived
 status to submitted for the whole period, so his claim is recorded in `schedule_days` and the audit row (`detail.offer
-= false`) only; a surgeon with nothing entered does get the row and becomes submitted (preferred) by it. **Trades are
-not there yet (review 9/23):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`) calls
-`eligibility` without the claim flag and `apply_trade()` writes no offer row, so once part 3 passes `offers` / `periods`
-into `ctxInputs` an exhaustive surgeon could not be traded onto a non-offered day; part 3 must either pass `{ claim:
-true }` there (a trade acceptance is an offer made on the spot, the same reading as a claim) and give `apply_trade()`
-the same upsert block, or Faraz rules that such trades are refused — latent until then, because `ctxInputs` carries
-no offers today. The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
+= false`) only; a surgeon with nothing entered does get the row and becomes submitted (preferred) by it. **Trades
+(review 9/23; settled by part 3c):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`)
+passes `{ claim: true }` — a trade acceptance is an offer made on the spot, the same reading as a claim — so an
+exhaustive surgeon can be traded onto a non-offered day and, since 10/18, any submitted surgeon onto a day his dated
+list excludes (read as if his lists did not exist — `claimHard`, his recurring whitelist included); `apply_trade()` still
+writes no offer row, so such a traded day later reads as a conflict on his held slot (the day editor names it; Generate
+keeps it and lists it under `fixedViolations`), as an exhaustive surgeon's traded non-offered day already did — closing
+that is the open `apply_trade` offer upsert (SQL, report-first). A claim records its offer, so a claimed day does not
+— except for a claimer listed in the period's `rules_only_ids` (submitted only by an offer of his elsewhere in the
+period): `claim_open_slot` writes no row for him, so his claimed day off his list can show the same conflict. The painter consults `eligibility` with the same flag: a day
+his dated list excludes asks one confirmation ("outside your listed weeks") while he has not painted the period yet,
+and none once he is submitted (as before 10/18). The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
 day and weekend units an eligible surgeon offered are filled before the rest (`genOfferedUnits` / `genOrder`), so a
 surgeon's offered days are placed before his own non-offered placements can consume his caps or runs; the bonus
 already makes an offered candidate beat a rules-only candidate for the same slot; and **the bonus stops at the share**
@@ -1570,13 +1581,42 @@ measured Acton offering every November day, seeds 1–3: 12 primaries / 5 backup
 taper, 11 / 10 / 9 primaries and 3 backups after it — his eight primary locks already equal his target and November's
 open primaries exceed the sum of everyone's targets, so every over-share day of his is one no colleague below his own
 share could take, which is the invariant the regression pins; caps stay hard; a surgeon with no target — a windows
-surgeon — is never tapered). `diagnostics.offers`
+surgeon — is never tapered). ⟶ **Painting fix B (Faraz 10/18; Prompt 32 step 5 (b)) — the taper's mirror:** a
+preferred colleague's `outside-offers` term is **waived while the placement still brings him towards his share** and
+stands beyond it. Same capacity (`genOfferCapacity`: `ceil(T − 0.5)` − his count — **every day he holds** in the month
+and role), consumed in **one order in the fill and the evaluation: his days that carry neither term first** (a day of the
+month in a period he is not submitted for or did not paint that month in, or in no period — a month split by a period
+boundary: January 2027, the first period ending Sun 1/3; `helpers.offerTimeline` moves a Friday / Saturday end to the
+Sunday, so the shape recurs), **then his offered days, then his outside days**: in the fill `genOfferTaper` takes the
+placement's own neither-term days off the capacity, tapers its offered days beyond what is left and subtracts
+`weights.outsideOffers` for each outside day within what the offered days then leave; in the evaluation `genTaperSoftList`
+starts from the lock-only count (`G.base`), takes off his generated neither-term days and then his generated offered slots
+(`genPlacedKinds` — read from the schedule by `rules.offeredOn` / `rules.outsideOffersOn`, whatever their dates and
+whatever the weights, so the order holds with the taper switched off too), re-labels or drops the offered bonuses beyond
+what the neither-term days leave, and drops the `outside-offers` terms of his first outside days (date order) within the
+remainder — a zero-weight term never stays in the list (review 10/18 round 2: the evaluation used to measure the capacity
+on the lock-only schedule and take off only his offered days, so in a split month it waived terms — and kept bonuses —
+for a surgeon already past his share; `test/painting.test.js` splitInput pins the January shape). The days in scope come from **`rules.outsideOffersOn(ctx, day,
+role, id)`**, the ONE reading of B10's per-month scope (preferred, submitted, a month he painted in, the role not offered
+that day) — `rdStatic`'s soft push reads it for its preferred leg too, so the rule and the waiver cannot drift; the
+generator never reads `P.offerMonths` itself (its browser rules API lists the helper). Exhaustive is untouched (the
+helper answers false; its claim-result term is never waived); a surgeon with no target for the role is neither tapered
+nor waived; `eligibility()` itself always carries the term (the day editor and the board still read "preferred days:
+penalty"). Why: before it a full painter kept winning placements up to about share + 3 against a partial painter
+(the +6 never stopped; smoothing tolerance 2 < 6 never moved them back). Measured on the painting fixture (§23): p1 / p2
+99 / 100 and 99 / 99 primaries / backups over 16 months (were 110 / 123 and 111 / 122), max weighted excess +1.2 / +0.7
+(were +2.6 / +2.6), every surgeon within share + 1 per role; both controls unchanged. `diagnostics.offers`
 = the periods touching the range, `byPerson[id] = { status, mode, offered, placed, unplaced: [{ day, role, reason,
 holidayUnit }] }` (unplaced offers carry the slot's reason — `slot-locked:<id>`, `holds-other-role`, `held-by:<id>`…;
 on a holiday-unit day the cause, `holiday-unit:<name> <day> <reason>`, the unit's other day he fails, because one
 holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
-(every generated placement of a submitted surgeon on a day he did not list — the publish email of part 4/6 reads it:
-"you were placed on 11/5, a day you did not list — trade if needed"); an open slot inside a period carries
+(every generated placement of a submitted surgeon on a day he did not list — the report the publish e-mail of part 4/6
+is to read, "you were placed on 11/5, a day you did not list — trade if needed"; that e-mail line is **not built yet**
+(still open, listed at the end of part 3c above) — no e-mail names these days today; a REPORT built from the schedule,
+not from the soft list: since fix B it still lists every such placement, its term waived below his share or standing
+beyond it; the Generate preview renders it as "Placed outside painted days" (GenDiagnostics, `gen-outside-offers`; review
+10/18 round 2 — the soft-penalty list there shows only the standing terms), and My schedule tags each such published day
+`not offered`); an open slot inside a period carries
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
 6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [14, 3] since 9/30 - [42, 14, 3] from 9/27; `lengthMonths` 6 since 9/30), end = the last day of the Nth month
@@ -1610,8 +1650,9 @@ offers, the record stays honest); `entered_by 'scheduler'`, `source 'email-relay
 shape plus source and `entered_by` is the seed's ownership mark (as `schedule_days` notes carry `seed: <source>`):
 stale seed-owned offers are deleted set-based for days on/after today only, and an offer entered or relayed **in the
 app** is never updated or deleted (a planned row over the surgeon's own entry reads *blocked* in the diff). For a
-surgeon so *submitted* the importer writes **no `available` row** for a day inside the period and **no
-`explicitListMonths` entry** for a month overlapping it (Burchett's blob entry becomes October only; his statement
+surgeon so *submitted* in **exhaustive** mode the importer writes **no `available` row** for a day inside the period and
+**no `explicitListMonths` entry** for a month overlapping it (since 10/18 only exhaustive — in a preferred period both
+stay beside his offers, Faraz "List always stands"; Burchett, exhaustive: his blob entry becomes October only; his statement
 lists stay in the blob as data); `unavailable` / `no_backup` / `backup_only` rows and everything outside the period
 are unchanged, row for row. The per-surgeon status the dry run prints (`surgeon | status | mode | offered days`) is
 derived like SQL `offer_status()` from the whole list, whatever today is. Live consequences of the first apply:
@@ -1632,8 +1673,9 @@ rolls back loudly — so **the seed's offers must be applied before 2026-10-02**
 enter in the app **once the Periods section ships (the UI wave)** — before that the only late path is a scheduler-JWT
 REST write (OF003 is skipped for `silvis_is_sched()`; the CLI is refused). Three consistency refusals guard the seed itself, whether or not the option is on: a surgeon *with*
 a mode in a period may not keep an **untagged** `explicitAvailable` / `offeredDays` / `availableWeeks` list that
-reaches into it (`OFFER_SOURCE_INVALID` — his status would retire the rows and the month while no offer carried the
-days), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
+reaches into it (`OFFER_SOURCE_INVALID` — in an exhaustive period his status would retire the rows and the month while
+no offer carried the days; since 10/18 only an **exhaustive** period retires them — `impOfferCoverage` — and a preferred
+surgeon's month lists and available rows stay beside his offers, Faraz "List always stands"), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
 the authenticated-read `call_periods`). A submitted surgeon whose planned rows come to 0 (listed days all past or on
 a vacation) is named in the dry run's warnings: the retirement follows the whole list, but a fresh database would read
 him `not_started` until a row exists.
@@ -2626,7 +2668,32 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   measures painters who offer every day against partial painters and two controls. Prompt 32's soft 7 holds every painter-month
   at 7 primaries, but a full painter still ends above his weighted share (backup up to about share + 2.8) because a partial
   painter's untapered `outside-offers` term (+6) protects the colleague's unpainted days; the engine is unchanged and a fix is
-  a decision for Faraz (the private report).
+  a decision for Faraz (the private report). ⟶ **10/18: fix B applied (Faraz: "go ahead with ... painting fix")** - the
+  taper's mirror, §17: a preferred colleague's `outside-offers` term is waived while the placement still brings him towards
+  his share (offered days consume the capacity first), stands beyond it; `rules.outsideOffersOn` is the one reading of the
+  scope. The fixture's partial pins moved to the prototype's row, reproduced exactly (p1 99 / 100, p2 99 / 99; max weighted
+  +1.2 / +0.7, mean +0.46 / +0.43; the partial painters at a mean weighted -0.19 / -0.35 / -0.35; everyone within share + 1
+  per role), the two control pins did not move. The suite now also restates fix B per run, colleague, month and role from
+  the fixture's own offers (the terms left = the outside days beyond the capacity; `diagnostics.offers.outsideOffers` still
+  reports all of them - 268 waived and 3 standing over the 8 seeds) and runs an order fixture (two surgeons; one is forced past
+  his explicit target of 3, his two painted days late in the month) that pins the offered-days-first count against a
+  date-ranked reading in the evaluation. The fill's own count is pinned on one placement (review 10/18: no run's fill met
+  the case): `fillOrder` drives `genOfferTaper` (exported for it) on the order board's two weekend blocks at the capacity
+  edge - a painted day and unpainted days of one block, the painted day first or last by date - with the seed's weights and
+  two variants where the waiver and the taper differ (with the seed's 6 / 6 a date-ranked fill scores the same sum), plus
+  exhaustive (never waived), no target and no period. Review 10/18 round 2 added three pins: the taper switched off
+  (`offerBonusOverShare` = `offerBonus`, 6 / 6 - Setup data) in `fillOrder` and on the order board (8 / 14 outside-offers
+  terms left per seed, primary / backup), so a fill or an evaluation that counted the painted days only while the taper is
+  on fails; and a split-month board (`splitInput`, the January shape - the first period to Sun 1/3, the next from Mon 1/4,
+  the painter in the second only, two surgeons) whose run restates the terms and bonuses left counting EVERY day he holds
+  (his first-period days first), with `splitFill` driving `genOfferTaper` on a Sun 1/3 - Tue 1/5 placement across the
+  boundary. The regression's P2 offers fixture moved exactly one pin, and what moved is the schedule, not a standing term:
+  the old pin ("one outside-offers term per Acton placement off his list") compared 0 with 0 on 393d5ec, where this run gave
+  Acton no off-list November placement; under fix B the waiver lets the fill give him Mon 11/30 backup, off his list but
+  below his November backup share (capacity 1), with no term - the day is pinned, the count restated from the fixture with
+  the same capacity rule, and `diagnostics.offers.outsideOffers` still names it; `test/rules.test.js` pins the helper, its
+  equivalence with eligibility's term, and the source contract; `test/data-layer.test.js` pins the new Periods and painter
+  words and the preview's "Placed outside painted days" list (GenDiagnostics lifted and run).
 - **Tests.** `test/rules.test.js` (the cap reading table, `"none"`, unreadable values, the weights helper, the over-soft-limit
   walk), `test/generator-regression.js` (§12 items 7 and 15), `test/water-fill.test.js` and `test/nov-backups.test.js`
   (re-pinned), `test/totals.test.js`, `test/exports.test.js`, `test/importer.test.js` (the seed's values), `test/publish.test.js`,

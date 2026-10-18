@@ -1490,6 +1490,25 @@ eq(p5.blob.surgeonRules[BURCHETT].explicitAvailable, stripNoteKeys(seed.surgeonR
 }
 eq([p5.timeOffRows, p5.scheduleDayRows], [plan.timeOffRows, plan.scheduleDayRows], "P5: time_off and schedule_days plans are byte-identical to the legacy plan (the locks stay locks)");
 eq(p5.stats.call_offers, 79); eq(p5.stats.call_periods, 2, "9/30: two periods planned");
+// 10/18 (Faraz, "List always stands"): only an EXHAUSTIVE period retires a surgeon's month lists and available rows; in a
+// PREFERRED period they stay beside his offers. The seed has Burchett exhaustive, so the plan above is unchanged; a variant
+// with Burchett preferred keeps his November / December entries and rows, plans the same offers, and the engine reads his
+// November list as standing (Generate) while a claim lifts it (taking it counts as painting it)
+{
+  const seedPref = clone(seed);
+  seedPref.offerPeriods[0].offerModes[BURCHETT] = "preferred";
+  const pp = IMP.importPlan(seedPref, { now: P5_NOW, offerPeriods: true });
+  eq(pp.blob.surgeonRules[BURCHETT].explicitListMonths, plan.blob.surgeonRules[BURCHETT].explicitListMonths, "10/18: Burchett PREFERRED - his October, November and December entries all stay (== the legacy plan's)");
+  eq(pp.availabilityRows.filter((r) => r.person_id === BURCHETT), plan.availabilityRows.filter((r) => r.person_id === BURCHETT), "10/18: ...and his available rows inside the period stay (== the legacy plan's)");
+  eq(pp.offerRows.filter((o) => o.person_id === BURCHETT), p5.offerRows.filter((o) => o.person_id === BURCHETT), "10/18: ...his offers are planned exactly as in exhaustive mode");
+  eq([pp.blob.surgeonRules[PHILIP].explicitListMonths, pp.availabilityRows.filter((r) => r.person_id === PHILIP)], [p5.blob.surgeonRules[PHILIP].explicitListMonths, p5.availabilityRows.filter((r) => r.person_id === PHILIP)], "10/18: Philip (still exhaustive) is retired exactly as before");
+  const ctxPP = R.buildContext({ roster: pp.blob.roster, surgeonRules: pp.blob.surgeonRules, groupRules: pp.blob.groupRules, holidays: pp.blob.holidays,
+    timeOffRows: pp.timeOffRows, availabilityRows: pp.availabilityRows, schedule: rowsToSchedule(pp.scheduleDayRows), periods: pp.periodRows, offers: pp.offerRows, today: SA.SEED_TEST_TODAY });
+  eq(ctxPP.warnings, [], "10/18: the preferred variant builds a warning-free ctx");
+  eq([R.offerState(ctxPP, "2026-11-19", BURCHETT).status, R.offerState(ctxPP, "2026-11-19", BURCHETT).mode], ["submitted", "preferred"], "10/18: Burchett submitted / preferred in the variant");
+  ok(R.eligibility(ctxPP, "2026-11-19", "backup", BURCHETT).hard.indexOf("whitelist-month") >= 0, "10/18: Burchett preferred, Thu 11/19 backup (off his November list) - his list stands for Generate");
+  ok(R.eligibility(ctxPP, "2026-11-19", "backup", BURCHETT, { claim: true }).hard.indexOf("whitelist-month") < 0, "10/18: ...a claim of it is not blocked by the list (taking it counts as painting it)");
+}
 // (7) the offers-aware ctx from the plan: statuses / modes as the DB would derive them; Burchett's November whitelist is now 'not-offered';
 //     rules-only and not-started surgeons are byte-identical to the legacy ctx on every period day and role
 {

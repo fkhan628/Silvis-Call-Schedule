@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-UpVD5XenpMCzd8kSmvPV15evQourrGgJ2byjmckW9U4=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-T5ldFuD3uw+tdX933uC7zfcBjHEOrcogbDgQz9Gw9UE=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-KFN+CGcFVD4ZRA3o/Gy7kdAxETW2nYKZWqJS/gMtisU=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-7B5JQnzGgLh5cTaWiXPxPt6L/vuaj41FQWMKNvt3a9E=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -186,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.14b";
+    var APP_VERSION = "2026.10.18a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -16922,7 +16922,7 @@ function OfferPainterSheet({
       marginTop: 4,
       lineHeight: 1.45
     }
-  }, shownMode === "exhaustive" ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "Your days are placed first; when a slot would otherwise stay open your ordinary rules may place you on another day, and your publish e-mail names every such day - trade if needed. (The default.)", periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""), periodStatus !== "submitted" && React.createElement("div", {
+  }, shownMode === "exhaustive" ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. This applies in each month where you painted at least one day of this period. Your listed weeks, or the days you listed for a month, still apply - painting only adds days. My schedule marks each day you did not paint 'not offered' - trade if needed. (The default.)", periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""), periodStatus !== "submitted" && React.createElement("div", {
     style: {
       marginTop: 6,
       display: "flex",
@@ -25748,7 +25748,35 @@ function GenDiagnostics({
       color: "#1a8040",
       margin: 0
     }
-  }, "None.")), React.createElement("div", {
+  }, "None.")), dg.offers && Array.isArray(dg.offers.outsideOffers) && Array.isArray(dg.offers.periods) && dg.offers.periods.length > 0 && React.createElement("div", {
+    style: box,
+    "data-testid": "gen-outside-offers",
+    "data-count": dg.offers.outsideOffers.length
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px"
+    })
+  }, "Placed outside painted days (", dg.offers.outsideOffers.length, ")"), dg.offers.outsideOffers.length === 0 ? React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#1a8040",
+      margin: 0
+    }
+  }, "None - nobody who painted days is placed on a day he did not paint.") : React.createElement(React.Fragment, null, React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82",
+      margin: "0 0 4px",
+      lineHeight: 1.5
+    }
+  }, "Every placement of a \"preferred days\" surgeon on a day or role he did not paint. Below his fair share for the month - or in a month he painted no day of that day's period - it carries no off-list penalty; beyond it the off-list penalty stands and the day is also counted under Soft penalties (\"outside the offered days\"). Once published, his My schedule marks the day \"not offered\"."), dg.offers.outsideOffers.map(o => React.createElement("div", {
+    key: o.day + o.role,
+    "data-outside-offer": o.day + ":" + o.role + ":" + o.id,
+    style: {
+      fontSize: 12,
+      fontFamily: mono
+    }
+  }, fmtMD(o.day), " ", o.role, " - ", nameOf(o.id))))), React.createElement("div", {
     style: box
   }, React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.subT), {}, {
@@ -26030,7 +26058,7 @@ function PeriodsSection({
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them, a \"preferred days\" surgeon only when a slot would otherwise stay open - the diagnostics list every such placement. The roll call below is derived from what is on file - who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules. Remind e-mails one surgeon the heads-up (enter vacations; painting days is optional)."), lead.next && React.createElement("div", {
+  }, "A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). \"Generate this period\" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in \"only these days\" mode is never placed outside them; a \"preferred days\" surgeon's painted days are placed first, and until he reaches his fair share for the month Generate does not hold a day he did not paint against him - beyond his share he is kept to his painted days unless no colleague can reasonably take the slot (in each month where he painted at least one day of the period); his listed weeks, or the days he listed for a month, still stand - painting only adds days. The Generate preview lists every placement outside a surgeon's painted days (\"Placed outside painted days\"), below his share or beyond it. The roll call below is derived from what is on file - who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules. Remind e-mails one surgeon the heads-up (enter vacations; painting days is optional)."), lead.next && React.createElement("div", {
     "data-testid": "prd-lead-warn",
     "data-kind": "next-missing",
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
