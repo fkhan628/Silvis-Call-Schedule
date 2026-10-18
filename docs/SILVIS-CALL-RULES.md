@@ -887,7 +887,7 @@ primary-week days keep counting toward Fierce's cap only. Khan's and Acton's 9/2
 default (item 5) are superseded. The engine: §6 and the build guide §23.
 
 **Decided by Faraz on 10/18 — painting fix B (Prompt 32 step 5):** a "preferred days" surgeon's painted days are placed
-first; until he reaches his fair share for the role and month a day he did not paint costs him nothing extra, and beyond
+first; until he reaches his fair share for the role and month a day he did not paint carries no penalty, and beyond
 his share he is kept to his painted days (the `outside-offers` penalty stands) unless no colleague can reasonably take the
 slot. Every day he holds in the month counts against his share (review 10/18: days in another period of the same month
 first). "Only these days" is unchanged, and every day he is placed on outside his painted days is still reported
