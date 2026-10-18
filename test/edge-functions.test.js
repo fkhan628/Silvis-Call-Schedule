@@ -3584,6 +3584,16 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
   const resetAt = f.indexOf("const rr = await runEastReviewResets({ trusted: vacTrusted, cacheRows, vacationCodes, fromMon, feed });");
   assert.ok(resetAt > f.indexOf(lines[9]) && resetAt < f.indexOf(lines[10]), "the reset sits after the reload and before the extra leg");
 });
+// A4 (Cowork's 10/16 4:40 AM review of the deploy record): Faraz's east-feed-refresh lines are concrete - every supabase line carries the
+// Silvis-linked workdir ON THE LINE (a CLI line without --workdir walks up from the current folder to the Davenport-linked one; a $wd set
+// in another window is empty here and would shift the flags), the deploy reads --no-verify-jwt --use-api (the new laptop may have no
+// Docker), the file comes from the worktree. The concrete path goes through $env:USERPROFILE: the public repo carries no drive path under
+// a user profile (test/privacy.test.js A6b); the private apply-scripts README gives the same lines with the literal paths.
+const EFR_WD = "\"$env:USERPROFILE\\projects\\supa-silvis\"";
+const EFR_SRC = "\"$env:USERPROFILE\\projects\\silvis-p31a\\edge-functions\\east-feed-refresh\\index.ts\"";
+const EFR_DST = "\"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\east-feed-refresh\\index.ts\"";
+const EFR_LIST = "supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD;
+const EFR_DEPLOY = "supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD + " --no-verify-jwt --use-api";
 check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), section 3's record (PREPARED, NOT deployed: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, NOT scheduled yet), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
   assert.ok(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*NOT deployed[^\n]*\| never \|$/m.test(readme), "the table row");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
@@ -3591,12 +3601,28 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   assert.ok(i > 0, "section 3's record");
   const rec = s3.slice(i, s3.indexOf("\n### ", i + 10));
   assert.ok(/^### Deploy record - Prompt 31 Part A \(east-feed-refresh[^\n]*\) - PREPARED, NOT deployed$/m.test(rec), "the heading says PREPARED, NOT deployed");
-  assert.ok(rec.indexOf("supabase functions deploy east-feed-refresh --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt") > 0, "the deploy command");
+  // pin moved deliberately 10/14: Prompt 31 Part A A4 - Cowork's 10/16 4:40 AM review: the deploy line carries the workdir on the line
+  // and reads --no-verify-jwt --use-api (was: --workdir $wd ... --no-verify-jwt)
+  assert.ok(rec.indexOf(EFR_DEPLOY) > 0, "the deploy command");
   assert.ok(/apply-east-vacations\.sh/.test(rec) && /east_vacation_reset_stale/.test(rec) && /silvis_vacation_short_days/.test(rec), "the database apply comes first (the function calls its functions)");
   const order = ["apply-east-vacations.sh", "supabase functions deploy east-feed-refresh", "401", "'{\"dryRun\":true}'::jsonb", "silvis-east-feed-daily"].map((s) => rec.indexOf(s));
   order.forEach((k, n) => assert.ok(k > 0 && (n === 0 || k > order[n - 1]), "the order: apply, deploy, 401, dryRun proof, cron (step " + n + ")"));
   assert.ok(rec.indexOf("select status_code, left(content::text, 400) from net._http_response order by created desc limit 1;") > 0 && /"dryRun":true/.test(rec), "the dryRun proof and what to expect");
-  assert.ok(/<cli-workdir>/.test(rec) && !/[A-Za-z]:\\Users\\/.test(rec), "placeholders, no machine path");
+  // pin moved deliberately 10/14: Prompt 31 Part A A4 - Cowork's 10/16 4:40 AM review: concrete paths, never placeholders (was:
+  // <cli-workdir> / <your clone>): the PowerShell block is exactly list, New-Item, Copy-Item from the worktree, the sha256 of the copy,
+  // deploy, list, the 401 - every supabase line with the workdir on the line, no $wd, no <placeholder>, and still no machine path
+  const psAt = rec.indexOf("```powershell\n") + 14, ps = rec.slice(psAt, psAt + rec.slice(psAt).search(/\n[ \t]*```/));   // the fence is indented
+  assert.deepStrictEqual(ps.split("\n").map((l) => l.trim()), [
+    EFR_LIST,
+    "New-Item -ItemType Directory -Force \"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\east-feed-refresh\" | Out-Null",
+    "Copy-Item " + EFR_SRC + " " + EFR_DST + " -Force",
+    "(Get-FileHash " + EFR_DST + " -Algorithm SHA256).Hash.ToLower()",
+    EFR_DEPLOY,
+    EFR_LIST,
+    "curl.exe -s -o NUL -w \"%{http_code}\" -X POST \"https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh\"",
+  ], "the deploy block, line for line");
+  assert.ok(!/<[A-Za-z][A-Za-z -]*>|\$wd\b/.test(ps) && !/[A-Za-z]:\\+Users\\/i.test(rec), "no placeholder, no $wd, no machine path");
+  assert.ok(/SHA256SUMS/.test(rec) && /--use-api/.test(rec.replace(EFR_DEPLOY, "")), "the record says what the hash must equal and why --use-api");
   const s4 = readme.slice(readme.indexOf("## 4."), readme.indexOf("## 5."));
   const CRON = "select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$\n  select net.http_post(\n    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',\n    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',\n      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),\n    body := '{}'::jsonb,\n    timeout_milliseconds := 60000);\n$$);";
   assert.ok(s4.indexOf(CRON) > 0, "section 4 carries the report's cron statement");
@@ -3616,6 +3642,17 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("select cron.unschedule('silvis-east-feed-daily');") > 0 && s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp") > s7.indexOf("select cron.unschedule('silvis-east-feed-daily');"), "the rollback: unschedule first, then the function");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
+});
+check("A4 (Cowork 10/16 4:40 AM): the function header's deploy line is section 3's (the workdir on the line, --no-verify-jwt --use-api); section 3's four-function block lists with --workdir $wd like its deploy lines; section 7's delete of east-feed-refresh carries the workdir; no machine path", () => {
+  const head = erSrc.slice(0, erSrc.indexOf("import { serve }"));
+  assert.ok(head.split("\n").map((l) => l.replace(/\r$/, "")).indexOf("//   " + EFR_DEPLOY) > 0, "the header's deploy line");
+  assert.ok(!/supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt$/m.test(head) && !/[A-Za-z]:\\+Users\\/i.test(head), "the old bare line is gone; no machine path");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("### Deploy record"));
+  const block = s3.slice(s3.indexOf("```powershell\n"), s3.indexOf("\n```", s3.indexOf("```powershell\n")));
+  const sb = block.split("\n").filter((l) => /^supabase /.test(l));
+  assert.ok(sb.length === 5 && sb.every((l) => / --workdir \$wd /.test(l + " ")), "every line of the four-function block carries --workdir $wd: " + sb.join(" | "));
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD) > 0, "section 7's delete carries the workdir");
 });
 
 (async () => {

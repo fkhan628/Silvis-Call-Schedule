@@ -62,8 +62,10 @@
 // Secrets (by NAME): CRON_SECRET (exists - the live pg_cron jobs use it); SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are
 // injected by Supabase. No new secret.
 //
-// Deploy (Faraz, by hand - a git push never deploys a function):
-//   supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
+// Deploy (Faraz, by hand - a git push never deploys a function), Windows PowerShell, after the copy of this file into the
+// Silvis-linked workdir and its sha256 check - the whole order is edge-functions/README.md section 3, "Deploy record -
+// Prompt 31 Part A" (the workdir on the line: a supabase line without it walks up to the Davenport-linked folder):
+//   supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --no-verify-jwt --use-api
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 

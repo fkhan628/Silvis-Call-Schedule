@@ -186,7 +186,7 @@ supabase functions deploy calendar-sync        --workdir $wd --project-ref bzhsr
 supabase functions deploy office-notifications --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
 supabase functions deploy send-notification    --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
 supabase functions deploy daily-reminder       --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
-supabase functions list --project-ref bzhsroegtagqhutbnsrp
+supabase functions list --workdir $wd --project-ref bzhsroegtagqhutbnsrp
 ```
 
 Why `--no-verify-jwt` on all four: the gateway toggle only checks for ANY valid
@@ -227,18 +227,26 @@ The order (Faraz, one step at a time; the expected result in brackets):
    each call's 404 in `errors`, and no review is reset.
 2. The Part A client, on Faraz's go (Setup > East feed then shows the server refresh's audit rows). The function does
    not depend on it.
-3. Deploy (PowerShell, a CLI workdir linked to the Silvis project - section 0):
+3. Deploy - Windows PowerShell, one line at a time, each line complete on its own (no `$wd`: a variable set in another
+   window is empty and would shift the flags). The workdir is the Silvis-linked `supa-silvis` folder under Faraz's
+   user profile (set up with `supabase init --workdir`, then `supabase link --project-ref bzhsroegtagqhutbnsrp --workdir`;
+   a supabase line without `--workdir` walks up from the current folder to the Davenport-linked one, so every line here
+   carries it). The file comes from the Part A worktree `silvis-p31a` beside it, at the commit apply-scripts'
+   `SHA256SUMS.txt` names; `--use-api` deploys without Docker. The public repo names the folders through
+   `$env:USERPROFILE` (no user name here); the private apply-scripts README gives the same lines with the literal paths.
    ```powershell
-   $wd = "<cli-workdir>"
-   supabase functions list --project-ref bzhsroegtagqhutbnsrp
-   New-Item -ItemType Directory -Force "$wd\supabase\functions\east-feed-refresh" | Out-Null
-   Copy-Item "<your clone>\edge-functions\east-feed-refresh\index.ts" "$wd\supabase\functions\east-feed-refresh\index.ts" -Force
-   supabase functions deploy east-feed-refresh --workdir $wd --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
-   supabase functions list --project-ref bzhsroegtagqhutbnsrp
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh" | Out-Null
+   Copy-Item "$env:USERPROFILE\projects\silvis-p31a\edge-functions\east-feed-refresh\index.ts" "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh\index.ts" -Force
+   (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh\index.ts" -Algorithm SHA256).Hash.ToLower()
+   supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --no-verify-jwt --use-api
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
    curl.exe -s -o NUL -w "%{http_code}" -X POST "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh"
    ```
-   [`east-feed-refresh` v1 ACTIVE, the other four unchanged; then `401` - the gate, nothing read.] Then download it
-   back and byte-compare it with the repo copy, as for the others.
+   [The first list: the four live functions, ACTIVE. The hash: exactly the `east-vacations/edge-functions/east-feed-refresh/index.ts`
+   line of apply-scripts' `SHA256SUMS.txt` - anything else, stop before the deploy. Then `east-feed-refresh` v1
+   ACTIVE, the other four unchanged; then `401` - the gate, nothing read.] A new slug: nothing to back up, and the hash
+   line proves the source that was deployed.
 4. The dryRun proof, through pg_net in the SQL editor (no cron job needed; nothing is written - no `east_feed` row, no
    prune, no reset, no audit row):
    ```sql
@@ -939,7 +947,7 @@ PR), byte-diff after deploying.
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)
-or delete it: `supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp`. The data needs no
+or delete it (PowerShell): `supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"`. The data needs no
 rollback: a run writes only what the in-app refresh writes (cached weeks, the forecast prune), and every review it
 reset is in its `eastvac.review` audit row (the dates and the decision) and can be entered again by hand. The
 database half has its own rollback (the header of `sql/migrations/2026-10-14-east-vacations.sql`); run it only after
