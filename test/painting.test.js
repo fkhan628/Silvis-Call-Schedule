@@ -30,7 +30,11 @@
 // share, all 271 still reported in diagnostics.offers.outsideOffers. The two controls did not move (no outside-offers
 // term in either). The order fixture (orderInput) forces placements beyond the share and pins that the offered days
 // consume the capacity first, whatever their dates - in the evaluation (the run) and in the fill's reading of one
-// weekend placement (fillOrder drives genOfferTaper directly; review 10/18).
+// weekend placement (fillOrder drives genOfferTaper directly; review 10/18) - and, review 10/18 round 2, that they do so
+// with the taper switched off too (offerBonusOverShare = offerBonus). The split fixture (splitInput - the January shape,
+// a month split by a period boundary) pins that EVERY day he holds counts against the capacity: his days that carry
+// neither term (a period he did not paint in) first, then his offered days, then his outside days - in the evaluation
+// and in the fill's reading of one placement across the boundary (splitFill).
 //
 // Measured 10/12 (seeds 1-8 at bestOf 2, 16 painter-months per painter; excess = count - target, weighted = P + 0.5 B
 // against tP + 0.5 tB):
@@ -99,30 +103,47 @@ function fixturePainted(variant) {
   return (id, m) => variant !== "nobody" && (PAINTERS.includes(id) || (variant === "partial" && COLLEAGUES.includes(id) && DAYS.some((d, i) => d.slice(0, 7) === m && PARTIAL[id](i))));
 }
 // Painting fix B (Faraz 10/18) restated from a fixture and a run, per surgeon, month and role:
-//   held    = his days in that role; offGen = the held days he offered; offList = the held days he did not offer (a
-//             submitted surgeon - what diagnostics.offers.outsideOffers reports, waived or not); outGen = the off-list days
-//             in a month he painted in (the days rules.js gives the +outsideOffers term, preferred mode);
+//   held    = his days in that role; gen = the held days the run placed (not locked); offGen = the generated days he
+//             offered; offList = the generated days he did not offer inside a period he is submitted for (what
+//             diagnostics.offers.outsideOffers reports, waived or not); outGen = the off-list days in a month he painted
+//             in, OF THAT DAY'S PERIOD (paintedFx(id, month, day) - the days rules.js gives the +outsideOffers term,
+//             preferred mode); otherGen = the generated days that carry neither term (a day of the month in another
+//             period he did not paint in, or in no period - review 10/18 round 2: a month split by a period boundary);
 //   cap     = ceil(T - 0.5) - the days he held before the run (lockedHeld) - the placements that still bring him towards
-//             his share T (the offered taper's capacity); his OFFERED days consume it first, then his OUTSIDE days:
-//   expected = the outside-offers terms that stand = max(0, outGen - max(0, cap - offGen)) (all of them with no target);
+//             his share T (the offered taper's capacity). EVERY day he holds counts against it: his days that carry
+//             neither term first, then his OFFERED days, then his OUTSIDE days:
+//   expected = the outside-offers terms that stand = max(0, outGen - max(0, cap - otherGen - offGen)) (all with no target);
+//   offExpected = the 'offered' bonuses that stay (weights.offerBonusOverShare 0 drops the rest) = min(offGen,
+//             max(0, cap - otherGen)) - read only on the seed's weights;
+//   baseOnly / offBaseOnly = what a reading that counts only the offered days against the capacity would leave (the
+//             evaluation before review 10/18 round 2) - kept to prove the split-month check is not vacuous;
 //   byDate  = what a reading that ranks offered and outside days together by date would leave (the prototype's evaluation)
 //             - kept to prove the order check is not vacuous;
-//   terms / reported = the outside-offers terms left in diagnostics.softPenalties / his diagnostics.offers.outsideOffers rows.
+//   terms / offTerms / reported = the outside-offers terms / the 'offered' terms left in diagnostics.softPenalties / his
+//             diagnostics.offers.outsideOffers rows. submittedFx(id, day) / paintedFx(id, month, day): the fixture's own facts.
 function offerCells(out, ids, months, days, offeredFx, paintedFx, submittedFx) {
   const D = out.diagnostics, list = [];
   ids.forEach((id) => months.forEach((m) => ["primary", "backup"].forEach((role) => {
     const mem = D.impliedTargets.months[m].members[id];
     const T = role === "primary" ? mem.primaryTarget : mem.backupTarget, base = mem.lockedHeld[role];
     const held = days.filter((d) => d.slice(0, 7) === m && out.schedule[d][role] === id);
-    const offDays = held.filter((d) => offeredFx(id, d)), offList = held.filter((d) => !offeredFx(id, d));
-    const outDays = paintedFx(id, m) ? offList : [];
+    const gen = held.filter((d) => !out.schedule[d][role + "Locked"]);
+    const offDays = gen.filter((d) => offeredFx(id, d)), offList = gen.filter((d) => !offeredFx(id, d) && submittedFx(id, d));
+    const outDays = offList.filter((d) => paintedFx(id, m, d));
+    const otherN = gen.length - offDays.length - outDays.length;
     const cap = T === null ? null : Math.max(0, Math.ceil(T - 0.5) - base);
-    const expected = cap === null ? outDays.length : Math.max(0, outDays.length - Math.max(0, cap - offDays.length));
+    const capO = cap === null ? null : Math.max(0, cap - otherN);
+    const expected = cap === null ? outDays.length : Math.max(0, outDays.length - Math.max(0, capO - offDays.length));
+    const offExpected = cap === null ? offDays.length : Math.min(offDays.length, capO);
+    const baseOnly = cap === null ? outDays.length : Math.max(0, outDays.length - Math.max(0, cap - offDays.length));
+    const offBaseOnly = cap === null ? offDays.length : Math.min(offDays.length, cap);
     const ranked = offDays.map((d) => [d, "off"]).concat(outDays.map((d) => [d, "out"])).sort((x, y) => (x[0] < y[0] ? -1 : 1));
     const byDate = cap === null ? outDays.length : ranked.filter((x, j) => j >= cap && x[1] === "out").length;
-    const terms = D.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === id && s.role === role && s.day.slice(0, 7) === m).length;
+    const mine = (s) => s.id === id && s.role === role && s.day.slice(0, 7) === m;
+    const terms = D.softPenalties.filter((s) => s.reason === "outside-offers" && mine(s)).length;
+    const offTerms = D.softPenalties.filter((s) => s.reason === "offered" && mine(s)).length;
     const reported = D.offers.outsideOffers.filter((o) => o.id === id && o.role === role && o.day.slice(0, 7) === m).length;
-    list.push({ id: id, month: m, role: role, T: T, base: base, cap: cap, offGen: offDays.length, outGen: outDays.length, offList: submittedFx(id) ? offList.length : 0, terms: terms, reported: reported, expected: expected, byDate: byDate });
+    list.push({ id: id, month: m, role: role, T: T, base: base, cap: cap, offGen: offDays.length, outGen: outDays.length, otherGen: otherN, offList: offList.length, terms: terms, offTerms: offTerms, reported: reported, expected: expected, offExpected: offExpected, baseOnly: baseOnly, offBaseOnly: offBaseOnly, byDate: byDate });
   })));
   return list;
 }
@@ -202,6 +223,12 @@ function fillOrder(h) {
   const pair = (c) => [wOf(c).outsideOffers, wOf(c).offerBonus - wOf(c).offerBonusOverShare];
   eq([pair(ctx), pair(ctxX), pair(ctxB), pair(ctxO)], [[6, 6], [6, 6], [6, 4], [3, 6]], "fill order: [outsideOffers, offerBonus - offerBonusOverShare] - the seed (and exhaustive), then the two weight variants");
   const out = wOf(ctx).outsideOffers, tap = pair(ctx)[1];
+  // the taper switched off (review 10/18 round 2): offerBonusOverShare = offerBonus (6 / 6 - Setup data; "= offerBonus
+  // restores the untapered reading"). The painted days still consume the capacity first - generator.js counts them whatever
+  // weights.offerBonus is (genOfferTaper's offered test, genTaperSoftList's held count) - so beyond his share a colleague's
+  // outside day keeps its +outsideOffers; a fill or an evaluation that counted them only while the taper is on would waive it
+  const ctxT = R.buildContext(orderInput(withWeights({ offerBonusOverShare: 6 }), FILL_OFFERS));
+  eq([ctxT.warnings, pair(ctxT)], [[], [6, 0]], "fill order (taper off): buildContext raises no warning; [outsideOffers, offerBonus - offerBonusOverShare] = [6, 0]");
   // the board's facts: both blocks are weekend units of the range; a painted only FILL_OFFERS; in preferred mode every
   // other day of the blocks is eligible and carries the outside term (both roles); in exhaustive mode it is the hard
   // 'not-offered' (eligibility without a claim; the soft term it also carries is the claim result's, never waived)
@@ -211,6 +238,7 @@ function fillOrder(h) {
   FILL_WE1.concat(FILL_WE2).forEach((d) => ["primary", "backup"].forEach((role) => {
     const painted = FILL_OFFERS.includes(d), pref = [painted, true, false, !painted];
     eq([facts(ctx, d, role), facts(ctxB, d, role), facts(ctxO, d, role), facts(ctxX, d, role)], [pref, pref, pref, [painted, painted, !painted, !painted]], "fill order: " + d + " " + role + " - [offered, eligible, hard not-offered, outside term] preferred (seed, both variants), exhaustive");
+    eq(facts(ctxT, d, role), pref, "fill order (taper off): " + d + " " + role + " - the same facts as the seed's preferred board");
   }));
   const G = (c, targetA) => ({ W: wOf(c), offersLive: true, R: R, ctx: c, targets: { byMonth: { "2027-02": { a: targetA, b: { primary: null, backup: null } } } }, forced: {} });
   const S = (n) => ({ counts: { "2027-02": { a: { primary: n, backup: n }, b: { primary: 0, backup: 0 } } } });
@@ -234,12 +262,61 @@ function fillOrder(h) {
     ["offerBonusOverShare 2, 2/26 - 2/28, capacity 0: the taper reads 6 - 2", G(ctxB, T3), FILL_WE2, "primary", 3, 0, 4],
     ["outsideOffers 3, 2/19 - 2/21, capacity 1: the painted Sunday consumes it - no waiver, no taper", G(ctxO, T3), FILL_WE1, "primary", 2, 0, 0],
     ["outsideOffers 3, 2/19 - 2/21, capacity 2: the painted Sunday, then one outside day waived (-3)", G(ctxO, T3), FILL_WE1, "primary", 1, 0, -3],
+    // the taper off (offerBonusOverShare 6 = offerBonus): no taper amount anywhere, the painted day still consumes the capacity
+    ["taper off, 2/26 - 2/28, capacity 1: the painted Friday still consumes it - no waiver", G(ctxT, T3), FILL_WE2, "primary", 2, 0, 0],
+    ["taper off, 2/26 - 2/28, capacity 2: the painted Friday, then one outside day waived", G(ctxT, T3), FILL_WE2, "primary", 1, 0, -out],
+    ["taper off, 2/26 - 2/28, capacity 0: no taper (the two weights are equal), no waiver", G(ctxT, T3), FILL_WE2, "primary", 3, 0, 0],
+    ["taper off, 2/19 - 2/21, capacity 1: the painted Sunday still consumes it before the earlier outside days - no waiver", G(ctxT, T3), FILL_WE1, "primary", 2, 0, 0],
+    ["taper off, 2/19 - 2/21, capacity 2: the painted Sunday, then one outside day waived", G(ctxT, T3), FILL_WE1, "primary", 1, 0, -out],
     ["exhaustive, 2/26 - 2/28, capacity 3: his unpainted days are never waived", G(ctxX, T3), FILL_WE2, "primary", 0, 0, 0],
     ["exhaustive, 2/26 - 2/28, capacity 0: only the taper reads", G(ctxX, T3), FILL_WE2, "primary", 3, 0, tap],
     ["no backup target: neither tapered nor waived", G(ctx, { primary: 3, backup: null }), FILL_WE2, "backup", 3, 0, 0],
     ["no period live (offersLive false): 0, the pre-P2 path", Object.assign(G(ctx, T3), { offersLive: false }), FILL_WE2, "primary", 0, 0, 0]
   ];
   cases.forEach((c) => eq(GEN.genOfferTaper(c[1], S(c[4]), "a", c[2], c[3], null, c[5]), c[6], "fill order (genOfferTaper): " + c[0]));
+}
+
+// Fix B on a month SPLIT by a period boundary (review 10/18 round 2) - the January shape: the live first period ends Sun
+// 1/3/2027 and the next starts Mon 1/4 (helpers.offerTimeline also moves a Friday / Saturday end to the Sunday, so the
+// boundary falls inside a month again; November 2026's 11/1 lay in no period). The same two surgeons as the order board
+// cover January 2027 alone (a holds a slot every day; his explicit target 3 / 3, capacity 3 per role); a paints 1/20 and
+// 1/22 ('either') in the SECOND period only, so in the first he is not started: his 1/1 - 1/3 days carry neither the
+// 'offered' bonus nor the 'outside-offers' term, yet they are days he holds in January and count against his January
+// share - the fill counts them (genOfferCapacity reads every day he holds). The evaluation must count them too: before
+// the fix it measured the capacity on the lock-only schedule and took off only his generated OFFERED days, so it waived
+// outside-offers terms (and kept offered bonuses) for a surgeon already past his share.
+const SPLIT_START = "2027-01-01", SPLIT_END = "2027-01-31", SPLIT_DAYS = daysList(SPLIT_START, SPLIT_END), SPLIT_P1_END = "2027-01-03";
+const SPLIT_OFFERS = ["2027-01-20", "2027-01-22"];
+function splitInput(seed, offerDays) {
+  const inp = orderInput(seed, offerDays || SPLIT_OFFERS);
+  inp.periods = [
+    { id: "fixb-split-p1", label: "Fix B split fixture Nov 2026 - Jan 3 2027", start_day: "2026-11-02", end_day: SPLIT_P1_END, offers_close_at: "2026-09-21", publish_by: "2026-10-05", status: "closed", rules_only_ids: [], offer_modes: {} },
+    { id: "fixb-split-p2", label: "Fix B split fixture Jan - Jun 2027", start_day: "2027-01-04", end_day: "2027-06-30", offers_close_at: "2026-11-23", publish_by: "2026-12-07", status: "closed", rules_only_ids: [], offer_modes: {} }
+  ];
+  return inp;
+}
+// ... and the fill's reading of one placement whose days lie on both sides of the boundary (a holiday unit can straddle
+// one): Sun 1/3 (first period - neither term), Mon 1/4 (painted in this variant) and Tue 1/5 (second period, unpainted -
+// the outside term). Capacity = 3 - count; the day with neither term consumes it first, then the painted day, then the
+// outside day (the evaluation's order). genOfferTaper is driven directly, as in fillOrder.
+const SPLIT_FILL_OFFERS = ["2027-01-04", "2027-01-20", "2027-01-22"], SPLIT_FILL_DAYS = ["2027-01-03", "2027-01-04", "2027-01-05"];
+function splitFill(h) {
+  const R = h.R, GEN = h.GEN, eq = h.eq;
+  const seed = h.seedData || JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
+  const ctx = R.buildContext(splitInput(seed, SPLIT_FILL_OFFERS));
+  eq(ctx.warnings, [], "split fill: buildContext raises no warning");
+  const w = ctx.weights || R.defaultWeights(), out = w.outsideOffers, tap = w.offerBonus - w.offerBonusOverShare;
+  eq([out, tap], [6, 6], "split fill: the seed's weights (outsideOffers 6, offerBonus - offerBonusOverShare 6)");
+  eq(SPLIT_FILL_DAYS.map((d) => [R.offerState(ctx, d, "a").status, R.offeredOn(ctx, d, "primary", "a"), R.outsideOffersOn(ctx, d, "primary", "a")]), [["not_started", false, false], ["submitted", true, false], ["submitted", false, true]], "split fill: 1/3 neither term (first period, not started), 1/4 painted, 1/5 the outside term - [status, offered, outside]");
+  const G = { W: w, offersLive: true, R: R, ctx: ctx, targets: { byMonth: { "2027-01": { a: { primary: 3, backup: 3 }, b: { primary: null, backup: null } } } }, forced: {} };
+  const S = (n) => ({ counts: { "2027-01": { a: { primary: n, backup: n }, b: { primary: 0, backup: 0 } } } });
+  // [what, his count before, expected]
+  [
+    ["capacity 3: all three within his share - the outside day waived", 0, -out],
+    ["capacity 2: 1/3 and the painted 1/4 consume it - no waiver, no taper", 1, 0],
+    ["capacity 1: 1/3 consumes it - the painted 1/4 is beyond (tapered), 1/5 keeps its term", 2, tap],
+    ["capacity 0: the painted 1/4 tapered, 1/5 keeps its term", 3, tap]
+  ].forEach((c) => eq(GEN.genOfferTaper(G, S(c[1]), "a", SPLIT_FILL_DAYS, "primary", null, 0), c[2], "split fill (genOfferTaper) 1/3 - 1/5: " + c[0]));
 }
 
 // per surgeon: total P / B over the cells and the max / mean excess per role and weighted (P + 0.5 B against tP + 0.5 tB)
@@ -282,12 +359,15 @@ function run(h) {
   // towards his share - the mirror of the offered taper (capacity ceil(T - 0.5) - his days held before the run, offered
   // days first, then outside days); beyond it the +6 stands. Restated per run, colleague, month and role from the
   // fixture's own offers (offerCells): the terms left in the soft list are exactly the outside days beyond the capacity,
-  // and diagnostics.offers.outsideOffers still REPORTS every off-list placement, waived or not (the publish e-mail's list).
+  // and diagnostics.offers.outsideOffers still REPORTS every off-list placement, waived or not (a report: the Generate
+  // preview's "Placed outside painted days" list; the publish e-mail's off-list line is still to be built).
   let waived = 0, standing = 0, reportedN = 0;
   A.runs.forEach((r) => r.offerCells.forEach((c) => {
     const at = "partial seed " + r.seed + " " + c.id + " " + c.month + " " + c.role;
     eq(c.base, 0, at + ": the fixture holds nothing before the run (lockedHeld 0)");
+    eq(c.otherGen, 0, at + ": one period covers the month - every generated day of a submitted surgeon is offered or carries the outside term");
     eq(c.terms, c.expected, at + ": outside-offers terms left = the outside days beyond the capacity (" + JSON.stringify(c) + ")");
+    eq(c.offTerms, c.offExpected, at + ": 'offered' bonuses left = the offered days within the capacity (the taper; " + JSON.stringify(c) + ")");
     eq(c.reported, c.offList, at + ": diagnostics.offers.outsideOffers reports every off-list placement, waived or not (" + JSON.stringify(c) + ")");
     if (PAINTERS.includes(c.id)) eq([c.outGen, c.terms, c.reported], [0, 0, 0], at + ": a full painter has no off-list day");
     waived += c.outGen - c.expected; standing += c.expected; reportedN += c.reported;
@@ -349,13 +429,63 @@ function run(h) {
       const at = "order seed " + sd + " a " + c.role;
       eq([c.T, c.base, c.cap], [3, 0, 3], at + ": the explicit target 3, nothing held before the run, capacity 3");
       eq(c.terms, c.expected, at + ": outside-offers terms left = outside days beyond the capacity, offered days counted first (" + JSON.stringify(c) + ")");
+      eq(c.offTerms, c.offExpected, at + ": 'offered' bonuses left = the offered days within the capacity (" + JSON.stringify(c) + ")");
       eq(c.reported, c.offList, at + ": every off-list placement is still reported (" + JSON.stringify(c) + ")");
     });
   });
   ok(orderCells.every((c) => c.expected > 0), "order: beyond his share the +outsideOffers stands in every cell (" + orderCells.map((c) => c.role[0] + c.expected).join(" ") + ")");
   ok(orderCells.some((c) => c.offGen > 0 && c.expected !== c.byDate), "order: in at least one cell a date-ranked reading would leave a different count - the check sees the order (" + orderCells.map((c) => c.role[0] + " off " + c.offGen + " out " + c.outGen + " exp " + c.expected + " byDate " + c.byDate).join("; ") + ")");
+  // the same board with the taper switched off (review 10/18 round 2: offerBonusOverShare = offerBonus, 6 / 6 - Setup
+  // data): the evaluation still counts his offered days against the capacity first (it reads the schedule, not the
+  // 'offered' terms the taper would relabel), so the outside days beyond his share keep their +outsideOffers
+  const seedT = JSON.parse(JSON.stringify(seed)); seedT.groupRules.weights.offerBonusOverShare = seedT.groupRules.weights.offerBonus;
+  const ctxOT = R.buildContext(orderInput(seedT));
+  eq(ctxOT.warnings, [], "order (taper off): buildContext raises no warning");
+  const orderOffT = [];
+  [1, 2].forEach((sd) => {
+    const outOT = GEN.generate(ctxOT, ORDER_START, ORDER_END, { seed: sd, bestOf: 2 });
+    eq([outOT.diagnostics.uncovered.length, outOT.diagnostics.hardViolations.length], [0, 0], "order (taper off) seed " + sd + ": no open slot, no hard violation");
+    offerCells(outOT, ["a"], ["2027-02"], ORDER_DAYS, (id, d) => id === "a" && ORDER_OFFERS.includes(d), (id) => id === "a", (id) => id === "a").forEach((c) => {
+      const at = "order (taper off) seed " + sd + " a " + c.role;
+      eq(c.terms, c.expected, at + ": outside-offers terms left = outside days beyond the capacity, offered days counted first although the taper is off (" + JSON.stringify(c) + ")");
+      eq(c.offTerms, c.offGen, at + ": no taper - every offered day keeps its bonus (" + JSON.stringify(c) + ")");
+      orderOffT.push([sd, c.role, c.offGen, c.terms]);
+    });
+  });
+  ok(orderOffT.some((x) => x[2] > 0), "order (taper off): a holds at least one painted day in some cell - the offered-days-first count is exercised (" + JSON.stringify(orderOffT) + ")");
+  eq(orderOffT.map((x) => x[3]), [8, 14, 8, 14], "order (taper off): the outside-offers terms left per seed and role (seed 1 P / B, seed 2 P / B - pinned as observed 10/18)");
   // ... and the same order in the fill's reading of one placement (review 10/18)
   fillOrder({ R: R, GEN: GEN, ok: ok, eq: eq, seedData: seed });
+
+  // ---- fix B on a month split by a period boundary (review 10/18 round 2): every day he holds counts (splitInput) ----
+  const ctxS = R.buildContext(splitInput(seed));
+  eq(ctxS.warnings, [], "split: buildContext raises no warning");
+  eq([R.offerState(ctxS, "2027-01-02", "a").status, R.offerState(ctxS, "2027-01-10", "a").status, R.offerState(ctxS, "2027-01-10", "a").mode, R.offerState(ctxS, "2027-01-02", "b").status, R.offerState(ctxS, "2027-01-10", "b").status], ["not_started", "submitted", "preferred", "not_started", "not_started"], "split: a not started in the first period, submitted / preferred in the second; b not started in either");
+  const splitOut = SPLIT_DAYS.filter((d) => d > SPLIT_P1_END && !SPLIT_OFFERS.includes(d));
+  ["primary", "backup"].forEach((role) => {
+    eq(SPLIT_DAYS.filter((d) => R.outsideOffersOn(ctxS, d, role, "a")), splitOut, "split: a's " + role + " outside days are exactly his unpainted second-period days of January");
+    eq(SPLIT_DAYS.filter((d) => R.offeredOn(ctxS, d, role, "a")), SPLIT_OFFERS, "split: a's " + role + " offered days are 1/20 and 1/22");
+  });
+  const splitCells = [];
+  [1, 2, 3, 4].forEach((sd) => {
+    const outS = GEN.generate(ctxS, SPLIT_START, SPLIT_END, { seed: sd, bestOf: 2 });
+    eq([outS.diagnostics.uncovered.length, outS.diagnostics.hardViolations.length], [0, 0], "split seed " + sd + ": no open slot, no hard violation");
+    eq(SPLIT_DAYS.filter((d) => outS.schedule[d].primary === "a" || outS.schedule[d].backup === "a").length, SPLIT_DAYS.length, "split seed " + sd + ": a holds a slot every day (two surgeons, two slots a day)");
+    offerCells(outS, ["a", "b"], ["2027-01"], SPLIT_DAYS, (id, d) => id === "a" && SPLIT_OFFERS.includes(d), (id, m, d) => id === "a" && d > SPLIT_P1_END, (id, d) => id === "a" && d > SPLIT_P1_END).forEach((c) => {
+      c.seed = sd;
+      const at = "split seed " + sd + " " + c.id + " " + c.role;
+      if (c.id === "b") { eq([c.offGen, c.outGen, c.terms, c.offTerms, c.reported], [0, 0, 0, 0, 0], at + ": b painted nothing - no term, nothing reported"); return; }
+      splitCells.push(c);
+      eq([c.T, c.base, c.cap], [3, 0, 3], at + ": the explicit target 3, nothing held before the run, capacity 3");
+      eq(c.terms, c.expected, at + ": outside-offers terms left = outside days beyond the capacity, EVERY held day counted - his first-period days first, then his offered days (" + JSON.stringify(c) + ")");
+      eq(c.offTerms, c.offExpected, at + ": 'offered' bonuses left = the offered days within what his first-period days leave of the capacity (" + JSON.stringify(c) + ")");
+      eq(c.reported, c.offList, at + ": every off-list placement in the second period is still reported (" + JSON.stringify(c) + ")");
+    });
+  });
+  ok(splitCells.some((c) => c.otherGen > 0 && c.expected !== c.baseOnly), "split: in at least one cell a reading that counts only his offered days would waive a different number of outside terms - the check sees the first-period days (" + splitCells.map((c) => c.seed + c.role[0] + " other " + c.otherGen + " off " + c.offGen + " out " + c.outGen + " exp " + c.expected + " baseOnly " + c.baseOnly).join("; ") + ")");
+  ok(splitCells.some((c) => c.otherGen > 0 && c.offExpected !== c.offBaseOnly), "split: in at least one cell the same reading would keep a different number of offered bonuses (" + splitCells.map((c) => c.seed + c.role[0] + " other " + c.otherGen + " off " + c.offGen + " offExp " + c.offExpected + " offBaseOnly " + c.offBaseOnly).join("; ") + ")");
+  // ... and the fill's reading of one placement across the boundary
+  splitFill({ R: R, GEN: GEN, ok: ok, eq: eq, seedData: seed });
 
   const fmt = (s) => s.P + "P/" + s.B + "B, excess max P +" + s.max[0] + " B +" + s.max[1] + " W +" + s.max[2] + " (mean W +" + s.mean[2] + ")";
   const line = "painting (Feb-Mar 2027 fixture, bestOf 2): partial seeds 1-8 - p1 " + fmt(sP.p1) + "; p2 " + fmt(sP.p2) + "; controls seeds 1-4 - rules-only max W +" + Math.max(ctl.rulesOnly.p1.max[2], ctl.rulesOnly.p2.max[2]) + ", nobody max W +" + Math.max(ctl.nobody.p1.max[2], ctl.nobody.p2.max[2]);
@@ -363,7 +493,7 @@ function run(h) {
   return { line: line, partial: sP, controls: ctl };
 }
 
-module.exports = { run, measure, summarize, fixtureInput, fillOrder, IDS, PAINTERS, COLLEAGUES, START, END, MONTHS };
+module.exports = { run, measure, summarize, fixtureInput, fillOrder, splitFill, IDS, PAINTERS, COLLEAGUES, START, END, MONTHS };
 
 if (require.main === module) {
   const T0 = Date.now();

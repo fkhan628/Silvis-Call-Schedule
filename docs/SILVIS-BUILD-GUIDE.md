@@ -1552,11 +1552,20 @@ open primaries exceed the sum of everyone's targets, so every over-share day of 
 share could take, which is the invariant the regression pins; caps stay hard; a surgeon with no target — a windows
 surgeon — is never tapered). ⟶ **Painting fix B (Faraz 10/18; Prompt 32 step 5 (b)) — the taper's mirror:** a
 preferred colleague's `outside-offers` term is **waived while the placement still brings him towards his share** and
-stands beyond it. Same capacity (`genOfferCapacity`: `ceil(T − 0.5)` − his count), his **offered days consume it first,
-then his outside days**: in the fill `genOfferTaper` subtracts `weights.outsideOffers` for each outside day within what
-the offered days leave of it; in the evaluation `genTaperSoftList` counts his generated offered slots first (whatever
-their dates; `genOfferedPlaced`) and drops the `outside-offers` terms of his first outside days (date order) within the
-remainder — a zero-weight term never stays in the list. The days in scope come from **`rules.outsideOffersOn(ctx, day,
+stands beyond it. Same capacity (`genOfferCapacity`: `ceil(T − 0.5)` − his count — **every day he holds** in the month
+and role), consumed in **one order in the fill and the evaluation: his days that carry neither term first** (a day of the
+month in a period he is not submitted for or did not paint that month in, or in no period — a month split by a period
+boundary: January 2027, the first period ending Sun 1/3; `helpers.offerTimeline` moves a Friday / Saturday end to the
+Sunday, so the shape recurs), **then his offered days, then his outside days**: in the fill `genOfferTaper` takes the
+placement's own neither-term days off the capacity, tapers its offered days beyond what is left and subtracts
+`weights.outsideOffers` for each outside day within what the offered days then leave; in the evaluation `genTaperSoftList`
+starts from the lock-only count (`G.base`), takes off his generated neither-term days and then his generated offered slots
+(`genPlacedKinds` — read from the schedule by `rules.offeredOn` / `rules.outsideOffersOn`, whatever their dates and
+whatever the weights, so the order holds with the taper switched off too), re-labels or drops the offered bonuses beyond
+what the neither-term days leave, and drops the `outside-offers` terms of his first outside days (date order) within the
+remainder — a zero-weight term never stays in the list (review 10/18 round 2: the evaluation used to measure the capacity
+on the lock-only schedule and take off only his offered days, so in a split month it waived terms — and kept bonuses —
+for a surgeon already past his share; `test/painting.test.js` splitInput pins the January shape). The days in scope come from **`rules.outsideOffersOn(ctx, day,
 role, id)`**, the ONE reading of B10's per-month scope (preferred, submitted, a month he painted in, the role not offered
 that day) — `rdStatic`'s soft push reads it for its preferred leg too, so the rule and the waiver cannot drift; the
 generator never reads `P.offerMonths` itself (its browser rules API lists the helper). Exhaustive is untouched (the
@@ -1570,9 +1579,13 @@ penalty"). Why: before it a full painter kept winning placements up to about sha
 holidayUnit }] }` (unplaced offers carry the slot's reason — `slot-locked:<id>`, `holds-other-role`, `held-by:<id>`…;
 on a holiday-unit day the cause, `holiday-unit:<name> <day> <reason>`, the unit's other day he fails, because one
 holder covers every unit day), and `outsideOffers = [{ day, role, id }]`
-(every generated placement of a submitted surgeon on a day he did not list — the publish email of part 4/6 reads it:
-"you were placed on 11/5, a day you did not list — trade if needed"; a REPORT built from the schedule, not from the
-soft list: since fix B it still lists every such placement, its term waived below his share or standing beyond it); an open slot inside a period carries
+(every generated placement of a submitted surgeon on a day he did not list — the report the publish e-mail of part 4/6
+is to read, "you were placed on 11/5, a day you did not list — trade if needed"; that e-mail line is **not built yet**
+(still open, listed at the end of part 3c above) — no e-mail names these days today; a REPORT built from the schedule,
+not from the soft list: since fix B it still lists every such placement, its term waived below his share or standing
+beyond it; the Generate preview renders it as "Placed outside painted days" (GenDiagnostics, `gen-outside-offers`; review
+10/18 round 2 — the soft-penalty list there shows only the standing terms), and My schedule tags each such published day
+`not offered`); an open slot inside a period carries
 `offered` (who offered it) and the note "no offer and no rule allows it" when nobody did. Helpers own the period
 maths (`periodFor`, `offerStatus` mirroring the SQL, `offerTimeline` from `groupRules.offerPeriods`: close = start −
 6 weeks, publish by = start − 4 weeks, reminders 14 and 3 days before the close (the built-in default; the seed carries [14, 3] since 9/30 - [42, 14, 3] from 9/27; `lengthMonths` 6 since 9/30), end = the last day of the Nth month
@@ -2622,10 +2635,19 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   the case): `fillOrder` drives `genOfferTaper` (exported for it) on the order board's two weekend blocks at the capacity
   edge - a painted day and unpainted days of one block, the painted day first or last by date - with the seed's weights and
   two variants where the waiver and the taper differ (with the seed's 6 / 6 a date-ranked fill scores the same sum), plus
-  exhaustive (never waived), no target and no period. The regression's P2 offers fixture moved exactly one pin: Acton's one off-list November placement lies
-  below his share, so it carries no term (was "one term per off-list placement") - restated from the fixture with the same
-  capacity rule; `test/rules.test.js` pins the helper, its equivalence with eligibility's term, and the source contract;
-  `test/data-layer.test.js` pins the new Periods and painter words.
+  exhaustive (never waived), no target and no period. Review 10/18 round 2 added three pins: the taper switched off
+  (`offerBonusOverShare` = `offerBonus`, 6 / 6 - Setup data) in `fillOrder` and on the order board (8 / 14 outside-offers
+  terms left per seed, primary / backup), so a fill or an evaluation that counted the painted days only while the taper is
+  on fails; and a split-month board (`splitInput`, the January shape - the first period to Sun 1/3, the next from Mon 1/4,
+  the painter in the second only, two surgeons) whose run restates the terms and bonuses left counting EVERY day he holds
+  (his first-period days first), with `splitFill` driving `genOfferTaper` on a Sun 1/3 - Tue 1/5 placement across the
+  boundary. The regression's P2 offers fixture moved exactly one pin, and what moved is the schedule, not a standing term:
+  the old pin ("one outside-offers term per Acton placement off his list") compared 0 with 0 on 393d5ec, where this run gave
+  Acton no off-list November placement; under fix B the waiver lets the fill give him Mon 11/30 backup, off his list but
+  below his November backup share (capacity 1), with no term - the day is pinned, the count restated from the fixture with
+  the same capacity rule, and `diagnostics.offers.outsideOffers` still names it; `test/rules.test.js` pins the helper, its
+  equivalence with eligibility's term, and the source contract; `test/data-layer.test.js` pins the new Periods and painter
+  words and the preview's "Placed outside painted days" list (GenDiagnostics lifted and run).
 - **Tests.** `test/rules.test.js` (the cap reading table, `"none"`, unreadable values, the weights helper, the over-soft-limit
   walk), `test/generator-regression.js` (§12 items 7 and 15), `test/water-fill.test.js` and `test/nov-backups.test.js`
   (re-pinned), `test/totals.test.js`, `test/exports.test.js`, `test/importer.test.js` (the seed's values), `test/publish.test.js`,

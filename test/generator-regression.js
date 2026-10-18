@@ -2467,13 +2467,18 @@ const OSL_WHOLE = { n: 0 };
   console.log("P2 (offers fixture, seed 1 bestOf 2): Khan (rules_only) holds " + khanGen.length + " generated day(s); " + khanDiff.length + " day(s) differ from the no-offers run of the same seed (other surgeons' offers move the rest of the board - his rules, not his placements, are what stays unchanged): " + khanDiff.join(", "));
   // the terms are in force for the two submitters only
   eq(DP.softPenalties.filter((s) => (s.reason === "offered" || s.reason === "outside-offers") && s.id !== BURCHETT && s.id !== ACTON), [], "no offered / outside-offers term on a rules_only or not_started surgeon");
-  // pin moved deliberately 10/18 (painting fix B, Faraz 10/18): this read "one outside-offers term (+6) per Acton placement
-  // off his list" (1). Under fix B a preferred surgeon's outside-offers term is waived while the placement still brings him
-  // towards his share - per role, capacity = ceil(T - 0.5) - his November days held before the run (the locks in the range,
-  // 11/1 from the input outside it); his generated OFFERED days consume it first, then his OUTSIDE days (a month he painted
-  // in - November); beyond it the +6 stands. Restated here from the fixture and the run (never from rules.js): his one
-  // off-list placement lies below his November share, so its term is waived - while diagnostics.offers.outsideOffers (the
-  // publish e-mail's list, pinned above) still names it. The standing-beyond-share half is pinned in test/painting.test.js.
+  // pin moved deliberately 10/18 (painting fix B, Faraz 10/18). Before fix B this read "one outside-offers term (+6) per
+  // Acton placement off his list" (terms = actOutside.length) - and on 393d5ec this run gave Acton NO off-list November
+  // placement (actOutside [], terms 0: the old pin compared 0 with 0; observed with a probe on 393d5ec's own regression,
+  // review 10/18 round 2). What fix B moved is the SCHEDULE, not a standing term: a preferred surgeon's outside-offers term
+  // is now waived while the placement still brings him towards his share - per role, capacity = ceil(T - 0.5) - his
+  // November days held before the run (the locks in the range, 11/1 from the input outside it), and every day he holds
+  // counts against it (his days with neither term first - none here: one period covers the range and he painted November
+  // - then his generated OFFERED days, then his OUTSIDE days); beyond it the +6 stands. So the fill now gives him Mon 11/30
+  // backup, a day he did not list but below his November backup share (capacity 1, no offered backup generated), with no
+  // term - and diagnostics.offers.outsideOffers (a report, pinned above) still names it. The day itself is pinned, so a
+  // later shift of the schedule shows up as a stated move, not a silent one. Restated from the fixture and the run (never
+  // from rules.js); the standing-beyond-share half is pinned in test/painting.test.js.
   {
     const actMem = DP.impliedTargets.months["2026-11"].members[ACTON];
     let actExpected = 0;
@@ -2482,14 +2487,17 @@ const OSL_WHOLE = { n: 0 };
       const T = role === P ? actMem.primaryTarget : actMem.backupTarget;
       const before = (ctxP.schedule["2026-11-01"] && ctxP.schedule["2026-11-01"][role] === ACTON ? 1 : 0) + pDays.filter((d) => outP.schedule[d][role] === ACTON && outP.schedule[d][role + "Locked"]).length;
       eq(before, actMem.lockedHeld[role], "fix B: Acton's November " + role + " days held before the run (the locks + 11/1) = impliedTargets lockedHeld");
+      const gen = pDays.filter((d) => outP.schedule[d][role] === ACTON && !outP.schedule[d][role + "Locked"]).length;
       const offGen = pDays.filter((d) => outP.schedule[d][role] === ACTON && !outP.schedule[d][role + "Locked"] && offeredIn(ACTON, d, role)).length;
       const outGen = actOutside.filter((x) => x.endsWith(" " + role)).length;
+      eq(gen, offGen + outGen, "fix B: every generated November " + role + " day of Acton's is offered or off his list in a month he painted - no day with neither term (one period covers the range), so the capacity below counts every day he holds");
       const cap = Math.max(0, Math.ceil(T - 0.5) - before), exp = Math.max(0, outGen - Math.max(0, cap - offGen));
       actExpected += exp;
       actWhy.push(role + ": target " + T + ", held before " + before + ", capacity " + cap + ", offered generated " + offGen + ", outside generated " + outGen + " -> " + exp + " standing");
     });
-    eq(DP.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === ACTON).length, actExpected, "fix B: Acton's outside-offers terms = his outside placements beyond his capacity, offered days first (" + actWhy.join("; ") + ")");
-    eq([actOutside.length, actExpected], [1, 0], "fix B: his one off-list November placement lies below his share - its +6 is waived, the e-mail's list still names it (" + actWhy.join("; ") + ")");
+    eq(DP.softPenalties.filter((s) => s.reason === "outside-offers" && s.id === ACTON).length, actExpected, "fix B: Acton's outside-offers terms = his outside placements beyond his capacity, every held day counted, offered days before outside days (" + actWhy.join("; ") + ")");
+    eq(actOutside, ["2026-11-30 backup"], "fix B: Acton's one off-list November placement is Mon 11/30 backup - on 393d5ec this run gave him none; the waiver lets the fill place him there below his backup share (" + actWhy.join("; ") + ")");
+    eq(actExpected, 0, "fix B: that placement lies below his share, so it carries no outside-offers term; diagnostics.offers.outsideOffers (the report) still names it (" + actWhy.join("; ") + ")");
   }
   DP.softPenalties.filter((s) => s.reason === "outside-offers").forEach((s) => ok(s.weight === seed.groupRules.weights.outsideOffers, "outside-offers weight = groupRules.weights.outsideOffers"));
   // an offered day beats a rules-only candidate on a real slot: Philip (not_started above) offers Mon 11/30 as 'either' - a day he

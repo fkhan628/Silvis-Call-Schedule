@@ -9585,7 +9585,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
                 <div style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.45 }}>
                   {shownMode === "exhaustive"
                     ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)."
-                    : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint, at no extra cost; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. Your publish e-mail names every day you did not paint - trade if needed. (The default.)"}
+                    : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint, at no extra cost; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. My schedule marks each day you did not paint 'not offered' - trade if needed. (The default.)"}
                   {periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""}
                 </div>
                 {periodStatus !== "submitted" && (
@@ -12742,6 +12742,20 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
         })}
         {soft.length === 0 && <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None.</p>}
       </div>
+      {/* Painting fix B review (10/18, round 2): diagnostics.offers.outsideOffers - every generated placement of a surgeon who
+          painted days in the period on a day / role he did not paint ("preferred days" mode), its outside-offers penalty waived
+          (below his share for the month - gone from the soft list above) or standing (beyond it - also under Soft penalties).
+          A REPORT read from the preview, shown when a period touches the range (a run with no period, or an older preview,
+          shows no box); the Periods intro points here. */}
+      {dg.offers && Array.isArray(dg.offers.outsideOffers) && Array.isArray(dg.offers.periods) && dg.offers.periods.length > 0 && (
+        <div style={box} data-testid="gen-outside-offers" data-count={dg.offers.outsideOffers.length}>
+          <div style={{ ...css.subT, margin: "0 0 4px" }}>Placed outside painted days ({dg.offers.outsideOffers.length})</div>
+          {dg.offers.outsideOffers.length === 0 ? <p style={{ fontSize: 12, color: "#1a8040", margin: 0 }}>None - nobody who painted days is placed on a day he did not paint.</p> : <>
+            <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>Every placement of a "preferred days" surgeon on a day or role he did not paint. Below his fair share for the month - or in a month he painted no day of - it costs nothing extra; beyond it the penalty stands and the day is also counted under Soft penalties ("outside the offered days"). Once published, his My schedule marks the day "not offered".</p>
+            {dg.offers.outsideOffers.map(o => <div key={o.day + o.role} data-outside-offer={o.day + ":" + o.role + ":" + o.id} style={{ fontSize: 12, fontFamily: mono }}>{fmtMD(o.day)} {o.role} - {nameOf(o.id)}</div>)}
+          </>}
+        </div>
+      )}
       <div style={box}>
         <div style={{ ...css.subT, margin: "0 0 4px" }}>Holiday units in range ({(dg.holidayUnits || []).length})</div>
         {(dg.holidayUnits || []).length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>None.</p> : (dg.holidayUnits || []).map((u, i) => <div key={i} data-testid="gen-holiday" style={{ fontSize: 12 }}>{u.name || "unit"} {(u.days || u.inRange || []).map ? (u.days || u.inRange || []).map(fmtMD).join(", ") : ""}: P {u.primary ? (String(u.primary).indexOf("external:") === 0 ? u.primary.slice(9) + " (ext)" : nameOf(u.primary)) : "OPEN"} / B {u.backup ? nameOf(u.backup) : "OPEN"}{u.uncovered ? <span style={{ color: "#a83232" }}> (open slot)</span> : null}</div>)}
@@ -12882,7 +12896,7 @@ function PeriodsSection({ css, periods, offers, timeOff, roster, groupRules, tod
         <span style={{ flex: 1 }} />
         {!draft && <button type="button" data-testid="prd-new" onClick={openForm} disabled={busy} style={{ ...css.btn(true), padding: "5px 12px", fontSize: 11 }}>New period</button>}
       </div>
-      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). "Generate this period" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in "only these days" mode is never placed outside them; a "preferred days" surgeon's painted days are placed first, and until he reaches his fair share for the month a day he did not paint costs him nothing extra - beyond his share he is kept to his painted days unless no colleague can reasonably take the slot. The diagnostics list every placement outside a surgeon's painted days. The roll call below is derived from what is on file - who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules. Remind e-mails one surgeon the heads-up (enter vacations; painting days is optional).</p>
+      <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 8px", lineHeight: 1.5 }}>A period is one generation window. Surgeons paint the dates they will cover any time ahead; the period's offers freeze on its close date (six weeks before it starts by default). "Generate this period" places what was offered first (offered days first, gaps by each surgeon's rules) over the period's range; a surgeon in "only these days" mode is never placed outside them; a "preferred days" surgeon's painted days are placed first, and until he reaches his fair share for the month a day he did not paint costs him nothing extra - beyond his share he is kept to his painted days unless no colleague can reasonably take the slot. The Generate preview lists every placement outside a surgeon's painted days ("Placed outside painted days"), below his share or beyond it. The roll call below is derived from what is on file - who painted days (offers inside the period) and who added vacations (time off overlapping it); everyone else is following their rules. Remind e-mails one surgeon the heads-up (enter vacations; painting days is optional).</p>
       {lead.next && <div data-testid="prd-lead-warn" data-kind="next-missing" style={{ ...css.warnBox, padding: "5px 9px", marginBottom: 8 }}>Create the next period (from {fmtMD(lead.next.from)}) - choices for it should close by {fmtMD(lead.next.closeBy)}{inWords(lead.next.daysToClose)} so the schedule can be built {closeW} weeks ahead.</div>}
       {draft && (
         <div data-testid="prd-form" style={{ border: "1px solid #c8d8e8", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#f8fbff" }}>
