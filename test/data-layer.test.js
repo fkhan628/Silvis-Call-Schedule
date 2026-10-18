@@ -14467,6 +14467,48 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(!/\b[A-Za-z]:[\\/]+Users[\\/]/.test(t) && !/(^|[^A-Za-z0-9])Users[\\/]+[A-Za-z0-9._-]+[\\/]/.test(t), n + ": no machine path");
       });
     });
+    // A5 review (10/18), the verifier's finding (should-fix): six places said every non-scheduler role - a surgeon included -
+    // sees the East person's away / unreviewed range as a "set by the scheduler" line in the Time off list, and the rules doc's
+    // section 1 row gave the calendar dot to every signed-in role, the scheduler included. The client lists a surgeon's OWN
+    // vacations only on the Time off card (another surgeon's Silvis vacation is not listed there either - "exactly like a
+    // Silvis vacation", item 1), so the line reaches the roles whose list shows other people (the office coordinator, a viewer /
+    // follower, an APP); and the scheduler keeps the diamond with no dot (derivedVacMap is {} under eastDetailsVisible -
+    // decision 6). Pinned on those two source lines and on the docs' words, so a change on either side shows here. The docs
+    // say "a surgeon's own list shows no one else's vacations", not "... his own vacations": a doc line that also names the
+    // East side and a date range reads as a personal East range to test/privacy.test.js A6c (the rules doc's Time off row
+    // carries the "Also off: ..." example).
+    check("P31A5 review (10/18): who sees the 'set by the scheduler' Time off line and the dot - the client lists a surgeon's own vacations only on the Time off card and gives the scheduler no dot (decision 6); guide 25.2's table (its header and Time off row), 18.3, ONBOARDING, the rules doc's section 1 row and section 3 Khan's bullet say the line shows where a Time off list shows other people's vacations, a surgeon's own list shows no one else's, and the dot is everyone's but the scheduler's", () => {
+      const src5 = readDoc5("index-source.html");
+      assert.ok(src5.includes("{renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer)}"), "the Time off card lists everyone for the scheduler, the office and a viewer (a follower or an APP is a viewer or office account) and a surgeon's own vacations only");
+      assert.ok(src5.includes("const derivedVacMap = useMemo(() => (isPublicMode || !authUser || eastDetailsVisible) ? {} : derivedVacationMap(derivedVacRows),"), "the derived dots skip the scheduler (decision 6: his diamond only)");
+      const OTHERS = "other people's vacations", OWN = /a surgeon's own (Time off )?list shows no one else's vacations/i;
+      const cellsOf = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+      // guide 25.2: the header says a cell is what that role sees where it has the surface; the Time off row's everyone-else cell
+      const s252 = sub25(2);
+      const hdr = (s252.match(/^ *\| surface \| the scheduler \| everyone else signed in [^\n]*\|$/m) || [""])[0];
+      assert.strictEqual(cellsOf(hdr)[2], "everyone else signed in (a surgeon, the office coordinator, a viewer / follower, an APP), where that role has the surface", "25.2's table header");
+      const other252 = cellsOf((s252.match(/^ *\| Time off list \|[^\n]*/m) || [""])[0])[2] || "";
+      assert.ok(other252.startsWith("where the list shows other people's vacations (the office coordinator's, a viewer's / follower's, an APP's): a read-only line \"set by the scheduler\"") && OWN.test(other252) && other252.includes("no Edit / Remove"), "25.2's Time off row: the line where the list shows other people's vacations, a surgeon's own list shows no one else's: " + JSON.stringify(other252));
+      // guide 18.3's Part A bullet
+      const s18r = h2(guide, "## 18. East vacations");
+      const s183 = s18r.slice(s18r.indexOf("\n### 18.3"), s18r.indexOf("\n### 18.4"));
+      const b183 = flat5((s183.match(/^- \u27f6 \*\*Prompt 31 Part A \(Faraz 10\/9 item 1; decisions 10\/14\):\*\*[^\n]*(\n  [^\n]+)*/m) || [""])[0]);
+      assert.ok(b183.includes(":** everyone signed in but the scheduler now sees") && b183.includes("where a Time off list shows " + OTHERS) && OWN.test(b183) && b183.includes("decision 6"), "18.3's Part A bullet: everyone signed in but the scheduler; the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's; the scheduler's diamond, no dot: " + JSON.stringify(b183.slice(0, 160)));
+      // ONBOARDING's paragraph for everyone else
+      const ob = flat5(onboarding.split("\n\n").find(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p)) || "");
+      assert.ok(ob.includes("every other signed-in account - surgeons, the office coordinator, viewers, followers and APPs") && ob.includes("Where a Time off list shows " + OTHERS) && OWN.test(ob), "ONBOARDING: every other signed-in account; the line where a Time off list shows other people's vacations; a surgeon's own Time off list shows no one else's");
+      // the rules doc: section 1's Time off row (its 10/14 entry) and section 3 Khan's Part A bullet
+      const row1 = (rulesDoc.match(/^\| Time off \|[^\n]*/m) || [""])[0];
+      const r1 = row1.slice(Math.max(0, row1.indexOf(MARK + " **10/14 (Faraz 10/9, Prompt 31 Part A)")));
+      assert.ok(r1.includes("the calendar dot and \"Off: Khan\" for everyone but the scheduler") && r1.includes("decision 6") && r1.includes("where a Time off list shows " + OTHERS) && OWN.test(r1), "the rules doc's section 1 row: the dot for everyone but the scheduler (decision 6); the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's");
+      const khan5 = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
+      const pk = flat5((khan5.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
+      assert.ok(pk.includes("now shows to every signed-in role but the scheduler - a surgeon, the office coordinator, a viewer / follower, an APP -") && pk.includes("where a Time off list shows " + OTHERS) && OWN.test(pk) && pk.includes("decision 6"), "section 3 Khan's Part A bullet: every signed-in role but the scheduler; the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's; the diamond, no dot (decision 6)");
+      // the old claims are gone
+      [["guide", guide, "a read-only Time off line \"set by the scheduler\", My vacations"], ["guide", guide, "everyone signed in now sees an away"],
+        ["ONBOARDING", onboarding, "a line in the Time off list that reads"], ["rules", rulesDoc, "exactly like a vacation - the calendar dot"],
+        ["rules", rulesDoc, "now shows to every signed-in role - a surgeon"]].forEach(([n, t, old]) => assert.ok(!flat5(t).includes(old), n + " still says: " + old));
+    });
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

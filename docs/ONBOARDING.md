@@ -159,10 +159,13 @@ ranges as read-only lines "set by the scheduler" in My vacations, like everyone 
 
 **Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A, Faraz 10/9; tell the group once it ships).** Once the
 database part is applied and the Part A client ships, the East-code person's ranges that are *away* or still *unreviewed* show to
-every signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: a dot on the
-calendar, "Off: Khan" in the day summary, a line in the Time off list that reads "set by the scheduler" (read-only: no Edit and no
-Remove - the office cannot change or delete it), and "on vacation" in the open-shifts board, claim and trade reasons. They count
-toward the 2 surgeons around rule as they already do, so a vacation that would leave fewer than 2 around on such a day is refused
+every other signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: a dot on
+the calendar, "Off: Khan" in the day summary and "on vacation" in the open-shifts board, claim and trade reasons. Where a Time off
+list shows other people's vacations - the office coordinator's, a viewer's, a follower's, an APP's - such a range is a line that
+reads "set by the scheduler" (read-only: no Edit and no Remove - the office cannot change or delete it). A surgeon's own Time off
+list shows no one else's vacations, as it always has, so the other surgeons see those ranges by the dot and "Off: Khan", not as a
+line there. They count toward the 2 surgeons around rule as they already do, so a vacation that would leave fewer than 2 around on
+such a day is refused
 (the scheduler gets a confirm instead). Where a range comes from stays the scheduler's: the app shows them no East or Davenport word
 (the E / O / F / EV badges in Mine and Following and the offer painter's East words are the scheduler's only too - the painter says
 "not available"), and *home* ranges do not show at all. Nothing changes on the public link, its share links, the printout, the

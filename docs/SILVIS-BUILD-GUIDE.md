@@ -1881,10 +1881,13 @@ possible later migration.
   Silvis vacations — nothing is entered there and no Silvis row is written.
 - **Untouched on purpose:** the office digest, the daily reminder and the ER Call Panels export show assignments, not
   availability (data-layer pin).
-- ⟶ **Prompt 31 Part A (Faraz 10/9 item 1; decisions 10/14):** everyone signed in now sees an away / unreviewed range as a
-  plain vacation - the calendar dot, "Off: Khan", a read-only Time off line "set by the scheduler", My vacations - from the
-  database's derived rows (§25.2). The diamond, its legend, the strip items and the day-editor lines stay the scheduler's, the
-  Mine / Following badges and the two East cards became his only (decision 11), and *home* ranges show to nobody else.
+- ⟶ **Prompt 31 Part A (Faraz 10/9 item 1; decisions 10/14):** everyone signed in but the scheduler now sees an away / unreviewed
+  range as a plain vacation, from the database's derived rows (§25.2): the calendar dot, "Off: Khan", and a read-only line
+  "set by the scheduler" where a Time off list shows other people's vacations (the office coordinator's, a viewer's / follower's,
+  an APP's). A surgeon's own list shows no one else's vacations, so he sees such a line only on a range of his own (none today:
+  the one East person is the scheduler). The scheduler keeps the diamond and no dot (decision 6) and sees the ranges in his lists
+  with the East marker (decision 10); the diamond, its legend, the strip items and the day-editor lines stay his, the Mine /
+  Following badges and the two East cards became his only (decision 11), and *home* ranges show to nobody else.
 
 ### 18.4 Proof
 
@@ -2907,11 +2910,11 @@ window is Part B's (section 24.5); the Davenport side is never written.
   `?public=1`, the share page and print keep reading `time_off` (decision 9).
 - **Per surface and role:**
 
-  | surface | the scheduler | everyone else signed in (a surgeon, the office coordinator, a viewer / follower, an APP) | `?public=1`, share links, print |
+  | surface | the scheduler | everyone else signed in (a surgeon, the office coordinator, a viewer / follower, an APP), where that role has the surface | `?public=1`, share links, print |
   |---|---|---|---|
   | calendar dots | `time_off` only; the East diamond in its review state stays his (decision 6, section 18.3) | `time_off` + the derived ranges - one dot per person a day | `time_off` only |
   | day summary / day editor | the editor's "Vacations: Khan" (decision 8), its East lines and the "(East vacation, <state> ...)" gloss | "Off: Khan" (decision 8 - the existing words, no new literal) | "Off:" from `time_off` only |
-  | Time off list | a read-only line with the East marker: "East vacation (<state>) - decide in Setup > East feed" | a read-only line "set by the scheduler" (decision 12): no Edit / Remove - the office coordinator included (item 3) | - |
+  | Time off list | a read-only line with the East marker: "East vacation (<state>) - decide in Setup > East feed" | where the list shows other people's vacations (the office coordinator's, a viewer's / follower's, an APP's): a read-only line "set by the scheduler" (decision 12), no Edit / Remove - the office coordinator included (item 3). A surgeon's own list shows no one else's vacations, as with a Silvis vacation: he sees such a line only on a range of his own (none today - the one East person is the scheduler) | - |
   | Mine "My vacations (N upcoming)" | his own away / unreviewed ranges join as read-only lines; his East card stays (decision 10) | an East-code surgeon who is not the scheduler: his derived ranges, read-only | - |
   | board, claim and trade reasons | "on vacation" (his editor keeps the gloss) | "on vacation" (decision 7 - it read "not available"; `eastMaskedReasons` no longer masks a derived East vacation) | - |
   | vacation guard line | "Also off: ... (East, <state>)" | "Also off: Khan ..." - plain, as since 9/30 | - |
