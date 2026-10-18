@@ -147,7 +147,11 @@
 //                 mode the day is also the hard 'not-offered' whatever the
 //                 month, so the soft surfaces only on a claim result
 //                 (opts.claim) and names the day as outside his offers for the
-//                 open-shifts board. Every
+//                 open-shifts board. outsideOffersOn(ctx, day, role, id) is the
+//                 ONE reading of that preferred-mode month scope (painting fix B,
+//                 10/18): eligibility always carries the term, and the generator
+//                 waives it while a placement still brings him towards his
+//                 share (the mirror of the offered taper). Every
 //                 offer is folded into P.avail as a dated available row for
 //                 its role (item W: it lifts the weekday-pattern family incl.
 //                 hardNeverWeekdays for that date and role; obligations never
@@ -158,7 +162,8 @@
 //                 outside every period, today's rules apply byte for byte.
 //                 opts.claim (a Prompt 13 claim = an offer made on the spot)
 //                 skips the exhaustive 'not-offered' only. offerState(ctx,
-//                 day, id) / offeredOn(ctx, day, role, id) expose the facts;
+//                 day, id) / offeredOn(ctx, day, role, id) / outsideOffersOn(ctx,
+//                 day, role, id) expose the facts;
 //                 malformed rows and periods warn and are dropped (fail
 //                 closed: a dropped offer never widens anyone's days).
 //   groupRules.backupPolicy.openToEveryone  the 9/22 switch (absent = true);
@@ -1235,6 +1240,27 @@ function offeredOn(ctx, day, role, surgeonId) {
   var st = offerState(ctx, day, surgeonId);
   return !!(st && st.status === "submitted" && st.roles.indexOf(role) >= 0);
 }
+// outsideOffersOn(ctx, day, role, surgeonId) -> true when a PREFERRED-mode surgeon's
+// soft 'outside-offers' term applies to that day and role: the day lies inside a
+// period he is 'submitted' for, his mode there is 'preferred', he did not offer that
+// role that day, and he offered at least one day OF THAT PERIOD in the day's calendar
+// month (B10, 9/23 - P.offerMonths, keyed per period). The ONE reading of B10's
+// per-month scope (painting fix B, Faraz 10/18): rdStatic's soft push (its preferred
+// leg) and the generator's waiver (genOfferTaper / genTaperSoftList - the term is
+// waived while a placement still brings him towards his share) both call it, so the
+// two can never drift. Exhaustive answers false: his day is the hard 'not-offered',
+// and the soft term rdStatic pushes for him (period-wide, for the claim result) is
+// its own leg - never waived. Read-only; false (never a throw) for an unknown
+// surgeon, a role other than primary / backup, or a day outside every period.
+function outsideOffersOn(ctx, day, role, surgeonId) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  var k = ctx && ctx.periodOfDay ? ctx.periodOfDay[day] : undefined;
+  if (!P || k === undefined || (role !== "primary" && role !== "backup")) return false;
+  var key = ctx.periods[k].key;
+  if (P.offerStatus[key] !== "submitted" || P.offerMode[key] !== "preferred") return false;
+  if ((P.offers[day] || 0) & RD_MASK[role]) return false;
+  return !!P.offerMonths[key + ":" + day.slice(0, 7)];
+}
 
 /* ------------------------------------------------------------ helpers */
 
@@ -1595,8 +1621,10 @@ function rdStatic(ctx, date, role, id, asBlock) {
         // only in a calendar month where he offered at least one day OF THIS PERIOD (P.offerMonths, keyed per period);
         // in a month he did not paint at all he competes on the equal share like a rules-only colleague. Status / mode
         // stay period-wide. Exhaustive is untouched: the day is outside "only these days" whatever the month, so the
-        // label stays for the claim result.
-        if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || P.offerMonths[perKey + ":" + date.slice(0, 7)])) soft.push({ reason: "outside-offers", weight: W.outsideOffers });
+        // label stays for the claim result. Painting fix B (10/18): the preferred leg reads outsideOffersOn - the ONE
+        // reading of this month scope, the same the generator's waiver reads (the term is waived there while a
+        // placement still brings him towards his share; eligibility itself always carries it).
+        if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || outsideOffersOn(ctx, date, role, id))) soft.push({ reason: "outside-offers", weight: W.outsideOffers });
       }
     }
   }
@@ -2580,6 +2608,7 @@ if (typeof module !== "undefined") {
     eastBusyOn: function (ctx, id, d) { var P = ctx && ctx.per ? ctx.per[id] : null; return !!P && rdEastBusyOn(ctx, P, d); },
     offerState: offerState,
     offeredOn: offeredOn,
+    outsideOffersOn: outsideOffersOn, // painting fix B (10/18): the ONE reading of B10's per-month scope (preferred mode)
     rdFmt: rdFmt,
     rdParse: rdParse,
     rdAddDays: rdAddDays,

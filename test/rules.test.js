@@ -2537,6 +2537,57 @@ lacks(khanTue.hard, "hard-never-weekday", "P2/W: the OR-day rule is lifted for t
 hasSoft(khanTue, "offered", "P2/W: offered bonus");
 blocked(R.eligibility(ocKhan, "2026-12-08", P, KHAN), "hard-never-weekday:Tue", "P2/W: the next Tuesday is not offered - OR day (hard) - and, preferred, it would carry outside-offers if it were eligible");
 
+// Painting fix B (Faraz 10/18; Prompt 32 step 5 (b)): rules.outsideOffersOn(ctx, day, role, id) is the ONE reading of
+// B10's per-month scope for PREFERRED mode - true when the day lies inside a period he is submitted for, in preferred mode,
+// he did not offer that role that day, and he offered at least one day of THAT period in the day's month. rdStatic's soft
+// push (the preferred leg) and the generator's outside-offers waiver (genOfferTaper / genTaperSoftList) both read it, so the
+// two can never drift. Exhaustive answers false everywhere (its term is its own leg - the claim result, period-wide).
+step("Painting fix B: rules.outsideOffersOn - the one reading of B10's per-month scope (preferred mode)");
+ok(typeof R.outsideOffersOn === "function", "fix B: rules.js exports outsideOffersOn(ctx, day, role, id)");
+const oo = (c, d, role, id) => R.outsideOffersOn(c, d, role, id);
+eq([oo(oc, "2026-11-12", P, ACTON), oo(oc, "2026-11-12", B, ACTON)], [true, true], "fix B: Acton Thu 11/12 (November, not offered) - both roles in scope");
+eq([oo(oc, "2026-11-02", P, ACTON), oo(oc, "2026-11-02", B, ACTON)], [false, true], "fix B: Acton 11/2 offered as primary only - primary out of scope, backup in scope (the mask is per role)");
+eq([oo(oc, "2026-12-17", P, ACTON), oo(oc, "2027-01-02", B, ACTON)], [false, false], "fix B: December / January - months he painted nothing in (B10)");
+eq([oo(oc, "2026-11-10", P, BURCHETT), oo(oc, "2026-12-17", P, BURCHETT)], [false, false], "fix B: exhaustive Burchett - never in the preferred scope (his day is the hard not-offered)");
+eq([oo(oc, "2026-11-10", P, KHAN), oo(oc, "2026-11-10", B, SARKAR), oo(oc, "2026-11-10", P, PHILIP), oo(oc, "2026-11-10", B, FIERCE)], [false, false, false, false], "fix B: rules_only / not_started - out of scope");
+eq([oo(oc, "2026-10-15", P, ACTON), oo(oc, "2027-01-04", P, ACTON)], [false, false], "fix B: a day outside every period - out of scope");
+eq([oo(oc, "2026-11-12", P, "nobody"), oo(oc, "2026-11-12", "any", ACTON), oo(null, "2026-11-12", P, ACTON), oo({}, "2026-11-12", P, ACTON)], [false, false, false, false], "fix B: an unknown surgeon, a role that is not primary / backup, no ctx - false, never a throw");
+eq([oo(ocJanOut, "2027-01-02", B, ACTON), oo(ocSplit, "2027-01-02", B, ACTON), oo(ocSplit, "2027-01-21", P, ACTON)], [false, false, true], "fix B: the per-period month scope (an offer after the period, or in the next one, switches no month on for this one)");
+eq([oo(ocEither, "2026-12-10", P, PHILIP), oo(ocEither, "2026-12-09", P, PHILIP), oo(ocEither, "2026-11-10", P, PHILIP)], [true, false, false], "fix B: Philip's one December 'either' offer - his other December days in scope, the offered day and November not");
+eq([oo(ocKhan, "2026-12-08", P, KHAN), oo(ocKhan, "2026-12-01", B, KHAN), oo(ocKhan, "2026-12-01", P, KHAN)], [true, true, false], "fix B: Khan's own Tuesday offer - scope is about the offer, not eligibility (12/8 is hard-blocked, yet in scope)");
+// equivalence: wherever a surgeon is not exhaustive, eligibility carries 'outside-offers' exactly when outsideOffersOn says so
+// (every day of both test periods and a margin, both roles, all six, four contexts); an exhaustive surgeon is never in scope
+{
+  let n = 0, inScopeN = 0;
+  const diff = [], exh = [];
+  [["oc", oc], ["ocSplit", ocSplit], ["ocEither", ocEither], ["ocKhan", ocKhan]].forEach(([cn, c]) => {
+    for (let d = "2026-10-30"; d <= "2027-04-02"; d = R.rdAddDays(d, 1)) {
+      [KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].forEach(id => [P, B].forEach(role => {
+        const st = R.offerState(c, d, id), inScope = R.outsideOffersOn(c, d, role, id);
+        if (st && st.status === "submitted" && st.mode === "exhaustive") { if (inScope) exh.push(cn + " " + d + " " + role + " " + id); return; }
+        n++;
+        if (inScope) inScopeN++;
+        const term = R.eligibility(c, d, role, id).soft.some(s => s.reason === "outside-offers");
+        if (term !== inScope) diff.push(cn + " " + d + " " + role + " " + id + " term " + term + " scope " + inScope);
+      }));
+    }
+  });
+  eq(diff, [], "fix B: eligibility's 'outside-offers' (non-exhaustive) = outsideOffersOn on all " + n + " checks");
+  eq(exh, [], "fix B: outsideOffersOn is false on every day of an exhaustive surgeon");
+  ok(n > 5000 && inScopeN > 100, "fix B: the equivalence walk is not vacuous (" + n + " checks, " + inScopeN + " in scope)");
+}
+hasSoft(R.eligibility(oc, "2026-12-17", P, BURCHETT, { claim: true }), "outside-offers", "fix B: exhaustive keeps its own leg - the claim result still names a December day as outside his offers");
+eq(oo(oc, "2026-12-17", P, BURCHETT), false, "fix B: ...while outsideOffersOn (the preferred scope the generator waives) stays false for him");
+// the source contract: rdStatic's preferred leg reads the helper, the generator never reads the per-month map itself, and
+// its browser rules API (the shared globals) names the helper
+{
+  const rulesSrc = fs.readFileSync(path.join(__dirname, "..", "rules.js"), "utf8"), genSrc = fs.readFileSync(path.join(__dirname, "..", "generator.js"), "utf8");
+  ok(rulesSrc.includes('if (W.outsideOffers && (P.offerMode[perKey] === "exhaustive" || outsideOffersOn(ctx, date, role, id))) soft.push({ reason: "outside-offers", weight: W.outsideOffers });'), "fix B: rdStatic's outside-offers push reads outsideOffersOn for the preferred leg (one reading of the month scope)");
+  eq((rulesSrc.match(/offerMonths\[/g) || []).length, 2, "fix B: rules.js touches P.offerMonths[...] twice only - rdBuildOffers writes it, outsideOffersOn reads it");
+  eq(/offerMonths/.test(genSrc), false, "fix B: generator.js never reads P.offerMonths (it asks rules.outsideOffersOn)");
+  ok(genSrc.includes("offerState: offerState, offeredOn: offeredOn, outsideOffersOn: outsideOffersOn"), "fix B: generator.js's browser rules API (the shared globals) names outsideOffersOn");
+}
+
 step("Prompt 14 P2: obligations still apply on an offered day - East busy, vacation, trailing edge, derived lock, window, other role");
 const ocKhanEast = p14Ctx({ offers: P14_OFFERS.concat([p14Offer(KHAN, "2026-12-01", "primary")]), eastBusyDays: { [KHAN]: ["2026-12-01"] } });
 blocked(R.eligibility(ocKhanEast, "2026-12-01", P, KHAN), "east-busy", "P2: an offered day that is East-busy stays blocked");

@@ -150,9 +150,15 @@
 // towards his target for the role and month the bonus reads
 // -weights.offerBonusOverShare (seed 0), so the equal shares decide between him
 // and a rules-only colleague exactly as before offers; caps and every other
-// hard rule are unchanged - an offer is not a demand. diagnostics.offers =
+// hard rule are unchanged - an offer is not a demand. Its mirror (painting fix B,
+// Faraz 10/18): a preferred-mode colleague's +weights.outsideOffers is WAIVED while
+// a placement still brings him towards his share (offered days consume the same
+// capacity first, then outside days - rules.outsideOffersOn names them) and stands
+// beyond it, so a full painter no longer outbids a partial painter below his share;
+// exhaustive is untouched. diagnostics.offers =
 // { periods, byPerson: { id: { status, mode, offered, placed, unplaced: [{ day,
 // role, reason, holidayUnit }], byPeriod } }, outsideOffers: [{ day, role, id }] }
+// (outsideOffers REPORTS every off-list placement, its term waived or not)
 // (genOffersDiag; an unplaced offer on a holiday-unit day names the unit's other
 // day that failed - "holiday-unit:<name> <day> <reason>" - as the cause);
 // an open slot inside a period carries uncovered[].offered (the ids who offered
@@ -211,7 +217,7 @@ function genRulesApi() {
       standingEastDays: standingEastDays,
       eastConflicts: eastConflicts,
       eastVacationConflicts: eastVacationConflicts,
-      offerState: offerState, offeredOn: offeredOn, // Prompt 14 P2
+      offerState: offerState, offeredOn: offeredOn, outsideOffersOn: outsideOffersOn, // Prompt 14 P2; painting fix B (10/18)
       shiftWeightsOf: shiftWeightsOf, // Prompt 32 step 2: the ONE reader of groupRules.shiftAccounting.weights
       overSoftLimitDays: overSoftLimitDays // Prompt 32 step 4: the ONE reading of the over-soft-limit primary days
     };
@@ -471,49 +477,103 @@ function genOfferCapacity(G, S, id, month, role, exceptDay, extra) {
   var c = genMonthCount(G, S, id, month, role) + genPendingForced(G, S, id, month, exceptDay, role) + (extra || 0);
   return Math.max(0, Math.ceil(T - 0.5) - c);
 }
-// The amount to ADD to a candidate's soft sum for taking `days` in `role`: each offered
-// day beyond the capacity swaps -offerBonus for -offerBonusOverShare. 0 whenever no
+// Painting fix B (Faraz 10/18; Prompt 32 step 5 (b)) - the mirror of the offered taper. A
+// preferred-mode colleague who painted a few days of a month carries rules.js's soft
+// 'outside-offers' (+weights.outsideOffers) on every other day of it, while a painter's
+// 'offered' bonus stops at his share: so a full painter kept winning placements up to
+// about share + 3 against him. Now the outside-offers term is WAIVED while the
+// placement still brings that colleague towards his share - the same capacity as the
+// taper (ceil(T - 0.5) - his count), his OFFERED days consuming it first, then his
+// OUTSIDE days; beyond it the +outsideOffers stands, so beyond his share preferred mode
+// still keeps him to his painted days. The days in scope are rules.outsideOffersOn's
+// (the ONE reading of B10's per-month scope: preferred, submitted, a month he painted
+// in, the role not offered that day) - exhaustive mode is untouched (hard not-offered;
+// its claim-result term is never waived). A surgeon with no target for the role is
+// neither tapered nor waived. eligibility() itself always carries the term (the day
+// editor and the board still show it); the waiver lives in the fill (genOfferTaper)
+// and the evaluation (genTaperSoftList), and diagnostics.offers.outsideOffers still
+// REPORTS every off-list placement, waived or not.
+//
+// The amount to ADD to a candidate's soft sum for taking `days` in `role`, per month
+// against the capacity (offered days counted first): each offered day beyond it swaps
+// -offerBonus for -offerBonusOverShare (the taper), and each outside day within what
+// the offered days leave of it takes back its +outsideOffers (fix B). 0 whenever no
 // period touches the range (the pre-P2 path is untouched, rng included).
 function genOfferTaper(G, S, id, days, role, exceptDay, extra) {
-  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0;
-  if (!G.offersLive || !bonus || bonus === over) return 0;
-  var perMonth = {}, R = G.R, ctx = G.ctx;
+  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0, outside = G.W.outsideOffers || 0;
+  var taper = !!bonus && bonus !== over;
+  if (!G.offersLive || (!taper && !outside)) return 0;
+  var offMonth = {}, outMonth = {}, months = [], R = G.R, ctx = G.ctx;
   for (var i = 0; i < days.length; i++) {
-    if (!R.offeredOn(ctx, days[i], role, id)) continue;
+    var isOff = R.offeredOn(ctx, days[i], role, id);
+    if (!isOff && !(outside && R.outsideOffersOn(ctx, days[i], role, id))) continue;
     var m = genMonthOf(days[i]);
-    perMonth[m] = (perMonth[m] || 0) + 1;
+    if (offMonth[m] === undefined) { offMonth[m] = 0; outMonth[m] = 0; months.push(m); }
+    if (isOff) offMonth[m]++; else outMonth[m]++;
   }
   var adj = 0;
-  Object.keys(perMonth).forEach(function (m) {
-    var overN = Math.max(0, perMonth[m] - genOfferCapacity(G, S, id, m, role, exceptDay, extra));
-    adj += overN * (bonus - over);
-  });
+  for (var k = 0; k < months.length; k++) {
+    var mo = months[k], offN = offMonth[mo], outN = outMonth[mo];
+    var capN = genOfferCapacity(G, S, id, mo, role, exceptDay, extra);
+    if (taper && offN) adj += Math.max(0, offN - capN) * (bonus - over);
+    if (outN && capN !== Infinity) adj -= Math.min(outN, Math.max(0, capN - offN)) * outside;
+  }
   return adj;
 }
-// The same rule on a finished candidate (genEvaluate): per surgeon, month and role the
-// generated offered days in date order keep the bonus up to the capacity measured on the
-// lock-only schedule (ceil(T - 0.5) - the days he held before the run); the rest are
-// re-labelled 'offered-over-share' at -offerBonusOverShare (dropped when that is 0).
-function genTaperSoftList(G, softList) {
-  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0;
-  if (!G.offersLive || !bonus || bonus === over) return softList;
-  var groups = {};
-  softList.forEach(function (s, i) {
-    if (s.reason !== "offered" || !s.id) return;
-    var k = s.id + "|" + genMonthOf(s.day) + "|" + s.role;
-    (groups[k] = groups[k] || []).push(i);
+// His generated OFFERED slots per "id|month|role" on the candidate (the slots genEvaluate
+// reads: held, not locked) - what consumes the capacity before his outside days in the
+// evaluation, counted whatever weights.offerBonus is (the fill counts them the same way).
+function genOfferedPlaced(G) {
+  var W = G.ctx.schedule, R = G.R, ctx = G.ctx, out = {};
+  G.days.forEach(function (d) {
+    var e = W[d];
+    GEN_ROLES.forEach(function (role) {
+      if (!e || genSlotOpen(e, role) || e[role + "Locked"] || !e[role] || !R.offeredOn(ctx, d, role, e[role])) return;
+      var k = e[role] + "|" + genMonthOf(d) + "|" + role;
+      out[k] = (out[k] || 0) + 1;
+    });
   });
-  var drop = {};
-  Object.keys(groups).forEach(function (k) {
-    var parts = k.split("|"), id = parts[0], month = parts[1], role = parts[2];
+  return out;
+}
+// The same rules on a finished candidate (genEvaluate). Per surgeon, month and role the
+// capacity is measured on the lock-only schedule (ceil(T - 0.5) - the days he held
+// before the run) and his generated OFFERED days consume it first: in date order they
+// keep the bonus up to it, the rest are re-labelled 'offered-over-share' at
+// -offerBonusOverShare (dropped when that is 0). Fix B: what the offered days leave of
+// it is then consumed by his generated OUTSIDE days (rules.outsideOffersOn) in date
+// order - those within it lose their 'outside-offers' term (dropped: a zero-weight term
+// never stays in the list), the rest keep +outsideOffers. Offered days always count
+// first, whatever their dates (the order the fill uses). A surgeon with no target for
+// the role keeps every term.
+function genTaperSoftList(G, softList) {
+  var bonus = G.W.offerBonus || 0, over = G.W.offerBonusOverShare || 0, outside = G.W.outsideOffers || 0;
+  var taper = !!bonus && bonus !== over;
+  if (!G.offersLive || (!taper && !outside)) return softList;
+  var R = G.R, ctx = G.ctx, groups = {}, keys = [];
+  softList.forEach(function (s, i) {
+    if (!s.id) return;
+    var kind = s.reason === "offered" ? (taper ? "offered" : null) : (s.reason === "outside-offers" && outside && R.outsideOffersOn(ctx, s.day, s.role, s.id)) ? "outside" : null;
+    if (!kind) return;
+    var k = s.id + "|" + genMonthOf(s.day) + "|" + s.role;
+    if (!groups[k]) { groups[k] = { offered: [], outside: [] }; keys.push(k); }
+    groups[k][kind].push(i);
+  });
+  var drop = {}, offeredPlaced = null;
+  var byDay = function (a, b) { return softList[a].day < softList[b].day ? -1 : softList[a].day > softList[b].day ? 1 : 0; };
+  keys.forEach(function (k) {
+    var g = groups[k], parts = k.split("|"), id = parts[0], month = parts[1], role = parts[2];
     var T = genTargetFor(G, month, id, role);
     if (T === null) return;
     var cap = Math.max(0, Math.ceil(T - 0.5) - genMonthCountScan(G.base, id, month, role));
-    var idx = groups[k].slice().sort(function (a, b) { return softList[a].day < softList[b].day ? -1 : softList[a].day > softList[b].day ? 1 : 0; });
+    var idx = g.offered.slice().sort(byDay);
     for (var j = cap; j < idx.length; j++) {
       var s = softList[idx[j]];
       if (over) { s.reason = "offered-over-share"; s.weight = -over; } else drop[idx[j]] = true;
     }
+    if (!g.outside.length) return;
+    if (!offeredPlaced) offeredPlaced = genOfferedPlaced(G);
+    var rem = Math.max(0, cap - (offeredPlaced[k] || 0)), out = g.outside.slice().sort(byDay);
+    for (var q = 0; q < out.length && q < rem; q++) drop[out[q]] = true;
   });
   return softList.filter(function (s, i) { return !drop[i]; });
 }
@@ -1745,7 +1805,9 @@ function genUncoveredReasons(G, open) {
 //   outsideOffers every GENERATED (not locked / fixed) slot held by a submitted
 //                 surgeon inside a period on a day/role he did not offer - the
 //                 publish email tells him "trade if needed" (preferred mode only,
-//                 by construction).
+//                 by construction). A REPORT, not the score: it lists every such
+//                 placement whether painting fix B waived its outside-offers term
+//                 (below his share) or not, and in any month of the period.
 // Empty ({ periods: [], byPerson: {}, outsideOffers: [] }) when no period touches
 // the range - present always, never absent.
 function genOffersDiag(G, warnings) {
