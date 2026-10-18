@@ -186,6 +186,13 @@
 // instead of dropping the day only he can take (before the fix that Saturday stayed
 // open while its Sunday, fillable by others, went to someone else). With none of
 // the keys on the roster the output is byte-identical to the pre-23 engine.
+//
+// 10/18 (Faraz, Acton's rest preference): the soft short-rest:<days off>
+// (surgeonRules.<id>.restBetweenStretches) reaches the generator the same way and
+// needs no code here - rules.js reads it on a stretch's first / last day only, so a
+// fill or a weekend / holiday pattern pays once per short side, and genEvaluate
+// (the run's score, the preview's softPenalties) counts each short rest on the call
+// day on either side of it (twice, like a back-to-back weekend; a locked side never).
 
 var GEN_DAY_MS = 86400000;
 var GEN_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

@@ -8707,6 +8707,40 @@ try {
           else if (JSON.stringify(stRv.fields) !== JSON.stringify(st0.fields) || stRv.status !== "Saved" || JSON.stringify(stRv.lines) !== JSON.stringify(st0.lines)) fail(`${P24}: Revert after removing '${rmId}' should bring it back - fields ${stRv.fields.join(", ")}, status ${stRv.status}`);
           else ok(`${P24}: Remove '${rmId}' (it holds data) asks '${rmMsgWant.slice(0, 120)}${rmMsgWant.length > 120 ? "..." : ""}' - dismissed: nothing removed; accepted: removed (Unsaved, summary without it); Revert: back`);
         }
+        // (c3) 10/18 (the rest preference): the Days off between call stretches field - added from the menu (or shown, once the
+        // live rules carry it): each of its two controls with its <label>, the start value { minDaysOff: 2, weight: "medium" }
+        // (or the live value) in them, the summary's Limits words over the draft; a weight change reads in the summary; Revert
+        // takes it all back - nothing is saved (the save leg (d) below starts from the shown rules as before)
+        {
+          const RB = "restBetweenStretches", rbF = HELPERS.suRuleField(RB);
+          const had = st0.fields.includes(RB);
+          if (!had) await ensureRuleField(page, RB);
+          await page.waitForTimeout(150);
+          const rbState = () => page.evaluate(() => {
+            const n = document.querySelector("[data-testid=rules-rest-min-days]"), w = document.querySelector("[data-testid=rules-rest-weight]");
+            const lab = (el) => (el && el.labels && el.labels.length ? el.labels[0].textContent : null);
+            return { n: n ? n.value : null, w: w ? w.value : null, nLab: lab(n), wLab: lab(w), opts: w ? Array.from(w.options).map(o => o.value) : [] };
+          });
+          const s1 = await rbState(), stRB = await pageState();
+          const draft1 = had ? orig : HELPERS.suRuleFieldAdd(rbF, orig);
+          const rb1 = draft1[RB] || {};
+          const wantN = rb1.minDaysOff === undefined || rb1.minDaysOff === null ? "" : String(rb1.minDaysOff), wantW = rb1.weight === undefined || rb1.weight === null ? "medium" : String(rb1.weight);
+          if (s1.nLab !== "Days off between call stretches (soft)" || s1.wLab !== "Weight of a short rest") fail(`${P24}: the rest field's two controls should each carry their <label> - got ${JSON.stringify([s1.nLab, s1.wLab])}`);
+          else if (s1.n !== wantN || s1.w !== wantW || !["low", "medium", "strong"].every(o => s1.opts.includes(o))) fail(`${P24}: the rest field should show ${wantN} days / ${wantW} (low / medium / strong offered) - got ${JSON.stringify(s1)}`);
+          else if (JSON.stringify(stRB.lines) !== JSON.stringify(sumOf(draft1)) || (!had && (stRB.status !== "Unsaved" || stRB.menu.includes(RB)))) fail(`${P24}: the rest field ${had ? "shown" : "added"} - the summary should read the draft (${JSON.stringify(sumOf(draft1))}), got ${JSON.stringify(stRB.lines)}; status ${stRB.status}`);
+          else ok(`${P24}: Days off between call stretches ${had ? "shown (live rules)" : "added from the menu (Unsaved, out of the menu)"} - both controls labelled, ${wantN} days at ${wantW}, the summary reads '${(stRB.lines.find(l => l.startsWith("Limits")) || "").slice(0, 160)}'`);
+          await page.selectOption("[data-testid=rules-rest-weight]", "strong");
+          await page.waitForTimeout(150);
+          const stW = await pageState();
+          const draft2 = JSON.parse(JSON.stringify(draft1)); draft2[RB] = Object.assign({}, draft2[RB], { weight: "strong" });
+          if (JSON.stringify(stW.lines) !== JSON.stringify(sumOf(draft2)) || !stW.lines.some(l => /between call stretches[^;]*\(soft, strong\)/.test(l))) fail(`${P24}: picking strong should read '(soft, strong)' in the summary - got ${JSON.stringify(stW.lines)}`);
+          else ok(`${P24}: the rest field's weight set to strong reads '(soft, strong)' in the Limits line`);
+          if (await page.$("[data-testid=rules-revert]")) await page.click("[data-testid=rules-revert]");
+          await page.waitForTimeout(250);
+          const stRv3 = await pageState();
+          if (JSON.stringify(stRv3.fields) !== JSON.stringify(st0.fields) || stRv3.status !== "Saved" || JSON.stringify(stRv3.lines) !== JSON.stringify(st0.lines)) fail(`${P24}: Revert after the rest field leg should bring back the shown rules - fields ${stRv3.fields.join(", ")}, status ${stRv3.status}`);
+          else ok(`${P24}: Revert after the rest field leg - fields, summary and Saved as they were (nothing written)`);
+        }
         // (d) one edit per group, then Save
         const modeNew = orig.availabilityMode === "whitelist-weeks" ? "blacklist-recurring" : "whitelist-weeks";
         const wsNew = orig.weekendStyle === "block" ? "split" : "block";
