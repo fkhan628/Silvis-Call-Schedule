@@ -917,7 +917,9 @@ offer). The claim is read as if his dated lists did not exist — so his other r
 included, still apply. That is exactly how claims and trades already worked in the live Nov 2026 – Jan 2027 period, so
 nothing changes there; a surgeon who never painted (rules-only / not started) keeps his list on claims, as before. A
 trade records no offer (`apply_trade` writes none — an open item), so a traded day off his list later shows as a
-conflict on his held slot; a claimed day does not. **Imports:** the importer
+conflict on his held slot; a claimed day does not (`claim_open_slot` records the offer — except for a claimer listed in
+the period's `rules_only_ids`, whose claim writes none, so his claimed day off his list can show the same conflict).
+**Imports:** the importer
 retires a surgeon's month lists and their available rows only for an "only these days" period; in a preferred period
 they stay beside his offers. Engine: `rules.js` (`listsAside`; the claim lift in `eligibility()`), `importer.js`
 (`impOfferCoverage`); proof: `test/rules.test.js` (painting never removes a hard reason from a day he did not offer; a
