@@ -35,8 +35,9 @@ MercyOne/MercyHealth work addresses.
 One calendar day = one 24-hour shift (07:00 → 07:00). Two roles per day: `primary` (in Silvis) and `backup`.
 In-memory schedule: `{ "YYYY-MM-DD": { primary, backup, primaryLocked, backupLocked, source, externalCover, note } }`.
 Persisted one row per day in `schedule_days` with compare-and-swap on `version`. Fri/Sat/Sun form a *weekend unit*
-(block / split / daily). Fairness is an **equal share per role** — of the open primary slots and, separately, of the open
-backup slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22), balanced across
+(block / split / daily). Fairness is an **equal share per role** — water-filled over all of the month's primary slots (the
+open ones plus the days pool members already hold, which count against the holder; WF 9/23) and, separately, its backup
+slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22), balanced across
 roles by a **weighted load** (primary 1, backup 0.5 - `groupRules.shiftAccounting.weights`, read only through
 `rules.shiftWeightsOf`; Prompt 32, Faraz 10/9-10/11): a surgeon short of his primary share makes it up in backups, two per
 primary, and the reverse - never pushed over a primary limit. Monthly caps: the group's **soft 7** primary days a month
@@ -70,6 +71,16 @@ applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce 
 approvals, Davenport's split-shift accounting (Silvis weighs whole days instead - the weighted load above, Prompt 32).
 The East-code surgeon (Khan today) sees a "My call - Silvis + Davenport" card in Mine (Prompt 31 Part B): Silvis days plus
 Davenport call counted by `call-totals.js`, the Davenport app's own counter ported verbatim, so both apps' cards agree.
+His East vacations (his away / unreviewed Davenport ranges; Prompt 31 Part A, decisions 10/14 - rules doc §8 item 26,
+build guide §25): the calendar dots, "Off: Khan" and the read-only Time off / My vacations lines every signed-in role but the
+scheduler (who keeps the diamond) sees come from ONE database reading, `silvis_derived_vacations()`, which revision x's
+`time_off` guard trigger reads too (the client check keeps `vacEastAway`, the same reading in JS); a missing function (404 -
+before revision x, Faraz's `apply-east-vacations.sh`, is applied; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations")
+reads as "unavailable": no derived line, never "no vacations". Client-side and live since 2026.10.18b whatever the apply:
+non-schedulers read "on vacation" for such a day on the board, the claim sheet and the trade card, and see no East /
+Davenport word. `?public=1`, share and print stay `time_off` only; the calendar feeds (Khan's `?east=1` keeps its away
+events), the digest, e-mails and pay are unchanged and never call the function. The daily server refresh `east-feed-refresh` (the in-app Refresh unattended, gated by the cron
+secret; cron `silvis-east-feed-daily` at 10:30 UTC) is deployed by hand after that apply - `edge-functions/README.md` §3.
 Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
 worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30. Its database part was applied, the VAPID keys set and
 send-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client.
@@ -118,7 +129,10 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   (day, roster id, busy flag, an operational note), `east_forecast` (week flags + busy probabilities) and `client_versions` (anon
   reads the `main` row only). Pay data (`call_pay_settings`, `call_pay_logs`) is never anon-readable (anon privileges revoked on top of
   RLS); the client reads them only through `config.js` `payDb` with a fresh user token and reads a missing table as
-  "unavailable", never as an empty list.
+  "unavailable", never as an empty list. The same contract holds for the authenticated-only RPC `silvis_derived_vacations()`
+  (Prompt 31 Part A; EXECUTE for authenticated + service_role, never anon - a new function's EXECUTE is revoked from PUBLIC
+  and anon, since Supabase grants it to anon by default), read through `config.js` `derivedVacDb`: a missing function (404)
+  is "unavailable".
   An RLS-blocked read returns HTTP 200 + `[]` — **silent**. Reads must distinguish failure from empty (`db.query` throws on
   non-2xx; keep that). **The service-role key is server-side only — never in client code or a URL.** RLS changes apply to
   the live DB instantly — always report-first with blast radius.
@@ -126,21 +140,27 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   `intentionalScheduleWipeRef`, snapshots to `call_schedule_snapshots` before destructive actions (capture failure
   BLOCKS the action), scheduler restore UI in Settings. Preserve all of it.
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
-  caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call".
+  caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
+  guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no
+  review - never "no vacations"), and the review resets go through ONE SQL function, `east_vacation_reset_stale` (the 9/23
+  client loop while it is missing).
 
 ## Rules engine + generator contract
 
 - `rules.js` is pure (no DOM/React); `eligibility(ctx, date, role, surgeonId)` is the **single chokepoint** — every
   assignment, repair, trade acceptance and manual edit consults it (manual edits may override with a visible warning).
 - No surgeon-specific `if (name === ...)` in code: every rule is data in `call_schedule_data.data.surgeonRules` and
-  editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features.
-- **Offers are the mechanism (Prompt 14):** `rules.buildContext` reads `offers` (`call_offers`) and `periods` (`call_periods`) and eligibility is offers-first inside a period (exhaustive / preferred per surgeon, rules-only by choice); the seed's dated lists (`explicitAvailable`, `offeredDays`, `availableWeeks`, tagged `surgeonRules.<id>.offerSources`) are **offer sources** the importer turns into `call_offers` rows — never a second whitelist path; recurring patterns, derived weeks and windows stay rules.
+  editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features; Acton's rest
+  preference is the generic soft `restBetweenStretches { minDaysOff, weight }` (10/18 - `short-rest` between call stretches,
+  both roles; Setup > Rules > Limits; it acts once Faraz enters it there).
+- **Offers are the mechanism (Prompt 14):** `rules.buildContext` reads `offers` (`call_offers`) and `periods` (`call_periods`) and eligibility is offers-first inside a period (exhaustive / preferred per surgeon, rules-only by choice); the seed's dated lists (`explicitAvailable`, `offeredDays`, `availableWeeks`, tagged `surgeonRules.<id>.offerSources`) are **offer sources** the importer turns into `call_offers` rows for a surgeon with a mode in the period; recurring patterns, derived weeks and windows stay rules. **Since 10/18 (rules doc §8):** an *exhaustive* ("only these days") surgeon's dated lists are set aside for the period - his hard `not-offered` governs and the importer retires his month lists and available rows there, so for him they are never a second whitelist path; a *preferred* surgeon's dated lists STAND all period ("List always stands": painting only adds days - an offer lifts a list on its own date and role only) and the importer keeps his rows and months beside his offers (`offeredDays` is offers only). **Painting fix B:** in the generator a preferred painter's soft `outside-offers` is waived while a placement still brings him towards his share for the role and month and stands beyond it (`diagnostics.offers.outsideOffers` lists every off-list day either way). **Claims and trades** (`opts.claim`) skip the exhaustive `not-offered`, and for a surgeon submitted for the day's period (either mode) read the day as if his dated lists did not exist ("taking it counts as painting it"; his recurring whitelist and every other hard rule stand); rules-only / not-started surgeons, and every day outside a period, keep today's rules byte for byte.
 - `generator.js`: locks → weekend/day units → primary pass → backup pass → repair → target smoothing, wrapped in
   best-of-N; returns `{ schedule, diagnostics }` and **never silently leaves a slot empty** — open slots carry reasons.
 - `test/generator-regression.js` re-states every hard rule independently and runs 50 seeds × 4 ranges (Oct with the
   imports, Nov–Dec, Jan–Mar, the milestone 11/2 → 1/3 on the even seeds) plus the fill-open-only October backfill runs
-  and the fixture runs, all from `docs/silvis-seed.json` and `test/fixtures/`; CI runs it before the build. When a rule
-  changes, update `docs/SILVIS-CALL-RULES.md`, the seed, and the test in the same PR.
+  and the fixture runs, all from `docs/silvis-seed.json` and `test/fixtures/`; CI runs it before the build. Since 10/18 it
+  also restates the soft rest rule (`restBetweenStretches`) against the preview's `short-rest` entries on every seed × range
+  run and on the rule-on half of its rule-on / rule-off comparison (the rule-off runs must carry no `short-rest` entry). When a rule changes, update `docs/SILVIS-CALL-RULES.md`, the seed, and the test in the same PR.
 
 ## Session ground rules (non-negotiable)
 
@@ -166,3 +186,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   unknowns, not assumptions to bake in. Every default taken for an unanswered question is data in
   `call_schedule_data.data.groupRules` / `surgeonRules` (listed in `docs/SILVIS-CALL-RULES.md` §8 and the seed's
   `openQuestions`; the 9/21 orientation that first listed them is history, `docs/HISTORY.md`), never a code branch.
+  Faraz's own Prompt 31 Part A steps, in order: the database apply, the `east-feed-refresh` deploy, its dryRun, the cron job
+  (the private apply README's last section; each is recorded when done in `docs/SCHEMA-REVIEW.md` "2026-10-14 - East
+  vacations" and `edge-functions/README.md` §3). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
+  vacations' open questions, the rest rule).
