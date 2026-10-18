@@ -595,8 +595,8 @@ the pool, within each person's availability:
   over the whole period, and the water-filled share itself is untouched — the penalty is a score term, never a target,
   so in a month without offers he is simply placed to his share. Offers-first placement of offered units is unchanged.
 - **Painting and the share — fix B (Faraz 10/18; Prompt 32 step 5).** What "preferred days" means: his **painted days are
-  placed first**; **until he reaches his fair share** for the role and month, a day he did not paint **costs him nothing
-  extra**; **beyond his share** the `outside-offers` penalty (+`weights.outsideOffers`, 6) stands, so he is kept to his
+  placed first**; **until he reaches his fair share** for the role and month, Generate **does not hold a day he did not
+  paint against him** (the day editor and the board still show its `outside-offers` term); **beyond his share** the `outside-offers` penalty (+`weights.outsideOffers`, 6) stands, so he is kept to his
   painted days unless no colleague can reasonably take the slot. This is the mirror of the offered bonus, which already
   stops at the share (`weights.offerBonusOverShare`): the same capacity — the placements that still bring him towards his
   share — is consumed first by his painted days, then by his unpainted ones. **Every day he holds in that month and role
@@ -887,13 +887,20 @@ primary-week days keep counting toward Fierce's cap only. Khan's and Acton's 9/2
 default (item 5) are superseded. The engine: §6 and the build guide §23.
 
 **Decided by Faraz on 10/18 — painting fix B (Prompt 32 step 5):** a "preferred days" surgeon's painted days are placed
-first; until he reaches his fair share for the role and month a day he did not paint carries no penalty, and beyond
-his share he is kept to his painted days (the `outside-offers` penalty stands) unless no colleague can reasonably take the
-slot. Every day he holds in the month counts against his share (review 10/18: days in another period of the same month
+first; until he reaches his fair share for the role and month Generate does not hold a day he did not paint against him,
+and beyond his share he is kept to his painted days (the `outside-offers` penalty stands) unless no colleague can
+reasonably take the slot - in each month where he painted at least one day of the period (B10). Every day he holds in the month counts against his share (review 10/18: days in another period of the same month
 first). "Only these days" is unchanged, and every day he is placed on outside his painted days is still reported
 (`diagnostics.offers.outsideOffers` — the Generate preview lists them, My schedule tags each "not offered"; the publish
 e-mail's off-list line that is to read it is still open, build guide §17). The rule: §6 "Painting and the share"; the
 engine: the build guide §17 and §23.
+
+**Raised 10/18 for Faraz (found reviewing fix B's words; not changed - it predates fix B):** a surgeon whose rules carry
+a dated list (Listed weeks / Listed months, e.g. Philip's weeks) who paints any day of a period loses that list for the
+WHOLE period (submitted -> offers govern, so `whitelist-month` / `outside-available-weeks` are off), while the
+`outside-offers` penalty only applies in the period-months he painted (B10). In a month of that period he painted
+nothing, neither applies, so Generate may place him outside his listed weeks. Fixing it (keep the list in the
+period-months he did not paint) is a behaviour change - report first, with the regression and §6.
 
 **Still open:**
 
