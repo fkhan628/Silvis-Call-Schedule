@@ -204,9 +204,14 @@ Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
 for that function. Always deploy from the CLI, and after any deploy re-run the
 calendar-sync check in section 5.
 
-After deploying, follow the Davenport convention: `supabase functions download
-<slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp` and byte-compare with
-the repo copy (`fc.exe` / `cmp`) so the repo stays the source of truth.
+After deploying, follow the Davenport convention: download the deployed copy back,
+`supabase functions download <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp --use-api`,
+and byte-compare it with the repo copy (`fc.exe` / `cmp`, or the two sha256) so the repo stays the
+source of truth. `--use-api` unbundles on the server; without it the CLI unbundles in a local Docker
+container, and the new laptop has no Docker. The download writes over
+`$wd\supabase\functions\<slug>\index.ts`, the copy that was just uploaded - so remove the uploaded copy first:
+a download that wrote nothing (or wrote somewhere else) then fails the compare on a missing file instead
+of passing it on the uploaded one.
 
 ### Deploy record - Prompt 31 Part A (east-feed-refresh, the daily East feed refresh) - PREPARED, NOT deployed
 
@@ -232,7 +237,7 @@ The order (Faraz, one step at a time; the expected result in brackets):
    user profile (set up with `supabase init --workdir`, then `supabase link --project-ref bzhsroegtagqhutbnsrp --workdir`;
    a supabase line without `--workdir` walks up from the current folder to the Davenport-linked one, so every line here
    carries it). The file comes from the Part A worktree `silvis-p31a` beside it, at the commit apply-scripts'
-   `SHA256SUMS.txt` names; `--use-api` deploys without Docker. The public repo names the folders through
+   `SHA256SUMS.txt` names; `--use-api` deploys and downloads without Docker. The public repo names the folders through
    `$env:USERPROFILE` (no user name here); the private apply-scripts README gives the same lines with the literal paths.
    ```powershell
    supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
@@ -241,12 +246,19 @@ The order (Faraz, one step at a time; the expected result in brackets):
    (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh\index.ts" -Algorithm SHA256).Hash.ToLower()
    supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --no-verify-jwt --use-api
    supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
+   Remove-Item "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh\index.ts"
+   supabase functions download east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --use-api
+   (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\supabase\functions\east-feed-refresh\index.ts" -Algorithm SHA256).Hash.ToLower()
    curl.exe -s -o NUL -w "%{http_code}" -X POST "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh"
    ```
-   [The first list: the four live functions, ACTIVE. The hash: exactly the `east-vacations/edge-functions/east-feed-refresh/index.ts`
+   [The first list: the four live functions, ACTIVE. The first hash: exactly the `east-vacations/edge-functions/east-feed-refresh/index.ts`
    line of apply-scripts' `SHA256SUMS.txt` - anything else, stop before the deploy. Then `east-feed-refresh` v1
-   ACTIVE, the other four unchanged; then `401` - the gate, nothing read.] A new slug: nothing to back up, and the hash
-   line proves the source that was deployed.
+   ACTIVE, the other four unchanged. The `Remove-Item` takes the uploaded copy away, so the second hash can only read
+   what the download wrote - the source the project now serves. The second hash: that same `SHA256SUMS.txt` line again
+   (a missing file or another hash: the function is deployed - stop, do not deploy again, and paste the download's
+   output back). Then `401` - the gate, nothing read.] A new slug: nothing to back up before the deploy, but the deploy
+   is still verified - section 3's download-and-compare rule above, without Docker. The first hash proves the source
+   that was uploaded, the second the source the project serves.
 4. The dryRun proof, through pg_net in the SQL editor (no cron job needed; nothing is written - no `east_feed` row, no
    prune, no reset, no audit row):
    ```sql

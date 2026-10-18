@@ -3594,6 +3594,12 @@ const EFR_SRC = "\"$env:USERPROFILE\\projects\\silvis-p31a\\edge-functions\\east
 const EFR_DST = "\"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\east-feed-refresh\\index.ts\"";
 const EFR_LIST = "supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD;
 const EFR_DEPLOY = "supabase functions deploy east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD + " --no-verify-jwt --use-api";
+// A4 review (10/18): the post-deploy check - the uploaded copy is removed, the deployed source downloaded back into the same path
+// (--use-api: unbundled on the server, no Docker), and the same hash line read again. A download that wrote nothing (or wrote somewhere
+// else) then fails the hash line on a missing file instead of re-hashing the uploaded copy - never a silent pass.
+const EFR_HASH = "(Get-FileHash " + EFR_DST + " -Algorithm SHA256).Hash.ToLower()";
+const EFR_REMOVE = "Remove-Item " + EFR_DST;
+const EFR_DOWNLOAD = "supabase functions download east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD + " --use-api";
 check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), section 3's record (PREPARED, NOT deployed: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, NOT scheduled yet), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
   assert.ok(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*NOT deployed[^\n]*\| never \|$/m.test(readme), "the table row");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
@@ -3611,18 +3617,32 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   // pin moved deliberately 10/14: Prompt 31 Part A A4 - Cowork's 10/16 4:40 AM review: concrete paths, never placeholders (was:
   // <cli-workdir> / <your clone>): the PowerShell block is exactly list, New-Item, Copy-Item from the worktree, the sha256 of the copy,
   // deploy, list, the 401 - every supabase line with the workdir on the line, no $wd, no <placeholder>, and still no machine path
+  // pin moved deliberately 10/14: Prompt 31 Part A A4 review - the verifier's 10/18 finding: A4 had dropped the post-deploy byte-compare
+  // (a new slug has nothing to BACK UP, but still something to VERIFY); the block now ends deploy, list, Remove-Item of the uploaded copy,
+  // the download with --use-api, the same hash line, the 401 (was: deploy, list, the 401)
   const psAt = rec.indexOf("```powershell\n") + 14, ps = rec.slice(psAt, psAt + rec.slice(psAt).search(/\n[ \t]*```/));   // the fence is indented
   assert.deepStrictEqual(ps.split("\n").map((l) => l.trim()), [
     EFR_LIST,
     "New-Item -ItemType Directory -Force \"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\east-feed-refresh\" | Out-Null",
     "Copy-Item " + EFR_SRC + " " + EFR_DST + " -Force",
-    "(Get-FileHash " + EFR_DST + " -Algorithm SHA256).Hash.ToLower()",
+    EFR_HASH,
     EFR_DEPLOY,
     EFR_LIST,
+    EFR_REMOVE,
+    EFR_DOWNLOAD,
+    EFR_HASH,
     "curl.exe -s -o NUL -w \"%{http_code}\" -X POST \"https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh\"",
   ], "the deploy block, line for line");
   assert.ok(!/<[A-Za-z][A-Za-z -]*>|\$wd\b/.test(ps) && !/[A-Za-z]:\\+Users\\/i.test(rec), "no placeholder, no $wd, no machine path");
-  assert.ok(/SHA256SUMS/.test(rec) && /--use-api/.test(rec.replace(EFR_DEPLOY, "")), "the record says what the hash must equal and why --use-api");
+  assert.ok(/SHA256SUMS/.test(rec) && /--use-api/.test(rec.replace(EFR_DEPLOY, "").replace(EFR_DOWNLOAD, "")), "the record says what the hash must equal and why --use-api");
+  // A4 review (10/18): what the two hashes prove, in the record's own words - the first the source that was UPLOADED (it reads the workdir
+  // copy before the deploy), the second the source the project SERVES (the uploaded copy is removed first, so it can only read what the
+  // download wrote); both must be the same SHA256SUMS line; a missing file or another hash after the deploy: stop, never deploy again
+  const flat = rec.replace(/\s+/g, " ");
+  assert.ok(flat.indexOf("The first hash proves the source that was uploaded, the second the source the project serves") > 0 && !/proves the source that was deployed/.test(flat), "the first hash proves the upload, the second what is served");
+  assert.ok(/The `Remove-Item` takes the uploaded copy away, so the second hash can only read what the download wrote/.test(flat), "why the Remove-Item");
+  assert.ok(/The second hash: that same `SHA256SUMS\.txt` line again/.test(flat) && /a missing file or another hash: the function is deployed - stop, do not deploy again/.test(flat), "the second hash must be the same line; what to do when it is not");
+  assert.ok(flat.indexOf("nothing to back up before the deploy") > 0 && flat.indexOf("A new slug: nothing to back up, and the hash line proves") < 0, "a new slug has nothing to back up - but the deploy is still verified");
   const s4 = readme.slice(readme.indexOf("## 4."), readme.indexOf("## 5."));
   const CRON = "select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$\n  select net.http_post(\n    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',\n    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',\n      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),\n    body := '{}'::jsonb,\n    timeout_milliseconds := 60000);\n$$);";
   assert.ok(s4.indexOf(CRON) > 0, "section 4 carries the report's cron statement");
@@ -3653,6 +3673,11 @@ check("A4 (Cowork 10/16 4:40 AM): the function header's deploy line is section 3
   assert.ok(sb.length === 5 && sb.every((l) => / --workdir \$wd /.test(l + " ")), "every line of the four-function block carries --workdir $wd: " + sb.join(" | "));
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD) > 0, "section 7's delete carries the workdir");
+  // A4 review (10/18): section 3's general after-deploy rule downloads with --use-api (the CLI's other path unbundles in a local Docker
+  // container, and the new laptop has none) and says to remove the uploaded copy first (the download writes over the same path)
+  const rule = s3.slice(s3.indexOf("After deploying, follow the Davenport convention")).replace(/\s+/g, " ");
+  assert.ok(rule.indexOf("`supabase functions download <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp --use-api`") > 0, "the general rule's download line carries --use-api: " + rule.slice(0, 200));
+  assert.ok(/--use-api` unbundles on the server[^.]*Docker/.test(rule) && /remove the uploaded copy first/.test(rule), "the rule says why --use-api and why the uploaded copy goes first");
 });
 
 (async () => {
