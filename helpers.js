@@ -5183,6 +5183,14 @@ function offerRulesWords(rules, groupRules) {
   else if (cap.soft !== null) out.push("Soft limit: " + cap.soft + " primary days a month" + (cap.softGroup ? " (the group's)" : "") + (cap.east ? ", East primary-week days included" : "") + ".");
   if (R.backupCap && typeof R.backupCap === "object") out.push("Backup cap: " + [typeof R.backupCap.perMonthDays === "number" ? R.backupCap.perMonthDays + " days" : null, typeof R.backupCap.weekendsPerMonth === "number" ? R.backupCap.weekendsPerMonth + " weekend" + (R.backupCap.weekendsPerMonth === 1 ? "" : "s") : null].filter(Boolean).join(" and ") + " a month.");
   if (typeof R.maxConsecutiveDays === "number") out.push("At most " + R.maxConsecutiveDays + " consecutive primary days" + (typeof R.maxConsecutiveAnyRole === "number" ? " (" + R.maxConsecutiveAnyRole + " in any role)" : "") + ".");
+  // Faraz 10/18 (the rest preference): restBetweenStretches - said only when rules.js applies it (well formed, 2 days or more, a weight
+  // above 0; the reading of suRulesSummary's Limits line)
+  const rb = R.restBetweenStretches;
+  if (rb && typeof rb === "object" && !Array.isArray(rb) && typeof rb.minDaysOff === "number" && Math.floor(rb.minDaysOff) === rb.minDaysOff && rb.minDaysOff >= 2 && rb.minDaysOff <= 14) {
+    const Wt = suSumWeights(G), rbW = rb.weight !== undefined ? rb.weight : "medium";
+    const rbNum = typeof rbW === "number" ? rbW : typeof rbW === "string" ? (Object.prototype.hasOwnProperty.call(Wt, rbW) ? Wt[rbW] : parseFloat(rbW)) : NaN;
+    if (typeof rbNum === "number" && isFinite(rbNum) && rbNum > 0) out.push("At least " + rb.minDaysOff + " days off between your call stretches, primary or backup - days in a row are one stretch, and so is a weekend or a holiday unit (preferred, not a hard limit).");
+  }
   const hr = R.holidayRules;
   if (hr && Array.isArray(hr.holidaysOff) && hr.holidaysOff.length) out.push("Never on " + hr.holidaysOff.join(", ") + ".");
   if (hr && typeof hr.maxMajorHolidays === "number") out.push("At most " + hr.maxMajorHolidays + " major holiday" + (hr.maxMajorHolidays === 1 ? "" : "s") + " in 12 months.");
@@ -5292,7 +5300,7 @@ const SU_SUM_KNOWN = {
     "monthlyCap", "recurringAvailable", "recurringUnavailable", "recurringAvoid", "weekendsAvailable", "explicitAvailable", "explicitBackupOnly", "explicitUnavailable",
     "explicitBackupUnavailable", "explicitListMonths", "offerSources", "offeredDays", "timeOff", "holidayRules", "aledo", "availableWeeks", "availableWeeksFrom",
     "preferences", "backupCap", "outsideDerivedWeeks", "availableWindows", "daysPerWindowWeek", "preferAlternateDays", "weekendBlockPenalty", "handoffPartnerRequired",
-    "splitPartner", "standaloneFriday", "noLoneWeekendDay", "weekendCap"],
+    "splitPartner", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "restBetweenStretches"],
   weekdays: ["allowed", "autoOffer"],
   eastFeed: ["enabled", "eastBlocksPrimary", "eastBlocksBackup", "eastBackupCountsAsBusy", "forecast", "deriveFrom", "statedWeeks"],
   "eastFeed.statedWeeks": ["eastPrimary", "eastBackup"],
@@ -5302,6 +5310,7 @@ const SU_SUM_KNOWN = {
   aledo: ["weekdays", "avoidWholeWeek", "hardAvoidDayBefore"],
   backupCap: ["perMonthDays", "weekendsPerMonth"],
   weekendCap: ["perMonth", "countsEast", "roles", "days", "weight"],
+  restBetweenStretches: ["minDaysOff", "weight"],
   daysPerWindowWeek: ["target", "countsBackup", "min", "max", "minIsSoft"],
   preferences: ["maxMajorHolidays"],
   weekendsAvailable: ["primary", "backup"],
@@ -5555,6 +5564,18 @@ function suRulesSummary(rules, info) {
   const mcd = typeof R.maxConsecutiveDays === "number" ? R.maxConsecutiveDays : null;
   const dmc = typeof G.defaultMaxConsecutiveDays === "number" ? G.defaultMaxConsecutiveDays : 2;
   lim.push("at most " + (mcd !== null ? mcd : dmc) + " " + (G.countBackupInConsecutive ? "days on call" : "primary days") + " in a row" + (mcd === null ? " (group default)" : "") + (R.holidayUnitCountsAsOneDay === true ? " (a holiday unit counts as one)" : "") + (typeof R.maxConsecutiveAnyRole === "number" ? ", " + R.maxConsecutiveAnyRole + " in any role (soft)" : ""));
+  // Faraz 10/18 (the rest preference): restBetweenStretches, read as rules.js buildContext reads it - the whole rule is ignored when
+  // minDaysOff is not a whole number from 1 to 14 or the weight is not a number / a weight name of the table / a numeric
+  // string, at 0 or more ("medium" when absent); 1 day, or a weight of 0, has no effect
+  const rb = R.restBetweenStretches;
+  if (rb !== undefined && rb !== null) {
+    const rbW = suSumObj(rb) && rb.weight !== undefined ? rb.weight : "medium";
+    const rbNum = typeof rbW === "number" ? rbW : typeof rbW === "string" ? (Object.prototype.hasOwnProperty.call(Wt, rbW) ? Wt[rbW] : parseFloat(rbW)) : NaN;
+    const okRb = suSumObj(rb) && typeof rb.minDaysOff === "number" && isFinite(rb.minDaysOff) && Math.floor(rb.minDaysOff) === rb.minDaysOff
+      && rb.minDaysOff >= 1 && rb.minDaysOff <= 14 && typeof rbNum === "number" && isFinite(rbNum) && rbNum >= 0;
+    if (!okRb) lim.push("a rest between call stretches that is not well formed (ignored)");
+    else lim.push("at least " + suSumPlural(rb.minDaysOff, "day") + " off between call stretches in either role, a weekend or a holiday unit counting as one stretch (" + (rb.minDaysOff === 1 || rbNum === 0 ? "no effect" : "soft" + (rbW === "medium" ? "" : ", " + suSumWeight(rbW))) + ")");
+  }
   // Prompt 32 (Faraz 10/11): the hard cap and the soft limit as rules.js reads them (suMonthlyCapReading) - absent and null
   // are the group default (the seed's soft 7), "none" is no limit, an unreadable value reads as the group default (warned)
   const capR = suMonthlyCapReading(R, G);
@@ -5680,6 +5701,8 @@ const SU_RULE_FIELDS = [
   { id: "splitPartner", group: "weekends", label: "Split partner", paths: ["splitPartner"], used: r => suRfSet(r.splitPartner) },
   { id: "maxConsecutiveDays", group: "limits", label: "Most primary days in a row", paths: ["maxConsecutiveDays"], used: r => typeof r.maxConsecutiveDays === "number" },
   { id: "maxConsecutiveAnyRole", group: "limits", label: "Most days in a row, any role", paths: ["maxConsecutiveAnyRole"], used: r => typeof r.maxConsecutiveAnyRole === "number" },
+  // Faraz 10/18: the soft rest between call stretches - any present object is in use (rules.js reads it or warns)
+  { id: "restBetweenStretches", group: "limits", label: "Days off between call stretches", paths: ["restBetweenStretches"], used: r => suRfObj(r.restBetweenStretches), start: { minDaysOff: 2, weight: "medium" } },
   { id: "holidayUnitCountsAsOneDay", group: "limits", label: "A holiday unit counts as one day", paths: ["holidayUnitCountsAsOneDay"], used: r => r.holidayUnitCountsAsOneDay === true, start: true },
   { id: "monthlyTarget", group: "limits", label: "Monthly target", paths: ["monthlyTarget"], used: r => typeof r.monthlyTarget === "number" || suRfObj(r.monthlyTarget) },
   // Prompt 32 (10/11): monthlyCap null is the group default - the same as no key - so only a non-null value uses the field
@@ -5745,6 +5768,7 @@ const SU_RULE_KEY_WORDS = {
   days: "counted days", weight: "weight", target: "target", countsBackup: "backup days count", min: "old min", max: "old max",
   minIsSoft: "old min is soft", primary: "primary", backup: "backup", total: "total (older name)", preferred: "preferred at most",
   countsEastDays: "East primary-week days count", perMonthDays: "backup days per month", weekendsPerMonth: "backup weekends per month",
+  minDaysOff: "days off between stretches",
 };
 function suRuleKeyWords(k) { return SU_RULE_KEY_WORDS[k] || String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase(); }
 // Review 2 (10/1): a choice field's lone value reads as its menu words in the confirm, not the stored token - the mode

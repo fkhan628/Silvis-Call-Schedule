@@ -89,7 +89,7 @@ ok(!("holidayPlanNote" in imp.blob.groupRules), "holidayPlanNote is dropped from
 eq(imp.blob.surgeonRules.s1.holidayRules, { holidaysOff: ["Christmas"] }, "blob s1.holidayRules = the rule only (holidaysOffNote dropped)");
 ok(IMP.impFindContactValues(seed.groupRules.holidayPlan).length === 0 && !seed.roster.some((r) => JSON.stringify(seed.groupRules.holidayPlan).indexOf(r.name) >= 0), "the block carries no contact-like value and no roster name (the blob is anon-readable)");
 
-step("A3: openQuestions 21 and ONE 2026-09-30 revision entry for Prompt 25, right before the 10/10 entry (then the 10/11 caps entry and the 10/11 weights entry, the last)");
+step("A3: openQuestions 21 and ONE 2026-09-30 revision entry for Prompt 25, right before the 10/10 entry (then the 10/11 caps entry, the 10/11 weights entry and the 10/18 rest entry, the last)");
 // pin moved deliberately 10/1 (merge with Prompt 23, which shipped first and took openQuestions 20 / rules doc section 8 item 23):
 // the holiday plan's entry is 21 (section 8 item 24); kept intent - one entry, its text, the last revision entry
 const q20 = seed.openQuestions.filter((t) => /^21\. Holiday plan \(Prompt 25, Faraz 9\/30\)/.test(t));
@@ -109,10 +109,14 @@ const rev1010 = seed._meta.revisions.filter((t) => /^2026-10-10 \(Claude Code, b
 const rev1011 = seed._meta.revisions.filter((t) => /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 3/.test(t));
 const rev1011w = seed._meta.revisions.filter((t) => /^2026-10-11 \(Claude Code, branch feat\/backup-weight-cap, Faraz 10\/11 - Prompt 32 step 1/.test(t));
 eq([rev1010.length, rev1011.length, rev1011w.length], [1, 1, 1], "one _meta.revisions entry dated 2026-10-10 (Burchett's January ranges), one dated 2026-10-11 for the caps (Prompt 32 step 3) and one for the shift weights (step 1)");
-eq([seed._meta.revisions.indexOf(rev[0]), seed._meta.revisions.indexOf(rev1010[0]), seed._meta.revisions.indexOf(rev1011[0]), seed._meta.revisions.indexOf(rev1011w[0])], [seed._meta.revisions.length - 4, seed._meta.revisions.length - 3, seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "it sits right before the 10/11 caps entry, which sits right before the 10/11 weights entry (the last)");
+// pin moved deliberately 10/18 (Acton's rest rule): the 10/18 entry (feat/rest-between-stretches) follows the weights entry and is
+// the last, so the four entries move one place up and seedLastRevision reads 2026-10-18. Kept intent as before.
+const rev1018 = seed._meta.revisions.filter((t) => /^2026-10-18 \(Claude Code, branch feat\/rest-between-stretches/.test(t));
+eq(rev1018.length, 1, "one _meta.revisions entry dated 2026-10-18 (Acton's rest rule)");
+eq([seed._meta.revisions.indexOf(rev[0]), seed._meta.revisions.indexOf(rev1010[0]), seed._meta.revisions.indexOf(rev1011[0]), seed._meta.revisions.indexOf(rev1011w[0]), seed._meta.revisions.indexOf(rev1018[0])], [seed._meta.revisions.length - 5, seed._meta.revisions.length - 4, seed._meta.revisions.length - 3, seed._meta.revisions.length - 2, seed._meta.revisions.length - 1], "it sits right before the 10/11 caps entry, which sits right before the 10/11 weights entry, then the 10/18 rest entry (the last)");
 ok(/groupRules\.holidayPlan/.test(rev[0]) && /HOLIDAY_PLAN_DEFAULTS/.test(rev[0]) && /holidaysOff \['Christmas'\]/.test(rev[0]) && /seedCoreHash moves/.test(rev[0]), "it names the block, the code defaults, Khan's opt-out and the core-hash move");
 ok(IMP.impFindContactValues(rev[0]).length === 0 && !/\$\s*\d/.test(rev[0]), "no contact-like value, no amount");
-eq(imp.blob.settings.seedLastRevision, "2026-10-11", "blob settings.seedLastRevision (the 10/11 entry is the last - pin moved deliberately 10/11)");
+eq(imp.blob.settings.seedLastRevision, "2026-10-18", "blob settings.seedLastRevision (the 10/18 entry is the last - pin moved deliberately 10/11, 10/18)");
 
 /* =================================================================== B */
 step("B1: holidayPlanHistory reads the schedule's units (split holders listed, external cover kept, empty units skipped)");

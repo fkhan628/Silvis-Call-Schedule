@@ -2837,7 +2837,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // Item E4 (Faraz 9/26: "the East details still visible to non-schedulers. The open-shifts board's chip hovers, the Take
   // button title, the claim sheet list, the claim-gate toast and trade reasons say 'not available' to non-schedulers; the
   // scheduler keeps the detail. The two 'couldn't load East ...' toasts show to the scheduler only."): ONE helper,
-  // eastMaskedReasons(list, eastDetailsVisible, eastVacation), lifted verbatim (with REASON_WORDS / reasonLabel / softTag)
+  // eastMaskedReasons(list, eastDetailsVisible) (Part A decision 7 dropped its third argument, the eastVacation gloss: an East
+  // vacation's time-off / day-before-vacation is kept and reads "on vacation"), lifted verbatim (with REASON_WORDS / reasonLabel / softTag)
   // and run; its two key lists pinned against rules.js (every East code it pushes, hard and soft) and helpers.js (the
   // codes openSlotReason reads as 'not available' since Item E3); every reason the board and the trade card render reads
   // through it; the two East loaders lifted verbatim and run against stub reads with the ref false / true.
@@ -3108,6 +3109,70 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(leakHard, [], "unmasked hard codes whose words name East: " + leakHard.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
     const leakSoft = softCodes.filter(c => eastSoft.indexOf(keyOf(c)) < 0 && (eastWords.test(L.reasonLabel(c, nameOf)) || eastWords.test(L.softTag({ reason: c, weight: 1 }))));
     assert.deepStrictEqual(leakSoft, [], "unmasked soft codes whose words name East: " + leakSoft.map(c => c + " -> " + L.reasonLabel(c, nameOf)).join("; "));
+  });
+  // Faraz 10/18 (the rest preference, Acton in the seed): restBetweenStretches - rules.js 'short-rest:<days off>' in plain words
+  // on the claim sheet / board chip (reasonLabel) and as a tag (softTag: the Generate preview, the day editor, the trade note);
+  // the rule in My rules (offerRulesWords) and in Setup's summary, both read exactly as rules.js buildContext reads the key.
+  check("10/18 rest between stretches: short-rest words; My rules and the Setup summary read the key as rules.js does (parity over well-formed and malformed values)", () => {
+    const labelsSrc = e4Lift("const REASON_WORDS = {", "\n};\n") + "\n" + e4Lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + e4Lift("function softTag(soft) {", "\n}\n");
+    const L = new Function(labelsSrc + "\nreturn { reasonLabel, softTag };")();
+    assert.strictEqual(L.reasonLabel("short-rest:1", nameOf), "only 1 day off between call stretches");
+    assert.strictEqual(L.reasonLabel("short-rest:2", nameOf), "only 2 days off between call stretches");
+    assert.strictEqual(L.reasonLabel("short-rest", nameOf), "too few days off between call stretches", "no argument: the REASON_WORDS sentence");
+    assert.strictEqual(L.softTag({ reason: "short-rest:1", weight: 3 }), "short rest: 1 day off");
+    assert.strictEqual(L.softTag({ reason: "short-rest:3", weight: 3 }), "short rest: 3 days off");
+    assert.strictEqual(L.softTag({ reason: "short-rest", weight: 3 }), "short rest");
+    ["short-rest:1", "short-rest:2", "short-rest"].forEach(c => {
+      assert.ok(!/ - |[()]/.test(L.reasonLabel(c, nameOf)), c + ": the label carries its own dash / brackets");
+      assert.ok(!/[()]/.test(L.softTag({ reason: c, weight: 1 })), c + ": the tag carries brackets (the dropdown wraps the tags in them)");
+      assert.ok(!/\bEast\b|Davenport/i.test(L.reasonLabel(c, nameOf) + L.softTag({ reason: c, weight: 1 })), c + ": unmasked words never name East");
+    });
+    const softSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8");
+    assert.ok(/soft\.push\(\{ reason: "short-rest:" \+ rsOff, weight: rsWeight \}\)/.test(softSrc), "rules.js pushes short-rest with its days-off argument (the vocabulary scan above reads it as short-rest:2)");
+    // My rules: Acton's seed rule in words; the sentence only where rules.js applies the rule (2+ days, a weight above 0)
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const SENT = "At least 2 days off between your call stretches, primary or backup - days in a row are one stretch, and so is a weekend or a holiday unit (preferred, not a hard limit).";
+    assert.ok(H.offerRulesWords(seed.surgeonRules.s3, seed.groupRules).includes(SENT), "Acton's My rules carry the rest sentence: " + JSON.stringify(H.offerRulesWords(seed.surgeonRules.s3, seed.groupRules)));
+    assert.ok(["s1", "s2", "s4", "s5", "s6"].every(id => !H.offerRulesWords(seed.surgeonRules[id], seed.groupRules).some(s => /between your call stretches/.test(s))), "nobody else carries the key in the seed - no sentence");
+    const R = require(path.join(ROOT, "rules.js"));
+    const SA = require(path.join(ROOT, "test", "seed-adapter.js"));
+    const restOf = (val) => {
+      const sr = JSON.parse(JSON.stringify(SA.seedToSurgeonRules(seed)));
+      if (val === undefined) delete sr.s4.restBetweenStretches; else sr.s4.restBetweenStretches = val;
+      const ctx = R.buildContext(SA.seedToContextInput(seed, { surgeonRules: sr, schedule: {}, eastBusyDays: {} }));
+      const summary = H.suRulesSummary(sr.s4, { groupRules: seed.groupRules, roster: seed.roster }).map(l => l.text).join(" ");
+      return { P: ctx.per.s4.restBetween, warned: ctx.warnings.some(w => /^surgeonRules\.s4\.restBetweenStretches ignored/.test(w)), summary, words: H.offerRulesWords(sr.s4, seed.groupRules).filter(s => /between your call stretches/.test(s)) };
+    };
+    const cases = [
+      [{ minDaysOff: 2, weight: "medium" }, { minDaysOff: 2, weight: 3 }], [{ minDaysOff: 2 }, { minDaysOff: 2, weight: 3 }], [{ minDaysOff: 3, weight: "strong" }, { minDaysOff: 3, weight: 10 }],
+      [{ minDaysOff: 2, weight: 5 }, { minDaysOff: 2, weight: 5 }], [{ minDaysOff: 2, weight: "4.5" }, { minDaysOff: 2, weight: 4.5 }], [{ minDaysOff: 2, weight: 0 }, { minDaysOff: 2, weight: 0 }],
+      [{ minDaysOff: 1, weight: "medium" }, { minDaysOff: 1, weight: 3 }], [{ minDaysOff: 14 }, { minDaysOff: 14, weight: 3 }],
+      [{ minDaysOff: 0 }, null], [{ minDaysOff: 15 }, null], [{ minDaysOff: 2.5 }, null], [{ minDaysOff: "2" }, null], [{ weight: "medium" }, null], [{ minDaysOff: 2, weight: "preferred" }, null],
+      [{ minDaysOff: 2, weight: -1 }, null], [{ minDaysOff: 2, weight: "note" }, null], [{ minDaysOff: 2, weight: "huge" }, null], [{ minDaysOff: 2, weight: null }, null], [2, null], [[2], null], ["2", null]
+    ];
+    cases.forEach(([val, want]) => {
+      const r = restOf(val), tag = JSON.stringify(val);
+      assert.deepStrictEqual(r.P, want, tag + ": rules.js reads " + JSON.stringify(r.P));
+      assert.strictEqual(r.warned, want === null, tag + ": a warning exactly when the rule is ignored");
+      assert.strictEqual(/a rest between call stretches that is not well formed \(ignored\)/.test(r.summary), want === null, tag + ": the summary calls it not well formed exactly when rules.js ignores it: " + r.summary);
+      const applies = !!want && want.minDaysOff >= 2 && want.weight > 0;
+      assert.strictEqual(r.words.length, applies ? 1 : 0, tag + ": My rules say it exactly when it has an effect: " + JSON.stringify(r.words));
+      if (want) assert.ok(r.summary.includes("at least " + want.minDaysOff + " day" + (want.minDaysOff === 1 ? "" : "s") + " off between call stretches in either role, a weekend or a holiday unit counting as one stretch (" + (applies ? "soft" : "no effect")), tag + ": the summary's Limits words: " + r.summary);
+      if (applies) assert.strictEqual(r.words[0], "At least " + want.minDaysOff + " days off between your call stretches, primary or backup - days in a row are one stretch, and so is a weekend or a holiday unit (preferred, not a hard limit).", tag);
+    });
+    assert.ok(restOf({ minDaysOff: 2, weight: "strong" }).summary.includes("counting as one stretch (soft, strong)") && restOf({ minDaysOff: 2, weight: 5 }).summary.includes("counting as one stretch (soft, weight 5)"), "a weight other than medium is named in the summary");
+    assert.ok(!/between call stretches/.test(restOf(undefined).summary) && restOf(undefined).P === null && !restOf(undefined).warned, "no key: no words, no rule, no warning");
+    assert.deepStrictEqual(H.suRulesUnknownKeys({ restBetweenStretches: { minDaysOff: 2, weight: "medium", extra: 1 } }), ["restBetweenStretches.extra"], "the key and its two sub-keys are known; anything else in it is listed as not read");
+    // Setup > Rules: the registry entry (limits, after the any-role run) and its renderer - one control per RuField (the a11y
+    // check pairs each label with its one input / select), the weight shown as medium when absent, a custom weight kept
+    const f = H.SU_RULE_FIELDS.find(x => x.id === "restBetweenStretches");
+    assert.ok(f && f.group === "limits" && H.SU_RULE_FIELDS.indexOf(f) === H.SU_RULE_FIELDS.findIndex(x => x.id === "maxConsecutiveAnyRole") + 1, "the field sits in Limits right after the any-role run");
+    assert.deepStrictEqual([f.paths, f.start, f.used({}), f.used({ restBetweenStretches: { minDaysOff: 2 } })], [["restBetweenStretches"], { minDaysOff: 2, weight: "medium" }, false, true], "paths, start value and use");
+    const caseSrc = e4Lift('      case "restBetweenStretches": return (', "\n      );\n");
+    assert.ok(caseSrc.includes('data-testid="rules-rest-min-days" type="number" min="1" max="14" value={numVal("restBetweenStretches.minDaysOff")} onChange={numSet("restBetweenStretches.minDaysOff")}') && caseSrc.includes('data-testid="rules-rest-weight"') && caseSrc.includes('return v === null || v === undefined ? "medium" : String(v);') && caseSrc.includes("custom: {String(v)}"), "the renderer: minDaysOff 1-14, the weight select (medium when absent, a custom weight kept)");
+    assert.strictEqual((caseSrc.match(/<RuField /g) || []).length, 2, "two RuFields, one control each");
+    assert.strictEqual(H.suRuleRemoveConfirm(f, { restBetweenStretches: { minDaysOff: 3, weight: "strong" } }, "X"), "Remove the rule \"Days off between call stretches\" for X? This deletes: days off between stretches 3; weight strong.", "the Remove confirm names the sub-keys in words");
+    assert.strictEqual(H.suRuleRemoveConfirm(f, { restBetweenStretches: { minDaysOff: 2, weight: "medium" } }, "X"), null, "the start value removes without a confirm");
   });
 
   /* ---------------- M. outside surgeons (Prompt 12 M) source pins ---------------- */
@@ -10934,7 +10999,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "Backup: Any day.",
         "Weekends: Prefers a split, Fri+Sun / Sat (soft).",
         // pin moved deliberately 10/11: Prompt 32 Acton's null reads the group default, the soft 7 (was "no monthly cap")
-        "Limits: At most 3 primary days in a row, 4 in any role (soft); soft limit 7 primary days a month (the group's); equal share.",
+        // pin moved deliberately 10/18: his restBetweenStretches { minDaysOff: 2, weight: "medium" } joins the Limits line
+        "Limits: At most 3 primary days in a row, 4 in any role (soft); at least 2 days off between call stretches in either role, a weekend or a holiday unit counting as one stretch (soft); soft limit 7 primary days a month (the group's); equal share.",
         "Holidays: Never covers Thanksgiving (primary or backup).",
         "Seed lists: Read by the seed import, not the scheduler: availability rows (available Oct 2026), 2 vacations; with offer periods on, the offered days of Nov 2026 become offers.",
       ],
@@ -11376,7 +11442,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const want = {
         s1: ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed"],
         s2: ["availabilityMode", "recurringAvailable", "weekendStyle", "weekendsAvailable", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap"],
-        s3: ["availabilityMode", "hardNeverWeekdays", "recurringUnavailable", "recurringAvoid", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap", "holidaysOff"],
+        s3: ["availabilityMode", "hardNeverWeekdays", "recurringUnavailable", "recurringAvoid", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "restBetweenStretches", "monthlyCap", "holidaysOff"],
         s4: ["availabilityMode", "availableWeeks", "aledo", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "maxMajorHolidays", "backupCap"],
         s5: ["availabilityMode", "outsideDerivedWeeks", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap", "eastFeed"],
         s6: ["availabilityMode", "availableWindows", "daysPerWindowWeek", "weekendStyle", "weekendBlockPenalty", "maxConsecutiveDays", "maxConsecutiveAnyRole", "preferAlternateDays", "handoffPartnerRequired"],
@@ -11407,7 +11473,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(f.used(added), f.id + ": not used after Add");
         assert.deepStrictEqual(H.suRuleFieldRemove(f, added), { maxConsecutiveDays: 3 }, f.id + ": add then remove");
       }
-      assert.deepStrictEqual(starts, { daysPerWindowWeek: { target: 2, countsBackup: false }, weekdays: { allowed: [], autoOffer: true }, outsideDerivedWeeks: { canBePrimary: true, weekdayPattern: {} }, aledo: { weekdays: [], avoidWholeWeek: "strong", hardAvoidDayBefore: true }, standaloneFriday: true, noLoneWeekendDay: true, weekendCap: { perMonth: 2 }, weekendsAvailable: { primary: true, backup: true }, holidayUnitCountsAsOneDay: true, preferAlternateDays: true, handoffPartnerRequired: true, backupOptOut: true, eastFeed: { enabled: true } });
+      assert.deepStrictEqual(starts, { daysPerWindowWeek: { target: 2, countsBackup: false }, weekdays: { allowed: [], autoOffer: true }, outsideDerivedWeeks: { canBePrimary: true, weekdayPattern: {} }, aledo: { weekdays: [], avoidWholeWeek: "strong", hardAvoidDayBefore: true }, standaloneFriday: true, noLoneWeekendDay: true, weekendCap: { perMonth: 2 }, weekendsAvailable: { primary: true, backup: true }, restBetweenStretches: { minDaysOff: 2, weight: "medium" }, holidayUnitCountsAsOneDay: true, preferAlternateDays: true, handoffPartnerRequired: true, backupOptOut: true, eastFeed: { enabled: true } });
       const hf = H.suRuleField("holidaysOff"), mm = H.suRuleField("maxMajorHolidays");
       assert.deepStrictEqual(H.suRuleFieldRemove(hf, { holidayRules: { holidaysOff: ["Thanksgiving"], neverThanksgiving: true } }), {}, "the emptied holidayRules goes");
       assert.deepStrictEqual(H.suRuleFieldRemove(hf, { holidayRules: { holidaysOff: ["Thanksgiving"], neverThanksgiving: true, maxMajorHolidays: 1 } }), { holidayRules: { maxMajorHolidays: 1 } });

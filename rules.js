@@ -299,6 +299,28 @@
 //                 finished schedule add up to weight x (count - perMonth) whenever the
 //                 East data alone stay within the cap. Never lifted by an offer (a
 //                 cap). Malformed -> one warning, ignored.
+//   surgeonRules[id].restBetweenStretches  { minDaysOff, weight } (Faraz 10/18,
+//                 Acton's rest preference; Acton { minDaysOff: 2, weight: "medium" })
+//                 - SOFT: at least minDaysOff days off between his call stretches.
+//                 Primary AND backup are call days (schedule, assume-slots and the
+//                 evaluated slot). A stretch is his held days in a row, and the held
+//                 days of one weekend unit (the groupRules.weekendUnit.days of a
+//                 Fri-Sun weekend - all three in the seed) or of one holiday unit
+//                 count as ONE stretch however they sit, transitively (his split
+//                 Fri + Sun, a colleague on the Saturday, is one stretch - never a
+//                 short rest; so are a holiday unit and the weekend it shares a day
+//                 with); the run inside a
+//                 stretch stays the max-consecutive limits' business. Fewer than
+//                 minDaysOff days off between the stretch through the evaluated day
+//                 and the one before or after it -> 'short-rest:<days off>' at weight x
+//                 (minDaysOff - days off) per short side, read only on the stretch's
+//                 FIRST day (the rest before it) and LAST day (the rest after it): a
+//                 candidate pays for the rest its placement shortens, an inner day
+//                 pays nothing, and a finished schedule shows each short rest on the
+//                 call day on either side of it. Never hard, never lifted by an offer;
+//                 claims and trades only see the term. minDaysOff a whole number from
+//                 1 to 14 (1 = no effect), weight a weight name or a number >= 0
+//                 (default "medium"); malformed -> one warning, ignored.
 //
 // Backup is open to everyone (Faraz 9/22, rules doc section 1 "Roles per day"):
 // outreach days, OR days, Clinton/Aledo days, the recurring whitelist, governed
@@ -845,6 +867,8 @@ function buildContext(input) {
       // Prompt 23 B3: the soft weekends-per-month cap (normalized below; null = none) and its East memo (Saturday -> bool)
       weekendCap: null,
       wkEastMemo: Object.create(null),
+      // Faraz 10/18 (Acton): the soft rest between call stretches { minDaysOff, weight } (normalized below; null = none)
+      restBetween: null,
       // Prompt 14 P2 (9/23): his offers ('YYYY-MM-DD' -> role mask) and, per period key, the derived status
       // ('submitted' | 'rules_only' | 'not_started') and mode ('exhaustive' | 'preferred') - rdBuildOffers.
       offers: Object.create(null),
@@ -902,6 +926,21 @@ function buildContext(input) {
       }
       if (wcBad.length) ctx.warnings.push("surgeonRules." + id + ".weekendCap ignored (Prompt 23): " + wcBad.join("; ") + " - use { perMonth: 2, countsEast: true, roles: [\"primary\"], weight: \"strong\" }");
       else P.weekendCap = { perMonth: wcIn.perMonth, countsEast: wcIn.countsEast === true, roles: wcRoles.slice(), days: wcDays.slice(), weight: resolveWeight(ctx, wcW) };
+    }
+    // Faraz 10/18 (Acton): restBetweenStretches { minDaysOff, weight } -> P.restBetween (null when absent or malformed).
+    var rbIn = rules.restBetweenStretches;
+    if (rbIn !== undefined && rbIn !== null) {
+      var rbBad = [], rbW = "medium";
+      if (typeof rbIn !== "object" || Array.isArray(rbIn)) rbBad.push("not an object");
+      else {
+        if (!(typeof rbIn.minDaysOff === "number" && isFinite(rbIn.minDaysOff) && Math.floor(rbIn.minDaysOff) === rbIn.minDaysOff && rbIn.minDaysOff >= 1 && rbIn.minDaysOff <= 14)) rbBad.push("minDaysOff must be a whole number from 1 to 14");
+        if (rbIn.weight !== undefined) rbW = rbIn.weight;
+        // a weight name must name a NUMBER of the table (its prose "note" key is no weight); 0 = off, below 0 is refused
+        var rbNum = typeof rbW === "number" ? rbW : typeof rbW === "string" ? (Object.prototype.hasOwnProperty.call(ctx.weights, rbW) ? ctx.weights[rbW] : parseFloat(rbW)) : NaN;
+        if (!(typeof rbNum === "number" && isFinite(rbNum) && rbNum >= 0)) rbBad.push("weight must be a weight name or a number >= 0");
+      }
+      if (rbBad.length) ctx.warnings.push("surgeonRules." + id + ".restBetweenStretches ignored (10/18): " + rbBad.join("; ") + " - use { minDaysOff: 2, weight: \"medium\" }");
+      else P.restBetween = { minDaysOff: rbIn.minDaysOff, weight: rbNum };
     }
     // Prompt 12 V (9/22 evening): standing East days. The same gate as busy days (the
     // surgeon's East feature must be on AND block at least one role - blocksPrimary /
@@ -1744,6 +1783,20 @@ function rdStatic(ctx, date, role, id, asBlock) {
 
 /* ------------------------------------------------------ dynamic layer */
 
+// restBetweenStretches (Faraz 10/18): the days one held day links into ONE stretch whatever sits between them -
+// the weekend-unit days (groupRules.weekendUnit.days - Fri, Sat, Sun in the seed) of its Fri-Sun weekend when it
+// is one of them, and its holiday unit - as [first, last] date strings (the day itself when neither applies).
+// Unit days are sorted (buildContext), so days[0] / the last day bound the unit.
+function rdRestSpan(ctx, d) {
+  var i = rdInfo(d), lo = d, hi = d;
+  if (i.friday && rdIsWeekendDay(ctx, i)) {
+    for (var k = 0; k < 3; k++) { var wd = rdAddDays(i.friday, k); if (rdIsWeekendDay(ctx, rdInfo(wd))) { if (wd < lo) lo = wd; if (wd > hi) hi = wd; } }
+  }
+  var u = ctx.holidayByDay[d];
+  if (u) { if (u.days[0] < lo) lo = u.days[0]; if (u.days[u.days.length - 1] > hi) hi = u.days[u.days.length - 1]; }
+  return [lo, hi];
+}
+
 function rdAssumeMap(assume) {
   if (!assume || !assume.length) return null;
   var m = Object.create(null);
@@ -2037,6 +2090,33 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // surgeon's SOFT limit. Backup is standby, so this is a penalty that grows per
   // day, never a block; no maxConsecutiveAnyRole -> no check (no group default).
   if (wantAny && nAny > P.maxConsecAnyRole) soft.push({ reason: "long-run:" + nAny, weight: W.longRunPerDay * (nAny - P.maxConsecAnyRole) });
+
+  // Faraz 10/18 (Acton's rest preference): restBetweenStretches - see the header. The stretch through the evaluated
+  // day is grown from it: the held day next to either end joins (days in a row), and so does any held day inside the
+  // reach - the Fri-Sun weekends and holiday units of the days already in it (rdRestSpan). Only the stretch's first
+  // day reads the rest before it and only its last day the rest after it; a side is short when he holds a day 2 ..
+  // minDaysOff days beyond the end (1 .. minDaysOff - 1 days off). Nothing outside the reach is linked, so that held
+  // day starts another stretch.
+  var RB = P.restBetween;
+  if (RB && RB.weight && RB.minDaysOff > 1) {
+    var rsLo = dateStr, rsHi = dateStr, rsSpan = rdRestSpan(ctx, dateStr), reachLo = rsSpan[0], reachHi = rsSpan[1], x;
+    for (var rg = 0; rg < 60; rg++) {
+      var nLo = null, nHi = null;
+      x = rdAddDays(rsLo, -1);
+      if (holdsAny(x)) nLo = x;
+      else for (x = reachLo; x < rsLo; x = rdAddDays(x, 1)) if (holdsAny(x)) { nLo = x; break; }
+      x = rdAddDays(rsHi, 1);
+      if (holdsAny(x)) nHi = x;
+      else for (x = reachHi; x > rsHi; x = rdAddDays(x, -1)) if (holdsAny(x)) { nHi = x; break; }
+      if (!nLo && !nHi) break;
+      if (nLo) { for (x = nLo; x < rsLo; x = rdAddDays(x, 1)) { rsSpan = rdRestSpan(ctx, x); if (rsSpan[0] < reachLo) reachLo = rsSpan[0]; if (rsSpan[1] > reachHi) reachHi = rsSpan[1]; } rsLo = nLo; }
+      if (nHi) { for (x = nHi; x > rsHi; x = rdAddDays(x, -1)) { rsSpan = rdRestSpan(ctx, x); if (rsSpan[0] < reachLo) reachLo = rsSpan[0]; if (rsSpan[1] > reachHi) reachHi = rsSpan[1]; } rsHi = nHi; }
+    }
+    var rsOff = null, rsWeight = 0, k2;
+    if (rsLo === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsAny(rdAddDays(rsLo, -k2))) { rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - rsOff); break; }
+    if (rsHi === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsAny(rdAddDays(rsHi, k2))) { if (rsOff === null || k2 - 1 < rsOff) rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - (k2 - 1)); break; }
+    if (rsOff !== null) soft.push({ reason: "short-rest:" + rsOff, weight: rsWeight });
+  }
 
   if (info.friday) {
     var b2b = false;

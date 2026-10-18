@@ -513,6 +513,58 @@ function runLengths(view, days, id) {
   return { maxConsecutive: longest((d) => holder(view, d, P) === id), maxConsecutiveAnyRole: longest((d) => holdsAny(view, d, id)) };
 }
 
+/* ------------------- 10/18: rest between call stretches (surgeonRules.<id>.restBetweenStretches), restated */
+// Faraz 10/18 (Acton's rest preference): SOFT, both roles, only between stretches. Restated from the seed alone: a surgeon's
+// held days (either role) in the merged view; two held days are ONE stretch when they are next to each other, are both
+// weekend-unit days of one Fri-Sun weekend (groupRules.weekendUnit.days) or are both days of one holiday unit - transitively
+// (union-find). A short rest = fewer than minDaysOff days off between two consecutive stretches. rules.js names a short rest
+// on the earlier stretch's LAST day and on the later stretch's FIRST day (one entry per day, the sides it borders summed:
+// weight x (minDaysOff - days off) each, the shorter side named), and Generate's softPenalties hold those entries for every
+// such day it placed (in range, not locked) - no other short-rest entry.
+const REST = {}; IDS.forEach((id) => { const rb = SR[id].restBetweenStretches; REST[id] = rb && typeof rb === "object" && typeof rb.minDaysOff === "number" ? rb.minDaysOff : null; });
+eq(IDS.filter((id) => REST[id] !== null), [ACTON], "seed: only Acton carries restBetweenStretches (Faraz 10/18)");
+eq(SR[ACTON].restBetweenStretches, { minDaysOff: 2, weight: "medium" }, "seed: Acton's rest rule is { minDaysOff: 2, weight: \"medium\" }");
+const REST_W = seed.groupRules.weights.medium; // "medium" through the seed's weights table (3)
+const WK_UNIT_DAYS = seed.groupRules.weekendUnit.days;
+function shortRests(view, id, from, to, minDaysOff) {
+  const held = daysList(from, to).filter((d) => holdsAny(view, d, id));
+  const parent = {}; held.forEach((d) => { parent[d] = d; });
+  const find = (d) => (parent[d] === d ? d : (parent[d] = find(parent[d])));
+  const join = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  const firstOfKey = {};
+  held.forEach((d, i) => {
+    if (i > 0 && addDays(held[i - 1], 1) === d) join(held[i - 1], d);
+    const keys = [];
+    if (fridayOf(d) && WK_UNIT_DAYS.includes(weekday(d))) keys.push("W" + fridayOf(d));
+    if (HOLIDAY[d]) keys.push("H" + HOLIDAY[d].name + HOLIDAY[d].days[0]);
+    keys.forEach((k) => { if (firstOfKey[k]) join(firstOfKey[k], d); else firstOfKey[k] = d; });
+  });
+  const span = {}; held.forEach((d) => { const r = find(d); if (!span[r]) span[r] = [d, d]; else { if (d < span[r][0]) span[r][0] = d; if (d > span[r][1]) span[r][1] = d; } });
+  const st = Object.keys(span).map((k) => span[k]).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  const out = [];
+  for (let i = 1; i < st.length; i++) { const off = dayNum(st[i][0]) - dayNum(st[i - 1][1]) - 1; if (off < minDaysOff) out.push({ last: st[i - 1][1], first: st[i][0], off }); }
+  return out;
+}
+const REST_SEEN = { runs: 0, rests: 0, entries: 0 };
+function checkRest(out, range, id) {
+  const minD = REST[id]; if (minD === null) return [];
+  const view = makeView(out), rests = shortRests(view, id, addDays(range.start, -30), addDays(range.end, 30), minD);
+  const want = {};
+  rests.forEach((x) => [[x.last, x.off], [x.first, x.off]].forEach(([d, off]) => {
+    if (d < range.start || d > range.end) return;
+    const role = holder(view, d, P) === id ? P : B;
+    if (out.schedule[d][role + "Locked"]) return; // the run's score never reads a locked slot
+    const w = want[d] || (want[d] = { day: d, role, off, weight: 0 });
+    w.off = Math.min(w.off, off); w.weight += REST_W * (minD - off);
+  }));
+  const fmt = (o) => o.day + " " + o.role + " short-rest:" + o.off + " " + o.weight;
+  const exp = Object.keys(want).sort().map((d) => fmt(want[d]));
+  const got = out.diagnostics.softPenalties.filter((p) => p.id === id && /^short-rest/.test(p.reason)).map((p) => fmt({ day: p.day, role: p.role, off: +p.reason.split(":")[1], weight: p.weight })).sort();
+  eq(got, exp, "10/18: " + CODE[id] + "'s short-rest entries equal the restated short rests (" + JSON.stringify(rests) + ")");
+  REST_SEEN.runs++; REST_SEEN.rests += rests.length; REST_SEEN.entries += got.length;
+  return rests;
+}
+
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
 function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extraOffers) { // extraRows (W): dated rows a fixture run appended to the seed's;
@@ -1236,6 +1288,7 @@ for (let s = 1; s <= SEEDS; s++) {
     const el = Date.now() - t;
     timing[range.name].ms += el; timing[range.name].runs++; timing[range.name].candidates += out.diagnostics.candidatesTried;
     checkRun(out, range, s, range.name.indexOf("R4") === 0);
+    checkRest(out, range, ACTON); // 10/18: the engine's short-rest entries = the restated short rests
     if (ri === 1) { r2Results.push({ seed: s, score: out.diagnostics.score.total, out }); r2Json.add(JSON.stringify(out.schedule)); }
     if (ri === 3) r4Results.push({ seed: s, out }); // Prompt 12 V: the R4 runs are re-read at the end (standing East days)
   });
@@ -2803,6 +2856,36 @@ const OSL_WHOLE = { n: 0 };
   ok(W_STATS.beyondNotice.every((x) => x.indexOf("FAK ") === 0 && dayNum(x.split(" ")[1]) - dayNum(TODAY) > NOTICE[KHAN]), "B4: every hard-never placement without a row lies beyond Khan's notice (the per-slot pin fails first otherwise)");
   console.log("Prompt 23 (all runs): Khan Tue/Thu primaries beyond the notice " + W_STATS.beyondNotice.length + (W_STATS.beyondNotice.length ? " (first: " + W_STATS.beyondNotice.slice(0, 4).join(", ") + ")" : "") + "; generated Sat/Sun primaries checked against the pair rule " + P23_STATS.loneChecked + "; shapes standalone Fridays " + P23_STATS.standaloneFridays + ", Sat-Sun pairs " + P23_STATS.satSunPairs + ", full blocks " + P23_STATS.fullBlocks + "; weekend-cap terms " + P23_STATS.capTerms + "; months over the soft cap " + P23_STATS.capMonthsOver.length + (P23_STATS.capMonthsOver.length ? " (first: " + P23_STATS.capMonthsOver.slice(0, 4).join(", ") + ")" : ""));
   CUR.range = "-";
+}
+
+// 10/18 (Faraz, Acton's rest preference): Generate avoids leaving him a single day off between call stretches - the same seeds
+// with the rule on (the seed) and with his key removed: his short rests drop; the rule is soft, so it never opens a slot the
+// run without it filled; the soft term reaches the preview (checkRest on every run with the rule).
+{
+  CUR.range = "10/18 rest rule on / off"; CUR.seed = "-"; CUR.day = "-";
+  const srOff = JSON.parse(JSON.stringify(input.surgeonRules)); delete srOff[ACTON].restBetweenStretches;
+  const ctxOff = R.buildContext(Object.assign({}, input, { surgeonRules: srOff }));
+  if (ctxOff.warnings.length) fail("buildContext warnings (rest rule off): " + JSON.stringify(ctxOff.warnings));
+  eq([ctx.per[ACTON].restBetween, ctxOff.per[ACTON].restBetween], [{ minDaysOff: 2, weight: REST_W }, null], "the two contexts differ by Acton's rule alone");
+  const RS = 20, stats = {};
+  [RANGES[1], RANGES[2]].forEach((range) => {
+    const st = stats[range.name] = { on: 0, off: 0, openOn: 0, openOff: 0, runs: 0 };
+    for (let s = 1; s <= RS; s++) {
+      CUR.range = range.name + " (rest rule on / off)"; CUR.seed = s;
+      const on = GEN.generate(ctx, range.start, range.end, { seed: s, bestOf: 2 });
+      const off = GEN.generate(ctxOff, range.start, range.end, { seed: s, bestOf: 2 });
+      const inRange = (x) => (x.first >= range.start && x.first <= range.end) || (x.last >= range.start && x.last <= range.end);
+      st.on += checkRest(on, range, ACTON).filter(inRange).length;
+      st.off += shortRests(makeView(off), ACTON, addDays(range.start, -30), addDays(range.end, 30), 2).filter(inRange).length;
+      ok(!off.diagnostics.softPenalties.some((p) => /^short-rest/.test(p.reason)), "without the key no run carries a short-rest entry");
+      st.openOn += on.diagnostics.uncovered.length; st.openOff += off.diagnostics.uncovered.length; st.runs++;
+    }
+    ok(st.on < st.off, range.name + ": Acton's short rests drop with the rule (" + st.on + " with it vs " + st.off + " without, " + RS + " seeds)");
+    ok(st.openOn <= st.openOff, range.name + ": the soft rule opens no slot the runs without it filled (" + st.openOn + " open with it vs " + st.openOff + " without)");
+  });
+  ok(REST_SEEN.rests > 0 && REST_SEEN.entries > 0, "the short-rest restatement was exercised (" + JSON.stringify(REST_SEEN) + ")");
+  console.log("10/18 rest rule (Acton, minDaysOff 2): short rests with / without the rule over " + RS + " seeds at bestOf 2 - " + Object.keys(stats).map((k) => k + " " + stats[k].on + " / " + stats[k].off + " (open slots " + stats[k].openOn + " / " + stats[k].openOff + ")").join("; ") + "; restated on " + REST_SEEN.runs + " runs: " + REST_SEEN.rests + " short rest(s), " + REST_SEEN.entries + " preview entr(ies)");
+  CUR.range = "-"; CUR.seed = "-";
 }
 
 const total = Date.now() - T_FILE;

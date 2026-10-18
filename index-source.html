@@ -9906,6 +9906,7 @@ const REASON_WORDS = {
   "avoid-row": "a day stated as one to avoid", "recurring-avoid": "a recurring day set to avoid",
   "auto-offer-weekday": "an auto-offered weekday", "pattern-mismatch": "not the preferred weekend style",
   "under-target": "under the monthly target",
+  "short-rest": "too few days off between call stretches", // restBetweenStretches (Faraz 10/18, Acton); reasonLabel / softTag word its argument
 };
 // Read an AUTHENTICATED-ONLY table (shift_trade_requests, notifications: RLS
 // 'to authenticated'). db.query reads with dbReadHeaders(), which falls back
@@ -9953,6 +9954,8 @@ function reasonLabel(code, nameOf) {
     // standing schedule, however it was placed) without claiming how the slot was set
     case "lone-weekend-day": return arg === "Sat" ? "a Saturday alone as primary, without its Sunday" : arg === "Sun" ? "a Sunday alone as primary, without its Saturday" : "a weekend day alone as primary, without its pair";
     case "weekend-cap": return "past the soft weekend cap of " + arg + " a month";
+    // restBetweenStretches (Faraz 10/18): the argument is the days off left between two call stretches (the shorter side)
+    case "short-rest": return arg ? "only " + arg + " day" + (arg === "1" ? "" : "s") + " off between call stretches" : REASON_WORDS["short-rest"];
     // pattern-mismatch's argument is the surgeon's OWN preferred style (rules.js), or standalone-friday for a weekend shaped
     // around a Friday on its own - say "prefers" so "(split)" is not read as the slot's style (re-check 10/1)
     case "pattern-mismatch": return arg === "standalone-friday" ? "not the preferred weekend style (the Friday stands on its own)" : arg ? "not the preferred weekend style (prefers " + arg + ")" : "not the preferred weekend style";
@@ -9980,6 +9983,7 @@ function softTag(soft) {
     case "window-week-over-target": return "over window target " + arg;
     case "consecutive-primary": return "consecutive primary";
     case "back-to-back-weekend": return "back-to-back weekend";
+    case "short-rest": return "short rest" + (arg ? ": " + arg + " day" + (arg === "1" ? "" : "s") + " off" : ""); // restBetweenStretches (10/18)
     case "backup-after-primary": return "backup after primary";
     case "pattern-mismatch": return "style: " + arg;
     case "pattern-daily": return "daily weekend pattern"; // generator.js unit-level term (the Generate diagnostics), worded 10/1
@@ -12068,6 +12072,14 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
       );
       case "maxConsecutiveAnyRole": return (
         <RuField T={T} label="Most days in a row, any role" hint="soft: a growing penalty beyond it"><input data-testid="rules-max-consec-any" type="number" min="1" max="14" value={get("maxConsecutiveAnyRole", "") === null ? "" : get("maxConsecutiveAnyRole", "")} onChange={e => set("maxConsecutiveAnyRole", e.target.value === "" ? undefined : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+      );
+      // Faraz 10/18 (Acton): the soft rest between call stretches - one control per RuField (its label's htmlFor); an absent
+      // weight reads as medium (rules.js), a weight that is no menu word shows as custom so it is never lost by looking
+      case "restBetweenStretches": return (
+        <div>
+          <RuField T={T} label="Days off between call stretches (soft)" hint="primary and backup are both call days; days in a row are one stretch, and so is a weekend or a holiday unit, so a split Fri + Sun is no short rest; fewer days off between two stretches costs the weight once per side"><input data-testid="rules-rest-min-days" type="number" min="1" max="14" value={numVal("restBetweenStretches.minDaysOff")} onChange={numSet("restBetweenStretches.minDaysOff")} style={{ ...inp, width: 70 }} /></RuField>
+          <RuField T={T} label="Weight of a short rest"><select data-testid="rules-rest-weight" value={(() => { const v = get("restBetweenStretches.weight", null); return v === null || v === undefined ? "medium" : String(v); })()} onChange={e => set("restBetweenStretches.weight", /^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value)} style={{ ...inp, width: 130 }}><option value="low">low</option><option value="medium">medium</option><option value="strong">strong</option>{(() => { const v = get("restBetweenStretches.weight", null); return v === null || v === undefined || v === "low" || v === "medium" || v === "strong" ? null : <option value={String(v)}>custom: {String(v)}</option>; })()}</select></RuField>
+        </div>
       );
       case "holidayUnitCountsAsOneDay": return <SuCheck label="A holiday unit counts as one day for the days-in-a-row limits" title="Unchecked: every day of the unit counts." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />;
       case "monthlyTarget": return (

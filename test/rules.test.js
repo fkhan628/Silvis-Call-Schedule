@@ -3187,6 +3187,90 @@ step("Prompt 32 step 4: overSoftLimitDays / overSoftLimitMonths - the (L+1)th an
   eq(R.overSoftLimitDays(c, { "not-a-day": row(ACTON), "2027-01-15": null }), [], "a junk key / a null row are skipped");
 }
 
+step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest between call stretches, both roles, a weekend / holiday unit is one stretch");
+{
+  // Faraz 10/18, all three as recommended: SOFT (claims and trades never blocked); primary AND backup are call days; only
+  // BETWEEN stretches - days in a row are one stretch (his max-consecutive limits govern it), and so are the held days of one
+  // weekend unit (his split Fri + Sun) or of one holiday unit. Dates: Jan - Mar 2027 days his outreach / Tuesday rules leave open
+  // for the role asked (a Tuesday or a 2nd-4th Wednesday is asked as backup only).
+  const row = (p, b) => ({ primary: p || null, backup: b || null, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
+  const short = (r) => r.soft.filter(s => s.reason.indexOf("short-rest") === 0);
+  const sr = (S, day, role, id, opts, extra) => { const r = R.eligibility(makeCtx(Object.assign({ schedule: S }, extra || {})), day, role, id || ACTON, opts); okElig(r, day + " " + role + " stays eligible (the rule is soft)"); return short(r); };
+  const T3 = (n) => [{ reason: "short-rest:" + n, weight: 3 * (2 - n) }];
+  // the seed: Acton's rule, nobody else's
+  const c0 = makeCtx({ schedule: {} });
+  eq(c0.per[ACTON].restBetween, { minDaysOff: 2, weight: 3 }, "seed: Acton { minDaysOff: 2, weight: \"medium\" } reads 2 days at medium (3)");
+  eq([KHAN, BURCHETT, PHILIP, FIERCE, SARKAR].map(id => c0.per[id].restBetween), [null, null, null, null, null], "seed: nobody else carries the rule");
+  ok(!c0.warnings.some(w => /restBetweenStretches/.test(w)), "seed: no warning");
+  // one day off is short; two are fine; a run is one stretch
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", P), T3(1), "Mon primary, Tue off, Wed primary: short-rest:1 at medium");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-07", P), [], "Mon, Tue + Wed off, Thu: two days off - fine");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-05", B), [], "Mon primary + Tue backup: a run, one stretch - no rest to judge");
+  eq(sr({ "2027-01-04": row(ACTON), "2027-01-07": row(ACTON) }, "2027-01-05", B), T3(1), "...but Tue backup then Wed off and Thu primary: the run's LAST day pays the one day off after it");
+  // both roles count
+  eq(sr({ "2027-01-04": row(KHAN, ACTON) }, "2027-01-06", P), T3(1), "a held BACKUP then a primary with one day between: short");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", B), T3(1), "a held primary then a BACKUP with one day between: short");
+  eq(sr({ "2027-01-04": row(KHAN, ACTON) }, "2027-01-06", B), T3(1), "backup, a day off, backup: short");
+  // his split weekend is one stretch - never a short rest, whoever holds the Saturday
+  eq(sr({ "2027-01-15": row(ACTON), "2027-01-16": row(BURCHETT) }, "2027-01-17", P), [], "Fri + Sun with Burchett on the Saturday: one stretch, no short rest");
+  eq(sr({ "2027-01-17": row(ACTON) }, "2027-01-15", P), [], "...read from the Friday too");
+  eq(sr({ "2027-01-15": row(ACTON, null), "2027-01-16": row(BURCHETT) }, "2027-01-17", B), [], "...and a backup Sunday after his primary Friday");
+  eq(sr({ "2027-01-15": row(ACTON), "2027-01-17": row(ACTON) }, "2027-01-19", B), T3(1), "split Fri + Sun, Mon off, Tue backup: the rest AFTER the stretch is judged - short");
+  eq(sr({ "2027-01-15": row(ACTON), "2027-01-17": row(ACTON) }, "2027-01-20", B), [], "...Mon + Tue off, Wed backup: fine");
+  eq(sr({ "2027-01-13": row(KHAN, ACTON) }, "2027-01-15", P), T3(1), "Wed backup, Thu off, Fri primary: short (the weekend links only weekend days)");
+  // only the stretch's edge days read the rests: the first day the rest before, the last day the rest after
+  const EDGE = { "2027-01-25": row(ACTON), "2027-01-27": row(KHAN, ACTON), "2027-01-28": row(ACTON) };
+  eq(sr(EDGE, "2027-01-27", B), T3(1), "Mon / Tue off / Wed backup + Thu primary: the stretch's first day (Wed, held) pays the one day off before it");
+  eq(sr(EDGE, "2027-01-28", P), [], "...its inner / last day (Thu, held) pays nothing for it");
+  eq(sr(EDGE, "2027-01-29", P), [], "...and a Friday extending the stretch pays nothing either (the rest before is the first day's)");
+  eq(sr({ "2027-01-04": row(ACTON), "2027-01-08": row(ACTON) }, "2027-01-06", B), [{ reason: "short-rest:1", weight: 6 }], "a lone day with one day off on BOTH sides: one entry, both sides' weight (3 + 3)");
+  eq(sr({ "2027-01-04": row(ACTON), "2027-01-06": row(KHAN, ACTON) }, "2027-01-05", B), [], "filling the one-day gap joins the two stretches - no short rest left on that day");
+  // a holiday unit is one stretch; with the weekend it shares a day with, one stretch too (transitively)
+  eq(sr({ "2026-12-24": row(ACTON), "2026-12-25": row(ACTON), "2026-12-26": row(BURCHETT) }, "2026-12-27", P), [], "Christmas (Thu 12/24 + Fri 12/25) and Sun 12/27, Burchett on the Saturday: one stretch");
+  eq(sr({ "2026-12-24": row(ACTON), "2026-12-25": row(ACTON), "2026-12-27": row(ACTON) }, "2026-12-29", B), T3(1), "...then Mon off and Tue backup: short");
+  eq(sr({ "2026-12-22": row(KHAN, ACTON) }, "2026-12-24", P, ACTON, { assume: [{ date: "2026-12-25", role: P }] }), T3(1), "the unit fill (the other unit day assumed): Tue backup, Wed off, Christmas Eve - the unit's FIRST day pays");
+  eq(sr({ "2026-12-22": row(KHAN, ACTON) }, "2026-12-25", P, ACTON, { assume: [{ date: "2026-12-24", role: P }] }), [], "...its last day does not (the rest before is the first day's)");
+  const holT = clone(seed.holidays); holT.units["2027"] = holT.units["2027"].concat([{ name: "Test unit", tier: "minor", days: ["2027-02-01", "2027-02-03"] }]);
+  eq(sr({ "2027-02-01": row(ACTON) }, "2027-02-03", P, ACTON, {}, { holidays: holT }), [], "a holiday unit whose days are Mon 2/1 + Wed 2/3 (data): one stretch, the Tuesday between is no rest");
+  eq(sr({ "2027-02-01": row(ACTON) }, "2027-02-03", P), T3(1), "...the same two days with no unit: short");
+  // the weekend link is the group's weekend unit (data): with Sat + Sun only, a Friday is a weekday
+  const grSS = clone(seed.groupRules); grSS.weekendUnit = Object.assign({}, grSS.weekendUnit, { days: ["Sat", "Sun"] });
+  eq(sr({ "2027-01-15": row(ACTON) }, "2027-01-17", P, ACTON, {}, { groupRules: grSS }), T3(1), "weekendUnit.days [Sat, Sun]: Fri + Sun is no longer one stretch - short");
+  // the weight per missing day off, and the shorter side named
+  const sr3 = clone(SA.seedToSurgeonRules(seed)); sr3[ACTON].restBetweenStretches = { minDaysOff: 3, weight: "strong" };
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", P, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:1", weight: 20 }], "minDaysOff 3, strong: one day off = 10 x (3 - 1)");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-07", P, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:2", weight: 10 }], "...two days off = 10 x (3 - 2)");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-08", P, ACTON, {}, { surgeonRules: sr3 }), [], "...three days off: fine");
+  eq(sr({ "2027-01-04": row(ACTON), "2027-01-09": row(ACTON) }, "2027-01-07", B, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:1", weight: 30 }], "...Thu backup between Mon (2 off) and Sat (1 off): both sides, the shorter named (10 + 20)");
+  // soft only: a claim (and so a trade) is never blocked - it carries the note
+  const cl = R.eligibility(makeCtx({ schedule: { "2027-01-04": row(ACTON) } }), "2027-01-06", P, ACTON, { claim: true });
+  ok(cl.ok && cl.hard.length === 0 && short(cl).length === 1, "a claim on a short rest: ok, with the short-rest note");
+  // generic data: any surgeon with the key, nobody without it - no name branch
+  const srP = clone(SA.seedToSurgeonRules(seed)); srP[PHILIP].restBetweenStretches = { minDaysOff: 2 }; delete srP[ACTON].restBetweenStretches;
+  eq(sr({ "2027-01-04": row(KHAN, PHILIP) }, "2027-01-06", B, PHILIP, {}, { surgeonRules: srP }), T3(1), "Philip with the key (weight absent = medium): the same term");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", P, ACTON, {}, { surgeonRules: srP }), [], "Acton without the key: no term");
+  eq(sr({ "2027-01-04": row(KHAN) }, "2027-01-06", P, KHAN), [], "Khan (no key): no term at one day off");
+  // off switches and malformed values: one warning, ignored (never a silent hard rule, never a silent no-op without a word)
+  const srOff = (v) => { const x = clone(SA.seedToSurgeonRules(seed)); x[ACTON].restBetweenStretches = v; return x; };
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", P, ACTON, {}, { surgeonRules: srOff({ minDaysOff: 2, weight: 0 }) }), [], "weight 0: off");
+  eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-06", P, ACTON, {}, { surgeonRules: srOff({ minDaysOff: 1 }) }), [], "minDaysOff 1: no rest can be short");
+  [{ minDaysOff: 0 }, { minDaysOff: 15 }, { minDaysOff: 1.5 }, { minDaysOff: "2" }, {}, { minDaysOff: 2, weight: "preferred" }, { minDaysOff: 2, weight: -3 }, { minDaysOff: 2, weight: "note" }, { minDaysOff: 2, weight: "huge" }, 2, [2], "medium"].forEach(v => {
+    const cx = makeCtx({ schedule: { "2027-01-04": row(ACTON) }, surgeonRules: srOff(v) });
+    ok(cx.per[ACTON].restBetween === null && cx.warnings.filter(w => /^surgeonRules\.s3\.restBetweenStretches ignored/.test(w)).length === 1, JSON.stringify(v) + ": ignored with one warning");
+    eq(short(R.eligibility(cx, "2027-01-06", P, ACTON)), [], JSON.stringify(v) + ": no term");
+  });
+  // the weekend patterns: his split and his block pay ONCE for the rest before the weekend (the Friday), never for the split itself
+  const srNo = clone(SA.seedToSurgeonRules(seed)); delete srNo[ACTON].restBetweenStretches;
+  const pat = (S, rules) => R.weekendUnitPatterns(makeCtx(rules ? { schedule: S, surgeonRules: rules } : { schedule: S }), "2027-01-15", P); // an undefined surgeonRules would REPLACE the seed's
+  const pick = (list, kind) => list.filter(p => p.kind === kind && (kind === "block" ? p.members.fri === ACTON : p.members.fri === ACTON && p.members.sun === ACTON)).map(p => p.penalty);
+  ["split", "block"].forEach(kind => {
+    const clean = pick(pat({}, undefined), kind), cleanNo = pick(pat({}, srNo), kind);
+    ok(clean.length > 0 && JSON.stringify(clean) === JSON.stringify(cleanNo), kind + ": with no call day near, the rule costs his " + kind + " nothing (" + JSON.stringify([clean, cleanNo]) + ")");
+    const wed = { "2027-01-13": row(KHAN, ACTON) }, onP = pick(pat(wed, undefined), kind), offP = pick(pat(wed, srNo), kind);
+    ok(onP.length > 0 && onP.length === offP.length && onP.every((v, i) => v - offP[i] === 3), kind + ": a Wednesday backup before it costs his " + kind + " exactly one medium (" + JSON.stringify([onP, offP]) + ")");
+  });
+}
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

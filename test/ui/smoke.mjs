@@ -3911,8 +3911,9 @@ try {
       const EH = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"], ES = ["east-forecast", "east-unknown", "east-clear"];
       const key = (c) => String(c).split("@")[0].split(":")[0];
       const hard0 = (e) => (e && !e.ok && e.hard && e.hard.length) ? e.hard[0] : null;
+      // an East hard code only (EH): since Part A decision 7 an East vacation's time-off / day-before-vacation reads "on
+      // vacation" to non-schedulers, never "not available", so it can prove no masked surface non-vacuous here
       const eastHard = (e) => !!hard0(e) && EH.includes(key(hard0(e)));
-      const glossHard = (e) => !!hard0(e) && !!e.eastVacation && /^(time-off|day-before-vacation)$/.test(key(hard0(e)));
       const eastSoft = (e) => (e && e.ok ? (e.soft || []) : []).filter(s => ES.includes(key(s.reason))).map(s => s.reason);
       const wd = (d) => new Date(d + "T12:00:00Z").getUTCDay();
       const elig = (d, role, id, o) => { try { return eligibility(ctx, d, role, id, o); } catch (e) { return { ok: false, hard: ["threw: " + String(e && e.message || e)], soft: [] }; } };
@@ -3940,7 +3941,7 @@ try {
       }
       if (mode === "check") {
         const e = elig(args.day, args.role, args.cand, args.opts || {});
-        return { ok: !!e.ok, hard0: hard0(e), hard: (e.hard || []).slice(0, 4), eastHard: eastHard(e) || glossHard(e), eastSoft: eastSoft(e) };
+        return { ok: !!e.ok, hard0: hard0(e), hard: (e.hard || []).slice(0, 4), eastHard: eastHard(e), eastSoft: eastSoft(e) };
       }
       return { error: "unknown mode " + mode };
     }, { mode, args });
