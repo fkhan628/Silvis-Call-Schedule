@@ -2618,7 +2618,11 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   the fixture's own offers (the terms left = the outside days beyond the capacity; `diagnostics.offers.outsideOffers` still
   reports all of them - 268 waived and 3 standing over the 8 seeds) and runs an order fixture (two surgeons; one is forced past
   his explicit target of 3, his two painted days late in the month) that pins the offered-days-first count against a
-  date-ranked reading. The regression's P2 offers fixture moved exactly one pin: Acton's one off-list November placement lies
+  date-ranked reading in the evaluation. The fill's own count is pinned on one placement (review 10/18: no run's fill met
+  the case): `fillOrder` drives `genOfferTaper` (exported for it) on the order board's two weekend blocks at the capacity
+  edge - a painted day and unpainted days of one block, the painted day first or last by date - with the seed's weights and
+  two variants where the waiver and the taper differ (with the seed's 6 / 6 a date-ranked fill scores the same sum), plus
+  exhaustive (never waived), no target and no period. The regression's P2 offers fixture moved exactly one pin: Acton's one off-list November placement lies
   below his share, so it carries no term (was "one term per off-list placement") - restated from the fixture with the same
   capacity rule; `test/rules.test.js` pins the helper, its equivalence with eligibility's term, and the source contract;
   `test/data-layer.test.js` pins the new Periods and painter words.

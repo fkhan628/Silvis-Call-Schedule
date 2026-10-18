@@ -29,7 +29,8 @@
 // every surgeon within share + 1 per role in every month; 268 off-list colleague placements waived, 3 standing beyond
 // share, all 271 still reported in diagnostics.offers.outsideOffers. The two controls did not move (no outside-offers
 // term in either). The order fixture (orderInput) forces placements beyond the share and pins that the offered days
-// consume the capacity first, whatever their dates.
+// consume the capacity first, whatever their dates - in the evaluation (the run) and in the fill's reading of one
+// weekend placement (fillOrder drives genOfferTaper directly; review 10/18).
 //
 // Measured 10/12 (seeds 1-8 at bestOf 2, 16 painter-months per painter; excess = count - target, weighted = P + 0.5 B
 // against tP + 0.5 tB):
@@ -159,13 +160,86 @@ function measure(R, GEN, opts) {
 // their +outsideOffers, and a date-ranked reading would waive his first three outside days instead of counting his
 // offered days first. b paints nothing (not started). The run limits are opened up (31) so only the share decides.
 const ORDER_START = "2027-02-01", ORDER_END = "2027-02-28", ORDER_DAYS = daysList(ORDER_START, ORDER_END), ORDER_OFFERS = ["2027-02-24", "2027-02-26"];
-function orderInput(seed) {
+// offerDays / offerModes: the fill-order pin below (fillOrder) reuses the board with a's painted days and mode changed;
+// the order run itself always reads ORDER_OFFERS in preferred mode.
+function orderInput(seed, offerDays, offerModes) {
   const roster = ["a", "b"].map((id) => ({ id: id, name: "Order" + id.toUpperCase(), code: "OR" + id.toUpperCase(), fullName: "Order surgeon " + id, active: true, roles: ["surgeon"] }));
   const base = { poolMember: true, backupOptOut: false, maxConsecutiveDays: 31, maxConsecutiveAnyRole: 31, holidayUnitCountsAsOneDay: false };
   const surgeonRules = { a: Object.assign({ monthlyTarget: { primary: 3, backup: 3 } }, base), b: Object.assign({}, base) };
-  const period = { id: "fixb-order-2027", label: "Fix B order fixture Feb 2027", start_day: ORDER_START, end_day: ORDER_END, offers_close_at: "2027-01-04", publish_by: "2027-01-11", status: "closed", rules_only_ids: [], offer_modes: {} };
-  const offers = ORDER_OFFERS.map((d) => ({ person_id: "a", day: d, role_pref: "either", source: "app", entered_by: "a", note: null }));
+  const period = { id: "fixb-order-2027", label: "Fix B order fixture Feb 2027", start_day: ORDER_START, end_day: ORDER_END, offers_close_at: "2027-01-04", publish_by: "2027-01-11", status: "closed", rules_only_ids: [], offer_modes: offerModes || {} };
+  const offers = (offerDays || ORDER_OFFERS).map((d) => ({ person_id: "a", day: d, role_pref: "either", source: "app", entered_by: "a", note: null }));
   return { roster: roster, surgeonRules: surgeonRules, groupRules: JSON.parse(JSON.stringify(seed.groupRules)), holidays: seed.holidays, timeOffRows: [], availabilityRows: [], schedule: {}, periods: [period], offers: offers, today: "2026-11-23" };
+}
+
+// Fix B's ORDER inside ONE placement - the fill's own reading (generator.js genOfferTaper; review 10/18). The order run
+// above pins the evaluation's order (genTaperSoftList), but its fill never scores a placement whose offered and outside
+// days meet at the capacity edge (a multi-day weekend or holiday unit with offN > 0, outN > 0 and capacity - offN < outN)
+// - a fill that waived min(outN, capacity) and ignored the offered days passed every run. So genOfferTaper is driven
+// directly here, on the order board's real context (rules.js decides which days are offered and which carry the outside
+// term) with the state it reads stubbed: G.W (the context's weights), G.offersLive, G.R, G.ctx, G.targets.byMonth (a's
+// explicit 3 / 3 - the run above reads the same from impliedTargets), G.forced (none) and S.counts (his count before the
+// placement). The candidates are a's two Fri - Sun weekend blocks, the shape genFillWeekend scores: 2/19 - 2/21 (only the
+// Sunday painted - his OUTSIDE days come first by date) and 2/26 - 2/28 (only the Friday painted). Capacity = 3 - count:
+// the painted day consumes it first, what is left waives that many outside days (-outsideOffers each), and a painted day
+// beyond it loses its bonus (+offerBonus - offerBonusOverShare, the taper). Expected values are restated from the fixture.
+// With the seed's weights a waived outside day and a tapered painted day are the same 6, so a fill that ranked the days
+// by date would score the same SUM (only the evaluation's labels would differ); the weights are data (groupRules.weights,
+// Setup), so two variants where they differ (offerBonusOverShare 2: taper 4; outsideOffers 3) pin the fill's order too.
+const FILL_OFFERS = ["2027-02-21", "2027-02-24", "2027-02-26"];
+const FILL_WE1 = ["2027-02-19", "2027-02-20", "2027-02-21"], FILL_WE2 = ["2027-02-26", "2027-02-27", "2027-02-28"];
+function fillOrder(h) {
+  const R = h.R, GEN = h.GEN, ok = h.ok, eq = h.eq;
+  const seed = h.seedData || JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
+  ok(typeof GEN.genOfferTaper === "function", "fill order: generator.js exports genOfferTaper for this pin (got " + typeof GEN.genOfferTaper + ")");
+  if (typeof GEN.genOfferTaper !== "function") return;
+  const withWeights = (patch) => { const sd = JSON.parse(JSON.stringify(seed)); Object.assign(sd.groupRules.weights, patch); return sd; };
+  const ctx = R.buildContext(orderInput(seed, FILL_OFFERS));
+  const ctxX = R.buildContext(orderInput(seed, FILL_OFFERS, { a: "exhaustive" }));
+  const ctxB = R.buildContext(orderInput(withWeights({ offerBonusOverShare: 2 }), FILL_OFFERS));
+  const ctxO = R.buildContext(orderInput(withWeights({ outsideOffers: 3 }), FILL_OFFERS));
+  eq([ctx, ctxX, ctxB, ctxO].map((c) => c.warnings), [[], [], [], []], "fill order: buildContext raises no warning");
+  const wOf = (c) => c.weights || R.defaultWeights();
+  const pair = (c) => [wOf(c).outsideOffers, wOf(c).offerBonus - wOf(c).offerBonusOverShare];
+  eq([pair(ctx), pair(ctxX), pair(ctxB), pair(ctxO)], [[6, 6], [6, 6], [6, 4], [3, 6]], "fill order: [outsideOffers, offerBonus - offerBonusOverShare] - the seed (and exhaustive), then the two weight variants");
+  const out = wOf(ctx).outsideOffers, tap = pair(ctx)[1];
+  // the board's facts: both blocks are weekend units of the range; a painted only FILL_OFFERS; in preferred mode every
+  // other day of the blocks is eligible and carries the outside term (both roles); in exhaustive mode it is the hard
+  // 'not-offered' (eligibility without a claim; the soft term it also carries is the claim result's, never waived)
+  const units = GEN.buildUnits(ctx, ORDER_START, ORDER_END).weekends;
+  eq([FILL_WE1, FILL_WE2].map((we) => (units.find((u) => u.friday === we[0]) || {}).present), [FILL_WE1, FILL_WE2], "fill order: 2/19 - 2/21 and 2/26 - 2/28 are whole weekend units of the order board");
+  const facts = (c, d, role) => { const r = R.eligibility(c, d, role, "a"); return [R.offeredOn(c, d, role, "a"), r.ok, r.hard.includes("not-offered"), r.soft.some((s) => s.reason === "outside-offers" && s.weight === wOf(c).outsideOffers)]; };
+  FILL_WE1.concat(FILL_WE2).forEach((d) => ["primary", "backup"].forEach((role) => {
+    const painted = FILL_OFFERS.includes(d), pref = [painted, true, false, !painted];
+    eq([facts(ctx, d, role), facts(ctxB, d, role), facts(ctxO, d, role), facts(ctxX, d, role)], [pref, pref, pref, [painted, painted, !painted, !painted]], "fill order: " + d + " " + role + " - [offered, eligible, hard not-offered, outside term] preferred (seed, both variants), exhaustive");
+  }));
+  const G = (c, targetA) => ({ W: wOf(c), offersLive: true, R: R, ctx: c, targets: { byMonth: { "2027-02": { a: targetA, b: { primary: null, backup: null } } } }, forced: {} });
+  const S = (n) => ({ counts: { "2027-02": { a: { primary: n, backup: n }, b: { primary: 0, backup: 0 } } } });
+  const T3 = { primary: 3, backup: 3 };
+  // [what, G, days, role, his count before, extra, expected]
+  const cases = [
+    ["2/26 - 2/28, capacity 3: 2/26 within, both outside days waived", G(ctx, T3), FILL_WE2, "primary", 0, 0, -2 * out],
+    ["2/26 - 2/28, capacity 2: 2/26 first, one outside day waived", G(ctx, T3), FILL_WE2, "primary", 1, 0, -out],
+    ["2/26 - 2/28, capacity 1: 2/26 consumes it, no outside day waived (the capacity edge)", G(ctx, T3), FILL_WE2, "primary", 2, 0, 0],
+    ["2/26 - 2/28, capacity 0: 2/26 beyond the share is tapered, no outside day waived", G(ctx, T3), FILL_WE2, "primary", 3, 0, tap],
+    ["2/26 - 2/28 backup, capacity 1: the same reading per role", G(ctx, T3), FILL_WE2, "backup", 2, 0, 0],
+    ["2/26 - 2/28, count 3 with extra -1 (smoothing's reading without the holder's own day) - capacity 1", G(ctx, T3), FILL_WE2, "primary", 3, -1, 0],
+    ["2/19 - 2/21, capacity 1: the painted Sunday still consumes it before the earlier outside days", G(ctx, T3), FILL_WE1, "primary", 2, 0, 0],
+    ["2/19 - 2/21, capacity 2: the painted Sunday first, then one outside day waived", G(ctx, T3), FILL_WE1, "primary", 1, 0, -out],
+    ["2/19 - 2/21, capacity 3: both outside days waived", G(ctx, T3), FILL_WE1, "primary", 0, 0, -2 * out],
+    ["2/20 - 2/21 (a split's Sat + Sun), capacity 1: the painted Sunday consumes it", G(ctx, T3), FILL_WE1.slice(1), "primary", 2, 0, 0],
+    ["2/27 - 2/28, outside days only, capacity 1: one waived", G(ctx, T3), FILL_WE2.slice(1), "primary", 2, 0, -out],
+    // the order where the two weights differ (a date-ranked fill reads -2 / -8 / +3 / 0 on the four 2/19 - 2/21 rows)
+    ["offerBonusOverShare 2, 2/19 - 2/21, capacity 1: the painted Sunday consumes it - no waiver, no taper", G(ctxB, T3), FILL_WE1, "primary", 2, 0, 0],
+    ["offerBonusOverShare 2, 2/19 - 2/21, capacity 2: the painted Sunday, then one outside day waived (-6)", G(ctxB, T3), FILL_WE1, "primary", 1, 0, -6],
+    ["offerBonusOverShare 2, 2/26 - 2/28, capacity 0: the taper reads 6 - 2", G(ctxB, T3), FILL_WE2, "primary", 3, 0, 4],
+    ["outsideOffers 3, 2/19 - 2/21, capacity 1: the painted Sunday consumes it - no waiver, no taper", G(ctxO, T3), FILL_WE1, "primary", 2, 0, 0],
+    ["outsideOffers 3, 2/19 - 2/21, capacity 2: the painted Sunday, then one outside day waived (-3)", G(ctxO, T3), FILL_WE1, "primary", 1, 0, -3],
+    ["exhaustive, 2/26 - 2/28, capacity 3: his unpainted days are never waived", G(ctxX, T3), FILL_WE2, "primary", 0, 0, 0],
+    ["exhaustive, 2/26 - 2/28, capacity 0: only the taper reads", G(ctxX, T3), FILL_WE2, "primary", 3, 0, tap],
+    ["no backup target: neither tapered nor waived", G(ctx, { primary: 3, backup: null }), FILL_WE2, "backup", 3, 0, 0],
+    ["no period live (offersLive false): 0, the pre-P2 path", Object.assign(G(ctx, T3), { offersLive: false }), FILL_WE2, "primary", 0, 0, 0]
+  ];
+  cases.forEach((c) => eq(GEN.genOfferTaper(c[1], S(c[4]), "a", c[2], c[3], null, c[5]), c[6], "fill order (genOfferTaper): " + c[0]));
 }
 
 // per surgeon: total P / B over the cells and the max / mean excess per role and weighted (P + 0.5 B against tP + 0.5 tB)
@@ -280,6 +354,8 @@ function run(h) {
   });
   ok(orderCells.every((c) => c.expected > 0), "order: beyond his share the +outsideOffers stands in every cell (" + orderCells.map((c) => c.role[0] + c.expected).join(" ") + ")");
   ok(orderCells.some((c) => c.offGen > 0 && c.expected !== c.byDate), "order: in at least one cell a date-ranked reading would leave a different count - the check sees the order (" + orderCells.map((c) => c.role[0] + " off " + c.offGen + " out " + c.outGen + " exp " + c.expected + " byDate " + c.byDate).join("; ") + ")");
+  // ... and the same order in the fill's reading of one placement (review 10/18)
+  fillOrder({ R: R, GEN: GEN, ok: ok, eq: eq, seedData: seed });
 
   const fmt = (s) => s.P + "P/" + s.B + "B, excess max P +" + s.max[0] + " B +" + s.max[1] + " W +" + s.max[2] + " (mean W +" + s.mean[2] + ")";
   const line = "painting (Feb-Mar 2027 fixture, bestOf 2): partial seeds 1-8 - p1 " + fmt(sP.p1) + "; p2 " + fmt(sP.p2) + "; controls seeds 1-4 - rules-only max W +" + Math.max(ctl.rulesOnly.p1.max[2], ctl.rulesOnly.p2.max[2]) + ", nobody max W +" + Math.max(ctl.nobody.p1.max[2], ctl.nobody.p2.max[2]);
@@ -287,7 +363,7 @@ function run(h) {
   return { line: line, partial: sP, controls: ctl };
 }
 
-module.exports = { run, measure, summarize, fixtureInput, IDS, PAINTERS, COLLEAGUES, START, END, MONTHS };
+module.exports = { run, measure, summarize, fixtureInput, fillOrder, IDS, PAINTERS, COLLEAGUES, START, END, MONTHS };
 
 if (require.main === module) {
   const T0 = Date.now();

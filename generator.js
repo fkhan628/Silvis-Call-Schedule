@@ -2236,6 +2236,7 @@ if (typeof module !== "undefined") {
     genWeightedFill: genWeightedFill, // Prompt 32 step 2: the weighted backup fill
     genWeightedShares: genWeightedShares, // Prompt 32 step 2: per-role shares + the weighted cross-role balance (one month)
     genStyleMismatch: genStyleMismatch, // Prompt 23 review (10/1): test/rules.test.js pins it beside the unit choice and per-day eligibility
+    genOfferTaper: genOfferTaper, // painting fix B review (10/18): test/painting.test.js (fillOrder) pins the fill's offered-days-first count on one placement
     genAddDays: genAddDays,
     genWeekday: genWeekday,
     genDaysList: genDaysList
