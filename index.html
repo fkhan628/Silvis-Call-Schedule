@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-KFN+CGcFVD4ZRA3o/Gy7kdAxETW2nYKZWqJS/gMtisU=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-7B5JQnzGgLh5cTaWiXPxPt6L/vuaj41FQWMKNvt3a9E=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5DqfCTmaNUmHYi5HxYoLdktAN5AydGLbRbha3mx/dSs=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-hAkUfcEVXwluvHQPknoam2WQoA61gdv9vn0TdY0dQ8I=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -186,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.18a";
+    var APP_VERSION = "2026.10.18b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -398,6 +398,13 @@ function CallSchedule() {
   const [eastVacReviewState, setEastVacReviewState] = useState("pending");
   const [eastVacBusy, setEastVacBusy] = useState(null);
   const [eastIdByCode, setEastIdByCode] = useState(null);
+  const [derivedVacRows, setDerivedVacRows] = useState([]);
+  const [derivedVacState, setDerivedVacState] = useState("unread");
+  const derivedVacSigRef = useRef(null);
+  const [eastRefreshAudit, setEastRefreshAudit] = useState({
+    state: "unread",
+    rows: []
+  });
   const [auditEntries, setAuditEntries] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [showPastVacations, setShowPastVacations] = useState(false);
@@ -1958,6 +1965,59 @@ function CallSchedule() {
       return false;
     }
   };
+  const loadDerivedVacations = async () => {
+    if (isPublicMode) return "none";
+    const r = await derivedVacDb.load();
+    if (r.state === "ok") {
+      const sig = derivedVacationSignature(r.rows);
+      const prev = derivedVacSigRef.current;
+      derivedVacSigRef.current = sig;
+      setDerivedVacRows(r.rows);
+      setDerivedVacState("ok");
+      if (prev !== null && prev !== sig) loadEastTables(true);
+      return "ok";
+    }
+    if (r.state === "unavailable") {
+      derivedVacSigRef.current = null;
+      setDerivedVacRows([]);
+      setDerivedVacState("unavailable");
+      return "unavailable";
+    }
+    if (r.state === "failed") {
+      console.warn("silvis_derived_vacations read failed - the last rows are kept", r.error || "");
+      setDerivedVacState("failed");
+      return "failed";
+    }
+    setDerivedVacState(s => s === "unread" ? "skipped" : s);
+    return "skipped";
+  };
+  const loadEastRefreshAudit = async () => {
+    if (!isScheduler || isPublicMode) return;
+    try {
+      const rows = await readAuthOnlyTable("audit_log", {
+        eq: {
+          action: "east.refresh"
+        },
+        order: "created_at.desc",
+        limit: 10
+      });
+      if (rows === null) {
+        setEastRefreshAudit(s => _objectSpread(_objectSpread({}, s), {}, {
+          state: s.state === "ok" ? "ok" : "skipped"
+        }));
+        return;
+      }
+      setEastRefreshAudit({
+        state: "ok",
+        rows
+      });
+    } catch (e) {
+      console.warn("east.refresh audit read failed", e);
+      setEastRefreshAudit(s => _objectSpread(_objectSpread({}, s), {}, {
+        state: "failed"
+      }));
+    }
+  };
   const vacationConflictItems = (personId, start, end) => {
     const out = [];
     const sched = scheduleRef.current || {};
@@ -2777,7 +2837,7 @@ function CallSchedule() {
           console.warn("client_versions min-version check failed:", e);
         }
       };
-      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")), loadAppDaysRef.current(sayLoadFail("appDays"))]);
+      await Promise.allSettled([legA(), legB(), loadTrades(), loadNotifs(), loadOffers(true), loadPeriods(true), loadMinVersion(), loadTimeOff(sayLoadFail("timeOff")), loadAvailability(sayLoadFail("availability")), loadEastTables(sayLoadFail("eastFeed")), loadEastVacationReviews(sayLoadFail("eastReviews")), loadDerivedVacations(), loadAppDaysRef.current(sayLoadFail("appDays"))]);
       const loadFailToast = combinedLoadToast(loadFails, {
         retry: !daysReadOkRef.current,
         isScheduler: isSchedulerRef.current
@@ -2870,7 +2930,7 @@ function CallSchedule() {
       lastFullPollAt = Date.now();
       const fr = await auth.ensureFresh();
       if (fr && fr.refreshed) resyncPendingRef.current("poll");
-      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadOffers(true), loadPeriods(true), loadAppDaysRef.current(false)]);
+      await Promise.allSettled([refreshOwnProfile(fr), refreshBlobRow(), refreshDays(), refreshTradeReqs(), refreshNotifs(), refreshMinVersion(), loadTimeOff(true), loadAvailability(true), refreshEastTables(), loadEastVacationReviews(true), loadDerivedVacations(), loadOffers(true), loadPeriods(true), loadAppDaysRef.current(false)]);
       if (blobDirtyRef.current && !auth.sessionExpired) resyncPendingRef.current("poll");
     };
     refreshDaysRef.current = refreshDays;
@@ -4083,6 +4143,31 @@ function CallSchedule() {
         const ef = surgeonRules && surgeonRules[s.id] && surgeonRules[s.id].eastFeed;
         return eastVacationPerson(s, ef);
       }).map(s => String(s.code).toUpperCase());
+      const cacheRead = await loadEastTables(true);
+      const cacheBefore = cacheRead && Array.isArray(cacheRead.feedRows) ? cacheRead.feedRows : null;
+      if (!cacheBefore) {
+        const why = "the cached East weeks could not be read - stopped before Davenport: nothing was written and no review was reset";
+        console.warn("East feed refresh stopped: " + why);
+        const stopDone = logAudit("east.refresh", "East feed refresh STOPPED: " + why, {
+          ok: false,
+          error: why,
+          errors: [why],
+          source: "app",
+          from: fromMon,
+          to: toMon,
+          weeks: 0,
+          stopped: "cache-read",
+          vacations: {
+            codes: vacationCodes,
+            trusted: false,
+            guard: []
+          },
+          reviewResetSkipped: "the cache could not be read"
+        });
+        showToast("East feed refresh STOPPED - the cached East weeks could not be read, so nothing was fetched or written and no review was reset (a refresh over an unknown cache could clear the cached East vacations). Refresh again.", "error");
+        stopDone.then(() => loadEastRefreshAudit());
+        return;
+      }
       let feed;
       try {
         feed = await fetchEastWeeks(fromMon, toMon, {
@@ -4094,10 +4179,13 @@ function CallSchedule() {
         return;
       }
       if (feed.vacationsError) console.warn("East time_off read failed - the cached East vacations are kept", feed.vacationsError);
-      const plan = feed.vacations ? planVacationCache(eastFeedRows, feed.weeks, feed.vacations, {
+      const vacGuard = eastVacationReadGuard(feed, cacheBefore, vacationCodes, fromMon);
+      const vacTrusted = vacGuard.ok && !!feed.vacations;
+      if (!vacGuard.ok) console.warn("East vacation read not trusted - the cached East vacations are kept and no review is reset", vacGuard.problems);
+      const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, {
         from: fromMon
       }) : {
-        weeks: keepCachedVacations(feed.weeks, eastFeedRows),
+        weeks: keepCachedVacations(feed.weeks, cacheBefore),
         rewritten: [],
         carriers: 0
       };
@@ -4165,33 +4253,15 @@ function CallSchedule() {
       setEastIdByCode(codes);
       const reloaded = await loadEastTables();
       const cacheRows = reloaded && Array.isArray(reloaded.feedRows) ? reloaded.feedRows : null;
-      const reviewResets = [],
-        reviewResetFailures = [];
-      if (feed.vacations && cacheRows && typeof derivedEastVacations === "function" && typeof eastVacations === "function") {
-        for (const s of surgeons) {
-          const code = String(s.code || "").toUpperCase();
-          if (!code || vacationCodes.indexOf(code) < 0 || !Object.prototype.hasOwnProperty.call(feed.vacations, code)) continue;
-          const newRanges = eastVacations(cacheRows, code);
-          const stale = derivedEastVacations(newRanges, eastVacationReviewRows, s.id).stale.filter(st => st.review && suIsIso(st.review.end) && st.review.end >= fromMon);
-          for (const st of stale) {
-            const r = await saveEastVacationReview(s.id, {
-              start: st.review.start,
-              end: st.review.end
-            }, "unreviewed", {
-              quiet: true,
-              reason: st.reason
-            });
-            (r.ok ? reviewResets : reviewResetFailures).push({
-              person_id: s.id,
-              start: st.review.start,
-              end: st.review.end,
-              reason: st.reason,
-              decision: st.review.decision,
-              error: r.ok ? undefined : r.error
-            });
-          }
-        }
-      }
+      const rr = await runEastReviewResets({
+        trusted: vacTrusted,
+        cacheRows,
+        vacationCodes,
+        fromMon,
+        feed
+      });
+      const reviewResets = rr.resets,
+        reviewResetFailures = rr.failures;
       const extra = {
         from: eastWin.extra.from,
         to: eastWin.extra.to,
@@ -4232,12 +4302,17 @@ function CallSchedule() {
         }
       } else extra.error = "the cache did not reload - skipped";
       const resetText = x => `${fmtMD(x.start)}-${fmtMD(x.end)} (was ${x.decision}; ${x.reason === "changed" ? "dates changed" : "removed from Davenport"})`;
-      const resetWord = reviewResets.length || reviewResetFailures.length ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.` : "";
+      const resetWord = (reviewResets.length || reviewResetFailures.length ? ` East vacation review(s) reset: ${reviewResets.map(resetText).join(", ") || "none"}${reviewResetFailures.length ? "; could NOT reset " + reviewResetFailures.map(resetText).join(", ") + " - delete the row by hand" : ""}.` : "") + (rr.error ? ` The East vacation reviews could NOT be reset (nothing was reset - refresh again): ${String(rr.error).slice(0, 120)}.` : "");
       const pruneSummary = !publishedCoverage ? "forecast prune skipped (no published weeks)" : forecastRowsDeleted !== null ? forecastRowsDeleted + " forecast row(s) inside the published coverage deleted" : forecastCountUnknown ? "forecast rows inside the published coverage deleted, count unknown (no representation returned)" : "forecast prune FAILED";
       const rewrittenWord = rewrittenRows.length ? `; ${rewrittenRows.length} older cached week(s) rewritten (East vacation ranges re-hosted or cleared)` : "";
-      const vacationSummary = !vacationCodes.length ? "no East vacation codes" : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept" : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}` : `no East vacations read${unresolvedWord}`;
+      const vacationSummary = !vacationCodes.length ? "no East vacation codes" : feed.vacationsError ? "East time_off read FAILED - cached East vacations kept" : !vacTrusted && feed.vacations ? "East vacations NOT trusted (" + vacGuard.problems.map(p => p.code + " " + p.why).join(", ") + ") - cached East vacations kept, no review reset" : feed.vacations ? `${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo}${unresolvedWord}${rewrittenWord}` : `no East vacations read${unresolvedWord}`;
       const extraSummary = extra.error ? `; Davenport weeks outside the window NOT cached: ${extra.error}` : `; ${extra.weeks} more published week(s) cached (${extra.from}..${extra.to}${extra.skipped ? `; ${extra.skipped} after a gap skipped` : ""})`;
-      logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${extraSummary}`, {
+      const refreshErrors = vacGuard.problems.map(eastGuardText).concat(forecastDeleteError ? ["forecast prune: " + String(forecastDeleteError).slice(0, 180)] : []).concat(cacheRows ? [] : ["the cache did not reload - no review reset, no extra leg"]).concat(reviewResetFailures.length ? [reviewResetFailures.length + " East vacation review reset(s) FAILED - delete the row(s) by hand"] : []).concat(rr.error ? ["review reset FAILED: " + String(rr.error).slice(0, 180)] : []).concat(extra.error ? ["the Davenport weeks outside the window were NOT cached: " + String(extra.error).slice(0, 140)] : []);
+      const auditDone = logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${rr.error ? "; the review reset FAILED" : ""}${extraSummary}`, {
+        ok: refreshErrors.length === 0,
+        error: refreshErrors[0] || null,
+        errors: refreshErrors,
+        source: "app",
         from: fromMon,
         to: toMon,
         weeks: weekRows.length,
@@ -4250,22 +4325,117 @@ function CallSchedule() {
           to: feed.vacationsTo || null,
           rewrittenWeeks: rewrittenRows.length,
           unresolved: feed.vacationCodesUnresolved || [],
-          error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null
+          error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null,
+          trusted: vacTrusted,
+          guard: vacGuard.problems
         },
+        reviewResetVia: rr.via,
+        reviewResetError: rr.error,
+        reviewResetSkipped: rr.skipped,
         reviewResets,
         reviewResetFailures,
         extra
       });
       const pruneWord = !publishedCoverage ? "" : forecastRowsDeleted !== null ? ` ${forecastRowsDeleted} forecast row(s) for now-published weeks deleted.` : forecastCountUnknown ? ` Forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were deleted but the count is unknown (no representation returned) - check the forecast strip.` : ` But the forecast rows inside ${publishedCoverage.from}..${publishedCoverage.to} were NOT deleted - couldn't delete the forecast rows: ${describeDbError(forecastDeleteError)} (eligibility ignores them; delete them by hand).`;
-      const vacationWord = !vacationCodes.length ? "" : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}` : feed.vacations ? plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.` : ` No East vacations read${unresolvedWord}.`;
+      const vacationWord = !vacationCodes.length ? "" : feed.vacationsError ? ` East time off could NOT be read - the cached East vacations are kept (a failed read never means 'no vacations'): ${String(feed.vacationsError).slice(0, 120)}` : !vacTrusted && feed.vacations ? ` ${vacGuard.problems.map(eastGuardText).join(" ")}` : feed.vacations ? plan.carriers ? ` ${vacationCount} East vacation range(s) for ${Object.keys(feed.vacations).join(", ")} through ${feed.vacationsTo} cached${unresolvedWord}${rewrittenWord}.` : ` ${vacationCount} East vacation range(s) read but NOT cached - no published week row to hold them.` : ` No East vacations read${unresolvedWord}.`;
       const extraWord = extra.error ? ` Davenport weeks outside the refresh window could NOT be cached (the call totals may undercount): ${extra.error}.` : (extra.weeks ? ` ${extra.weeks} more published week(s) cached.` : "") + (extra.skipped ? ` ${extra.skipped} later week(s) after a gap in Davenport's published weeks not cached (they follow once the weeks between are published).` : "");
-      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${resetWord}${extraWord}`, feed.vacationsError || reviewResetFailures.length || extra.error ? "error" : weekRows.length ? forecastDeleteError ? "error" : "success" : "info");
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${resetWord}${extraWord}`, feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error" : weekRows.length ? forecastDeleteError ? "error" : "success" : "info");
+      auditDone.then(() => loadEastRefreshAudit());
     } catch (e) {
       console.warn("East feed refresh failed", e);
       showToast("East feed refresh FAILED - the cached weeks are unchanged. " + errText(e).slice(0, 120), "error");
     } finally {
       setEastRefreshing(false);
     }
+  };
+  const runEastReviewResets = async ({
+    trusted,
+    cacheRows,
+    vacationCodes,
+    fromMon,
+    feed
+  }) => {
+    const resets = [],
+      failures = [];
+    if (!trusted) return {
+      via: null,
+      resets,
+      failures,
+      error: null,
+      skipped: (vacationCodes || []).length ? "the East vacation read is not trusted - the cached East vacations are kept" : "no East vacation codes"
+    };
+    if (!cacheRows) return {
+      via: null,
+      resets,
+      failures,
+      error: null,
+      skipped: "the cache did not reload"
+    };
+    const rpc = await derivedVacDb.resetStale(fromMon);
+    if (rpc.state === "ok") {
+      rpc.rows.forEach(x => resets.push({
+        person_id: x.person_id,
+        start: x.start,
+        end: x.end,
+        reason: x.reason,
+        decision: x.decision
+      }));
+      await loadEastVacationReviews(true);
+      return {
+        via: "rpc",
+        resets,
+        failures,
+        error: null,
+        skipped: null
+      };
+    }
+    if (rpc.state !== "unavailable") {
+      console.warn("east_vacation_reset_stale failed - no review was reset", rpc.status, rpc.error);
+      return {
+        via: "rpc",
+        resets,
+        failures,
+        error: describeDbError(rpc.error) || "HTTP " + rpc.status,
+        skipped: null
+      };
+    }
+    if (typeof derivedEastVacations !== "function" || typeof eastVacations !== "function") return {
+      via: null,
+      resets,
+      failures,
+      error: null,
+      skipped: "the reset helpers did not load"
+    };
+    for (const s of surgeons) {
+      const code = String(s.code || "").toUpperCase();
+      if (!code || vacationCodes.indexOf(code) < 0 || !Object.prototype.hasOwnProperty.call(feed.vacations, code)) continue;
+      const newRanges = eastVacations(cacheRows, code);
+      const stale = derivedEastVacations(newRanges, eastVacationReviewRows, s.id).stale.filter(st => st.review && suIsIso(st.review.end) && st.review.end >= fromMon);
+      for (const st of stale) {
+        const r = await saveEastVacationReview(s.id, {
+          start: st.review.start,
+          end: st.review.end
+        }, "unreviewed", {
+          quiet: true,
+          reason: st.reason
+        });
+        (r.ok ? resets : failures).push({
+          person_id: s.id,
+          start: st.review.start,
+          end: st.review.end,
+          reason: st.reason,
+          decision: st.review.decision,
+          error: r.ok ? undefined : r.error
+        });
+      }
+    }
+    return {
+      via: "client",
+      resets,
+      failures,
+      error: null,
+      skipped: null
+    };
   };
   const saveEastOverride = async row => {
     if (!isScheduler) return;
@@ -5400,7 +5570,7 @@ function CallSchedule() {
       soft
     };
   };
-  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible, r.eastVacation)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
   const rulesUnknownGate = (elig, whoId, what, verb) => {
     if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
     if (!isScheduler) {
@@ -7665,22 +7835,24 @@ function CallSchedule() {
   const toggleCalFilter = id => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
   const colorOf = id => rosterColors(sMap[id], sMap[id] ? sMap[id].idx : 0);
   const textColorOf = id => rosterNameColor(colorOf(id), dk);
+  const derivedVacMap = useMemo(() => isPublicMode || !authUser || eastDetailsVisible ? {} : derivedVacationMap(derivedVacRows), [derivedVacRows, isPublicMode, authUser, eastDetailsVisible]);
+  const vacShown = useMemo(() => vacationMapWithExtra(vacations, derivedVacMap), [vacations, derivedVacMap]);
   const vacByDay = useMemo(() => {
     const map = {};
     if (!gridDays.length) return map;
     const lo = gridDays[0],
       hi = gridDays[gridDays.length - 1];
-    Object.keys(vacations).forEach(pid => (vacations[pid] || []).forEach(([vs, ve]) => {
+    Object.keys(vacShown).forEach(pid => (vacShown[pid] || []).forEach(([vs, ve]) => {
       if (!vs || !ve || ve < lo || vs > hi) return;
       const stop = ve > hi ? hi : ve;
       for (let d = parse(vs < lo ? lo : vs); fmt(d) <= stop; d = addD(d, 1)) {
         const ds = fmt(d);
-        (map[ds] = map[ds] || []).push(pid);
+        map[ds] = map[ds] || [];
+        if (map[ds].indexOf(pid) < 0) map[ds].push(pid);
       }
     }));
     return map;
-  }, [vacations, gridDays]);
-  const vacNamesOn = d => Object.keys(vacations).filter(pid => onVac(pid, d, vacations)).map(nameOf);
+  }, [vacShown, gridDays]);
   const forecastThreshold = rulesCtx ? rulesCtx.forecastThreshold : 0.5;
   const glance = useMemo(() => suCoverageGlance(schedule, todayStr, 60, ctxInputs.eastForecast, forecastThreshold), [schedule, todayStr, ctxInputs, forecastThreshold]);
   const eastCoverageEnd = useMemo(() => {
@@ -7729,6 +7901,9 @@ function CallSchedule() {
     });
     return m;
   }, [eastVacPeople]);
+  const vacListExtra = useMemo(() => isPublicMode ? {} : eastDetailsVisible ? vacEastAway : derivedVacMap, [isPublicMode, eastDetailsVisible, vacEastAway, derivedVacMap]);
+  const vacListMap = useMemo(() => vacationMapWithExtra(vacations, vacListExtra), [vacations, vacListExtra]);
+  const vacNamesOn = d => Object.keys(vacListMap).filter(pid => onVac(pid, d, vacListMap)).map(nameOf);
   const vacGuardFor = (personId, start, end, excludeId, extraRows) => vacationGuard({
     personId,
     start,
@@ -7827,6 +8002,16 @@ function CallSchedule() {
       return [];
     }
   }, [rulesCtx]);
+  const eastVacWarnings = useMemo(() => eastDetailsVisible ? eastVacationOwnWarnings({
+    eastAway: vacEastAway,
+    timeOffRows,
+    roster: surgeons,
+    groupRules,
+    eastReviewsLoaded: eastVacReviewState === "ok",
+    conflicts: eastVacConflictRows,
+    today: todayStr
+  }) : [], [eastDetailsVisible, vacEastAway, timeOffRows, surgeons, groupRules, eastVacReviewState, eastVacConflictRows, todayStr]);
+  const eastVacWarnByDay = useMemo(() => eastVacationWarnDays(eastVacWarnings), [eastVacWarnings]);
   const openEastVacPanel = () => {
     if (isPublicMode) return;
     if (isScheduler) {
@@ -7839,6 +8024,9 @@ function CallSchedule() {
       setView("setup");
     } else setView("timeoff");
   };
+  useEffect(() => {
+    if (view === "setup" && isScheduler && !isPublicMode) loadEastRefreshAudit();
+  }, [view, isScheduler, isPublicMode]);
   const scrollToCardRef = useRef(null);
   useEffect(() => {
     if (view !== "setup" || !scrollToCardRef.current) return;
@@ -8053,8 +8241,7 @@ function CallSchedule() {
           id: sg.id,
           ok: !!r.ok,
           hard: r.hard && r.hard.length ? r.hard : r.ok ? [] : ["unknown-surgeon"],
-          soft: r.soft || [],
-          eastVacation: r.eastVacation || null
+          soft: r.soft || []
         };
       });
     });
@@ -8182,7 +8369,7 @@ function CallSchedule() {
     if (!s || claimBusy || !mySurgeon) return;
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
     if (!gate || !gate.ok) {
-      showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible, gate.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
+      showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
       closeClaimSheet();
       return;
     }
@@ -8788,12 +8975,19 @@ function CallSchedule() {
     }
   }, "x")));
   const renderVacationList = (personIds, allowEdit) => {
-    const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations);
-    if (groups.length === 0) return React.createElement("p", {
+    const groups = groupVacationRows(vacations, personIds, todayStr, showPastVacations, vacListExtra);
+    const derivedFailed = () => React.createElement(React.Fragment, null, !eastDetailsVisible && derivedVacState === "failed" && React.createElement("p", {
+      "data-testid": "vac-derived-failed",
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic",
+        margin: "6px 0 0"
+      })
+    }, "Some vacations set by the scheduler could not be loaded - the list may be incomplete until they load."));
+    if (groups.length === 0) return React.createElement(React.Fragment, null, React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
-    }, "No ", showPastVacations ? "" : "upcoming ", "vacations.");
+    }, "No ", showPastVacations ? "" : "upcoming ", "vacations."), derivedFailed());
     const withHeader = personIds.length > 1;
     const lineStyle = {
       display: "flex",
@@ -8838,7 +9032,39 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         color: "#a0a8b0"
       })
-    }, "+", g.past, " past")), g.rows.map(r => React.createElement("div", {
+    }, "+", g.past, " past")), g.rows.map(r => r.derived ? React.createElement("div", {
+      key: "dv-" + r.pid + r.vs + r.ve,
+      "data-testid": "vac-line-" + r.pid + "-" + r.vs,
+      "data-derived": "1",
+      "data-start": r.vs,
+      "data-end": r.ve,
+      style: _objectSpread(_objectSpread({}, lineStyle), {}, {
+        marginLeft: withHeader ? 8 : 0
+      })
+    }, eastDetailsVisible && React.createElement("span", {
+      "data-testid": "vac-derived-mark",
+      "data-state": r.state || "unreviewed",
+      style: _objectSpread(_objectSpread({}, eastVacMarkStyle(r.state || "unreviewed", dk, dkText)), {}, {
+        flexShrink: 0
+      })
+    }), React.createElement("span", {
+      style: {
+        fontFamily: mono,
+        fontSize: 12,
+        color: dkText
+      },
+      title: r.vs + (r.ve !== r.vs ? " to " + r.ve : "")
+    }, vacRangeLabel(r.vs, r.ve, todayStr)), React.createElement("span", {
+      "data-testid": "vac-derived-note",
+      style: _objectSpread(_objectSpread({}, muted), {}, {
+        fontStyle: "italic"
+      })
+    }, eastDetailsVisible ? "East vacation (" + (r.state || "unreviewed") + ") - decide in Setup > East feed" : "set by the scheduler"), r.past && React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: "#a0a8b0"
+      }
+    }, "past")) : React.createElement("div", {
       key: r.id || r.pid + r.vs,
       "data-testid": "vac-line-" + r.pid + "-" + r.vs,
       "data-start": r.vs,
@@ -8924,7 +9150,7 @@ function CallSchedule() {
         cursor: "pointer",
         fontFamily: font
       }
-    }, "Remove"))))))));
+    }, "Remove"))))))), derivedFailed());
   };
   const renderVacationForm = personChoices => React.createElement("div", {
     style: {
@@ -9321,7 +9547,7 @@ function CallSchedule() {
     css: css,
     dk: dk,
     surgeons: isScheduler ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon),
-    vacations: vacations,
+    vacations: vacationMapWithExtra(vacations, vacListExtra),
     onCommit: commitTimeOffPaint,
     onClose: () => setPaintSheet(false)
   }), offerSheet && !isPublicMode && React.createElement(OfferPainterSheet, {
@@ -9344,7 +9570,8 @@ function CallSchedule() {
     nameOf: nameOf,
     preferPeriodId: offerSheet.periodId || null,
     onCommit: commitOffersPaint,
-    onClose: () => setOfferSheet(null)
+    onClose: () => setOfferSheet(null),
+    eastDetails: eastDetailsVisible
   }), toast && React.createElement("div", {
     role: "status",
     "aria-live": "polite",
@@ -10835,7 +11062,7 @@ function CallSchedule() {
     ck: "setup_vacations",
     defaultOpen: false,
     title: "Vacations (everyone)",
-    summary: cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations")),
+    summary: cardSummary(plural(groupVacationRows(vacations, surgeons.map(s => s.id), todayStr, false, vacListExtra).reduce((n, g) => n + g.upcoming, 0), "upcoming vacation", "upcoming vacations")),
     right: React.createElement("button", {
       onClick: e => {
         e.stopPropagation();
@@ -11008,7 +11235,9 @@ function CallSchedule() {
     onReviewEastVac: saveEastVacationReview,
     eastVacBusyKey: eastVacBusy,
     canReviewEastVac: pid => isScheduler || pid === mySurgeon,
-    eastVacConflicts: eastVacConflictRows
+    eastVacConflicts: eastVacConflictRows,
+    eastVacWarnings: eastVacWarnings,
+    refreshAudit: eastRefreshAudit
   })), React.createElement(Collapsible, {
     css: css,
     ck: "setup_office",
@@ -11419,7 +11648,24 @@ function CallSchedule() {
           fontFamily: mono,
           fontWeight: 800
         }
-      }, eastVacUnreviewed), eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""), daysShown && lastPublishedDay && React.createElement("span", {
+      }, eastVacUnreviewed), eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("button", {
+        type: "button",
+        "data-testid": "cov-eastvac-warn",
+        "data-count": eastVacWarnings.length,
+        onClick: openEastVacPanel,
+        title: (eastVacWarnings.length ? eastVacWarnings.map(w => eastVacationWarnText(w, nameOf)).join(" | ") + " - " : "No upcoming East vacation breaks the vacation minimum or overlaps a published day. ") + "Opens Setup > East feed.",
+        style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+          color: eastVacWarnings.length ? "#c04040" : "#1a8040",
+          borderColor: eastVacWarnings.length ? "#c04040" : "#a0d8b0",
+          fontFamily: font,
+          cursor: "pointer"
+        })
+      }, "East vacation warnings: ", React.createElement("span", {
+        style: {
+          fontFamily: mono,
+          fontWeight: 800
+        }
+      }, eastVacWarnings.length)), daysShown && lastPublishedDay && React.createElement("span", {
         "data-testid": "cov-published-through",
         "data-value": lastPublishedDay,
         title: "The last day of the published schedule's contiguous block - the Open shifts board runs to it"
@@ -12315,6 +12561,7 @@ function CallSchedule() {
     mySurgeon: mySurgeon,
     vacationNames: vacNamesOn(editorDay),
     focusExternal: editorFocus === "external",
+    eastVacWarn: eastDetailsVisible ? eastVacWarnByDay[editorDay] || [] : [],
     appEntry: !isPublicMode ? appByDay[editorDay] || null : null,
     appChoices: appPickList(appNameRows),
     appState: appDaysState,
@@ -12372,7 +12619,7 @@ function CallSchedule() {
         }
       }, nameOf(o.id));
     };
-    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible, me.eastVacation)[0], nameOf) : reasonLabel("unknown-surgeon");
+    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon");
     const sheetDate = d => {
       try {
         return parse(d).toLocaleDateString(undefined, {
@@ -12890,6 +13137,7 @@ function CallSchedule() {
         bg: "#fbf1d8",
         fg: "#7a5a20"
       });
+      if (!eastDetailsVisible) return out;
       if (P && P.derived[d]) out.push({
         k: "E",
         text: "E",
@@ -12966,7 +13214,7 @@ function CallSchedule() {
       return a ? a.primary === pid ? "primary" : a.backup === pid ? "backup" : null : null;
     };
     const syncUrl = `${EDGE_FN_BASE}/calendar-sync?surgeon=${codeOf(pid)}`;
-    const pidVacs = (vacations[pid] || []).filter(([vs, ve]) => ve >= todayStr).length;
+    const pidVacs = groupVacationRows(vacations, [pid], todayStr, false, vacListExtra).reduce((n, g) => n + g.upcoming, 0);
     const daysBlock = (who, own) => {
       const upcoming = upcomingDaysOf(who, 90);
       const next = upcomingDaysOf(who, null)[0] || null;
@@ -13038,7 +13286,7 @@ function CallSchedule() {
         style: css.subT
       }, "Upcoming - next 90 days (", daysShown ? upcoming.length : "...", ")"), React.createElement("span", {
         style: muted
-      }, "H holiday unit - E East-derived week - F East forecast busy - EV East (Davenport) vacation")), !daysShown ? React.createElement("p", {
+      }, "H holiday unit", eastDetailsVisible ? " - E East-derived week - F East forecast busy - EV East (Davenport) vacation" : "")), !daysShown ? React.createElement("p", {
         style: _objectSpread(_objectSpread({}, muted), {}, {
           fontStyle: "italic"
         })
@@ -13351,7 +13599,7 @@ function CallSchedule() {
       style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
         marginLeft: "auto"
       })
-    }, "Enter a vacation")), renderVacationList([pid], true)), eastVacById[pid] && React.createElement("div", {
+    }, "Enter a vacation")), renderVacationList([pid], true)), eastDetailsVisible && eastVacById[pid] && React.createElement("div", {
       style: css.card,
       "data-testid": "mine-eastvac"
     }, React.createElement("div", {
@@ -13471,17 +13719,17 @@ function CallSchedule() {
       padding: "7px 16px",
       opacity: coordOfferPerson ? 1 : 0.5
     })
-  }, coordOfferPerson ? "Enter offers for " + nameOf(coordOfferPerson) : "Enter offers for..."))), (isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon)).length > 0 && React.createElement("div", {
+  }, coordOfferPerson ? "Enter offers for " + nameOf(coordOfferPerson) : "Enter offers for..."))), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("div", {
     style: css.card,
     "data-testid": "eastvac-timeoff"
   }, React.createElement("div", {
     style: css.cardT
-  }, isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"), React.createElement("p", {
+  }, "East (Davenport) vacations"), React.createElement("p", {
     style: sectionNote
   }, "Mirrored from the Davenport app by the East feed refresh - nothing is entered here and no Silvis vacation row is written. Decide each range: ", React.createElement("strong", null, "away"), " = also off at Silvis (treated exactly like a vacation above); ", React.createElement("strong", null, "home"), " = available at Silvis (no East call, no OR block - the Tue/Thu rule is lifted and you are preferred as primary). Unreviewed counts as away until you decide."), React.createElement(EastVacationList, {
     css: css,
     dk: dk,
-    people: isScheduler ? eastVacPeople : eastVacPeople.filter(p => p.id === mySurgeon),
+    people: eastVacPeople,
     reviewState: eastVacReviewState,
     onReview: saveEastVacationReview,
     busyKey: eastVacBusy,
@@ -13489,6 +13737,13 @@ function CallSchedule() {
     nameOf: nameOf,
     today: todayStr,
     testid: "eastvac-timeoff-list"
+  }), React.createElement(EastVacWarnBox, {
+    css: css,
+    dk: dk,
+    warnings: eastVacWarnings,
+    nameOf: nameOf,
+    onEditDay: goToDay,
+    testid: "eastvac-timeoff-warnings"
   })), (() => {
     const fromId = isScheduler ? tradeFrom || mySurgeon || "" : mySurgeon || "";
     if (isCoordinator || isViewer) return null;
@@ -13744,7 +13999,7 @@ function CallSchedule() {
         style: bad ? {
           color: "#a0a8b0"
         } : undefined
-      }, s.name, bad ? " - " + (e.unknown ? "rules not loaded" : eastMaskedReasons(e.hard, eastDetailsVisible, e.eastVacation)[0]) : "");
+      }, s.name, bad ? " - " + (e.unknown ? "rules not loaded" : eastMaskedReasons(e.hard, eastDetailsVisible)[0]) : "");
     }))), toElig && !toElig.ok && React.createElement("div", {
       "data-testid": "trade-to-reason",
       style: _objectSpread(_objectSpread({}, css.errBox), {}, {
@@ -15755,7 +16010,8 @@ function OfferPainterSheet({
   nameOf,
   preferPeriodId,
   onCommit,
-  onClose
+  onClose,
+  eastDetails
 }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
@@ -15864,7 +16120,9 @@ function OfferPainterSheet({
             console.warn("Paint offers: eligibility threw for " + ds + " " + role, e);
           }
           const hard = elig ? elig.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [];
-          const why = offerDayWhy(hard);
+          const why = offerDayWhy(hard, {
+            eastDetails: !!eastDetails
+          });
           row.block[role] = why.block;
           row.confirm[role] = why.confirm;
         });
@@ -15882,7 +16140,7 @@ function OfferPainterSheet({
       out.push(row);
     }
     return out;
-  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np]);
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails]);
   const rowByDay = React.useMemo(() => {
     const m = {};
     days.forEach(r => {
@@ -17320,7 +17578,7 @@ function softTag(soft) {
 const EAST_HARD_REASON_KEYS = ["east-busy", "east-forecast-busy", "derived-lock", "derived-lock-held"];
 const EAST_SOFT_REASON_KEYS = ["east-forecast", "east-unknown", "east-clear"];
 const EAST_NOT_AVAILABLE = "not available";
-function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {
+function eastMaskedReasons(list, eastDetailsVisible) {
   if (eastDetailsVisible || !Array.isArray(list)) return list;
   const out = [];
   let masked = false;
@@ -17331,7 +17589,7 @@ function eastMaskedReasons(list, eastDetailsVisible, eastVacation) {
       if (EAST_SOFT_REASON_KEYS.indexOf(key) < 0) out.push(x);
       return;
     }
-    if (EAST_HARD_REASON_KEYS.indexOf(key) >= 0 || eastVacation && (key === "time-off" || key === "day-before-vacation")) {
+    if (EAST_HARD_REASON_KEYS.indexOf(key) >= 0) {
       if (!masked) {
         masked = true;
         out.push(EAST_NOT_AVAILABLE);
@@ -18156,7 +18414,8 @@ function DayEditor(props) {
     focusExternal,
     onGive,
     onOpenShifts,
-    openOnBoard
+    openOnBoard,
+    eastVacWarn
   } = props;
   const {
     appEntry,
@@ -19099,7 +19358,18 @@ function DayEditor(props) {
       marginRight: 6,
       verticalAlign: "middle"
     })
-  }) : null, "East - ", l.text))), canEdit ? React.createElement("div", null, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off") : vacationNames.length > 0 && React.createElement("div", {
+  }) : null, "East - ", l.text))), eastDetailsVisible && (eastVacWarn || []).map((w, i) => React.createElement("div", {
+    key: "evw" + i,
+    "data-testid": "east-vac-warn",
+    "data-kind": w.kind,
+    "data-person": w.id,
+    style: {
+      color: "#a83232",
+      fontWeight: 700
+    }
+  }, "East - ", eastVacationWarnLine(w, nameOf))), canEdit ? React.createElement("div", {
+    "data-testid": "editor-vacations"
+  }, "Vacations: ", vacationNames.length ? vacationNames.join(", ") : "nobody off") : vacationNames.length > 0 && React.createElement("div", {
     "data-testid": "editor-off"
   }, "Off: ", vacationNames.join(", ")), canEdit && ctxError && React.createElement("div", {
     style: {
@@ -25025,6 +25295,77 @@ function EastVacationList({
     })
   }, c.day), " ", c.role, " ", nameOf(c.surgeonId), ": East vacation (", c.state, ")", c.trailingEdge ? " starts the next morning" : "")))));
 }
+function EastVacWarnBox({
+  css,
+  dk,
+  warnings,
+  nameOf,
+  onEditDay,
+  testid
+}) {
+  const list = Array.isArray(warnings) ? warnings : [];
+  const border = list.length ? "#e0b4b4" : dk ? "#24406B" : "#e8ecf0";
+  return React.createElement("div", {
+    "data-testid": testid || "eastvac-warnings",
+    "data-count": list.length,
+    style: {
+      marginTop: 8,
+      border: "1px solid " + border,
+      borderRadius: 8,
+      padding: "8px 10px"
+    }
+  }, React.createElement("div", {
+    style: _objectSpread(_objectSpread({}, css.subT), {}, {
+      margin: "0 0 4px"
+    })
+  }, React.createElement("span", {
+    style: {
+      color: list.length ? "#c04040" : undefined
+    }
+  }, "East vacations under the vacation minimum or over published days (", list.length, ")")), React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#5B6B82",
+      margin: "0 0 4px"
+    }
+  }, "A Davenport range is never refused here. Listed: an upcoming away / unreviewed range that leaves fewer than the vacation minimum around on a day (with the person off), or one he holds a published day inside (or primary the day before). A warning only - nothing is blocked, dropped or unlocked; decide ", React.createElement("em", null, "home"), ", trade the day, or let it stand."), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      lineHeight: 1.7
+    }
+  }, list.length === 0 ? React.createElement("span", {
+    style: {
+      fontFamily: mono
+    }
+  }, "none") : list.map(w => {
+    const days = Array.from(new Set((w.shortDays || []).map(x => x.day).concat((w.held || []).map(h => h.day)))).sort();
+    return React.createElement("div", {
+      key: w.id + w.start + w.end,
+      "data-testid": "eastvac-warning",
+      "data-person": w.id,
+      "data-start": w.start,
+      "data-end": w.end,
+      "data-short": (w.shortDays || []).map(x => x.day).join(","),
+      "data-held": (w.held || []).map(h => h.day).join(",")
+    }, React.createElement("span", null, eastVacationWarnText(w, nameOf)), React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        flexWrap: "wrap",
+        gap: 4,
+        marginLeft: 6
+      }
+    }, days.slice(0, 14).map(d => React.createElement("button", {
+      key: d,
+      type: "button",
+      onClick: () => onEditDay && onEditDay(d),
+      title: "Open " + d + " in the day editor",
+      style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
+        fontFamily: mono,
+        padding: "1px 6px"
+      })
+    }, d))));
+  })));
+}
 function EastFeedCard({
   css,
   dk,
@@ -25051,7 +25392,9 @@ function EastFeedCard({
   onReviewEastVac,
   eastVacBusyKey,
   canReviewEastVac,
-  eastVacConflicts
+  eastVacConflicts,
+  eastVacWarnings,
+  refreshAudit
 }) {
   const inp = _objectSpread(_objectSpread({}, css.inp), {}, {
     padding: "3px 6px",
@@ -25086,6 +25429,18 @@ function EastFeedCard({
   });
   const state = k => (loadState || {})[k] || "pending";
   const tone = k => state(k) === "ok" ? "#1a8040" : state(k) === "failed" ? "#a83232" : "#8a5a10";
+  const refreshStatus = eastRefreshStatus(refreshAudit && refreshAudit.rows || []);
+  const auditState = refreshAudit && refreshAudit.state || "unread";
+  const statusLine = (ln, testid) => React.createElement("div", {
+    "data-testid": testid,
+    "data-ok": ln.ok ? "1" : "0",
+    "data-server": ln.server ? "1" : "0"
+  }, React.createElement("span", {
+    style: {
+      color: ln.ok ? "#1F2A3A" : "#c04040",
+      fontWeight: ln.ok ? 400 : 700
+    }
+  }, ln.text));
   return React.createElement("div", {
     "data-testid": "east-card"
   }, React.createElement("div", {
@@ -25114,6 +25469,23 @@ function EastFeedCard({
       color: tone("overrides")
     }
   }, state("overrides")))), React.createElement("div", {
+    "data-testid": "east-refresh-status",
+    "data-state": auditState,
+    style: {
+      fontSize: 12,
+      lineHeight: 1.6,
+      marginBottom: 8
+    }
+  }, refreshStatus.latest ? statusLine(refreshStatus.latest, "east-refresh-latest") : React.createElement("div", {
+    style: {
+      color: "#5B6B82"
+    }
+  }, auditState === "failed" ? "The refresh record could not be read." : auditState === "ok" ? "No refresh on record yet." : auditState === "skipped" ? "The refresh record was not read - the session token is missing or expired." : "Reading the refresh record..."), refreshStatus.latest && !refreshStatus.latest.server && (refreshStatus.lastServer ? statusLine(refreshStatus.lastServer, "east-refresh-server") : React.createElement("div", {
+    "data-testid": "east-refresh-server",
+    style: {
+      color: "#5B6B82"
+    }
+  }, "No server refresh on record yet (the daily job runs once east-feed-refresh is deployed and scheduled)."))), React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -25249,6 +25621,13 @@ function EastFeedCard({
     testid: "eastvac-list",
     conflicts: eastVacConflicts || [],
     onEditDay: onEditDay
+  }), React.createElement(EastVacWarnBox, {
+    css: css,
+    dk: dk,
+    warnings: eastVacWarnings || [],
+    nameOf: nameOf,
+    onEditDay: onEditDay,
+    testid: "eastvac-warnings"
   })), React.createElement("div", {
     style: {
       border: "1px solid #e8ecf0",
