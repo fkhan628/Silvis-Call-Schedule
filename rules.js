@@ -163,8 +163,11 @@
 //                 offer, a dated row, lifts them on its own date and role);
 //                 for rules_only / not_started surgeons, and on any day
 //                 outside every period, today's rules apply byte for byte.
-//                 opts.claim (a Prompt 13 claim = an offer made on the spot)
-//                 skips the exhaustive 'not-offered' only. offerState(ctx,
+//                 opts.claim (a Prompt 13 claim = an offer made on the spot;
+//                 the board's claims and every trade path) skips the
+//                 exhaustive 'not-offered' and, for a surgeon submitted for
+//                 the period (either mode), his dated lists (10/18, Faraz:
+//                 "taking it counts as painting it"). offerState(ctx,
 //                 day, id) / offeredOn(ctx, day, role, id) / outsideOffersOn(ctx,
 //                 day, role, id) expose the facts;
 //                 malformed rows and periods warn and are dropped (fail
@@ -1791,7 +1794,11 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   }
   var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
   if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
-  hard = hard.concat(st.hard);
+  // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade (opts.claim) by a surgeon SUBMITTED for the day's
+  // period - either mode - is his own choice, like painting that day (claim_open_slot also records the offer), so his dated
+  // lists do not block it. Generate (no claim flag) still never places a preferred surgeon off his list, and a surgeon who
+  // never painted (rules_only / not_started) keeps his lists on claims too. Here, not in rdStatic: its memo has no claim key.
+  hard = hard.concat(opts.claim && st.offersGovern ? st.hard.filter(function (h) { return h !== "whitelist-month" && h !== "outside-available-weeks"; }) : st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
   // Prompt 23 review (10/1): hardNeverWeekdaysNoticeDays measures a NEW placement from ctx.today. A slot he already
   // holds on the STANDING schedule was placed when the notice allowed it - the held slot is a fact as far as the notice

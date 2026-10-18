@@ -1532,7 +1532,9 @@ byte for byte (the whole regression runs unchanged with `periods: []`). This is 
 doc §8 item 12): Acton's and Philip's rules allow those days even when their painting does not name them — since 10/18
 not a day a dated list of theirs excludes (Philip's weeks) unless they painted it. A Prompt 13
 claim is an offer made on the spot: `eligibility(ctx, day, role, id, { claim: true })` skips the exhaustive
-`not-offered` only, and `claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
+`not-offered` and — for a surgeon submitted for the period, either mode — his dated lists (Faraz 10/18, "taking it
+counts as painting it"; the trade paths pass the same flag; a surgeon who never painted keeps his lists on claims), and
+`claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
 applied after the open-shifts branch; the freeze guard yields to a claim in progress, transaction-locally) — except
 for a claimer listed in the period's `rules_only_ids`: he chose "go by my rules", one offer row would flip his derived
 status to submitted for the whole period, so his claim is recorded in `schedule_days` and the audit row (`detail.offer
@@ -1623,8 +1625,9 @@ offers, the record stays honest); `entered_by 'scheduler'`, `source 'email-relay
 shape plus source and `entered_by` is the seed's ownership mark (as `schedule_days` notes carry `seed: <source>`):
 stale seed-owned offers are deleted set-based for days on/after today only, and an offer entered or relayed **in the
 app** is never updated or deleted (a planned row over the surgeon's own entry reads *blocked* in the diff). For a
-surgeon so *submitted* the importer writes **no `available` row** for a day inside the period and **no
-`explicitListMonths` entry** for a month overlapping it (Burchett's blob entry becomes October only; his statement
+surgeon so *submitted* in **exhaustive** mode the importer writes **no `available` row** for a day inside the period and
+**no `explicitListMonths` entry** for a month overlapping it (since 10/18 only exhaustive — in a preferred period both
+stay beside his offers, Faraz "List always stands"; Burchett, exhaustive: his blob entry becomes October only; his statement
 lists stay in the blob as data); `unavailable` / `no_backup` / `backup_only` rows and everything outside the period
 are unchanged, row for row. The per-surgeon status the dry run prints (`surgeon | status | mode | offered days`) is
 derived like SQL `offer_status()` from the whole list, whatever today is. Live consequences of the first apply:
@@ -1645,8 +1648,9 @@ rolls back loudly — so **the seed's offers must be applied before 2026-10-02**
 enter in the app **once the Periods section ships (the UI wave)** — before that the only late path is a scheduler-JWT
 REST write (OF003 is skipped for `silvis_is_sched()`; the CLI is refused). Three consistency refusals guard the seed itself, whether or not the option is on: a surgeon *with*
 a mode in a period may not keep an **untagged** `explicitAvailable` / `offeredDays` / `availableWeeks` list that
-reaches into it (`OFFER_SOURCE_INVALID` — his status would retire the rows and the month while no offer carried the
-days), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
+reaches into it (`OFFER_SOURCE_INVALID` — in an exhaustive period his status would retire the rows and the month while
+no offer carried the days; since 10/18 only an **exhaustive** period retires them — `impOfferCoverage` — and a preferred
+surgeon's month lists and available rows stay beside his offers, Faraz "List always stands"), periods never overlap, and a period label is gated against the note denylist like an offer note (it reaches
 the authenticated-read `call_periods`). A submitted surgeon whose planned rows come to 0 (listed days all past or on
 a vacation) is named in the dry run's warnings: the retirement follows the whole list, but a fresh database would read
 him `not_started` until a row exists.

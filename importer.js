@@ -110,10 +110,12 @@
 //                                            the tag ('email-relay' default), note 'seed: <tag>' - the seed OWNS rows
 //                                            with source email-relay / import + entered_by scheduler + that note
 //                                            shape; offers entered or relayed in the app are never updated or deleted.
-//   for such a 'submitted' surgeon        -> NO 'available' availability row for a day inside the period and NO
-//                                            explicitListMonths entry (seed or derived) for a month that overlaps it
-//                                            (unavailable / no_backup / backup_only rows still go); outside the
-//                                            period (October lists, weeks in 2027...) the old behaviour stands.
+//   for such a 'submitted' surgeon        -> in an EXHAUSTIVE period, NO 'available' availability row for a day inside
+//                                            it and NO explicitListMonths entry (seed or derived) for a month that
+//                                            overlaps it (unavailable / no_backup / backup_only rows still go); in a
+//                                            PREFERRED period both stay - his dated lists stand beside his offers (10/18,
+//                                            Faraz "List always stands"); outside every period (October lists, weeks in
+//                                            2027...) the old behaviour stands.
 //   status per surgeon per period (dry-run table) is derived like SQL offer_status(): submitted (>= 1 listed day in
 //   the period, whatever today is), else rules_only (listed in rulesOnly), else not_started; a submitted surgeon
 //   with 0 rows planned (listed days all past / on a vacation) is named in offerWarnings.
@@ -534,8 +536,9 @@ function impOfferSources(seed, id) {
 //   skips    [{ person_id, day, role_pref, reason: 'vacation' }] - listed days inside the person's seed vacation
 //   warnings tagged lists of a surgeon without a mode (not converted), one line per tag
 //   status   [{ label, start, end, byPerson: { id: { status, mode, offered, primary, backup, either } } }]
-//   covered  { id: [{ start, end }] } - the periods in which the surgeon is 'submitted' (drives the retirement of
-//            his available rows and governed months there; independent of today, like SQL offer_status())
+//   covered  { id: [{ start, end, mode }] } - the periods in which the surgeon is 'submitted' (independent of today, like
+//            SQL offer_status()); the EXHAUSTIVE ones drive the retirement of his available rows and governed months
+//            there (impOfferCoverage - 10/18, Faraz "List always stands": a preferred surgeon's lists stay beside his offers)
 function impSeedOffers(seed, opts) {
   opts = opts || {};
   var today = opts.today || impCentralToday(opts.now);
@@ -549,8 +552,9 @@ function impSeedOffers(seed, opts) {
   roster.forEach(function (id) { vac[id] = (((sr[id] || {}).timeOff) || []).map(function (t) { return [t.start, t.end || t.start]; }); });
   var onVacation = function (id, d) { return vac[id].some(function (v) { return d >= v[0] && d <= v[1]; }); };
   var offers = [], skips = [], warnings = [], status = [], covered = {}, seen = {};
-  // 9/23 review: a surgeon WITH a mode in a period may not keep an untagged dated list that reaches into it - his
-  // status would retire the list's rows and month while no offer carries the days (lost from both mechanisms, silently)
+  // 9/23 review: a surgeon WITH a mode in a period may not keep an untagged dated list that reaches into it - in an
+  // exhaustive period his status would retire the list's rows and month while no offer carries the days (lost from both
+  // mechanisms, silently); refused in either mode, so a list there is always an offer source (10/18: preferred keeps it too)
   var refuseUntagged = function (id, per) {
     var r = sr[id] || {};
     var tagged = {};
@@ -588,7 +592,7 @@ function impSeedOffers(seed, opts) {
       }
       var submitted = !!(mode && listed.length);
       if (submitted) {
-        (covered[id] = covered[id] || []).push({ start: per.start_day, end: per.end_day });
+        (covered[id] = covered[id] || []).push({ start: per.start_day, end: per.end_day, mode: mode });
         listed.forEach(function (x) {
           if (x.day < today) return;                                        // OF001: never a past day
           if (onVacation(id, x.day)) {                                      // OF002: the trigger would refuse it
@@ -605,7 +609,7 @@ function impSeedOffers(seed, opts) {
       // 9/23 review: 'submitted' follows the whole list (the live rows keep counting past days for offer_status()), but a
       // plan with 0 rows for him would leave a fresh database reading not_started - say so in the dry run
       if (submitted && counts.primary + counts.backup + counts.either === 0) {
-        warnings.push(id + ": submitted for " + per.label + " from listed days that are all past or inside a vacation - 0 rows planned; on a fresh database offer_status() reads not_started until a row exists (his available rows and governed months inside the period are still retired)");
+        warnings.push(id + ": submitted for " + per.label + " from listed days that are all past or inside a vacation - 0 rows planned; on a fresh database offer_status() reads not_started until a row exists" + (mode === "exhaustive" ? " (his available rows and governed months inside the period are still retired)" : " (preferred: his dated lists stay - nothing is retired)"));
       }
       by[id] = { status: submitted ? "submitted" : per.rules_only_ids.indexOf(id) >= 0 ? "rules_only" : "not_started", mode: mode || "preferred",
         offered: counts.primary + counts.backup + counts.either, primary: counts.primary, backup: counts.backup, either: counts.either };
@@ -617,10 +621,17 @@ function impSeedOffers(seed, opts) {
   return { today: today, periods: periods, offers: offers, skips: skips, warnings: warnings, status: status, covered: covered };
 }
 
-// The periods in which each surgeon is submitted (no today needed) - the retirement map for rows and months.
+// The retirement map for rows and months (no today needed): the periods in which each surgeon is submitted in EXHAUSTIVE
+// mode - his offers are then his only days there (rules.js sets his lists aside). 10/18 (Faraz, "List always stands"): in
+// a PREFERRED period his dated lists stand beside his offers, so their governed months and available rows are kept.
 function impOfferCoverage(seed, opts) {
   if (!(opts && opts.offerPeriods === true)) return {};
-  return impSeedOffers(seed, { today: "2000-01-01" }).covered;
+  var cov = impSeedOffers(seed, { today: "2000-01-01" }).covered, out = {};
+  Object.keys(cov).forEach(function (id) {
+    var ex = cov[id].filter(function (p) { return p.mode === "exhaustive"; });
+    if (ex.length) out[id] = ex;
+  });
+  return out;
 }
 function impDayCovered(cov, id, day) { return !!(cov[id] && cov[id].some(function (p) { return day >= p.start && day <= p.end; })); }
 function impMonthCovered(cov, id, month) {
@@ -640,7 +651,8 @@ function impOffersInput(plan) {
 //   explicitUnavailable       -> unavailable/any
 //   explicitBackupUnavailable -> no_backup/backup
 // availableWeeks (Philip) and availableWindows (Sarkar) are NOT rows (see header).
-// opts.offerPeriods (P5): no 'available' row for a submitted surgeon's day inside his period.
+// opts.offerPeriods (P5): no 'available' row for a day inside a period in which the surgeon is submitted in EXHAUSTIVE
+// mode (his offers carry those days); a preferred surgeon's rows stay (10/18 - his lists stand; impOfferCoverage).
 function impSeedAvailabilityRows(seed, opts) {
   opts = opts || {};
   var rows = [];
@@ -685,8 +697,9 @@ function impSeedAvailabilityRows(seed, opts) {
 // the seed writes { month, roles: ['primary','backup'] } explicitly to govern
 // backup (November 2026). Entries the seed already lists are kept as written.
 // Returns copies - the seed object is never mutated.
-// opts.offerPeriods (P5): a month that overlaps a period in which the surgeon is submitted is not governed - its
-// entry (seed or derived) is left out; his offers govern him there.
+// opts.offerPeriods (P5): a month that overlaps a period in which the surgeon is submitted in EXHAUSTIVE mode is not
+// governed - its entry (seed or derived) is left out; his offers govern him there. In a preferred period the month
+// stays governed (10/18, Faraz "List always stands"; impOfferCoverage).
 function impSeedSurgeonRules(seed, opts) {
   var sr = (seed && seed.surgeonRules) || {};
   var cov = impOfferCoverage(seed, opts);

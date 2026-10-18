@@ -2665,6 +2665,14 @@ okElig(R.eligibility(ocBurPref, "2026-12-05", P, BURCHETT), "10/18: Sat 12/5 - o
 const burExhDec3 = R.eligibility(oc, "2026-12-03", P, BURCHETT);
 blocked(burExhDec3, "not-offered", "10/18: exhaustive Burchett on 12/3 - not-offered, as before");
 lacks(burExhDec3.hard, "whitelist-month", "10/18: exhaustive unchanged - his lists stay aside period-wide (not-offered governs)");
+// claims and trades (opts.claim - the board's Take, every trade path; Faraz 10/18, "taking it counts as painting it"): for a
+// surgeon SUBMITTED for the period, either mode, his dated lists do not block a claim; one who never painted keeps them
+okElig(R.eligibility(ocEither, "2026-12-03", P, PHILIP, { claim: true }), "10/18 claims: Philip (preferred, painted) may CLAIM Thu 12/3 primary off his weeks - taking it counts as painting it");
+okElig(R.eligibility(ocEither, "2026-11-04", P, PHILIP, { claim: true }), "10/18 claims: ...in his unpainted November too (submitted is period-wide)");
+okElig(R.eligibility(ocBurPref, "2026-11-19", B, BURCHETT, { claim: true }), "10/18 claims: Burchett (preferred) may claim Thu 11/19 backup off his November list");
+blocked(R.eligibility(ocBurPref, "2026-11-19", B, BURCHETT), "whitelist-month", "10/18 claims: ...while Generate (no claim flag) still reads his list there");
+blocked(R.eligibility(oc, "2026-12-03", P, PHILIP, { claim: true }), "outside-available-weeks", "10/18 claims: Philip NOT painted (not_started) - his list still blocks a claim, as before");
+blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT, { claim: true }), "whitelist-month", "10/18 claims: Burchett rules_only (go by my rules) - his list still blocks a claim, as before");
 // the walk: for a submitted PREFERRED surgeon, painting never removes a hard reason from a day (and role) he did not offer -
 // there his hard reasons equal those he would have had without painting, and his soft terms too apart from the offers'
 // own 'outside-offers'; on an offered day painting only lifts (his hard reasons are a subset)
@@ -2678,7 +2686,7 @@ lacks(burExhDec3.hard, "whitelist-month", "10/18: exhaustive unchanged - his lis
     ["oc/Acton", [P14_PERIOD], P14_OFFERS, ACTON],
     ["ocSplit/Acton", [P14_PERIOD, P14_PERIOD2], P14_OFFERS.concat([p14Offer(ACTON, "2027-01-20", "either")]), ACTON]
   ];
-  let n = 0, listN = 0, liftN = 0;
+  let n = 0, listN = 0, liftN = 0, claimLiftN = 0;
   const diff = [];
   const noOffers = (soft) => soft.filter(s => s.reason !== "outside-offers" && s.reason !== "offered");
   cases.forEach(([name, periods, offers, id]) => {
@@ -2688,6 +2696,14 @@ lacks(burExhDec3.hard, "whitelist-month", "10/18: exhaustive unchanged - his lis
       for (let d = per.start_day; d <= per.end_day; d = R.rdAddDays(d, 1)) [P, B].forEach(role => {
         n++;
         const e = R.eligibility(c, d, role, id), e0 = R.eligibility(c0, d, role, id);
+        // a claim (or trade) of the same day: never a dated-list code or not-offered. eligibility() works in stages and returns
+        // at the first stage with a hard reason, so with the list code gone a LATER stage may speak (Fierce's derived lock):
+        // when other early reasons remain the claim reads exactly them; when none remain only a later-stage reason may appear
+        const ec = R.eligibility(c, d, role, id, { claim: true }), wantC = e.hard.filter(h => h !== "not-offered" && !LIST_CODES.includes(h));
+        const claimOk = !ec.hard.some(h => h === "not-offered" || LIST_CODES.includes(h)) &&
+          (wantC.length ? JSON.stringify(ec.hard) === JSON.stringify(wantC) : ec.hard.every(h => /^derived-lock(-held)?:/.test(h)));
+        if (!claimOk) diff.push(name + " " + d + " " + role + " (claim): " + JSON.stringify(ec.hard) + " from " + JSON.stringify(e.hard));
+        if (e.hard.some(h => LIST_CODES.includes(h))) claimLiftN++;
         if (!offRole(offers, id, d, role)) {
           if (JSON.stringify([e.hard, noOffers(e.soft)]) !== JSON.stringify([e0.hard, noOffers(e0.soft)])) diff.push(name + " " + d + " " + role + ": " + JSON.stringify([e.hard, noOffers(e.soft)]) + " vs unpainted " + JSON.stringify([e0.hard, noOffers(e0.soft)]));
           if (e0.hard.some(h => LIST_CODES.includes(h))) listN++;
@@ -2700,7 +2716,7 @@ lacks(burExhDec3.hard, "whitelist-month", "10/18: exhaustive unchanged - his lis
     });
   });
   eq(diff.slice(0, 6), [], "10/18: painting never removes a hard reason from a day he did not offer, and only lifts on one he did (" + diff.length + " differences of " + n + " checks)");
-  ok(n > 600 && listN > 20 && liftN >= 1, "10/18: the walk is not vacuous (" + n + " checks; " + listN + " non-offered checks where a list governs; " + liftN + " offered day(s) where the offer lifts a list)");
+  ok(n > 600 && listN > 20 && liftN >= 1 && claimLiftN > 20, "10/18: the walk is not vacuous (" + n + " checks; " + listN + " non-offered checks where a list governs; " + liftN + " offered day(s) where the offer lifts a list; " + claimLiftN + " where a claim lifts one)");
 }
 
 step("Prompt 14 P2: a claim is an offer made on the spot - opts.claim skips the exhaustive not-offered, every other rule stands");
