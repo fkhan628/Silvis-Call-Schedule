@@ -2685,6 +2685,10 @@ okElig(R.eligibility(ocEither, "2026-12-03", P, PHILIP, { claim: true }), "10/18
 okElig(R.eligibility(ocEither, "2026-11-04", P, PHILIP, { claim: true }), "10/18 claims: ...in his unpainted November too (submitted is period-wide)");
 okElig(R.eligibility(ocBurPref, "2026-11-19", B, BURCHETT, { claim: true }), "10/18 claims: Burchett (preferred) may claim Thu 11/19 backup off his November list");
 blocked(R.eligibility(ocBurPref, "2026-11-19", B, BURCHETT), "whitelist-month", "10/18 claims: ...while Generate (no claim flag) still reads his list there");
+// a claim reads his day as if his dated lists did not exist - the pre-10/18 reading, where his recurring whitelist speaks in
+// a month his list governed (re-check 10/18: dropping the list code alone lost it - Tue 11/10 read ok)
+blocked(R.eligibility(ocBurPref, "2026-11-10", P, BURCHETT, { claim: true }), "not-recurring-available", "10/18 claims: Burchett (preferred) claiming Tue 11/10 primary - his November list is lifted, his recurring whitelist is not (as live today)");
+blocked(R.eligibility(oc, "2026-11-10", P, BURCHETT, { claim: true }), "not-recurring-available", "10/18 claims: ...the same answer exhaustive Burchett gets - the two modes agree on a claim");
 blocked(R.eligibility(oc, "2026-12-03", P, PHILIP, { claim: true }), "outside-available-weeks", "10/18 claims: Philip NOT painted (not_started) - his list still blocks a claim, as before");
 blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT, { claim: true }), "whitelist-month", "10/18 claims: Burchett rules_only (go by my rules) - his list still blocks a claim, as before");
 // the walk: for a submitted PREFERRED surgeon, painting never removes a hard reason from a day (and role) he did not offer -
@@ -2700,24 +2704,25 @@ blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT, { claim: true }), "
     ["oc/Acton", [P14_PERIOD], P14_OFFERS, ACTON],
     ["ocSplit/Acton", [P14_PERIOD, P14_PERIOD2], P14_OFFERS.concat([p14Offer(ACTON, "2027-01-20", "either")]), ACTON]
   ];
-  let n = 0, listN = 0, liftN = 0, claimLiftN = 0;
+  let n = 0, listN = 0, liftN = 0, claimLiftN = 0, recurN = 0;
   const diff = [];
   const noOffers = (soft) => soft.filter(s => s.reason !== "outside-offers" && s.reason !== "offered");
+  const noListsFor = (id) => { const sr = clone(SA.seedToSurgeonRules(seed)); ["explicitListMonths", "availableWeeks", "availableWeeksFrom"].forEach(k => { delete sr[id][k]; }); return sr; };
   cases.forEach(([name, periods, offers, id]) => {
     const c = p14Ctx({ periods: periods, offers: offers }), c0 = p14Ctx({ periods: periods, offers: offers.filter(o => o.person_id !== id) });
+    const cT = p14Ctx({ periods: periods, offers: offers, surgeonRules: noListsFor(id) });
     periods.forEach(per => {
       eq(p14State(c, per.start_day, id) && [p14State(c, per.start_day, id).status, p14State(c, per.start_day, id).mode], ["submitted", "preferred"], "10/18 walk: " + name + " is submitted / preferred in " + per.id);
       for (let d = per.start_day; d <= per.end_day; d = R.rdAddDays(d, 1)) [P, B].forEach(role => {
         n++;
         const e = R.eligibility(c, d, role, id), e0 = R.eligibility(c0, d, role, id);
-        // a claim (or trade) of the same day: never a dated-list code or not-offered. eligibility() works in stages and returns
-        // at the first stage with a hard reason, so with the list code gone a LATER stage may speak (Fierce's derived lock):
-        // when other early reasons remain the claim reads exactly them; when none remain only a later-stage reason may appear
-        const ec = R.eligibility(c, d, role, id, { claim: true }), wantC = e.hard.filter(h => h !== "not-offered" && !LIST_CODES.includes(h));
-        const claimOk = !ec.hard.some(h => h === "not-offered" || LIST_CODES.includes(h)) &&
-          (wantC.length ? JSON.stringify(ec.hard) === JSON.stringify(wantC) : ec.hard.every(h => /^derived-lock(-held)?:/.test(h)));
-        if (!claimOk) diff.push(name + " " + d + " " + role + " (claim): " + JSON.stringify(ec.hard) + " from " + JSON.stringify(e.hard));
+        // a claim (or trade) of the same day reads exactly as if he had no dated lists at all (cT: the twin context without
+        // his explicitListMonths / availableWeeks) - no list code, his recurring whitelist where his month list stood, every
+        // later stage as usual (re-check 10/18: a filter that only dropped the list codes lost the recurring whitelist)
+        const ec = R.eligibility(c, d, role, id, { claim: true }), ecT = R.eligibility(cT, d, role, id, { claim: true });
+        if (JSON.stringify([ec.hard, ec.soft]) !== JSON.stringify([ecT.hard, ecT.soft])) diff.push(name + " " + d + " " + role + " (claim): " + JSON.stringify([ec.hard, ec.soft]) + " vs no lists " + JSON.stringify([ecT.hard, ecT.soft]));
         if (e.hard.some(h => LIST_CODES.includes(h))) claimLiftN++;
+        if (e.hard.includes("whitelist-month") && ec.hard.includes("not-recurring-available")) recurN++;
         if (!offRole(offers, id, d, role)) {
           if (JSON.stringify([e.hard, noOffers(e.soft)]) !== JSON.stringify([e0.hard, noOffers(e0.soft)])) diff.push(name + " " + d + " " + role + ": " + JSON.stringify([e.hard, noOffers(e.soft)]) + " vs unpainted " + JSON.stringify([e0.hard, noOffers(e0.soft)]));
           if (e0.hard.some(h => LIST_CODES.includes(h))) listN++;
@@ -2730,7 +2735,7 @@ blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT, { claim: true }), "
     });
   });
   eq(diff.slice(0, 6), [], "10/18: painting never removes a hard reason from a day he did not offer, and only lifts on one he did (" + diff.length + " differences of " + n + " checks)");
-  ok(n > 600 && listN > 20 && liftN >= 1 && claimLiftN > 20, "10/18: the walk is not vacuous (" + n + " checks; " + listN + " non-offered checks where a list governs; " + liftN + " offered day(s) where the offer lifts a list; " + claimLiftN + " where a claim lifts one)");
+  ok(n > 600 && listN > 20 && liftN >= 1 && claimLiftN > 20 && recurN > 5, "10/18: the walk is not vacuous (" + n + " checks; " + listN + " non-offered checks where a list governs; " + liftN + " offered day(s) where the offer lifts a list; " + claimLiftN + " where a claim lifts one; " + recurN + " where the claim then meets his recurring whitelist)");
 }
 
 step("Prompt 14 P2: a claim is an offer made on the spot - opts.claim skips the exhaustive not-offered, every other rule stands");

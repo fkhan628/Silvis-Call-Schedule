@@ -4610,7 +4610,9 @@ function CallSchedule() {
     if (!rulesCtx) return { ok: false, hard: ["rules-unavailable"], soft: [], unknown: true };
     // The claim flag (Prompt 14 U3c, 9/23): a trade acceptance is an offer made on the spot (rules doc 2c, the same
     // reading as a board claim) - the exhaustive surgeon's hard 'not-offered' is skipped, the soft 'outside-offers'
-    // still surfaces; every other hard rule stands. apply_trade() does not yet write the call_offers row (open).
+    // still surfaces, and (10/18, Faraz "taking it counts as painting it") a receiver submitted for the day's period is
+    // read as if his dated lists did not exist; every other hard rule stands. apply_trade() does not yet write the
+    // call_offers row (open) - so a traded day off his offers / list later reads as a conflict on the held slot.
     try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }
     catch (e) {
       console.warn("trade eligibility check failed:", e);
@@ -6483,7 +6485,8 @@ function CallSchedule() {
       out[openSlotKey(s.day, s.role)] = activeSurgeons.filter(sg => sg.type !== "external").map(sg => {
         let r;
         // The claim flag (Prompt 14 U3c): a claim is an offer made on the spot (rules doc 2c) - the hard 'not-offered' of an
-        // exhaustive surgeon is skipped for the board only; the soft 'outside-offers' rides along for the row's words
+        // exhaustive surgeon is skipped for the board only, and a surgeon submitted for the period is read as if his dated
+        // lists did not exist (10/18); the soft 'outside-offers' rides along for the row's words
         try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
         // Item E4 (9/26): eastVacation (the derived East-vacation gloss of a time-off / day-before-vacation code) rides along

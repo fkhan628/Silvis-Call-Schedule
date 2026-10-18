@@ -445,8 +445,8 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    the published coverage and never on a day of a *home* Davenport vacation range — as the engine), `holidaysOff`,
    `backupOptOut`, `maxMajorHolidays` and the derived East week (5 below). **Once accepted, the rows are ordinary locks
    to the rules engine and the generator — not the holder's availability:** Generate lists a waived rule as a lock
-   violation and keeps the unit, and a trade of a plan unit still faces windows, dated lists, caps and run limits
-   (*After Accept* below; whether the engine should read an accepted row as availability is §8 item 24 (d)).
+   violation and keeps the unit, and a trade of a plan unit still faces windows, dated lists (except for a receiver
+   submitted for that period — 10/18, §8), caps and run limits (*After Accept* below; whether the engine should read an accepted row as availability is §8 item 24 (d)).
 2. **The tiers split as at Davenport:** major = New Year's, Thanksgiving, Christmas; minor = Memorial Day, July 4th,
    Labor Day (each unit's `tier`). Each unit has a primary and a backup, so a tier has six slots a year. **With six in
    the pool everyone holds exactly one major and one minor.** With fewer, the extra slots are **backups**, to the lowest
@@ -551,7 +551,8 @@ scheduler's only:
   2027 plan (verified 10/1): Sarkar's Memorial Day backup and Thanksgiving primary (`outside-window` — her windows; her
   4-day Thanksgiving also passes her 2-day run limit, which the engine names once a window covers it), Burchett's
   3-day July 4th primary (`max-consecutive:2`) and Philip's Christmas primary (`outside-available-weeks`). A trade of a
-  plan unit faces those rules like any trade (windows, dated lists, caps, run limits) — a holder-to-holder swap the plan
+  plan unit faces those rules like any trade (windows, dated lists — not for a receiver submitted for that period, 10/18
+  §8 — caps, run limits) — a holder-to-holder swap the plan
   card calls rule-keeping can still be refused there. Whether the engine should read an accepted row as availability
   instead is §8 item 24 (d).
 - **Re-check ‹year›** (read-only; shown after an Accept, or on its button) lists every accepted slot — a unit day still
@@ -912,8 +913,11 @@ aside and `not-offered` keeps Generate off every day he did not paint (a claim o
 but not days his dated list excludes unless he painted them. **Claims and trades (Faraz 10/18, "taking it counts as
 painting it"):** a surgeon who is submitted for the period — either mode — may claim an open shift or take a trade on a
 day outside his dated list: taking it himself is his own choice, like painting the day (`claim_open_slot` also records the
-offer). That is how claims and trades already worked in the live Nov 2026 – Jan 2027 period, so nothing changes there; a
-surgeon who never painted (rules-only / not started) keeps his list on claims, as before. **Imports:** the importer
+offer). The claim is read as if his dated lists did not exist — so his other rules, his recurring available days
+included, still apply. That is exactly how claims and trades already worked in the live Nov 2026 – Jan 2027 period, so
+nothing changes there; a surgeon who never painted (rules-only / not started) keeps his list on claims, as before. A
+trade records no offer (`apply_trade` writes none — an open item), so a traded day off his list later shows as a
+conflict on his held slot; a claimed day does not. **Imports:** the importer
 retires a surgeon's month lists and their available rows only for an "only these days" period; in a preferred period
 they stay beside his offers. Engine: `rules.js` (`listsAside`; the claim lift in `eligibility()`), `importer.js`
 (`impOfferCoverage`); proof: `test/rules.test.js` (painting never removes a hard reason from a day he did not offer; a

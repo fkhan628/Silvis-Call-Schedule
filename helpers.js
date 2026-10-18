@@ -2943,7 +2943,8 @@ function defaultHolidayUnits(year, opts) {
    Rule 1 - to the PLANNER a plan assignment counts as the surgeon's own availability for those days: windows,
      weekday patterns, dated lists, offers, caps and run limits are not consulted. (Once accepted, rules.js and the
      generator read the rows as ordinary locks, not as availability: Generate lists the waived ones as lockViolations
-     and keeps them; a trade of a plan unit still faces those rules - rules doc section 5.) What still refuses (rules.js
+     and keeps them; a trade of a plan unit still faces those rules - the dated lists not for a receiver submitted for
+     that period, 10/18 - rules doc section 5.) What still refuses (rules.js
      vocabulary): inactive, holiday-opt-out:<name> (both roles), backup-opt-out, time-off:<day> and day-before-vacation
      (trailing-edge roles), east-busy (feed day / override true / eastStanding) and east-forecast-busy:<p> (outside the
      published coverage, at or over the threshold, never on an override-false day) for the roles the surgeon's East

@@ -1705,17 +1705,26 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // lifts (edit the window in Setup instead) - unlike the weeks whitelist.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
+  // the recurring whitelist's own answer, read whether or not a month list governs: it speaks whenever the month is not
+  // governed - and, for a claim (below), whenever the dated lists are set aside
+  var recurringOff = false;
+  if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
+    var wa = rules.weekendsAvailable;
+    var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
+    if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) recurringOff = true;
+  }
   var governed = !!((P.governedMonths[info.month] || 0) & mask) && !listsAside; // P2: exhaustive offers set the dated lists aside; 10/18: a preferred surgeon's lists stand
   if (governed) {
     if (!rowAvail) datedBlock = "whitelist-month";
-  } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
-    var wa = rules.weekendsAvailable;
-    var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
-    if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
-  }
+  } else if (recurringOff) notRecurring = true;
   if (isPrimary && !listsAside && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
   if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
+  // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade by a surgeon submitted for the period reads his
+  // day as if his dated lists did not exist - exactly the pre-10/18 reading, where they were set aside: the month is then
+  // not governed, so the recurring whitelist speaks, and neither list code appears. eligibility() uses it for opts.claim
+  // (rdStatic's memo has no claim key). Exhaustive needs none - its lists are aside already (listsAside).
+  if (offersGovern && !listsAside) res.claimHard = hard.concat(recurringOff && !waive ? ["not-recurring-available"] : []);
   if (notRecurring && !waive) hard.push("not-recurring-available");
   // Small items (9/22): an EXPLICIT dated list stays HARD on a holiday-unit day -
   // the holiday waiver (waive, above) lifts the recurring weekday patterns only,
@@ -1764,10 +1773,15 @@ function rdAssumeMap(assume) {
 //                    are unaffected by the flag.
 //   skipPatternSoft - weekendUnitPatterns adds the style mismatch and the weekend-contribution
 //                    term (weekend-primary / weekend-backup) itself, once per pattern.
-//   claim          - a Prompt 13 claim is an offer made on the spot (Prompt 14 P2): a submitted
+//   claim          - a Prompt 13 claim is an offer made on the spot (Prompt 14 P2): the board's
+//                    Take, every trade path and the painter's day check pass it. A submitted
 //                    surgeon in exhaustive mode may claim a non-offered day when every other
-//                    hard rule passes - the flag skips 'not-offered' only (the result still
-//                    carries the soft 'outside-offers' so the board can say so).
+//                    hard rule passes (the flag skips 'not-offered'; the result still carries the
+//                    soft 'outside-offers' so the board can say so), and - 10/18, Faraz "taking
+//                    it counts as painting it" - a surgeon submitted for the day's period, either
+//                    mode, is read as if his dated lists did not exist (st.claimHard: no list
+//                    code, his recurring whitelist where the month list stood). Every other hard
+//                    rule stands; one who never painted keeps his lists.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1795,10 +1809,11 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
   if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
   // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade (opts.claim) by a surgeon SUBMITTED for the day's
-  // period - either mode - is his own choice, like painting that day (claim_open_slot also records the offer), so his dated
-  // lists do not block it. Generate (no claim flag) still never places a preferred surgeon off his list, and a surgeon who
-  // never painted (rules_only / not_started) keeps his lists on claims too. Here, not in rdStatic: its memo has no claim key.
-  hard = hard.concat(opts.claim && st.offersGovern ? st.hard.filter(function (h) { return h !== "whitelist-month" && h !== "outside-available-weeks"; }) : st.hard);
+  // period - either mode - is his own choice, like painting that day (claim_open_slot also records the offer), so it is read
+  // as if his dated lists did not exist: st.claimHard (preferred - the pre-10/18 reading, the recurring whitelist included
+  // where his month list stood); an exhaustive surgeon's st.hard has its lists aside already. Generate (no claim flag)
+  // still never places a preferred surgeon off his list, and a surgeon who never painted keeps his lists on claims too.
+  hard = hard.concat(opts.claim && st.claimHard ? st.claimHard : st.hard);
   soft = soft.concat(st.soft.map(function (s) { return { reason: s.reason, weight: s.weight }; })); // copies: the memo's entries stay pristine
   // Prompt 23 review (10/1): hardNeverWeekdaysNoticeDays measures a NEW placement from ctx.today. A slot he already
   // holds on the STANDING schedule was placed when the notice allowed it - the held slot is a fact as far as the notice

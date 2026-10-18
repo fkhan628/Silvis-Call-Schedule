@@ -1542,7 +1542,10 @@ status to submitted for the whole period, so his claim is recorded in `schedule_
 (review 9/23; settled by part 3c):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`)
 passes `{ claim: true }` — a trade acceptance is an offer made on the spot, the same reading as a claim — so an
 exhaustive surgeon can be traded onto a non-offered day and, since 10/18, any submitted surgeon onto a day his dated
-list excludes; `apply_trade()` still writes no offer row. The painter consults `eligibility` with the same flag: a day
+list excludes (read as if his lists did not exist — `claimHard`, his recurring whitelist included); `apply_trade()` still
+writes no offer row, so such a traded day later reads as a conflict on his held slot (the day editor names it; Generate
+keeps it and lists it under `fixedViolations`), as an exhaustive surgeon's traded non-offered day already did — closing
+that is the open `apply_trade` offer upsert (SQL, report-first). A claim records its offer, so a claimed day does not. The painter consults `eligibility` with the same flag: a day
 his dated list excludes asks one confirmation ("outside your listed weeks") while he has not painted the period yet,
 and none once he is submitted (as before 10/18). The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
 day and weekend units an eligible surgeon offered are filled before the rest (`genOfferedUnits` / `genOrder`), so a
