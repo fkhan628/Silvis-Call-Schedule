@@ -3256,6 +3256,11 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
     let r = null; try { r = sr({ "2027-02-01": row(KHAN, ACTON) }, "2027-02-03", B, ACTON, {}, { holidays: hb }); } catch (e) { r = "threw: " + e.message; }
     eq(r, T3(1), "a unit day " + JSON.stringify(bad) + " that is no date: no throw, the term reads as before");
   });
+  {
+    const hb = clone(seed.holidays); hb.units["2027"] = hb.units["2027"].concat([{ name: "Bad", tier: "minor", days: ["2027-02-01", "2027-2-1"] }]);
+    let r2 = null; try { r2 = sr({}, "2027-02-01", B, ACTON, { assume: [{ date: "2027-2-1", role: B }] }, { holidays: hb }); } catch (e) { r2 = "threw: " + e.message; }
+    eq(r2, [], "re-check 10/18: the bad unit day links nothing even when an assume-slot holds it (no throw - origin/main returns ok there too)");
+  }
   // the weekend link is the group's weekend unit (data): with Sat + Sun only, a Friday is a weekday
   const grSS = clone(seed.groupRules); grSS.weekendUnit = Object.assign({}, grSS.weekendUnit, { days: ["Sat", "Sun"] });
   eq(sr({ "2027-01-15": row(ACTON) }, "2027-01-17", P, ACTON, {}, { groupRules: grSS }), T3(1), "weekendUnit.days [Sat, Sun]: Fri + Sun is no longer one stretch - short");

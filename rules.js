@@ -1808,7 +1808,7 @@ function rdRestLinks(ctx, d) {
     for (var k = 0; k < 3; k++) { var wd = rdAddDays(i.friday, k); if (wd !== d && rdIsWeekendDay(ctx, rdInfo(wd))) out.push(wd); }
   }
   var u = ctx.holidayByDay[d];
-  if (u) for (var j = 0; j < u.days.length; j++) if (u.days[j] !== d && ctx.holidayByDay[u.days[j]] === u) out.push(u.days[j]);
+  if (u) for (var j = 0; j < u.days.length; j++) if (u.days[j] !== d && ctx.holidayByDay[u.days[j]] === u && rdIsDateStr(u.days[j])) out.push(u.days[j]); // a unit day that is no date links nothing (re-check 10/18)
   return out;
 }
 
