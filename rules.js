@@ -309,7 +309,8 @@
 //                 count as ONE stretch however they sit, transitively (his split
 //                 Fri + Sun, a colleague on the Saturday, is one stretch - never a
 //                 short rest; so are a holiday unit and the weekend it shares a day
-//                 with); the run inside a
+//                 with), and every held day between a stretch's first and last day
+//                 belongs to it (a unit's days need not be consecutive); the run inside a
 //                 stretch stays the max-consecutive limits' business. Fewer than
 //                 minDaysOff days off between the stretch through the evaluated day
 //                 and the one before or after it -> 'short-rest:<days off>' at weight x
@@ -317,7 +318,10 @@
 //                 FIRST day (the rest before it) and LAST day (the rest after it): a
 //                 candidate pays for the rest its placement shortens, an inner day
 //                 pays nothing, and a finished schedule shows each short rest on the
-//                 call day on either side of it. Never hard, never lifted by an offer;
+//                 call day on either side of it (Generate's score and preview: on
+//                 each such day it placed in the range - a locked side or one beyond
+//                 the range is not scored, so such a rest counts once). Never hard,
+//                 never lifted by an offer;
 //                 claims and trades only see the term. minDaysOff a whole number from
 //                 1 to 14 (1 = no effect), weight a weight name or a number >= 0
 //                 (default "medium"); malformed -> one warning, ignored.
@@ -697,6 +701,7 @@ function buildContext(input) {
     per: {},
     holidayByDay: Object.create(null),
     holidayUnitsAll: [],
+    holidayUnitsGapped: [],             // review 10/18: units whose days are not consecutive (restBetweenStretches; filled below)
     derivedByDay: Object.create(null),
     eastCoverage: null,
     forecastThreshold: forecastThreshold,
@@ -773,6 +778,9 @@ function buildContext(input) {
     });
   });
   ctx.holidayUnitsAll.sort(function (a, b) { return a.days[0] < b.days[0] ? -1 : a.days[0] > b.days[0] ? 1 : 0; });
+  // restBetweenStretches (review 10/18): the units whose days are not consecutive (Setup > Holidays takes any list) - a held
+  // day between two held days of such a unit belongs to their stretch; none in the seed, so the term's walk skips this
+  ctx.holidayUnitsGapped = ctx.holidayUnitsAll.filter(function (u) { for (var k = 1; k < u.days.length; k++) if (rdInfo(u.days[k]).n !== rdInfo(u.days[k - 1]).n + 1) return true; return false; });
 
   // Roster.
   roster.forEach(function (r) {
@@ -1783,18 +1791,18 @@ function rdStatic(ctx, date, role, id, asBlock) {
 
 /* ------------------------------------------------------ dynamic layer */
 
-// restBetweenStretches (Faraz 10/18): the days one held day links into ONE stretch whatever sits between them -
-// the weekend-unit days (groupRules.weekendUnit.days - Fri, Sat, Sun in the seed) of its Fri-Sun weekend when it
-// is one of them, and its holiday unit - as [first, last] date strings (the day itself when neither applies).
-// Unit days are sorted (buildContext), so days[0] / the last day bound the unit.
-function rdRestSpan(ctx, d) {
-  var i = rdInfo(d), lo = d, hi = d;
+// restBetweenStretches (Faraz 10/18): the days a HELD day links into one stretch whatever sits between them (when he
+// holds them too) - the other weekend-unit days (groupRules.weekendUnit.days - Fri, Sat, Sun in the seed) of its Fri-Sun
+// weekend when it is one of them, and the other days of its holiday unit. Membership, never an interval: the relation
+// is the same from both sides (review 10/18 - a unit's days need not be consecutive, Setup > Holidays takes any list).
+function rdRestLinks(ctx, d) {
+  var i = rdInfo(d), out = [];
   if (i.friday && rdIsWeekendDay(ctx, i)) {
-    for (var k = 0; k < 3; k++) { var wd = rdAddDays(i.friday, k); if (rdIsWeekendDay(ctx, rdInfo(wd))) { if (wd < lo) lo = wd; if (wd > hi) hi = wd; } }
+    for (var k = 0; k < 3; k++) { var wd = rdAddDays(i.friday, k); if (wd !== d && rdIsWeekendDay(ctx, rdInfo(wd))) out.push(wd); }
   }
   var u = ctx.holidayByDay[d];
-  if (u) { if (u.days[0] < lo) lo = u.days[0]; if (u.days[u.days.length - 1] > hi) hi = u.days[u.days.length - 1]; }
-  return [lo, hi];
+  if (u) for (var j = 0; j < u.days.length; j++) if (u.days[j] !== d) out.push(u.days[j]);
+  return out;
 }
 
 function rdAssumeMap(assume) {
@@ -2091,26 +2099,37 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // day, never a block; no maxConsecutiveAnyRole -> no check (no group default).
   if (wantAny && nAny > P.maxConsecAnyRole) soft.push({ reason: "long-run:" + nAny, weight: W.longRunPerDay * (nAny - P.maxConsecAnyRole) });
 
-  // Faraz 10/18 (Acton's rest preference): restBetweenStretches - see the header. The stretch through the evaluated
-  // day is grown from it: the held day next to either end joins (days in a row), and so does any held day inside the
-  // reach - the Fri-Sun weekends and holiday units of the days already in it (rdRestSpan). Only the stretch's first
-  // day reads the rest before it and only its last day the rest after it; a side is short when he holds a day 2 ..
-  // minDaysOff days beyond the end (1 .. minDaysOff - 1 days off). Nothing outside the reach is linked, so that held
-  // day starts another stretch.
+  // Faraz 10/18 (Acton's rest preference): restBetweenStretches - see the header. The stretch [rsLo, rsHi] through the
+  // evaluated day is grown from it until nothing joins: the held day next to either end (days in a row), a held day
+  // that a held day of the stretch links to (rdRestLinks: its weekend unit, its holiday unit), and every held day between
+  // rsLo and rsHi belongs to it (so its links count too - a unit whose days are not consecutive spans a held day between
+  // them). Only the stretch's first day reads the rest before it and only its last day the rest after it; a side is short
+  // when he holds a day 2 .. minDaysOff days beyond the end (1 .. minDaysOff - 1 days off) - nothing links that day to
+  // the stretch, so it ends another one.
   var RB = P.restBetween;
   if (RB && RB.weight && RB.minDaysOff > 1) {
-    var rsLo = dateStr, rsHi = dateStr, rsSpan = rdRestSpan(ctx, dateStr), reachLo = rsSpan[0], reachHi = rsSpan[1], x;
+    var rsLo = dateStr, rsHi = dateStr, rsRead = Object.create(null), x;
     for (var rg = 0; rg < 60; rg++) {
-      var nLo = null, nHi = null;
-      x = rdAddDays(rsLo, -1);
-      if (holdsAny(x)) nLo = x;
-      else for (x = reachLo; x < rsLo; x = rdAddDays(x, 1)) if (holdsAny(x)) { nLo = x; break; }
-      x = rdAddDays(rsHi, 1);
-      if (holdsAny(x)) nHi = x;
-      else for (x = reachHi; x > rsHi; x = rdAddDays(x, -1)) if (holdsAny(x)) { nHi = x; break; }
+      var nLo = holdsAny(rdAddDays(rsLo, -1)) ? rdAddDays(rsLo, -1) : null, nHi = holdsAny(rdAddDays(rsHi, 1)) ? rdAddDays(rsHi, 1) : null;
+      for (x = rsLo; x <= rsHi; x = rdAddDays(x, 1)) {
+        if (rsRead[x] || !holdsAny(x)) continue;
+        rsRead[x] = true;
+        var rsL = rdRestLinks(ctx, x);
+        // a held day between two held days of a unit whose days are not consecutive joins them (the same from both sides)
+        for (var gu = 0, gUnits = ctx.holidayUnitsGapped || []; gu < gUnits.length; gu++) {
+          var gD = gUnits[gu].days, gB = false, gA = false;
+          if (!(gD[0] < x && x < gD[gD.length - 1]) || gD.indexOf(x) >= 0) continue;
+          for (var gj = 0; gj < gD.length; gj++) if (holdsAny(gD[gj])) { if (gD[gj] < x) gB = true; else gA = true; }
+          if (gB && gA) rsL = rsL.concat(gD);
+        }
+        for (var li = 0; li < rsL.length; li++) {
+          var y = rsL[li];
+          if ((y < rsLo && (nLo === null || y < nLo)) || (y > rsHi && (nHi === null || y > nHi))) { if (holdsAny(y)) { if (y < rsLo) nLo = y; else nHi = y; } }
+        }
+      }
       if (!nLo && !nHi) break;
-      if (nLo) { for (x = nLo; x < rsLo; x = rdAddDays(x, 1)) { rsSpan = rdRestSpan(ctx, x); if (rsSpan[0] < reachLo) reachLo = rsSpan[0]; if (rsSpan[1] > reachHi) reachHi = rsSpan[1]; } rsLo = nLo; }
-      if (nHi) { for (x = nHi; x > rsHi; x = rdAddDays(x, -1)) { rsSpan = rdRestSpan(ctx, x); if (rsSpan[0] < reachLo) reachLo = rsSpan[0]; if (rsSpan[1] > reachHi) reachHi = rsSpan[1]; } rsHi = nHi; }
+      if (nLo) rsLo = nLo;
+      if (nHi) rsHi = nHi;
     }
     var rsOff = null, rsWeight = 0, k2;
     if (rsLo === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsAny(rdAddDays(rsLo, -k2))) { rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - rsOff); break; }

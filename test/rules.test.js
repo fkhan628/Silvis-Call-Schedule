@@ -3233,6 +3233,19 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
   const holT = clone(seed.holidays); holT.units["2027"] = holT.units["2027"].concat([{ name: "Test unit", tier: "minor", days: ["2027-02-01", "2027-02-03"] }]);
   eq(sr({ "2027-02-01": row(ACTON) }, "2027-02-03", P, ACTON, {}, { holidays: holT }), [], "a holiday unit whose days are Mon 2/1 + Wed 2/3 (data): one stretch, the Tuesday between is no rest");
   eq(sr({ "2027-02-01": row(ACTON) }, "2027-02-03", P), T3(1), "...the same two days with no unit: short");
+  // review 10/18: the link is a day's MEMBERSHIP of a weekend / unit, the same from both sides, and every held day between a
+  // stretch's first and last day belongs to it - the result never depends on which day is evaluated
+  const holU = (days) => { const h = clone(seed.holidays); h.units["2027"] = h.units["2027"].concat([{ name: "Test unit", tier: "minor", days }]); return { holidays: h }; };
+  const U14 = holU(["2027-02-01", "2027-02-04"]);
+  eq(sr({ "2027-02-01": row(ACTON), "2027-02-04": row(ACTON) }, "2027-02-03", B, ACTON, {}, U14), [], "unit Mon 2/1 + Thu 2/4 held: a Wednesday backup next to the Thursday joins the stretch the unit makes - an inner day, no short rest (the growth through a joined day's links)");
+  eq(sr({ "2027-02-01": row(ACTON), "2027-02-04": row(ACTON) }, "2027-02-03", B), T3(1), "...the same days with no unit: Tue off after Monday - short");
+  const U15 = holU(["2027-02-01", "2027-02-05"]), S15 = { "2027-02-01": row(ACTON), "2027-02-03": row(KHAN, ACTON), "2027-02-05": row(ACTON) };
+  eq(["2027-02-01", "2027-02-03", "2027-02-05"].map(d => sr(S15, d, d === "2027-02-03" ? B : P, ACTON, {}, U15)), [[], [], []], "unit Mon 2/1 + Fri 2/5 held with a Wednesday backup between: one stretch read from every day (no one-sided link)");
+  eq(["2027-02-01", "2027-02-03", "2027-02-05"].map(d => sr(S15, d, d === "2027-02-03" ? B : P)), [T3(1), [{ reason: "short-rest:1", weight: 6 }], T3(1)], "...with no unit: three stretches, each rest shown on the call day either side");
+  eq(sr({ "2027-02-03": row(KHAN, ACTON) }, "2027-02-01", P, ACTON, { assume: [{ date: "2027-02-05", role: P }] }, U15), [], "...the unit fill around the held Wednesday (the other unit day assumed): nothing - the unit day reads the same stretch");
+  const U23 = holU(["2027-01-30", "2027-02-03"]), S23 = { "2027-01-29": row(ACTON), "2027-01-30": row(BURCHETT), "2027-01-31": row(ACTON), "2027-02-02": row(KHAN, ACTON), "2027-02-03": row(BURCHETT) };
+  eq([sr(S23, "2027-01-31", P, ACTON, {}, U23), sr(S23, "2027-02-02", B, ACTON, {}, U23)], [T3(1), T3(1)], "a unit Sat 1/30 + Wed 2/3 he does not hold links none of his days: his split Fri + Sun, Mon off, Tue backup - short on both sides, as with no unit");
+  eq([sr(S23, "2027-01-31", P), sr(S23, "2027-02-02", B)], [T3(1), T3(1)], "...the same with no unit");
   // the weekend link is the group's weekend unit (data): with Sat + Sun only, a Friday is a weekday
   const grSS = clone(seed.groupRules); grSS.weekendUnit = Object.assign({}, grSS.weekendUnit, { days: ["Sat", "Sun"] });
   eq(sr({ "2027-01-15": row(ACTON) }, "2027-01-17", P, ACTON, {}, { groupRules: grSS }), T3(1), "weekendUnit.days [Sat, Sun]: Fri + Sun is no longer one stretch - short");
@@ -3242,6 +3255,7 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
   eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-07", P, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:2", weight: 10 }], "...two days off = 10 x (3 - 2)");
   eq(sr({ "2027-01-04": row(ACTON) }, "2027-01-08", P, ACTON, {}, { surgeonRules: sr3 }), [], "...three days off: fine");
   eq(sr({ "2027-01-04": row(ACTON), "2027-01-09": row(ACTON) }, "2027-01-07", B, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:1", weight: 30 }], "...Thu backup between Mon (2 off) and Sat (1 off): both sides, the shorter named (10 + 20)");
+  eq(sr({ "2027-01-04": row(ACTON), "2027-01-09": row(ACTON) }, "2027-01-06", B, ACTON, {}, { surgeonRules: sr3 }), [{ reason: "short-rest:1", weight: 30 }], "...the mirror, Wed backup between Mon (1 off) and Sat (2 off): the shorter is the BEFORE side (20 + 10)");
   // soft only: a claim (and so a trade) is never blocked - it carries the note
   const cl = R.eligibility(makeCtx({ schedule: { "2027-01-04": row(ACTON) } }), "2027-01-06", P, ACTON, { claim: true });
   ok(cl.ok && cl.hard.length === 0 && short(cl).length === 1, "a claim on a short rest: ok, with the short-rest note");

@@ -1245,8 +1245,11 @@ entries; on 20 seeds his short rests drop from 27 to 4 in Nov – Dec and from 1
     is 3 for one day off, 6 when a lone call day has one day off on both sides; a `minDaysOff` of 3 would cost 2 × medium for
     one day off and 1 × medium for two. (e) **Where it shows:** on the call day on each side of the short rest (the earlier
     stretch's last day and the later one's first), so the preview lists each short rest twice — the two dates it sits between —
-    and the run's score counts it on both days, like a back-to-back weekend. A published or locked day reads the note too once
+    and the run's score counts it on both days, like a back-to-back weekend; a rest next to a locked day or across the range
+    edge is listed and scored once (Generate scores only the days it placed). A published or locked day reads the note too once
     the rule is live: the day editor, the board, the claim sheet and the trade card show "short rest: 1 day off" / "only 1 day
     off between call stretches" on such a day (his published October / November days include some), but a locked slot never
     enters Generate's score or its soft list; and a trade partner suggestion ranks a colleague with fewer notes first, so a
-    swap that would leave him one day off ranks him lower.
+    swap that would leave him one day off ranks him lower. (f) **A holiday unit whose days are not consecutive** (Setup takes
+    any list; none in the seed): his call days of the unit are one stretch, and so is any call day of his between two of them
+    (review 10/18).

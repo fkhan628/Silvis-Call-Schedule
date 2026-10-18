@@ -486,15 +486,18 @@ is a number, a number or a numeric string, at 0 or more - "medium" when absent; 
 or a weight of 0 has no effect). In `eligibility()`, beside `long-run` in the schedule-shape soft section (only when no hard
 reason stands - it never blocks, so a claim or a trade carries it as a note), the **stretch** through the evaluated day is
 grown with `holdsAny` (primary or backup - `ctx.schedule`, the assume-slots and the evaluated slot): the held day next to
-either end joins (days in a row), and so does any held day inside the reach - the weekend-unit days
-(`groupRules.weekendUnit.days`) of the Fri–Sun weekend and the holiday unit (`rdRestSpan`: its first to last day) of every day
-already in the stretch, transitively, so a split Fri + Sun is one stretch and so are a unit and the weekend it shares a day
-with. A side is short when he holds a day 2 .. `minDaysOff` days beyond the stretch's end: `short-rest:<days off>` at
+either end joins (days in a row), and so does a held day that a held day of the stretch links to (`rdRestLinks`: the other
+weekend-unit days - `groupRules.weekendUnit.days` - of its Fri–Sun weekend and the other days of its holiday unit, by
+membership, the same from both sides), transitively, so a split Fri + Sun is one stretch and so are a unit and the weekend
+it shares a day with; every held day between the stretch's first and last day belongs to it (review 10/18: a unit's days
+need not be consecutive - `ctx.holidayUnitsGapped` lists the units that are not, none in the seed - so a held day between
+two held days of such a unit joins them, read the same from any day). A side is short when he holds a day 2 .. `minDaysOff` days beyond the stretch's end: `short-rest:<days off>` at
 `weight × (minDaysOff − days off)` per short side, read **only on the stretch's first day** (the rest before it) **and its
 last day** (the rest after it), one entry per day (both sides summed, the shorter named). So a candidate pays for the rest
 its placement shortens and an inner day pays nothing; a weekend pattern (its members assumed) and a holiday unit fill (the
 other unit days assumed) pay once per short side; a finished schedule (`genEvaluate`, the preview) shows each short rest on
-the call day on either side of it - two entries, counted twice in the run's soft sum like a back-to-back weekend (the
+each call day on either side of it that the run placed in the range - two entries, counted twice in the run's soft sum
+like a back-to-back weekend, or once when the other side is locked or outside the range (`genEvaluate` scores neither; the
 generator needs no change: it sums the terms). The run inside a stretch stays the max-consecutive limits' business, and
 `holidayUnitCountsAsOneDay` is unrelated (it changes how a run is counted). Words: `short-rest` in `REASON_WORDS`,
 `reasonLabel` ("only 1 day off between call stretches") and `softTag` ("short rest: 1 day off"); `helpers.offerRulesWords`

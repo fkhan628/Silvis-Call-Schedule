@@ -517,7 +517,8 @@ function runLengths(view, days, id) {
 // Faraz 10/18 (Acton's rest preference): SOFT, both roles, only between stretches. Restated from the seed alone: a surgeon's
 // held days (either role) in the merged view; two held days are ONE stretch when they are next to each other, are both
 // weekend-unit days of one Fri-Sun weekend (groupRules.weekendUnit.days) or are both days of one holiday unit - transitively
-// (union-find). A short rest = fewer than minDaysOff days off between two consecutive stretches. rules.js names a short rest
+// (union-find), with every held day between a stretch's first and last day in it (overlapping spans merged). A short rest =
+// fewer than minDaysOff days off between two consecutive stretches. rules.js names a short rest
 // on the earlier stretch's LAST day and on the later stretch's FIRST day (one entry per day, the sides it borders summed:
 // weight x (minDaysOff - days off) each, the shorter side named), and Generate's softPenalties hold those entries for every
 // such day it placed (in range, not locked) - no other short-rest entry.
@@ -540,7 +541,10 @@ function shortRests(view, id, from, to, minDaysOff) {
     keys.forEach((k) => { if (firstOfKey[k]) join(firstOfKey[k], d); else firstOfKey[k] = d; });
   });
   const span = {}; held.forEach((d) => { const r = find(d); if (!span[r]) span[r] = [d, d]; else { if (d < span[r][0]) span[r][0] = d; if (d > span[r][1]) span[r][1] = d; } });
-  const st = Object.keys(span).map((k) => span[k]).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  // review 10/18: every held day between a stretch's first and last day belongs to it (a unit's days need not be
+  // consecutive) - components whose spans overlap are one stretch
+  const st = [];
+  Object.keys(span).map((k) => span[k]).sort((a, b) => (a[0] < b[0] ? -1 : 1)).forEach((s) => { const p = st[st.length - 1]; if (p && s[0] <= p[1]) { if (s[1] > p[1]) p[1] = s[1]; } else st.push(s.slice()); });
   const out = [];
   for (let i = 1; i < st.length; i++) { const off = dayNum(st[i][0]) - dayNum(st[i - 1][1]) - 1; if (off < minDaysOff) out.push({ last: st[i - 1][1], first: st[i][0], off }); }
   return out;
