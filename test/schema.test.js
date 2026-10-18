@@ -3554,7 +3554,10 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   // pin moved deliberately (Prompt 30): --help's env-var list could continue after SILVIS_PREFS_ROWS_BEFORE with Prompt 30's two
   // flags; moved again 10/3 (Prompt 30's record step dropped both): it ends at SILVIS_PREFS_ROWS_BEFORE, then only another prepared
   // migration's SILVIS_*_APPLIED flag (the merge-tolerant form); kept intent: SILVIS_NO_PRIMARY_APPLIED stays dropped
-  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_NO_PRIMARY_APPLIED|SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_NO_PRIMARY_APPLIED and Prompt 30's two flags dropped)");
+  // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - a prepared deploy's SILVIS_*_DEPLOYED flag may follow too (20i's
+  // SILVIS_EAST_REFRESH_DEPLOYED, as Prompt 30's SILVIS_PUSH_DEPLOYED once did); kept intent: SILVIS_NO_PRIMARY_APPLIED and Prompt 30's
+  // two flags stay dropped
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_(APPLIED|DEPLOYED))* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_NO_PRIMARY_APPLIED|SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_NO_PRIMARY_APPLIED and Prompt 30's two flags dropped)");
 }
 {
   // pin moved deliberately 10/2 (Prompt 29's merge with main): the faked run stops at the next section header (18) - section 18's
@@ -4773,7 +4776,9 @@ ok(/\nline=\$\(curl -s -o \$T\/vr19i\.json -w 'HTTP %\{http_code\}' "\$URL\/func
   // pin moved deliberately 10/14: Prompt 31 Part A (section 20) - 20a-20d may follow 19i in the anon-checks list and 20e may follow 19f in the
   // surgeon reads; kept intent: the header names section 19, 19a-19e, 19i and 19f
   ok(/phone push anon checks and probe \(19\)/.test(head) && /anon checks \([^)]*19a-19e, 19i[,)]/.test(head) && /surgeon reads \([^)]*19f[,;]/.test(head), "verify-rls.sh's header names section 19, its anon checks (19a-19e, 19i) and 19f");
-  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_APPLIED)* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED dropped)");
+  // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - another prepared deploy's SILVIS_*_DEPLOYED flag may follow as
+  // well (20i's SILVIS_EAST_REFRESH_DEPLOYED); kept intent: Prompt 30's two flags stay dropped
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_(APPLIED|DEPLOYED))* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_PUSH_/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help must end its env-var list at SILVIS_PREFS_ROWS_BEFORE (SILVIS_PUSH_APPLIED / SILVIS_PUSH_DEPLOYED dropped)");
 }
 {
   const code19 = vr.slice(vr.indexOf('echo "== 19. '), vrSectionEnd('echo "== 19. '));
@@ -5311,7 +5316,7 @@ step("Prompt 31 Part A (critic A12): the days under the minimum after the apply 
   ok(!olFlat.includes("The same reading as the trigger:") && olFlat.includes("The 9/30 trigger's reading (sql/migrations/2026-09-30-vacation-guard.sql - the guard live until revision x is applied):") && olFlat.includes("After that apply run sql/probes/vacation-short-days.sql") && olFlat.includes("a covering, non-exact 'home' row still exempts a day here but no longer in the guard"), "the 9/30 over-limit query's header names its reading the 9/30 trigger's, says where it is more lenient than the revision x guard and sends the scheduler to sql/probes/vacation-short-days.sql after that apply");
 }
 
-step("Prompt 31 Part A: verify-rls.sh section 20 - anon REST (20a the derived rows, 20b the reset, 20c / 20d the internal functions, 20h the short days), 20e as a surgeon, the graded probe (56), leftovers (20g), section 15 re-run unchanged; PROBE_SETUP / 404 pass as not applied unless SILVIS_EAST_VACATIONS_APPLIED=1; graded against a faked CLI and curl");
+step("Prompt 31 Part A: verify-rls.sh section 20 - anon REST (20a the derived rows, 20b the reset, 20c / 20d the internal functions, 20h the short days), 20e as a surgeon, the graded probe (56), leftovers (20g), section 15 re-run unchanged; PROBE_SETUP / 404 pass as not applied unless SILVIS_EAST_VACATIONS_APPLIED=1; 20i the deployed east-feed-refresh (only with SILVIS_EAST_REFRESH_DEPLOYED=1 - the review of 10/18); graded against a faked CLI and curl");
 ok(/^echo "== 20\. East vacations \(2026-10-14, Prompt 31 Part A\): silvis_derived_vacations \+ east_vacation_reset_stale \+ the re-created vacation guard - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 20 (East vacations)");
 const s20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
 ok(s20.length > 0 && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 19. ') && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 20 could not be sliced out (after section 19, up to the next section header or the RESULT line)");
@@ -5319,10 +5324,22 @@ ok(/^# Section 20 \(17 = the weekend pair claim, taken on its own branch; 19 = P
 ok(s20.replace(/\n# ?/g, " ").includes("section 15 above re-runs its 20 cases unchanged, which proves the re-created trigger kept its behaviour"), "section 20's comment says section 15 is the re-run that proves the re-created guard (section 15 itself does not change)");
 const s20code = s20.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 ok(s20code.includes('EVSTRICT20="${SILVIS_EAST_VACATIONS_APPLIED:-}"'), "section 20 reads SILVIS_EAST_VACATIONS_APPLIED");
-eq((s20code.match(/curl /g) || []).length, 8, "section 20 makes exactly eight REST calls (20a-20d and 20h anon, 20e three as a surgeon);");
+// Prompt 31 Part A review (10/18): the report's section 5 named a case 20i - an unauthenticated POST to the deployed east-feed-refresh
+// answers 401, SKIP unless SILVIS_EAST_REFRESH_DEPLOYED=1 - and it was never built, so the 401 was checked once, by hand, in the
+// deploy block; a later redeploy with a broken gate would leave every verify-rls run green. 20i grades it (an unauthenticated POST
+// and a wrong x-cron-secret, each the function's own 401 {"error":"unauthorized"}), as 19i graded send-notification before its
+// record step; the deploy's record step drops the flag (19i's precedent).
+ok(s20code.includes('EVDEPLOYED20="${SILVIS_EAST_REFRESH_DEPLOYED:-}"'), "section 20 reads SILVIS_EAST_REFRESH_DEPLOYED (20i)");
+// pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - 20i adds the two POSTs to the deployed east-feed-refresh (was
+// eight calls); kept intent: every call of the section is counted and named
+eq((s20code.match(/curl /g) || []).length, 10, "section 20 makes exactly ten calls (20a-20d and 20h anon, 20e three as a surgeon, 20i two to the deployed function);");
 {
+  // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - 20i's two POSTs go to the function, not an RPC (was: every POST
+  // one of the five RPCs); kept intent: every RPC call is an anon or surgeon POST to one of the five RPCs
   const posts = s20code.match(/curl [^\n]*-X POST[^\n]*/g) || [];
-  ok(posts.length === 8 && posts.every((p) => /rest\/v1\/rpc\/(silvis_derived_vacations|east_vacation_reset_stale|silvis_east_ranges|silvis_east_people|silvis_vacation_short_days)"/.test(p) && /Bearer \$ANON"|Bearer \$SILVIS_SURGEON_JWT"/.test(p)), "every REST call in section 20 is an anon or surgeon POST to one of the five RPCs");
+  const rpcPosts = posts.filter((p) => /\/rest\/v1\/rpc\//.test(p)), fnPosts = posts.filter((p) => /\/functions\/v1\//.test(p));
+  ok(posts.length === 10 && rpcPosts.length === 8 && rpcPosts.every((p) => /rest\/v1\/rpc\/(silvis_derived_vacations|east_vacation_reset_stale|silvis_east_ranges|silvis_east_people|silvis_vacation_short_days)"/.test(p) && /Bearer \$ANON"|Bearer \$SILVIS_SURGEON_JWT"/.test(p)), "every RPC call in section 20 is an anon or surgeon POST to one of the five RPCs");
+  ok(fnPosts.length === 2 && fnPosts.every((p) => p.includes('-X POST "$URL/functions/v1/east-feed-refresh"') && !/Authorization|apikey|-d |--data/.test(p)) && fnPosts.filter((p) => /-H "x-cron-secret: [^"$]+"\)$/.test(p)).length === 1, "20i's two POSTs go to $URL/functions/v1/east-feed-refresh with no session, no apikey and no body (a gate that let one through would stop at the body check - 400, nothing read); the second carries a wrong x-cron-secret, a literal (never a variable that could hold the real one)");
   ok(posts.filter((p) => /rpc\/silvis_vacation_short_days/.test(p)).length === 2 && posts.filter((p) => /rpc\/silvis_vacation_short_days/.test(p)).every((p) => p.includes("-d '{\"p_from\":\"2099-01-01\",\"p_to\":\"2099-01-01\"}'")), "20h (anon) and 20e's third call (a surgeon) ask silvis_vacation_short_days for 2099-01-01 only");
   ok(posts.filter((p) => /rpc\/east_vacation_reset_stale/.test(p)).every((p) => p.includes("-d '{\"p_from\":\"2099-01-01\"}'")) && posts.filter((p) => /rpc\/east_vacation_reset_stale/.test(p)).length === 2, "both reset calls ask for p_from 2099-01-01 (even a body that ran could reset nothing)");
   ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s20code) && !/-X (PATCH|DELETE|PUT)/.test(s20code) && !/SERVICE_ROLE/.test(s20code), "section 20 never sends the scheduler's token or a service-role key and never PATCHes / DELETEs over REST");
@@ -5348,36 +5365,56 @@ ok(s20code.includes("LEFTOVER20_SQL=\"select ((select count(*) from auth.users w
 ok(["delete from public.time_off where note like 'probe-eastvac31%';", "delete from public.east_feed where data->>'probe' = 'eastvac31';", "delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';", "delete from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30';", "delete from auth.users where email like 'probe-eastvac31-%@example.test';   -- user_profiles rows cascade"].every((d) => s20code.includes("echo \"      " + d + "\"")), "20g prints DELETEs for the probe's rows only");
 ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 20f / 20g skip (20a-20e and 20h still run)");
 {
+  // 20i (the review of 10/18): last in the section (after 20g, like 19i after 19h), only on its flag, a SKIP line otherwise; each
+  // POST must be answered by the FUNCTION's gate - 401 with exactly {"error":"unauthorized"} (the gateway's JWT check, on a deploy
+  // without --no-verify-jwt, answers 401 with another body, and the cron's call carries no JWT); anything else FAILs
+  const i20 = s20code.indexOf('if [ "$EVDEPLOYED20" = "1" ]; then');
+  ok(i20 > 0 && i20 > s20code.indexOf('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"') && i20 > s20code.indexOf("LEFTOVER20_SQL="), "20i comes last in section 20, after the probe and its leftover count (20f / 20g), outside the linked-CLI branch");
+  const i20code = i20 < 0 ? "" : s20code.slice(i20);
+  ok(/\nelse\n  echo "   SKIP 20i \(set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy[^"\n]*"\nfi$/.test(i20code.replace(/\s+$/, "")), "without SILVIS_EAST_REFRESH_DEPLOYED=1 20i prints one SKIP line and counts nothing (the section's last statement)");
+  ok(i20code.includes("line=$(curl -s -o $T/vr20i.json -w 'HTTP %{http_code}' -X POST \"$URL/functions/v1/east-feed-refresh\")") && i20code.includes("line=$(curl -s -o $T/vr20i2.json -w 'HTTP %{http_code}' -X POST \"$URL/functions/v1/east-feed-refresh\" -H \"x-cron-secret: verify-rls-20i-not-the-secret\")"), "20i's two POSTs: no session, then a wrong x-cron-secret");
+  ok(i20code.includes("body20i=$(tr -d ' \\r\\n' < $T/vr20i.json)") && i20code.includes("body20i2=$(tr -d ' \\r\\n' < $T/vr20i2.json)") && (i20code.match(/if \[ "\$line" = "HTTP 401" \] && \[ "\$body20i2?" = '\{"error":"unauthorized"\}' \]; then\n    ok "/g) || []).length === 2 && (i20code.match(/\n  else\n    bad "east-feed-refresh /g) || []).length === 2, "20i: each POST PASSes only on 401 with exactly {\"error\":\"unauthorized\"} (the function's own gate), and FAILs otherwise");
+}
+{
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h) and 20e");
   ok(head.includes("#   SILVIS_EAST_VACATIONS_APPLIED=1                         grade section 20 strictly (the probe's PROBE_SETUP and the 404s = FAIL): only on the run right after sql/migrations/2026-10-14-east-vacations.sql is applied; the record step makes strict the default and drops this variable"), "verify-rls.sh's header documents SILVIS_EAST_VACATIONS_APPLIED");
-  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_EAST_VACATIONS_APPLIED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_EAST_VACATIONS_APPLIED");
+  ok(head.includes("#   SILVIS_EAST_REFRESH_DEPLOYED=1                          also grade 20i (the deployed east-feed-refresh: an unauthenticated POST and a wrong x-cron-secret, each its own 401 {\"error\":\"unauthorized\"}): only after the east-feed-refresh deploy; without it 20i prints a SKIP line and counts nothing; the deploy's record step grades 20i on every run and drops this variable"), "verify-rls.sh's header documents SILVIS_EAST_REFRESH_DEPLOYED (20i)");
+  // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - --help lists 20i's flag after SILVIS_EAST_VACATIONS_APPLIED;
+  // kept intent: --help names the section 20 flag(s)
+  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_EAST_VACATIONS_APPLIED \/ SILVIS_EAST_REFRESH_DEPLOYED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_EAST_VACATIONS_APPLIED and SILVIS_EAST_REFRESH_DEPLOYED");
 }
 {
   const code20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
   const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
   const run20 = (cliOut, opts) => {
-    const o = Object.assign({ strict: false, surgeon: false, leftover: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", h: "401", eDer: "200", eDerBody: "[]", eRes: "400", eResBody: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}', eSh: "403" }, opts || {});
+    // deployed (the review of 10/18): SILVIS_EAST_REFRESH_DEPLOYED=1 - 20i's unauthenticated POST answers i1 / i1Body, its wrong-secret
+    // POST i2 / i2Body (the function's own 401 by default); `fnCalls` counts the calls that reached the function (each curl runs in a
+    // command substitution's subshell, so the fake appends a line to a file) - 0 without the flag
+    const UNAUTH = '{"error":"unauthorized"}';
+    const o = Object.assign({ strict: false, deployed: false, surgeon: false, leftover: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", h: "401", eDer: "200", eDerBody: "[]", eRes: "400", eResBody: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}', eSh: "403", i1: "401", i1Body: UNAUTH, i2: "401", i2Body: UNAUTH }, opts || {});
     const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
       : o.shape === "bare" ? "printf '[\\n  {\\n    \"leftover\": " + o.leftover + "\\n  }\\n]\\n'"
       : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + o.leftover + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
       "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
-      "SILVIS_EAST_VACATIONS_APPLIED='" + (o.strict ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      "SILVIS_EAST_VACATIONS_APPLIED='" + (o.strict ? "1" : "") + "'\nSILVIS_EAST_REFRESH_DEPLOYED='" + (o.deployed ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
       "q() { " + qBody + "; }\n" +
-      "curl() { local of='' prev='' code='' sur='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; " +
+      "curl() { local of='' prev='' code='' sur='' sec='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; x-cron-secret:*) sec=1;; esac; prev=\"$a\"; done; " +
       "case \"$u\" in " +
       "*rpc/silvis_derived_vacations*) if [ -n \"$sur\" ]; then code=" + o.eDer + "; body=" + sq(o.eDerBody) + "; else code=" + o.a + "; fi;; " +
       "*rpc/east_vacation_reset_stale*) if [ -n \"$sur\" ]; then code=" + o.eRes + "; body=" + sq(o.eResBody) + "; else code=" + o.b + "; fi;; " +
       "*rpc/silvis_east_ranges*) code=" + o.c + ";; " +
       "*rpc/silvis_east_people*) code=" + o.d + ";; " +
       "*rpc/silvis_vacation_short_days*) if [ -n \"$sur\" ]; then code=" + o.eSh + "; else code=" + o.h + "; fi;; " +
+      "*functions/v1/east-feed-refresh) echo fn >> \"$T/fn.calls\"; if [ -n \"$sec\" ]; then code=" + o.i2 + "; body=" + sq(o.i2Body) + "; else code=" + o.i1 + "; body=" + sq(o.i1Body) + "; fi;; " +
       "esac; [ -n \"$of\" ] && printf '%s' \"$body\" > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
-      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + fakesGuard(["linked", "q", "supabase", "curl"]) + code20 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+      "supabase() { echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" + fakesGuard(["linked", "q", "supabase", "curl"]) + code20 +
+      "\necho \"FNCALLS $(cat \"$T/fn.calls\" 2>/dev/null | wc -l | tr -d ' ')\"\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
     const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
     ok(!r.error, "bash could not be started to run section 20: " + (r.error && r.error.message));
     ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 20's faked run: a fake did not resolve to a bash function - aborted before the section ran");
-    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "", fnCalls: Number(((r.stdout || "").match(/^FNCALLS (\d+)$/m) || [])[1]) };
   };
   const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
   const after = {};
@@ -5388,6 +5425,19 @@ ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)
   const ra = run20(msgOf(after));
   eq(ra.result, [N20, 0], "section 20 against the AFTER picture (20a-20d and 20h 401, every case, leftover 0): every check PASS (" + fails(ra) + ");");
   ok(/SKIP 20e/.test(ra.out), "... 20e skipped without a surgeon token");
+  // 20i (the review of 10/18): without SILVIS_EAST_REFRESH_DEPLOYED the default count does not move - a SKIP line, nothing asked of
+  // the function; with it, two more checks (N20I), each the function's own 401 {"error":"unauthorized"} or a FAIL
+  ok(/^   SKIP 20i \(set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy/m.test(ra.out) && ra.fnCalls === 0 && !/^ +20i /m.test(ra.out), "... 20i skipped without SILVIS_EAST_REFRESH_DEPLOYED - no call reaches the function (" + ra.fnCalls + ")");
+  const N20I = 2;   // 20i: the unauthenticated POST and the wrong x-cron-secret
+  const rdep = run20(msgOf(after), { deployed: true });
+  eq(rdep.result, [N20 + N20I, 0], "with SILVIS_EAST_REFRESH_DEPLOYED=1 20i adds two PASSes (an unauthenticated POST and a wrong x-cron-secret, each 401 {\"error\":\"unauthorized\"}) (" + fails(rdep) + ");");
+  ok(rdep.fnCalls === 2 && /^PASS  east-feed-refresh refuses an unauthenticated POST \(401/m.test(rdep.out) && /^PASS  east-feed-refresh refuses a wrong x-cron-secret \(401/m.test(rdep.out) && !/SKIP 20i/.test(rdep.out), "... the two POSTs reached the function and each PASS line names what was refused");
+  eq(run20(msgOf(after), { deployed: true, surgeon: true }).result, [N20 + 3 + N20I, 0], "... beside 20e's three;");
+  eq(run20(msgOf(after), { deployed: true, i1: "404", i1Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}', i2: "404", i2Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}' }).result, [N20, 2], "20i fails a function that is not deployed (404 - the flag says it is);");
+  eq(run20(msgOf(after), { deployed: true, i1Body: '{"code":401,"message":"Missing authorization header"}', i2Body: '{"code":401,"message":"Missing authorization header"}' }).result, [N20, 2], "20i fails the GATEWAY's 401 (a deploy without --no-verify-jwt: the cron's call carries no JWT and would never reach the function);");
+  eq(run20(msgOf(after), { deployed: true, i1: "400", i1Body: '{"error":"the body must be {} or {\\"dryRun\\": <boolean>}; nothing was read or written"}' }).result, [N20 + 1, 1], "20i fails an unauthenticated POST that got past the gate (400 at the body check);");
+  eq(run20(msgOf(after), { deployed: true, i2: "200", i2Body: '{"dryRun":false,"ok":true}' }).result, [N20 + 1, 1], "20i fails a wrong x-cron-secret that is let through;");
+  eq(run20(msgOf(after), { deployed: true, i1: "000", i1Body: "", i2: "000", i2Body: "" }).result, [N20, 2], "20i fails when the function cannot be reached (HTTP 000);");
   eq(run20(msgOf(after), { surgeon: true }).result, [N20 + 3, 0], "with SILVIS_SURGEON_JWT 20e adds three PASSes (the derived rows a JSON array, the reset 400 EV001, the short days refused 403);");
   const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied\\nCONTEXT:  ..."}';
   const beforePic = { a: "404", b: "404", c: "404", d: "404", h: "404" };
@@ -5460,6 +5510,10 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (PREPARED - report-
   eq((xr.match(/^\| [PDAGSR]\d+ \| /gm) || []).length, XV_CASES.length, "the probe table has exactly the 56 case rows;");
   ok(xf.includes("PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied") && xf.includes("2031"), "the probe's BEFORE answer and its 2031 fixtures");
   ["20a", "20b", "20c", "20d", "20e", "20f", "20g", "20h"].forEach((p) => ok(new RegExp("^\\| " + p + " \\|", "m").test(xr), "the section 20 table has a row for " + p));
+  // the review of 10/18: 20i - the deployed east-feed-refresh, behind SILVIS_EAST_REFRESH_DEPLOYED=1 until the deploy's record step
+  const row20i = (xr.match(/^\| 20i \|[^\n]*/m) || [""])[0];
+  ok(row20i.includes("`SILVIS_EAST_REFRESH_DEPLOYED=1`") && row20i.includes("`POST /functions/v1/east-feed-refresh`") && row20i.includes("`x-cron-secret`") && row20i.includes("`{\"error\":\"unauthorized\"}`") && /record step drops the flag/.test(row20i) && /SKIP/.test(row20i), "the section 20 table has a 20i row: SILVIS_EAST_REFRESH_DEPLOYED=1 only, an unauthenticated POST and a wrong x-cron-secret, each the function's own 401 {\"error\":\"unauthorized\"}, a SKIP without the flag, the deploy's record step drops the flag: " + row20i.slice(0, 200));
+  ok(xf.includes("`SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`") && xf.indexOf("`SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`") > xf.indexOf("9. The Part A client on Faraz's go"), "the apply order's item 9 runs 20i after the east-feed-refresh deploy");
   // the apply order, the one command, the rollback, the record step
   ok(xf.includes("SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh") && xf.includes("56 cases") && xf.includes("section 15") && xf.includes("sql/probes/vacation-guard-overlimit.sql") && xf.includes("sql/probes/vacation-short-days.sql"), "the apply order: the over-limit query before, the short days after, probe AFTER (56), strict verify-rls with section 15 re-run");
   ok(xf.includes("`apply-east-vacations.sh`, kept OUTSIDE the repo") && xf.includes("APPLY") && xf.includes("capital letters") && xf.includes("`--dry-run`") && xf.includes("`AI_AGENT=1`") && xf.includes("PASTE THIS BACK") && !/bash scripts\/apply-/.test(xr), "one command: Faraz's apply script, outside the repo (APPLY in capital letters, --dry-run, AI_AGENT=1, the paste-back block)");

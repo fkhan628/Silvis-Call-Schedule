@@ -263,6 +263,12 @@ The order (Faraz, one step at a time; the expected result in brackets):
    output back). Then `401` - the gate, nothing read.] A new slug: nothing to back up before the deploy, but the deploy
    is still verified - section 3's download-and-compare rule above, without Docker. The first hash proves the source
    that was uploaded, the second the source the project serves.
+   Then the gate, graded: `SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh` in Git Bash at the worktree's root
+   [section 20's 20i: two PASS lines - an unauthenticated POST and a wrong `x-cron-secret`, each the function's own `401`
+   `{"error":"unauthorized"}` (a `401` with another body is the gateway's JWT check: a deploy without `--no-verify-jwt`,
+   which the cron's call - it carries no JWT - would never pass); then `RESULT: <n> passed, 0 failed`]. The `curl.exe`
+   line above reads the status only; 20i reads the body too, and keeps reading it on every later run once the record
+   step drops the flag (step 6).
 4. The dryRun proof, through pg_net in the SQL editor (no cron job needed; nothing is written - no `east_feed` row, no
    prune, no reset, no audit row):
    ```sql
@@ -283,7 +289,9 @@ The order (Faraz, one step at a time; the expected result in brackets):
 6. The next morning: Setup > East feed shows the server refresh (with the Part A client), or in the SQL editor
    `select created_at, detail->>'ok', detail->>'summary' from audit_log where action = 'east.refresh' and actor_id = 'cron' order by created_at desc limit 3;`
    [`true` and "Server refresh of the East feed (cron): N published week(s) ..."]. Paste back; the record step then
-   fills this record (versions, times, the proofs) and rewords the sentences about the four functions and jobs.
+   fills this record (versions, times, the proofs, the 20i lines), rewords the sentences about the four functions and
+   jobs, and drops `SILVIS_EAST_REFRESH_DEPLOYED` from `scripts/verify-rls.sh`, which then grades 20i on every plain run
+   (as 19i since Prompt 30's record step).
 
 Rollback: section 7.
 
@@ -905,6 +913,9 @@ curl.exe -s -i "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" | Select-Obj
 #       "weeks":N,"coverage":{"from":...,"to":...},...,"vacations":{"codes":["FAK"],"ranges":N,...,"trusted":true,"guard":[]},...,
 #       "extra":{"from":...,"to":...,"weeks":N,...},"newRanges":[...],...,"would":{"upsert":N,"weekRows":N,"rewrittenRows":N,"prune":{...},"reset":{"p_from":"<Monday>"},"extra":N}}
 ```
+The first two checks are `scripts/verify-rls.sh` 20i - with `SILVIS_EAST_REFRESH_DEPLOYED=1` after the deploy (section 3),
+on every plain run once the deploy's record step drops the flag - which also requires the function's own body
+`{"error":"unauthorized"}` (a 401 with another body is the gateway's JWT check).
 A LIVE call (`{}`) writes what the in-app Refresh from Davenport writes (`east_feed` rows, the forecast prune, the
 review reset, one `east.refresh` audit row) and never mails; the daily cron job is its intended caller. Only `{}` and
 `{"dryRun":true|false}` run: any other body - one that does not parse, an array, null, a string or number, an unknown

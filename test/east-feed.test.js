@@ -557,6 +557,31 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   texts.forEach(t => ok(typeof t === "string" && t.length > 20 && t.length <= 200 && /kept/.test(t) && /no review (is )?reset/.test(t), "P31A A3 guard text: says the cache is kept and no review is reset (<= 200 characters): " + t));
   ok(texts[0].indexOf("FAK") >= 0 && texts[2].indexOf("FAK") >= 0 && texts[3].indexOf("MAB") >= 0, "P31A A3 guard text: names the code");
 }
+// Prompt 31 Part A review (10/18): the guard's window EDGES. A cached range counts when it overlaps the read's window
+// [from, vacationsTo]: one that STRADDLES from (a vacation over the main window's Monday - Davenport is read from `from` on, and
+// the range began before it; the cache holds it in the week before the window too) or straddles vacationsTo, or touches an edge
+// with its last / first day, keeps the cache; one that ends the day before from or starts the day after vacationsTo lies outside
+// what the read could see. Every earlier fixture kept its cached ranges wholly inside or wholly outside the window, so the mutants
+// r.start >= from, r.end <= to, r.end > from and r.start < to - applied to east-feed.js and the server's @eastRefresh copy
+// together - passed every suite (test/edge-functions.test.js carries the same fixtures and a handler run of the straddling range).
+{
+  const FROM = "2026-09-14", TO = "2028-04-17";
+  const feed = (over) => Object.assign({ weeks: [], vacations: { FAK: [] }, vacationsError: null, vacationsTo: TO, vacationCodesUnresolved: [] }, over);
+  // a range as the cache holds it: the same entry in every cached week it touches (attachVacationsToWeeks)
+  const held = (mondays, start, end) => mondays.map(m => ({ week_monday: m, data: { vacations: [{ code: "FAK", start, end }] } }));
+  const g = (cache, over) => ef.eastVacationReadGuard(feed(over), cache, ["FAK"], FROM);
+  const KEPT = { ok: false, problems: [{ code: "FAK", why: "empty-while-cached", cached: 1 }] };
+  const TRUSTED = { ok: true, problems: [] };
+  eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16")), KEPT, "P31A review guard edge: FAK 09-10..09-16 straddles from (09-14; held by 09-07 and 09-14) and Davenport answers [] -> NOT trusted (the range is in the window from 09-14 on)");
+  eq(g(held(["2026-09-07"], "2026-09-10", "2026-09-16")), KEPT, "P31A review guard edge: the same range held by the week before the window alone -> NOT trusted (the guard counts ranges, not the weeks holding them)");
+  eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-14")), KEPT, "P31A review guard edge: a range whose last day IS from -> NOT trusted");
+  eq(g(held(["2026-09-07"], "2026-09-08", "2026-09-13")), TRUSTED, "P31A review guard edge: a range ending the day before from -> trusted (the read could not see it)");
+  eq(g(held(["2027-04-05"], "2028-04-15", "2028-04-20")), KEPT, "P31A review guard edge: a range straddling vacationsTo (2028-04-17) -> NOT trusted");
+  eq(g(held(["2027-04-05"], "2028-04-17", "2028-04-20")), KEPT, "P31A review guard edge: a range whose first day IS vacationsTo -> NOT trusted");
+  eq(g(held(["2027-04-05"], "2028-04-18", "2028-04-20")), TRUSTED, "P31A review guard edge: a range starting the day after vacationsTo -> trusted (past the read's horizon)");
+  eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-01", "2028-05-01")), KEPT, "P31A review guard edge: a range spanning the whole window -> NOT trusted");
+  eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16"), { vacationsTo: null }), KEPT, "P31A review guard edge: no vacationsTo (no upper bound) - the range straddling from still counts");
+}
 // fetchEastWeeks with a stubbed fetch: the time_off read is scoped to the
 // resolved ids, kind vacation, the window; its failure is NOT the weeks' failure.
 {

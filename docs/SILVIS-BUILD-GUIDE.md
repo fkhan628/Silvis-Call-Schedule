@@ -3008,25 +3008,30 @@ window is Part B's (section 24.5); the Davenport side is never written.
 ### 25.6 Tests, the apply, the deploy and the ship
 
 - **Tests.** `test/schema.test.js` (the migration pinned statement by statement, `schema.sql`'s mirror, the probe's 56 cases and its
-  header, the pre-check, the short days, verify-rls section 20 graded against a faked CLI, no apply script in the repo, the
-  `docs/SCHEMA-REVIEW.md` record); `test/edge-functions.test.js` (the real handler against a fake Silvis and a fake other project -
-  the gate, the body, the order, dryRun, the A7 guard, a rewritten older cached row, every stop; the UTC mirror against `east-feed.js`
-  by behaviour in child processes under UTC, America/Chicago, Asia/Tokyo, Pacific/Kiritimati, Pacific/Pago_Pago and
-  Australia/Lord_Howe; the README's deploy record line for line); `test/east-feed.test.js` (the guard and its words);
-  `test/data-layer.test.js` [P31A3] (every helper, `derivedVacDb` against a fake fetch, the refresh and the display lifted and run per
-  role, the pins) and [P31A5] (these docs); `test/ui/smoke.mjs` (both functions answered by the harness on every page, never passed
-  through - an unmocked reset POST would be a live write; the refresh-reset step asserts ONE reset POST, critic A8; the scheduler's
-  derived line, warning count, box, editor line and last-refresh line; an office page's dot, "Off: Khan" and read-only line;
-  `?public=1` calls neither function). Offline, the SQL ran on PGlite in a scratch folder outside the repo (the probe 56 / 56, 21
-  mutants, the JS <-> SQL parity, the guard against the short days).
+  header, the pre-check, the short days, verify-rls section 20 graded against a faked CLI (20i included), no apply script in the
+  repo, the `docs/SCHEMA-REVIEW.md` record); `test/edge-functions.test.js` (the real handler against a fake Silvis and a fake other
+  project - the gate, the body, the order, dryRun, the A7 guard (at the read window's edges too: a cached range straddling the main
+  window's Monday or `vacationsTo` keeps the cache - the review of 10/18), a rewritten older cached row, every stop; the UTC mirror
+  against `east-feed.js` by behaviour in child processes under UTC, America/Chicago, Asia/Tokyo, Pacific/Kiritimati, Pacific/Pago_Pago
+  and Australia/Lord_Howe; the README's deploy record line for line); `test/east-feed.test.js` (the guard, its window edges and its
+  words); `test/data-layer.test.js` [P31A3] (every helper, `derivedVacDb` against a fake fetch, the refresh and the display lifted and
+  run per role, the pins), [P31A5] (these docs) and [P31A-R] (the review of 10/18); `test/ui/smoke.mjs` (both functions answered by
+  the harness on every page, never passed through - an unmocked reset POST would be a live write; the refresh-reset step asserts ONE
+  reset POST, critic A8; the scheduler's derived line, the East range's own short days gaining the harness's day (read before from the
+  Time off East card's box - never the strip's total, a count of ranges the live rows can already hold a warning in: the review of
+  10/18), the strip's wording, the box, the editor line and the last-refresh line; an office page's dot, "Off: Khan" and read-only
+  line; `?public=1` calls neither function). Offline, the SQL ran on PGlite in a scratch folder outside the repo (the probe 56 / 56,
+  21 mutants, the JS <-> SQL parity, the guard against the short days).
 - **The order** (Faraz, one step at a time, each pasted back): (1) `apply-east-vacations.sh` from the Part A worktree - `--dry-run`
   first (steps 0-3, nothing applied), then the run (type APPLY in capital letters); (2) the record step (`docs/SCHEMA-REVIEW.md`,
   verify-rls section 20 strict, `schema.sql` revision x applied, this status line); (3) the Part A client on Faraz's go (main merged,
   the gates and the smoke); (4) the `east-feed-refresh` deploy from PowerShell - the file's sha256, the deploy with
   `--no-verify-jwt --use-api`, the download-and-compare, then an unauthenticated POST answering `401` (`edge-functions/README.md`
-  section 3); (5) the dryRun proof through pg_net in the SQL editor; (6) the cron job `silvis-east-feed-daily`; (7) the next morning,
-  Setup > East feed shows "Server refresh (daily) ... ok". Then the README's record step rewords its four-functions / four-jobs
-  sentences.
+  section 3), then `SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh` - 20i: an unauthenticated POST and a wrong
+  `x-cron-secret`, each the function's own `401` `{"error":"unauthorized"}` (a 401 with another body is the gateway's JWT check);
+  (5) the dryRun proof through pg_net in the SQL editor; (6) the cron job `silvis-east-feed-daily`; (7) the next morning, Setup > East
+  feed shows "Server refresh (daily) ... ok". Then the README's record step rewords its four-functions / four-jobs sentences and drops
+  `SILVIS_EAST_REFRESH_DEPLOYED` - every plain verify-rls run grades 20i from then on, as 19i since Prompt 30's record step.
 - **Rollback** (only on Faraz's and Claude Code's decision), in this order: unschedule the job; leave or delete the function; revert
   the client merge; the database - the 9/30 guard body first, then the five drops (the migration header). The data needs none: a run
   writes only what the in-app refresh writes, and every reset review is in its `eastvac.review` audit row.

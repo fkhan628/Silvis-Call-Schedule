@@ -3902,6 +3902,7 @@ sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases
 | 20f | the probe through the linked CLI, graded by case name | every case as the table above; `PROBE_SETUP: ... absent` = not applied yet (a FAIL when strict); a partly-applied or collision raise, or no sentinel = FAIL |
 | 20g | leftovers by the probe's identity: its auth users, `time_off` notes `probe-eastvac31%`, `east_feed` rows with `data.probe` `eastvac31`, reviews `decided_by` `probe-eastvac31`, `eastvac.review` audit rows starting in 2031-01 .. 2031-04 | 0; else FAIL with the five DELETEs (rows only the probe writes) |
 | 20h | anon `POST rpc/silvis_vacation_short_days` (added after 20d by the A1 review, so 20e-20g kept their letters) | 401 / 403 (the 404 rule) |
+| 20i | with `SILVIS_EAST_REFRESH_DEPLOYED=1` only - the run after the `east-feed-refresh` deploy (`edge-functions/README.md` section 3); built by the review of 10/18 (the report's section 5 named it); the deploy's record step drops the flag and grades 20i on every run, as 19i: an unauthenticated `POST /functions/v1/east-feed-refresh`, then one with a wrong `x-cron-secret`, no body (a gate that let one through would stop at the body check) | each 401 with exactly `{"error":"unauthorized"}` - the function's own gate (the gateway's JWT check answers 401 with another body); a 404 or anything else FAILs. Without the flag: a SKIP line, nothing counted |
 
 **Apply order:**
 
@@ -3921,8 +3922,9 @@ sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases
 7. `SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh` - section 20 strict (the anon 404s and PROBE_SETUP are FAILs), section
    15's 20 cases unchanged, every other section green, both leftover counts 0.
 8. The record step (below).
-9. The Part A client on Faraz's go; then the `east-feed-refresh` deploy, its dryRun proof and its cron job (`edge-functions/README.md`
-   section 3).
+9. The Part A client on Faraz's go; then the `east-feed-refresh` deploy, `SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`
+   (20i: the function's own 401 for an unauthenticated POST and a wrong `x-cron-secret`), its dryRun proof and its cron job
+   (`edge-functions/README.md` section 3).
 
 **One command (Faraz):** his apply script `apply-east-vacations.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
 paths; `test/schema.test.js` pins that none sits here) - the private folder's apply-scripts, beside byte copies of the graded files
@@ -3953,7 +3955,8 @@ The client reads the missing functions as "unavailable" (today's picture) and re
 
 **The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed lines; table (a)'s helper line; `sql/schema.sql`
 revision x ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's headers; verify-rls section
-20 strict by default with `SILVIS_EAST_VACATIONS_APPLIED` dropped; guide 4.3 and section 25, the rules doc's Time off row, section 3
-(Khan) and section 8 item 17; and the test pins with them.
+20 strict by default with `SILVIS_EAST_VACATIONS_APPLIED` dropped (`SILVIS_EAST_REFRESH_DEPLOYED` stays: 20i grades the deployed
+function, and the deploy's own record step, `edge-functions/README.md` section 3, drops it); guide 4.3 and section 25, the rules doc's
+Time off row, section 3 (Khan) and section 8 item 17; and the test pins with them.
 
 observed: (the record step fills this - nothing in this section has run against the live project).

@@ -350,8 +350,12 @@
 //     are not on the live database before the apply; the POST would be a live
 //     write). Then: the scheduler's Time off list shows Khan's East range as a
 //     read-only line with the East marker; five harness-only vacations on its
-//     first day raise the strip's own-range warning count, list the day in Setup
-//     -> East feed's box and the day editor's East line (nothing written); the
+//     first day put that day among the range's own short days (read before
+//     from the Time off East card's box - never the strip's total, a count of
+//     ranges that need not move when the live rows already give the range a
+//     warning: review 10/18): the strip words the range under the minimum, Setup
+//     -> East feed's box lists the day and so does the day editor's East line
+//     (nothing written); the
 //     last-refresh line names the newest in-app run and the harness's server
 //     run; an office page reads the derived rows with its own token and shows
 //     Khan's dot (no diamond), "Off: Khan" and a read-only "set by the scheduler"
@@ -9621,10 +9625,14 @@ try {
     // The harness answers silvis_derived_vacations() on every page (p31aDerivedRows - after the reset step above the store
     // holds EV[0]'s away row only, so EV[0..2] are all derived: away / unreviewed / unreviewed). Checked:
     //  (a) the scheduler (main page): his Time off list carries EV[0] as a READ-ONLY line (data-derived, the East marker, no
-    //      button); the coverage strip's own-range warning count; then five other surgeons' vacations on EV[0].start, served
-    //      by the harness only (extraTimeOff, a Realtime INSERT frame to re-read time_off - never written): the strip's count
-    //      rises, Setup > East feed's box lists the day, the day editor's East line says the minimum - and nothing is written;
-    //      Setup > East feed's last-refresh line names the newest in-app run and the harness's server run;
+    //      button); EV[0]'s own short days, read from the Time off East card's warning box; then five other surgeons' vacations
+    //      on EV[0].start, served by the harness only (extraTimeOff, a Realtime INSERT frame to re-read time_off - never
+    //      written): EV[0] gains that day - the coverage strip words it under the minimum, Setup > East feed's box lists the
+    //      day, the day editor's East line says the minimum - and nothing is written; Setup > East feed's last-refresh line
+    //      names the newest in-app run and the harness's server run. Review 10/18: the premise is EV[0]'s OWN short days, never
+    //      the strip's total - that counts RANGES with a short or held day, and the schedule_days here are the live project's:
+    //      once a later period is published Khan may hold a role inside EV[0] (or primary the day before), EV[0] then carries
+    //      a warning before the vacations and the total would not move;
     //  (b) the office coordinator: the derived read went out with ITS token; an s1 dot (no diamond) on EV[0].start; the day
     //      summary "Off: Khan"; its Time off list's s1 line "set by the scheduler" with no button (item 3 - it may edit every
     //      time_off row, never these); no East card; no East word there. (A surgeon's Time off list shows his own vacations only.)
@@ -9640,18 +9648,33 @@ try {
         if (!dl) fail(`P31A A3 (scheduler): no read-only derived line for Khan's ${EV[0].start} East range in his Time off list`);
         else if (dl.buttons || !dl.mark || !/East vacation \((away|unreviewed)\) - decide in Setup > East feed/.test(dl.text)) fail("P31A A3 (scheduler): the derived line should carry the East marker, its state and 'decide in Setup > East feed', and no Edit / Remove: " + JSON.stringify(dl));
         else ok(`P31A A3 (scheduler): Time off lists Khan's ${EV[0].start} East range read-only - '${dl.text}' with the East marker, no button`);
-        await showMonth(2027, 3);
-        const warn0 = Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "-1"));
-        if (!(warn0 >= 0)) fail("P31A A3 (scheduler): no [data-testid=cov-eastvac-warn] item in the coverage strip");
-        // five other surgeons off on EV[0].start, served by the harness only: Khan's East range then leaves fewer than 2 around
+        // EV[0]'s own short days BEFORE the harness vacations: data-short of its row in the Time off East card's warning box (the
+        // same eastVacWarnings the strip counts; no row = no warning yet). A live vacation that already puts offDay under the
+        // minimum leaves nothing to show - named as not exercised, never an app FAIL (the 9/29 smoke-clean rule)
         const offDay = EV[0].start;
+        const evShortIn = (box) => page.$eval(`[data-testid=${box}]`, (el, s) => { const r = Array.from(el.querySelectorAll("[data-testid=eastvac-warning]")).find(x => x.getAttribute("data-person") === "s1" && x.getAttribute("data-start") === s); return r ? (r.getAttribute("data-short") || "") : ""; }, EV[0].start).then(v => v.split(",").filter(Boolean)).catch(() => null);
+        await page.waitForSelector("[data-testid=eastvac-timeoff-warnings]", { timeout: 8000 }).catch(() => {});
+        const short0 = await evShortIn("eastvac-timeoff-warnings");
+        if (!short0) fail("P31A A3 (scheduler): no [data-testid=eastvac-timeoff-warnings] box in the Time off East card - EV[0]'s short days could not be read before the harness vacations");
+        else if (short0.indexOf(offDay) >= 0) console.log(`     (P31A A3 (scheduler): Khan's ${EV[0].start} range already lists ${offDay} under the vacation minimum before the harness vacations (live vacations; its short days ${short0.join(", ")}) - the 'gains the day' half is not exercised this run)`);
+        await showMonth(2027, 3);
+        const stripNow = () => page.$eval("[data-testid=cov-eastvac-warn]", el => ({ count: Number(el.getAttribute("data-count")), title: el.getAttribute("title") || "" })).catch(() => null);
+        const s0 = await stripNow();
+        if (!s0 || !(s0.count >= 0)) fail("P31A A3 (scheduler): no [data-testid=cov-eastvac-warn] item in the coverage strip");
+        // five other surgeons off on EV[0].start, served by the harness only: Khan's East range then leaves fewer than 2 around
         extraTimeOff = ["s2", "s3", "s4", "s5", "s6"].map((pid, i) => ({ id: "harness-p31a-vac-" + i, person_id: pid, start_date: offDay, end_date: offDay, note: null, public: false, created_at: new Date().toISOString() }));
         const wA = writes.length;
         if (!rtSendRow("time_off", extraTimeOff[0], "INSERT")) throw new Error("the realtime mock is not joined - the mocked vacations cannot reach the page");
-        const rose = await waitFor(async () => Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "0")) > warn0, 15000);
-        const warn1 = Number(await page.getAttribute("[data-testid=cov-eastvac-warn]", "data-count").catch(() => "-1"));
-        if (!rose) fail(`P31A A3 (scheduler): the own-range warning count did not rise (${warn0} -> ${warn1}) with five other surgeons off on ${offDay} inside Khan's East range`);
-        else ok(`P31A A3 (scheduler): the coverage strip's 'East vacation warnings' rose ${warn0} -> ${warn1} with the others off on ${offDay}`);
+        // the strip's title words each warning (helpers.eastVacationWarnText): EV[0]'s must come to read "under the vacation minimum
+        // on <short0 + offDay> (" - the days as the app's own vgDaysLabel words them, so it cannot match before the vacations land
+        const mdA3 = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
+        const evHead = "Khan " + mdA3(EV[0].start) + "-" + mdA3(EV[0].end) + " (";
+        const evText = (t) => { const i = String(t || "").indexOf(evHead); return i < 0 ? "" : t.slice(i).split(" | ")[0]; };
+        const wantOn = "under the vacation minimum on " + HELPERS.vgDaysLabel((short0 || []).concat([offDay])) + " (";
+        const worded = await waitFor(async () => { const s = await stripNow(); return !!s && evText(s.title).indexOf(wantOn) >= 0; }, 15000);
+        const s1 = await stripNow();
+        if (!worded || !s1 || !(s1.count >= Math.max(1, s0 ? s0.count : 0))) fail(`P31A A3 (scheduler): the coverage strip did not word Khan's ${EV[0].start} range under the vacation minimum with ${offDay} among its days (wanted '${wantOn}', count ${s0 ? s0.count : "?"} -> ${s1 ? s1.count : "?"}; EV[0]: '${evText(s1 && s1.title).slice(0, 160)}')`);
+        else ok(`P31A A3 (scheduler): the coverage strip words Khan's ${EV[0].start} range under the minimum with ${offDay} - '${evText(s1.title).slice(0, 120)}' (count ${s0 ? s0.count : "?"} -> ${s1.count}: it counts ranges, so it rises only when EV[0] had no warning before)`);
         // the day editor's East line on that day
         await page.click(`[data-day="${offDay}"]`);
         await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });

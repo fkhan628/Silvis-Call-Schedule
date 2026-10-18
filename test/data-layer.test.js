@@ -14187,7 +14187,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "East refresh reset: the client deleted review rows itself (the reset is the database's now)",
         "East refresh reset: the client wrote eastvac.review audit rows (the database writes them on the RPC path)",
         "East refresh (P31A A3): expected exactly ONE POST rpc/east_vacation_reset_stale",
-        "P31A A3 (scheduler): the own-range warning count did not rise",
+        // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - the step no longer FAILs on the strip's TOTAL not rising (a
+        // count of ranges, which stays put when the live rows already give the range a warning); it asserts the range's own short
+        // days gain the day (the P31A review smoke check below); kept intent: the scheduler's strip check exists and can FAIL
+        "P31A A3 (scheduler): the coverage strip did not word Khan's",
         "P31A A3 (scheduler): Setup > East feed's last-refresh line should name the newest in-app run",
         "P31A A3 (office): the derived read should be a GET with the office account's own token",
         "P31A A3 (office): its Time off list should show Khan's",
@@ -14508,6 +14511,52 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       [["guide", guide, "a read-only Time off line \"set by the scheduler\", My vacations"], ["guide", guide, "everyone signed in now sees an away"],
         ["ONBOARDING", onboarding, "a line in the Time off list that reads"], ["rules", rulesDoc, "exactly like a vacation - the calendar dot"],
         ["rules", rulesDoc, "now shows to every signed-in role - a surgeon"]].forEach(([n, t, old]) => assert.ok(!flat5(t).includes(old), n + " still says: " + old));
+    });
+  }
+
+  /* ---------------- Prompt 31 Part A review (10/18): the smoke's own-range warning step; guide 25.6's 20i ---------------- */
+  console.log("\n[P31A-R] Prompt 31 Part A review (10/18): the smoke's own-range warning premise, guide 25.6's verify-rls 20i");
+  {
+    const smokeR = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8").replace(/\r\n/g, "\n");
+    const guideR = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8").replace(/\r\n/g, "\n");
+    // The scheduler's step served five harness vacations on EV[0].start and FAILed unless the coverage strip's count ROSE. That
+    // count is eastVacWarnings.length - RANGES with a short or held day - and the smoke's schedule_days are the live project's:
+    // once a later period is published, Khan may hold a role inside EV[0] (or primary the day before), EV[0] then carries a warning
+    // before the vacations, the count stays put and the smoke FAILs an app that works (the 9/29 "smoke clean" rule: no premise is
+    // a dated fact). The step reads EV[0]'s OWN short days instead - data-short of its row in the Time off East card's box (the same
+    // eastVacWarnings the strip counts) - before the vacations; waits until the strip's title words EV[0] under the minimum on
+    // exactly those days plus offDay (the app's own helpers.vgDaysLabel - no restated label format); names a live vacation that
+    // already lists offDay as not exercised (never an app FAIL); and keeps Setup > East feed's box check (data-short lists offDay).
+    check("P31A review (10/18) smoke pins: the own-range warning step asserts that EV[0]'s OWN short days gain offDay - read before the harness vacations from the Time off East card's box (data-short), the strip's title then words EV[0] under the minimum on those days plus offDay (helpers.vgDaysLabel), a live vacation already listing offDay is 'not exercised' (never a FAIL); no FAIL on the strip's total not rising; Setup's box still lists offDay", () => {
+      const a = smokeR.indexOf("      // (a) the scheduler\n"), b = smokeR.indexOf("      // (b) the office coordinator", a);
+      assert.ok(a > 0 && b > a, "the smoke's P31A A3 (a) scheduler step");
+      const st = smokeR.slice(a, b);
+      const readAt = st.indexOf('const short0 = await evShortIn("eastvac-timeoff-warnings");'), sendAt = st.indexOf('rtSendRow("time_off", extraTimeOff[0], "INSERT")');
+      assert.ok(readAt > 0 && sendAt > readAt, "EV[0]'s short days are read from the Time off East card's box BEFORE the harness vacations are sent");
+      assert.ok(st.includes('const evShortIn = (box) => page.$eval(`[data-testid=${box}]`, (el, s) => {') && st.includes('x.getAttribute("data-person") === "s1" && x.getAttribute("data-start") === s') && st.includes('r.getAttribute("data-short")'), "evShortIn reads data-short of the s1 / EV[0].start row");
+      assert.ok(st.indexOf("await showMonth(2027, 3);") > readAt && st.indexOf("await showMonth(2027, 3);") < sendAt, "the calendar (the strip) is shown after the read and before the vacations");
+      assert.ok(st.includes('const wantOn = "under the vacation minimum on " + HELPERS.vgDaysLabel((short0 || []).concat([offDay])) + " (";'), "the strip's EV[0] words are waited for with the app's own label of short0 plus offDay");
+      assert.ok(/console\.log\(`     \(P31A A3 \(scheduler\): Khan's \$\{EV\[0\]\.start\} range already lists \$\{offDay\} under the vacation minimum before the harness vacations[^`]*not exercised this run\)`\)/.test(st), "a live vacation that already lists offDay is named as not exercised");
+      assert.ok(!/did not rise/.test(st) && !/> warn0/.test(st) && !/\bwarn0\b/.test(st), "no premise on the strip's total (the old 'count did not rise' FAIL is gone)");
+      assert.ok(st.includes("fail(`P31A A3 (scheduler): the coverage strip did not word Khan's ${EV[0].start} range under the vacation minimum"), "the strip check still FAILs when the strip never words EV[0] with offDay");
+      assert.ok(st.includes('(row.short || "").split(",").indexOf(offDay) < 0'), "Setup > East feed's box must list offDay among EV[0]'s short days (data-short)");
+      assert.ok(!/[^\x00-\x7f]/.test(st), "the step stays ASCII");
+    });
+    check("P31A review (10/18) smoke header: the P31A paragraph says the step reads the range's own short days, never the strip's total", () => {
+      const h = smokeR.slice(0, smokeR.indexOf("\nimport ")).replace(/\n\/\/ */g, " ");
+      assert.ok(h.length > 1000, "the smoke's header comment");
+      assert.ok(!/raise the strip's own-range warning count/.test(h), "the header no longer says the vacations raise the strip's count");
+      assert.ok(/own short days/.test(h) && /never the strip's total/.test(h), "the header names the range's own short days and why not the total");
+    });
+    check("P31A review (10/18) guide 25.6: the deploy step runs verify-rls 20i (SILVIS_EAST_REFRESH_DEPLOYED=1 - the function's own 401 for an unauthenticated POST and a wrong x-cron-secret) and the README's record step drops the flag (20i on every plain run, as 19i); the tests name 20i and the smoke's own-range premise", () => {
+      const i = guideR.indexOf("\n### 25.6 Tests, the apply, the deploy and the ship");
+      const s = i < 0 ? "" : guideR.slice(i).replace(/\s+/g, " ");
+      const RUN = "`SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`";
+      assert.ok(s.includes(RUN) && s.indexOf(RUN) > s.indexOf("(4) the `east-feed-refresh` deploy") && s.indexOf(RUN) < s.indexOf("(5) the dryRun proof"), "25.6's order: the 20i run inside the deploy step (4), before the dryRun proof (5)");
+      assert.ok(/\b20i\b/.test(s) && s.includes("`{\"error\":\"unauthorized\"}`") && /wrong `x-cron-secret`/.test(s), "25.6 says what 20i grades");
+      assert.ok(/drops `SILVIS_EAST_REFRESH_DEPLOYED`/.test(s) && /every plain verify-rls run grades 20i/.test(s), "the README's record step drops the flag; 20i on every plain run from then on");
+      assert.ok(/verify-rls section 20 graded against a faked CLI \(20i included\)/.test(s), "the tests bullet names 20i");
+      assert.ok(/own short days/.test(s) && !/the scheduler's derived line, warning count, box/.test(s), "the smoke's own-range check is the range's own short days, not the strip's count");
     });
   }
 

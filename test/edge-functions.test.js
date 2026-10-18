@@ -2962,6 +2962,29 @@ check("A2 (critic A7): eastVacationReadGuard - the vacation leg is trusted only 
     if (p.code) assert.ok(t.indexOf(p.code) >= 0, "it names the code: " + t);
   });
 });
+// Prompt 31 Part A review (10/18): the guard's window EDGES - the same fixtures as test/east-feed.test.js's, against the server's
+// copy. A cached range that straddles from (09-14: a vacation over the main window's Monday, held by the week before the window
+// too) or vacationsTo, or touches an edge with its last / first day, keeps the cache; one ending the day before from or starting the
+// day after vacationsTo does not count. Every fixture above kept its cached ranges wholly inside or wholly outside the window, so
+// the mutants r.start >= from, r.end <= to, r.end > from and r.start < to - applied to BOTH copies (the equality check below
+// compares the two copies, so a mutant in both passes it) - survived every suite.
+check("A2 review (10/18, critic A7): eastVacationReadGuard at the window's edges - a cached range straddling from or vacationsTo, or ending ON from / starting ON vacationsTo, keeps the cache (empty-while-cached, cached 1); one ending the day before from or starting the day after vacationsTo is trusted; a range over the whole window, or straddling from with no vacationsTo, keeps it", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  const FROM = "2026-09-14", TO = "2028-04-17";
+  const feed = (over) => Object.assign({ weeks: [], vacations: { FAK: [] }, vacationsError: null, vacationsTo: TO, vacationCodesUnresolved: [] }, over);
+  const held = (mondays, start, end) => mondays.map((m) => ({ week_monday: m, data: { vacations: [{ code: "FAK", start, end }] } }));
+  const g = (cache, over) => ER.eastVacationReadGuard(feed(over), cache, ["FAK"], FROM);
+  const KEPT = { ok: false, problems: [{ code: "FAK", why: "empty-while-cached", cached: 1 }] }, TRUSTED = { ok: true, problems: [] };
+  assert.deepStrictEqual(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16")), KEPT, "FAK 09-10..09-16 straddles from 09-14 (held by 09-07 and 09-14), Davenport answers [] -> not trusted");
+  assert.deepStrictEqual(g(held(["2026-09-07"], "2026-09-10", "2026-09-16")), KEPT, "held by the week before the window alone -> not trusted (ranges count, not weeks)");
+  assert.deepStrictEqual(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-14")), KEPT, "its last day IS from -> not trusted");
+  assert.deepStrictEqual(g(held(["2026-09-07"], "2026-09-08", "2026-09-13")), TRUSTED, "it ends the day before from -> trusted (the read could not see it)");
+  assert.deepStrictEqual(g(held(["2027-04-05"], "2028-04-15", "2028-04-20")), KEPT, "it straddles vacationsTo -> not trusted");
+  assert.deepStrictEqual(g(held(["2027-04-05"], "2028-04-17", "2028-04-20")), KEPT, "its first day IS vacationsTo -> not trusted");
+  assert.deepStrictEqual(g(held(["2027-04-05"], "2028-04-18", "2028-04-20")), TRUSTED, "it starts the day after vacationsTo -> trusted (past the read's horizon)");
+  assert.deepStrictEqual(g(held(["2026-09-07", "2026-09-14"], "2026-09-01", "2028-05-01")), KEPT, "it spans the whole window -> not trusted");
+  assert.deepStrictEqual(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16"), { vacationsTo: null }), KEPT, "no vacationsTo: the range straddling from still counts");
+});
 // Prompt 31 Part A (A3, 10/16): the in-app refresh runs the same silent-empty guard - east-feed.js eastVacationReadGuard /
 // eastGuardText, the client's copy - so the two refreshes trust (and word) a Davenport read alike: behaviour equality on the
 // fixtures above and on 3000 generated cases (codes, caches with forecast rows and junk, empty / failed / unresolved reads,
@@ -3418,6 +3441,40 @@ acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the 
   assert.strictEqual(r2.body.ok, true, JSON.stringify(r2.body.errors));
   assert.ok(w2.rpc.some((x) => x[0] === "reset"), "the reset runs");
 });
+// Prompt 31 Part A review (10/18): the A7 guard at the window's EDGES, through the real handler. erRewriteScenario's range (FAK
+// 09-10..09-16, held by 09-07 - the week before the main window - and 09-14) straddles the main window's Monday 09-14; a range past
+// the published weeks rides on the last one (11-09) and can straddle vacationsTo. With every other cached list empty and Davenport
+// answering NO vacation (an RLS-blocked read looks the same), the read must not be trusted: no reset RPC, the review stays, every
+// week keeps its list - the main upsert's weeks and the extra leg's older one - and the run says ok:false. The two-sided mutants of
+// the guard's window (r.start >= from / r.end <= to in both copies) trusted it: the plan cleared the lists and the reset deleted the
+// review as 'removed' - critic A7's failure on the edge where it most often matters.
+acheck("A2 handler review (10/18, critic A7): a cached range STRADDLING an edge of the read's window keeps the cache when Davenport answers no vacation - FAK 09-10..09-16 (held by 09-07, before the main window, and 09-14) over the main window's Monday, and a range straddling vacationsTo (held by the last published week): no reset RPC, the review stays, every week keeps its list (09-14 / 11-09 in the main upsert, 09-07 through the extra leg), ok:false with empty-while-cached; the in-app refresh writes the same rows", async () => {
+  const TO = (await erClientExpect(erWorld())).feed.vacationsTo;
+  assert.ok(/^\d{4}-\d\d-\d\d$/.test(TO || ""), "fixture: the read's vacationsTo: " + TO);
+  const day = (d, k) => ef.efFmt(ef.efAddD(ef.efParse(d), k));
+  for (const [label, mondays, start, end] of [["from (2026-09-14)", ["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16"], ["vacationsTo (" + TO + ")", ["2026-11-09"], day(TO, -2), day(TO, 3)]]) {
+    const span = [{ code: "FAK", start, end }];
+    const w = erWorld({ fail: { "dav:time_off": "empty" } });
+    w.cache.forEach((x) => { x.data.vacations = mondays.indexOf(x.week_monday) >= 0 ? erClone(span) : []; });
+    w.reviews = [{ person_id: "s1", start, end, decision: "away" }];
+    const exp = await erClientExpect(w);
+    const r = await erCall(w, {});
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 300));
+    erCommon(w, r, label);
+    assert.ok(!w.rpc.some((x) => x[0] === "reset"), label + ": no reset RPC");
+    assert.deepStrictEqual(w.reviews, [{ person_id: "s1", start, end, decision: "away" }], label + ": the review stays");
+    assert.deepStrictEqual([r.body.ok, r.body.vacations.trusted, r.body.vacations.guard], [false, false, [{ code: "FAK", why: "empty-while-cached", cached: 1 }]], label + ": not trusted, and named");
+    assert.deepStrictEqual(w.upserts[0], exp.mainRows, label + ": the main upsert = the in-app refresh's rows (the same guard)");
+    assert.deepStrictEqual(exp.plan.rewritten, [], label + ": no older week rewritten");
+    mondays.forEach((m) => {
+      const inMain = w.upserts[0].find((x) => x.week_monday === m), inExtra = (w.upserts[1] || []).find((x) => x.week_monday === m);
+      assert.ok(!!inMain !== !!inExtra, label + ": " + m + " is in exactly one upsert");
+      assert.deepStrictEqual((inMain || inExtra || { data: {} }).data.vacations, span, label + ": " + m + " keeps its list (" + (inMain ? "the main upsert" : "the extra leg") + ")");
+      assert.deepStrictEqual(w.cache.find((x) => x.week_monday === m).data.vacations, span, label + ": the final cache's " + m + " list");
+    });
+    assert.deepStrictEqual(ef.eastVacations(w.cache, "FAK"), [{ start, end }], label + ": the range is still cached (it stays a vacation)");
+  }
+});
 acheck("A2 handler: Davenport's time_off read fails (HTTP 500) or the code is not in the Davenport roster - the in-app failure path (each fetched week keeps its cached list - the same rows the in-app refresh writes), no reset, ok:false naming it; the weeks and the extra leg still refresh", async () => {
   for (const [label, over, re] of [["time_off 500", { fail: { "dav:time_off": 500 } }, /time_off read FAILED/], ["FAK unresolved", { davRoster: [{ id: "s2", name: "MAB" }] }, /FAK is not in the Davenport roster/]]) {
     const w = erWorld(over), exp = await erClientExpect(w);
@@ -3662,6 +3719,25 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("select cron.unschedule('silvis-east-feed-daily');") > 0 && s7.indexOf("supabase functions delete east-feed-refresh --project-ref bzhsroegtagqhutbnsrp") > s7.indexOf("select cron.unschedule('silvis-east-feed-daily');"), "the rollback: unschedule first, then the function");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
+});
+// Prompt 31 Part A review (10/18): the report's case 20i (verify-rls.sh, the deployed function's gate) was never built, and the deploy
+// record checked the 401 once, by hand - a later redeploy with a broken gate would leave every verify-rls run green. 20i is built now
+// (behind SILVIS_EAST_REFRESH_DEPLOYED=1, test/schema.test.js grades it): the record runs it right after the deploy, before the dryRun
+// proof, and its record step drops the flag - as Prompt 30's did with 19i.
+check("A2 review (10/18): section 3's record runs verify-rls 20i right after the deploy (SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh - the function's own 401 {\"error\":\"unauthorized\"} for an unauthenticated POST and a wrong x-cron-secret), before the dryRun proof; the record step drops the flag (20i on every plain run, as 19i); section 5 names 20i beside its first two checks", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
+  const rec = i < 0 ? "" : s3.slice(i, s3.indexOf("\n### ", i + 10));
+  const flat = rec.replace(/\s+/g, " ");
+  const RUN = "`SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`";
+  const at = flat.indexOf(RUN);
+  assert.ok(at > 0 && at > flat.indexOf("supabase functions deploy east-feed-refresh") && at > flat.indexOf("Then `401` - the gate, nothing read.") && at < flat.indexOf("'{\"dryRun\":true}'::jsonb"), "the 20i run follows the deploy and its 401, before the dryRun proof");
+  const near = flat.slice(at, at + 700);
+  assert.ok(/\b20i\b/.test(near) && near.includes("`{\"error\":\"unauthorized\"}`") && /wrong `x-cron-secret`/.test(near) && /Git Bash/.test(near) && /gateway/.test(near), "it says what 20i grades (an unauthenticated POST and a wrong x-cron-secret, each the function's own 401 body - a 401 with another body is the gateway's) and where it runs (Git Bash): " + near.slice(0, 300));
+  const s6 = flat.slice(flat.indexOf("6. The next morning"));
+  assert.ok(/drops `SILVIS_EAST_REFRESH_DEPLOYED`/.test(s6) && /grades 20i on every plain run/.test(s6) && /19i/.test(s6), "step 6's record step drops the flag - every plain verify-rls run grades 20i from then on, as 19i");
+  const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6.")).replace(/\s+/g, " ");
+  assert.ok(/`scripts\/verify-rls\.sh` 20i/.test(s5) && s5.includes("`SILVIS_EAST_REFRESH_DEPLOYED=1`"), "section 5 says its first two checks are verify-rls.sh's 20i");
 });
 check("A4 (Cowork 10/16 4:40 AM): the function header's deploy line is section 3's (the workdir on the line, --no-verify-jwt --use-api); section 3's four-function block lists with --workdir $wd like its deploy lines; section 7's delete of east-feed-refresh carries the workdir; no machine path", () => {
   const head = erSrc.slice(0, erSrc.indexOf("import { serve }"));
