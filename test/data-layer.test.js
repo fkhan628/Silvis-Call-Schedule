@@ -14174,7 +14174,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const dl = rl.slice(rl.indexOf("{g.rows.map(r => r.derived ? ("), rl.indexOf(") : (", rl.indexOf("{g.rows.map(r => r.derived ? (")));
       assert.ok(dl.includes('data-derived="1"') && dl.includes('data-testid={"vac-line-" + r.pid + "-" + r.vs}'), "the line (data-derived)");
       assert.ok(dl.includes('{eastDetailsVisible ? "East vacation (" + (r.state || "unreviewed") + ") - decide in Setup > East feed" : "set by the scheduler"}'), "the words");
-      assert.ok(dl.includes("{eastDetailsVisible && <span data-testid=\"vac-line-eastmark\""), "the East marker is the scheduler's");
+      assert.ok(dl.includes("{eastDetailsVisible && <span data-testid=\"vac-derived-mark\""), "the East marker is the scheduler's");
+      // smoke 10/18: the line's inner spans must not share the line prefix - Item B counts every [data-testid^="vac-line-"]
+      // element as a line (the marker and the note read as two extra lines per derived range)
+      assert.ok(!/<span data-testid="vac-line-/.test(dl), "no inner span of a derived line carries a vac-line- test id");
       assert.ok(!/Edit|Remove|rmVac|setEditVac/.test(dl), "no Edit / Remove on a derived line");
       assert.ok(rl.includes('{!eastDetailsVisible && derivedVacState === "failed" && <p data-testid="vac-derived-failed"'), "a failed derived read is said under the list (never the look of 'no vacations')");
     });

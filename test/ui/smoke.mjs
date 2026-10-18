@@ -4285,7 +4285,9 @@ try {
             // the claim gate's wording for both kinds of reader: a self-test of the page's shipped helper (Khan's surgeon page
             // drives the gate itself - see the block comment); the scheduler's text must stay the pre-E4 one
             const gate = await rp.evaluate(() => (typeof eastMaskedReasons === "function" && typeof reasonLabel === "function") ? { other: "Not eligible any more: " + reasonLabel(eastMaskedReasons(["east-busy"], false, null)[0], (x) => x), sched: "Not eligible any more: " + reasonLabel(eastMaskedReasons(["east-busy"], true, null)[0], (x) => x), vac: reasonLabel(eastMaskedReasons(["time-off:2026-12-01"], false, "unreviewed")[0], (x) => x) } : null);
-            if (!gate || gate.other !== "Not eligible any more: " + E4_NA || gate.sched !== "Not eligible any more: on East (Davenport) call" || gate.vac !== E4_NA) fail(`${T}: the page's eastMaskedReasons / reasonLabel give the claim-gate toast the wrong reason: ${JSON.stringify(gate)}`);
+            // pin moved deliberately 10/18 (Prompt 31 Part A decision 7, Faraz 10/14: an East vacation shows exactly like a Silvis
+            // vacation): the time-off code of a derived East vacation is no longer masked - it reads "on vacation", not E4_NA
+            if (!gate || gate.other !== "Not eligible any more: " + E4_NA || gate.sched !== "Not eligible any more: on East (Davenport) call" || gate.vac !== "on vacation") fail(`${T}: the page's eastMaskedReasons / reasonLabel give the claim-gate toast the wrong reason: ${JSON.stringify(gate)}`);
             else ok(`Item E4 (claim gate, helper self-test): the page's shipped helper words the toast '${gate.other}' for everyone but the scheduler ('${gate.sched}')`);
           } else {
             if (hp) {
@@ -9644,7 +9646,7 @@ try {
         await page.click('button[data-tab="timeoff"]');
         await page.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
         await page.waitForTimeout(400);
-        const dl = await page.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-line-eastmark]") })).catch(() => null);
+        const dl = await page.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-derived-mark]") })).catch(() => null);
         if (!dl) fail(`P31A A3 (scheduler): no read-only derived line for Khan's ${EV[0].start} East range in his Time off list`);
         else if (dl.buttons || !dl.mark || !/East vacation \((away|unreviewed)\) - decide in Setup > East feed/.test(dl.text)) fail("P31A A3 (scheduler): the derived line should carry the East marker, its state and 'decide in Setup > East feed', and no Edit / Remove: " + JSON.stringify(dl));
         else ok(`P31A A3 (scheduler): Time off lists Khan's ${EV[0].start} East range read-only - '${dl.text}' with the East marker, no button`);
@@ -9750,7 +9752,7 @@ try {
         await sa.click('button[data-tab="timeoff"]');
         await sa.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
         await sa.waitForTimeout(300);
-        const line = await sa.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-line-eastmark]") })).catch(() => null);
+        const line = await sa.$eval(`[data-testid=timeoff-card] [data-testid="vac-line-s1-${EV[0].start}"][data-derived="1"]`, el => ({ text: el.innerText.replace(/\s+/g, " ").trim(), buttons: el.querySelectorAll("button").length, mark: !!el.querySelector("[data-testid=vac-derived-mark]") })).catch(() => null);
         const eastCard = await sa.$("[data-testid=eastvac-timeoff]");
         if (!line || line.buttons || line.mark || !/set by the scheduler/.test(line.text) || EASTWORD_A3.test(line.text)) fail("P31A A3 (office): its Time off list should show Khan's " + EV[0].start + " range read-only, 'set by the scheduler', no marker, no button, no East word: " + JSON.stringify(line));
         else if (eastCard) fail("P31A A3 (office): the East (Davenport) vacations card shows to the office");

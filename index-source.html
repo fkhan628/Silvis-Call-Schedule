@@ -7055,9 +7055,9 @@ function CallSchedule() {
             )}
             {g.rows.map(r => r.derived ? (
               <div key={"dv-" + r.pid + r.vs + r.ve} data-testid={"vac-line-" + r.pid + "-" + r.vs} data-derived="1" data-start={r.vs} data-end={r.ve} style={{...lineStyle,marginLeft:withHeader ? 8 : 0}}>
-                {eastDetailsVisible && <span data-testid="vac-line-eastmark" data-state={r.state || "unreviewed"} style={{...eastVacMarkStyle(r.state || "unreviewed", dk, dkText),flexShrink:0}}/>}
+                {eastDetailsVisible && <span data-testid="vac-derived-mark" data-state={r.state || "unreviewed"} style={{...eastVacMarkStyle(r.state || "unreviewed", dk, dkText),flexShrink:0}}/>}
                 <span style={{fontFamily:mono,fontSize:12,color:dkText}} title={r.vs + (r.ve !== r.vs ? " to " + r.ve : "")}>{vacRangeLabel(r.vs, r.ve, todayStr)}</span>
-                <span data-testid="vac-line-derived" style={{...muted,fontStyle:"italic"}}>{eastDetailsVisible ? "East vacation (" + (r.state || "unreviewed") + ") - decide in Setup > East feed" : "set by the scheduler"}</span>
+                <span data-testid="vac-derived-note" style={{...muted,fontStyle:"italic"}}>{eastDetailsVisible ? "East vacation (" + (r.state || "unreviewed") + ") - decide in Setup > East feed" : "set by the scheduler"}</span>
                 {r.past && <span style={{fontSize:10,color:"#a0a8b0"}}>past</span>}
               </div>
             ) : (
