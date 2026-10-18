@@ -81,8 +81,12 @@ the guard an unattended run needs: when the other project answers no vacation fo
 ranges of it in the read's window, the cache is kept, no review is reset and the run records ok:false. Cron-only
 (`x-cron-secret`, like `daily-reminder`); it never mails. It calls three functions of the revision x database apply,
 so the order is that apply, then the deploy, the dryRun proof and the cron job: section 3's "Deploy record - Prompt 31
-Part A", section 4's statement, section 5's checks, section 7's rollback. Until then every sentence here about the
-four functions and the four jobs stays true.
+Part A", section 4's statement, section 5's checks, section 7's rollback. Where a run shows: ONE `east.refresh` audit
+row per run (`actor_id` `cron`), which Setup > East feed's refresh line reads for the scheduler - ok, or FAILED with the
+error and "the cached weeks were kept" - and which names, dates only, the days a new or changed East range leaves under
+the vacation minimum (`silvis_vacation_short_days`) and the published days held inside it. The other four functions are
+unchanged by Part A and call none of the new SQL functions: the calendar feeds, the digest and the reminders show
+assignments, not availability. Until then every sentence here about the four functions and the four jobs stays true.
 
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live

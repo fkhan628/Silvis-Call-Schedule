@@ -16,7 +16,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01 - report-first, **applied live 2026-10-02 12:05 UTC** - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
-| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. |
+| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, NOT applied - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
@@ -28,13 +28,13 @@ Verification: `scripts/verify-rls.sh`.*
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
 | `call_offers` | Offers: one row per person and day (`role_pref` primary / backup / either, operational `note`, `entered_by`, `source` app / email-relay / import); triggers refuse a past day (`OF001`), a day inside the person's vacation (`OF002`) and non-scheduler writes inside a frozen period (`OF003`). Authenticated. Added 2026-09-22 (Prompt 14 part 1; block below). |
 | `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live 2026-09-23 07:05Z - see the offer_modes subsection below). Authenticated read, scheduler write. |
-| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. |
+| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. Prompt 31 Part A (prepared 2026-10-14 - report-first, NOT applied - section at the end): a refresh deletes the stale rows through `east_vacation_reset_stale(p_from)` (one `eastvac.review` audit row each) instead of the client's loop. |
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 | `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
 | `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. |
 
-Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon).
+Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon). Prompt 31 Part A (revision x, prepared 2026-10-14 - report-first, NOT applied - section at the end): `silvis_derived_vacations()` (security definer, stable: the East person's away / unreviewed ranges as person and dates; EXECUTE for authenticated and service_role, never anon), `east_vacation_reset_stale(p_from)` (security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session), `silvis_vacation_short_days(p_from, p_to)` (security invoker: the days under the vacation minimum - service_role only) and the internal `silvis_east_people()` / `silvis_east_ranges()` (security invoker, service_role only); `time_off_vacation_guard()` re-created to read the derived rows.
 
 ## (b) RLS policies — who can read / write
 
@@ -3385,3 +3385,575 @@ block comments, the migration's trailer line and sha256 pin, the probe's and the
 default with 19i graded on every run and `SILVIS_PUSH_APPLIED` / `SILVIS_PUSH_DEPLOYED` dropped, `edge-functions/README.md`'s deploy
 record, guide 22, ONBOARDING, CLAUDE.md, and the test pins with them. Not re-run against the live project after the record step (the
 record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grades section 19 strictly, 19i included, with no flag.
+
+## 2026-10-14 - East vacations: silvis_derived_vacations + east_vacation_reset_stale + silvis_vacation_short_days + time_off_vacation_guard re-created (Faraz 10/9, Prompt 31 Part A; `sql/migrations/2026-10-14-east-vacations.sql`)
+
+**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations.sh`.** Revision x (u stays reserved for the
+weekend pair claim, prepared on its own branch; w - phone push - is the last applied). Nothing in the repo applies it: the apply
+script lives outside the repo (Faraz 10/1), Faraz runs it from the Part A worktree and pastes the log back, and the record step
+fills the observed lines at the end of this section. The order (guide section 25.6): this apply, the record step, the Part A client
+on Faraz's go, then the `east-feed-refresh` deploy, its dryRun proof and its cron job (`edge-functions/README.md` section 3, "Deploy
+record - Prompt 31 Part A") - the function calls three of these functions.
+
+**Why.** Faraz 10/9 (Prompt 31 item 1): "Every East range reviewed 'away', and every range still 'unreviewed', shows to every
+signed-in role exactly like a Silvis vacation." Until now only the scheduler sees those ranges; the rules, the generator and both
+vacation guards already count them (the app since 9/23, the trigger since 9/30). Item 5 asked for ONE source of truth with no orphan
+rows, either (a) a derived SQL view or definer function or (b) `time_off` rows with a source marker. **Faraz chose (a) on 10/14**
+(the report-first findings `REPORT-PROMPT-31-2026-10-13.md`, section 2, with its critic of 10/13 and the "PART A DECISIONS (10/14)"
+block - private folder, `docs/HISTORY.md`): (a) writes no row, so nothing can orphan, and it changes no table, policy or surface the
+public page reads. (b) would have broken three rules: `time_off_no_call_conflict` would refuse a range over a day Khan holds (item 2:
+"never block, never drop a range"); a marked row would sit in `time_off`, which the `?public=1` page and the office digest read; and
+the coordinator may edit or delete any `time_off` row (item 3 forbids it) - plus a filter in about a dozen readers. Item 6's review
+reset needs the same SQL reading anyway.
+
+**The objects** (no table, column, policy, trigger or row; the migration verbatim below):
+
+| object | before | after |
+|---|---|---|
+| `silvis_east_people()` | - | new, internal: the East people of the blob (`call_schedule_data` `main`) - an ACTIVE roster surgeon (`active` not false, `type` not `external`) with a roster code whose `surgeonRules.<id>.eastFeed` has `enabled` and `eastBlocksPrimary` or `eastBlocksBackup` as JSON `true` (the app's `eastVacationPerson`; Khan today) - as `(person_id, code, name, ord)`. `language sql stable security invoker`, `search_path = public, pg_temp`; EXECUTE for `service_role` only |
+| `silvis_east_ranges()` | - | new, internal: the ONE SQL port of `east-feed.js` `eastVacations` + `eastMergeRanges` and `helpers.js` `reviewStateFor` - per East person every vacation entry the cache holds for his code (every cached `east_feed` week; forecast rows skipped; the code compared upper-cased; an entry that is not an object, whose start or end is not a real `YYYY-MM-DD` date or that ends before it starts dropped), merged when two ranges overlap or touch, each with its review state: `away` / `home` when a review of the same person has EXACTLY its start and end, else `unreviewed` - as `(person_id, code, start_date, end_date, state)`. Security invoker, stable; EXECUTE for `service_role` only |
+| `silvis_derived_vacations()` | - | new: the `away` / `unreviewed` rows of that reading as `(person_id, start_date, end_date)` - no state, no code, no East column. **Security definer** (critic A6: it reads `east_feed` and the reviews past RLS - an RLS-filtered read answers no rows, silently - and an invoker caller would need EXECUTE on the internal functions too), stable (PostgREST answers GET and POST), `search_path = public, pg_temp`; EXECUTE for `authenticated` and `service_role`, never `anon` (Supabase grants EXECUTE on every new function to anon by default - the migration revokes it) |
+| `east_vacation_reset_stale(p_from date)` | the in-app refresh's per-person client loop (9/23) | new: the ONE review reset both refreshes run (decision 4) - over the current cache, every review row of an East person ending on or after `p_from` whose exact range is no longer a merged range is deleted, reason `changed` (it still overlaps a merged range of his) or `removed`, with one `eastvac.review` audit row each, and returned as `(person_id, start_date, end_date, decision, reason)`. Security definer, volatile (POST only), `search_path = public, pg_temp`, one transaction advisory lock (`east_vacation_reviews:reset`); EXECUTE for `authenticated` (the body refuses everyone but the scheduler) and `service_role`, never anon |
+| `silvis_vacation_short_days(p_from date, p_to date)` | the 9/30 read-only over-limit query only | new (the A1 review, critic A12): the ONE SQL definition of the days under the vacation minimum by the guard's reading - the active roster, `groupRules.vacations.minSurgeonsAround` (0-99, junk -> 2), off = a `time_off` row or a derived row - one row per day in `[p_from, p_to]` (a null bound is open) with someone off and fewer than the minimum around, as `(day, around, active, minimum, off_ids, derived_only_ids)`. Security invoker, stable; EXECUTE for `service_role` only (its ids say who is off through an East range) |
+| `time_off_vacation_guard()` | 9/30: the East leg reads the raw per-week `east_feed` entries minus the days ANY covering `home` review covers | re-created (`create or replace`; its trigger `time_off_vacation_guard_trg` is kept as it is): the East leg reads `silvis_derived_vacations()` (one materialized CTE) - the merged range, a `home` review only when it is exactly that range. Everything else is the 9/30 body: the UPDATE exit, the advisory lock, the scheduler / no-user exit, the minimum, the active roster, the `time_off` leg (inline - earlier rows of a multi-row insert stay visible), the counting and the `VG001` text |
+| every table, column, policy, trigger and row; `time_off_no_call_conflict`; the anon `read_all` loop; the realtime publication | - | **unchanged** |
+| PostgREST schema cache | - | the migration ends with `notify pgrst, 'reload schema';` (the three RPCs the client and the server refresh call; verify-rls 20a-20e prove it) |
+
+**The reading (one truth).** The database now reads Khan's East vacations exactly as the app does: the per-week copies merged into
+ranges (`eastVacations` -> `eastMergeRanges`), a review deciding a range only when it is the same person's EXACT range
+(`helpers.derivedEastVacations`), unreviewed counting as away. The client's signed-in display reads `silvis_derived_vacations()`
+(guide section 25.2), the guard reads the same rows, the server refresh's warning and `sql/probes/vacation-short-days.sql` read them
+through `silvis_vacation_short_days`, and both refreshes reset reviews through `silvis_east_ranges()`. **The client guard keeps its own
+copy** (critic A5): `vacationGuard`'s `eastAway` stays `vacEastAway` - the JS picture with the review state, which the scheduler's
+"(East, unreviewed)" gloss reads and the stateless derived rows lack; it is the same reading (merged, exact match), so the two agree.
+Offline (PGlite): the SQL reading equals `derivedEastVacations(eastVacations(...))` on 158 / 158 fixture sets under five time zones.
+
+**Who it binds.**
+
+| caller | `silvis_derived_vacations()` | `east_vacation_reset_stale(p_from)` | `silvis_vacation_short_days`, `silvis_east_ranges`, `silvis_east_people` | `time_off_vacation_guard` |
+|---|---|---|---|---|
+| anon | refused 42501 (no EXECUTE) | refused 42501 | refused 42501 | - (anon writes no `time_off`) |
+| a surgeon (Khan too), the office coordinator, a viewer / follower / APP | the rows | refused `EV001` | refused 42501 | a surgeon's or the coordinator's vacation is refused `VG001` when short (as on 9/30) |
+| the scheduler / admin (`silvis_is_sched()`) | the rows | runs (the audit rows carry his roster id and name) | refused 42501 over REST (EXECUTE is the service role's) | passes (the client asks him first) |
+| no signed-in user: the service role (the server refresh), the SQL editor, the linked CLI | the rows | runs (actor `cron`); a no-user call carrying an `anon` / `authenticated` role claim is `EV001` | runs | passes |
+
+**Refusals** (custom SQLSTATEs, HTTP 400 through PostgREST like VG / AP / NP / PS), both before any review is read or any row
+written:
+
+    EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
+    EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)
+
+The first is `EV001` (anyone but the scheduler or a no-user session), the second `EV002` (`p_from` null).
+
+**The audit rows.** One `eastvac.review` row per deleted review, in the client's shape: `{summary, person_id, start, end, decision:
+'reset', reason, removed: 1}` plus `was` (the deleted decision); the summary reads "East vacation <start>..<end> <name>: reset
+(<reason>)". The scheduler's carry his roster id (else his auth uid) and his display name (else his roster name, else `Unknown`),
+like `logAudit`; a no-user session's carry `actor_id` `'cron'` and `actor_name` `'east-feed-refresh (cron)'` when the JWT role is
+`service_role`, else `'no signed-in user (SQL)'`. The scheduler alone reads them (`audit_read`). Dates, ids and a decision only.
+
+**Behaviour change (the guard only; Faraz 10/14, decision 3 - "one truth").** (a) The East ranges are the MERGED ones: copies of a
+range in several cached weeks, and ranges that overlap or touch, count as one range (the same days are off either way). (b) A `home`
+review exempts its range only when it is exactly the merged range, as the app reads it: a `home` row that merely covers a day - a
+stale review of a range Davenport changed, until the next refresh resets it - no longer exempts the day, which now counts as off
+(probe G4 / G6: the 9/30 guard let both through). Stricter in that one case only, never more lenient. (c) An entry with an impossible
+date is dropped instead of compared as text (the cache's ranges come from a date column, so none carries one). The vacation guard
+probe's East fixtures (2030-10) are exact, separated ranges: verify-rls section 15 reads its 20 cases unchanged after the apply.
+
+**The known gap stays (9/30, review 10/1).** Only a `time_off` write is refused. A review turned `away`, or a new or longer range from
+a feed refresh, is never refused - Davenport owns the range (item 2: "never block, never drop a range, never move a lock"). Instead
+the Part A client warns the scheduler with the dates (guide section 25.3), and the server refresh's `east.refresh` audit detail
+names - dates only - the days a new or changed range puts under the minimum (`silvis_vacation_short_days`) and the published days
+held inside it. After the apply the scheduler lists such days with `sql/probes/vacation-short-days.sql` (the new reading);
+`sql/probes/vacation-guard-overlimit.sql` keeps the 9/30 reading (a covering, non-exact `home` row still exempts a day there) and is
+the BEFORE picture only. Server enforcement in `claim_open_slot` (`CL009`), `apply_trade` and `call_offers_guard` (`OF002`) stays out
+of Prompt 31 (decision 17): those read `time_off` only, as before.
+
+**The silent-empty guard is the caller's (critic A7).** An RLS-blocked Davenport read answers HTTP 200 + `[]`: one unattended run
+that trusted it would clear the cached ranges, and the reset over that cache would delete every review as `removed`. So a refresh
+whose Davenport `time_off` read failed, left a code unresolved, came back without a list for a code, or answered no range for a code
+while the cache holds ranges of it in the read's window keeps every week's cached list and never calls the reset; it records the run
+as `ok:false`. Both refreshes run that guard before the reset (`east-feed.js` `eastVacationReadGuard`; the server's copy is pinned
+behaviour-equal by `test/edge-functions.test.js`). The function itself never second-guesses its caller: it resets against the cache
+as it stands.
+
+**Blast radius.** One re-created trigger function on `time_off` (every non-scheduler vacation INSERT / UPDATE from the apply on reads
+the derived rows once - a materialized CTE over a cache of about ten ranges a year) and five new functions. No table, column, policy,
+trigger or row; nothing the public page, the share page, print, the calendar feeds, the office digest, the daily reminder, the ER
+export, e-mails or pay read (they keep reading `time_off` and never call the new functions - anon cannot). The new functions are
+called by no client and no edge function until the Part A client ships and the server refresh is deployed; until then the shipped
+client never names them. The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
+claim (revision u, on its own branch) - no shared object, either apply order.
+
+**What could break / what offline cannot show.** Offline, on PGlite (WASM PostgreSQL, a scratch folder outside the repo, over this
+branch's `schema.sql` with stubbed Supabase roles and `auth.uid()`): the migration and probe AFTER read 56 / 56; the 9/30 guard probe
+read 20 / 20 before and after the migration; the other probes were unchanged; a partly-applied database raised by name; 21 mutants
+each turned a named case red (anon EXECUTE on the derived rows, the reset or the short days; authenticated EXECUTE on the states or
+the short days; the derived rows as an invoker, the short days as a definer; no merge of touching ranges; a covering `home` exempting
+again; forecast rows read; the code compared case-sensitively; the reset touching non-East people, ignoring `p_from`, open to the
+coordinator or to an anon role claim; the guard skipping the derived rows; the short days skipping the derived rows, the roster filter
+or the bounds, listing a day AT the minimum, or reading a covering `home`); the rollback restored the BEFORE picture; `schema.sql`
+re-ran wholesale to the migrated picture; the JS <-> SQL parity above held; and on 5137 random (active surgeon, day) pairs over 100
+random sets the guard refused exactly when `silvis_vacation_short_days` listed the day once the vacation was entered. What PGlite cannot
+show: Supabase's own default privileges (the revokes and grants - P4 and A1-A8 read them live), the functions' owner (live:
+`postgres`), the live roster, cache and reviews, and PostgREST (the HTTP codes of section 20, the schema-cache reload). The live
+apply proves those; section 20 grades exact strings and names any difference by case.
+
+**The migration** (verbatim - every statement after its header; `sql/schema.sql` mirrors it: the five functions in their own block
+right after the `east_vacation_reviews` table, the guard re-created in its 9/30 block):
+
+```sql
+create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)
+language sql stable security invoker set search_path = public, pg_temp as $$
+  select e.r ->> 'id', upper(e.r ->> 'code'), coalesce(nullif(btrim(e.r ->> 'name'), ''), e.r ->> 'id'), e.ord
+    from public.call_schedule_data c
+    cross join lateral jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
+   where c.id = 'main'
+     and jsonb_typeof(e.r) = 'object' and coalesce(e.r ->> 'id', '') <> ''
+     and coalesce(e.r -> 'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r ->> 'type', '') <> 'external'
+     and coalesce(e.r ->> 'code', '') <> ''
+     and (c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'enabled']) = 'true'::jsonb
+     and ((c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksPrimary']) = 'true'::jsonb
+       or (c.data #> array['surgeonRules', e.r ->> 'id', 'eastFeed', 'eastBlocksBackup']) = 'true'::jsonb)
+   order by e.ord;
+$$;
+revoke all on function public.silvis_east_people() from public;
+revoke all on function public.silvis_east_people() from anon;
+revoke all on function public.silvis_east_people() from authenticated;
+grant execute on function public.silvis_east_people() to service_role;
+comment on function public.silvis_east_people() is 'Prompt 31 Part A (revision x): the East people of the blob - an active roster surgeon with a code whose eastFeed is enabled and blocks a role (the app''s eastVacationPerson, strict JSON true). Internal: EXECUTE for the service role only; the definer functions call it.';
+
+create or replace function public.silvis_east_ranges() returns table (person_id text, code text, start_date date, end_date date, state text)
+language sql stable security invoker set search_path = public, pg_temp as $$
+  with entries as (
+    select p.person_id, p.code, p.ord, v.r ->> 'start' as s, v.r ->> 'end' as e
+      from public.silvis_east_people() p
+      cross join public.east_feed f
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(f.data -> 'vacations') = 'array' then f.data -> 'vacations' else '[]'::jsonb end) as v(r)
+     where (f.data -> 'isForecast') is distinct from 'true'::jsonb
+       and jsonb_typeof(v.r) = 'object'
+       and upper(coalesce(v.r ->> 'code', '')) = p.code
+  ),
+  dated as (
+    select x.person_id, x.code, x.ord,
+           case when coalesce(x.s, '') ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' and substr(x.s, 1, 4) <> '0000'
+                then case when substr(x.s, 9, 2)::int <= extract(day from (substr(x.s, 1, 7) || '-01')::date + interval '1 month - 1 day')::int
+                          then x.s::date end end as sd,
+           case when coalesce(x.e, '') ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$' and substr(x.e, 1, 4) <> '0000'
+                then case when substr(x.e, 9, 2)::int <= extract(day from (substr(x.e, 1, 7) || '-01')::date + interval '1 month - 1 day')::int
+                          then x.e::date end end as ed
+      from entries x
+  ),
+  valid as (
+    select d.person_id, d.code, d.ord, d.sd, d.ed from dated d where d.sd is not null and d.ed is not null and d.sd <= d.ed
+  ),
+  marked as (
+    select g.person_id, g.code, g.ord, g.sd, g.ed,
+           case when max(g.ed) over (partition by g.person_id order by g.sd, g.ed rows between unbounded preceding and 1 preceding) >= g.sd - 1
+                then 0 else 1 end as brk
+      from valid g
+  ),
+  islands as (
+    select k.person_id, k.code, k.ord, k.sd, k.ed,
+           sum(k.brk) over (partition by k.person_id order by k.sd, k.ed rows between unbounded preceding and current row) as isl
+      from marked k
+  ),
+  merged as (
+    select i.person_id, min(i.code) as code, min(i.ord) as ord, min(i.sd) as start_date, max(i.ed) as end_date
+      from islands i
+     group by i.person_id, i.isl
+  )
+  select m.person_id, m.code, m.start_date, m.end_date,
+         case w.decision when 'away' then 'away' when 'home' then 'home' else 'unreviewed' end
+    from merged m
+    left join public.east_vacation_reviews w on w.person_id = m.person_id and w."start" = m.start_date and w."end" = m.end_date
+   order by m.ord, m.start_date;
+$$;
+revoke all on function public.silvis_east_ranges() from public;
+revoke all on function public.silvis_east_ranges() from anon;
+revoke all on function public.silvis_east_ranges() from authenticated;
+grant execute on function public.silvis_east_ranges() to service_role;
+comment on function public.silvis_east_ranges() is 'Prompt 31 Part A (revision x): the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and helpers.js reviewStateFor - per East person the cached vacation ranges merged (overlapping or touching), each with its exact-match review state (away / home / unreviewed). Internal: EXECUTE for the service role only; read through silvis_derived_vacations and east_vacation_reset_stale.';
+
+create or replace function public.silvis_derived_vacations() returns table (person_id text, start_date date, end_date date)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select r.person_id, r.start_date, r.end_date
+    from public.silvis_east_ranges() r
+   where r.state <> 'home'
+   order by r.person_id, r.start_date;
+$$;
+revoke all on function public.silvis_derived_vacations() from public;
+revoke all on function public.silvis_derived_vacations() from anon;
+grant execute on function public.silvis_derived_vacations() to authenticated;
+grant execute on function public.silvis_derived_vacations() to service_role;
+comment on function public.silvis_derived_vacations() is 'Prompt 31 Part A (revision x): the derived vacation rows every signed-in role sees beside time_off - (person_id, start_date, end_date), dates only, no state and no source column. Security definer, stable (GET or POST); EXECUTE for authenticated / service_role, never anon. The vacation guard reads the same rows.';
+
+create or replace function public.east_vacation_reset_stale(p_from date) returns table (person_id text, start_date date, end_date date, decision text, reason text)
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me       uuid := auth.uid();
+  v_role   text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_actor  text;
+  v_name   text;
+  x        record;
+  n        int;
+begin
+  if me is null then
+    if v_role in ('anon', 'authenticated') then
+      raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+    end if;
+    v_actor := 'cron';
+    v_name := case when v_role = 'service_role' then 'east-feed-refresh (cron)' else 'no signed-in user (SQL)' end;
+  elsif not public.silvis_is_sched() then
+    raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+  else
+    v_actor := coalesce(public.silvis_person_id(), me::text);
+    v_name := coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                       (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                         where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                       'Unknown');
+  end if;
+  if p_from is null then
+    raise exception 'EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)' using errcode = 'EV002';
+  end if;
+  -- one reset at a time (the in-app refresh and the server refresh may meet)
+  perform pg_advisory_xact_lock(hashtext('east_vacation_reviews:reset'));
+  for x in
+    with cur as materialized (
+      select r.person_id as pid, r.start_date as s, r.end_date as e from public.silvis_east_ranges() r
+    ),
+    ppl as materialized (
+      select p.person_id as pid, p.name as pname, p.ord from public.silvis_east_people() p
+    )
+    select w.id as rid, w.person_id as pid, w."start" as s, w."end" as e, w.decision as dec, q.pname,
+           case when exists (select 1 from cur c where c.pid = w.person_id and c.s <= w."end" and c.e >= w."start")
+                then 'changed' else 'removed' end as why
+      from public.east_vacation_reviews w
+      join ppl q on q.pid = w.person_id
+     where w."end" >= p_from
+       and not exists (select 1 from cur c where c.pid = w.person_id and c.s = w."start" and c.e = w."end")
+     order by q.ord, w."start", w."end"
+  loop
+    delete from public.east_vacation_reviews d where d.id = x.rid;
+    get diagnostics n = row_count;
+    continue when n = 0;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (v_actor, v_name, 'eastvac.review',
+            jsonb_build_object('summary', 'East vacation ' || to_char(x.s, 'YYYY-MM-DD') || '..' || to_char(x.e, 'YYYY-MM-DD') || ' ' || x.pname || ': reset (' || x.why || ')',
+                               'person_id', x.pid, 'start', x.s, 'end', x.e, 'decision', 'reset', 'reason', x.why, 'removed', 1, 'was', x.dec));
+    person_id := x.pid;
+    start_date := x.s;
+    end_date := x.e;
+    decision := x.dec;
+    reason := x.why;
+    return next;
+  end loop;
+end $$;
+revoke all on function public.east_vacation_reset_stale(date) from public;
+revoke all on function public.east_vacation_reset_stale(date) from anon;
+grant execute on function public.east_vacation_reset_stale(date) to authenticated;
+grant execute on function public.east_vacation_reset_stale(date) to service_role;
+comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x): the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them. The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon. The caller skips it when its Davenport read failed or came back empty while the cache holds ranges.';
+
+create or replace function public.silvis_vacation_short_days(p_from date, p_to date) returns table (day date, around int, active int, minimum int, off_ids text[], derived_only_ids text[])
+language sql stable security invoker set search_path = public, pg_temp as $$
+  with blob as (
+    select c.data from public.call_schedule_data c where c.id = 'main'
+  ),
+  min_n as (
+    select coalesce((select case when jsonb_typeof(b.data #> '{groupRules,vacations,minSurgeonsAround}') = 'number'
+                                 then case when (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric between 0 and 99
+                                            and (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric = trunc((b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric)
+                                           then (b.data #>> '{groupRules,vacations,minSurgeonsAround}')::numeric::int end end
+                       from blob b), 2) as n
+  ),
+  roster as (
+    select e.r ->> 'id' as id, e.ord
+      from blob b
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(b.data -> 'roster') = 'array' then b.data -> 'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
+     where jsonb_typeof(e.r) = 'object' and coalesce(e.r ->> 'id', '') <> ''
+       and coalesce(e.r -> 'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r ->> 'type', '') <> 'external'
+  ),
+  active_n as (
+    select count(*)::int as n from roster
+  ),
+  sources as (
+    select t.person_id as id, t.start_date as s, t.end_date as e, false as derived from public.time_off t
+    union all
+    select dv.person_id, dv.start_date, dv.end_date, true from public.silvis_derived_vacations() dv
+  ),
+  off_days as (
+    select g::date as d, x.id, x.derived
+      from sources x
+      cross join lateral generate_series(greatest(x.s, coalesce(p_from, '-infinity'::date))::timestamp,
+                                         least(x.e, coalesce(p_to, 'infinity'::date))::timestamp, interval '1 day') as g
+     where x.id in (select a.id from roster a)
+  ),
+  off_people as (
+    select o.d, o.id, bool_and(o.derived) as derived_only, (select min(a.ord) from roster a where a.id = o.id) as ord
+      from off_days o
+     group by o.d, o.id
+  )
+  select p.d, (select n from active_n) - count(*)::int, (select n from active_n), (select n from min_n),
+         array_agg(p.id order by p.ord, p.id),
+         coalesce(array_agg(p.id order by p.ord, p.id) filter (where p.derived_only), '{}'::text[])
+    from off_people p
+   group by p.d
+  having (select n from active_n) - count(*)::int < (select n from min_n)
+   order by p.d;
+$$;
+revoke all on function public.silvis_vacation_short_days(date, date) from public;
+revoke all on function public.silvis_vacation_short_days(date, date) from anon;
+revoke all on function public.silvis_vacation_short_days(date, date) from authenticated;
+grant execute on function public.silvis_vacation_short_days(date, date) to service_role;
+comment on function public.silvis_vacation_short_days(date, date) is 'Prompt 31 Part A (revision x): the ONE SQL definition of the days under the vacation minimum (critic A12) - by the guard''s reading (the active roster, groupRules.vacations.minSurgeonsAround, off = a time_off row or a silvis_derived_vacations row), one row per day in [p_from, p_to] (a null bound is open) with someone off and fewer than the minimum around. The server refresh''s east.refresh audit and sql/probes/vacation-short-days.sql read it. EXECUTE for the service role only.';
+
+create or replace function public.time_off_vacation_guard() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  blob        jsonb;
+  min_around  int := 2;
+  m           numeric;
+  active      text[];
+  o_start     date;
+  o_end       date;
+  ex_old      uuid;
+  over_txt    text;
+begin
+  -- an edit that takes the person off no new day (same person, the range kept or narrowed, a note) is never checked
+  if tg_op = 'UPDATE' then
+    if new.person_id = old.person_id then
+      if new.start_date >= old.start_date and new.end_date <= old.end_date then
+        return new;
+      end if;
+      o_start := old.start_date;
+      o_end := old.end_date;
+    end if;
+    ex_old := old.id;
+  end if;
+  -- one vacation write at a time: two concurrent entries cannot both pass the count (read-then-write)
+  perform pg_advisory_xact_lock(hashtext('time_off:vacation_guard'));
+  -- the scheduler may enter one anyway (the client asks him first); so may a session with no signed-in user (the SQL editor,
+  -- the linked CLI, service_role - the scheduler's own tools)
+  if auth.uid() is null or public.silvis_is_sched() then
+    return new;
+  end if;
+  select c.data into blob from public.call_schedule_data c where c.id = 'main';
+  -- the minimum: groupRules.vacations.minSurgeonsAround, a whole number 0-99; absent / junk -> 2 (helpers.js VACATION_GUARD_DEFAULTS)
+  if jsonb_typeof(blob #> '{groupRules,vacations,minSurgeonsAround}') = 'number' then
+    m := (blob #>> '{groupRules,vacations,minSurgeonsAround}')::numeric;
+    if m = trunc(m) and m >= 0 and m <= 99 then
+      min_around := m::int;
+    end if;
+  end if;
+  -- the ACTIVE roster (active is not false, not an outside surgeon) in roster order; the East people and their ranges are
+  -- silvis_derived_vacations()'s (Prompt 31 Part A, revision x)
+  select coalesce(array_agg(x.id order by x.ord), '{}')
+    into active
+    from (select e.r->>'id' as id, e.ord
+            from jsonb_array_elements(case when jsonb_typeof(blob->'roster') = 'array' then blob->'roster' else '[]'::jsonb end) with ordinality as e(r, ord)
+           where jsonb_typeof(e.r) = 'object' and coalesce(e.r->>'id', '') <> ''
+             and coalesce(e.r->'active', 'true'::jsonb) <> 'false'::jsonb and coalesce(e.r->>'type', '') <> 'external') x;
+  -- a person who is not an active roster surgeon changes nobody's count
+  if not (new.person_id = any(active)) then
+    return new;
+  end if;
+  -- per checked day: who else is off WITHOUT this row, then the days this row takes the person off and how many stay around;
+  -- off = a time_off row (inline: earlier rows of a multi-row insert count) or a derived East vacation row (away / unreviewed,
+  -- the merged range, a 'home' review only when it is exactly that range)
+  with days as (
+    select g::date as day
+      from generate_series(new.start_date::timestamp, new.end_date::timestamp, interval '1 day') as g
+     where o_start is null or g::date not between o_start and o_end
+  ),
+  east_off as materialized (
+    select dv.person_id, dv.start_date, dv.end_date from public.silvis_derived_vacations() dv
+  ),
+  off_before as (
+    select d.day, a.id
+      from days d cross join unnest(active) as a(id)
+     where exists (select 1 from public.time_off t
+                    where t.person_id = a.id and t.id <> new.id and t.id is distinct from ex_old
+                      and d.day between t.start_date and t.end_date)
+        or exists (select 1 from east_off eo
+                    where eo.person_id = a.id and d.day between eo.start_date and eo.end_date)
+  ),
+  per_day as (
+    select d.day, cardinality(active) - 1 - (select count(*) from off_before o where o.day = d.day)::int as around
+      from days d
+     where not exists (select 1 from off_before o where o.day = d.day and o.id = new.person_id)
+  ),
+  short_days as (
+    select day, around from per_day where around < min_around
+  ),
+  runs as (
+    select around, min(day) as s, max(day) as e, count(*) as n
+      from (select day, around, day - (row_number() over (partition by around order by day))::int as grp from short_days) x
+     group by around, grp
+  ),
+  by_count as (
+    select around, min(s) as first_day,
+           string_agg(case when n = 1 then to_char(s, 'FMMM/FMDD')
+                           when n = 2 then to_char(s, 'FMMM/FMDD') || ', ' || to_char(e, 'FMMM/FMDD')
+                           else to_char(s, 'FMMM/FMDD') || '-' || to_char(e, 'FMMM/FMDD') end, ', ' order by s) as txt
+      from runs
+     group by around
+  )
+  select string_agg(txt || ' only ' || around, '; on ' order by first_day) into over_txt from by_count;
+  if over_txt is not null then
+    raise exception 'VACATION_TOO_FEW_AROUND: on % of % surgeons would be around (minimum %) - pick other dates or ask the scheduler',
+      over_txt, cardinality(active), min_around using errcode = 'VG001';
+  end if;
+  return new;
+end $$;
+
+notify pgrst, 'reload schema';
+```
+
+**The pre-check** (`sql/probes/east-vacations-precheck.sql`, read-only; one SELECT of `ord, section, role, detail` - counts, dates and
+catalog facts only, no name, no e-mail, no reason; run before and right after the apply):
+
+| row | section | before the apply | after the apply |
+|---|---|---|---|
+| 1 | objects (the gate) | `people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no` | `people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes short_fn=yes guard=yes guard_derived=yes` |
+| 2 | guard | `trigger=yes definer=t body_md5=c69066960303545b0028e0a820f6e1ab` (the 9/30 body - any other body is a STOP: the live guard is not the one this migration replaces) | `trigger=yes definer=t body_md5=2c81df20b98b3eb78a1d5b94fe8c30cf` (the reviewed revision x body) |
+| 3 | feed | the `east_feed` cache: `rows`, `forecast`, `first`, `last`, `fetched_max`, `vacation_entries` - facts | the same |
+| 4 | reviews | `away`, `home`, `home_inexact` (home rows whose dates are no cached entry's exact dates - the guard stops exempting their days after the apply unless the merge makes them a whole range) - facts | the same |
+| 5 | ranges | `functions=absent` | the new reading: `merged`, `away`, `home`, `unreviewed`, `derived` |
+| 6 | cron | `jobs`, `active`, `east_job=no` (the four live jobs) | the same (the server refresh's job comes after the deploy) |
+| 7 | pg_net | `version=<extversion>` (the cron job sets `timeout_milliseconds` because pg_net's default is a few seconds) | the same |
+| 8 | realtime | the publication facts for `time_off`, `east_feed`, `east_vacation_reviews` (a function has no Realtime and needs none) | the same |
+
+**The probe** (`sql/probes/east-vacations-probe.sql`, rolled back - one batch through the linked CLI, every observation in a temp
+table, the last statement raising `PROBE_RESULTS ...;END`. Fixtures in an unused far-future window, 2031-01 .. 2031-04, behind a
+collision guard; four throwaway auth users `probe-eastvac31-<uuid>@example.test` (U1 a surgeon linked to n1, U2 a coordinator, U3 an
+admin, U4 a viewer); the roster is READ from the live blob, never written: E = the East person, n1..n5 the other active surgeons in
+roster order. BEFORE the migration every case reads `PROBE_SETUP: silvis_derived_vacations is absent -
+sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases - the header's own words, verbatim):
+
+| case | what | AFTER |
+|---|---|---|
+| P1 | postgres: the live roster's active count and minimum | `active=6 min=2` |
+| P2 | postgres: an East person on the roster | `east=yes` |
+| P3 | postgres: the five functions' security, volatility and search_path | `people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile short=invoker/stable paths=5` |
+| P4 | postgres: who may EXECUTE them | `public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset,short` |
+| P5 | postgres: the derived rows' columns | `result=TABLE(person_id text, start_date date, end_date date)` |
+| P6 | postgres: time_off's triggers in firing order, the guard's security and its East leg | `triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t derived=yes` |
+| D1 | range(02-03): an unreviewed range | `range=02-03..02-04 state=unreviewed derived=yes` |
+| D2 | range(02-06): a range reviewed away (exact) | `range=02-06..02-07 state=away derived=yes` |
+| D3 | range(02-10): a range reviewed home (exact) | `range=02-10..02-11 state=home derived=no` |
+| D4 | range(02-13): a home review covers it but is not its exact range | `range=02-13..02-14 state=unreviewed derived=yes` |
+| D5 | range(02-20): copies in two cached weeks that touch merge; home on the merged range | `range=02-17..02-21 state=home derived=no` |
+| D6 | range(02-25): overlapping copies and a duplicate merge; home on one copy only | `range=02-24..02-27 state=unreviewed derived=yes` |
+| D7 | range(03-11): an entry of a forecast row is ignored | `range=none` |
+| D8 | range(02-05) and any other person's range in the window: n2's code (no East feature) and a code on no roster | `range=none others=0` |
+| D9 | range(03-05): a lower-case code still matches | `range=03-05..03-06 state=unreviewed derived=yes` |
+| D10 | E's ranges and derived rows in the window; the malformed entries' days (03-01, 03-07, 03-08, 03-09) | `ranges=8 derived=6 malformed_days=0` |
+| A1 | U1 (surgeon n1): silvis_derived_vacations() rows of E in the window | `rows=6` |
+| A2 | U2 (coordinator): the same | `rows=6` |
+| A3 | U4 (viewer): the same | `rows=6` |
+| A4 | U1: silvis_east_ranges() | `ERR 42501 permission denied for function silvis_east_ranges` |
+| A5 | U1: silvis_east_people() | `ERR 42501 permission denied for function silvis_east_people` |
+| A6 | anon: silvis_derived_vacations() | `ERR 42501 permission denied for function silvis_derived_vacations` |
+| A7 | anon: reset('2099-01-01') | `ERR 42501 permission denied for function east_vacation_reset_stale` |
+| A8 | anon: silvis_east_ranges() | `ERR 42501 permission denied for function silvis_east_ranges` |
+| G1 | U1 enters n1 02-03 (E unreviewed - counted) | `ERR VG001 VACATION_TOO_FEW_AROUND: on 2/3 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G2 | U1 enters n1 02-06 (E away - counted) | `ERR VG001 VACATION_TOO_FEW_AROUND: on 2/6 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G3 | U1 enters n1 02-10 (E home, exact - not counted) | `ok` |
+| G4 | U1 enters n1 02-13 (a home review that covers the day but is not its range no longer exempts it; the 9/30 guard let it through) | `ERR VG001 VACATION_TOO_FEW_AROUND: on 2/13 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G5 | U1 enters n1 02-20 (home on the merged range of two touching copies) | `ok` |
+| G6 | U1 enters n1 02-25 (home on one copy of an overlapping pair is stale and counts; the 9/30 guard let it through) | `ERR VG001 VACATION_TOO_FEW_AROUND: on 2/25 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G7 | U1 enters n1 03-11 (only a forecast row's entry - not counted) | `ok` |
+| G8 | U1 enters n1 03-05 (a lower-case code - counted) | `ERR VG001 VACATION_TOO_FEW_AROUND: on 3/5 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G9 | U1 enters n1 02-05 (n2's code and a code on no roster - nobody else counted) | `ok` |
+| G10 | U2 (coordinator) enters n1 02-06..02-07 | `ERR VG001 VACATION_TOO_FEW_AROUND: on 2/6, 2/7 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler` |
+| G11 | U3 (admin = the scheduler) enters n1 02-03..02-04 | `ok` |
+| S1 | postgres: short('2031-01-01', '2031-04-30') - G11's n1 inside E's unreviewed 02-03..02-04; 02-05, 02-10, 02-20, 03-11 stay at 2 | `days=02-03/1,02-04/1` |
+| S2 | postgres: its 02-03 row - the counts, who is off (roster order) and who only through a derived row | `active=6 min=2 off=E,n1,n3,n4,n5 derived_only=E roster_order=yes` |
+| S3 | postgres, no signed-in user: n1 entered on 02-13 and 02-25 and an id on no roster on 02-14, then short('2031-02-01', '2031-03-31') - a covering, non-exact or one-copy home exempts nothing (the 9/30 over-limit query would list neither day); a non-roster row counts for nobody | `days=02-03/1,02-04/1,02-13/1,02-25/1` |
+| S4 | postgres: the bounds - (null, 02-28) from 2031-01-01 on, (02-04, null) through 2031-04-30, (02-04, 02-04), (02-05, 02-04) | `lo=02-03,02-04,02-13,02-25 hi=02-04,02-13,02-25 one=02-04 none=0` |
+| S5 | postgres: its columns | `result=TABLE(day date, around integer, active integer, minimum integer, off_ids text[], derived_only_ids text[])` |
+| S6 | U1 (surgeon): short('2031-01-01', '2031-04-30') | `ERR 42501 permission denied for function silvis_vacation_short_days` |
+| S7 | anon: short('2031-01-01', '2031-04-30') | `ERR 42501 permission denied for function silvis_vacation_short_days` |
+| R1 | U1 (surgeon): reset('2031-02-01') | `ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)` |
+| R2 | U2 (coordinator): reset('2031-02-01') | `ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)` |
+| R3 | U4 (viewer): reset('2031-02-01') | `ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)` |
+| R4 | postgres with an anon role claim and no user: reset('2031-02-01') | `ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)` |
+| R5 | postgres, no signed-in user: reset(null) | `ERR EV002 EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)` |
+| R6 | U3 (admin): reset('2031-03-01') - only rows ending on or after 03-01 | `n=1 03-25..03-26/away/removed` |
+| R7 | its audit row | `audit=1 actor=self name=probe admin sum=East vacation 2031-03-25..2031-03-26 <E>: reset (removed) keys=decision,end,person_id,reason,removed,start,summary,was was=away` |
+| R8 | postgres with the service_role claim: reset('2031-02-01') | `n=2 02-12..02-15/home/changed,02-24..02-26/home/changed` |
+| R9 | their audit rows | `audit=2 actor=cron name=east-feed-refresh (cron)` |
+| R10 | postgres, no signed-in user: reset('2031-01-01') - the row ending 01-28 is now in scope | `n=1 01-27..01-28/away/removed` |
+| R11 | its audit row | `audit=1 actor=cron name=no signed-in user (SQL)` |
+| R12 | postgres, no signed-in user: reset('2031-01-01') again | `n=0 audit=0` |
+| R13 | the fixture reviews left (n2's never touched) | `kept=E 02-06..02-07 away,E 02-10..02-11 home,E 02-17..02-21 home,n2 02-05..02-05 away` |
+| R14 | the resets wrote no time_off / east_feed row; the derived rows are unchanged | `time_off=same east_feed=same ranges=8 derived=6` |
+
+**verify-rls.sh section 20** (`SILVIS_EAST_VACATIONS_APPLIED=1` = strict, only on the run right after the apply; section 15, the
+9/30 guard's 20 cases, re-runs unchanged and proves the re-created trigger kept its behaviour):
+
+| part | what | PASS |
+|---|---|---|
+| 20a | anon `POST rpc/silvis_derived_vacations` | 401 / 403; 404 = not applied yet (a FAIL when strict); a 200 or a 400 = anon reached the body - a FAIL always |
+| 20b | anon `POST rpc/east_vacation_reset_stale` with `p_from` 2099-01-01 (a body that ran could reset nothing) | 401 / 403 (the 404 rule; a 400 = EV001 refused it but the revoke did not take - a FAIL) |
+| 20c | anon `POST rpc/silvis_east_ranges` | 401 / 403 (the 404 rule) |
+| 20d | anon `POST rpc/silvis_east_people` | 401 / 403 (the 404 rule) |
+| 20e | with `SILVIS_SURGEON_JWT` only: the surgeon reads the derived rows, asks the reset for 2099-01-01, asks the short days | 200 with a JSON array; 400 `EV001` (never a write); 401 / 403 |
+| 20f | the probe through the linked CLI, graded by case name | every case as the table above; `PROBE_SETUP: ... absent` = not applied yet (a FAIL when strict); a partly-applied or collision raise, or no sentinel = FAIL |
+| 20g | leftovers by the probe's identity: its auth users, `time_off` notes `probe-eastvac31%`, `east_feed` rows with `data.probe` `eastvac31`, reviews `decided_by` `probe-eastvac31`, `eastvac.review` audit rows starting in 2031-01 .. 2031-04 | 0; else FAIL with the five DELETEs (rows only the probe writes) |
+| 20h | anon `POST rpc/silvis_vacation_short_days` (added after 20d by the A1 review, so 20e-20g kept their letters) | 401 / 403 (the 404 rule) |
+
+**Apply order:**
+
+1. Pre-check `sql/probes/east-vacations-precheck.sql` (read-only): the objects row must read `people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no`
+   and the guard row the 9/30 body's md5; the other rows are facts. Then `sql/probes/vacation-guard-overlimit.sql` (read-only): the
+   days already under the minimum by the 9/30 reading - facts, never changed.
+2. Function-absent check (`pg_proc`): none of the five names exists in `public`, in any overload.
+3. Probe BEFORE: `supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-vacations-probe.sql` -> `PROBE_SETUP:
+   silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied`.
+4. The migration: `supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-14-east-vacations.sql` (one implicit
+   transaction - a failure changes nothing), after Faraz types APPLY in capital letters.
+5. The gate after: `people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes short_fn=yes guard=yes guard_derived=yes`, the guard row's md5 the revision x body's,
+   the five signatures (two definer, three invoker) and EXECUTE: anon none, authenticated the derived rows and the reset only, PUBLIC
+   none.
+6. Probe AFTER: every case as the table lists (56 cases); then `sql/probes/vacation-short-days.sql` (read-only): the days under the
+   minimum by the new reading - facts.
+7. `SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh` - section 20 strict (the anon 404s and PROBE_SETUP are FAILs), section
+   15's 20 cases unchanged, every other section green, both leftover counts 0.
+8. The record step (below).
+9. The Part A client on Faraz's go; then the `east-feed-refresh` deploy, its dryRun proof and its cron job (`edge-functions/README.md`
+   section 3).
+
+**One command (Faraz):** his apply script `apply-east-vacations.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
+paths; `test/schema.test.js` pins that none sits here) - the private folder's apply-scripts, beside byte copies of the graded files
+and their SHA256SUMS. Its shape is `apply-push-notifications.sh`'s post-10/3 one (critic A3): step 0 checks the branch, the commit and
+the sha256 of the eight files it runs or deploys (this migration, the pre-check, the probe, the two read-only queries, `verify-rls.sh`,
+the 9/30 guard migration - the rollback file - and the `east-feed-refresh` source) and that the CLI workdir is linked to
+`bzhsroegtagqhutbnsrp` (any other link - the Davenport one included - is a STOP); it runs steps 1-7 above, stops at the first failure
+(nothing after it runs), asks for APPLY in capital letters on the terminal before step 4 (`SKIP_CONFIRM` only with a fake CLI in a
+test), has a `--dry-run` (steps 0-3 only), exports `AI_AGENT=1` and stops before anything is applied unless the CLI answers in its
+agent-mode envelope, prints the rollback on any stop after step 4, holds no secret, writes a log and ends with a PASTE THIS BACK TO
+CLAUDE CODE block for the record step.
+
+**Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - the migration writes no row). Stop the server
+refresh's job first when it exists (`select cron.unschedule('silvis-east-feed-daily');` - the function calls these functions), then
+the 9/30 guard body FIRST (it stops calling the derived rows), then the drops:
+
+```text
+supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-30-vacation-guard.sql   (the 9/30 guard body; idempotent)
+drop function if exists public.silvis_vacation_short_days(date, date);
+drop function if exists public.east_vacation_reset_stale(date);
+drop function if exists public.silvis_derived_vacations();
+drop function if exists public.silvis_east_ranges();
+drop function if exists public.silvis_east_people();
+notify pgrst, 'reload schema';
+```
+
+The client reads the missing functions as "unavailable" (today's picture) and resets reviews with its 9/23 loop again.
+
+**The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed lines; table (a)'s helper line; `sql/schema.sql`
+revision x ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's headers; verify-rls section
+20 strict by default with `SILVIS_EAST_VACATIONS_APPLIED` dropped; guide 4.3 and section 25, the rules doc's Time off row, section 3
+(Khan) and section 8 item 17; and the test pins with them.
+
+observed: (the record step fills this - nothing in this section has run against the live project).

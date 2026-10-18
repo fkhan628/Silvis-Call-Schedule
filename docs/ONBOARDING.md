@@ -17,7 +17,9 @@ afterwards; the editor keeps query history).*
    (created 9/22), `silvis-offers-daily` (created 9/23) and the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
    `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z). All read
    the Vault secret `silvis_cron_secret`. For a rebuild, the `cron.schedule` statements of `edge-functions/README.md`
-   section 4 are the reference; `select jobid, jobname, schedule, active from cron.job` must show the four rows.
+   section 4 are the reference; `select jobid, jobname, schedule, active from cron.job` must show the four rows. Prompt 31 Part A
+   prepares a fifth, `silvis-east-feed-daily` (the daily East feed refresh), created only after `east-feed-refresh` is deployed and its
+   dry run passed (`edge-functions/README.md` sections 3 and 4).
 
 ## Your own account (first — already done for Faraz on 9/23 - `admin`, roster `s1`; kept for a rebuild)
 
@@ -151,7 +153,22 @@ written for an East range — a change of mind is one tap and leaves nothing beh
 to unreviewed and the toast says so. On the scheduler's calendar an East range is a small diamond (dashed = unreviewed, outline =
 away, filled green = home), the day editor names the state, and the coverage strip counts the unreviewed ranges until
 they are decided - since 9/25 (item E3) those three are the scheduler's view only; the person's own Time off view and
-My schedule keep the list and the control.
+My schedule keep the list and the control. Since Prompt 31 Part A (decision 11) those two East cards are the scheduler's too -
+nothing changes for Khan, who is the scheduler; an East-code surgeon who is not the scheduler would see his away / unreviewed
+ranges as read-only lines "set by the scheduler" in My vacations, like everyone else (next paragraph).
+
+**Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A, Faraz 10/9; tell the group once it ships).** Once the
+database part is applied and the Part A client ships, the East-code person's ranges that are *away* or still *unreviewed* show to
+every signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: a dot on the
+calendar, "Off: Khan" in the day summary, a line in the Time off list that reads "set by the scheduler" (read-only: no Edit and no
+Remove - the office cannot change or delete it), and "on vacation" in the open-shifts board, claim and trade reasons. They count
+toward the 2 surgeons around rule as they already do, so a vacation that would leave fewer than 2 around on such a day is refused
+(the scheduler gets a confirm instead). Where a range comes from stays the scheduler's: the app shows them no East or Davenport word
+(the E / O / F / EV badges in Mine and Following and the offer painter's East words are the scheduler's only too - the painter says
+"not available"), and *home* ranges do not show at all. Nothing changes on the public link, its share links, the printout, the
+calendar feeds, the office digest, the ER export or any e-mail. A change - an away / home decision, or a range the Davenport app
+changes - reaches everyone within about a minute of the next refresh, and the daily server refresh (once deployed) keeps the
+ranges fresh without anyone opening the app.
 
 **My call - Silvis + Davenport (for the person with an East code - Khan today; Prompt 31 Part B).** On their own **Mine**
 page, under My pay, one card counts their call at both sites: Silvis primary and backup days (one 07:00-07:00 day = 1),

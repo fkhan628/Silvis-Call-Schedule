@@ -14330,6 +14330,145 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- Prompt 31 Part A (A5): the docs ---------------- */
+  // The docs are part of the contract (the P15 docs-pin rule above): Faraz applies, deploys and decides from these pages, and
+  // reads the rules doc and ONBOARDING. Pinned on the headings, the names a reader greps for, the decisions' words and the
+  // privacy lines. The PREPARED state's words ("NOT applied", "NOT deployed", "applied: _to be filled at the record step_") are
+  // pinned too: the record step after Faraz's apply / deploy moves them deliberately, as every apply's record step has.
+  // test/schema.test.js pins the database record (docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations") and guide 4.3.
+  console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");
+  {
+    const readDoc5 = (...p) => { const f = path.join(ROOT, ...p); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n") : ""; };
+    const guide = readDoc5("docs", "SILVIS-BUILD-GUIDE.md"), rulesDoc = readDoc5("docs", "SILVIS-CALL-RULES.md");
+    const onboarding = readDoc5("docs", "ONBOARDING.md"), efReadme = readDoc5("edge-functions", "README.md"), historyDoc = readDoc5("docs", "HISTORY.md");
+    const flat5 = (t) => t.replace(/\s+/g, " ");
+    const SEC = "\u00a7", MARK = "\u27f6";
+    // h2(text, head): from "\n" + head to the next "\n## " (or the end); "" when the heading is missing
+    const h2 = (t, head) => { const i = t.indexOf("\n" + head); if (i < 0) return ""; const j = t.indexOf("\n## ", i + 1); return t.slice(i, j < 0 ? t.length : j); };
+    const H25 = "## 25. East vacations for everyone + the daily server refresh (Faraz 10/9; Prompt 31 Part A)";
+    const SUBS = ["### 25.1 One reading in the database - revision x", "### 25.2 What everyone signed in sees",
+      "### 25.3 The scheduler's warning for the East person's own range (item 2)", "### 25.4 The review reset and the silent-empty guard - both refreshes",
+      "### 25.5 The daily server refresh - `east-feed-refresh` (items 6 and 7)", "### 25.6 Tests, the apply, the deploy and the ship"];
+    const s25 = h2(guide, H25);
+    const sub25 = (n) => { const i = s25.indexOf("\n" + SUBS[n - 1]); if (i < 0) return ""; const j = n < SUBS.length ? s25.indexOf("\n" + SUBS[n], i + 1) : -1; return s25.slice(i, j < 0 ? s25.length : j); };
+    const has = (t, words, where) => words.forEach(w => assert.ok(t.includes(w), where + " must name " + JSON.stringify(w)));
+    check("P31A5 guide: '" + H25 + "' directly after section 24 and the last numbered section; the sub-headings 25.1 .. 25.6 in order; every '25.<k>' pointer in the guide names one of them", () => {
+      assert.ok(s25.length > 0, "the section 25 heading");
+      const nums = [...guide.matchAll(/^## (\d+)\. /gm)].map(m => Number(m[1]));
+      assert.strictEqual(nums[nums.length - 1], 25, "section 25 is the last numbered section");
+      assert.strictEqual(nums[nums.length - 2], 24, "section 24 (Part B) comes right before it");
+      let last = -1;
+      SUBS.forEach(h => { const i = s25.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
+      assert.strictEqual((guide.match(/\n### 25\.\d/g) || []).length, SUBS.length, "exactly six 25.x sub-headings");
+      const ptrs = (guide.match(/(?<![\d.\/:-])25\.\d+(?!\d)/g) || []).filter(p => !/^25\.[1-6]$/.test(p));
+      assert.deepStrictEqual(ptrs, [], "every 25.<k> pointer names a sub-heading 25.1 .. 25.6");
+    });
+    check("P31A5 guide 25: the status line - revision x NOT applied (Faraz runs apply-east-vacations.sh), east-feed-refresh NOT deployed with no cron job, the client after the apply; the binding texts (the 10/13 report, its critic, the PART A DECISIONS of 10/14); the rules and the generator unchanged", () => {
+      const head = s25.slice(0, s25.indexOf("\n" + SUBS[0]));
+      const status = (head.match(/^\*Status: [^\n]*(\n[^\n]+)*/m) || [""])[0];
+      has(flat5(status), ["`feat/east-vacations-part-a`", "revision x", "NOT applied", "`apply-east-vacations.sh`", "`east-feed-refresh` is NOT deployed", "`silvis-east-feed-daily`", "\"unavailable\"", "The record step rewrites this line."], "section 25's status line");
+      has(flat5(head), ["REPORT-PROMPT-31-2026-10-13.md", "critic of 10/13", "PART A DECISIONS", "`docs/HISTORY.md`", "rules doc section 8 item 26", "the critic wins", "since 9/23"], "section 25's opening");
+    });
+    check("P31A5 guide 25.1: the one reading - the five functions with their security and EXECUTE (critic A6: the derived rows a security definer, anon revoked), the guard's East leg on the derived rows (merged; a home review only when exact - decision 3), the client guard keeps vacEastAway (critic A5), the short days (critic A12), what stays out (decision 17)", () => {
+      has(flat5(sub25(1)), ["`silvis_east_people()`", "`silvis_east_ranges()`", "`silvis_derived_vacations()`", "`east_vacation_reset_stale(p_from)`", "`silvis_vacation_short_days(p_from, p_to)`", "`time_off_vacation_guard()`",
+        "security definer", "critic A6", "never anon", "decision 3", "exactly", "critic A5", "`vacEastAway`", "critic A12", "decision 17", "`CL009`", "`apply_trade`", "`OF002`", "`time_off_no_call_conflict`", "56 cases", "section 20", "section 15"], "25.1");
+    });
+    check("P31A5 guide 25.2: what everyone signed in sees - derivedVacDb.load's states, derivedVacMap / vacShown / vacListExtra / vacListMap (never timeOffRows / vacations), the per-role table, the existing words (decisions 6-12), decision 11's East words, the failed read said in place, the unchanged surfaces (item 4), the timing", () => {
+      const s = sub25(2);
+      has(flat5(s), ["`derivedVacDb.load()`", "\"skipped\"", "\"unavailable\"", "\"failed\"", "`derivedVacMap`", "`vacShown`", "`vacListExtra`", "`vacListMap`", "`timeOffRows`", "decision 13",
+        "\"set by the scheduler\"", "\"Off: Khan\"", "\"Vacations: Khan\"", "\"on vacation\"", "decision 6", "decision 7", "decision 8", "decision 9", "decision 10", "decision 11", "decision 12", "`eastDetailsVisible`", "\"not available\"",
+        "`vac-derived-failed`", "?public=1", "share", "print", "calendar feeds", "office digest", "ER export", "e-mails", "pay", "60 s"], "25.2");
+      assert.ok(/^ *\| surface \| the scheduler \| everyone else signed in [^\n]*\|$/m.test(s), "25.2 carries the per-role table (surface | the scheduler | everyone else signed in | ...; inside its bullet)");
+      assert.ok(/no Edit \/ Remove/.test(s) && /coordinator/.test(s), "the derived lines are read-only for the office too (item 3)");
+    });
+    check("P31A5 guide 25.3-25.5: the own-range warning (eastVacationOwnWarnings, the boxes, cov-eastvac-warn, the day editor - never a block); the ONE reset and the A7 guard (eastVacationReadGuard's four problems, the cache read first, eastRefreshStatus, EAST_FEED_STALE_DAYS 2, no phantom-week delete); the server refresh (the gate first, the body fails closed, eastRefreshWindows mirrored in UTC, the in-app order, dryRun, 502, the cron job's name, schedule and timeout)", () => {
+      has(flat5(sub25(3)), ["`eastVacationOwnWarnings`", "`EastVacWarnBox`", "`cov-eastvac-warn`", "`eastVacationWarnText`", "Davenport owns it", "never a block", "`silvis_vacation_short_days`", "dates only"], "25.3");
+      has(flat5(sub25(4)), ["`east_vacation_reset_stale(p_from)`", "`runEastReviewResets`", "`derivedVacDb.resetStale`", "decision 4", "critic A7", "`eastVacationReadGuard`", "`read-failed`", "`unresolved`", "`missing`", "`empty-while-cached`",
+        "200 + []", "`cacheBefore`", "`eastRefreshStatus`", "\"the cached weeks were kept\"", "`EAST_FEED_STALE_DAYS`", "decision 5", "decision 14"], "25.4");
+      has(flat5(sub25(5)), ["`x-cron-secret`", "fails closed", "`eastRefreshWindows`", "`eastExtraWeeks`", "UTC", "critic A9", "decision 15", "merge-duplicates", "`east.refresh`", "`cron`", "dryRun", "502",
+        "`silvis-east-feed-daily`", "`30 10 * * *`", "`timeout_milliseconds` 60000", "decision 16", "never a delete of a cached week", "NOT deployed"], "25.5");
+    });
+    check("P31A5 guide 25.6: the tests (the server mirror under six time zones), the order (the apply with its dry run, the record step, the client, the deploy, the dryRun proof, the cron job), the rollback and what stays open", () => {
+      has(flat5(sub25(6)), ["`test/schema.test.js`", "`test/edge-functions.test.js`", "`test/east-feed.test.js`", "[P31A3]", "[P31A5]", "`test/ui/smoke.mjs`", "critic A8", "PGlite",
+        "America/Chicago", "Asia/Tokyo", "Pacific/Kiritimati", "Pacific/Pago_Pago", "Australia/Lord_Howe", "`apply-east-vacations.sh`", "--dry-run", "APPLY", "capital letters", "the record step",
+        "--no-verify-jwt --use-api", "`401`", "dryRun", "`silvis-east-feed-daily`", "Rollback", "Still open"], "25.6");
+    });
+    check("P31A5 guide pointers: section 7 (the blind spot answered by the A7 guard -> " + SEC + "25.4; a server-refresh bullet -> " + SEC + "25.5; the refresh-windows bullet stays Part B's), section 8's vacation guard bullet (vacEastAway / critic A5 -> " + SEC + "25.3), section 10, section 18 (18.2 -> " + SEC + "25.4, 18.3 -> " + SEC + "25.2, 18.5 questions 3 and 6)", () => {
+      const s7 = h2(guide, "## 7. East feed");
+      const b7 = s7.split(/\n(?=- )/);
+      const vac7 = b7.find(b => b.startsWith("- **East vacations (Prompt 15 part 1a")) || "";
+      assert.ok(vac7.includes("Known blind spot") && vac7.includes("`eastVacationReadGuard`") && vac7.includes(SEC + "25.4"), "section 7's East vacations bullet answers its blind spot with the A7 guard (" + SEC + "25.4)");
+      const srv7 = b7.filter(b => b.startsWith("- **The daily server refresh (Prompt 31 Part A"));
+      assert.strictEqual(srv7.length, 1, "section 7 has one server-refresh bullet");
+      has(srv7[0], ["`east-feed-refresh`", "`silvis-east-feed-daily`", SEC + "25.5", "Refresh from Davenport"], "section 7's server-refresh bullet");
+      const win7 = b7.filter(b => b.startsWith("- **Refresh windows (Prompt 31 item 7"));
+      assert.ok(win7.length === 1 && !win7[0].includes(SEC + "25"), "the refresh-windows bullet stays Part B's (call-totals T12 pins it to section 24)");
+      const vg8 = (guide.match(/^- \*\*Vacation guard \(Prompt 27, [^\n]*/m) || [""])[0];
+      has(vg8, ["Database: `time_off_vacation_guard` (applied 2026-10-01 16:53 UTC - section 4.3;", MARK + " **Prompt 31 Part A", "`vacEastAway`", "critic A5", "`silvis_derived_vacations()`", SEC + "25.3"], "section 8's vacation guard bullet");
+      has(h2(guide, "## 10. Notifications"), ["`east-feed-refresh`", "`silvis-east-feed-daily`", SEC + "25.5"], "section 10");
+      const s18 = h2(guide, "## 18. East vacations");
+      const i182 = s18.indexOf("\n### 18.2"), i183 = s18.indexOf("\n### 18.3"), i184 = s18.indexOf("\n### 18.4"), i185 = s18.indexOf("\n### 18.5");
+      assert.ok(s18.slice(i182, i183).includes("`east_vacation_reset_stale(p_from)`") && s18.slice(i182, i183).includes(SEC + "25.4"), "18.2's refresh resets point at the ONE SQL reset (" + SEC + "25.4)");
+      assert.ok(s18.slice(i183, i184).includes(SEC + "25.2") && /everyone signed in/.test(s18.slice(i183, i184)), "18.3 says who sees the ranges since Part A (" + SEC + "25.2)");
+      const q = s18.slice(i185);
+      assert.ok(/^3\. \*\*Server-side enforcement\*\*[^\n]*(\n[^\n]+)*/m.test(q) && (q.match(/^3\. \*\*Server-side enforcement\*\*[^\n]*(\n   [^\n]+)*/m) || [""])[0].includes(SEC + "25.1"), "18.5 question 3 points at revision x (" + SEC + "25.1)");
+      assert.ok((q.match(/^6\. \*\*Who refreshes\.\*\*[^\n]*(\n   [^\n]+)*/m) || [""])[0].includes(SEC + "25.5"), "18.5 question 6 points at the server refresh (" + SEC + "25.5)");
+    });
+    check("P31A5 rules doc: section 1's Time off row (everyone signed in, the derived reading, the own range warned never refused, revision x NOT applied yet); section 3 Khan (the Part A bullet; the reset by one SQL function and the A7 guard); section 6 (no count, share or target moves); section 8 item 17 (the trigger leg answered, decision 17) and item 26 (decision (a) and the 16 others, numbered; what stays open)", () => {
+      const row = (rulesDoc.match(/^\| Time off \|[^\n]*/m) || [""])[0];
+      has(row, [MARK + " **10/14 (Faraz 10/9, Prompt 31 Part A)", "every signed-in role", "\"set by the scheduler\"", "`silvis_derived_vacations()`", "**revision x**", "**NOT applied yet**", "`apply-east-vacations.sh`", "is never refused", "Davenport owns it", "`docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\""], "section 1's Time off row");
+      assert.ok(/\| Khan 9\/21, \*\*9\/22\*\*, \*\*9\/30\*\*, Faraz \*\*10\/9, 10\/14\*\* \|$/.test(row), "the Time off row's source cell adds Faraz 10/9, 10/14");
+      const khan = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
+      const pa = (khan.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0];
+      has(flat5(pa), ["seen by everyone signed in", "\"set by the scheduler\"", "\"Off: Khan\"", "*home*", "the scheduler's only", "?public=1", "`silvis_derived_vacations()`", "nothing is written", "build guide " + SEC + "25"], "section 3 Khan's Part A bullet");
+      const reset = (khan.match(/^  - \*\*A refreshed feed that changes or removes a range resets its review\*\*[^\n]*(\n    [^\n]+)*/m) || [""])[0];
+      has(flat5(reset), ["`east_vacation_reset_stale`", "critic A7", "resets nothing"], "section 3 Khan's reset bullet");
+      const s6 = h2(rulesDoc, "## 6. Fairness model");
+      const b6 = s6.split(/\n(?=- )/).filter(b => b.includes("Prompt 31 Part A"));
+      assert.strictEqual(b6.length, 1, "one section 6 bullet for Part A");
+      assert.ok(/change no count, share, target or cap/.test(flat5(b6[0])) && !/My call - Silvis \+ Davenport/.test(b6[0]), "it says the shown ranges change no count, share, target or cap (and is not the card's bullet - T12 counts that one)");
+      const s8 = rulesDoc.slice(rulesDoc.indexOf("\n## 8. Answered"));
+      const i17 = (s8.match(/^17\. \*\*East vacations[^\n]*(\n    [^\n]+)*/m) || [""])[0];
+      has(flat5(i17), ["60 days", "open-slot window", MARK + " **10/14 (Prompt 31 Part A, decision 17)", "`claim_open_slot` (`CL009`)", "`apply_trade`", "`OF002`", "revision x"], "section 8 item 17");
+      const i26 = (s8.match(/^26\. \*\*East vacations seen by everyone signed in[^\n]*(\n    [^\n]+)*/m) || [""])[0];
+      assert.ok(i26.length > 0, "section 8 item 26");
+      const f26 = flat5(i26);
+      for (let n = 1; n <= 17; n++) assert.ok(f26.includes("(" + n + ")"), "item 26 lists decision (" + n + ")");
+      has(f26, ["DECIDED 10/14", "(1) **(a) the derived SQL function**", "\"set by the scheduler\"", "`silvis-east-feed-daily`", "`30 10 * * *`", "**Still open:**", "build guide " + SEC + "25"], "section 8 item 26");
+      assert.ok(f26.indexOf("(1)") < f26.indexOf("(2)") && f26.indexOf("(16)") < f26.indexOf("(17)"), "item 26 numbers the decisions in order");
+    });
+    check("P31A5 ONBOARDING: one paragraph for what everyone else sees (every signed-in role; the dot, 'Off: Khan', the Time off line 'set by the scheduler' read-only for the office too, 'on vacation'; the 2-around rule; no East / Davenport word, home ranges not shown; not the public link, share, print, feeds, digest, ER export, e-mails); the East vacations paragraph says the two East cards are the scheduler's (decision 11); the cron line names the prepared fifth job", () => {
+      const paras = onboarding.split("\n\n").filter(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p));
+      assert.strictEqual(paras.length, 1, "exactly one paragraph leads with **Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A");
+      const p = flat5(paras[0]);
+      has(p, ["surgeons", "office coordinator", "viewers", "followers", "APPs", "\"Off: Khan\"", "\"set by the scheduler\"", "no Edit", "no Remove", "\"on vacation\"", "2 surgeons around",
+        "no East or Davenport word", "*home*", "public link", "printout", "calendar feeds", "office digest", "ER export", "e-mail", "about a minute", "daily server refresh"], "the paragraph");
+      assert.ok(!/\*\*East vacations|\*\*My call/.test(paras[0]), "apart from the East vacations and My call paragraphs (P15 and T12 read those by their lead-ins)");
+      const ev = onboarding.split("\n\n").find(pp => /\*\*East vacations/.test(pp)) || "";
+      assert.ok(/Prompt 31 Part A/.test(ev) && /decision 11/.test(ev) && /"set by the scheduler"/.test(ev), "the East vacations paragraph says the Time off and My schedule East cards are the scheduler's since Part A (decision 11) and what a non-scheduler East surgeon sees");
+      const at = onboarding.indexOf("4. The pg_cron jobs are in place");
+      const item4 = at < 0 ? "" : onboarding.slice(at, onboarding.indexOf("\n\n", at));
+      assert.ok(/four, all active/.test(item4) && /must show the four rows/.test(item4) && /`silvis-east-feed-daily`/.test(item4) && /fifth/.test(item4), "the cron item keeps the four live jobs and names the prepared fifth, silvis-east-feed-daily");
+    });
+    check("P31A5 edge-functions/README.md (A2's gap): the Part A paragraph says where a run shows (one east.refresh row, Setup > East feed, the warning days from silvis_vacation_short_days, dates only) and that the four other functions call none of the new SQL functions; it still ends 'Until then ...'; ASCII. HISTORY's report row points at guide section 25", () => {
+      const para = efReadme.split("\n\n").find(pp => pp.startsWith("**Prompt 31 Part A (2026-10-16): a fifth function, `east-feed-refresh`")) || "";
+      const f = flat5(para);
+      has(f, ["Where a run shows:", "ONE `east.refresh` audit row", "Setup > East feed", "`silvis_vacation_short_days`", "dates only", "call none of the new SQL functions", "assignments, not availability"], "the README's Part A paragraph");
+      assert.ok(/Until then every sentence here about the four functions and the four jobs stays true\.$/.test(f.trim()), "the paragraph still ends with the four-functions sentence (the record step rewords it)");
+      assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(efReadme) && /^[\x09\x0a\x0d\x20-\x7e]*$/.test(historyDoc), "the README and HISTORY stay ASCII");
+      const rows = historyDoc.split("\n").filter(l => l.startsWith("| `REPORT-PROMPT-31-2026-10-13.md`"));
+      assert.ok(rows.length === 1 && /guide section 25/.test(rows[0]) && /"2026-10-14 - East vacations"/.test(rows[0]) && !/PART-B-DESIGN/.test(rows[0]), "HISTORY's report row points at guide section 25 and the SCHEMA-REVIEW record (and stays apart from the Part B row T12 reads)");
+    });
+    check("P31A5 privacy: no address-shaped string and no machine path in the Part A docs (guide 25, the rules doc, ONBOARDING, the README)", () => {
+      const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
+      [["guide 25", s25], ["rules", rulesDoc], ["ONBOARDING", onboarding], ["README", efReadme]].forEach(([n, t]) => {
+        const hits = (t.match(EMAIL) || []).filter(m => !/@example\.(test|com)$/.test(m));
+        assert.deepStrictEqual(hits.map(m => n + ": " + m.replace(/[A-Za-z0-9]/g, "x")), [], "address-shaped strings (masked)");
+        assert.ok(!/\b[A-Za-z]:[\\/]+Users[\\/]/.test(t) && !/(^|[^A-Za-z0-9])Users[\\/]+[A-Za-z0-9._-]+[\\/]/.test(t), n + ": no machine path");
+      });
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });

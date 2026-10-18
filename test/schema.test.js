@@ -5424,4 +5424,60 @@ step("Prompt 31 Part A: no apply script in the repo (Faraz 10/1: apply scripts l
 }
 console.log("- Prompt 31 Part A: five NEW functions (silvis_east_people / silvis_east_ranges / silvis_derived_vacations / east_vacation_reset_stale / silvis_vacation_short_days - critic A12) + time_off_vacation_guard re-created to read the derived rows (report-first, NOT applied; revision x), mirrored, probe (56) + pre-check + vacation-short-days.sql + verify-rls section 20 graded against a faked CLI");
 
+// ---- Prompt 31 Part A (A5): the database record before the apply - docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations" (the migration
+// header's record step names it), table (a)'s helper line and guide 4.3. The PREPARED state's words (the status line, "NOT applied",
+// "applied: _to be filled at the record step_", the observed placeholder) are pinned here and move deliberately at the record step, as
+// every apply's did; everything else is re-derived from the files it describes (the migration verbatim, the probe header's 56 AFTER
+// strings, the two guard bodies' md5, the gates, the rollback, the refusals). test/data-layer.test.js [P31A5] pins the other docs.
+step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (PREPARED - report-first, NOT applied - Faraz runs apply-east-vacations.sh: why + decision (a), the objects, the reading, who it binds, EV001 / EV002, the audit rows, the behaviour change, the known gap, the caller's A7 guard, blast radius, offline limits, the migration verbatim, the pre-check, the probe table = the probe header's 56 cases, section 20, the apply order, one command, the rollback, the record step, the observed placeholder), table (a)'s helper line, guide 4.3's bullet + Proof line and the vacation guard bullet's pointer");
+{
+  ok(/^## 2026-10-14 - East vacations: silvis_derived_vacations \+ east_vacation_reset_stale \+ silvis_vacation_short_days \+ time_off_vacation_guard re-created \(Faraz 10\/9, Prompt 31 Part A; `sql\/migrations\/2026-10-14-east-vacations\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-14 - East vacations: ... (Faraz 10/9, Prompt 31 Part A; `sql/migrations/2026-10-14-east-vacations.sql`)' section (the migration header's record step names it)");
+  const at = review.indexOf("## 2026-10-14 - East vacations:"), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
+  const xr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const xf = xr.replace(/\s+/g, " ");
+  ok(at > review.indexOf("## 2026-10-03 - phone push:") && end < 0, "the section is the last one, after the Prompt 30 record");
+  ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations\.sh`\.\*\*/m.test(xr) && !/\*\*Status: APPLIED/.test(xr), "the status line reads '**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations.sh`.**' until the record step");
+  const ANCHORS = ["**Why.**", "**The objects**", "**The reading (one truth).**", "**Who it binds.**", "**Refusals**", "**The audit rows.**", "**Behaviour change (the guard only", "**The known gap stays", "**The silent-empty guard is the caller's (critic A7).**", "**Blast radius.**", "**What could break / what offline cannot show.**", "**The migration**", "**The pre-check", "**The probe**", "**verify-rls.sh section 20**", "**Apply order:**", "**One command (Faraz):**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved: "];
+  let last = -1;
+  ANCHORS.forEach((a) => { const i = xr.indexOf(a); ok(i > last, "the section's '" + a.trim() + "' is missing or out of order"); last = i; });
+  ok(xf.includes("Faraz chose (a) on 10/14") && xf.includes("REPORT-PROMPT-31-2026-10-13.md") && xf.includes("PART A DECISIONS (10/14)") && xf.includes("`time_off_no_call_conflict`"), "why: Faraz's decision (a) of 10/14, the report and its decisions, and what (b) would have broken (the on-call trigger)");
+  // the objects table: one row per new function by its signature, the re-created guard, the unchanged rest, the schema-cache reload
+  XV_ORDER.forEach((f) => ok(new RegExp("^\\| `" + xvEsc(XV_FNS[f].sig.replace("(date)", "(p_from date)").replace("(date, date)", "(p_from date, p_to date)")) + "` \\|", "m").test(xr), "the objects table has a row for " + f));
+  ok(/^\| `time_off_vacation_guard\(\)` \|/m.test(xr) && /^\| every table, column, policy, trigger and row[^\n]*\*\*unchanged\*\* \|$/m.test(xr) && xr.includes("`notify pgrst, 'reload schema';`"), "the objects table: the re-created guard, the unchanged rest, the schema-cache reload");
+  ok(xf.includes("critic A6") && xf.includes("critic A5") && xf.includes("critic A12") && xf.includes("decision 3") && xf.includes("decision 17"), "the critic items and decisions the record rests on are named (A5 / A6 / A7 / A12, decisions 3 and 17)");
+  ["EV001", "EV002"].forEach((c) => ok(xr.includes("    " + XV_TEXT[c]), "the section quotes " + c + " verbatim (an indented line)"));
+  ok(xf.includes("'cron'") && xf.includes("'east-feed-refresh (cron)'") && xf.includes("'no signed-in user (SQL)'") && xf.includes("`was`"), "the audit rows' actors (the scheduler, cron / the service role, a no-user SQL session) and the extra `was` key");
+  ok(xf.includes("must not call the reset") || xf.includes("never calls the reset"), "the A7 guard is the caller's: a failed, unresolved or empty-but-cached read never calls the reset");
+  // the migration, verbatim: every statement after its header, in one sql fence
+  const body = xvMig.slice(xvMig.indexOf("create or replace function public.silvis_east_people()")).replace(/\n+$/, "");
+  ok(body.length > 1000 && xr.includes("```sql\n" + body + "\n```"), "the section carries the migration verbatim (every statement after its header - = sql/migrations/2026-10-14-east-vacations.sql)");
+  // the pre-check: the two gates and the two guard bodies' md5 (re-derived from the 9/30 file and this migration)
+  const md5Of = (file) => { const s = read(file), i = s.indexOf("create or replace function public.time_off_vacation_guard()"), a = s.indexOf("$$", i) + 2; return crypto.createHash("md5").update(s.slice(a, s.indexOf("$$", a))).digest("hex"); };
+  const MD5_930 = md5Of(path.join(ROOT, "sql", "migrations", "2026-09-30-vacation-guard.sql")), MD5_X = md5Of(XV_MIGRATION);
+  ok(xr.includes(XV_GATE_BEFORE) && xr.includes(XV_GATE_AFTER) && xr.includes("body_md5=" + MD5_930) && xr.includes("body_md5=" + MD5_X) && MD5_930 !== MD5_X, "the pre-check's gates and the guard body md5 before (" + MD5_930 + ", the 9/30 body) and after (" + MD5_X + ")");
+  // the probe table: the probe header's 56 cases, each with its AFTER string verbatim
+  XV_CASES.forEach((k) => ok(new RegExp("^\\| " + k + " \\| [^\\n]+ \\| `" + xvEsc(XV_AFTER[k] || "?") + "` \\|$", "m").test(xr), "the section's probe table lists case " + k + " with its AFTER string (" + XV_AFTER[k] + ")"));
+  eq((xr.match(/^\| [PDAGSR]\d+ \| /gm) || []).length, XV_CASES.length, "the probe table has exactly the 56 case rows;");
+  ok(xf.includes("PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied") && xf.includes("2031"), "the probe's BEFORE answer and its 2031 fixtures");
+  ["20a", "20b", "20c", "20d", "20e", "20f", "20g", "20h"].forEach((p) => ok(new RegExp("^\\| " + p + " \\|", "m").test(xr), "the section 20 table has a row for " + p));
+  // the apply order, the one command, the rollback, the record step
+  ok(xf.includes("SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh") && xf.includes("56 cases") && xf.includes("section 15") && xf.includes("sql/probes/vacation-guard-overlimit.sql") && xf.includes("sql/probes/vacation-short-days.sql"), "the apply order: the over-limit query before, the short days after, probe AFTER (56), strict verify-rls with section 15 re-run");
+  ok(xf.includes("`apply-east-vacations.sh`, kept OUTSIDE the repo") && xf.includes("APPLY") && xf.includes("capital letters") && xf.includes("`--dry-run`") && xf.includes("`AI_AGENT=1`") && xf.includes("PASTE THIS BACK") && !/bash scripts\/apply-/.test(xr), "one command: Faraz's apply script, outside the repo (APPLY in capital letters, --dry-run, AI_AGENT=1, the paste-back block)");
+  const xrRb = xr.slice(xr.indexOf("**Rolling back**"));
+  let rb = -1;
+  XV_ROLLBACK.forEach((l) => { const i = xrRb.indexOf(l); ok(i > rb, "the rollback (its own block) lists, in order: " + l); rb = i; });
+  ok(xf.includes("select cron.unschedule('silvis-east-feed-daily');"), "the rollback stops the server refresh's job first, when it exists");
+  ok(/^observed: \(the record step fills this[^\n]*/m.test(xr), "the observed placeholder (nothing has run against the live project)");
+  // table (a)'s helper line, guide 4.3
+  ok(/^Helper functions: `silvis_role\(\)`[^\n]*Prompt 31 Part A \(revision x, prepared 2026-10-14 - report-first, NOT applied - section at the end\): `silvis_derived_vacations\(\)`[^\n]*`east_vacation_reset_stale\(p_from\)`[^\n]*`silvis_vacation_short_days\(p_from, p_to\)`[^\n]*`silvis_east_people\(\)`[^\n]*`silvis_east_ranges\(\)`[^\n]*`time_off_vacation_guard\(\)` re-created/m.test(review), "table (a)'s helper line names revision x's five functions and the re-created guard (prepared 2026-10-14, NOT applied)");
+  const xvBullet = (g43.match(/^- \*\*East vacations, derived \(2026-10-14, [^\n]*/m) || [""])[0];
+  const xvProof = (g43.match(/^Proof: `sql\/probes\/east-vacations-probe\.sql`[^\n]*/m) || [""])[0];
+  ok(xvBullet.startsWith("- **East vacations, derived (2026-10-14, Prompt 31 Part A, report-first, NOT applied - Faraz runs `apply-east-vacations.sh`; `sql/migrations/2026-10-14-east-vacations.sql`, revision x).**") && /decision \(a\)/.test(xvBullet), "guide 4.3 carries the revision x bullet (report-first, NOT applied - Faraz runs apply-east-vacations.sh)");
+  ["silvis_east_people()", "silvis_east_ranges()", "silvis_derived_vacations()", "east_vacation_reset_stale(p_from)", "silvis_vacation_short_days(p_from, p_to)", "time_off_vacation_guard()"].forEach((f) => ok(new RegExp("^\\| `" + xvEsc(f) + "`", "m").test(g43.slice(g43.indexOf("- **East vacations, derived (2026-10-14,"))), "guide 4.3's revision x table has a row for " + f));
+  ok(/56 cases in its header/.test(xvProof) && /east-vacations-precheck\.sql/.test(xvProof) && /vacation-short-days\.sql/.test(xvProof) && /section 20 \(/.test(xvProof) && /section 15/.test(xvProof) && /`apply-east-vacations\.sh`/.test(xvProof) && /"2026-10-14 - East vacations"/.test(xvProof) && /applied: _to be filled at the record step_/.test(xvProof), "guide 4.3's revision x Proof line: the probe (56), the pre-check, the short days, verify-rls sections 20 and 15, the apply script, the record and the placeholder");
+  const vgBulletX = (g43.match(/^- \*\*Vacation guard \(2026-09-30, [^\n]*/m) || [""])[0];
+  ok(vgBulletX.includes("Revision x (Prompt 31 Part A, 2026-10-14 - report-first, NOT applied)") && vgBulletX.includes("`silvis_derived_vacations()`") && /Known gap \(review 10\/1\): only a `time_off` write is checked/.test(vgBulletX), "guide 4.3's vacation guard bullet points at revision x (the East leg on the derived rows) and keeps its known gap");
+}
+console.log("- Prompt 31 Part A (A5): docs/SCHEMA-REVIEW.md's revision x record (PREPARED, NOT applied - Faraz runs apply-east-vacations.sh; the migration verbatim, the 56 probe cases with their AFTER strings, the gates and guard md5s re-derived), table (a)'s helper line, guide 4.3");
+
 console.log("schema.test.js: " + N + " assertions passed");
