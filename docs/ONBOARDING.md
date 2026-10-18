@@ -80,7 +80,7 @@ rules"): your recurring rules in Setup → Rules place you - you still get the h
 say whether the list is **"only these days"** (you are never placed on a day you did not list) or **"my preferred days
 — use my rules to fill gaps"** (the default: your days are placed first; until you reach your fair share for the month
 your rules may also place you on days you did not list, and beyond your share you are kept to your list
-unless no colleague can reasonably take the slot - in each month where you listed at least one day of the period; My schedule marks each day you did not list "not offered" — trade if needed). Vacations, East days, derived weeks, windows and caps still
+unless no colleague can reasonably take the slot - in each month where you listed at least one day of the period; listed weeks or months in your Setup → Rules still apply - painting only adds days; My schedule marks each day you did not list "not offered" — trade if needed). Vacations, East days, derived weeks, windows and caps still
 apply on an offered day. A day is refused if it is past, on your vacation, or inside a period that has already frozen —
 ask Faraz: the database lets the scheduler enter a late offer (OF003 is skipped for the scheduler role), and he does that
 in the app from Setup → Generate → Periods → "Enter for someone" (the painter opens as that surgeon; the entry is stamped

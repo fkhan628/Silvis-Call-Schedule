@@ -1523,10 +1523,14 @@ where `not-offered` is skipped, so the board can name the day as outside his off
 rows feed, so it is a dated row in item W's sense: it lifts the weekday-pattern family (hardNeverWeekdays included)
 for that date and role and never an obligation — vacations and the trailing edge, East busy / forecast / standing days,
 derived-week locks, windows, backupOptOut, caps, runs, the other role all still apply on an offered day. The dated
-lists (`whitelist-month`, `outside-available-weeks`) are not applied to a submitted surgeon inside the period (offers
-supersede them — one mechanism); rules-only and silent surgeons, and every day outside a period, get today's rules
+lists (`whitelist-month`, `outside-available-weeks`) are set aside for a submitted **exhaustive** surgeon inside the
+period (`listsAside` — his `not-offered` governs every day he did not paint) and **stand** for a preferred one (Faraz
+10/18, "List always stands": painting only adds days — an offer, a dated row, lifts them on its own date and role; from
+9/23 being submitted set them aside in both modes, which left a preferred weeks-list surgeon unbounded — rules doc §8);
+rules-only and silent surgeons, and every day outside a period, get today's rules
 byte for byte (the whole regression runs unchanged with `periods: []`). This is the answer to the Tue/Thu gap (rules
-doc §8 item 12): Acton's and Philip's rules allow those days even when their lists do not name them. A Prompt 13
+doc §8 item 12): Acton's and Philip's rules allow those days even when their painting does not name them — since 10/18
+not a day a dated list of theirs excludes (Philip's weeks) unless they painted it. A Prompt 13
 claim is an offer made on the spot: `eligibility(ctx, day, role, id, { claim: true })` skips the exhaustive
 `not-offered` only, and `claim_open_slot()` writes the `call_offers` row (`sql/migrations/2026-09-23-claim-offer.sql`,
 applied after the open-shifts branch; the freeze guard yields to a claim in progress, transaction-locally) — except

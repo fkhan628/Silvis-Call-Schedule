@@ -523,7 +523,9 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   const vacHas = (id, d) => VAC[id].has(d) || !!(extraVac && extraVac[id] && extraVac[id].has(d));
   // extraOffers (Prompt 14 P2 x WF, found rebasing offers onto the water-filled share 9/23): call_offers rows a fixture run
   // handed the generator. An offer is a dated available row for its date and role(s): it lifts the weekday pattern (W)
-  // and, for the submitted surgeon inside the period, the whitelist-month / available-weeks lists are not applied.
+  // and the whitelist-month / available-weeks lists on its own date - the per-date lift restated below. Since 10/18 that is
+  // exact for a PREFERRED surgeon (his lists stand everywhere else - Faraz, "List always stands"); an EXHAUSTIVE surgeon's
+  // lists are set aside period-wide, but his hard not-offered keeps Generate off every day he did not offer.
   const offerLifts = (id, d, role) => (extraOffers || []).some((o) => o.person_id === id && o.day === d && (o.role_pref === role || o.role_pref === "either"));
   const edgeHas = (id, d) => DAY_BEFORE_VAC[id].has(d) || (!!(extraVac && extraVac[id] && extraVac[id].has(addDays(d, 1))) && !vacHas(id, d));
   // a fixture's dated UNAVAILABLE row for that surgeon, date and role closes the slot to him (the allowed-slot counts below)
@@ -2516,6 +2518,18 @@ const OSL_WHOLE = { n: 0 };
   console.log("P2 (Philip " + PH_DAY + " 'either' offer): without it P " + (outP.schedule[PH_DAY].primary ? CODE[outP.schedule[PH_DAY].primary] : "open") + " / B " + (outP.schedule[PH_DAY].backup ? CODE[outP.schedule[PH_DAY].backup] : "open") + "; with it P " + (e19.primary ? CODE[e19.primary] : "open") + " / B " + (e19.backup ? CODE[e19.backup] : "open"));
   checkRun(outPh, RP, 1, false, undefined, undefined, undefined, FIXP.offers.concat([FIXP.philipOpenSlotOffer]));
   CUR.range = RP.name; CUR.seed = 1; CUR.day = "-";
+  // 10/18 (Faraz, "List always stands"): restated from the seed's own weeks list - with Philip PREFERRED and submitted by his
+  // one 11/30 offer, every day of the period outside his listed weeks but that offered one carries outside-available-weeks for
+  // primary (from 9/23 'submitted' set the list aside for the whole period, so none of them did - and since painting fix B the
+  // outside-offers penalty that stood in for it is waived below his share); the offered 11/30, off his weeks, is lifted by the
+  // offer (a dated row) - painting adds days. The reasons are read from hard + conflicts, so a day he holds by lock counts too.
+  {
+    const hasWeeks = (e) => (e.hard || []).concat(e.conflicts || []).some((r) => String(r).split("@")[0] === "outside-available-weeks");
+    const outside = daysList(FIXP.period.start_day, FIXP.period.end_day).filter((d) => d >= PHILIP_WEEKS_FROM && !PHILIP_WEEK_DAYS.has(d) && d !== PH_DAY);
+    ok(outside.length > 20, "10/18: the restatement is not vacuous (" + outside.length + " period days outside his weeks)");
+    eq(outside.filter((d) => !hasWeeks(R.eligibility(ctxPh, d, P, PHILIP))), [], "10/18: Philip (preferred, one 11/30 offer) carries outside-available-weeks on every period day outside his weeks but the offered one");
+    eq(hasWeeks(R.eligibility(ctxPh, PH_DAY, P, PHILIP)), false, "10/18: ...and his offered " + PH_DAY + " (off his weeks) is lifted by the offer - painting adds days");
+  }
   // open slot nobody offered and nobody's rules allow: Khan's W control day (Tue 12/1 with the four unavailable rows) inside the period
   const FIXW2 = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "khan-dated-row-2026-12-01.json"), "utf8"));
   const inputOpen = mkInput({ periods: [FIXP.period], offers: FIXP.offers });

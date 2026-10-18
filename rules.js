@@ -156,9 +156,12 @@
 //                 its role (item W: it lifts the weekday-pattern family incl.
 //                 hardNeverWeekdays for that date and role; obligations never
 //                 lift) - one code path decides. The dated lists
-//                 (whitelist-month, outside-available-weeks) are NOT applied
-//                 to a submitted surgeon inside the period (offers supersede
-//                 them); for rules_only / not_started surgeons, and on any day
+//                 (whitelist-month, outside-available-weeks) are set aside
+//                 for a submitted EXHAUSTIVE surgeon inside the period (his
+//                 not-offered governs) and STAND for a preferred one (10/18,
+//                 Faraz: "List always stands" - painting only adds days; an
+//                 offer, a dated row, lifts them on its own date and role);
+//                 for rules_only / not_started surgeons, and on any day
 //                 outside every period, today's rules apply byte for byte.
 //                 opts.claim (a Prompt 13 claim = an offer made on the spot)
 //                 skips the exhaustive 'not-offered' only. offerState(ctx,
@@ -1605,15 +1608,22 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // is true and the weekday-pattern family below is lifted for it - W) earns the
   // 'offered' bonus in either mode; a non-offered day is 'not-offered' (hard, applied
   // by eligibility() unless the caller claims) in exhaustive mode and 'outside-offers'
-  // (soft) under the ordinary rules in preferred mode. offersGovern also switches the
-  // dated lists (whitelist-month, outside-available-weeks) off for him inside the
-  // period. rules_only / not_started, or a day outside every period: nothing here.
-  var offersGovern = false;
+  // (soft) under the ordinary rules in preferred mode. In EXHAUSTIVE mode the dated lists
+  // (whitelist-month, outside-available-weeks) are set aside for him inside the period
+  // (listsAside - his not-offered governs every day he did not paint). In PREFERRED mode
+  // they stand (10/18, Faraz: "List always stands" - painting only adds days; an offer is
+  // a dated row, so it lifts them on its own date and role): from 9/23 'submitted' set
+  // them aside in both modes, so nothing kept a weeks-list surgeon to his weeks - in a
+  // month he painted nothing (no outside-offers there, B10) and, since painting fix B,
+  // in a painted month below his share (the term waived). rules_only / not_started, or a
+  // day outside every period: nothing here.
+  var offersGovern = false, listsAside = false;
   var perIdx = ctx.periodOfDay[date];
   if (perIdx !== undefined) {
     var perKey = ctx.periods[perIdx].key;
     if (P.offerStatus[perKey] === "submitted") {
       offersGovern = true;
+      listsAside = P.offerMode[perKey] === "exhaustive";
       if ((P.offers[date] || 0) & mask) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
       else {
         if (P.offerMode[perKey] === "exhaustive") res.notOffered = true;   // hard unless the caller claims (eligibility)
@@ -1692,7 +1702,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
   // lifts (edit the window in Setup instead) - unlike the weeks whitelist.
   var datedBlock = null;
   var isPrimary = role === "primary" || !ctx.backupOpen; // backupPolicy.openToEveryone false -> both roles again
-  var governed = !!((P.governedMonths[info.month] || 0) & mask) && !offersGovern; // P2: offers supersede the dated lists for a submitted surgeon
+  var governed = !!((P.governedMonths[info.month] || 0) & mask) && !listsAside; // P2: exhaustive offers set the dated lists aside; 10/18: a preferred surgeon's lists stand
   if (governed) {
     if (!rowAvail) datedBlock = "whitelist-month";
   } else if (isPrimary && (P.mode === "whitelist-recurring" || (rules.recurringAvailable && rules.recurringAvailable.length))) {
@@ -1700,7 +1710,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
     var weekendOk = rdIsWeekendDay(ctx, info) && wa && (wa === true || wa[role]);
     if (!(rowAvail || weekendOk || rdRecurringMatches(rules.recurringAvailable, date))) notRecurring = true;
   }
-  if (isPrimary && !offersGovern && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
+  if (isPrimary && !listsAside && P.weeksFromN !== null && info.n >= P.weeksFromN && !(P.weekDays.has(date) || rowAvail)) datedBlock = datedBlock || "outside-available-weeks";
   if (P.hasWindows && !P.windowDays.has(date)) hard.push("outside-window"); // both roles; still enforced on holidays; never lifted by a row (W)
 
   if (notRecurring && !waive) hard.push("not-recurring-available");
