@@ -779,8 +779,14 @@ function buildContext(input) {
   });
   ctx.holidayUnitsAll.sort(function (a, b) { return a.days[0] < b.days[0] ? -1 : a.days[0] > b.days[0] ? 1 : 0; });
   // restBetweenStretches (review 10/18): the units whose days are not consecutive (Setup > Holidays takes any list) - a held
-  // day between two held days of such a unit belongs to their stretch; none in the seed, so the term's walk skips this
-  ctx.holidayUnitsGapped = ctx.holidayUnitsAll.filter(function (u) { for (var k = 1; k < u.days.length; k++) if (rdInfo(u.days[k]).n !== rdInfo(u.days[k - 1]).n + 1) return true; return false; });
+  // day between two held days of such a unit belongs to their stretch; none in the seed, so the term's walk skips this. A
+  // unit's days here are the days it OWNS - ctx.holidayByDay's reading (a day listed in two units is the last one's, as
+  // everywhere in the engine) - and a day that is no 'YYYY-MM-DD' date is skipped (never a throw: the rest of the engine
+  // accepts such a unit).
+  ctx.holidayUnitsAll.forEach(function (u) {
+    var own = u.days.filter(function (d) { return ctx.holidayByDay[d] === u && rdIsDateStr(d); });
+    for (var k = 1; k < own.length; k++) if (rdInfo(own[k]).n !== rdInfo(own[k - 1]).n + 1) { ctx.holidayUnitsGapped.push({ name: u.name, days: own }); return; }
+  });
 
   // Roster.
   roster.forEach(function (r) {
@@ -1793,15 +1799,16 @@ function rdStatic(ctx, date, role, id, asBlock) {
 
 // restBetweenStretches (Faraz 10/18): the days a HELD day links into one stretch whatever sits between them (when he
 // holds them too) - the other weekend-unit days (groupRules.weekendUnit.days - Fri, Sat, Sun in the seed) of its Fri-Sun
-// weekend when it is one of them, and the other days of its holiday unit. Membership, never an interval: the relation
-// is the same from both sides (review 10/18 - a unit's days need not be consecutive, Setup > Holidays takes any list).
+// weekend when it is one of them, and the other days its holiday unit owns (ctx.holidayByDay: a day listed in two units
+// is the last one's). Membership, never an interval: the relation is the same from both sides (review 10/18 - a unit's
+// days need not be consecutive, Setup > Holidays takes any list).
 function rdRestLinks(ctx, d) {
   var i = rdInfo(d), out = [];
   if (i.friday && rdIsWeekendDay(ctx, i)) {
     for (var k = 0; k < 3; k++) { var wd = rdAddDays(i.friday, k); if (wd !== d && rdIsWeekendDay(ctx, rdInfo(wd))) out.push(wd); }
   }
   var u = ctx.holidayByDay[d];
-  if (u) for (var j = 0; j < u.days.length; j++) if (u.days[j] !== d) out.push(u.days[j]);
+  if (u) for (var j = 0; j < u.days.length; j++) if (u.days[j] !== d && ctx.holidayByDay[u.days[j]] === u) out.push(u.days[j]);
   return out;
 }
 

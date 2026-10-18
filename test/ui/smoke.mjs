@@ -8724,7 +8724,7 @@ try {
           const s1 = await rbState(), stRB = await pageState();
           const draft1 = had ? orig : HELPERS.suRuleFieldAdd(rbF, orig);
           const rb1 = draft1[RB] || {};
-          const wantN = rb1.minDaysOff === undefined || rb1.minDaysOff === null ? "" : String(rb1.minDaysOff), wantW = rb1.weight === undefined || rb1.weight === null ? "medium" : String(rb1.weight);
+          const wantN = rb1.minDaysOff === undefined || rb1.minDaysOff === null ? "" : String(rb1.minDaysOff), wantW = rb1.weight === undefined ? "medium" : rb1.weight === null ? "__null" : String(rb1.weight); // review 10/18: a stored null is no weight
           if (s1.nLab !== "Days off between call stretches (soft)" || s1.wLab !== "Weight of a short rest") fail(`${P24}: the rest field's two controls should each carry their <label> - got ${JSON.stringify([s1.nLab, s1.wLab])}`);
           else if (s1.n !== wantN || s1.w !== wantW || !["low", "medium", "strong"].every(o => s1.opts.includes(o))) fail(`${P24}: the rest field should show ${wantN} days / ${wantW} (low / medium / strong offered) - got ${JSON.stringify(s1)}`);
           else if (JSON.stringify(stRB.lines) !== JSON.stringify(sumOf(draft1)) || (!had && (stRB.status !== "Unsaved" || stRB.menu.includes(RB)))) fail(`${P24}: the rest field ${had ? "shown" : "added"} - the summary should read the draft (${JSON.stringify(sumOf(draft1))}), got ${JSON.stringify(stRB.lines)}; status ${stRB.status}`);

@@ -1251,5 +1251,5 @@ entries; on 20 seeds his short rests drop from 27 to 4 in Nov – Dec and from 1
     off between call stretches" on such a day (his published October / November days include some), but a locked slot never
     enters Generate's score or its soft list; and a trade partner suggestion ranks a colleague with fewer notes first, so a
     swap that would leave him one day off ranks him lower. (f) **A holiday unit whose days are not consecutive** (Setup takes
-    any list; none in the seed): his call days of the unit are one stretch, and so is any call day of his between two of them
-    (review 10/18).
+    any list; none in the seed): his call days of the unit are one stretch, and so is any call day of his between two of them; a day
+    listed in two units is the last one's, as everywhere in the engine (review 10/18).

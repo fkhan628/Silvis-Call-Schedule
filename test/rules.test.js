@@ -3237,7 +3237,7 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
   // stretch's first and last day belongs to it - the result never depends on which day is evaluated
   const holU = (days) => { const h = clone(seed.holidays); h.units["2027"] = h.units["2027"].concat([{ name: "Test unit", tier: "minor", days }]); return { holidays: h }; };
   const U14 = holU(["2027-02-01", "2027-02-04"]);
-  eq(sr({ "2027-02-01": row(ACTON), "2027-02-04": row(ACTON) }, "2027-02-03", B, ACTON, {}, U14), [], "unit Mon 2/1 + Thu 2/4 held: a Wednesday backup next to the Thursday joins the stretch the unit makes - an inner day, no short rest (the growth through a joined day's links)");
+  eq(sr({ "2027-02-01": row(ACTON), "2027-02-04": row(ACTON) }, "2027-02-03", B, ACTON, {}, U14), [], "unit Mon 2/1 + Thu 2/4 held: a Wednesday backup between two held days of the unit (next to the Thursday) joins their stretch - an inner day, no short rest (re-check 10/18: decided by the between-days check from the Wednesday itself)");
   eq(sr({ "2027-02-01": row(ACTON), "2027-02-04": row(ACTON) }, "2027-02-03", B), T3(1), "...the same days with no unit: Tue off after Monday - short");
   const U15 = holU(["2027-02-01", "2027-02-05"]), S15 = { "2027-02-01": row(ACTON), "2027-02-03": row(KHAN, ACTON), "2027-02-05": row(ACTON) };
   eq(["2027-02-01", "2027-02-03", "2027-02-05"].map(d => sr(S15, d, d === "2027-02-03" ? B : P, ACTON, {}, U15)), [[], [], []], "unit Mon 2/1 + Fri 2/5 held with a Wednesday backup between: one stretch read from every day (no one-sided link)");
@@ -3246,6 +3246,16 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
   const U23 = holU(["2027-01-30", "2027-02-03"]), S23 = { "2027-01-29": row(ACTON), "2027-01-30": row(BURCHETT), "2027-01-31": row(ACTON), "2027-02-02": row(KHAN, ACTON), "2027-02-03": row(BURCHETT) };
   eq([sr(S23, "2027-01-31", P, ACTON, {}, U23), sr(S23, "2027-02-02", B, ACTON, {}, U23)], [T3(1), T3(1)], "a unit Sat 1/30 + Wed 2/3 he does not hold links none of his days: his split Fri + Sun, Mon off, Tue backup - short on both sides, as with no unit");
   eq([sr(S23, "2027-01-31", P), sr(S23, "2027-02-02", B)], [T3(1), T3(1)], "...the same with no unit");
+  // re-check 10/18: a day listed in two units is the LAST unit's (ctx.holidayByDay, as everywhere in the engine) - the link
+  // reads that the same from both sides; a unit day that is no date never throws (the rest of the engine accepts it)
+  const holAB = clone(seed.holidays); holAB.units["2027"] = holAB.units["2027"].concat([{ name: "A", tier: "minor", days: ["2027-02-01", "2027-02-03"] }, { name: "B", tier: "minor", days: ["2027-02-03", "2027-02-09"] }]);
+  const SAB = { "2027-02-01": row(KHAN, ACTON), "2027-02-03": row(KHAN, ACTON) };
+  eq([sr(SAB, "2027-02-01", B, ACTON, {}, { holidays: holAB }), sr(SAB, "2027-02-03", B, ACTON, {}, { holidays: holAB })], [T3(1), T3(1)], "units A (Mon 2/1 + Wed 2/3) and B (Wed 2/3 + Tue 2/9): Wed is B's, so Mon and Wed are two stretches - read the same from both days");
+  ["2027-2-1", "", null, "2027-02-01T00:00"].forEach(bad => {
+    const hb = clone(seed.holidays); hb.units["2027"] = hb.units["2027"].concat([{ name: "Bad", tier: "minor", days: ["2027-02-01", bad] }]);
+    let r = null; try { r = sr({ "2027-02-01": row(KHAN, ACTON) }, "2027-02-03", B, ACTON, {}, { holidays: hb }); } catch (e) { r = "threw: " + e.message; }
+    eq(r, T3(1), "a unit day " + JSON.stringify(bad) + " that is no date: no throw, the term reads as before");
+  });
   // the weekend link is the group's weekend unit (data): with Sat + Sun only, a Friday is a weekday
   const grSS = clone(seed.groupRules); grSS.weekendUnit = Object.assign({}, grSS.weekendUnit, { days: ["Sat", "Sun"] });
   eq(sr({ "2027-01-15": row(ACTON) }, "2027-01-17", P, ACTON, {}, { groupRules: grSS }), T3(1), "weekendUnit.days [Sat, Sun]: Fri + Sun is no longer one stretch - short");

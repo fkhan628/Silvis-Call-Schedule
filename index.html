@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5DqfCTmaNUmHYi5HxYoLdktAN5AydGLbRbha3mx/dSs=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-hAkUfcEVXwluvHQPknoam2WQoA61gdv9vn0TdY0dQ8I=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5DqfCTmaNUmHYi5HxYoLdktAN5AydGLbRbha3mx/dSs=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-8s/ZDK3SekjTnZSp8bdcWUscHfwez/VvXeCSiWyS888=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17446,7 +17446,8 @@ const REASON_WORDS = {
   "recurring-avoid": "a recurring day set to avoid",
   "auto-offer-weekday": "an auto-offered weekday",
   "pattern-mismatch": "not the preferred weekend style",
-  "under-target": "under the monthly target"
+  "under-target": "under the monthly target",
+  "short-rest": "too few days off between call stretches"
 };
 async function readAuthOnlyTable(table, opts) {
   let token = null;
@@ -17510,6 +17511,8 @@ function reasonLabel(code, nameOf) {
       return arg === "Sat" ? "a Saturday alone as primary, without its Sunday" : arg === "Sun" ? "a Sunday alone as primary, without its Saturday" : "a weekend day alone as primary, without its pair";
     case "weekend-cap":
       return "past the soft weekend cap of " + arg + " a month";
+    case "short-rest":
+      return arg ? "only " + arg + " day" + (arg === "1" ? "" : "s") + " off between call stretches" : REASON_WORDS["short-rest"];
     case "pattern-mismatch":
       return arg === "standalone-friday" ? "not the preferred weekend style (the Friday stands on its own)" : arg ? "not the preferred weekend style (prefers " + arg + ")" : "not the preferred weekend style";
     case "hard-never-beyond-notice":
@@ -17553,6 +17556,8 @@ function softTag(soft) {
       return "consecutive primary";
     case "back-to-back-weekend":
       return "back-to-back weekend";
+    case "short-rest":
+      return "short rest" + (arg ? ": " + arg + " day" + (arg === "1" ? "" : "s") + " off" : "");
     case "backup-after-primary":
       return "backup after primary";
     case "pattern-mismatch":
@@ -23059,6 +23064,48 @@ function RulesEditor({
             width: 70
           })
         }));
+      case "restBetweenStretches":
+        return React.createElement("div", null, React.createElement(RuField, {
+          T: T,
+          label: "Days off between call stretches (soft)",
+          hint: "primary and backup are both call days; days in a row are one stretch, and so is a weekend or a holiday unit, so a split Fri + Sun is no short rest; each day short of the minimum between two stretches costs the weight, on each short side"
+        }, React.createElement("input", {
+          "data-testid": "rules-rest-min-days",
+          type: "number",
+          min: "1",
+          max: "14",
+          value: numVal("restBetweenStretches.minDaysOff"),
+          onChange: numSet("restBetweenStretches.minDaysOff"),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Weight of a short rest"
+        }, React.createElement("select", {
+          "data-testid": "rules-rest-weight",
+          value: (() => {
+            const v = get("restBetweenStretches.weight", undefined);
+            return v === undefined ? "medium" : v === null ? "__null" : String(v);
+          })(),
+          onChange: e => set("restBetweenStretches.weight", e.target.value === "__null" ? null : /^\d+(\.\d+)?$/.test(e.target.value) ? Number(e.target.value) : e.target.value),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 130
+          })
+        }, React.createElement("option", {
+          value: "low"
+        }, "low"), React.createElement("option", {
+          value: "medium"
+        }, "medium"), React.createElement("option", {
+          value: "strong"
+        }, "strong"), (() => {
+          const v = get("restBetweenStretches.weight", undefined);
+          return v === undefined || v === "low" || v === "medium" || v === "strong" ? null : v === null ? React.createElement("option", {
+            value: "__null"
+          }, "not a weight - ignored") : React.createElement("option", {
+            value: String(v)
+          }, "custom: ", String(v));
+        })())));
       case "holidayUnitCountsAsOneDay":
         return React.createElement(SuCheck, {
           label: "A holiday unit counts as one day for the days-in-a-row limits",
