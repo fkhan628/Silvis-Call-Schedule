@@ -1526,10 +1526,10 @@ derived-week locks, windows, backupOptOut, caps, runs, the other role all still 
 lists (`whitelist-month`, `outside-available-weeks`) are set aside for a submitted **exhaustive** surgeon inside the
 period (`listsAside` — his `not-offered` governs every day he did not paint) and **stand** for a preferred one (Faraz
 10/18, "List always stands": painting only adds days — an offer, a dated row, lifts them on its own date and role; from
-9/23 being submitted set them aside in both modes, which left a preferred weeks-list surgeon unbounded — rules doc §8);
+9/23 being submitted set them aside in both modes, so nothing held a preferred weeks-list surgeon to his weeks — rules doc §8);
 rules-only and silent surgeons, and every day outside a period, get today's rules
 byte for byte (the whole regression runs unchanged with `periods: []`). This is the answer to the Tue/Thu gap (rules
-doc §8 item 12): Acton's and Philip's rules allow those days even when their painting does not name them — since 10/18
+doc §8 item 15): Acton's and Philip's rules allow those days even when their painting does not name them — since 10/18
 not a day a dated list of theirs excludes (Philip's weeks) unless they painted it. A Prompt 13
 claim is an offer made on the spot: `eligibility(ctx, day, role, id, { claim: true })` skips the exhaustive
 `not-offered` and — for a surgeon submitted for the period, either mode — his dated lists (Faraz 10/18, "taking it
@@ -1538,13 +1538,13 @@ counts as painting it"; the trade paths pass the same flag; a surgeon who never 
 applied after the open-shifts branch; the freeze guard yields to a claim in progress, transaction-locally) — except
 for a claimer listed in the period's `rules_only_ids`: he chose "go by my rules", one offer row would flip his derived
 status to submitted for the whole period, so his claim is recorded in `schedule_days` and the audit row (`detail.offer
-= false`) only; a surgeon with nothing entered does get the row and becomes submitted (preferred) by it. **Trades are
-not there yet (review 9/23):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`) calls
-`eligibility` without the claim flag and `apply_trade()` writes no offer row, so once part 3 passes `offers` / `periods`
-into `ctxInputs` an exhaustive surgeon could not be traded onto a non-offered day; part 3 must either pass `{ claim:
-true }` there (a trade acceptance is an offer made on the spot, the same reading as a claim) and give `apply_trade()`
-the same upsert block, or Faraz rules that such trades are refused — latent until then, because `ctxInputs` carries
-no offers today. The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
+= false`) only; a surgeon with nothing entered does get the row and becomes submitted (preferred) by it. **Trades
+(review 9/23; settled by part 3c):** the trade path (`tradeEligibility` / `tradeEligibilityOver` in `index-source.html`)
+passes `{ claim: true }` — a trade acceptance is an offer made on the spot, the same reading as a claim — so an
+exhaustive surgeon can be traded onto a non-offered day and, since 10/18, any submitted surgeon onto a day his dated
+list excludes; `apply_trade()` still writes no offer row. The painter consults `eligibility` with the same flag: a day
+his dated list excludes asks one confirmation ("outside your listed weeks") while he has not painted the period yet,
+and none once he is submitted (as before 10/18). The generator adds order and one fairness rule: after locks, holiday units and derived weeks, the
 day and weekend units an eligible surgeon offered are filled before the rest (`genOfferedUnits` / `genOrder`), so a
 surgeon's offered days are placed before his own non-offered placements can consume his caps or runs; the bonus
 already makes an offered candidate beat a rules-only candidate for the same slot; and **the bonus stops at the share**

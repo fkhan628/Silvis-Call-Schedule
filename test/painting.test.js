@@ -55,7 +55,8 @@
 // The pins are the observed after-numbers (re-derive them from a run when the engine changes; never loosen them).
 //
 // Wall clock: SILVIS_GEN_BUDGET_MS (shared with the regression, the holidays and the water-fill suites) overrides the
-// default 4000 ms (16 runs at bestOf 2, ~0.4 s on the dev machine); the budget is a failing assertion, never a warning.
+// default 4000 ms (16 runs at bestOf 2, ~0.4 s on the dev machine, plus the order / split / lists fixtures); the budget is a
+// failing assertion, never a warning.
 // Run: node test/painting.test.js   (exit 1 on the first failing assertion)
 "use strict";
 const fs = require("fs");
@@ -91,6 +92,19 @@ function fixtureInput(seed, variant, data) {
   });
   return { roster: roster, surgeonRules: surgeonRules, groupRules: gr, holidays: seed.holidays, timeOffRows: [], availabilityRows: [], schedule: {}, periods: [period], offers: offers, today: "2026-11-23" };
 }
+
+// 10/18 (Faraz, "List always stands"): fix B x a dated list. p1 carries listed weeks (availableWeeks, primary-only) and
+// paints ONE day, outside them; nobody else paints. Generate must keep his primaries inside his weeks, plus the day he
+// painted - in the month he painted (where fix B waives outside-offers below his share) and in the month he did not (no
+// outside-offers term at all, B10). Before 10/18 'submitted' set his list aside for the whole period.
+const LISTS_WEEKS = ["2027-02-01", "2027-03-01"], LISTS_PAINTED = "2027-02-10";
+function listsInput(seed) {
+  const inp = fixtureInput(seed, "nobody", "after");
+  inp.surgeonRules.p1 = Object.assign({}, inp.surgeonRules.p1, { availableWeeks: LISTS_WEEKS.slice() });
+  inp.offers = [{ person_id: "p1", day: LISTS_PAINTED, role_pref: "either", source: "app", entered_by: "p1", note: null }];
+  return inp;
+}
+const listsWeekDays = () => { const s = new Set(); LISTS_WEEKS.forEach((m) => { for (let k = 0; k < 7; k++) s.add(fromDayNum(dayNum(m) + k)); }); return s; };
 
 // The fixture's own offer facts (never read back from rules.js): did `id` offer `d` (every offer is 'either', so both roles),
 // and did he paint at least one day of month `m` (B10's month scope - every fixture surgeon is in preferred mode)?
@@ -486,6 +500,20 @@ function run(h) {
   ok(splitCells.some((c) => c.otherGen > 0 && c.offExpected !== c.offBaseOnly), "split: in at least one cell the same reading would keep a different number of offered bonuses (" + splitCells.map((c) => c.seed + c.role[0] + " other " + c.otherGen + " off " + c.offGen + " offExp " + c.offExpected + " offBaseOnly " + c.offBaseOnly).join("; ") + ")");
   // ... and the fill's reading of one placement across the boundary
   splitFill({ R: R, GEN: GEN, ok: ok, eq: eq, seedData: seed });
+
+  // ---- 10/18: fix B x a dated list - a preferred painter's listed weeks still bound his primaries in Generate (listsInput) ----
+  const ctxL = R.buildContext(listsInput(seed));
+  eq(ctxL.warnings.filter((w) => !/availableWeeks ends with the week/.test(w)), [], "lists: buildContext raises no warning beyond the end-of-list notice");
+  eq([R.offerState(ctxL, "2027-02-10", "p1").status, R.offerState(ctxL, "2027-02-10", "p1").mode], ["submitted", "preferred"], "lists: p1 submitted / preferred by his one painted day");
+  const weekDaysL = listsWeekDays(), listsHeld = [];
+  [1, 2, 3, 4].forEach((sd) => {
+    const outL = GEN.generate(ctxL, START, END, { seed: sd, bestOf: 2 });
+    eq([outL.diagnostics.uncovered.length, outL.diagnostics.hardViolations.length], [0, 0], "lists seed " + sd + ": no open slot, no hard violation");
+    const held = DAYS.filter((d) => outL.schedule[d].primary === "p1");
+    listsHeld.push(held.length);
+    eq(held.filter((d) => !weekDaysL.has(d) && d !== LISTS_PAINTED), [], "lists seed " + sd + ": every p1 primary lies in his listed weeks or on the day he painted (February painted, March not - his list stands in both)");
+  });
+  ok(listsHeld.every((n) => n > 0), "lists: p1 holds primaries in every run - the check is not vacuous (" + listsHeld.join(" / ") + ")");
 
   const fmt = (s) => s.P + "P/" + s.B + "B, excess max P +" + s.max[0] + " B +" + s.max[1] + " W +" + s.max[2] + " (mean W +" + s.mean[2] + ")";
   const line = "painting (Feb-Mar 2027 fixture, bestOf 2): partial seeds 1-8 - p1 " + fmt(sP.p1) + "; p2 " + fmt(sP.p2) + "; controls seeds 1-4 - rules-only max W +" + Math.max(ctl.rulesOnly.p1.max[2], ctl.rulesOnly.p2.max[2]) + ", nobody max W +" + Math.max(ctl.nobody.p1.max[2], ctl.nobody.p2.max[2]);

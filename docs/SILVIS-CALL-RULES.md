@@ -902,10 +902,13 @@ does not name him, e.g. Jan–Jun 2027; the seed has him exhaustive for Nov 2026
 (`explicitListMonths`) — keeps that list as his rule for the whole period: painting only adds days (an offer is a dated
 row, so it lifts the list on its own date and role, and nowhere else). Found reviewing fix B's words: from 9/23 being
 *submitted* set the lists aside for the whole period, so nothing held him to them in a month he painted nothing (B10:
-no `outside-offers` term there) and, since fix B, in a painted month below his share either (the term waived) — in a
-scratch Feb–Mar run (preferred, one painted day) he took 4–5 of his 6–7 February primaries outside his weeks.
-"Only these days" is unchanged: its lists stay aside and `not-offered` governs every day he did not paint. This narrows
-the 9/23 Tue/Thu answer (build guide §23): a preferred surgeon's own rules still reach days his painting does not name,
+no `outside-offers` term there) and, since fix B, in a painted month below his share either (the term waived) — in
+`test/painting.test.js`'s lists fixture (a five-surgeon pool, Feb–Mar 2027; the painter has listed weeks 2/1 and 3/1,
+paints one day, 2/10, and nobody else paints) the engine before this change put him on 10 primaries outside his weeks
+in seed 1 (4 in February, 6 in March); now none. (The seed's Philip happened to stay inside his weeks in the runs tried —
+his Aledo-week rules pull him back — but that was luck, not the rule.) "Only these days" is unchanged: its lists stay
+aside and `not-offered` keeps Generate off every day he did not paint (a claim or trade skips `not-offered`, as since
+9/23). This narrows the 9/23 Tue/Thu answer (build guide §17): a preferred surgeon's own rules still reach days his painting does not name,
 but not days his dated list excludes unless he painted them. **Claims and trades (Faraz 10/18, "taking it counts as
 painting it"):** a surgeon who is submitted for the period — either mode — may claim an open shift or take a trade on a
 day outside his dated list: taking it himself is his own choice, like painting the day (`claim_open_slot` also records the

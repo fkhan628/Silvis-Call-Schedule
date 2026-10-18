@@ -2462,7 +2462,7 @@ step("Prompt 14 P2: exhaustive - eligible ONLY on an offered day in the offered 
 const bur1110 = R.eligibility(oc, "2026-11-10", P, BURCHETT);
 blocked(bur1110, "not-offered", "P2: Burchett primary Tue 11/10 - not on his list");
 eq(bur1110.hard[0], "not-offered", "P2: not-offered is the first (visible) hard reason: " + JSON.stringify(bur1110.hard));
-lacks(bur1110.hard, "whitelist-month", "P2: the governed-month whitelist is NOT applied to a submitted surgeon inside the period (offers supersede the dated lists)");
+lacks(bur1110.hard, "whitelist-month", "P2: the governed-month whitelist is NOT applied to a submitted EXHAUSTIVE surgeon inside the period (his not-offered governs; a preferred surgeon's lists stand since 10/18)");
 blocked(R.eligibility(oc, "2026-11-10", B, BURCHETT), "not-offered", "P2: ...backup 11/10 likewise (exhaustive governs both roles)");
 const bur1111 = R.eligibility(oc, "2026-11-11", P, BURCHETT);
 okElig(bur1111, "P2: Burchett primary Wed 11/11 - offered");
@@ -2621,7 +2621,7 @@ blocked(phOff, "outside-available-weeks", "10/18: Philip submitted PREFERRED (on
 hasSoft(phOff, "outside-offers", "10/18: ...the outside-offers term still rides beside it on the non-offered day (December is a month he painted - B10)");
 hasSoft(phOff, "aledo-week", "P2: ...his ordinary Aledo-week soft still applies");
 blocked(R.eligibility(ocEither, "2026-12-15", P, PHILIP), "day-before-aledo", "P2: his hard day-before-Aledo rule still applies on a non-offered day (Tue 12/15 before the 3rd Wednesday)");
-blocked(R.eligibility(ocEither, "2027-01-05", P, PHILIP), "outside-available-weeks", "P2: ...but outside the period (1/5/2027 > end_day 1/3) his weeks list governs again");
+blocked(R.eligibility(ocEither, "2027-01-05", P, PHILIP), "outside-available-weeks", "P2: ...outside the period (1/5/2027 > end_day 1/3) his weeks list governs too (inside it as well since 10/18 - he is preferred)");
 const ocBurRules = p14Ctx({ offers: p14List(ACTON, P14_ACT), periods: [Object.assign({}, P14_PERIOD, { rules_only_ids: [KHAN, SARKAR, BURCHETT] })] });
 eq(p14State(ocBurRules, "2026-11-10", BURCHETT).status, "rules_only", "P2: Burchett with no offers, listed -> rules_only");
 blocked(R.eligibility(ocBurRules, "2026-11-10", P, BURCHETT), "whitelist-month", "P2: rules_only - his November whitelist (governed both roles, T) applies exactly as before");
@@ -2661,6 +2661,20 @@ const burDec3 = R.eligibility(ocBurPref, "2026-12-03", P, BURCHETT);
 blocked(burDec3, "whitelist-month", "10/18: December (painted) - 12/3 is off his December list: his list stands there too");
 hasSoft(burDec3, "outside-offers", "10/18: ...with the outside-offers term beside it (a painted month)");
 okElig(R.eligibility(ocBurPref, "2026-12-05", P, BURCHETT), "10/18: Sat 12/5 - on his list and painted: eligible");
+// verdict flips (each of these read ok before 10/18 - the pins above were already blocked by another reason there)
+blocked(R.eligibility(ocBurPref, "2026-11-17", B, BURCHETT), "whitelist-month", "10/18: Tue 11/17 backup - off his November list (ok before 10/18)");
+blocked(R.eligibility(ocBurPref, "2026-12-03", B, BURCHETT), "whitelist-month", "10/18: Thu 12/3 backup - off his December list, a painted month (ok before)");
+blocked(R.eligibility(ocBurPref, "2026-12-04", P, BURCHETT), "whitelist-month", "10/18: Fri 12/4 primary (ok before)");
+// an offer lifts a two-role month list for its OWN role only: Burchett paints Wed 12/2 as primary only
+const ocBur122 = p14Ctx({ periods: [P14_PERIOD_BP], offers: p14List(ACTON, P14_ACT).concat(burDecOffers, [p14Offer(BURCHETT, "2026-12-02", "primary")]) });
+okElig(R.eligibility(ocBur122, "2026-12-02", P, BURCHETT), "10/18: Burchett paints Wed 12/2 primary (off his list) - primary is lifted");
+blocked(R.eligibility(ocBur122, "2026-12-02", B, BURCHETT), "whitelist-month", "10/18: ...backup that day is not (his December list names both roles; the offer only its own)");
+// a holiday-unit day: Philip, preferred in a Jan - Jun 2027 period that does not name him, one painted day (2/9)
+const P_JJ = { id: "p-jj-test", label: "Jan - Jun 2027", start_day: "2027-01-04", end_day: "2027-06-30", status: "upcoming", rules_only_ids: [], offer_modes: {} };
+const ocJJ = p14Ctx({ periods: [P_JJ], offers: [p14Offer(PHILIP, "2027-02-09", "either")] });
+eq([p14State(ocJJ, "2027-05-31", PHILIP).status, p14State(ocJJ, "2027-05-31", PHILIP).mode], ["submitted", "preferred"], "10/18: Philip submitted / preferred (offer_modes does not name him) in the Jan - Jun test period");
+blocked(R.eligibility(ocJJ, "2027-05-31", P, PHILIP), "outside-available-weeks", "10/18: Memorial Day Mon 5/31/2027 - a holiday-unit day off his weeks: his list stands for Generate (eligible before 10/18)");
+lacks(R.eligibility(ocJJ, "2027-05-31", P, PHILIP, { claim: true }).hard, "outside-available-weeks", "10/18: ...a claim of it is not blocked by the list (taking it counts as painting it)");
 // exhaustive unchanged: Burchett (November offers only, exhaustive) on Thu 12/3 - not-offered, never whitelist-month
 const burExhDec3 = R.eligibility(oc, "2026-12-03", P, BURCHETT);
 blocked(burExhDec3, "not-offered", "10/18: exhaustive Burchett on 12/3 - not-offered, as before");
