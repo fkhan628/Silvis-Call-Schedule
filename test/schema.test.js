@@ -89,7 +89,13 @@ const GIVE_INSERT_GUARD_SHA256 = "edb1945657e5dbd392cc291a0ef5d1feca25f327a2c4ba
 const RETURN_LEG_MIGRATION = path.join(ROOT, "sql", "migrations", RETURN_LEG_FILE);
 // sha256 of S1's trade_insert_guard body (git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql) - the follow-up re-creates it
 const S1_INSERT_GUARD_SHA256 = "0866c8228ef8e8b209c7c0d5925f27f901e909ef409675046ae73fac7da3dbbd";
-const AUDIT_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-trade-audit-names.sql");   // Prompt 16 follow-up 5b: the newest for apply_trade + claim_open_slot (report-first, not applied)
+const AUDIT_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-trade-audit-names.sql");   // Prompt 16 follow-up 5b: the newest for claim_open_slot (applied 2026-09-24); its apply_trade (revision m) is frozen by sha256 since revision y
+// Revision y (2026-10-18, Faraz - report-first, NOT applied): the newest for apply_trade, trade_insert_guard and trade_update_guard
+const TRADE_OFFER_FILE = "2026-10-18-trade-offer.sql";
+const TRADE_OFFER_MIGRATION = path.join(ROOT, "sql", "migrations", TRADE_OFFER_FILE);
+// sha256 of the bodies revision y supersedes, frozen as applied: apply_trade (revision m, the 5b file) and trade_update_guard (revision n, the give-kind file)
+const M_APPLY_TRADE_SHA256 = "70a3bbc36f70c41732b278d6eb33ef357c580b6b2a7c60a52e95caf47522eb72";
+const N_UPDATE_GUARD_SHA256 = "71197d76eaba0737041956e138e677f7c42aa06c50636e565b1117c8e833d074";
 const PROBE = path.join(ROOT, "sql", "probes", "trade-guards-probe.sql");
 const VERIFY = path.join(ROOT, "scripts", "verify-rls.sh");
 
@@ -284,7 +290,7 @@ function checkUpdateGuard(n, s, give) {
   }
   ok(/returns trigger/.test(fn), n + ": trade_update_guard must return trigger");
   const bypass = fn.indexOf("if public.silvis_is_sched() then return new; end if;");
-  ok(bypass > 0, n + ": the scheduler bypass must stay the first statement");
+  ok(bypass > 0, n + ": the scheduler bypass must stay ahead of every refusal (since revision y only the consent stamps run before it)");
   ok(TODAY_C.test(fn), n + ": trade_update_guard must compute today_c in America/Chicago");
   const acc = fn.indexOf("if me = old.to_surgeon_id and new.status in ('accepted', 'declined') then");
   const cond = "if new.status = 'accepted' and (old.day < today_c or (old.return_day is not null and old.return_day < today_c)) then";
@@ -321,8 +327,10 @@ step("2026-09-22 migration: both bodies frozen as applied live (sha256); schema.
     "2026-09-22-trade-guards.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-22 (a change belongs in a NEW migration);");
   eq(sha(functionText(migration, "trade_insert_guard")), "b2b5e23fe401765241523846131265825bdcca18bcfb41f1d328d54729357a5b",
     "2026-09-22-trade-guards.sql trade_insert_guard() must stay byte-for-byte what was applied live on 2026-09-22 (the roster names went into the 2026-09-24 migration);");
-  const a = functionText(schema, "trade_insert_guard"), b = functionText(read(RETURN_LEG_MIGRATION), "trade_insert_guard");
-  ok(a && b && a === b, "trade_insert_guard(): schema.sql differs from sql/migrations/" + RETURN_LEG_FILE + " (the newest migration touching it, applied 2026-09-27; keep them identical)");
+  // revision y (2026-10-18) is the newest migration touching trade_insert_guard; the follow-up's body (revision p, applied 2026-09-27) stays
+  // pinned by S1_INSERT_GUARD_SHA256 (the Prompt 19 follow-up step) and is y's with the two stamp lines undone (the revision y step)
+  const a = functionText(schema, "trade_insert_guard"), b = functionText(read(TRADE_OFFER_MIGRATION), "trade_insert_guard");
+  ok(a && b && a === b, "trade_insert_guard(): schema.sql differs from sql/migrations/" + TRADE_OFFER_FILE + " (revision y, the newest migration touching it; keep them identical)");
 })();
 
 const PAST_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-23-trade-past-guard.sql");
@@ -342,8 +350,12 @@ ok(!/drop function|drop table|create table|drop policy|create policy/.test(pastM
     "2026-09-23-trade-past-guard.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-23 (the share locks went into the 2026-09-24 migration);");
   eq(sha(functionText(pastMigration, "trade_update_guard")), "61964f85e58847427e8dc69517051aebe99d022900f9893f14784d0db2697045",
     "2026-09-23-trade-past-guard.sql trade_update_guard() must stay byte-for-byte what was applied live on 2026-09-23 (a change belongs in a NEW migration);");
-  const a = functionText(schema, "trade_update_guard"), b = functionText(read(GIVE_MIGRATION), "trade_update_guard");
-  ok(a && b && a === b, "trade_update_guard(): schema.sql differs from sql/migrations/2026-09-24-give-kind.sql (the newest migration touching it; keep them identical)");
+  // revision y (2026-10-18) is the newest migration touching trade_update_guard; the give-kind body (revision n, applied 2026-09-25) is frozen
+  // by sha256 and is y's with the stamp block undone (the revision y step)
+  eq(sha(functionText(read(GIVE_MIGRATION), "trade_update_guard")), N_UPDATE_GUARD_SHA256,
+    "2026-09-24-give-kind.sql trade_update_guard() must stay byte-for-byte what was applied live on 2026-09-25 (revision y re-creates it in a NEW migration);");
+  const a = functionText(schema, "trade_update_guard"), b = functionText(read(TRADE_OFFER_MIGRATION), "trade_update_guard");
+  ok(a && b && a === b, "trade_update_guard(): schema.sql differs from sql/migrations/" + TRADE_OFFER_FILE + " (revision y, the newest migration touching it; keep them identical)");
 })();
 ok(/-- Revision 2026-09-23 e \(audit RLS-6, sql\/migrations\/2026-09-23-trade-past-guard\.sql\)/.test(schema), "schema.sql header must record revision e (TRADE_PAST)");
 
@@ -1588,10 +1600,13 @@ ok(!/drop function|drop table|create table|alter table|drop policy|create policy
 ok(!/trade_insert_guard|trade_update_guard|call_offers_guard|call_offers_delete_guard|time_off_no_call_conflict|handle_new_auth_user/.test(auditMig.replace(/--[^\n]*/g, "")), "the trade-audit migration's statements touch no other function (comments may name them)");
 ok(/^-- supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql$/m.test(auditMig), "the trade-audit migration must declare `-- supersedes: sql/migrations/2026-09-24-definer-locks.sql` (same day; it re-creates B6's apply_trade / claim_open_slot after B6)");
 ok(/revoke all on function public\.apply_trade\(uuid\) from public, anon;\ngrant execute on function public\.apply_trade\(uuid\) to authenticated;/.test(auditMig) && /revoke all on function public\.claim_open_slot\(date, text\) from public, anon;\ngrant execute on function public\.claim_open_slot\(date, text\) to authenticated;/.test(auditMig), "the trade-audit migration must re-run both revoke / grant pairs");
-["apply_trade", "claim_open_slot"].forEach((name) => {
+["claim_open_slot"].forEach((name) => {
   const a = functionText(schema, name), b = functionText(auditMig, name);
   ok(a && b && a === b, name + "(): schema.sql differs from sql/migrations/2026-09-24-trade-audit-names.sql (keep them identical; the migration is what runs live)");
 });
+// revision y (2026-10-18) re-creates apply_trade: this file's body (revision m, live since 2026-09-24) is frozen by sha256 and is y's with the
+// offer loop undone (the revision y step); schema.sql mirrors y
+eq(sha5b(functionText(auditMig, "apply_trade")), M_APPLY_TRADE_SHA256, "2026-09-24-trade-audit-names.sql apply_trade() must stay byte-for-byte what was applied live on 2026-09-24 (revision y re-creates it in a NEW migration);");
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-trade-audit-names\.sql/.test(auditMig), "the trade-audit migration header must carry the CLI apply line for the orchestrator");
 ok(/REPORT-FIRST/.test(auditMig) && /Blast radius/.test(auditMig), "the trade-audit migration header must say it is report-first and state the blast radius");
 ok(/-- Revision 2026-09-24 m \(Prompt 16 follow-up 5b, sql\/migrations\/2026-09-24-trade-audit-names\.sql, applied 2026-09-24[^)]*\)/.test(schema), "schema.sql header must record revision 2026-09-24 m (trade / claim audit rows; report-first, NOT yet applied - the record step changes it to 'applied <timestamp>' with this pin)");
@@ -1614,7 +1629,8 @@ const TRADE_SUMMARY = [
 const undoTrade = (t) => t
   .replace("  my_name  text;\n  summary  text;\n", "")
   .replace(/  -- \(2026-09-24, follow-up 5b\)[\s\S]*?\n  insert into public\.audit_log \(actor_id, actor_name, action, detail\)\n  values \(me, my_name, 'trade\.apply', jsonb_build_object\('summary', summary, /, "  insert into public.audit_log (actor_id, action, detail)\n  values (me, 'trade.apply', jsonb_build_object(");
-[["schema.sql", schema], ["trade-audit migration", auditMig]].forEach(([n, s]) => {
+// (scoped to the 5b file since revision y: schema.sql's apply_trade is y's - its audit insert gains offer / return_offer, pinned in the y step)
+[["trade-audit migration", auditMig]].forEach(([n, s]) => {
   const fn = functionText(s, "apply_trade");
   ok(fn.includes(ACTOR_LOOKUP_1), n + ": apply_trade must read the CALLER's display_name: `" + ACTOR_LOOKUP_1 + "`");
   ok(fn.includes(ACTOR_LOOKUP_2), n + ": apply_trade must fall back to the roster name for the caller's roster id, then the id: `" + ACTOR_LOOKUP_2 + "`");
@@ -1711,11 +1727,13 @@ ok(!/public\.apply_trade\(|claim_open_slot|call_offers_guard|time_off_no_call_co
 eq((giveMig.match(/^create trigger /gm) || []).length, 2, "the give-kind migration re-creates exactly its two triggers;");
 ok(/^-- supersedes: sql\/migrations\/2026-09-24-definer-locks\.sql$/m.test(giveMig), "the give-kind migration must declare `-- supersedes: sql/migrations/2026-09-24-definer-locks.sql` (same day; it re-creates B6's trade_insert_guard after B6)");
 {
-  const a = functionText(schema, "trade_update_guard"), b = functionText(giveMig, "trade_update_guard");
-  ok(a && b && a === b, "trade_update_guard(): schema.sql differs from sql/migrations/2026-09-24-give-kind.sql (keep them identical; the migration is what runs live)");
+  // since revision y (2026-10-18) schema.sql mirrors y's trade_update_guard; this file's is frozen by sha256 (N_UPDATE_GUARD_SHA256, the trade-past
+  // step) and is y's with the stamp block undone (the revision y step)
+  const a = functionText(schema, "trade_update_guard"), b = functionText(read(TRADE_OFFER_MIGRATION), "trade_update_guard");
+  ok(a && b && a === b, "trade_update_guard(): schema.sql differs from sql/migrations/" + TRADE_OFFER_FILE + " (revision y, the newest touching it; keep them identical)");
   // the follow-up's record step (2026-09-27): schema.sql's trade_insert_guard is the follow-up's, and this file's stays frozen as applied
   eq(crypto.createHash("sha256").update(functionText(giveMig, "trade_insert_guard") || "").digest("hex"), GIVE_INSERT_GUARD_SHA256, "the give-kind file's trade_insert_guard must stay byte-for-byte what was applied live on 2026-09-25 (the member return-leg refusal belongs to sql/migrations/" + RETURN_LEG_FILE + ");");
-  ok(functionText(schema, "trade_insert_guard") === functionText(read(RETURN_LEG_MIGRATION), "trade_insert_guard") && functionText(schema, "trade_insert_guard") !== functionText(giveMig, "trade_insert_guard"), "trade_insert_guard(): schema.sql mirrors the member return-leg follow-up (the newest touching it), not the give-kind file");
+  ok(functionText(schema, "trade_insert_guard") === functionText(read(TRADE_OFFER_MIGRATION), "trade_insert_guard") && functionText(schema, "trade_insert_guard") !== functionText(giveMig, "trade_insert_guard"), "trade_insert_guard(): schema.sql mirrors revision y (the newest touching it, after the member return-leg follow-up), not the give-kind file");
 }
 ok(/supabase db query --linked --workdir <dir> -f <abs>\/sql\/migrations\/2026-09-24-give-kind\.sql/.test(giveMig), "the give-kind migration header must carry the CLI apply line for the orchestrator");
 ok(/REPORT-FIRST/.test(giveMig) && /Blast radius/.test(giveMig) && /TAIL rows/.test(giveMig), "the give-kind migration header must say it is report-first and state the blast radius (incl. the live client's one-way unit-tail rows)");
@@ -1741,7 +1759,8 @@ const KIND_DDL = [
 ].join("\n");
 [["schema.sql", schema], ["give-kind migration", giveMig]].forEach(([n, s]) => {
   ok(s.includes(KIND_DDL + "\ncomment on column public.shift_trade_requests.kind is "), n + ": the kind column DDL must read exactly `" + KIND_DDL.replace(/\n/g, " ") + "` followed by its comment");
-  eq((s.match(/alter table public\.shift_trade_requests (add|drop) /g) || []).length, 5, n + ": exactly the five kind add / drop statements alter shift_trade_requests;");
+  // since revision y (2026-10-18) schema.sql also adds the two consent-stamp columns (pinned in the revision y step): 5 kind + 2 there
+  eq((s.match(/alter table public\.shift_trade_requests (add|drop) /g) || []).length, n === "schema.sql" ? 7 : 5, n + ": exactly the five kind add / drop statements (and, in schema.sql, revision y's two add column lines) alter shift_trade_requests;");
 });
 ok(schema.indexOf(KIND_DDL) > schema.indexOf("create index if not exists trade_day_idx") && schema.indexOf(KIND_DDL) < schema.indexOf("create or replace function public.trade_update_guard()"), "schema.sql: the kind DDL sits right after the trades table's indexes and before the trade guards");
 ok(!/\bkind\b/.test(schema.slice(schema.indexOf("create table if not exists public.shift_trade_requests ("), schema.indexOf("create index if not exists trade_status_idx"))), "schema.sql: the create table stays as it was (an existing table never sees a create-table column; the alter adds it, like call_periods.offer_modes)");
@@ -1752,11 +1771,13 @@ step("Prompt 19: nothing else in either trigger body moved (the body with the Pr
 const undoInsert = (t) => t.replace(/\n  end if;\n  -- \(2026-09-24, Prompt 19\)[^\n]*\n  if new\.kind = 'give'[\s\S]*?\n  end if;\n/, "\n  end if;\n");
 const undoFollowUp = (t) => t.replace(/    -- \(2026-09-24, Prompt 19\)[\s\S]*?\n    end if;\n  end if;\n  -- \(2026-09-24, Prompt 19\)[^\n]*\n  if new\.kind = 'give'[\s\S]*?\n  end if;\n/, "  end if;\n");
 const undoUpdate = (t) => t.replace("new.return_role is distinct from old.return_role\n     or new.kind is distinct from old.kind then", "new.return_role is distinct from old.return_role then");
-[["schema.sql", schema, undoFollowUp], ["give-kind migration", giveMig, undoInsert]].forEach(([n, s, undo]) => {
+// (since revision y, 2026-10-18: the follow-up file stands in for schema.sql here - schema.sql's two bodies are y's, which the revision y step
+// undoes back to the follow-up's / give-kind's byte for byte, so the chain y -> p / n -> B6 / 9-23 stays proven)
+[["member return-leg follow-up", read(RETURN_LEG_MIGRATION), undoFollowUp], ["give-kind migration", giveMig, undoInsert]].forEach(([n, s, undo]) => {
   eq(undo(functionText(s, "trade_insert_guard")), functionText(locksMig, "trade_insert_guard"), n + ": with the Prompt 19 lines undone textually, trade_insert_guard must equal B6's applied body byte for byte (from := me, the same-surgeon refusal and the roster names untouched);");
-  eq(undoUpdate(functionText(s, "trade_update_guard")), functionText(pastMigration, "trade_update_guard"), n + ": with the kind line undone textually, trade_update_guard must equal the 9/23 applied body byte for byte (the status transitions untouched);");
 });
-ok(functionText(schema, "apply_trade") === functionText(auditMig, "apply_trade"), "apply_trade(): schema.sql still equals the 5b file - Prompt 19 does not redefine it");
+eq(undoUpdate(functionText(giveMig, "trade_update_guard")), functionText(pastMigration, "trade_update_guard"), "give-kind migration: with the kind line undone textually, trade_update_guard must equal the 9/23 applied body byte for byte (the status transitions untouched);");
+ok(functionText(auditMig, "apply_trade") !== null && !/\bkind\b/.test(functionText(auditMig, "apply_trade")), "apply_trade(): the 5b file's body (revision m) never names kind - Prompt 19 does not redefine it (revision y does, 2026-10-18 - pinned in its own step)");
 ok(/if not \(sched or me = t\.from_surgeon_id or me = t\.to_surgeon_id\) then/.test(functionText(schema, "apply_trade")), "apply_trade's caller check admits the RECEIVER (me = t.to_surgeon_id) - the reason Prompt 19 leaves it untouched");
 
 step("Prompt 19: trade probe GIVE_SETUP and O..U3 (after N, before the report); A / G / H / N carry a return leg; verify-rls.sh grades every case and 6a posts a return leg");
@@ -1914,7 +1935,7 @@ const guardVerdict = (fn, caller, row) => {
   ];
   CASES.forEach(([what, caller, row, want]) => eq(guardVerdict(give, caller, row), want, "give-kind trade_insert_guard (sql/migrations/2026-09-24-give-kind.sql, frozen as applied): " + what + ";"));
   CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(followUp, caller, row), wantFu, "follow-up trade_insert_guard (sql/migrations/" + RETURN_LEG_FILE + ", applied 2026-09-27): " + what + ";"));
-  CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(functionText(schema, "trade_insert_guard"), caller, row), wantFu, "schema.sql's trade_insert_guard (the follow-up's since its record step): " + what + ";"));
+  CASES.forEach(([what, caller, row, , wantFu]) => eq(guardVerdict(functionText(schema, "trade_insert_guard"), caller, row), wantFu, "schema.sql's trade_insert_guard (revision y's since 2026-10-18 - the follow-up's plus the consent stamps, which add no refusal): " + what + ";"));
   // The B6 guard (frozen by sha256 above) was the BEFORE of Prompt 19: it never refused a member's one-way trade (only the client
   // did - Q's BEFORE in the probe header reads status=pending return=null) and knew no kind.
   eq(guardVerdict(b6, MEMBER, { ...base }), "ok", "the B6 trade_insert_guard accepted a member trade with no return leg (the BEFORE the follow-up closed; the give-kind file kept it);");
@@ -1959,7 +1980,7 @@ eq(crypto.createHash("sha256").update(fuFn || "").digest("hex"), S1_INSERT_GUARD
 const MEMBER_BLOCK = "    -- (2026-09-24, Prompt 19) a member's 'trade' carries its return shift (return_day AND return_role); a one-way row from a\n    -- member is a 'give'. kind null reads as a trade here (the not-null constraint refuses it after the trigger anyway).\n    " + GIVE_NEEDS_RETURN_IF + "\n      " + GIVE_NEEDS_RETURN_RAISE + "\n    end if;\n";
 eq(fuFn, functionText(giveMig, "trade_insert_guard").replace("    new.decided_at      := null;\n  end if;\n", "    new.decided_at      := null;\n" + MEMBER_BLOCK + "  end if;\n"), "the follow-up's body must be the give-kind body with ONLY the member return-leg block added (right after the normalisation, inside the member branch);");
 eq(undoFollowUp(fuFn), functionText(locksMig, "trade_insert_guard"), "the follow-up's body with both Prompt 19 blocks undone must equal B6's applied body byte for byte;");
-ok(schema.includes(GIVE_NEEDS_RETURN_IF) && functionText(schema, "trade_insert_guard") === fuFn, "schema.sql must carry the member return-leg block - it mirrors the follow-up since its apply was recorded (2026-09-27)");
+ok(schema.includes(GIVE_NEEDS_RETURN_IF) && functionText(schema, "trade_insert_guard").includes(MEMBER_BLOCK), "schema.sql must carry the member return-leg block - it mirrored the follow-up from its apply (2026-09-27) and mirrors revision y, which keeps it (the revision y step proves y = the follow-up + the stamp lines)");
 const fuHdr = fuMig.slice(0, fuMig.indexOf("create or replace function"));
 ok(!/^-- PREPARED FOLLOW-UP/m.test(fuHdr) && /^-- APPLIED 2026-09-27 00:43:01Z by the 24-hour gate \(run by hand\); sql\/schema\.sql mirrors it as Revision 2026-09-25 p since the record step\.$/m.test(fuHdr), "the follow-up header's PREPARED / NOT APPLIED / NOT MIRRORED marker line is gone; its place reads `-- APPLIED 2026-09-27 00:43:01Z by the 24-hour gate (run by hand); sql/schema.sql mirrors it as Revision 2026-09-25 p since the record step.`");
 ok(/apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain/.test(fuHdr.replace(/\n-- /g, " ")), "the follow-up header must say: apply only after a client_versions min_version bump to the Prompt 19 build and a day for old builds to drain");
@@ -4650,8 +4671,9 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   // pin moved deliberately 10/3 (the record step): the four places read applied (they read 'report-first, NOT yet applied' before)
   // pin moved deliberately 10/14: Prompt 31 Part A - revision x is prepared, not applied, so its own three schema.sql lines (the revision line,
   // the derived-functions block, the guard's revision-x paragraph) read 'report-first, NOT yet applied'; kept intent: no OTHER line does (every
-  // one left names sql/migrations/2026-10-14-east-vacations.sql, and the record step turns them applied)
-  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !/sql\/migrations\/2026-10-14-east-vacations\.sql/.test(l)).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but revision x's own (prepared, not applied)");
+  // one left names sql/migrations/2026-10-14-east-vacations.sql, and the record step turns them applied); widened 10/18 for revision y (trade
+  // offers, prepared, not applied): its header line names sql/migrations/2026-10-18-trade-offer.sql, and its record step turns it applied
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !/sql\/migrations\/(2026-10-14-east-vacations|2026-10-18-trade-offer)\.sql/.test(l)).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but revision x's and revision y's own (prepared, not applied)");
 }
 
 step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
@@ -5485,7 +5507,8 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (PREPARED - report-
   const at = review.indexOf("## 2026-10-14 - East vacations:"), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
   const xr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const xf = xr.replace(/\s+/g, " ");
-  ok(at > review.indexOf("## 2026-10-03 - phone push:") && end < 0, "the section is the last one, after the Prompt 30 record");
+  // widened 10/18: revision y's section (trade offers, prepared after x) is the only one that may follow it
+  ok(at > review.indexOf("## 2026-10-03 - phone push:") && (end < 0 || (review.indexOf("\n## ", end + 1) < 0 && review.slice(end + 1).startsWith("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)"))), "the section is the last one after the Prompt 30 record (revision y's, 10/18, alone may follow it)");
   ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations\.sh`\.\*\*/m.test(xr) && !/\*\*Status: APPLIED/.test(xr), "the status line reads '**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations.sh`.**' until the record step");
   const ANCHORS = ["**Why.**", "**The objects**", "**The reading (one truth).**", "**Who it binds.**", "**Refusals**", "**The audit rows.**", "**Behaviour change (the guard only", "**The known gap stays", "**The silent-empty guard is the caller's (critic A7).**", "**Blast radius.**", "**What could break / what offline cannot show.**", "**The migration**", "**The pre-check", "**The probe**", "**verify-rls.sh section 20**", "**Apply order:**", "**One command (Faraz):**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved: "];
   let last = -1;
@@ -5533,5 +5556,296 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (PREPARED - report-
   ok(vgBulletX.includes("Revision x (Prompt 31 Part A, 2026-10-14 - report-first, NOT applied)") && vgBulletX.includes("`silvis_derived_vacations()`") && /Known gap \(review 10\/1\): only a `time_off` write is checked/.test(vgBulletX), "guide 4.3's vacation guard bullet points at revision x (the East leg on the derived rows) and keeps its known gap");
 }
 console.log("- Prompt 31 Part A (A5): docs/SCHEMA-REVIEW.md's revision x record (PREPARED, NOT applied - Faraz runs apply-east-vacations.sh; the migration verbatim, the 56 probe cases with their AFTER strings, the gates and guard md5s re-derived), table (a)'s helper line, guide 4.3");
+
+/* ---------------------------------------------- revision y (2026-10-18): a trade writes the receiver's offer */
+// Faraz 10/18: "build revision y as recommended (D3 consent stamps, D2 submitted receivers only, D1 claim parity, and the rest as
+// recommended)". sql/migrations/2026-10-18-trade-offer.sql (report-first, NOT applied - Faraz runs apply-trade-offer.sh, kept outside the
+// repo, AFTER Part A's): two consent-stamp columns on shift_trade_requests written by the trade triggers only, and apply_trade writing
+// each agreeing, submitted receiver's call_offers row the way claim_open_slot does. Pinned here: the file's shape and its mirror; each
+// body = the live one with the y lines undone, byte for byte; the loop's conditions in order; no declared variable that collides with a
+// column or alias of the body (the 42702 lesson - a variable `r` beside revision m's `jsonb_array_elements(roster) r` alias fails every
+// apply, a fault only a run sees); the stamps never taken from the client; the audit keys; the probe and pre-check shapes; the docs'
+// PREPARED words; and scripts/verify-rls.sh left byte-unchanged (Part A's apply script pins its sha256 - D8).
+const Y_PROBE = path.join(ROOT, "sql", "probes", "trade-offer-probe.sql");
+const Y_PRECHECK = path.join(ROOT, "sql", "probes", "trade-offer-precheck.sql");
+const ySha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+step("revision y: migration 2026-10-18-trade-offer.sql - LF / ASCII, the two stamp columns, trade_insert_guard + trade_update_guard + apply_trade (nothing else), both triggers re-created, apply_trade's grants re-run, the reload; every statement byte-identical in schema.sql");
+const yMig = read(TRADE_OFFER_MIGRATION);
+ok(!/\r/.test(yMig) && /^[\x00-\x7f]*$/.test(yMig), "the trade-offer migration is LF and ASCII");
+checkInsertGuard("trade-offer migration", yMig, true, true, true);
+checkUpdateGuard("trade-offer migration", yMig, true);
+checkApplyTrade("trade-offer migration", yMig, true, true);
+eq(Array.from(yMig.matchAll(/^create or replace function public\.([a-z_]+)\(/gm)).map((m) => m[1]), ["trade_insert_guard", "trade_update_guard", "apply_trade"], "the trade-offer migration re-creates exactly the two trade guards and apply_trade, in that order;");
+const yCode = yMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+ok(!/\b(create|drop) (table|policy|index|publication|view)\b|drop function|drop column|alter policy|security_invoker/i.test(yCode), "the migration creates and drops no table, policy, index, view or publication, and drops no function or column");
+ok(!/call_offers_guard\(|call_offers_delete_guard|claim_open_slot\(|offer_status\(|save_offers\(|save_no_primary\(/.test(yCode), "the migration's statements re-create no other function (call_offers_guard, claim_open_slot, offer_status, save_offers, save_no_primary stay as they are)");
+ok(!/^-- supersedes:/m.test(yMig) && !/^-- PREPARED FOLLOW-UP/m.test(yMig), "no supersedes line (no other 2026-10-18 file) and not a NOT-MIRRORED follow-up");
+ok(yMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST learns the two columns)");
+const yStmts = psTopStatements(yMig);
+ok(!yStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row outside function bodies (no backfill - D5)");
+eq(yStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
+  "alter table public.shift_trade_requests add column if not exists proposed_by text;",
+  "alter table public.shift_trade_requests add column if not exists accepted_by text;",
+  "comment on column public.shift_trade_requests.proposed_by is ...",
+  "comment on column public.shift_trade_requests.accepted_by is ...",
+  "create or replace function public.trade_insert_guard() returns trigger",
+  "drop trigger if exists trade_insert_guard_trg on public.shift_trade_requests;",
+  "create trigger trade_insert_guard_trg",
+  "create or replace function public.trade_update_guard() returns trigger",
+  "drop trigger if exists trade_update_guard_trg on public.shift_trade_requests;",
+  "create trigger trade_update_guard_trg",
+  "create or replace function public.apply_trade(p_trade_id uuid) returns jsonb",
+  "revoke all on function public.apply_trade(uuid) from public, anon;",
+  "grant execute on function public.apply_trade(uuid) to authenticated;",
+  "notify pgrst, 'reload schema';",
+], "the migration is exactly: the two columns and their comments, the insert guard + its trigger, the update guard + its trigger, apply_trade + its grants, the reload;");
+yStmts.filter((st) => st !== "notify pgrst, 'reload schema';").forEach((st) => ok(schemaCode.includes(st), "schema.sql must carry the migration's statement byte for byte (comment lines aside; the reload is the migration's alone): " + st.split("\n")[0]));
+const Y_DDL = "alter table public.shift_trade_requests add column if not exists proposed_by text;\nalter table public.shift_trade_requests add column if not exists accepted_by text;\n";
+{
+  const at = schema.indexOf(Y_DDL);
+  ok(at > schema.indexOf("comment on column public.shift_trade_requests.kind is ") && at < schema.indexOf("create or replace function public.trade_update_guard()"), "schema.sql: the two stamp columns sit right after the kind column and before the trade guards (alter only - the create table stays as it was)");
+  ok(!/proposed_by|accepted_by/.test(schema.slice(schema.indexOf("create table if not exists public.shift_trade_requests ("), schema.indexOf("create index if not exists trade_status_idx"))), "schema.sql: the create table names neither stamp (an existing table never sees a create-table column)");
+  ok(/^comment on column public\.shift_trade_requests\.proposed_by is 'revision y: [^\n]*never from the client\)';$/m.test(schema) && /^comment on column public\.shift_trade_requests\.accepted_by is 'revision y: [^\n]*never from the client\)';$/m.test(schema), "both columns carry a revision y comment saying they are never taken from the client");
+}
+{
+  const yHdr = yMig.slice(0, yMig.indexOf(Y_DDL));
+  const yHdrFlat = yHdr.replace(/\n-- ?/g, " ");
+  ok(yHdr.includes("\n--   bash <run folder>/apply-trade-offer.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + TRADE_OFFER_FILE + "   (what it runs)\n"), "the migration header carries the two apply lines (Faraz's script, outside the repo; what it runs)");
+  ok(/REPORT-FIRST, NOT APPLIED/.test(yHdr) && /Blast radius\./.test(yHdr) && /Who it binds\./.test(yHdr) && yHdrFlat.includes("ONE implicit transaction") && yHdrFlat.includes("Order: after Part A"), "the migration header says report-first / not applied, who it binds, the blast radius, one transaction, and that it runs after Part A");
+  ok(yHdrFlat.includes("D3 consent stamps, D2 submitted receivers only, D1 claim parity"), "the migration header quotes Faraz's go (D3, D2, D1)");
+  const Y_ROLLBACK = [
+    "supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-trade-audit-names.sql   (apply_trade m; claim_open_slot m, the live body)",
+    "supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-give-kind.sql   (trade_update_guard n; its DDL is idempotent)",
+    "supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-25-member-trade-return-leg.sql   (trade_insert_guard p - after give-kind)",
+    "notify pgrst, 'reload schema';",
+  ];
+  ok(yHdr.includes(Y_ROLLBACK.map((l) => "--   " + l).join("\n") + "\n"), "the migration header's rollback must read exactly (m's apply_trade, then give-kind's update guard, then the follow-up's insert guard - give-kind would otherwise leave the pre-p insert guard - the reload):\n" + Y_ROLLBACK.join("\n"));
+  // the rollback files' bodies are the live ones: m (frozen above), n (frozen above), p (S1's sha256), and the 5b file's claim_open_slot is schema.sql's (live)
+  ok(ySha(functionText(auditMig, "apply_trade")) === M_APPLY_TRADE_SHA256 && ySha(functionText(giveMig, "trade_update_guard")) === N_UPDATE_GUARD_SHA256 && ySha(functionText(fuMig, "trade_insert_guard")) === S1_INSERT_GUARD_SHA256 && functionText(auditMig, "claim_open_slot") === functionText(schema, "claim_open_slot"), "the three rollback files re-create exactly the bodies live before revision y (m, n, p) and claim_open_slot's live body");
+}
+
+step("revision y: apply_trade - revision m's body byte for byte plus the declarations, the offer loop (after the schedule_days writes, before the status flip) and the two audit booleans; the conditions in order; no exception handler; no variable that collides with a column or alias");
+const Y_DECLARE = "  leg_n    integer;\n  leg_pid  text;\n  leg_day  date;\n  leg_role text;\n  per_from date;\n  per_to   date;\n  per_ro   jsonb;\n  wrote1   boolean := false;\n  wrote2   boolean := false;\n";
+const Y_LOOP_START = "  -- (2026-10-18, revision y) a trade is an offer made on the spot, as a claim is:";
+const Y_LOOP_END = "  end loop;\n";
+const Y_AUDIT_KEYS = ", 'to', t.to_surgeon_id, 'offer', wrote1, 'return_offer', wrote2));";
+const TRADE_AUDIT_INSERT_Y = "insert into public.audit_log (actor_id, actor_name, action, detail)\n  values (me, my_name, 'trade.apply', jsonb_build_object('summary', summary, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id" + Y_AUDIT_KEYS;
+const undoYApply = (t) => {
+  const a = t.indexOf(Y_LOOP_START), b = a < 0 ? -1 : t.indexOf(Y_LOOP_END, a);
+  if (a < 0 || b < 0) return null;
+  return (t.slice(0, a) + t.slice(b + Y_LOOP_END.length)).replace(Y_DECLARE, "").replace(Y_AUDIT_KEYS, ", 'to', t.to_surgeon_id));");
+};
+const Y_LOOP_LINES = [
+  "  for leg_n, leg_pid, leg_day, leg_role in",
+  "      from (values (1, t.to_surgeon_id, t.day, t.role),",
+  "                   (2, t.from_surgeon_id, t.return_day, case when t.return_role = 'primary' then 'primary' else 'backup' end)) lg(n, pid, dy, rl)",
+  "     where lg.dy is not null",
+  "     order by lg.pid, lg.dy",
+  "    if leg_day < today_c then continue; end if;",
+  "    if t.accepted_by is distinct from t.to_surgeon_id then continue; end if;",
+  "    if leg_n = 2 and t.proposed_by is distinct from t.from_surgeon_id then continue; end if;",
+  "    if exists (select 1 from jsonb_array_elements(roster) e where e ->> 'id' = leg_pid and e ->> 'type' = 'external') then continue; end if;",
+  "    select p.start_day, p.end_day, p.rules_only_ids into per_from, per_to, per_ro",
+  "      from public.call_periods p where leg_day between p.start_day and p.end_day order by p.start_day limit 1;",
+  "    if not found then continue; end if;",
+  "    if per_ro ? leg_pid then continue; end if;",
+  "    if not exists (select 1 from public.call_offers o where o.person_id = leg_pid and o.day between per_from and per_to) then continue; end if;",
+  "    if leg_role = 'primary' then",
+  "      perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || leg_pid));",
+  "      if exists (select 1 from public.availability a where a.person_id = leg_pid and a.kind = 'backup_only' and leg_day between a.start_date and a.end_date) then continue; end if;",
+  "    end if;",
+  "    perform set_config('silvis.claim_in_progress', 'on', true);",
+  "    insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)",
+  "    values (leg_pid, leg_day, leg_role, null, leg_pid, 'app')",
+  "    on conflict (person_id, day) do update",
+  "       set role_pref  = case when public.call_offers.role_pref = excluded.role_pref then public.call_offers.role_pref else 'either' end,",
+  "           entered_by = case when public.call_offers.role_pref in (excluded.role_pref, 'either') then public.call_offers.entered_by else excluded.entered_by end,",
+  "           source     = case when public.call_offers.role_pref in (excluded.role_pref, 'either') then public.call_offers.source else excluded.source end,",
+  "           updated_at = now();",
+  "    perform set_config('silvis.claim_in_progress', '', true);",
+  "    if leg_n = 1 then wrote1 := true; else wrote2 := true; end if;",
+  "  end loop;",
+];
+// the 42702 guard: a declared name may not equal a column or an alias the body's SQL uses (PL/pgSQL substitutes the variable or refuses as ambiguous)
+const SQL_WORDS = new Set(["where", "for", "order", "limit", "cross", "left", "join", "on", "as", "lateral", "and", "or", "into", "set", "values", "select", "group", "having", "union", "update", "returning", "then"]);
+function yCollisions(fn) {
+  const decl = fn.slice(fn.indexOf("\ndeclare\n") + 9, fn.indexOf("\nbegin\n"));
+  const names = Array.from(decl.matchAll(/^\s+([a-z_][a-z0-9_]*)\s/gm)).map((m) => m[1]);
+  const body = fn.slice(fn.indexOf("\nbegin\n")).split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const used = new Set();
+  for (const m of body.matchAll(/\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b/g)) { if (m[1] !== "public" && !names.includes(m[1])) used.add(m[1]); used.add(m[2]); }
+  for (const m of body.matchAll(/\b(?:from|join)\s+(?:public\.)?[a-z_][a-z0-9_]*(?:\([^)]*\))?\s+([a-z_][a-z0-9_]*)\b/g)) if (!SQL_WORDS.has(m[1])) used.add(m[1]);
+  for (const m of body.matchAll(/\)\s+([a-z_][a-z0-9_]*)\(([a-z0-9_, ]+)\)/g)) { used.add(m[1]); m[2].split(/,\s*/).forEach((c) => used.add(c)); }
+  for (const m of body.matchAll(/insert into public\.[a-z_]+ \(([a-z_, ]+)\)/g)) m[1].split(/,\s*/).forEach((c) => used.add(c));
+  for (const m of body.matchAll(/on conflict \(([a-z_, ]+)\)/g)) m[1].split(/,\s*/).forEach((c) => used.add(c));
+  for (const m of body.matchAll(/\bset\s+([a-z_][a-z0-9_]*)\s*=/g)) used.add(m[1]);
+  for (const m of body.matchAll(/,\s*([a-z_][a-z0-9_]*)\s*=\s/g)) used.add(m[1]);
+  return { names, hits: names.filter((x) => used.has(x)) };
+}
+[["schema.sql", schema], ["trade-offer migration", yMig]].forEach(([n, s]) => {
+  const fn = functionText(s, "apply_trade");
+  eq(undoYApply(fn), functionText(auditMig, "apply_trade"), n + ": with the y lines undone textually (the declarations, the loop, the two audit keys), apply_trade must equal revision m's applied body byte for byte - every check, refusal, lock and write before the loop untouched;");
+  ok(fn.includes("  roster   jsonb;\n" + Y_DECLARE + "  to_name  text;\n  fr_name  text;\n  my_name  text;\n  summary  text;\nbegin"), n + ": the y declarations sit between roster and to_name (my_name / summary stay last)");
+  const loopAt = fn.indexOf(Y_LOOP_START);
+  ok(loopAt > fn.lastIndexOf("update public.schedule_days set ") && loopAt < fn.indexOf("perform set_config('silvis.apply_trade', '1', true);"), n + ": the offer loop runs after the last schedule_days write and before the status flip");
+  let at = loopAt;
+  Y_LOOP_LINES.forEach((l) => { const i = fn.indexOf("\n" + l + "\n", at); ok(i > at, n + ": the offer loop lacks, or misorders, the line `" + l.trim() + "`"); at = i < 0 ? at : i; });
+  ok(fn.includes(TRADE_AUDIT_INSERT_Y), n + ": the trade.apply audit insert must read exactly `" + TRADE_AUDIT_INSERT_Y.replace(/\n\s*/g, " ") + "` (D7: offer / return_offer last)");
+  ok(fn.indexOf(TRADE_AUDIT_INSERT_Y) > fn.indexOf("update public.shift_trade_requests set status = 'applied'") && fn.indexOf(TRADE_AUDIT_INSERT_Y) < fn.lastIndexOf("return jsonb_build_object('ok', true"), n + ": the audit insert stays the last write");
+  ok(!/\bexception\s+when\b/i.test(fn), n + ": apply_trade has no exception handler - anything unforeseen in the offer write rolls the whole apply back (fail closed)");
+  eq((fn.match(/set_config\('silvis\.claim_in_progress', 'on', true\)/g) || []).length, 1, n + ": the OFFER_FROZEN bypass is turned on once, around the one upsert;");
+  ok(fn.indexOf("perform set_config('silvis.claim_in_progress', '', true);") > fn.indexOf("on conflict (person_id, day) do update"), n + ": the bypass is turned off right after the upsert");
+  const c = yCollisions(fn);
+  eq(c.hits, [], n + ": no declared variable may share a name with a column or alias of apply_trade's SQL (" + c.names.join(", ") + ") - the 42702 lesson;");
+  ["r", "e", "p", "o", "a", "v", "d", "lg", "n", "pid", "dy", "rl", "k", "day", "role", "source", "status", "note"].forEach((x) => ok(!c.names.includes(x), n + ": apply_trade must not declare a variable named `" + x + "`"));
+});
+{
+  // the collision check is not vacuous: the report's first draft (a variable `r`) and a variable named like a column are caught
+  const fn = functionText(schema, "apply_trade");
+  eq(yCollisions(fn.replace("  leg_n    integer;\n", "  r        text;\n  leg_n    integer;\n")).hits, ["r"], "the collision check must catch a variable `r` beside the roster alias (the report's first draft);");
+  eq(yCollisions(fn.replace("  leg_n    integer;\n", "  person_id text;\n  leg_n    integer;\n")).hits, ["person_id"], "the collision check must catch a variable named like a column of the upsert;");
+}
+ok(schema.includes("perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || who));") && (schema.match(/hashtext\('availability:no_primary:' \|\| /g) || []).length === 3, "the D6 lock key is save_offers' / save_no_primary's own (availability:no_primary:<id>) - the two of them and apply_trade's loop");
+
+step("revision y: the consent stamps - written by the trade triggers only, for EVERY caller (a client's value is overwritten); each guard is its live body with the stamp lines undone, byte for byte");
+const Y_INS_P = "  new.proposed_by := case when me is not null and me = new.from_surgeon_id then me else 'scheduler' end;\n";
+const Y_INS_A = "  new.accepted_by := case when new.status = 'accepted' then (case when me is not null and me = new.to_surgeon_id then me else 'scheduler' end) end;\n";
+const undoYIns = (t) => t.replace(/  -- \(2026-10-18, revision y\) the consent stamps, for EVERY caller[\s\S]*?\n(?=  new\.proposed_by := )/, "").replace(Y_INS_P + Y_INS_A, "");
+const Y_UPD_BLOCK = [
+  "  if new.from_surgeon_id is distinct from old.from_surgeon_id or new.to_surgeon_id is distinct from old.to_surgeon_id",
+  "     or new.day is distinct from old.day or new.role is distinct from old.role",
+  "     or new.return_day is distinct from old.return_day or new.return_role is distinct from old.return_role then",
+  "    new.proposed_by := case when me is not null and me = new.from_surgeon_id then me else 'scheduler' end;",
+  "    new.accepted_by := case when new.status = 'accepted' then (case when me is not null and me = new.to_surgeon_id then me else 'scheduler' end) end;",
+  "  elsif new.status = 'accepted' and old.status is distinct from 'accepted' then",
+  "    new.proposed_by := old.proposed_by;",
+  "    new.accepted_by := case when me is not null and me = new.to_surgeon_id then me else 'scheduler' end;",
+  "  else",
+  "    new.proposed_by := old.proposed_by;",
+  "    new.accepted_by := old.accepted_by;",
+  "  end if;",
+].join("\n") + "\n";
+const undoYUpd = (t) => t.replace(/  -- \(2026-10-18, revision y\) the consent stamps are this trigger's alone[\s\S]*?\n(?=  if new\.from_surgeon_id is distinct from )/, "").replace(Y_UPD_BLOCK, "");
+[["schema.sql", schema], ["trade-offer migration", yMig]].forEach(([n, s]) => {
+  const ins = functionText(s, "trade_insert_guard"), upd = functionText(s, "trade_update_guard");
+  eq(undoYIns(ins), fuFn, n + ": with the two stamp lines (and their comment) undone, trade_insert_guard must equal revision p's applied body (the follow-up's) byte for byte;");
+  const at = ins.indexOf(Y_INS_P + Y_INS_A);
+  ok(at > ins.indexOf("raise exception 'TRADE_INELIGIBLE: a trade needs two different surgeons'") && at < ins.indexOf("select d.data -> 'roster' into roster"), n + ": the insert stamps sit after the same-surgeon refusal (from_surgeon_id is final) and before the roster names, at the top level - for every caller");
+  eq([(ins.match(/new\.proposed_by\s*:=/g) || []).length, (ins.match(/new\.accepted_by\s*:=/g) || []).length], [1, 1], n + ": trade_insert_guard assigns each stamp exactly once;");
+  eq(undoYUpd(upd), functionText(giveMig, "trade_update_guard"), n + ": with the stamp block (and its comment) undone, trade_update_guard must equal revision n's applied body (give-kind's) byte for byte;");
+  ok(upd.indexOf(Y_UPD_BLOCK) > 0 && upd.indexOf(Y_UPD_BLOCK) < upd.indexOf("if public.silvis_is_sched() then return new; end if;"), n + ": the stamp block runs BEFORE the scheduler's return (the scheduler's own PATCH cannot set a stamp either)");
+  eq([(upd.match(/new\.proposed_by\s*:=/g) || []).length, (upd.match(/new\.accepted_by\s*:=/g) || []).length], [3, 3], n + ": trade_update_guard assigns each stamp on each of its three branches;");
+  [ins, upd].forEach((fn) => ok(!/:=[^;\n]*new\.(proposed_by|accepted_by)|coalesce\(new\.(proposed_by|accepted_by)|new\.(proposed_by|accepted_by) is /.test(fn), n + ": a trade guard never reads a stamp the client sent (only old.* or the caller's own id)"));
+  ok(!/\bkind\b/.test(Y_UPD_BLOCK) && !/kind/.test(upd.slice(0, upd.indexOf(Y_UPD_BLOCK))), n + ": the stamp block and its comment never say kind (the update guard names kind only in the immutability test)");
+});
+
+step("revision y: the probe - self-rolling-back, the collision guard first, PROBE_SETUP absent, the partly-applied check, seven throwaway users, fixtures in 2031-05..09 / 2020-06 / 2029-12-31, 32 cases each stating its AFTER string, the roster never written");
+const yProbe = read(Y_PROBE);
+ok(!/\r/.test(yProbe) && /^[\x00-\x7f]*$/.test(yProbe), "the trade offer probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(yProbe), "the trade offer probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(yProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ncreate temp table probe_ctx (k text primary key, v text);\ngrant select on probe_ctx to authenticated;"), "the probe collects into probe_results and keeps its context in probe_ctx (both readable by authenticated - the helpers run as the acting user)");
+{
+  const lastDo = yProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(yProbe.slice(lastDo)) && yProbe.slice(lastDo).includes("translate(r.v, '\";\\' || chr(13) || chr(10), '     ')"), "the probe's last DO block flattens each value and raises 'PROBE_RESULTS %;END'");
+  const colAt = yProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in the probe window");
+  const absentAt = yProbe.indexOf("raise exception 'PROBE_SETUP: shift_trade_requests.accepted_by is absent - sql/migrations/2026-10-18-trade-offer.sql is not applied';");
+  const partAt = yProbe.indexOf("raise exception 'PROBE_SETUP: apply_trade / trade_update_guard / trade_insert_guard is not revision y - sql/migrations/2026-10-18-trade-offer.sql is partly applied';");
+  const usersAt = yProbe.indexOf("insert into auth.users");
+  ok(colAt > 0 && absentAt > colAt && partAt > absentAt && usersAt > partAt, "the setup raises the collision guard first (a dry run sees it), then PROBE_SETUP absent, then the partly-applied check, before any fixture (" + [colAt, absentAt, partAt, usersAt] + ")");
+  const code = yProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ok(code.includes("'probe-tradeoffer-' || u || '@example.test'") && !/'probe-tradeoffer-[^'|]*@/.test(code), "the throwaway users are probe-tradeoffer-<uuid>@example.test, the email built with || (no literal email in the file)");
+  ok(!/(update|insert into|delete from)\s+public\.call_schedule_data/.test(code), "the probe never writes the roster blob, not even inside its transaction (the outside-surgeon branch is proven offline - the SCHEMA-REVIEW record)");
+  ok(!/(update|insert into|delete from)\s+public\.(time_off|notifications|push_subscriptions|app_call_days)\b/.test(code), "the probe writes no vacation, feed, push or APP row");
+  const days = Array.from(code.matchAll(/'(20[0-9]{2}-[0-9]{2}-[0-9]{2})'/g)).map((m) => m[1]);
+  const okDay = (d) => d.startsWith("2031-") || d.startsWith("2020-05-") || d.startsWith("2020-06-") || d === "2029-12-31";
+  ok(days.length > 60 && days.every(okDay), "every fixture day is in 2031, 2020-05 / 2020-06 (the past period PP and its case day) or 2029-12-31 (PP's end and s1's offer there): " + days.filter((d) => !okDay(d)).join(", "));
+  ok(code.includes("'probe-tradeoffer ' || p_key") && code.includes("'probe-tradeoffer PA'") && code.includes("'probe-tradeoffer PP'") && (code.match(/'probe-tradeoffer'\)/g) || []).length >= 20, "every fixture carries the probe's identity: trades 'probe-tradeoffer <K>', periods 'probe-tradeoffer P?', days source 'probe-tradeoffer'");
+  ok(code.includes("execute 'set local role authenticated';") && code.includes("json_build_object('sub', uid, 'role', 'authenticated')::text") && !/set local role (service_role|postgres)/.test(code), "the acting user is a signed-in authenticated claim; postgres is reached with reset role (no SET ROLE to service_role)");
+  ok(code.includes("'probe-tradeoffer PA', '2031-05-01', '2031-06-30', '2031-03-01', '2031-04-01', 'published'"), "PA is a PUBLISHED period - every member apply goes through the OFFER_FROZEN bypass");
+}
+const yProbeHdr = yProbe.slice(0, yProbe.indexOf("create temp table probe_results"));
+ok(/REPORT-FIRST, NOT APPLIED\)/.test(yProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(yProbeHdr) && /\n-- 32 cases\.\n/.test(yProbeHdr), "the probe header: report-first / not applied, nothing persisted, 32 cases");
+const Y_AFTER = {
+  P1: "cols=proposed_by,accepted_by definer=t loop=t stamps=t anon=f auth=t",
+  S1: "st=pending by=s2/null", S2: "st=pending by=s2/null", S3: "st=accepted by=s2/s3", S4: "st=accepted by=s2/s3",
+  S5: "st=accepted by=scheduler/scheduler", S6: "st=accepted by=s1/scheduler", S7: "st=accepted by=s2/scheduler", S8: "st=accepted by=scheduler/scheduler", S9: "st=accepted by=scheduler/s1",
+  A1: "st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off",
+  A2: "st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true",
+  A3: "st=applied by=scheduler/s3 o1=primary/s3/app a=true/false",
+  A4: "m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false",
+  A5: "st=applied by=s2/scheduler o1=none a=false/false",
+  A6: "st=applied by=s2/scheduler o1=none a=false/false",
+  A7: "st=applied by=s2/s3 o1=primary/s3/app a=true/false upd=scheduler",
+  A8: "st=applied by=s2/s1 o1=primary/s1/app a=true/false",
+  A9: "st=applied by=scheduler/scheduler o1=none a=false/false held=s4",
+  A10: "st=applied by=s1/s3 o1=primary/s3/app o2=backup/s1/app a=true/true",
+  A11: "st=applied by=scheduler/s3 o1=primary/s3/app o2=none a=true/false",
+  M1: "st=applied by=s2/s4 o1=either/s4/app a=true/false",
+  M2: "st=applied by=s2/s4 o1=primary/scheduler/email-relay a=true/false",
+  M3: "st=applied by=s2/s4 o1=either/scheduler/email-relay a=true/false",
+  R1: "st=applied by=s2/s5 o1=none a=false/false", R2: "st=applied by=s2/s6 o1=none a=false/false", R3: "st=applied by=s2/s3 o1=none a=false/false",
+  R4: "st=applied by=s2/s5 o1=none a=false/false", R5: "st=applied by=s2/s6 o1=primary/s6/app a=true/false", R6: "st=applied by=s2/s1 o1=none a=false/false",
+  R7: "lock=f/t st=applied by=s2/s4 o1=none a=false/false", R8: "st=applied by=s2/s4 o1=backup/s4/app a=true/false",
+};
+{
+  const hdrAfter = {};
+  yProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+)\s+.* -> (.*)$/); if (m) hdrAfter[m[1]] = m[2]; });
+  eq(Object.keys(hdrAfter).sort(), Object.keys(Y_AFTER).sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
+  Object.keys(Y_AFTER).forEach((k) => {
+    ok(hdrAfter[k] === Y_AFTER[k], "the probe header's AFTER for " + k + " (" + hdrAfter[k] + ") must be " + Y_AFTER[k]);
+    ok(!/[;"<>&]/.test(Y_AFTER[k]), k + "'s AFTER string carries no ; \" < > & (the CLI wrapping and the case split)");
+    ok(yProbe.includes("insert into probe_results values ('" + k + "', res);"), "the probe lacks case " + k);
+  });
+}
+
+step("revision y: the pre-check - ONE read-only SELECT (the objects gate with Part A's function, the four bodies' md5, the signatures, the grants, FORCE RLS and the owner; facts: the uncovered legs, the offer_modes keys with no offer)");
+const yPre = read(Y_PRECHECK);
+ok(!/\r/.test(yPre) && /^[\x00-\x7f]*$/.test(yPre), "the trade offer pre-check is LF and ASCII");
+{
+  const hdr = yPre.slice(0, yPre.indexOf("with objects as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
+  ok(hdr.includes("cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes") && hdr.includes("cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes"), "the header states the gate before and after the apply");
+  const code = yPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code), "the pre-check writes, locks and changes nothing");
+  ["apply_trade(uuid)", "trade_insert_guard()", "trade_update_guard()", "call_offers_guard()", "silvis_derived_vacations()"].forEach((sig) => ok(code.includes("to_regprocedure('public." + sig + "')"), "the pre-check looks up " + sig + " by its exact signature"));
+  ["'objects'::text", "'bodies'::text", "'sigs'::text", "'grants'::text", "'rls'::text", "'legs'::text", "'modes'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  ok(code.includes("c.relforcerowsecurity") && code.includes("p.proowner") && code.includes("c.relowner") && code.includes("acldefault('f', p.proowner)"), "row 5 reads FORCE RLS and the owner match; row 4 reads PUBLIC from the ACL with its default");
+  ok(!/display_name|email|\bnote\b|\.detail\b|from_surgeon_name|to_surgeon_name/.test(code), "facts only: no display name, email, note, trade detail or stored name is read");
+}
+
+step("revision y: schema.sql's header revision y line (after x, before the same-day rule), SCHEMA-REVIEW.md's PREPARED section (the last one), table (a), guide 4.3 / section 17 and the rules doc's section 8 say prepared, not applied; scripts/verify-rls.sh untouched (Part A's apply pins it); no apply script in the repo");
+{
+  const xAt = header.search(/^-- Revision 2026-10-14 x /m), yAt = header.search(/^-- Revision 2026-10-18 y \(trade offers, sql\/migrations\/2026-10-18-trade-offer\.sql, report-first, NOT yet applied\): /m);
+  ok(xAt > 0 && yAt > xAt && yAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-18 y ('report-first, NOT yet applied' until the record step) after revision x and before the same-day rule");
+  const revY = header.slice(yAt).split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(/consent stamps/.test(revY) && /proposed_by/.test(revY) && /accepted_by/.test(revY) && /never taken from the client/.test(revY) && /already submitted/.test(revY) && /No policy, grant, index, other function or anon surface changes/.test(revY) && /Letter u stays taken by the weekend pair claim/.test(revY) && /runs after Part A's/.test(revY), "revision y names the stamps (never from the client), the submitted receiver, what does not change, the taken letter u and the order after Part A");
+  ok(/^-- 2026-10-18 y \(sql\/migrations\/2026-10-18-trade-offer\.sql, report-first; Faraz 10\/18 - D1 claim parity, D2 submitted receivers only,$/m.test(schema), "apply_trade's comment block carries the revision y paragraph");
+}
+{
+  ok(/^## 2026-10-18 - apply_trade writes the receiver's offer \(revision y\): shift_trade_requests\.proposed_by \/ accepted_by \+ trade_insert_guard \/ trade_update_guard \/ apply_trade re-created \(Faraz 10\/18; `sql\/migrations\/2026-10-18-trade-offer\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-18 - apply_trade writes the receiver's offer (revision y)' section");
+  const at = review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)"), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
+  const yr = at < 0 ? "" : review.slice(at);
+  ok(at > review.indexOf("## 2026-10-14 - East vacations:") && end < 0, "the revision y section is the last one, after Part A's");
+  ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer\.sh`, after Part A's `apply-east-vacations\.sh`\.\*\*/m.test(yr) && !/\*\*Status: APPLIED/.test(yr), "the status line reads PREPARED - report-first, NOT applied - after Part A - until the record step");
+  ["**Why.**", "**The decisions.**", "**The objects**", "**The conditions**", "**The write**", "**Who it binds.**", "**What it changes for the receiver (D1).**", "**Blast radius.**", "**Proof.**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**"].forEach((a) => ok(yr.includes(a), "the revision y section lacks " + a));
+  ok(/^observed: \(the record step fills this[^\n]*/m.test(yr), "the observed placeholder (nothing has run against the live project)");
+  ok(yr.includes("apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe"), "the section states the bodies' md5 before the apply (revisions m / p / n / j)");
+  ok(!/B6 report|xmax/.test(yr), "the section names neither the B6 report nor xmax (reviewB6 runs to the end of the file)");
+  const tradeRow = review.split("\n").find((l) => l.startsWith("| `shift_trade_requests` |")) || "";
+  ok(tradeRow.includes("Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`"), "table (a)'s shift_trade_requests row names revision y's two columns, prepared, not applied");
+}
+{
+  const yBullet = (g43.match(/^- \*\*Trade offers \(2026-10-18, revision y, [^\n]*/m) || [""])[0];
+  ok(yBullet.startsWith("- **Trade offers (2026-10-18, revision y, report-first, NOT applied - Faraz runs `apply-trade-offer.sh` after Part A's; `sql/migrations/2026-10-18-trade-offer.sql`).**") && /never anon/.test(yBullet) && /a client's value is overwritten/.test(yBullet), "guide 4.3 carries the revision y bullet (prepared, not applied; apply_trade never anon; the stamps never from the client)");
+  ok(/^Proof: `sql\/probes\/trade-offer-probe\.sql` \(rolled back; 32 cases in its header[^\n]*applied: _to be filled at the record step_\.$/m.test(g43), "guide 4.3's revision y proof line (32 cases; applied at the record step)");
+  const g17 = guide.slice(guide.indexOf("## 17. Offers"), guide.indexOf("\n## 18."));
+  ok(g17.replace(/\n/g, " ").includes("closing that is revision y (`sql/migrations/2026-10-18-trade-offer.sql`, prepared 10/18 — report-first, NOT applied; §4.3)") && g17.includes("the `apply_trade()` offer upsert (prepared 10/18 as revision y - report-first, NOT applied, §4.3)"), "guide section 17 says the offer upsert is revision y, prepared, not applied");
+  const rulesDoc = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md"), "utf8").replace(/\n/g, " ");
+  ok(rulesDoc.includes("trade records no offer until revision y is applied (`apply_trade` writes none today; revision y, prepared 10/18 — report-first, NOT applied — writes the receiver's offer") && !rulesDoc.includes("`apply_trade` writes none — an open item"), "the rules doc's section 8 says a trade records no offer until revision y is applied");
+}
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "76fd286a89912d9bf9cea8d940f8e26f43bec4a5e480decaea988de7b2883a1b", "scripts/verify-rls.sh must stay byte-unchanged until Part A is applied - apply-east-vacations.sh pins this sha256 (D8; revision y's record step edits verify-rls.sh only after Part A's);");
+ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
+console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (PREPARED, not applied) and verify-rls.sh untouched");
 
 console.log("schema.test.js: " + N + " assertions passed");

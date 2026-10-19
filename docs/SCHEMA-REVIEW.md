@@ -19,7 +19,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, NOT applied - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
-| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. |
+| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). |
 | `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself; since 2026-10-03 16:30 UTC `push.save` / `push.delete` from `save_push_subscription` / `delete_push_subscription`, Prompt 30 - the function writes the row for every role, in the same transaction as its own write). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
@@ -3958,5 +3958,117 @@ revision x ("applied ..."); the migration's trailer line and sha256 pin; the pro
 20 strict by default with `SILVIS_EAST_VACATIONS_APPLIED` dropped (`SILVIS_EAST_REFRESH_DEPLOYED` stays: 20i grades the deployed
 function, and the deploy's own record step, `edge-functions/README.md` section 3, drops it); guide 4.3 and section 25, the rules doc's
 Time off row, section 3 (Khan) and section 8 item 17; and the test pins with them.
+
+observed: (the record step fills this - nothing in this section has run against the live project).
+
+## 2026-10-18 - apply_trade writes the receiver's offer (revision y): shift_trade_requests.proposed_by / accepted_by + trade_insert_guard / trade_update_guard / apply_trade re-created (Faraz 10/18; `sql/migrations/2026-10-18-trade-offer.sql`)
+
+**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer.sh`, after Part A's `apply-east-vacations.sh`.**
+Revision y (u stays reserved for the weekend pair claim; x - Part A - is prepared and goes first: its apply script pins
+`scripts/verify-rls.sh`, which this section's record step edits - D8). Nothing in the repo applies it: the apply script lives
+outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the observed line at the end.
+
+**Why.** A claim is an offer made on the spot (Prompt 14 part 2c, 9/23): `claim_open_slot` upserts the claimer's `call_offers`
+row. A trade did not: `apply_trade` moved the slot and wrote no offer, so a receiver already submitted for the day's offer period
+held a slot outside his offers - his My schedule tagged it "not offered", the day editor showed "not offered" words (a hard code -
+exhaustive `not-offered`, or a preferred dated list - as "Not eligible"), and Generate listed it under `fixedViolations`. Since
+10/18 a trade acceptance is read as painting the day ("taking it counts as painting it", rules doc section 8); the database half
+was the open item. Faraz 10/18: "build revision y as recommended (D3 consent stamps, D2 submitted receivers only, D1 claim parity,
+and the rest as recommended)" - the report-first findings `REPORT-APPLY-TRADE-OFFER-2026-10-18.md` (private folder,
+`docs/HISTORY.md`), decisions D1-D8.
+
+**The decisions.** D1 claim parity (a preferred receiver's row also marks that calendar month painted, as a claim does). D2 only
+a receiver already submitted in the day's period (one or more offers in it), never outside every period. D3 the consent stamps:
+the row is written only for a receiver who agreed himself, recorded on the trade row, whoever later applies it. D4 the merge
+hands the row to him on a role change. D5 no backfill unless the pre-check lists legs (then its own report-first step). D6 a
+primary leg onto his No primary day writes none. D7 two audit booleans. D8 after Part A.
+
+**The objects** (the migration verbatim is the file; schema.sql mirrors it):
+
+| object | before | after |
+|---|---|---|
+| `shift_trade_requests.proposed_by`, `.accepted_by` | - | new nullable text columns, the consent stamps: a roster id when that surgeon agreed himself, else `'scheduler'` (the scheduler, an admin, a server session); null on every row from before revision y (such a trade writes no row) |
+| `trade_insert_guard()` | revision p (the member return-leg follow-up) | p's body plus two lines after the same-surgeon refusal, for EVERY caller: `proposed_by` = the caller's own id when he is the from surgeon, else `'scheduler'`; `accepted_by` = the same from the to surgeon for a row inserted already accepted (the scheduler or a server session - a member's row lands pending), else null |
+| `trade_update_guard()` | revision n (give-kind) | n's body plus a block at the top, before the scheduler's return: a move into `accepted` stamps `accepted_by` (the to surgeon's own id when he accepts himself, else `'scheduler'`); a change of the legs (the scheduler only - a member is refused `TRADE_IMMUTABLE`) re-stamps both as the insert guard does; every other update keeps both |
+| `apply_trade(uuid)` | revision m (5b) | m's body plus, after the `schedule_days` writes and before the status flip, one `call_offers` upsert per leg (person, day order) under the conditions below, and `offer` / `return_offer` in the `trade.apply` audit detail |
+| every policy, grant, index, other function (`call_offers_guard`, `claim_open_slot`, `offer_status`, `save_offers`) and the anon surface | - | **unchanged** |
+| PostgREST schema cache | - | `notify pgrst, 'reload schema';` (the two columns) |
+
+**The conditions** - a leg's row is written only when ALL hold: (1) its receiver agreed himself - leg 1 when `accepted_by` =
+`to_surgeon_id`; the return leg when, besides, `proposed_by` = `from_surgeon_id`; (2) the day is today or later in Central time
+(`OF001` refuses a past day for every caller - without the skip a past trade the scheduler applies would roll back); (3) the day
+lies in an offer period - the earliest `start_day` containing it, as rules.js picks - where he already has an offer (D2); (4) he
+is not in that period's `rules_only_ids` and not an outside surgeon (roster `type` `external`); (5) a primary leg does not land
+on his No primary day (`availability` `backup_only`), read under the per-person advisory lock `save_offers` / `save_no_primary`
+take (`availability:no_primary:<id>`), so a concurrent No primary save cannot slip past both checks (NP009's invariant).
+
+**The write** - the claim's (D4): one row per person and day, `entered_by` the receiver, `source` `app`, no note; the same role
+or an existing `either` is kept as it was; the other role becomes `either` and the row is handed to him (`entered_by` /
+`source` from the trade, as `save_offers` does), so the seed importer never resets it (its ownership test is email-relay /
+import + entered by the scheduler + a `seed: ` note). `OFFER_FROZEN` is bypassed for that write only
+(`silvis.claim_in_progress` on, then off). No exception handler: every known refusal is prevented (`OF001` skipped; `OF002`
+cannot fire - check (b) read the same `time_off` under the SHARE lock; `OF003` the flag; `OF004` the upsert moves neither day
+nor person), and anything unforeseen rolls the whole apply back, as today.
+
+**Who it binds.** Every caller of `apply_trade` (a party or the scheduler) and every writer of `shift_trade_requests`. The test is
+the receiver's own agreement, whoever presses apply: a trade on a LOCKED slot (only the scheduler applies those) that two
+surgeons agreed writes their rows; the scheduler accepting for someone - "Accept anyway as the scheduler" included - writes none,
+so a forced rule break stays visible. Faraz accepting as the receiver himself writes his own row (he is rules-only for Nov 2026 -
+Jan 2027, so not there).
+
+**What it changes for the receiver (D1).** Exhaustive: the traded day reads offered; nothing else of his changes. Preferred: the
+row lifts a dated list on that date and role and counts that calendar month as painted (B10's per-month scope), exactly as a
+claim does. Not started, rules-only, outside every period: today's reading (no row).
+
+**Blast radius.** An applied trade may write up to two `call_offers` rows (authenticated-only, never anon); no period status
+changes (only submitted receivers get rows). The client reads the trade rows with their new columns and ignores them (no client
+file names them; it sends `{ status, decided_at }` on a PATCH and the proposal keys on an insert - `test/data-layer.test.js`);
+snapshots, restore, export and import never copy trade rows. The other probes' trade fixtures (verify-rls section 5: 2030-03,
+2020-02) lie in no period. Residuals (claim parity, recorded): a revert of the trade leaves the receiver's offer; the giver's own
+offer on the day he gave stays (deleting it in a frozen period would hit `call_offers_delete_guard` and roll the trade back); a
+concurrent `set_offer_mode(rules_only)` and a trade can race, as with a claim; Faraz accepting as the receiver past the return
+leg's rule writes the giver's return row (the giver proposed that day himself); a trade accepted before revision y writes no row.
+
+**Proof.** `sql/probes/trade-offer-probe.sql` (rolled back; 32 cases in its header - P1 the catalog, S1-S9 the stamps never from
+the client, A1-A11 who agreed decides whoever applies, M1-M3 the merge, R1-R8 the receivers and days that get none, the No primary
+day with its advisory lock; its collision guard first, then PROBE_SETUP before the apply) and `sql/probes/trade-offer-precheck.sql`
+(read-only: the objects gate with Part A's function, the four bodies' md5, the signatures, the grants, no FORCE RLS and the owner
+match; facts: the applied legs inside a period without a covering offer, the `offer_modes` keys with no offer). Offline (PGlite,
+10/18, `origin/main`'s schema.sql + this file): PROBE_SETUP before, 32 / 32 cases after, nothing persisted, the migrated bodies
+equal schema.sql's, the file re-runs; the existing trade probe's 34 cases and the claim probe's 15 read the same before and
+after; the outside-surgeon branch (the live probe never writes the roster) gets no row beside a pool receiver who does.
+
+The gate (the pre-check's first rows):
+
+```text
+before: cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes
+        apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe
+after:  cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes
+        apply_trade=1d578d537763af778f18e388fc45f648 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b offers_guard=c48783939fd53dc56be90af140297abe
+both:   apply_trade=definer insert_guard=invoker update_guard=invoker offers_guard=invoker; anon=f authenticated=t public=f; offers_force=f owner_match=yes
+```
+
+**The order** (Faraz's apply script `apply-trade-offer.sh`, kept outside the repo; `--dry-run` first): 0. the sha256 pins of the
+graded files and the Silvis CLI link; 1. agent mode and the pre-check (the gate before, Part A applied, the facts printed); 2. the
+columns-absent check; 3. probe BEFORE (PROBE_SETUP ... accepted_by is absent); 4. APPLY in capitals, then the migration; 5. the gate
+after; 6. probe AFTER, every case graded against its header line, and the probe's own leftover count; 7. the PASTE THIS BACK block.
+Run nothing else that writes trades, offers or vacations during the run (the probe holds the `time_off` SHARE lock and an offers
+advisory lock for under a second).
+
+**Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - offer rows already written stay, and the
+`trade.apply` rows with `offer` / `return_offer` true name the legs that wrote or merged one; the two columns stay, with their
+stamps), in this order:
+
+```text
+supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-trade-audit-names.sql   (apply_trade m; claim_open_slot m, the live body)
+supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-give-kind.sql   (trade_update_guard n; its DDL is idempotent)
+supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-25-member-trade-return-leg.sql   (trade_insert_guard p - after give-kind)
+notify pgrst, 'reload schema';
+```
+
+**The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed line; table (a)'s `shift_trade_requests`
+row; `sql/schema.sql` revision y ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's
+headers; the `index-source.html` comment at the trade check ("apply_trade() does not yet write the call_offers row") - a runtime
+file, so it waits for the apply; the guide's section 17 and 4.3 and the rules doc's section 8 sentences; the test pins with them.
 
 observed: (the record step fills this - nothing in this section has run against the live project).

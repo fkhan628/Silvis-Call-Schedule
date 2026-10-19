@@ -14695,6 +14695,32 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   }
 
+  /* ---------------- revision y (10/18): the trade consent stamps are the database's alone ---------------- */
+  console.log("\n[Y] revision y (10/18): the client never sends or reads the consent stamps; one trade PATCH, status + decided_at only");
+  {
+    // sql/migrations/2026-10-18-trade-offer.sql (report-first, not applied): shift_trade_requests.proposed_by / accepted_by are written by
+    // the trade triggers only - apply_trade reads them to decide whose offer a trade writes. A client that sent one would be overwritten
+    // anyway (test/schema.test.js pins the triggers); these pins keep the client honest: it names neither column, its one PATCH of a
+    // trade row carries status + decided_at only, and its insert carries the proposal keys only (the 1583 / 1596 pins above).
+    const CLIENT = ["index-source.html", "config.js", "helpers.js", "rules.js", "generator.js", "importer.js", "east-feed.js", "app-styles.js", "sw.js", "call-totals.js"];
+    check("Y1 no client file names proposed_by / accepted_by (the stamps are never sent and never read)", () => {
+      CLIENT.forEach((f) => {
+        const t = fs.readFileSync(path.join(ROOT, f), "utf8");
+        assert.ok(!/proposed_by|accepted_by/.test(t), f + " names a consent stamp");
+      });
+    });
+    check("Y2 patchTradeStatus is the client's one shift_trade_requests PATCH and its body is { status, decided_at } (accept, decline and cancel)", () => {
+      const s = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+      const at = s.indexOf("  const patchTradeStatus = async (trade, status) => {");
+      assert.ok(at > 0, "patchTradeStatus");
+      const fn = s.slice(at, s.indexOf("\n  };\n", at));
+      assert.ok(fn.includes("fetch(`${SUPABASE_URL}/rest/v1/shift_trade_requests?id=eq.${encodeURIComponent(trade.id)}`, {") && fn.includes('method: "PATCH"') && fn.includes("body: JSON.stringify({ status, decided_at: new Date().toISOString() }),"), "the PATCH sends status + decided_at only");
+      assert.strictEqual((s.match(/\/rest\/v1\/shift_trade_requests/g) || []).length, 1, "one REST path to shift_trade_requests (the PATCH); reads go through readAuthOnlyTable, the insert through db.insert");
+      assert.deepStrictEqual(["accepted", "declined", "cancelled"].map((st) => s.includes("await patchTradeStatus(g, \"" + st + "\")")), [true, true, true], "accept, decline and cancel each PATCH through it");
+      assert.strictEqual((s.match(/db\.(insert|update|upsert)\("shift_trade_requests"/g) || []).length, 1, "one db.* write to the trades table: the proposal insert");
+    });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error("test runner crashed:", e); process.exit(1); });
