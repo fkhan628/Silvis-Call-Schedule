@@ -584,7 +584,9 @@ separately, and `diagnostics.impliedTargets` shows every level plus, per member,
 **Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
 (locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
 `diagnostics.fixedSlots`, and a held unlocked slot that breaks a rule is a fact in `diagnostics.fixedViolations`, never a
-hard violation. `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
+hard violation (10/18: each entry's `kept` says why it was kept - `claim` / `trade`, fixed in every mode, `outside-surgeon`, or
+`fill-open-only` - and the summary warning counts them by it; it used to say "kept by fill-open-only" for a plain generate's
+claimed or traded day too). `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
 Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
 the pool's open-slot count.
 
@@ -1192,7 +1194,7 @@ from the day editor, which is untouched. **Decided (P13R, 9/23 — the rebase on
 the generator treats a row whose source is `claim` or `trade` (`generator.GEN_PERSON_FIXED_SOURCES` — the two
 sources a surgeon writes for himself, neither path sets a lock) as **fixed in both modes exactly like a lock**: every
 held role of that day stays byte-identical, counts in `diagnostics.fixedSlots`, and its rule conflicts are facts in
-`diagnostics.fixedViolations` — a claim is never silently discarded by a later Generate. `manual` is not in the set:
+`diagnostics.fixedViolations` (`kept` `claim` / `trade`, 10/18) — a claim is never silently discarded by a later Generate. `manual` is not in the set:
 the day editor has its own lock toggle, so an unlocked manual slot stays regenerable. **A scheduler edit of a
 claimed / traded day keeps its source (P13R-2 review fix, 9/23)** while any role the day held before still has the same
 holder: a note, a lock toggle, or "Assign..." on the open partner role from the board leave `source = claim` /

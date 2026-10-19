@@ -15,7 +15,7 @@
 //   holder on the input schedule inside the range - locked or not, externalCover
 //   included - is FIXED: kept byte-identical (holder, its own lock flag, source,
 //   note), never rewritten, never moved by repair or smoothing, never a hard
-//   violation (its rule conflicts go to diagnostics.fixedViolations); only the
+//   violation (its rule conflicts go to diagnostics.fixedViolations, kept "fill-open-only"); only the
 //   open slots are filled. diagnostics.mode = "fill-open-only" / "generate",
 //   diagnostics.fixedSlots = the fixed count (the lock count in the default mode).
 //   lockViolations keeps reporting locked slots only.
@@ -25,7 +25,8 @@
 //   every held role of that day is FIXED in BOTH modes exactly like a lock - a
 //   claim is never silently discarded by a later Generate. source is a row fact,
 //   so a generated holder in the other role of a claimed day is kept too
-//   (conservative: nothing on a claimed day moves). "manual" is NOT in the set:
+//   (conservative: nothing on a claimed day moves); its conflicts go to
+//   fixedViolations with kept "claim" / "trade" (10/18), in either mode. "manual" is NOT in the set:
 //   the day editor has its own lock toggle, and an unlocked manual slot stays
 //   regenerable (pinned by test/generator-regression.js, the fill-open-only
 //   fixture). An outside surgeon (item M) stays fixed by roster type, whatever
@@ -654,7 +655,7 @@ function genUnset(G, S, day, role) {
 function genSeedLocks(G, original) {
   var base = {}, ctx = G.ctx, fillOpen = !!G.fillOpenOnly;
   Object.keys(original).forEach(function (k) { base[k] = original[k]; });
-  G.lockSrc = {}; G.fixed = {}; G.outLock = {}; G.fixedCount = 0;
+  G.lockSrc = {}; G.fixed = {}; G.fixedWhy = {}; G.outLock = {}; G.fixedCount = 0;
   G.derivedYields = []; G.derivedConfirmed = [];
   G.days.forEach(function (d) {
     var e = original[d] || {};
@@ -680,6 +681,10 @@ function genSeedLocks(G, original) {
     };
     G.lockSrc[d] = { primary: lockedP ? "import" : (fixedP ? "fixed" : null), backup: lockedB ? "import" : (fixedB ? "fixed" : null) };
     G.fixed[d] = { primary: fixedP, backup: fixedB };
+    // 10/18: WHY a held slot that is not a lock was kept (diagnostics.fixedViolations[].kept and its warning) - a claimed or
+    // traded day first (fixed in every mode), then an outside surgeon's slot, else the fill-open-only mode
+    var whyKept = function (fixed, locked, holder) { return !fixed || locked ? null : personHeld && holder ? e.source : genIsExternal(ctx, holder) ? "outside-surgeon" : "fill-open-only"; };
+    G.fixedWhy[d] = { primary: whyKept(fixedP, lockedP, e.primary), backup: whyKept(fixedB, lockedB, e.backup) };
     // the flag the OUTPUT carries for a fixed slot: a lock stays a lock, an unlocked held slot stays unlocked
     G.outLock[d] = { primary: lockedP || (fixedP && !!e.primaryLocked), backup: lockedB || (fixedB && !!e.backupLocked) };
     G.fixedCount += (fixedP ? 1 : 0) + (fixedB ? 1 : 0);
@@ -1904,6 +1909,21 @@ function genOffersDiag(G, warnings) {
   return out;
 }
 
+// The fixedViolations summary warning, by why each slot was kept (10/18), e.g. "3 held, unlocked slot(s) break a rule - kept
+// as facts, see fixedViolations: 1 claimed and 1 traded, fixed in every mode as the surgeon's own commitment; 1 kept by
+// fill-open-only".
+function genFixedViolationsWarning(list) {
+  var n = { claim: 0, trade: 0, "outside-surgeon": 0, "fill-open-only": 0 };
+  list.forEach(function (v) { n[v.kept] = (n[v.kept] || 0) + 1; });
+  var own = [], parts = [];
+  if (n.claim) own.push(n.claim + " claimed");
+  if (n.trade) own.push(n.trade + " traded");
+  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode as the surgeon's own commitment");
+  if (n["outside-surgeon"]) parts.push(n["outside-surgeon"] + " held by an outside surgeon");
+  if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");
+  return list.length + " held, unlocked slot(s) break a rule - kept as facts, see fixedViolations: " + parts.join("; ");
+}
+
 function genDiagnostics(G, best, meta) {
   var ctx = G.ctx, R = G.R, W = ctx.schedule, ids = ctx.activeIds;
   var ev = best.ev, S = best.S;
@@ -1915,7 +1935,10 @@ function genDiagnostics(G, best, meta) {
     Object.keys(u.reasons).forEach(function (id) { if (u.reasons[id][0] === "eligible-but-not-placed") warnings.push("open slot " + u.day + " " + u.role + " is fillable by " + id + " - generator bug, report it"); });
   });
   // Locks that break a rule (reported, never changed). T: a fixed slot that is
-  // not a lock (fill-open-only) is reported apart, in fixedViolations.
+  // not a lock is reported apart, in fixedViolations, with kept = why it was kept
+  // (10/18 - the warning used to say "kept by fill-open-only" for a claimed or traded
+  // day too, which a plain generate keeps as well): "claim" / "trade" (fixed in every
+  // mode), "outside-surgeon", or "fill-open-only".
   var lockViolations = [], fixedViolations = [];
   G.days.forEach(function (d) {
     var e = W[d];
@@ -1925,11 +1948,11 @@ function genDiagnostics(G, best, meta) {
       var conflicts = r.conflicts || (r.ok ? [] : r.hard);
       if (!conflicts.length) return;
       var src = G.lockSrc[d][role] || "";
-      if (src.indexOf("fixed") === 0) fixedViolations.push({ day: d, role: role, id: e[role], source: e.source, reasons: conflicts.slice() });
+      if (src.indexOf("fixed") === 0) fixedViolations.push({ day: d, role: role, id: e[role], source: e.source, kept: (G.fixedWhy[d] && G.fixedWhy[d][role]) || "fill-open-only", reasons: conflicts.slice() });
       else lockViolations.push({ day: d, role: role, id: e[role], lock: src, reasons: conflicts.slice() });
     });
   });
-  if (fixedViolations.length) warnings.push(fixedViolations.length + " held, unlocked slot(s) kept by fill-open-only break a rule - kept as facts, see fixedViolations");
+  if (fixedViolations.length) warnings.push(genFixedViolationsWarning(fixedViolations));
   // Tallies: per month (full calendar month, running-tally semantics) plus in-range totals.
   var tallies = {};
   ids.forEach(function (id) {

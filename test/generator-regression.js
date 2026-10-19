@@ -569,6 +569,18 @@ function checkRest(out, range, id) {
   return rests;
 }
 
+// 10/18: the fixedViolations summary warning, restated - by why each held, unlocked slot was kept (kept: a claim or a trade
+// is fixed in every mode, an outside surgeon's slot by roster type, everything else by the fill-open-only mode).
+const FV_KEPT = ["claim", "trade", "outside-surgeon", "fill-open-only"];
+function fvWarning(list) {
+  const n = {}; FV_KEPT.forEach((k) => { n[k] = list.filter((v) => v.kept === k).length; });
+  const own = [n.claim ? n.claim + " claimed" : null, n.trade ? n.trade + " traded" : null].filter(Boolean), parts = [];
+  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode as the surgeon's own commitment");
+  if (n["outside-surgeon"]) parts.push(n["outside-surgeon"] + " held by an outside surgeon");
+  if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");
+  return list.length + " held, unlocked slot(s) break a rule - kept as facts, see fixedViolations: " + parts.join("; ");
+}
+
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
 function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extraOffers) { // extraRows (W): dated rows a fixture run appended to the seed's;
@@ -598,6 +610,11 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   eq(D.seed, seedNo, "diagnostics.seed"); eq(D.truncated, false, "not truncated");
   eq(D.hardViolations, [], "generator reports hard violations: " + JSON.stringify(D.hardViolations));
   eq(D.score.hardViolations, 0, "score.hardViolations");
+  // 10/18: every fixed violation says why its slot was kept - never "fill-open-only" outside that mode - and the summary
+  // warning words exactly that (it said "kept by fill-open-only" for a claimed or traded day of a plain generate too)
+  ok((D.fixedViolations || []).every((v) => FV_KEPT.includes(v.kept) && (D.mode === "fill-open-only" || v.kept !== "fill-open-only")), "fixedViolations[].kept is one of " + FV_KEPT.join(" / ") + " (fill-open-only only in that mode): " + JSON.stringify(D.fixedViolations));
+  const fvW = D.warnings.filter((w) => /see fixedViolations/.test(w));
+  eq(fvW, (D.fixedViolations || []).length ? [fvWarning(D.fixedViolations)] : [], "the fixedViolations summary warning, by why each slot was kept");
   days.forEach((d) => { const e = out.schedule[d]; ["primary", "backup", "primaryLocked", "backupLocked", "source", "externalCover", "note"].forEach((k) => ok(k in e, d + " entry lacks " + k)); });
 
   // item 12 (per run): best-of-N returns the minimum-score candidate
@@ -1429,6 +1446,9 @@ for (let s = 1; s <= SEEDS; s++) {
   ok(e24.backup && e24.backup !== ACTON, "fixture: 10/24 backup is filled by someone else (got " + e24.backup + ")");
   eq(DOo.hardViolations, [], "fixture: fixed slots are facts, never hard violations");
   ok(Array.isArray(DOo.fixedViolations) && DOo.fixedViolations.some((v) => v.day === "2026-10-24" && v.role === P && v.id === ACTON && v.reasons.some((r) => r.indexOf("whitelist-month") === 0)), "fixture: Acton's off-list 10/24 is reported in diagnostics.fixedViolations: " + JSON.stringify(DOo.fixedViolations));
+  eq((DOo.fixedViolations.find((v) => v.day === "2026-10-24" && v.role === P) || {}).kept, "fill-open-only", "fixture: the manual (unlocked) 10/24 was kept by the fill-open-only mode (10/18 kept field)");
+  ok(DOo.warnings.includes(fvWarning(DOo.fixedViolations)) && DOo.warnings.some((w) => /kept by fill-open-only$/.test(w)), "fixture: the summary warning names fill-open-only: " + JSON.stringify(DOo.warnings.filter((w) => /fixedViolations/.test(w))));
+  eq(outN.diagnostics.fixedViolations, [], "fixture: the plain generate regenerated the manual slots - no fixed violation, no summary warning");
   eq(DOo.lockViolations.map((l) => l.day + " " + l.role + " " + l.id), expectedLockViolations(BF).map((l) => l.day + " " + l.role + " " + l.id), "fixture: lockViolations unaffected by fill-open-only (locked slots only)");
   ok(!DOo.warnings.some((w) => /generator bug/.test(w)), "fixture: generator reports its own bug");
   const openO = []; bfDays.forEach((d) => ROLES.forEach((role) => { const e = inputO.schedule[d]; if (!(e && (e[role] || (role === P && e.externalCover)))) openO.push(d + " " + role); }));
@@ -1462,6 +1482,9 @@ for (let s = 1; s <= SEEDS; s++) {
     ok(c24.backup && c24.backup !== ACTON, "fixture (" + modeName + "): 10/24 backup is filled by someone else (got " + c24.backup + ")");
     eq(DC.hardViolations, [], "fixture (" + modeName + "): fixed slots are facts, never hard violations");
     ok(Array.isArray(DC.fixedViolations) && DC.fixedViolations.some((v) => v.day === "2026-10-24" && v.role === P && v.id === ACTON && v.reasons.some((r) => r.indexOf("whitelist-month") === 0)), "fixture (" + modeName + "): Acton's off-list traded 10/24 is a fixedViolation (whitelist-month), got " + JSON.stringify(DC.fixedViolations));
+    // 10/18: kept by the trade in BOTH modes (it was worded "kept by fill-open-only" in a plain generate too)
+    eq((DC.fixedViolations.find((v) => v.day === "2026-10-24" && v.role === P) || {}).kept, "trade", "fixture (" + modeName + "): the traded 10/24 is kept as a trade");
+    ok(DC.warnings.includes(fvWarning(DC.fixedViolations)) && DC.warnings.some((w) => /see fixedViolations: .*traded, fixed in every mode/.test(w)) && !DC.warnings.some((w) => /fill-open-only/.test(w) && /fixedViolations/.test(w) && !DC.fixedViolations.some((v) => v.kept === "fill-open-only")), "fixture (" + modeName + "): the summary warning names the trade, not fill-open-only: " + JSON.stringify(DC.warnings.filter((w) => /fixedViolations/.test(w))));
     eq(DC.lockViolations.map((l) => l.day + " " + l.role + " " + l.id), expectedLockViolations(BF).map((l) => l.day + " " + l.role + " " + l.id), "fixture (" + modeName + "): lockViolations unaffected (locked slots only)");
     ok(!DC.warnings.some((w) => /generator bug/.test(w)), "fixture (" + modeName + "): generator reports its own bug");
     const openC = []; bfDays.forEach((d) => ROLES.forEach((role) => { const e = inputC.schedule[d]; if (!(e && (e[role] || (role === P && e.externalCover)))) openC.push(d + " " + role); }));
