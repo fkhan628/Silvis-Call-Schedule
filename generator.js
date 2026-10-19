@@ -1919,8 +1919,8 @@ function genFixedViolationsWarning(list) {
   var n = { claim: 0, trade: 0, "outside-surgeon": 0, "fill-open-only": 0 };
   list.forEach(function (v) { n[v.kept] = (n[v.kept] || 0) + 1; });
   var own = [], parts = [];
-  if (n.claim) own.push(n.claim + " on a claimed day");
-  if (n.trade) own.push(n.trade + " on a traded day");
+  if (n.claim) own.push(n.claim + (n.claim === 1 ? " on a claimed day" : " on claimed days"));
+  if (n.trade) own.push(n.trade + (n.trade === 1 ? " on a traded day" : " on traded days"));
   if (own.length) parts.push(own.join(" and ") + ", fixed in every mode");
   if (n["outside-surgeon"]) parts.push(n["outside-surgeon"] + " held by an outside surgeon");
   if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");

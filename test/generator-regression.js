@@ -35,7 +35,9 @@
 // the share taper and its untapered control (6 runs at bestOf 2) and a one-week
 // Christmas run at bestOf 1 for the holiday-unit unplaced reason); since Prompt 23
 // (9/30) the notice fixture's two one-week runs, and since its review (10/1) the
-// two three-day weekend-pair runs (noLoneWeekendDay on / off) - 27 in the summary.
+// two three-day weekend-pair runs (noLoneWeekendDay on / off), and since 10/18 the fixedViolations kinds fixture's five
+// runs (generate, fill-open-only, respect locks off / on, two claimed days) - 32 in the summary (the 10/18 rest rule's
+// on / off runs print their own line).
 // Prompt 32 (10/11-10/12) adds its own synthetic runs, counted apart in the summary:
 // the over-soft-limit tie-break runs (step 4), the five two-week February runs of
 // the whole-month over-soft-limit list and the three one-month shift-weight runs
@@ -576,7 +578,7 @@ function checkRest(out, range, id) {
 const FV_KEPT = ["claim", "trade", "fill-open-only"];
 function fvWarning(list) {
   const n = {}; FV_KEPT.forEach((k) => { n[k] = list.filter((v) => v.kept === k).length; });
-  const own = [n.claim ? n.claim + " on a claimed day" : null, n.trade ? n.trade + " on a traded day" : null].filter(Boolean), parts = [];
+  const own = [n.claim ? n.claim + (n.claim === 1 ? " on a claimed day" : " on claimed days") : null, n.trade ? n.trade + (n.trade === 1 ? " on a traded day" : " on traded days") : null].filter(Boolean), parts = [];
   if (own.length) parts.push(own.join(" and ") + ", fixed in every mode");
   if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");
   return list.length + " held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: " + parts.join("; ");
@@ -1525,6 +1527,11 @@ for (let s = 1; s <= SEEDS; s++) {
     checkFixedViolations(KL, "kinds fixture (respect locks off)");
     ok(KL.fixedViolations.some((v) => v.day === "2026-10-27" && v.kept === "claim") && !KL.lockViolations.some((v) => v.day === "2026-10-27") && /^\d+ held slot\(s\) kept as facts, not as locks, break a rule/.test(fvW(KL)[0] || ""), "kinds (respect locks off): the locked claimed day is a fixed violation, not a lock one, worded 'not as locks': " + JSON.stringify(fvW(KL)));
     ok(KR.lockViolations.some((v) => v.day === "2026-10-27" && v.role === P) && !KR.fixedViolations.some((v) => v.day === "2026-10-27"), "kinds (respect locks on): the locked claimed day is a lock violation instead");
+    // re-check 10/18: two claimed DAYS read in the plural ("2 on claimed days" - "2 on a claimed day" read as one day)
+    const inputM = JSON.parse(JSON.stringify(inputK)); inputM.schedule["2026-10-20"] = rowX(ACTON, KHAN, "claim");
+    const KM = runK(R.buildContext(inputM), {});
+    checkFixedViolations(KM, "kinds fixture (two claimed days)");
+    eq(fvW(KM), ["3 held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 2 on claimed days and 1 on a traded day, fixed in every mode"], "kinds (two claimed days): the warning counts the claimed days in the plural");
     CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
   }
   // P13R-2 (review, 9/23): the board scenario - Khan claimed the 10/21 backup, then the scheduler took "Assign..." on the
@@ -2955,7 +2962,7 @@ const total = Date.now() - T_FILE;
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
 console.log("Prompt 32 overSoftLimit (every checked run): " + OVER_SEEN.n + " day(s) listed, " + OVER_SEEN.outside + " of them outside the range; " + OVER_SEEN.trimmed + " over day(s) of the touched months left out (the run gave the holder no primary that month)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 27 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 32 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");
