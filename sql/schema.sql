@@ -950,8 +950,8 @@ create trigger trade_insert_guard_trg
 -- row for each leg he agreed to himself (see the comment above the loop) - a trade is an offer made on the spot, as a claim is, so a
 -- submitted receiver's traded day no longer reads "not offered" (his My schedule tag, the day editor, Generate's fixedViolations).
 -- The trade.apply audit detail gains two booleans, offer (leg 1 wrote or merged a row) and return_offer (the return leg did). Every
--- check, refusal, lock and write before the loop is revision m's, byte for byte; the loop adds the per-person advisory lock of
--- save_offers for a primary leg only, after the day rows.
+-- check, refusal, lock and write before the loop is revision m's, byte for byte; the loop adds save_offers' per-person advisory
+-- lock for every leg that reaches the period read (after the day rows, in person order - review 10/18).
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare

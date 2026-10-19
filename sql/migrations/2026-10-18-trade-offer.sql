@@ -44,10 +44,10 @@
 -- receiver's own agreement, recorded on the row, whoever presses apply: a trade on a locked slot (the scheduler applies those) that
 -- two surgeons agreed writes their rows; the scheduler accepting for someone, or "Accept anyway as the scheduler", writes none.
 --
--- Blast radius. An applied trade may write up to two call_offers rows (authenticated-only, never anon); no period status changes (only
--- submitted receivers get rows, in the earliest period holding the day - where two periods overlap, the row also counts in the later one,
--- as offer_status() and rules.js count every offer day inside a period, so a receiver rules-only or not started there reads submitted). The client reads the trade rows with their new columns and ignores them; no client sends them. The
--- other probes' trade fixtures (verify-rls section 5: 2030-03, 2020-02) lie in no call period and write no offer row. Residuals
+-- Blast radius. An applied trade may write up to two call_offers rows (authenticated-only, never anon); no status changes in the day's
+-- own (earliest) period, where only a submitted receiver gets a row; where two periods overlap, the later one's can change (rules-only
+-- or not started -> submitted), as offer_status() and rules.js count every offer day inside a period. The client reads the trade rows
+-- with their new columns and ignores them; no client sends them. The other probes' trade fixtures (verify-rls section 5: 2030-03, 2020-02) lie in no call period and write no offer row. Residuals
 -- (recorded, claim parity): a revert of the trade leaves the receiver's offer on a day he no longer holds; the giver's own offer on
 -- the day he gave stays; a trade accepted before this file writes no row when it is applied after it, and one proposed before it and
 -- accepted after it writes the leg-1 receiver's row only.

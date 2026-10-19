@@ -7,7 +7,7 @@
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/trade-offer-probe.sql
 --   (graded by the private apply-scripts/apply-trade-offer.sh, value for value against the header lines below)
 -- Run nothing else that writes trades, offers or vacations at the same time: the probe takes the time_off SHARE lock (apply_trade)
--- and the per-person offers advisory lock (a primary leg) for the length of the batch - well under a second.
+-- and the per-person offers advisory locks (each consenting receiver's, in person order) for the length of the batch - well under a second.
 -- Identity: users probe-tradeoffer-<uuid>@example.test; trades detail 'probe-tradeoffer <K>'; periods label 'probe-tradeoffer P?';
 -- schedule_days / call_offers / availability rows in the windows 2031-05-01..2031-09-30, 2020-06-01..2020-06-30 and 2029-12-31,
 -- which the collision guard proves empty first (a probe period PP spans 2020-06-01..2029-12-31; its only case day is 2020-06-10).

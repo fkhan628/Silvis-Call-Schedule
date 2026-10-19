@@ -4021,10 +4021,9 @@ Jan 2027, so not there).
 row lifts a dated list on that date and role and counts that calendar month as painted (B10's per-month scope), exactly as a
 claim does. Not started, rules-only, outside every period: today's reading (no row).
 
-**Blast radius.** An applied trade may write up to two `call_offers` rows (authenticated-only, never anon); no period status
-changes (only submitted receivers get rows, in the earliest period holding the day - where two periods overlap, the row also
-counts in the later one, as `offer_status()` and rules.js count every offer day inside a period, so a receiver rules-only or not
-started there reads submitted). The client reads the trade rows with their new columns and ignores them (no client
+**Blast radius.** An applied trade may write up to two `call_offers` rows (authenticated-only, never anon); no status changes in
+the day's own (earliest) period, where only a submitted receiver gets a row; where two periods overlap, the later one's can change
+(rules-only or not started -> submitted), as `offer_status()` and rules.js count every offer day inside a period (probe R5 is one). The client reads the trade rows with their new columns and ignores them (no client
 file names them; it sends `{ status, decided_at }` on a PATCH and the proposal keys on an insert - `test/data-layer.test.js`);
 snapshots, restore, export and import never copy trade rows. The other probes' trade fixtures (verify-rls section 5: 2030-03,
 2020-02) lie in no period. Residuals (claim parity, recorded): a revert of the trade leaves the receiver's offer; the giver's own
@@ -4042,8 +4041,9 @@ match; facts: the applied legs inside a period without a covering offer, the `of
 10/18, `origin/main`'s schema.sql + this file): PROBE_SETUP before, 32 / 32 cases after, nothing persisted, the migrated bodies
 equal schema.sql's, the file re-runs; the existing trade probe's 34 cases and the claim probe's 15 read the same before and
 after; the outside-surgeon branch (the live probe never writes the roster) gets no row beside a pool receiver who does. Mutation
-check: 15 of 16 one-change mutants of the migration turn at least one case red (each condition, the lock for every leg, the flag,
-the merge, the audit keys, each stamp rule); the 16th - dropping the no-period test - is equivalent (the submitted test skips the
+check: 15 of 16 one-change mutants of the migration turn at least one case red (each condition but the outside-surgeon one - the live
+probe never writes the roster; that branch is the offline check above - the lock for every leg, the flag, the merge, the audit
+keys, each stamp rule); the 16th - dropping the no-period test - is equivalent (the submitted test skips the
 same legs). Review 10/18 (four lenses, each finding re-checked): the lock moved before the reads for every leg, R1 / R4 given an
 offer so they test the rules-only branch, the probe's guard reads `time_off` on 2029-12-31 too, the pre-check prints `listed`.
 
@@ -4061,8 +4061,8 @@ both:   apply_trade=definer insert_guard=invoker update_guard=invoker offers_gua
 graded files and the Silvis CLI link; 1. agent mode and the pre-check (the gate before, Part A applied, the facts printed); 2. the
 columns-absent check; 3. probe BEFORE (PROBE_SETUP ... accepted_by is absent); 4. APPLY in capitals, then the migration; 5. the gate
 after; 6. probe AFTER, every case graded against its header line, and the probe's own leftover count; 7. the PASTE THIS BACK block.
-Run nothing else that writes trades, offers or vacations during the run (the probe holds the `time_off` SHARE lock and an offers
-advisory lock for under a second).
+Run nothing else that writes trades, offers or vacations during the run (the probe holds the `time_off` SHARE lock and the offers
+advisory locks of each consenting receiver for under a second).
 
 **Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - offer rows already written stay, and the
 `trade.apply` rows with `offer` / `return_offer` true name the legs that wrote or merged one; the two columns stay, with their

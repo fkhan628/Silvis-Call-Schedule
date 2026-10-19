@@ -5788,6 +5788,9 @@ ok(yProbe.includes("create temp table probe_results (k text, v text);\ngrant ins
   ok(code.includes("'probe-tradeoffer ' || p_key") && code.includes("'probe-tradeoffer PA'") && code.includes("'probe-tradeoffer PP'") && (code.match(/'probe-tradeoffer'\)/g) || []).length >= 20, "every fixture carries the probe's identity: trades 'probe-tradeoffer <K>', periods 'probe-tradeoffer P?', days source 'probe-tradeoffer'");
   ok(code.includes("execute 'set local role authenticated';") && code.includes("json_build_object('sub', uid, 'role', 'authenticated')::text") && !/set local role (service_role|postgres)/.test(code), "the acting user is a signed-in authenticated claim; postgres is reached with reset role (no SET ROLE to service_role)");
   ok(code.includes("'probe-tradeoffer PA', '2031-05-01', '2031-06-30', '2031-03-01', '2031-04-01', 'published'"), "PA is a PUBLISHED period - every member apply goes through the OFFER_FROZEN bypass");
+  // re-check 10/18: the fixtures that make R1 / R4 test the rules-only branch (s5 listed in PA AND submitted there) and the guard's 2029-12-31 day
+  ok(code.includes("('s5', '2031-05-01', 'backup',  null, 's5', 'app')") && code.includes("'probe-tradeoffer PA', '2031-05-01', '2031-06-30', '2031-03-01', '2031-04-01', 'published', 'probe', '[\"s5\"]'"), "s5 is listed rules-only in PA and has an offer there (05-01) - else R1 / R4 pass without apply_trade's rules-only test");
+  ok(code.includes("                                                  or '2029-12-31' between start_date and end_date)"), "the collision guard reads time_off on 2029-12-31 too (the day of s1's PP offer - OF002 would end the run otherwise)");
 }
 const yProbeHdr = yProbe.slice(0, yProbe.indexOf("create temp table probe_results"));
 ok(/REPORT-FIRST, NOT APPLIED\)/.test(yProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(yProbeHdr) && /\n-- 32 cases\.\n/.test(yProbeHdr), "the probe header: report-first / not applied, nothing persisted, 32 cases");
@@ -5837,6 +5840,8 @@ ok(!/\r/.test(yPre) && /^[\x00-\x7f]*$/.test(yPre), "the trade offer pre-check i
   ["apply_trade(uuid)", "trade_insert_guard()", "trade_update_guard()", "call_offers_guard()", "silvis_derived_vacations()"].forEach((sig) => ok(code.includes("to_regprocedure('public." + sig + "')"), "the pre-check looks up " + sig + " by its exact signature"));
   ["'objects'::text", "'bodies'::text", "'sigs'::text", "'grants'::text", "'rls'::text", "'legs'::text", "'modes'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
   ok(code.includes("c.relforcerowsecurity") && code.includes("p.proowner") && code.includes("c.relowner") && code.includes("acldefault('f', p.proowner)"), "row 5 reads FORCE RLS and the owner match; row 4 reads PUBLIC from the ACL with its default");
+  // re-check 10/18: row 6 reads the state in offer_status()'s order (an offer in the period first) and prints the listing apart; open_trades
+  ok(code.indexOf("then 'submitted'") > 0 && code.indexOf("then 'submitted'") < code.indexOf("then 'rules_only'") && code.includes("|| ' listed=' ||") && code.includes("|| ' open_trades=' ||"), "row 6: state=submitted before rules_only (offer_status()'s order), listed=<yes|no> apart, and the open_trades count");
   ok(!/display_name|email|\bnote\b|\.detail\b|from_surgeon_name|to_surgeon_name/.test(code), "facts only: no display name, email, note, trade detail or stored name is read");
 }
 
