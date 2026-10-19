@@ -150,7 +150,7 @@
 -- re-stamps both as the insert guard does); both kept as they are on every other update, never taken from the client. apply_trade() is revision m's body plus, after the schedule_days writes, one call_offers upsert per leg whose receiver
 -- agreed himself (leg 1: accepted_by = to; the return leg: also proposed_by = from), for a day today or later inside an offer period
 -- (the earliest start containing it, as rules.js picks) where the receiver is already submitted, not rules-only, not an outside surgeon,
--- and not a primary leg onto his No primary day (read under save_offers' per-person advisory lock); the claim's merge (same role kept,
+-- and not a primary leg onto his No primary day (every leg's reads under save_offers' per-person advisory lock); the claim's merge (same role kept,
 -- the other role -> 'either', owner fields handed over only when the role changes), source 'app', entered_by the receiver, the OF003
 -- bypass through silvis.claim_in_progress; and the trade.apply audit detail gains offer / return_offer. trade_insert_guard() and
 -- trade_update_guard() are their revision p / n bodies plus the stamp lines. No policy, grant, index, other function or anon surface
@@ -758,7 +758,10 @@ comment on column public.shift_trade_requests.kind is '''trade'' (day for day; t
 -- 2026-10-18 (revision y, sql/migrations/2026-10-18-trade-offer.sql): the consent stamps - who agreed, recorded on the row, so apply_trade
 -- writes a receiver's offer only for a receiver who agreed himself, whoever applies the trade (a locked slot moves only when the scheduler
 -- applies). Written ONLY by the triggers (trade_insert_guard / trade_update_guard overwrite whatever a client sends); null on every row
--- before revision y (such a trade writes no offer). Values: a roster id, or 'scheduler' (the scheduler, an admin or a server session).
+-- from before revision y: such a trade accepted before it writes no offer, and one proposed before it and accepted after it writes the
+-- leg-1 receiver's only (his acceptance is stamped; the proposer's agreement never was). Values: a roster id, or 'scheduler' (the
+-- scheduler, an admin or a server session). Re-applying revision y after a rollback is its own report-first step: null the stamps of
+-- the rows not yet applied first (no trigger overwrote a client's value in between).
 alter table public.shift_trade_requests add column if not exists proposed_by text;
 alter table public.shift_trade_requests add column if not exists accepted_by text;
 comment on column public.shift_trade_requests.proposed_by is 'revision y: the from surgeon''s own roster id when he inserted the row himself, else ''scheduler'' (trade_insert_guard; never from the client)';
@@ -1069,8 +1072,9 @@ begin
   -- is today or later in Central time (OF001 refuses a past day for every caller); it lies in an offer period - the earliest
   -- start_day containing it, as rules.js picks - where he already has an offer (submitted); he is not in its rules_only_ids
   -- and not an outside surgeon (roster type external); and a primary leg does not land on his No primary day (availability
-  -- backup_only), read under the per-person advisory lock save_offers / save_no_primary take. The claim's merge: the same
-  -- role or an existing either is kept as it was; the other role becomes either and the trade hands the row to him
+  -- backup_only). Those reads run under the per-person advisory lock save_offers / save_no_primary take, for every leg (review
+  -- 10/18: a save that clears his offers and turns him rules-only waits, or is waited for - never half seen). The claim's merge:
+  -- the same role or an existing either is kept as it was; the other role becomes either and the trade hands the row to him
   -- (entered_by / source, as save_offers does). OFFER_FROZEN is bypassed for this write only (silvis.claim_in_progress). No
   -- exception handler: anything else rolls the whole apply back. Legs run in (person, day) order.
   for leg_n, leg_pid, leg_day, leg_role in
@@ -1084,14 +1088,15 @@ begin
     if t.accepted_by is distinct from t.to_surgeon_id then continue; end if;
     if leg_n = 2 and t.proposed_by is distinct from t.from_surgeon_id then continue; end if;
     if exists (select 1 from jsonb_array_elements(roster) e where e ->> 'id' = leg_pid and e ->> 'type' = 'external') then continue; end if;
+    perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || leg_pid));
     select p.start_day, p.end_day, p.rules_only_ids into per_from, per_to, per_ro
       from public.call_periods p where leg_day between p.start_day and p.end_day order by p.start_day limit 1;
     if not found then continue; end if;
     if per_ro ? leg_pid then continue; end if;
     if not exists (select 1 from public.call_offers o where o.person_id = leg_pid and o.day between per_from and per_to) then continue; end if;
-    if leg_role = 'primary' then
-      perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || leg_pid));
-      if exists (select 1 from public.availability a where a.person_id = leg_pid and a.kind = 'backup_only' and leg_day between a.start_date and a.end_date) then continue; end if;
+    if leg_role = 'primary'
+       and exists (select 1 from public.availability a where a.person_id = leg_pid and a.kind = 'backup_only' and leg_day between a.start_date and a.end_date) then
+      continue;
     end if;
     perform set_config('silvis.claim_in_progress', 'on', true);
     insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)

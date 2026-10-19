@@ -22,10 +22,12 @@
 --              included - expected anon=f authenticated=t public=f before and after)
 --   5 rls      offers_force=<t|f> owner_match=<yes|no> (call_offers has no FORCE ROW LEVEL SECURITY and apply_trade's owner is
 --              call_offers' owner - the definer's write passes RLS by ownership, as claim_open_slot's does)
---   6 legs     one summary row (role '') legs=<n> in_period=<n> uncovered=<n>, then one row per applied trade leg on a day inside
+--   6 legs     one summary row (role '') legs=<n> in_period=<n> uncovered=<n> open_trades=<n> (pending / accepted rows: after the apply they
+--              carry null stamps - accepted ones write no offer, pending ones at most leg 1's), then one row per applied trade leg on a day inside
 --              an offer period (the earliest start_day containing it, as rules.js picks) whose receiver has no covering offer that
 --              day (role_pref = the leg's role or either), role = <day>:<leg>, detail trade=<first 8 of the id> leg=<1|2> day=<d>
---              role=<r> receiver=<roster id> holds=<yes|no> state=<submitted|rules_only|not_started> period=<start_day>
+--              role=<r> receiver=<roster id> holds=<yes|no> state=<submitted|rules_only|not_started> (offer_status()'s order: an offer in
+--              the period first) listed=<yes|no> (in its rules_only_ids - revision y skips a listed receiver) period=<start_day>
 --   7 modes    one row per period with offer_modes keys that have no offer in the period (exhaustive / preferred chosen, nothing
 --              painted), role = <start_day>, detail period=<start_day> status=<status> keys_without_offers=<ids, comma-separated>
 -- ============================================================================
@@ -83,9 +85,10 @@ legs_per as (
 ),
 legs_open as (
   select l.*,
-         case when l.per_ro ? l.pid then 'rules_only'
-              when exists (select 1 from public.call_offers o where o.person_id = l.pid and o.day between l.per_start and l.per_end) then 'submitted'
+         case when exists (select 1 from public.call_offers o where o.person_id = l.pid and o.day between l.per_start and l.per_end) then 'submitted'
+              when l.per_ro ? l.pid then 'rules_only'
               else 'not_started' end as state,
+         l.per_ro ? l.pid as listed,
          exists (select 1 from public.schedule_days d where d.day = l.dy
                     and case when l.rl = 'primary' then d.primary_id else d.backup_id end = l.pid) as holds
     from legs_per l
@@ -95,12 +98,14 @@ legs_open as (
 legs_sum as (
   select 6 as ord, 'legs'::text as section, ''::text as role,
          'legs=' || (select count(*) from legs_all) || ' in_period=' || (select count(*) from legs_per where per_start is not null)
-      || ' uncovered=' || (select count(*) from legs_open) as detail
+      || ' uncovered=' || (select count(*) from legs_open)
+      || ' open_trades=' || (select count(*) from public.shift_trade_requests t where t.status in ('pending', 'accepted')) as detail
 ),
 legs_rows as (
   select 6 as ord, 'legs'::text as section, l.dy::text || ':' || l.n::text as role,
          'trade=' || left(l.id::text, 8) || ' leg=' || l.n || ' day=' || l.dy || ' role=' || l.rl || ' receiver=' || l.pid
-      || ' holds=' || case when l.holds then 'yes' else 'no' end || ' state=' || l.state || ' period=' || l.per_start as detail
+      || ' holds=' || case when l.holds then 'yes' else 'no' end || ' state=' || l.state || ' listed=' || case when l.listed then 'yes' else 'no' end
+      || ' period=' || l.per_start as detail
     from legs_open l
 ),
 modes as (

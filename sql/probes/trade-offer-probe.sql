@@ -17,7 +17,9 @@
 -- 2031-08-31 upcoming (s6 has no offer there - not started); PP 2020-06-01..2029-12-31 (closed by date; s1 submitted).
 -- Submitted in PA through fixture offers: s1 (05-05 either), s2 (05-06 backup), s3 (05-02 backup), s4 (05-03 primary, plus the
 -- merge fixtures 05-22 backup / 05-23 primary / 05-24 either, each email-relay by the scheduler with a seed note), s6 (05-04 backup);
--- s5 has an offer in PB only (07-20). s4 has a No primary day (availability backup_only) 2031-05-26..05-27.
+-- s5 is listed rules-only in PA and yet has an offer there (05-01 - reachable: a save with no mode leaves rules_only_ids as it is;
+-- offer_status reads him submitted, so R1 / R4 pass only through apply_trade's rules-only test) and one in PB (07-20).
+-- s4 has a No primary day (availability backup_only) 2031-05-26..05-27.
 -- Users: u1 = s1 as scheduler, ua = admin with no roster link, u2..u6 = surgeons s2..s6.
 -- Reading: st=<status> by=<proposed_by>/<accepted_by> o1=<leg 1 receiver's offer> o2=<return receiver's offer> a=<offer>/<return_offer>
 -- (an offer reads role_pref/entered_by/source, or none; a = the trade.apply audit detail, or none before an apply).
@@ -33,7 +35,7 @@
 --   S8  postgres with no user inserts an already accepted give -> st=accepted by=scheduler/scheduler
 --   S9  u1 inserts an already accepted give s2 to s1 (himself) -> st=accepted by=scheduler/s1
 --   A1  give, u3 accepts and applies in the published PA -> st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off
---   A2  two-way trade, u3 accepts, u2 applies -> st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true
+--   A2  two-way trade, u3 accepts, u2 applies (the backup return leg takes s2's offers lock too) -> st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t
 --   A3  u1 inserts a one-way trade, u3 accepts, u1 applies -> st=applied by=scheduler/s3 o1=primary/s3/app a=true/false
 --   A4  locked slot: u3 accepts, u3's apply is refused, u1 applies -> m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false
 --   A5  u1 accepts for s3, u3 applies (Retry apply) -> st=applied by=s2/scheduler o1=none a=false/false
@@ -46,7 +48,7 @@
 --   M1  s4 takes primary over his backup offer (seed-owned) -> st=applied by=s2/s4 o1=either/s4/app a=true/false
 --   M2  s4 takes primary over his primary offer (seed-owned) -> st=applied by=s2/s4 o1=primary/scheduler/email-relay a=true/false
 --   M3  s4 takes backup over his either offer (seed-owned) -> st=applied by=s2/s4 o1=either/scheduler/email-relay a=true/false
---   R1  s5 is rules-only in PA -> st=applied by=s2/s5 o1=none a=false/false
+--   R1  s5 is rules-only in PA (and has an offer there) -> st=applied by=s2/s5 o1=none a=false/false
 --   R2  s6 has no offer in PC (not started) -> st=applied by=s2/s6 o1=none a=false/false
 --   R3  a day outside every period -> st=applied by=s2/s3 o1=none a=false/false
 --   R4  PA and PB both hold the day: s5 rules-only in PA (earliest), submitted in PB -> st=applied by=s2/s5 o1=none a=false/false
@@ -76,7 +78,8 @@ begin
                                                       or '2029-12-31' between start_day and end_day)
      or exists (select 1 from public.availability where start_date <= '2031-09-30' and end_date >= '2031-05-01')
      or exists (select 1 from public.time_off where (start_date <= '2031-09-30' and end_date >= '2031-05-01')
-                                                  or (start_date <= '2020-06-30' and end_date >= '2020-06-01'))
+                                                  or (start_date <= '2020-06-30' and end_date >= '2020-06-01')
+                                                  or '2029-12-31' between start_date and end_date)
      or exists (select 1 from public.shift_trade_requests where detail like 'probe-tradeoffer%') then
     raise exception 'PROBE_SETUP: live rows already sit in the probe window (schedule_days / call_offers / call_periods / availability / time_off in 2031-05..2031-09, 2020-06 or on 2029-12-31, or a probe-tradeoffer trade) - the probe fixtures would collide';
   end if;
@@ -126,6 +129,7 @@ begin
   values ('s1', '2031-05-05', 'either',  null, 's1', 'app'), ('s2', '2031-05-06', 'backup', null, 's2', 'app'),
          ('s3', '2031-05-02', 'backup',  null, 's3', 'app'), ('s4', '2031-05-03', 'primary', null, 's4', 'app'),
          ('s6', '2031-05-04', 'backup',  null, 's6', 'app'), ('s5', '2031-07-20', 'primary', null, 's5', 'app'),
+         ('s5', '2031-05-01', 'backup',  null, 's5', 'app'),
          ('s1', '2029-12-31', 'primary', null, 's1', 'app'),
          ('s4', '2031-05-22', 'backup',  'seed: probe-tradeoffer', 'scheduler', 'email-relay'),
          ('s4', '2031-05-23', 'primary', 'seed: probe-tradeoffer', 'scheduler', 'email-relay'),
@@ -153,6 +157,13 @@ begin
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', uid, 'role', 'authenticated')::text, true);
 end $$;
+-- whether this session holds p_person's offers advisory lock (save_offers' key; pg_advisory_xact_lock(bigint) splits the key into
+-- classid = the high 32 bits and objid = the low 32 bits, objsubid 1) - a lock taken in a case that committed is held to the end
+create or replace function pg_temp.locked(p_person text) returns text language sql as $$
+  select case when exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1
+                              and l.classid::bigint = ((hashtext('availability:no_primary:' || p_person)::bigint >> 32) & 4294967295)
+                              and l.objid::bigint = (hashtext('availability:no_primary:' || p_person)::bigint & 4294967295)) then 't' else 'f' end;
+$$;
 create or replace function pg_temp.off(p_person text, p_day date) returns text language sql as $$
   select coalesce((select o.role_pref || '/' || o.entered_by || '/' || o.source from public.call_offers o where o.person_id = p_person and o.day = p_day), 'none');
 $$;
@@ -324,14 +335,15 @@ do $$ declare tid uuid; res text; flag text; begin
   end;
   insert into probe_results values ('A1', res);
 end $$;
-do $$ declare tid uuid; res text; begin
+do $$ declare tid uuid; res text; l0 text; begin
   begin
+    l0 := pg_temp.locked('s2');
     perform pg_temp.act('u2');
     insert into public.shift_trade_requests (kind, from_surgeon_id, to_surgeon_id, day, role, return_day, return_role, status, detail)
     values ('trade', 's2', 's3', '2031-05-12', 'primary', '2031-05-13', 'backup', 'pending', 'probe-tradeoffer A2') returning id into tid;
     perform pg_temp.accept('u3', tid);
     perform pg_temp.apply('u2', tid);
-    res := pg_temp.rd(tid, 's3', '2031-05-12', 's2', '2031-05-13');
+    res := pg_temp.rd(tid, 's3', '2031-05-12', 's2', '2031-05-13') || ' lock=' || l0 || '/' || pg_temp.locked('s2');
   exception when others then res := 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',');
   end;
   insert into probe_results values ('A2', res);
@@ -443,16 +455,13 @@ do $$ declare tid uuid; res text; begin
 end $$;
 
 -- ---------- R7 before the merges (the merges take s4's advisory lock too): primary onto his No primary day writes no row
-do $$ declare tid uuid; res text; lk bigint := hashtext('availability:no_primary:s4')::bigint; l0 boolean; l1 boolean; begin
+do $$ declare tid uuid; res text; l0 text; begin
   begin
-    l0 := exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1
-                     and l.classid::bigint = ((lk >> 32) & 4294967295) and l.objid::bigint = (lk & 4294967295));
+    l0 := pg_temp.locked('s4');
     tid := pg_temp.give('u2', 's2', 's4', '2031-05-26', 'primary', 'R7');
     perform pg_temp.accept('u4', tid);
     perform pg_temp.apply('u4', tid);
-    l1 := exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1
-                     and l.classid::bigint = ((lk >> 32) & 4294967295) and l.objid::bigint = (lk & 4294967295));
-    res := 'lock=' || case when l0 then 't' else 'f' end || '/' || case when l1 then 't' else 'f' end || ' ' || pg_temp.rd(tid, 's4', '2031-05-26', null, null);
+    res := 'lock=' || l0 || '/' || pg_temp.locked('s4') || ' ' || pg_temp.rd(tid, 's4', '2031-05-26', null, null);
   exception when others then res := 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',');
   end;
   insert into probe_results values ('R7', res);

@@ -5626,33 +5626,43 @@ const Y_DDL = "alter table public.shift_trade_requests add column if not exists 
 
 step("revision y: apply_trade - revision m's body byte for byte plus the declarations, the offer loop (after the schedule_days writes, before the status flip) and the two audit booleans; the conditions in order; no exception handler; no variable that collides with a column or alias");
 const Y_DECLARE = "  leg_n    integer;\n  leg_pid  text;\n  leg_day  date;\n  leg_role text;\n  per_from date;\n  per_to   date;\n  per_ro   jsonb;\n  wrote1   boolean := false;\n  wrote2   boolean := false;\n";
-const Y_LOOP_START = "  -- (2026-10-18, revision y) a trade is an offer made on the spot, as a claim is:";
-const Y_LOOP_END = "  end loop;\n";
 const Y_AUDIT_KEYS = ", 'to', t.to_surgeon_id, 'offer', wrote1, 'return_offer', wrote2));";
 const TRADE_AUDIT_INSERT_Y = "insert into public.audit_log (actor_id, actor_name, action, detail)\n  values (me, my_name, 'trade.apply', jsonb_build_object('summary', summary, 'trade_id', p_trade_id, 'day', t.day, 'role', t.role, 'return_day', t.return_day, 'return_role', t.return_role, 'from', t.from_surgeon_id" + Y_AUDIT_KEYS;
-const undoYApply = (t) => {
-  const a = t.indexOf(Y_LOOP_START), b = a < 0 ? -1 : t.indexOf(Y_LOOP_END, a);
-  if (a < 0 || b < 0) return null;
-  return (t.slice(0, a) + t.slice(b + Y_LOOP_END.length)).replace(Y_DECLARE, "").replace(Y_AUDIT_KEYS, ", 'to', t.to_surgeon_id));");
-};
+// the loop, exactly: its comment and every line (review 10/18 - an in-order check would let an extra statement in)
+const Y_LOOP_COMMENT = [
+  "  -- (2026-10-18, revision y) a trade is an offer made on the spot, as a claim is: each leg's receiver gets a call_offers row",
+  "  -- for the day he takes when ALL hold - he agreed himself (the consent stamps: leg 1 when accepted_by is its receiver; the",
+  "  -- return leg when, besides, proposed_by is its receiver - a trade the scheduler accepted for someone writes none); the day",
+  "  -- is today or later in Central time (OF001 refuses a past day for every caller); it lies in an offer period - the earliest",
+  "  -- start_day containing it, as rules.js picks - where he already has an offer (submitted); he is not in its rules_only_ids",
+  "  -- and not an outside surgeon (roster type external); and a primary leg does not land on his No primary day (availability",
+  "  -- backup_only). Those reads run under the per-person advisory lock save_offers / save_no_primary take, for every leg (review",
+  "  -- 10/18: a save that clears his offers and turns him rules-only waits, or is waited for - never half seen). The claim's merge:",
+  "  -- the same role or an existing either is kept as it was; the other role becomes either and the trade hands the row to him",
+  "  -- (entered_by / source, as save_offers does). OFFER_FROZEN is bypassed for this write only (silvis.claim_in_progress). No",
+  "  -- exception handler: anything else rolls the whole apply back. Legs run in (person, day) order.",
+];
 const Y_LOOP_LINES = [
   "  for leg_n, leg_pid, leg_day, leg_role in",
+  "    select lg.n, lg.pid, lg.dy, lg.rl",
   "      from (values (1, t.to_surgeon_id, t.day, t.role),",
   "                   (2, t.from_surgeon_id, t.return_day, case when t.return_role = 'primary' then 'primary' else 'backup' end)) lg(n, pid, dy, rl)",
   "     where lg.dy is not null",
   "     order by lg.pid, lg.dy",
+  "  loop",
   "    if leg_day < today_c then continue; end if;",
   "    if t.accepted_by is distinct from t.to_surgeon_id then continue; end if;",
   "    if leg_n = 2 and t.proposed_by is distinct from t.from_surgeon_id then continue; end if;",
   "    if exists (select 1 from jsonb_array_elements(roster) e where e ->> 'id' = leg_pid and e ->> 'type' = 'external') then continue; end if;",
+  "    perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || leg_pid));",
   "    select p.start_day, p.end_day, p.rules_only_ids into per_from, per_to, per_ro",
   "      from public.call_periods p where leg_day between p.start_day and p.end_day order by p.start_day limit 1;",
   "    if not found then continue; end if;",
   "    if per_ro ? leg_pid then continue; end if;",
   "    if not exists (select 1 from public.call_offers o where o.person_id = leg_pid and o.day between per_from and per_to) then continue; end if;",
-  "    if leg_role = 'primary' then",
-  "      perform pg_advisory_xact_lock(hashtext('availability:no_primary:' || leg_pid));",
-  "      if exists (select 1 from public.availability a where a.person_id = leg_pid and a.kind = 'backup_only' and leg_day between a.start_date and a.end_date) then continue; end if;",
+  "    if leg_role = 'primary'",
+  "       and exists (select 1 from public.availability a where a.person_id = leg_pid and a.kind = 'backup_only' and leg_day between a.start_date and a.end_date) then",
+  "      continue;",
   "    end if;",
   "    perform set_config('silvis.claim_in_progress', 'on', true);",
   "    insert into public.call_offers (person_id, day, role_pref, note, entered_by, source)",
@@ -5666,6 +5676,10 @@ const Y_LOOP_LINES = [
   "    if leg_n = 1 then wrote1 := true; else wrote2 := true; end if;",
   "  end loop;",
 ];
+const Y_LOOP = Y_LOOP_COMMENT.concat(Y_LOOP_LINES).join("\n") + "\n";
+// each y piece must be found exactly once, else the undo returns null (and the byte comparison fails)
+const cutOnce = (t, piece, by) => (t && t.split(piece).length === 2 ? t.split(piece).join(by) : null);
+const undoYApply = (t) => cutOnce(cutOnce(cutOnce(t, Y_LOOP, ""), Y_DECLARE, ""), Y_AUDIT_KEYS, ", 'to', t.to_surgeon_id));");
 // the 42702 guard: a declared name may not equal a column or an alias the body's SQL uses (PL/pgSQL substitutes the variable or refuses as ambiguous)
 const SQL_WORDS = new Set(["where", "for", "order", "limit", "cross", "left", "join", "on", "as", "lateral", "and", "or", "into", "set", "values", "select", "group", "having", "union", "update", "returning", "then"]);
 function yCollisions(fn) {
@@ -5686,10 +5700,10 @@ function yCollisions(fn) {
   const fn = functionText(s, "apply_trade");
   eq(undoYApply(fn), functionText(auditMig, "apply_trade"), n + ": with the y lines undone textually (the declarations, the loop, the two audit keys), apply_trade must equal revision m's applied body byte for byte - every check, refusal, lock and write before the loop untouched;");
   ok(fn.includes("  roster   jsonb;\n" + Y_DECLARE + "  to_name  text;\n  fr_name  text;\n  my_name  text;\n  summary  text;\nbegin"), n + ": the y declarations sit between roster and to_name (my_name / summary stay last)");
-  const loopAt = fn.indexOf(Y_LOOP_START);
+  const loopAt = fn.indexOf(Y_LOOP);
   ok(loopAt > fn.lastIndexOf("update public.schedule_days set ") && loopAt < fn.indexOf("perform set_config('silvis.apply_trade', '1', true);"), n + ": the offer loop runs after the last schedule_days write and before the status flip");
-  let at = loopAt;
-  Y_LOOP_LINES.forEach((l) => { const i = fn.indexOf("\n" + l + "\n", at); ok(i > at, n + ": the offer loop lacks, or misorders, the line `" + l.trim() + "`"); at = i < 0 ? at : i; });
+  ok(loopAt > 0 && fn.split(Y_LOOP).length === 2, n + ": the offer loop must read exactly Y_LOOP (its comment and every line, once)");
+  ok(fn.slice(loopAt + Y_LOOP.length).startsWith("  perform set_config('silvis.apply_trade', '1', true);\n"), n + ": the status flip follows the loop directly");
   ok(fn.includes(TRADE_AUDIT_INSERT_Y), n + ": the trade.apply audit insert must read exactly `" + TRADE_AUDIT_INSERT_Y.replace(/\n\s*/g, " ") + "` (D7: offer / return_offer last)");
   ok(fn.indexOf(TRADE_AUDIT_INSERT_Y) > fn.indexOf("update public.shift_trade_requests set status = 'applied'") && fn.indexOf(TRADE_AUDIT_INSERT_Y) < fn.lastIndexOf("return jsonb_build_object('ok', true"), n + ": the audit insert stays the last write");
   ok(!/\bexception\s+when\b/i.test(fn), n + ": apply_trade has no exception handler - anything unforeseen in the offer write rolls the whole apply back (fail closed)");
@@ -5710,7 +5724,13 @@ ok(schema.includes("perform pg_advisory_xact_lock(hashtext('availability:no_prim
 step("revision y: the consent stamps - written by the trade triggers only, for EVERY caller (a client's value is overwritten); each guard is its live body with the stamp lines undone, byte for byte");
 const Y_INS_P = "  new.proposed_by := case when me is not null and me = new.from_surgeon_id then me else 'scheduler' end;\n";
 const Y_INS_A = "  new.accepted_by := case when new.status = 'accepted' then (case when me is not null and me = new.to_surgeon_id then me else 'scheduler' end) end;\n";
-const undoYIns = (t) => t.replace(/  -- \(2026-10-18, revision y\) the consent stamps, for EVERY caller[\s\S]*?\n(?=  new\.proposed_by := )/, "").replace(Y_INS_P + Y_INS_A, "");
+const Y_INS_COMMENT = [
+  "  -- (2026-10-18, revision y) the consent stamps, for EVERY caller (a client's value is overwritten), once from_surgeon_id is",
+  "  -- final: proposed_by is the from surgeon's own id when he inserts the row himself, else 'scheduler'; a row inserted already",
+  "  -- accepted (the scheduler or a server session - a member's lands pending) is stamped accepted_by the same way from the to",
+  "  -- surgeon; any other row starts with accepted_by null. apply_trade reads them to decide whose offer row a trade writes.",
+].join("\n") + "\n";
+const undoYIns = (t) => cutOnce(t, Y_INS_COMMENT + Y_INS_P + Y_INS_A, "");
 const Y_UPD_BLOCK = [
   "  if new.from_surgeon_id is distinct from old.from_surgeon_id or new.to_surgeon_id is distinct from old.to_surgeon_id",
   "     or new.day is distinct from old.day or new.role is distinct from old.role",
@@ -5725,7 +5745,13 @@ const Y_UPD_BLOCK = [
   "    new.accepted_by := old.accepted_by;",
   "  end if;",
 ].join("\n") + "\n";
-const undoYUpd = (t) => t.replace(/  -- \(2026-10-18, revision y\) the consent stamps are this trigger's alone[\s\S]*?\n(?=  if new\.from_surgeon_id is distinct from )/, "").replace(Y_UPD_BLOCK, "");
+const Y_UPD_COMMENT = [
+  "  -- (2026-10-18, revision y) the consent stamps are this trigger's alone, for EVERY caller (a client's value is overwritten), and",
+  "  -- run before the scheduler's return: moving into accepted stamps accepted_by - the to surgeon's own id when he accepts himself,",
+  "  -- else 'scheduler'; a change of the legs (the scheduler only - a member is refused below) re-stamps both, as the insert guard",
+  "  -- does, since an agreement to the old legs is not one to the new; every other update keeps both as they were.",
+].join("\n") + "\n";
+const undoYUpd = (t) => cutOnce(t, Y_UPD_COMMENT + Y_UPD_BLOCK, "");
 [["schema.sql", schema], ["trade-offer migration", yMig]].forEach(([n, s]) => {
   const ins = functionText(s, "trade_insert_guard"), upd = functionText(s, "trade_update_guard");
   eq(undoYIns(ins), fuFn, n + ": with the two stamp lines (and their comment) undone, trade_insert_guard must equal revision p's applied body (the follow-up's) byte for byte;");
@@ -5770,7 +5796,7 @@ const Y_AFTER = {
   S1: "st=pending by=s2/null", S2: "st=pending by=s2/null", S3: "st=accepted by=s2/s3", S4: "st=accepted by=s2/s3",
   S5: "st=accepted by=scheduler/scheduler", S6: "st=accepted by=s1/scheduler", S7: "st=accepted by=s2/scheduler", S8: "st=accepted by=scheduler/scheduler", S9: "st=accepted by=scheduler/s1",
   A1: "st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off",
-  A2: "st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true",
+  A2: "st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t",
   A3: "st=applied by=scheduler/s3 o1=primary/s3/app a=true/false",
   A4: "m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false",
   A5: "st=applied by=s2/scheduler o1=none a=false/false",
@@ -5830,7 +5856,14 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
   ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer\.sh`, after Part A's `apply-east-vacations\.sh`\.\*\*/m.test(yr) && !/\*\*Status: APPLIED/.test(yr), "the status line reads PREPARED - report-first, NOT applied - after Part A - until the record step");
   ["**Why.**", "**The decisions.**", "**The objects**", "**The conditions**", "**The write**", "**Who it binds.**", "**What it changes for the receiver (D1).**", "**Blast radius.**", "**Proof.**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**"].forEach((a) => ok(yr.includes(a), "the revision y section lacks " + a));
   ok(/^observed: \(the record step fills this[^\n]*/m.test(yr), "the observed placeholder (nothing has run against the live project)");
-  ok(yr.includes("apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe"), "the section states the bodies' md5 before the apply (revisions m / p / n / j)");
+  // the md5 of each body (pg_proc.prosrc = the text between its $$ quotes), derived from the files - before: m / p / n / j, after: y / y / y / j
+  // (review 10/18: a body edit must fail here until the record of the gate is updated; the apply script's pins come from the same bodies)
+  const bodyMd5 = (s, name) => { const t = functionText(s, name) || "", a = t.indexOf("$$") + 2; return crypto.createHash("md5").update(t.slice(a, t.lastIndexOf("$$"))).digest("hex"); };
+  const jMd5 = bodyMd5(schema, "call_offers_guard");
+  const Y_BODIES_BEFORE = "apply_trade=" + bodyMd5(auditMig, "apply_trade") + " insert_guard=" + bodyMd5(fuMig, "trade_insert_guard") + " update_guard=" + bodyMd5(giveMig, "trade_update_guard") + " offers_guard=" + jMd5;
+  const Y_BODIES_AFTER = "apply_trade=" + bodyMd5(yMig, "apply_trade") + " insert_guard=" + bodyMd5(yMig, "trade_insert_guard") + " update_guard=" + bodyMd5(yMig, "trade_update_guard") + " offers_guard=" + jMd5;
+  ok(yr.includes("before: cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes\n        " + Y_BODIES_BEFORE + "\n") && yr.includes("after:  cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes\n        " + Y_BODIES_AFTER + "\n"), "the section's gate states the bodies' md5 derived from the files - before: " + Y_BODIES_BEFORE + " / after: " + Y_BODIES_AFTER);
+  ok(Y_BODIES_BEFORE.startsWith("apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 "), "the before md5 are the live bodies' (m / p / n), as the pre-check read them on PGlite");
   ok(!/B6 report|xmax/.test(yr), "the section names neither the B6 report nor xmax (reviewB6 runs to the end of the file)");
   const tradeRow = review.split("\n").find((l) => l.startsWith("| `shift_trade_requests` |")) || "";
   ok(tradeRow.includes("Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`"), "table (a)'s shift_trade_requests row names revision y's two columns, prepared, not applied");

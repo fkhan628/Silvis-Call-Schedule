@@ -3987,7 +3987,7 @@ primary leg onto his No primary day writes none. D7 two audit booleans. D8 after
 
 | object | before | after |
 |---|---|---|
-| `shift_trade_requests.proposed_by`, `.accepted_by` | - | new nullable text columns, the consent stamps: a roster id when that surgeon agreed himself, else `'scheduler'` (the scheduler, an admin, a server session); null on every row from before revision y (such a trade writes no row) |
+| `shift_trade_requests.proposed_by`, `.accepted_by` | - | new nullable text columns, the consent stamps: a roster id when that surgeon agreed himself, else `'scheduler'` (the scheduler, an admin, a server session); null on every row from before revision y (a trade accepted before it writes no row; one proposed before it and accepted after it writes the leg-1 receiver's only) |
 | `trade_insert_guard()` | revision p (the member return-leg follow-up) | p's body plus two lines after the same-surgeon refusal, for EVERY caller: `proposed_by` = the caller's own id when he is the from surgeon, else `'scheduler'`; `accepted_by` = the same from the to surgeon for a row inserted already accepted (the scheduler or a server session - a member's row lands pending), else null |
 | `trade_update_guard()` | revision n (give-kind) | n's body plus a block at the top, before the scheduler's return: a move into `accepted` stamps `accepted_by` (the to surgeon's own id when he accepts himself, else `'scheduler'`); a change of the legs (the scheduler only - a member is refused `TRADE_IMMUTABLE`) re-stamps both as the insert guard does; every other update keeps both |
 | `apply_trade(uuid)` | revision m (5b) | m's body plus, after the `schedule_days` writes and before the status flip, one `call_offers` upsert per leg (person, day order) under the conditions below, and `offer` / `return_offer` in the `trade.apply` audit detail |
@@ -3999,8 +3999,9 @@ primary leg onto his No primary day writes none. D7 two audit booleans. D8 after
 (`OF001` refuses a past day for every caller - without the skip a past trade the scheduler applies would roll back); (3) the day
 lies in an offer period - the earliest `start_day` containing it, as rules.js picks - where he already has an offer (D2); (4) he
 is not in that period's `rules_only_ids` and not an outside surgeon (roster `type` `external`); (5) a primary leg does not land
-on his No primary day (`availability` `backup_only`), read under the per-person advisory lock `save_offers` / `save_no_primary`
-take (`availability:no_primary:<id>`), so a concurrent No primary save cannot slip past both checks (NP009's invariant).
+on his No primary day (`availability` `backup_only`). Every leg's reads - the period, his offers, the No primary day - run under the
+per-person advisory lock `save_offers` / `save_no_primary` take (`availability:no_primary:<id>`, taken in person order), so neither a
+concurrent No primary save (NP009's invariant) nor a save that clears his offers and turns him rules-only is half seen (review 10/18).
 
 **The write** - the claim's (D4): one row per person and day, `entered_by` the receiver, `source` `app`, no note; the same role
 or an existing `either` is kept as it was; the other role becomes `either` and the row is handed to him (`entered_by` /
@@ -4021,22 +4022,30 @@ row lifts a dated list on that date and role and counts that calendar month as p
 claim does. Not started, rules-only, outside every period: today's reading (no row).
 
 **Blast radius.** An applied trade may write up to two `call_offers` rows (authenticated-only, never anon); no period status
-changes (only submitted receivers get rows). The client reads the trade rows with their new columns and ignores them (no client
+changes (only submitted receivers get rows, in the earliest period holding the day - where two periods overlap, the row also
+counts in the later one, as `offer_status()` and rules.js count every offer day inside a period, so a receiver rules-only or not
+started there reads submitted). The client reads the trade rows with their new columns and ignores them (no client
 file names them; it sends `{ status, decided_at }` on a PATCH and the proposal keys on an insert - `test/data-layer.test.js`);
 snapshots, restore, export and import never copy trade rows. The other probes' trade fixtures (verify-rls section 5: 2030-03,
 2020-02) lie in no period. Residuals (claim parity, recorded): a revert of the trade leaves the receiver's offer; the giver's own
 offer on the day he gave stays (deleting it in a frozen period would hit `call_offers_delete_guard` and roll the trade back); a
-concurrent `set_offer_mode(rules_only)` and a trade can race, as with a claim; Faraz accepting as the receiver past the return
-leg's rule writes the giver's return row (the giver proposed that day himself); a trade accepted before revision y writes no row.
+claim can still race a save that turns the claimer rules-only (`claim_open_slot` takes no such lock - unchanged); Faraz accepting as the receiver past the return
+leg's rule writes the giver's return row (the giver proposed that day himself); a trade accepted before revision y writes no row,
+and one proposed before it and accepted after it writes the leg-1 receiver's row only (the proposer's agreement was never stamped).
 
 **Proof.** `sql/probes/trade-offer-probe.sql` (rolled back; 32 cases in its header - P1 the catalog, S1-S9 the stamps never from
-the client, A1-A11 who agreed decides whoever applies, M1-M3 the merge, R1-R8 the receivers and days that get none, the No primary
-day with its advisory lock; its collision guard first, then PROBE_SETUP before the apply) and `sql/probes/trade-offer-precheck.sql`
+the client, A1-A11 who agreed decides whoever applies (A2: the backup return leg takes the lock too), M1-M3 the merge, R1-R8 the
+receivers and days that get none and the two that do (R5 the earliest period, R8 a backup leg onto a No primary day; R7 the lock);
+its collision guard first, then PROBE_SETUP before the apply) and `sql/probes/trade-offer-precheck.sql`
 (read-only: the objects gate with Part A's function, the four bodies' md5, the signatures, the grants, no FORCE RLS and the owner
 match; facts: the applied legs inside a period without a covering offer, the `offer_modes` keys with no offer). Offline (PGlite,
 10/18, `origin/main`'s schema.sql + this file): PROBE_SETUP before, 32 / 32 cases after, nothing persisted, the migrated bodies
 equal schema.sql's, the file re-runs; the existing trade probe's 34 cases and the claim probe's 15 read the same before and
-after; the outside-surgeon branch (the live probe never writes the roster) gets no row beside a pool receiver who does.
+after; the outside-surgeon branch (the live probe never writes the roster) gets no row beside a pool receiver who does. Mutation
+check: 15 of 16 one-change mutants of the migration turn at least one case red (each condition, the lock for every leg, the flag,
+the merge, the audit keys, each stamp rule); the 16th - dropping the no-period test - is equivalent (the submitted test skips the
+same legs). Review 10/18 (four lenses, each finding re-checked): the lock moved before the reads for every leg, R1 / R4 given an
+offer so they test the rules-only branch, the probe's guard reads `time_off` on 2029-12-31 too, the pre-check prints `listed`.
 
 The gate (the pre-check's first rows):
 
@@ -4044,7 +4053,7 @@ The gate (the pre-check's first rows):
 before: cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes
         apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe
 after:  cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes
-        apply_trade=1d578d537763af778f18e388fc45f648 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b offers_guard=c48783939fd53dc56be90af140297abe
+        apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b offers_guard=c48783939fd53dc56be90af140297abe
 both:   apply_trade=definer insert_guard=invoker update_guard=invoker offers_guard=invoker; anon=f authenticated=t public=f; offers_force=f owner_match=yes
 ```
 
@@ -4057,7 +4066,8 @@ advisory lock for under a second).
 
 **Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - offer rows already written stay, and the
 `trade.apply` rows with `offer` / `return_offer` true name the legs that wrote or merged one; the two columns stay, with their
-stamps), in this order:
+stamps - re-applying revision y after a rollback is its own report-first step that first nulls `proposed_by` / `accepted_by` on
+the rows not yet applied: no trigger overwrote a client's value in between), in this order:
 
 ```text
 supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-09-24-trade-audit-names.sql   (apply_trade m; claim_open_slot m, the live body)
@@ -4069,6 +4079,9 @@ notify pgrst, 'reload schema';
 **The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed line; table (a)'s `shift_trade_requests`
 row; `sql/schema.sql` revision y ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's
 headers; the `index-source.html` comment at the trade check ("apply_trade() does not yet write the call_offers row") - a runtime
-file, so it waits for the apply; the guide's section 17 and 4.3 and the rules doc's section 8 sentences; the test pins with them.
+file, so it waits for the apply; the guide's section 17 and 4.3 and the rules doc's section 8 sentences; `scripts/verify-rls.sh`
+gains a section that runs and grades `sql/probes/trade-offer-probe.sql` (its 32 AFTER strings and its leftover count, as the apply
+script does) and its sha256 pin moves - only after Part A's record step, since Part A's apply script pins the file until then; the
+test pins with them.
 
 observed: (the record step fills this - nothing in this section has run against the live project).
