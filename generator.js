@@ -682,7 +682,9 @@ function genSeedLocks(G, original) {
     G.lockSrc[d] = { primary: lockedP ? "import" : (fixedP ? "fixed" : null), backup: lockedB ? "import" : (fixedB ? "fixed" : null) };
     G.fixed[d] = { primary: fixedP, backup: fixedB };
     // 10/18: WHY a held slot that is not a lock was kept (diagnostics.fixedViolations[].kept and its warning) - a claimed or
-    // traded day first (fixed in every mode), then an outside surgeon's slot, else the fill-open-only mode
+    // traded DAY first (fixed in every mode; the row records the source once, so both of its held roles read it), then the
+    // fill-open-only mode. An outside surgeon's slot reads "outside-surgeon" for completeness only: rules.eligibility reads
+    // his own slot as ok, so it never reaches fixedViolations.
     var whyKept = function (fixed, locked, holder) { return !fixed || locked ? null : personHeld && holder ? e.source : genIsExternal(ctx, holder) ? "outside-surgeon" : "fill-open-only"; };
     G.fixedWhy[d] = { primary: whyKept(fixedP, lockedP, e.primary), backup: whyKept(fixedB, lockedB, e.backup) };
     // the flag the OUTPUT carries for a fixed slot: a lock stays a lock, an unlocked held slot stays unlocked
@@ -1909,19 +1911,20 @@ function genOffersDiag(G, warnings) {
   return out;
 }
 
-// The fixedViolations summary warning, by why each slot was kept (10/18), e.g. "3 held, unlocked slot(s) break a rule - kept
-// as facts, see fixedViolations: 1 claimed and 1 traded, fixed in every mode as the surgeon's own commitment; 1 kept by
-// fill-open-only".
+// The fixedViolations summary warning, by why each slot was kept (10/18), e.g. "3 held slot(s) kept as facts, not as locks,
+// break a rule - see fixedViolations: 1 on a claimed day and 1 on a traded day, fixed in every mode; 1 kept by
+// fill-open-only". It names the DAY, never the holder's act (review 10/18): the other role of a claimed day is kept with
+// it, and with the panel's "respect locks" off an input lock is no lock in the run, so a locked slot can be listed too.
 function genFixedViolationsWarning(list) {
   var n = { claim: 0, trade: 0, "outside-surgeon": 0, "fill-open-only": 0 };
   list.forEach(function (v) { n[v.kept] = (n[v.kept] || 0) + 1; });
   var own = [], parts = [];
-  if (n.claim) own.push(n.claim + " claimed");
-  if (n.trade) own.push(n.trade + " traded");
-  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode as the surgeon's own commitment");
+  if (n.claim) own.push(n.claim + " on a claimed day");
+  if (n.trade) own.push(n.trade + " on a traded day");
+  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode");
   if (n["outside-surgeon"]) parts.push(n["outside-surgeon"] + " held by an outside surgeon");
   if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");
-  return list.length + " held, unlocked slot(s) break a rule - kept as facts, see fixedViolations: " + parts.join("; ");
+  return list.length + " held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: " + parts.join("; ");
 }
 
 function genDiagnostics(G, best, meta) {
@@ -1937,8 +1940,8 @@ function genDiagnostics(G, best, meta) {
   // Locks that break a rule (reported, never changed). T: a fixed slot that is
   // not a lock is reported apart, in fixedViolations, with kept = why it was kept
   // (10/18 - the warning used to say "kept by fill-open-only" for a claimed or traded
-  // day too, which a plain generate keeps as well): "claim" / "trade" (fixed in every
-  // mode), "outside-surgeon", or "fill-open-only".
+  // day too, which a plain generate keeps as well): "claim" / "trade" (the day's
+  // source - fixed in every mode) or "fill-open-only".
   var lockViolations = [], fixedViolations = [];
   G.days.forEach(function (d) {
     var e = W[d];

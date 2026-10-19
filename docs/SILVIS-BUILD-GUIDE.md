@@ -584,9 +584,12 @@ separately, and `diagnostics.impliedTargets` shows every level plus, per member,
 **Fill-open-only mode (T, 9/22):** `generate(ctx, start, end, { fillOpenOnly: true })` fixes every slot held on the input
 (locked or not, `externalCover` included) and fills only the open ones — `diagnostics.mode = "fill-open-only"`,
 `diagnostics.fixedSlots`, and a held unlocked slot that breaks a rule is a fact in `diagnostics.fixedViolations`, never a
-hard violation (10/18: each entry's `kept` says why it was kept - `claim` / `trade`, fixed in every mode, `outside-surgeon`, or
-`fill-open-only` - and the summary warning counts them by it; it used to say "kept by fill-open-only" for a plain generate's
-claimed or traded day too). `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
+hard violation (10/18: each entry's `kept` says why it was kept - `claim` / `trade`, the day's source (both its held roles;
+fixed in every mode), or `fill-open-only` - and the summary warning counts them by it, naming the day and never the holder's
+act: "N held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 1 on a claimed day and 1 on a traded
+day, fixed in every mode; 1 kept by fill-open-only". It used to say "kept by fill-open-only" for a plain generate's claimed or
+traded day too. "Not as locks", not "unlocked": with the panel's respect-locks box off, an input lock on a claimed day is no
+lock in the run, so that slot is listed here. An outside surgeon's slot never is - the rules read his own slot as ok). `scripts/preview-generate.js --backfill <from>..<to>` runs it over the live rows (the October open backups). ⟶ **Prompt 23 (9/30):** `--rules-override <file>` (`{ surgeonRules: { id: { key: value|null } }, groupRules: { ... } }`, applied to the blob in memory only - a null deletes a key) previews values before they are set in Setup, `--today <day>` sets the rules today (the `hardNeverWeekdaysNoticeDays` notice; default the Central date), and the report gains a weekend-caps table (`rules.weekendCapCounts` on the merged schedule) - read-only like the rest of the script.
 Outside surgeons (`type: "external"`, M) are never generated: a day one holds is a fixed slot in every mode and comes off
 the pool's open-slot count.
 

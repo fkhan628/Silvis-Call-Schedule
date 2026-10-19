@@ -569,16 +569,23 @@ function checkRest(out, range, id) {
   return rests;
 }
 
-// 10/18: the fixedViolations summary warning, restated - by why each held, unlocked slot was kept (kept: a claim or a trade
-// is fixed in every mode, an outside surgeon's slot by roster type, everything else by the fill-open-only mode).
-const FV_KEPT = ["claim", "trade", "outside-surgeon", "fill-open-only"];
+// 10/18: the fixedViolations summary warning, restated - by why each held slot was kept as a fact, not as a lock (kept: the
+// day's claim / trade source, fixed in every mode; else the fill-open-only mode). It names the DAY, never the holder's act
+// (the other role of a claimed day is kept with it). An outside surgeon's slot never reaches the list (rules.eligibility
+// reads his own slot as ok - rules.test.js item M), so "outside-surgeon" is not an expected value here.
+const FV_KEPT = ["claim", "trade", "fill-open-only"];
 function fvWarning(list) {
   const n = {}; FV_KEPT.forEach((k) => { n[k] = list.filter((v) => v.kept === k).length; });
-  const own = [n.claim ? n.claim + " claimed" : null, n.trade ? n.trade + " traded" : null].filter(Boolean), parts = [];
-  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode as the surgeon's own commitment");
-  if (n["outside-surgeon"]) parts.push(n["outside-surgeon"] + " held by an outside surgeon");
+  const own = [n.claim ? n.claim + " on a claimed day" : null, n.trade ? n.trade + " on a traded day" : null].filter(Boolean), parts = [];
+  if (own.length) parts.push(own.join(" and ") + ", fixed in every mode");
   if (n["fill-open-only"]) parts.push(n["fill-open-only"] + " kept by fill-open-only");
-  return list.length + " held, unlocked slot(s) break a rule - kept as facts, see fixedViolations: " + parts.join("; ");
+  return list.length + " held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: " + parts.join("; ");
+}
+// every fixed violation says why its slot was kept - never "fill-open-only" outside that mode - and the summary warning
+// words exactly that (it said "kept by fill-open-only" for a claimed or traded day of a plain generate too)
+function checkFixedViolations(D, label) {
+  ok((D.fixedViolations || []).every((v) => FV_KEPT.includes(v.kept) && (D.mode === "fill-open-only" || v.kept !== "fill-open-only") && (v.kept === "fill-open-only" || v.kept === v.source)), label + ": fixedViolations[].kept is the day's claim / trade source or fill-open-only (that mode only): " + JSON.stringify(D.fixedViolations));
+  eq(D.warnings.filter((w) => /see fixedViolations/.test(w)), (D.fixedViolations || []).length ? [fvWarning(D.fixedViolations)] : [], label + ": the fixedViolations summary warning, by why each slot was kept");
 }
 
 /* ------------------------------------------------------- the checks */
@@ -610,11 +617,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
   eq(D.seed, seedNo, "diagnostics.seed"); eq(D.truncated, false, "not truncated");
   eq(D.hardViolations, [], "generator reports hard violations: " + JSON.stringify(D.hardViolations));
   eq(D.score.hardViolations, 0, "score.hardViolations");
-  // 10/18: every fixed violation says why its slot was kept - never "fill-open-only" outside that mode - and the summary
-  // warning words exactly that (it said "kept by fill-open-only" for a claimed or traded day of a plain generate too)
-  ok((D.fixedViolations || []).every((v) => FV_KEPT.includes(v.kept) && (D.mode === "fill-open-only" || v.kept !== "fill-open-only")), "fixedViolations[].kept is one of " + FV_KEPT.join(" / ") + " (fill-open-only only in that mode): " + JSON.stringify(D.fixedViolations));
-  const fvW = D.warnings.filter((w) => /see fixedViolations/.test(w));
-  eq(fvW, (D.fixedViolations || []).length ? [fvWarning(D.fixedViolations)] : [], "the fixedViolations summary warning, by why each slot was kept");
+  checkFixedViolations(D, "run"); // 10/18 (the seed has no claim / trade row: an empty list on the main runs - the fixtures below fill it)
   days.forEach((d) => { const e = out.schedule[d]; ["primary", "backup", "primaryLocked", "backupLocked", "source", "externalCover", "note"].forEach((k) => ok(k in e, d + " entry lacks " + k)); });
 
   // item 12 (per run): best-of-N returns the minimum-score candidate
@@ -1447,7 +1450,8 @@ for (let s = 1; s <= SEEDS; s++) {
   eq(DOo.hardViolations, [], "fixture: fixed slots are facts, never hard violations");
   ok(Array.isArray(DOo.fixedViolations) && DOo.fixedViolations.some((v) => v.day === "2026-10-24" && v.role === P && v.id === ACTON && v.reasons.some((r) => r.indexOf("whitelist-month") === 0)), "fixture: Acton's off-list 10/24 is reported in diagnostics.fixedViolations: " + JSON.stringify(DOo.fixedViolations));
   eq((DOo.fixedViolations.find((v) => v.day === "2026-10-24" && v.role === P) || {}).kept, "fill-open-only", "fixture: the manual (unlocked) 10/24 was kept by the fill-open-only mode (10/18 kept field)");
-  ok(DOo.warnings.includes(fvWarning(DOo.fixedViolations)) && DOo.warnings.some((w) => /kept by fill-open-only$/.test(w)), "fixture: the summary warning names fill-open-only: " + JSON.stringify(DOo.warnings.filter((w) => /fixedViolations/.test(w))));
+  checkFixedViolations(DOo, "fill-open-only fixture");
+  ok(DOo.warnings.includes("1 held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 1 kept by fill-open-only"), "fixture: the summary warning, literally: " + JSON.stringify(DOo.warnings.filter((w) => /fixedViolations/.test(w))));
   eq(outN.diagnostics.fixedViolations, [], "fixture: the plain generate regenerated the manual slots - no fixed violation, no summary warning");
   eq(DOo.lockViolations.map((l) => l.day + " " + l.role + " " + l.id), expectedLockViolations(BF).map((l) => l.day + " " + l.role + " " + l.id), "fixture: lockViolations unaffected by fill-open-only (locked slots only)");
   ok(!DOo.warnings.some((w) => /generator bug/.test(w)), "fixture: generator reports its own bug");
@@ -1484,13 +1488,45 @@ for (let s = 1; s <= SEEDS; s++) {
     ok(Array.isArray(DC.fixedViolations) && DC.fixedViolations.some((v) => v.day === "2026-10-24" && v.role === P && v.id === ACTON && v.reasons.some((r) => r.indexOf("whitelist-month") === 0)), "fixture (" + modeName + "): Acton's off-list traded 10/24 is a fixedViolation (whitelist-month), got " + JSON.stringify(DC.fixedViolations));
     // 10/18: kept by the trade in BOTH modes (it was worded "kept by fill-open-only" in a plain generate too)
     eq((DC.fixedViolations.find((v) => v.day === "2026-10-24" && v.role === P) || {}).kept, "trade", "fixture (" + modeName + "): the traded 10/24 is kept as a trade");
-    ok(DC.warnings.includes(fvWarning(DC.fixedViolations)) && DC.warnings.some((w) => /see fixedViolations: .*traded, fixed in every mode/.test(w)) && !DC.warnings.some((w) => /fill-open-only/.test(w) && /fixedViolations/.test(w) && !DC.fixedViolations.some((v) => v.kept === "fill-open-only")), "fixture (" + modeName + "): the summary warning names the trade, not fill-open-only: " + JSON.stringify(DC.warnings.filter((w) => /fixedViolations/.test(w))));
+    checkFixedViolations(DC, "claim-fixed fixture (" + modeName + ")");
+    ok(DC.warnings.includes("1 held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 1 on a traded day, fixed in every mode"), "fixture (" + modeName + "): the summary warning names the traded day, not fill-open-only, literally: " + JSON.stringify(DC.warnings.filter((w) => /fixedViolations/.test(w))));
     eq(DC.lockViolations.map((l) => l.day + " " + l.role + " " + l.id), expectedLockViolations(BF).map((l) => l.day + " " + l.role + " " + l.id), "fixture (" + modeName + "): lockViolations unaffected (locked slots only)");
     ok(!DC.warnings.some((w) => /generator bug/.test(w)), "fixture (" + modeName + "): generator reports its own bug");
     const openC = []; bfDays.forEach((d) => ROLES.forEach((role) => { const e = inputC.schedule[d]; if (!(e && (e[role] || (role === P && e.externalCover)))) openC.push(d + " " + role); }));
     openC.forEach((k) => { const [d, role] = k.split(" "); ok(!!outC.schedule[d][role] !== inUncovered(outC, d, role), "fixture (" + modeName + "): open slot " + k + " filled XOR listed"); });
     eq(openC.length, bfOpen.length - 2, "fixture (" + modeName + "): two fewer open slots than the seed (10/21 backup, 10/24 primary held)");
   });
+  // 10/18 (the fixedViolations warning, review): every kind at once, literally. On top of the fixture: Tue 10/27 is a CLAIMED
+  // day (Khan claimed its backup) whose primary Acton holds - he did not claim it, the row's source is the day's - and breaks
+  // two rules (Tuesday, his October list); Thu 10/29 is a manual, unlocked Acton primary off his list. A plain generate keeps
+  // the traded and the claimed day and regenerates 10/29; fill-open-only keeps all three; with "respect locks" off a LOCKED
+  // claimed day is no lock in the run, so it is listed too (the words say "not as locks", never "unlocked").
+  {
+    const rowX = (p, b, src, pl) => ({ primary: p, backup: b, primaryLocked: !!pl, backupLocked: false, source: src, externalCover: null, note: null });
+    const inputK = SA.seedToContextInput(seed, { eastDerived: DERIVED, eastBusyDays: { [KHAN]: KHAN_BUSY }, eastFeedCoverage: EAST_COVER, eastForecast: { [KHAN]: FORECAST } });
+    Object.keys(FIXC.schedule).forEach((d) => { inputK.schedule[d] = JSON.parse(JSON.stringify(FIXC.schedule[d])); });
+    inputK.schedule["2026-10-27"] = rowX(ACTON, KHAN, "claim");
+    inputK.schedule["2026-10-29"] = rowX(ACTON, null, "manual");
+    const ctxK = R.buildContext(inputK);
+    if (ctxK.warnings.length) fail("buildContext warnings (fixedViolations kinds fixture): " + JSON.stringify(ctxK.warnings));
+    const runK = (ctxX, extra) => GEN.generate(ctxX, BF.start, BF.end, Object.assign({ seed: 1, bestOf: 2 }, extra)).diagnostics;
+    const kinds = (D) => D.fixedViolations.map((v) => v.day + " " + v.role + " " + v.id + " " + v.kept).sort();
+    const fvW = (D) => D.warnings.filter((w) => /see fixedViolations/.test(w));
+    CUR.range = "fixedViolations kinds fixture"; CUR.seed = 1; CUR.day = "2026-10-27";
+    const KG = runK(ctxK, {}), KF = runK(ctxK, { fillOpenOnly: true });
+    checkFixedViolations(KG, "kinds fixture (generate)"); checkFixedViolations(KF, "kinds fixture (fill-open-only)");
+    eq(kinds(KG), ["2026-10-24 primary " + ACTON + " trade", "2026-10-27 primary " + ACTON + " claim"], "kinds (generate): the traded 10/24 and the claimed day's other role 10/27 - the manual 10/29 is regenerated");
+    eq(fvW(KG), ["2 held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 1 on a claimed day and 1 on a traded day, fixed in every mode"], "kinds (generate): the warning names the days, not the holder's act");
+    eq(kinds(KF), ["2026-10-24 primary " + ACTON + " trade", "2026-10-27 primary " + ACTON + " claim", "2026-10-29 primary " + ACTON + " fill-open-only"], "kinds (fill-open-only): all three, the manual 10/29 by the mode");
+    eq(fvW(KF), ["3 held slot(s) kept as facts, not as locks, break a rule - see fixedViolations: 1 on a claimed day and 1 on a traded day, fixed in every mode; 1 kept by fill-open-only"], "kinds (fill-open-only): the warning counts each kind");
+    const inputL = JSON.parse(JSON.stringify(inputK)); inputL.schedule["2026-10-27"].primaryLocked = true;
+    const ctxL = R.buildContext(inputL);
+    const KL = runK(ctxL, { respectLocks: false }), KR = runK(ctxL, {});
+    checkFixedViolations(KL, "kinds fixture (respect locks off)");
+    ok(KL.fixedViolations.some((v) => v.day === "2026-10-27" && v.kept === "claim") && !KL.lockViolations.some((v) => v.day === "2026-10-27") && /^\d+ held slot\(s\) kept as facts, not as locks, break a rule/.test(fvW(KL)[0] || ""), "kinds (respect locks off): the locked claimed day is a fixed violation, not a lock one, worded 'not as locks': " + JSON.stringify(fvW(KL)));
+    ok(KR.lockViolations.some((v) => v.day === "2026-10-27" && v.role === P) && !KR.fixedViolations.some((v) => v.day === "2026-10-27"), "kinds (respect locks on): the locked claimed day is a lock violation instead");
+    CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+  }
   // P13R-2 (review, 9/23): the board scenario - Khan claimed the 10/21 backup, then the scheduler took "Assign..." on the
   // open partner role from the Open shifts board: saveDayEdit keeps source "claim" and the partner is UNLOCKED. Row-level
   // fixing keeps BOTH holders in both modes (nothing on a claimed day moves); the fixed count is unchanged (the primary
