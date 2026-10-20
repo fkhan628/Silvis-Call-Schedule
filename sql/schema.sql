@@ -128,7 +128,7 @@
 -- gains trade_updates_push / schedule_updates_push (boolean not null default true; prefs_own unchanged). Not in the realtime publication,
 -- not in the read_all loop; no existing table, policy, function or trigger changes. Letter u stays taken by the weekend pair claim
 -- (prepared, unmerged on its own branch).
--- Revision 2026-10-14 x (East vacations, sql/migrations/2026-10-14-east-vacations.sql, report-first, NOT yet applied): Faraz 10/9 (Prompt 31
+-- Revision 2026-10-14 x (East vacations, sql/migrations/2026-10-14-east-vacations.sql, applied 2026-10-19 22:53:18Z after the probe): Faraz 10/9 (Prompt 31
 -- Part A) - every East vacation range reviewed away, and every one still unreviewed, is seen by every signed-in role like a Silvis vacation;
 -- Faraz 10/14 chose (a), a derived SQL function. Five NEW functions (search_path public, pg_temp): silvis_east_people() and silvis_east_ranges()
 -- (internal, security invoker, stable; EXECUTE for the service role only - the ONE SQL port of east-feed.js eastVacations + eastMergeRanges and
@@ -140,7 +140,7 @@
 -- east.refresh audit reads; critic A12). time_off_vacation_guard() is re-created: its East leg reads silvis_derived_vacations()
 -- (the merged ranges; a 'home' review exempts only its exact range - stricter than 9/30 for a stale covering review); the time_off leg and
 -- everything else are the 9/30 body. No table, column, policy, trigger, row or anon surface changes. Letter u stays taken by the weekend pair
--- claim; w is the last applied.
+-- claim; w was the last applied before it.
 -- Revision 2026-10-18 y (trade offers, sql/migrations/2026-10-18-trade-offer.sql, report-first, NOT yet applied): Faraz 10/18 - a trade
 -- records the receiver's offer like a claim does, so a traded day off a submitted receiver's offers / dated list no longer reads as a
 -- conflict on his held slot. Two NEW nullable columns on shift_trade_requests, the consent stamps, written by the trade triggers only:
@@ -154,8 +154,8 @@
 -- the other role -> 'either', owner fields handed over only when the role changes), source 'app', entered_by the receiver, the OF003
 -- bypass through silvis.claim_in_progress; and the trade.apply audit detail gains offer / return_offer. trade_insert_guard() and
 -- trade_update_guard() are their revision p / n bodies plus the stamp lines. No policy, grant, index, other function or anon surface
--- changes. Letter u stays taken by the weekend pair claim; x is pending (independent - either apply order on the database, but this
--- file's apply script runs after Part A's, whose step 0 pins scripts/verify-rls.sh).
+-- changes. Letter u stays taken by the weekend pair claim; x is applied (2026-10-19 22:53:18Z; independent - either apply order on the database, but this
+-- file's apply script runs after Part A's, whose step 0 pinned scripts/verify-rls.sh until x's record step).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -330,7 +330,7 @@ create trigger time_off_no_call_conflict_trg
 -- so ON_CALL_CONFLICT still answers first. Known gap: only a time_off write is checked - an East review turned 'away' or a new
 -- Davenport range from the feed refresh can leave a day under the minimum (sql/probes/vacation-guard-overlimit.sql lists such
 -- days). Reviewed in docs/SCHEMA-REVIEW.md "2026-09-30 - vacation guard".
--- Revision x (2026-10-14, Prompt 31 Part A; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied) re-creates
+-- Revision x (2026-10-14, Prompt 31 Part A; sql/migrations/2026-10-14-east-vacations.sql - report-first; applied 2026-10-19 22:53:18Z) re-creates
 -- the function: an East-feature surgeon is off on a day one of his silvis_derived_vacations() rows covers - the MERGED cached range,
 -- away or unreviewed; a 'home' review exempts only when it is exactly that range (the app's reading - a covering, stale 'home' row no
 -- longer exempts). The trigger, the time_off leg and everything else are the 9/30 body's.
@@ -510,7 +510,7 @@ create table if not exists public.east_vacation_reviews (
 );
 create index if not exists east_vacation_reviews_person_idx on public.east_vacation_reviews(person_id, "start");
 
--- ---------- East vacations, derived (Prompt 31 Part A, revision x; sql/migrations/2026-10-14-east-vacations.sql - report-first, NOT yet applied)
+-- ---------- East vacations, derived (Prompt 31 Part A, revision x; sql/migrations/2026-10-14-east-vacations.sql - report-first; applied 2026-10-19 22:53:18Z)
 -- The ONE SQL reading of the cached East vacation ranges (Faraz 10/14, decision (a)): silvis_east_people() - the East people of the blob,
 -- silvis_east_ranges() - their cached ranges merged (east-feed.js eastVacations + eastMergeRanges) with the exact-match review state (both
 -- internal: EXECUTE for the service role only), silvis_derived_vacations() - the away / unreviewed ranges as (person_id, start_date, end_date)

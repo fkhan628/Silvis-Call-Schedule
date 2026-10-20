@@ -233,9 +233,10 @@ The order (Faraz, one step at a time; the expected result in brackets):
 1. The database first - `apply-east-vacations.sh` (revision x, `sql/migrations/2026-10-14-east-vacations.sql`), then
    its record step. The function calls three of its functions - `east_vacation_reset_stale`,
    `silvis_derived_vacations` and `silvis_vacation_short_days` - so before the apply a live run answers ok:false with
-   each call's 404 in `errors`, and no review is reset.
+   each call's 404 in `errors`, and no review is reset. Done: applied 2026-10-19 22:53:18Z and recorded (`docs/SCHEMA-REVIEW.md`
+   "2026-10-14 - East vacations") - the three functions exist since.
 2. The Part A client, on Faraz's go (Setup > East feed then shows the server refresh's audit rows). The function does
-   not depend on it.
+   not depend on it. Done: live since 2026.10.18b (2026-10-18), before the apply.
 3. Deploy - Windows PowerShell, one line at a time, each line complete on its own (no `$wd`: a variable set in another
    window is empty and would shift the flags). The workdir is the Silvis-linked `supa-silvis` folder under Faraz's
    user profile (set up with `supabase init --workdir`, then `supabase link --project-ref bzhsroegtagqhutbnsrp --workdir`;

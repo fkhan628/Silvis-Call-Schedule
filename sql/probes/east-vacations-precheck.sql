@@ -1,7 +1,12 @@
 -- ============================================================================
 -- Silvis Call Schedule - East vacations PRE-CHECK (2026-10-14, Prompt 31 Part A; sql/migrations/2026-10-14-east-vacations.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
+-- REPORT-FIRST; APPLIED 2026-10-19 22:53:18Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record, only the first one is a gate.
+-- As run (2026-10-19): before the apply the gate read people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no and right
+-- after it people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes short_fn=yes guard=yes guard_derived=yes; row 2 body_md5=c69066960303545b0028e0a820f6e1ab
+-- before (the 9/30 body) and 2c81df20b98b3eb78a1d5b94fe8c30cf after; row 5 functions=absent before and merged=11 away=8 home=1 unreviewed=2 derived=10
+-- after; rows 3, 4 and 6-8 the same both times (counts only) - docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations" quotes them. This header was
+-- kept byte for byte as reviewed until the apply (the apply script pinned its sha256); the record step turned it APPLIED.
 -- It runs before the migration, so it never names the new functions outside catalog lookups (to_regprocedure, pg_proc) and the
 -- query_to_xml text of row 5, which runs only when the functions exist. The days already under the minimum are, before the apply,
 -- sql/probes/vacation-guard-overlimit.sql's (the 9/30 reading - the apply script runs it beside this file) and after it, by the new

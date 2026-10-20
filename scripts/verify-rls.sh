@@ -6,7 +6,6 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_EAST_VACATIONS_APPLIED=1                         grade section 20 strictly (the probe's PROBE_SETUP and the 404s = FAIL): only on the run right after sql/migrations/2026-10-14-east-vacations.sql is applied; the record step makes strict the default and drops this variable
 #   SILVIS_EAST_REFRESH_DEPLOYED=1                          also grade 20i (the deployed east-feed-refresh: an unauthenticated POST and a wrong x-cron-secret, each its own 401 {"error":"unauthorized"}): only after the east-feed-refresh deploy; without it 20i prints a SKIP line and counts nothing; the deploy's record step grades 20i on every run and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
@@ -18,7 +17,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_EAST_VACATIONS_APPLIED / SILVIS_EAST_REFRESH_DEPLOYED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_EAST_REFRESH_DEPLOYED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1588,20 +1587,21 @@ esac
 
 echo "== 20. East vacations (2026-10-14, Prompt 31 Part A): silvis_derived_vacations + east_vacation_reset_stale + the re-created vacation guard - anon refused, rolled-back probe =="
 # Section 20 (17 = the weekend pair claim, taken on its own branch; 19 = Prompt 30's phone push, the section above).
-# sql/migrations/2026-10-14-east-vacations.sql (report-first, NOT applied; revision x): silvis_east_people / silvis_east_ranges (internal - EXECUTE for
+# sql/migrations/2026-10-14-east-vacations.sql (report-first; applied 2026-10-19 22:53:18Z, revision x): silvis_east_people / silvis_east_ranges (internal - EXECUTE for
 # the service role only), silvis_derived_vacations (security definer, stable - EXECUTE for authenticated and the service role, never anon) and
 # east_vacation_reset_stale (security definer, volatile - EXECUTE for authenticated, whose body refuses everyone but the scheduler EV001; never anon),
 # silvis_vacation_short_days (security invoker, stable - the days under the vacation minimum, critic A12; EXECUTE for the service role only);
 # time_off_vacation_guard re-created to read the derived rows for its East leg - section 15 above re-runs its 20 cases unchanged, which proves the
 # re-created trigger kept its behaviour. 20a-20d and 20h go over REST as anon and write nothing: 401/403 = the function exists and anon holds no
-# EXECUTE; a 404 = not applied yet (a PASS unless SILVIS_EAST_VACATIONS_APPLIED=1, the run right after the apply - then a FAIL); a 200 or a 400
+# EXECUTE; a 404 is a FAIL (the functions exist since the 2026-10-19 apply - or the schema cache is stale); a 200 or a 400
 # means anon reached the body - a FAIL. 20b asks the reset for p_from 2099-01-01, so even a body that ran could reset nothing. 20e (only with
 # SILVIS_SURGEON_JWT) reads the derived rows as a surgeon (200 with a JSON array), asks the reset for 2099-01-01 (refused 400 EV001 - never a
 # write) and asks the short days for 2099-01-01 (refused 401/403 - a signed-in user never reads who is off through an East range). 20h is added
 # after 20d (the A1 review), so the letters 20e-20g keep their meaning. 20f runs sql/probes/east-vacations-probe.sql through the linked CLI (rolls
 # itself back; 56 cases graded by name - its header lists each
-# AFTER string); BEFORE the apply it raises PROBE_SETUP: silvis_derived_vacations is absent - a PASS unless SILVIS_EAST_VACATIONS_APPLIED=1; its
-# partly-applied and collision raises are always FAILs. 20g counts the probe's leftovers either way, by the probe's identity only: its auth users,
+# AFTER string). The functions exist since the apply, so the probe's PROBE_SETUP (silvis_derived_vacations is absent) and a 404 are FAILs -
+# strict since the record step, which dropped the flag for the run right after the apply (before the apply they passed as the not-applied
+# picture); its partly-applied and collision raises are FAILs too. 20g counts the probe's leftovers either way, by the probe's identity only: its auth users,
 # its time_off notes, its east_feed rows (data.probe eastvac31), its review rows (decided_by probe-eastvac31) and the eastvac.review audit rows
 # whose start lies in 2031-01 .. 2031-04 - rows only the probe writes, so each gets its DELETE. 20i (the review of 10/18 - the report's section 5
 # named it) grades the deployed east-feed-refresh, last in the section like 19i: only with SILVIS_EAST_REFRESH_DEPLOYED=1, the run after its deploy
@@ -1610,46 +1610,45 @@ echo "== 20. East vacations (2026-10-14, Prompt 31 Part A): silvis_derived_vacat
 # {"error":"unauthorized"} - a 401 with another body is the gateway's JWT check (a deploy without --no-verify-jwt; the cron's call carries no JWT
 # and would never reach the function), a 404 = not deployed, anything else = the gate let it through. No body is sent, so even a gate that let
 # one through would stop at the body check (400): nothing is read or written.
-EVSTRICT20="${SILVIS_EAST_VACATIONS_APPLIED:-}"
 EVDEPLOYED20="${SILVIS_EAST_REFRESH_DEPLOYED:-}"
 # 20a. anon may not execute silvis_derived_vacations (the signed-in display's rows - never the ?public=1 page's)
 line=$(curl -s -o $T/vr20a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_derived_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
 echo "   20a anon rpc silvis_derived_vacations: $line  body: $(head -c 160 $T/vr20a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc silvis_derived_vacations refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_derived_vacations: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_derived_vacations: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc silvis_derived_vacations: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc silvis_derived_vacations: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
+  *) bad "anon rpc silvis_derived_vacations: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 20b. anon may not execute east_vacation_reset_stale (p_from 2099-01-01: even a body that ran would find nothing to reset)
 line=$(curl -s -o $T/vr20b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/east_vacation_reset_stale" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01"}')
 echo "   20b anon rpc east_vacation_reset_stale: $line  body: $(head -c 160 $T/vr20b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc east_vacation_reset_stale refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc east_vacation_reset_stale: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (PGRST202: the schema cache does not know the function) - do NOT push the Part A client"; else ok "anon rpc east_vacation_reset_stale: HTTP 404 - not applied yet (do not push the Part A client before the apply)"; fi;;
-  *) bad "anon rpc east_vacation_reset_stale: $line (expected 401/403, or 404 before the apply; a 400 means anon reached the body - its EV001 refused it, but the revoke did not take)";;
+  "HTTP 404") bad "anon rpc east_vacation_reset_stale: HTTP 404 (PGRST202: the schema cache does not know the function, which exists since the 2026-10-19 apply - the live client then falls back to its 9/23 reset loop)";;
+  *) bad "anon rpc east_vacation_reset_stale: $line (expected 401/403; a 400 means anon reached the body - its EV001 refused it, but the revoke did not take)";;
 esac
 # 20c / 20d. anon may not execute the two internal functions (the review states and the East people never leave the database)
 line=$(curl -s -o $T/vr20c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_east_ranges" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
 echo "   20c anon rpc silvis_east_ranges: $line  body: $(head -c 160 $T/vr20c.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc silvis_east_ranges refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_east_ranges: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_east_ranges: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc silvis_east_ranges: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc silvis_east_ranges: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
+  *) bad "anon rpc silvis_east_ranges: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 line=$(curl -s -o $T/vr20d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_east_people" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
 echo "   20d anon rpc silvis_east_people: $line  body: $(head -c 160 $T/vr20d.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc silvis_east_people refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_east_people: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_east_people: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc silvis_east_people: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc silvis_east_people: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
+  *) bad "anon rpc silvis_east_people: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 20h. anon may not execute silvis_vacation_short_days (who is off through an East range is the server's and the scheduler's only; read-only anyway)
 line=$(curl -s -o $T/vr20h.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_vacation_short_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01","p_to":"2099-01-01"}')
 echo "   20h anon rpc silvis_vacation_short_days: $line  body: $(head -c 160 $T/vr20h.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc silvis_vacation_short_days refused ($line - the function exists, execute revoked from anon)";;
-  "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "anon rpc silvis_vacation_short_days: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1 (the function should exist after the apply - or the schema cache is stale)"; else ok "anon rpc silvis_vacation_short_days: HTTP 404 - not applied yet (before the migration)"; fi;;
-  *) bad "anon rpc silvis_vacation_short_days: $line (expected 401/403, or 404 before the apply; anything else - a 200 included - means anon reached the body)";;
+  "HTTP 404") bad "anon rpc silvis_vacation_short_days: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
+  *) bad "anon rpc silvis_vacation_short_days: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 20e. as a surgeon (read-only): the derived rows answer 200 with a JSON array; the reset is refused EV001 (p_from 2099-01-01 - never a write);
 # the short days are refused 401/403 (EXECUTE for the service role only)
@@ -1658,21 +1657,21 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   echo "   20e surgeon rpc silvis_derived_vacations: $line  body: $(head -c 160 $T/vr20e.json)"
   case "$line" in
     "HTTP 200") if tr -d ' \r\n' < $T/vr20e.json | grep -q '^\['; then ok "a surgeon reads the derived vacation rows (200, a JSON array)"; else bad "surgeon rpc silvis_derived_vacations: HTTP 200 without a JSON array ($(head -c 160 $T/vr20e.json))"; fi;;
-    "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "surgeon rpc silvis_derived_vacations: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1"; else ok "surgeon rpc silvis_derived_vacations: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon rpc silvis_derived_vacations: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc silvis_derived_vacations: $line (expected 200 with a JSON array)";;
   esac
   line=$(curl -s -o $T/vr20e2.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/east_vacation_reset_stale" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01"}')
   echo "   20e surgeon rpc east_vacation_reset_stale: $line  body: $(head -c 160 $T/vr20e2.json)"
   case "$line" in
     "HTTP 400") if grep -q 'EV001' $T/vr20e2.json; then ok "a surgeon's reset is refused EV001 EAST_RESET_NOT_ALLOWED (nothing deleted)"; else bad "surgeon rpc east_vacation_reset_stale: HTTP 400 without EV001 ($(head -c 160 $T/vr20e2.json))"; fi;;
-    "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "surgeon rpc east_vacation_reset_stale: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1"; else ok "surgeon rpc east_vacation_reset_stale: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon rpc east_vacation_reset_stale: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc east_vacation_reset_stale: $line (expected 400 EV001 - a 200 means a surgeon ran the reset)";;
   esac
   line=$(curl -s -o $T/vr20e3.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_vacation_short_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_from":"2099-01-01","p_to":"2099-01-01"}')
   echo "   20e surgeon rpc silvis_vacation_short_days: $line  body: $(head -c 160 $T/vr20e3.json)"
   case "$line" in
     "HTTP 401"|"HTTP 403") ok "a surgeon may not read the short days ($line - EXECUTE for the service role only)";;
-    "HTTP 404") if [ "$EVSTRICT20" = "1" ]; then bad "surgeon rpc silvis_vacation_short_days: HTTP 404 with SILVIS_EAST_VACATIONS_APPLIED=1"; else ok "surgeon rpc silvis_vacation_short_days: HTTP 404 - not applied yet"; fi;;
+    "HTTP 404") bad "surgeon rpc silvis_vacation_short_days: HTTP 404 (the function exists since the 2026-10-19 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc silvis_vacation_short_days: $line (expected 401/403 - a 200 means a signed-in user reads who is off through an East range)";;
   esac
 else
@@ -1682,7 +1681,7 @@ if linked; then
   PROBE20="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/east-vacations-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE20" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: silvis_derived_vacations is absent'; then
-    if [ "$EVSTRICT20" = "1" ]; then bad "East vacations probe: PROBE_SETUP - silvis_derived_vacations is absent with SILVIS_EAST_VACATIONS_APPLIED=1 (the functions should exist after the apply)"; else ok "East vacations probe: silvis_derived_vacations is absent (before the migration: PROBE_SETUP)"; fi
+    bad "East vacations probe: PROBE_SETUP - silvis_derived_vacations is absent (the functions exist since the 2026-10-19 apply)"
   elif echo "$out" | grep -q 'PROBE_SETUP: '; then
     bad "East vacations probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, a fixture collision or the roster - ask Claude Code)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
@@ -1691,7 +1690,7 @@ if linked; then
     results20=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
     echo "$results20" | tr ';' '\n' | sed 's/^/   /'
     # one case per line, the CLI's JSON escapes decoded ONCE (< / > / & - R7's <E>; the backslashes of an escaped double
-    # quote); the graders then read a case in plain bash (no process per case - 49 of them)
+    # quote); the graders then read a case in plain bash (no process per case - 56 of them)
     lines20=$(echo "$results20" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
     case_val20()   { CV20=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV20="${l#"$1="}"; return 0;; esac; done <<< "$lines20"; }
     expect_eq20()  { case_val20 "$1"; v="$CV20"; [ "$v" = "$2" ] && ok "East vacations probe $1: $3" || bad "East vacations probe $1: $3 (got '$v', expected '$2')"; }

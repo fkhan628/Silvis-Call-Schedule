@@ -14,9 +14,9 @@ Verification: `scripts/verify-rls.sh`.*
 | `user_profiles` | Auth user → roster id + role (`admin`/`scheduler`/`surgeon`/`viewer`); the only place a surgeon's email exists besides `office_contacts`. Authenticated-read. Prompt 20 F1 (applied 2026-09-27 00:43:54Z, report-first - see the section at the end): `follows` jsonb, the roster ids an account follows (admin-set). Prompt 29 (prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end): `is_app` boolean, an APP account (an unlinked viewer row; admin-set, pinned in self-insert / self-update; the check `user_profiles_app_viewer`). |
 | `call_schedule_data` | One row `main`: roster (names/codes), `surgeonRules`, `groupRules`, holiday units, settings blob. Anon-read. |
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
-| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). |
+| `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). Since revision x (Prompt 31 Part A, **applied live 2026-10-19 22:53 UTC** - section at the end) its East leg reads `silvis_derived_vacations()`. |
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01 - report-first, **applied live 2026-10-02 12:05 UTC** - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
-| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, NOT applied - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
+| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
@@ -28,13 +28,13 @@ Verification: `scripts/verify-rls.sh`.*
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
 | `call_offers` | Offers: one row per person and day (`role_pref` primary / backup / either, operational `note`, `entered_by`, `source` app / email-relay / import); triggers refuse a past day (`OF001`), a day inside the person's vacation (`OF002`) and non-scheduler writes inside a frozen period (`OF003`). Authenticated. Added 2026-09-22 (Prompt 14 part 1; block below). |
 | `call_periods` | Periods: generation windows with `offers_close_at` / `publish_by` / `status` / `rules_only_ids` / `offer_modes` (`{person_id: 'exhaustive' \| 'preferred'}`, absent = preferred; column from `sql/migrations/2026-09-23-offer-modes.sql`, applied live 2026-09-23 07:05Z - see the offer_modes subsection below). Authenticated read, scheduler write. |
-| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. Prompt 31 Part A (prepared 2026-10-14 - report-first, NOT applied - section at the end): a refresh deletes the stale rows through `east_vacation_reset_stale(p_from)` (one `eastvac.review` audit row each) instead of the client's loop. |
+| `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): a refresh deletes the stale rows through `east_vacation_reset_stale(p_from)` (one `eastvac.review` audit row each) instead of the client's loop. |
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
 | `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. |
 | `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. |
 
-Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon). Prompt 31 Part A (revision x, prepared 2026-10-14 - report-first, NOT applied - section at the end): `silvis_derived_vacations()` (security definer, stable: the East person's away / unreviewed ranges as person and dates; EXECUTE for authenticated and service_role, never anon), `east_vacation_reset_stale(p_from)` (security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session), `silvis_vacation_short_days(p_from, p_to)` (security invoker: the days under the vacation minimum - service_role only) and the internal `silvis_east_people()` / `silvis_east_ranges()` (security invoker, service_role only); `time_off_vacation_guard()` re-created to read the derived rows.
+Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon). Prompt 31 Part A (revision x, prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): `silvis_derived_vacations()` (security definer, stable: the East person's away / unreviewed ranges as person and dates; EXECUTE for authenticated and service_role, never anon), `east_vacation_reset_stale(p_from)` (security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session), `silvis_vacation_short_days(p_from, p_to)` (security invoker: the days under the vacation minimum - service_role only) and the internal `silvis_east_people()` / `silvis_east_ranges()` (security invoker, service_role only); `time_off_vacation_guard()` re-created to read the derived rows.
 
 ## (b) RLS policies — who can read / write
 
@@ -3388,12 +3388,14 @@ record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grade
 
 ## 2026-10-14 - East vacations: silvis_derived_vacations + east_vacation_reset_stale + silvis_vacation_short_days + time_off_vacation_guard re-created (Faraz 10/9, Prompt 31 Part A; `sql/migrations/2026-10-14-east-vacations.sql`)
 
-**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-vacations.sh`.** Revision x (u stays reserved for the
-weekend pair claim, prepared on its own branch; w - phone push - is the last applied). Nothing in the repo applies it: the apply
-script lives outside the repo (Faraz 10/1), Faraz runs it from the Part A worktree and pastes the log back, and the record step
-fills the observed lines at the end of this section. The order (guide section 25.6): this apply, the record step, the Part A client
-on Faraz's go, then the `east-feed-refresh` deploy, its dryRun proof and its cron job (`edge-functions/README.md` section 3, "Deploy
-record - Prompt 31 Part A") - the function calls three of these functions.
+**Status: APPLIED 2026-10-19 22:53:18Z** (Faraz - `apply-east-vacations.sh`, which exports `AI_AGENT`, from the main clone at
+`b0344bd`; the observed lines at the end). Was PREPARED - report-first, NOT applied until then. Revision x (u stays reserved for the
+weekend pair claim, prepared on its own branch; w - phone push - was the last applied before it). Nothing in the repo applies it: the
+apply script lives outside the repo (Faraz 10/1); Faraz ran it and pasted the log back, and the record step filled the observed lines
+at the end of this section. The Part A client came first - merged to main on 2026-10-18 and live since 2026.10.18b, it read the
+missing functions as "unavailable" until the apply. Still to come, on Faraz's go (guide section 25.6): the `east-feed-refresh` deploy,
+its 20i run, its dryRun proof and its cron job (`edge-functions/README.md` section 3, "Deploy record - Prompt 31 Part A") - the
+function calls three of these functions.
 
 **Why.** Faraz 10/9 (Prompt 31 item 1): "Every East range reviewed 'away', and every range still 'unreviewed', shows to every
 signed-in role exactly like a Silvis vacation." Until now only the scheduler sees those ranges; the rules, the generator and both
@@ -3458,6 +3460,7 @@ stale review of a range Davenport changed, until the next refresh resets it - no
 (probe G4 / G6: the 9/30 guard let both through). Stricter in that one case only, never more lenient. (c) An entry with an impossible
 date is dropped instead of compared as text (the cache's ranges come from a date column, so none carries one). The vacation guard
 probe's East fixtures (2030-10) are exact, separated ranges: verify-rls section 15 reads its 20 cases unchanged after the apply.
+*As run: home_inexact=0 before the apply - no live day changed reading; section 15 read its 20 cases unchanged.*
 
 **The known gap stays (9/30, review 10/1).** Only a `time_off` write is refused. A review turned `away`, or a new or longer range from
 a feed refresh, is never refused - Davenport owns the range (item 2: "never block, never drop a range, never move a lock"). Instead
@@ -3466,7 +3469,7 @@ names - dates only - the days a new or changed range puts under the minimum (`si
 held inside it. After the apply the scheduler lists such days with `sql/probes/vacation-short-days.sql` (the new reading);
 `sql/probes/vacation-guard-overlimit.sql` keeps the 9/30 reading (a covering, non-exact `home` row still exempts a day there) and is
 the BEFORE picture only. Server enforcement in `claim_open_slot` (`CL009`), `apply_trade` and `call_offers_guard` (`OF002`) stays out
-of Prompt 31 (decision 17): those read `time_off` only, as before.
+of Prompt 31 (decision 17): those read `time_off` only, as before. *As run: 0 days under the minimum by both readings, before and after.*
 
 **The silent-empty guard is the caller's (critic A7).** An RLS-blocked Davenport read answers HTTP 200 + `[]`: one unattended run
 that trusted it would clear the cached ranges, and the reset over that cache would delete every review as `removed`. So a refresh
@@ -3480,8 +3483,10 @@ as it stands.
 the derived rows once - a materialized CTE over a cache of about ten ranges a year) and five new functions. No table, column, policy,
 trigger or row; nothing the public page, the share page, print, the calendar feeds, the office digest, the daily reminder, the ER
 export, e-mails or pay read (they keep reading `time_off` and never call the new functions - anon cannot). The new functions are
-called by no client and no edge function until the Part A client ships and the server refresh is deployed; until then the shipped
-client never names them. The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
+called by no client and no edge function until the Part A client ships and the server refresh is deployed; *As run: the Part A client
+shipped first (2026.10.18b, 2026-10-18) and read both RPCs' 404 PGRST202 as "unavailable" (the in-app refresh fell back to its 9/23
+loop); since 22:53:18Z every signed-in client reads the derived rows, and the scheduler's in-app refresh resets through
+`east_vacation_reset_stale`. No edge function calls them until `east-feed-refresh` is deployed.* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
 claim (revision u, on its own branch) - no shared object, either apply order.
 
 **What could break / what offline cannot show.** Offline, on PGlite (WASM PostgreSQL, a scratch folder outside the repo, over this
@@ -3497,6 +3502,12 @@ random sets the guard refused exactly when `silvis_vacation_short_days` listed t
 show: Supabase's own default privileges (the revokes and grants - P4 and A1-A8 read them live), the functions' owner (live:
 `postgres`), the live roster, cache and reviews, and PostgREST (the HTTP codes of section 20, the schema-cache reload). The live
 apply proves those; section 20 grades exact strings and names any difference by case.
+
+*As run (2026-10-19): the live probe AFTER read all 56 cases exactly as their header strings - P3 / P4 the security, volatility and
+EXECUTE (`public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset,short` - Supabase's default grants
+revoked as designed), P6 the triggers in order with the guard a definer reading the derived rows, A1-A8, S6 / S7 and the definer's
+audit rows R7 / R9 / R11 under the live owner; 20a-20d and 20h answered HTTP 401 42501 right after the reload; section 20 graded
+62 / 0, leftover 0.*
 
 **The migration** (verbatim - every statement after its header; `sql/schema.sql` mirrors it: the five functions in their own block
 right after the `east_vacation_reviews` table, the guard re-created in its 9/30 block):
@@ -3904,6 +3915,9 @@ sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases
 | 20h | anon `POST rpc/silvis_vacation_short_days` (added after 20d by the A1 review, so 20e-20g kept their letters) | 401 / 403 (the 404 rule) |
 | 20i | with `SILVIS_EAST_REFRESH_DEPLOYED=1` only - the run after the `east-feed-refresh` deploy (`edge-functions/README.md` section 3); built by the review of 10/18 (the report's section 5 named it); the deploy's record step drops the flag and grades 20i on every run, as 19i: an unauthenticated `POST /functions/v1/east-feed-refresh`, then one with a wrong `x-cron-secret`, no body (a gate that let one through would stop at the body check) | each 401 with exactly `{"error":"unauthorized"}` - the function's own gate (the gateway's JWT check answers 401 with another body); a 404 or anything else FAILs. Without the flag: a SKIP line, nothing counted |
 
+*As run (the record step, 2026-10-19): `SILVIS_EAST_VACATIONS_APPLIED` no longer exists - section 20 is strict by default (an anon
+404 and PROBE_SETUP are FAILs); `SILVIS_EAST_REFRESH_DEPLOYED` stays until the deploy's record step (20i).*
+
 **Apply order:**
 
 1. Pre-check `sql/probes/east-vacations-precheck.sql` (read-only): the objects row must read `people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no`
@@ -3926,6 +3940,17 @@ sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases
    (20i: the function's own 401 for an unauthenticated POST and a wrong `x-cron-secret`), its dryRun proof and its cron job
    (`edge-functions/README.md` section 3).
 
+*As run (2026-10-19): items 1-7 by `apply-east-vacations.sh` (Faraz, from the main clone at `b0344bd`, the pins from `505d90e` - all
+eight matched), in order; a `--dry-run` at 04:29:09Z (the Part A worktree, `80c2c2b`) stopped after the probe BEFORE as designed, and a
+13:12:00Z run stopped at the APPLY prompt - neither applied anything. Item 8 is the record commit, as listed, the migration kept byte for
+byte as it ran (sha256 `1995f9dd4aa9d5c54d58534416ed70ae7ed67b3d247362dcb57d3daa84a8916d`) with ONE trailer line; it changes five of the
+eight files the apply script checks (the migration through its trailer - its body's sha256 is unchanged - the probe, the pre-check,
+`sql/probes/vacation-short-days.sql` and `scripts/verify-rls.sh`), so the script is one-shot: a re-run or `--dry-run` needs its pins
+refreshed. `SILVIS_EAST_VACATIONS_APPLIED` no longer exists (section 20 is strict by default); `SILVIS_EAST_REFRESH_DEPLOYED` stays
+until the deploy's record step. Item 9's client came first (2026.10.18b, 2026-10-18); the deploy, its 20i run, the dryRun proof and the
+cron job follow, on Faraz's go; `edge-functions/east-feed-refresh/index.ts` keeps sha256
+`ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0` for it.*
+
 **One command (Faraz):** his apply script `apply-east-vacations.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
 paths; `test/schema.test.js` pins that none sits here) - the private folder's apply-scripts, beside byte copies of the graded files
 and their SHA256SUMS. Its shape is `apply-push-notifications.sh`'s post-10/3 one (critic A3): step 0 checks the branch, the commit and
@@ -3935,7 +3960,8 @@ the 9/30 guard migration - the rollback file - and the `east-feed-refresh` sourc
 (nothing after it runs), asks for APPLY in capital letters on the terminal before step 4 (`SKIP_CONFIRM` only with a fake CLI in a
 test), has a `--dry-run` (steps 0-3 only), exports `AI_AGENT=1` and stops before anything is applied unless the CLI answers in its
 agent-mode envelope, prints the rollback on any stop after step 4, holds no secret, writes a log and ends with a PASTE THIS BACK TO
-CLAUDE CODE block for the record step.
+CLAUDE CODE block for the record step. Faraz ran it on 2026-10-19 from the main clone at `b0344bd` (the observed lines at the end; the
+04:29Z `--dry-run` and the 13:12Z run applied nothing).
 
 **Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - the migration writes no row). Stop the server
 refresh's job first when it exists (`select cron.unschedule('silvis-east-feed-daily');` - the function calls these functions), then
@@ -3952,6 +3978,7 @@ notify pgrst, 'reload schema';
 ```
 
 The client reads the missing functions as "unavailable" (today's picture) and resets reviews with its 9/23 loop again.
+*As run: the job does not exist yet (`east_job=no` after the apply).*
 
 **The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed lines; table (a)'s helper line; `sql/schema.sql`
 revision x ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's headers; verify-rls section
@@ -3959,13 +3986,110 @@ revision x ("applied ..."); the migration's trailer line and sha256 pin; the pro
 function, and the deploy's own record step, `edge-functions/README.md` section 3, drops it); guide 4.3 and section 25, the rules doc's
 Time off row, section 3 (Khan) and section 8 item 17; and the test pins with them.
 
-observed: (the record step fills this - nothing in this section has run against the live project).
+observed (apply, 2026-10-19): applied 2026-10-19 22:53:18Z (`apply-east-vacations.sh` step 4: the migration file through
+`supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz (log
+`apply-east-vacations-20261019T225238Z.log`, outside the repo, result `APPLIED AND VERIFIED`; repo HEAD `b0344bd` on `main`, the pins
+from `505d90e`; the migration's sha256 `1995f9dd4aa9d5c54d58534416ed70ae7ed67b3d247362dcb57d3daa84a8916d` and the other seven graded
+files' matched (`all eight matched: yes`); supabase CLI 2.120.0 in its agent-mode envelope (`AI_AGENT=1`), the workdir linked to
+`bzhsroegtagqhutbnsrp`; APPLY typed at the prompt). Step 1, the pre-check (read-only) - gate before:
+`people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no`, guard
+`trigger=yes definer=t body_md5=c69066960303545b0028e0a820f6e1ab` (the 9/30 body); its facts (never a stop), as the log printed them:
+
+```text
+3 feed: rows=60 forecast=0 first=2025-12-29 last=2027-02-15 fetched_max=2026-10-15T03:07:29Z vacation_entries=13
+4 reviews: away=8 home=1 home_inexact=0
+5 ranges: functions=absent
+6 cron: jobs=4 active=4 east_job=no
+7 pg_net: version=0.20.4
+8 realtime: publication=yes all_tables=no time_off=no east_feed=no east_vacation_reviews=no
+```
+
+0 days under the minimum by the 9/30 reading (`sql/probes/vacation-guard-overlimit.sql`). Step 2, the function-absent check: 0 rows -
+`OK - none of the five functions exists` (signatures before: none). Step 3, probe BEFORE: `PROBE_SETUP: silvis_derived_vacations is
+absent - sql/migrations/2026-10-14-east-vacations.sql is not applied` (nothing else ran). Step 5, gate after:
+`people_fn=yes ranges_fn=yes derived_fn=yes reset_fn=yes short_fn=yes guard=yes guard_derived=yes`; guard
+`trigger=yes definer=t body_md5=2c81df20b98b3eb78a1d5b94fe8c30cf`; signatures after: `east_vacation_reset_stale(date) definer;silvis_derived_vacations()
+definer;silvis_east_people() invoker;silvis_east_ranges() invoker;silvis_vacation_short_days(date, date) invoker`; EXECUTE after:
+`anon=none authenticated=east_vacation_reset_stale,silvis_derived_vacations public=none`; facts after: rows 3, 4 and 6-8 unchanged, row
+`5 ranges: merged=11 away=8 home=1 unreviewed=2 derived=10`. Step 6, probe AFTER - 56 cases, every one as the probe table above lists,
+as the log printed them (sorted by case; no line carries a double quote; R7's `<E>` shown decoded):
+
+```text
+A1=rows=6
+A2=rows=6
+A3=rows=6
+A4=ERR 42501 permission denied for function silvis_east_ranges
+A5=ERR 42501 permission denied for function silvis_east_people
+A6=ERR 42501 permission denied for function silvis_derived_vacations
+A7=ERR 42501 permission denied for function east_vacation_reset_stale
+A8=ERR 42501 permission denied for function silvis_east_ranges
+D1=range=02-03..02-04 state=unreviewed derived=yes
+D10=ranges=8 derived=6 malformed_days=0
+D2=range=02-06..02-07 state=away derived=yes
+D3=range=02-10..02-11 state=home derived=no
+D4=range=02-13..02-14 state=unreviewed derived=yes
+D5=range=02-17..02-21 state=home derived=no
+D6=range=02-24..02-27 state=unreviewed derived=yes
+D7=range=none
+D8=range=none others=0
+D9=range=03-05..03-06 state=unreviewed derived=yes
+G1=ERR VG001 VACATION_TOO_FEW_AROUND: on 2/3 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G10=ERR VG001 VACATION_TOO_FEW_AROUND: on 2/6, 2/7 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G11=ok
+G2=ERR VG001 VACATION_TOO_FEW_AROUND: on 2/6 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G3=ok
+G4=ERR VG001 VACATION_TOO_FEW_AROUND: on 2/13 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G5=ok
+G6=ERR VG001 VACATION_TOO_FEW_AROUND: on 2/25 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G7=ok
+G8=ERR VG001 VACATION_TOO_FEW_AROUND: on 3/5 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler
+G9=ok
+P1=active=6 min=2
+P2=east=yes
+P3=people=invoker/stable ranges=invoker/stable derived=definer/stable reset=definer/volatile short=invoker/stable paths=5
+P4=public=none anon=none authenticated=derived,reset service_role=derived,people,ranges,reset,short
+P5=result=TABLE(person_id text, start_date date, end_date date)
+P6=triggers=time_off_no_call_conflict_trg,time_off_vacation_guard_trg definer=t derived=yes
+R1=ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
+R10=n=1 01-27..01-28/away/removed
+R11=audit=1 actor=cron name=no signed-in user (SQL)
+R12=n=0 audit=0
+R13=kept=E 02-06..02-07 away,E 02-10..02-11 home,E 02-17..02-21 home,n2 02-05..02-05 away
+R14=time_off=same east_feed=same ranges=8 derived=6
+R2=ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
+R3=ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
+R4=ERR EV001 EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)
+R5=ERR EV002 EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)
+R6=n=1 03-25..03-26/away/removed
+R7=audit=1 actor=self name=probe admin sum=East vacation 2031-03-25..2031-03-26 <E>: reset (removed) keys=decision,end,person_id,reason,removed,start,summary,was was=away
+R8=n=2 02-12..02-15/home/changed,02-24..02-26/home/changed
+R9=audit=2 actor=cron name=east-feed-refresh (cron)
+S1=days=02-03/1,02-04/1
+S2=active=6 min=2 off=E,n1,n3,n4,n5 derived_only=E roster_order=yes
+S3=days=02-03/1,02-04/1,02-13/1,02-25/1
+S4=lo=02-03,02-04,02-13,02-25 hi=02-04,02-13,02-25 one=02-04 none=0
+S5=result=TABLE(day date, around integer, active integer, minimum integer, off_ids text[], derived_only_ids text[])
+S6=ERR 42501 permission denied for function silvis_vacation_short_days
+S7=ERR 42501 permission denied for function silvis_vacation_short_days
+```
+
+then `sql/probes/vacation-short-days.sql`: 0 days. Step 7, `SILVIS_EAST_VACATIONS_APPLIED=1 bash scripts/verify-rls.sh` (section 20
+graded strictly): `RESULT: 533 passed, 0 failed` - section 20 62 / 0: 20a-20d and 20h each `HTTP 401` (`42501`, `permission denied
+for function <name>` - the function exists, execute revoked from anon), every one of the 56 cases PASS and the leftover count 0; 20e a
+SKIP line (no surgeon JWT - no signed-in REST read of the derived rows was observed; A1-A3 prove it in SQL); 20i a SKIP line (not
+deployed); section 15 21 / 0 (its 20 cases unchanged, leftover 0); every other section green with every leftover count 0 (17 is on
+another branch); the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d, 14c, 18e, 19f, 20e) skipped - no JWT set. Two earlier runs applied
+nothing: the `--dry-run` (log `apply-east-vacations-20261019T042909Z.log`, the Part A worktree at `80c2c2b` on
+`feat/east-vacations-part-a`, the same pins) read steps 0-3 and stopped there by design - `APPLY confirmation: not reached`,
+`migration: not run`; the 20261019T131200Z run (`main`, `b0344bd`) stopped at the APPLY prompt (the 22:52:38Z run's gate before still
+read the BEFORE picture). Not re-run against the live project after the record step: the next plain `bash scripts/verify-rls.sh`
+grades section 20 strictly with no flag (20i still a SKIP until the deploy's record step).
 
 ## 2026-10-18 - apply_trade writes the receiver's offer (revision y): shift_trade_requests.proposed_by / accepted_by + trade_insert_guard / trade_update_guard / apply_trade re-created (Faraz 10/18; `sql/migrations/2026-10-18-trade-offer.sql`)
 
 **Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer.sh`, after Part A's `apply-east-vacations.sh`.**
-Revision y (u stays reserved for the weekend pair claim; x - Part A - is prepared and goes first: its apply script pins
-`scripts/verify-rls.sh`, which this section's record step edits - D8). Nothing in the repo applies it: the apply script lives
+Revision y (u stays reserved for the weekend pair claim; x - Part A - went first (applied 2026-10-19 22:53:18Z): its apply script pinned
+`scripts/verify-rls.sh` until Part A's record step; this section's record step edits it next - D8). Nothing in the repo applies it: the apply script lives
 outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the observed line at the end.
 
 **Why.** A claim is an offer made on the spot (Prompt 14 part 2c, 9/23): `claim_open_slot` upserts the claimer's `call_offers`

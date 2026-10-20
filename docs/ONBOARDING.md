@@ -158,8 +158,8 @@ My schedule keep the list and the control. Since Prompt 31 Part A (decision 11) 
 nothing changes for Khan, who is the scheduler; an East-code surgeon who is not the scheduler would see his away / unreviewed
 ranges as read-only lines "set by the scheduler" in My vacations, like everyone else (next paragraph).
 
-**Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A, Faraz 10/9; tell the group once it ships).** Once the
-database part is applied and the Part A client ships, the East-code person's ranges that are *away* or still *unreviewed* show to
+**Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A, Faraz 10/9; live since 2026-10-19 - tell the group).** Since
+the database part was applied on 2026-10-19 (the Part A client has been live since 2026.10.18b), the East-code person's ranges that are *away* or still *unreviewed* show to
 every other signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: a dot on
 the calendar, "Off: Khan" in the day summary and "on vacation" in the open-shifts board, claim and trade reasons. Where a Time off
 list shows other people's vacations - the office coordinator's, a viewer's, a follower's, an APP's - such a range is a line that

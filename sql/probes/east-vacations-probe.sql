@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - East vacations PROBE (2026-10-14, Faraz 10/9 - Prompt 31 Part A: Khan's East vacations seen by everyone
--- signed in; sql/migrations/2026-10-14-east-vacations.sql, REPORT-FIRST, NOT APPLIED). Proves silvis_east_people(),
+-- signed in; sql/migrations/2026-10-14-east-vacations.sql, REPORT-FIRST; APPLIED 2026-10-19 22:53:18Z). Proves silvis_east_people(),
 -- silvis_east_ranges(), silvis_derived_vacations(), east_vacation_reset_stale(), silvis_vacation_short_days() and the re-created
 -- time_off_vacation_guard() on the LIVE database WITHOUT PERSISTING ANYTHING.
 --
@@ -20,6 +20,11 @@
 -- week or review row in the fixture window, a review row ending on or after 2031-01-01 - the reset cases read every review from
 -- 2031-01-01 on - or a cached East vacation entry ending on or after 2030-12-31 - it could merge with a fixture range); the roster
 -- check 'PROBE_SETUP: the probe needs ...'. AFTER the migration every case below must read as listed.
+-- As run: the migration was applied 2026-10-19 22:53:18Z (schema.sql revision x); the probe read PROBE_SETUP (silvis_derived_vacations
+-- is absent) before it and all 56 cases below as listed after it. Until the record step verify-rls read PROBE_SETUP and the anon 404s
+-- as the not-applied picture (unless its flag for the run right after the apply was set); since the record step, which dropped that
+-- flag, section 20 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is history (20i still waits for the east-feed-refresh
+-- deploy).
 --
 -- The roster is READ from the live blob (call_schedule_data 'main'), never written - not even inside the transaction: the active
 -- surgeons (active not false, not type 'external') in roster order, the minimum (groupRules.vacations.minSurgeonsAround, absent /

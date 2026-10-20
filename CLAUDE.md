@@ -74,9 +74,10 @@ Davenport call counted by `call-totals.js`, the Davenport app's own counter port
 His East vacations (his away / unreviewed Davenport ranges; Prompt 31 Part A, decisions 10/14 - rules doc §8 item 26,
 build guide §25): the calendar dots, "Off: Khan" and the read-only Time off / My vacations lines every signed-in role but the
 scheduler (who keeps the diamond) sees come from ONE database reading, `silvis_derived_vacations()`, which revision x's
-`time_off` guard trigger reads too (the client check keeps `vacEastAway`, the same reading in JS); a missing function (404 -
-before revision x, Faraz's `apply-east-vacations.sh`, is applied; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations")
-reads as "unavailable": no derived line, never "no vacations". Client-side and live since 2026.10.18b whatever the apply:
+`time_off` guard trigger reads too (the client check keeps `vacEastAway`, the same reading in JS) -
+revision x applied 2026-10-19 22:53:18Z (Faraz's `apply-east-vacations.sh`; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"),
+so the live client (since 2026.10.18b) shows them; a missing function (404 - after a rollback) reads as "unavailable": no derived
+line, never "no vacations". Client-side and live since 2026.10.18b whatever the apply:
 non-schedulers read "on vacation" for such a day on the board, the claim sheet and the trade card, and see no East /
 Davenport word. `?public=1`, share and print stay `time_off` only; the calendar feeds (Khan's `?east=1` keeps its away
 events), the digest, e-mails and pay are unchanged and never call the function. The daily server refresh `east-feed-refresh` (the in-app Refresh unattended, gated by the cron
@@ -186,7 +187,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   unknowns, not assumptions to bake in. Every default taken for an unanswered question is data in
   `call_schedule_data.data.groupRules` / `surgeonRules` (listed in `docs/SILVIS-CALL-RULES.md` §8 and the seed's
   `openQuestions`; the 9/21 orientation that first listed them is history, `docs/HISTORY.md`), never a code branch.
-  Faraz's own Prompt 31 Part A steps, in order: the database apply, the `east-feed-refresh` deploy, its dryRun, the cron job
-  (the private apply README's last section; each is recorded when done in `docs/SCHEMA-REVIEW.md` "2026-10-14 - East
-  vacations" and `edge-functions/README.md` §3). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
+  Faraz's own Prompt 31 Part A steps, in order: the database apply (done - applied 2026-10-19 22:53:18Z, recorded in
+  `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"), then the `east-feed-refresh` deploy, its dryRun, the cron job (the
+  private apply README's last section; each recorded when done in `edge-functions/README.md` §3). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
   vacations' open questions, the rest rule).

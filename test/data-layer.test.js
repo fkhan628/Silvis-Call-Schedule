@@ -14471,8 +14471,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   /* ---------------- Prompt 31 Part A (A5): the docs ---------------- */
   // The docs are part of the contract (the P15 docs-pin rule above): Faraz applies, deploys and decides from these pages, and
   // reads the rules doc and ONBOARDING. Pinned on the headings, the names a reader greps for, the decisions' words and the
-  // privacy lines. The PREPARED state's words ("NOT applied", "NOT deployed", "applied: _to be filled at the record step_") are
-  // pinned too: the record step after Faraz's apply / deploy moves them deliberately, as every apply's record step has.
+  // privacy lines. The PREPARED state's words ("NOT applied", "NOT deployed", "applied: _to be filled at the record step_") were
+  // pinned too; pin moved deliberately 10/19 (the record step): Faraz applied revision x on 2026-10-19 22:53:18Z, so the applied words
+  // replace "NOT applied"; "NOT deployed" stays until the east-feed-refresh deploy's record step.
   // test/schema.test.js pins the database record (docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations") and guide 4.3.
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");
   {
@@ -14501,10 +14502,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const ptrs = (guide.match(/(?<![\d.\/:-])25\.\d+(?!\d)/g) || []).filter(p => !/^25\.[1-6]$/.test(p));
       assert.deepStrictEqual(ptrs, [], "every 25.<k> pointer names a sub-heading 25.1 .. 25.6");
     });
-    check("P31A5 guide 25: the status line - revision x NOT applied (Faraz runs apply-east-vacations.sh), east-feed-refresh NOT deployed with no cron job, the client after the apply; the binding texts (the 10/13 report, its critic, the PART A DECISIONS of 10/14); the rules and the generator unchanged", () => {
+    check("P31A5 guide 25: the status line - revision x APPLIED 2026-10-19 22:53:18Z (Faraz, apply-east-vacations.sh), east-feed-refresh NOT deployed with no cron job, the client live since 2026.10.18b (before the apply); the binding texts (the 10/13 report, its critic, the PART A DECISIONS of 10/14); the rules and the generator unchanged", () => {
       const head = s25.slice(0, s25.indexOf("\n" + SUBS[0]));
       const status = (head.match(/^\*Status: [^\n]*(\n[^\n]+)*/m) || [""])[0];
-      has(flat5(status), ["`feat/east-vacations-part-a`", "revision x", "NOT applied", "`apply-east-vacations.sh`", "`east-feed-refresh` is NOT deployed", "`silvis-east-feed-daily`", "\"unavailable\"", "The record step rewrites this line."], "section 25's status line");
+      has(flat5(status), ["`feat/east-vacations-part-a`", "revision x", "APPLIED 2026-10-19 22:53:18Z", "2026.10.18b", "`apply-east-vacations.sh`", "`east-feed-refresh` is NOT deployed", "`silvis-east-feed-daily`", "\"unavailable\"", "The deploy's record step rewrites this line again."], "section 25's status line");
+      assert.ok(!/NOT applied/.test(flat5(status)) && !/ships after the apply/.test(flat5(status)), "section 25's status line no longer says NOT applied or that the client ships after the apply");
       has(flat5(head), ["REPORT-PROMPT-31-2026-10-13.md", "critic of 10/13", "PART A DECISIONS", "`docs/HISTORY.md`", "rules doc section 8 item 26", "the critic wins", "since 9/23"], "section 25's opening");
     });
     check("P31A5 guide 25.1: the one reading - the five functions with their security and EXECUTE (critic A6: the derived rows a security definer, anon revoked), the guard's East leg on the derived rows (merged; a home review only when exact - decision 3), the client guard keeps vacEastAway (critic A5), the short days (critic A12), what stays out (decision 17)", () => {
@@ -14552,10 +14554,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(/^3\. \*\*Server-side enforcement\*\*[^\n]*(\n[^\n]+)*/m.test(q) && (q.match(/^3\. \*\*Server-side enforcement\*\*[^\n]*(\n   [^\n]+)*/m) || [""])[0].includes(SEC + "25.1"), "18.5 question 3 points at revision x (" + SEC + "25.1)");
       assert.ok((q.match(/^6\. \*\*Who refreshes\.\*\*[^\n]*(\n   [^\n]+)*/m) || [""])[0].includes(SEC + "25.5"), "18.5 question 6 points at the server refresh (" + SEC + "25.5)");
     });
-    check("P31A5 rules doc: section 1's Time off row (everyone signed in, the derived reading, the own range warned never refused, revision x NOT applied yet); section 3 Khan (the Part A bullet; the reset by one SQL function and the A7 guard); section 6 (no count, share or target moves); section 8 item 17 (the trigger leg answered, decision 17) and item 26 (decision (a) and the 16 others, numbered; what stays open)", () => {
+    check("P31A5 rules doc: section 1's Time off row (everyone signed in, the derived reading, the own range warned never refused, revision x applied 2026-10-19); section 3 Khan (the Part A bullet; the reset by one SQL function and the A7 guard); section 6 (no count, share or target moves); section 8 item 17 (the trigger leg answered, decision 17) and item 26 (decision (a) and the 16 others, numbered; what stays open)", () => {
       const row = (rulesDoc.match(/^\| Time off \|[^\n]*/m) || [""])[0];
-      has(row, [MARK + " **10/14 (Faraz 10/9, Prompt 31 Part A)", "every signed-in role", "\"set by the scheduler\"", "`silvis_derived_vacations()`", "**revision x**", "**NOT applied yet**", "`apply-east-vacations.sh`", "is never refused", "Davenport owns it", "`docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\""], "section 1's Time off row");
+      has(row, [MARK + " **10/14 (Faraz 10/9, Prompt 31 Part A)", "every signed-in role", "\"set by the scheduler\"", "`silvis_derived_vacations()`", "**revision x**", "**applied 2026-10-19**", "`apply-east-vacations.sh`", "is never refused", "Davenport owns it", "`docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\""], "section 1's Time off row");
       assert.ok(/\| Khan 9\/21, \*\*9\/22\*\*, \*\*9\/30\*\*, Faraz \*\*10\/9, 10\/14\*\* \|$/.test(row), "the Time off row's source cell adds Faraz 10/9, 10/14");
+      assert.ok(!/\*\*NOT applied yet\*\*/.test(row), "section 1's Time off row no longer says revision x is NOT applied yet (the record step, 10/19)");
       const khan = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
       const pa = (khan.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0];
       has(flat5(pa), ["seen by everyone signed in", "\"set by the scheduler\"", "\"Off: Khan\"", "*home*", "the scheduler's only", "?public=1", "`silvis_derived_vacations()`", "nothing is written", "build guide " + SEC + "25"], "section 3 Khan's Part A bullet");

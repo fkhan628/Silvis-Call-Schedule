@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Silvis Call Schedule - the days ALREADY under the vacation minimum, by the guard's reading since revision x (2026-10-14, Prompt 31
--- Part A; sql/migrations/2026-10-14-east-vacations.sql, REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked
--- or changed. Run it AFTER the apply (the apply script runs it right after probe AFTER) and whenever in doubt: the guard never
+-- Part A; sql/migrations/2026-10-14-east-vacations.sql, REPORT-FIRST; APPLIED 2026-10-19 22:53:18Z). READ-ONLY: one SELECT, nothing is written, locked
+-- or changed. Run it AFTER the apply (done: 0 days on 2026-10-19, the apply run's step 6, right after probe AFTER) and whenever in doubt: the guard never
 -- re-checks or deletes what is already there, an East review turned 'away' or a new or longer Davenport range from a feed refresh is
 -- never refused (the known gap), and a non-scheduler's new vacation over such a day is refused - so the scheduler should know these
 -- days. BEFORE the apply it fails (function public.silvis_vacation_short_days does not exist): run
