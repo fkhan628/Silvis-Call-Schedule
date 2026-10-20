@@ -11,7 +11,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
-| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first run not observed yet); record in section 3's "Deploy record - Prompt 31 Part A" | never |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A" | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -267,10 +267,24 @@ first scheduled run is 2026-10-20 10:30 UTC (05:30 CDT); its `east.refresh` audi
 step 6's `audit_log` read - is Faraz's to paste, and gets its own line here. Until then no live run of the function has been
 observed: what stands is the gate (20i), the byte-compare and the dryRun's first 400 characters.
 
-Since this record step a plain `bash scripts/verify-rls.sh` grades 20i on every run (`SILVIS_EAST_REFRESH_DEPLOYED` is gone), as 19i
-since Prompt 30's record step. The source's own header still reads `NOT DEPLOYED` (pinned in `test/edge-functions.test.js`) on
+Since the deploy's record step a plain `bash scripts/verify-rls.sh` grades 20i on every run (`SILVIS_EAST_REFRESH_DEPLOYED` is gone),
+as 19i since Prompt 30's record step. The source's own header still reads `NOT DEPLOYED` (pinned in `test/edge-functions.test.js`) on
 purpose: the repo copy stays byte-identical to the deployed v1 (sha256 `ff717c93...`), and that wording flips, with its pin, at the
 next source change.
+
+**Observed - step 6, the first scheduled run (2026-10-20 10:30 UTC, 05:30 CDT; read the same morning):** Faraz, in the SQL editor,
+step 6's read with its columns named,
+`select created_at, detail->>'ok' as ok, detail->>'summary' as summary from audit_log where action = 'east.refresh' and actor_id = 'cron' order by created_at desc limit 3;`
+-> one row: `created_at` 2026-10-20 10:30:08.262041+00, `ok` `true`, `summary` "Server refresh of the East feed (cron): 22 published
+week(s) between 2026-09-21 and 2027-04-19; 0 forecast row(s) inside the published coverage deleted; 9 East vacation range(s) for FAK
+through 2028-04-24; 38 more published week(s) cached (2025-10-20..2029-10-15)" - the only `east.refresh` row with `actor_id`
+`cron`, so the dryRun of 01:55:53Z wrote none (as designed). Then Claude Code, read-only: an anonymous REST read of `east_feed`
+(anon-readable; the public anon key in `config.js`) - 60 rows, first week 2025-12-29, last 2027-02-15, the 22 published
+weeks of the main window (2026-09-21 .. 2027-02-15) with `fetched_at` 2026-10-20 10:30:06.524Z and the other 38 (2025-12-29 ..
+2026-09-14) with 10:30:07.546Z - the summary's 22 + 38; the Part A pre-check before the 10/19 apply had read 60 rows, the same first
+and last weeks and a latest `fetched_at` of 2026-10-15 03:07:29Z (`docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"). Not
+observed: whether a review was reset (the summary names none; `east_vacation_reviews`, not anon-readable, was not read) and the
+run's `errors` list (the read took `ok` and the summary only; by the source `ok` is `true` only when `errors` is empty).
 
 *As prepared (10/16-10/19; kept as the plan, each step with its Done or NOT observed note):*
 
@@ -353,7 +367,8 @@ The order (Faraz, one step at a time; the expected result in brackets):
    jobs, and drops `SILVIS_EAST_REFRESH_DEPLOYED` from `scripts/verify-rls.sh`, which then grades 20i on every plain run
    (as 19i since Prompt 30's record step). NOT observed yet: the record step came first (2026-10-20, before the 10:30 UTC run) -
    the flag is dropped (the deploy and 20i's two PASS lines are what dropping it needs), and the morning's audit row gets its own
-   line in this record when Faraz pastes it.
+   line in this record when Faraz pastes it. Done: the first scheduled run, 2026-10-20 10:30 UTC - Faraz's read: one row
+   (10:30:08Z), `true` and "Server refresh of the East feed (cron): 22 published week(s) ..." (observed above).
 
 Rollback: section 7.
 
@@ -745,17 +760,17 @@ Notes
   calls get 401 and nothing is sent (fail closed).
 - The jobs run unattended (the first two since 2026-09-22, `silvis-offers-daily` since 2026-09-23,
   `silvis-open-shifts-weekly` - first observed run 2026-09-28 12:00Z; the fifth, `silvis-east-feed-daily`, scheduled since
-  2026-10-20 - its first run, 2026-10-20 10:30 UTC, not observed yet; it never mails). A live send results only from the
+  2026-10-20 - its first run, 2026-10-20 10:30 UTC, observed (section 3's step 6); it never mails). A live send results only from the
   inputs listed in section 6 (a linked account whose reminder hour matches;
   rows in `office_contacts` plus a non-empty digest diff).
 
 Prompt 31 Part A - the fifth job, the daily server refresh of the East feed cache. Created 2026-10-20 by Faraz in the SQL editor
 with the statement below, after `east-feed-refresh` was deployed and its dryRun proof answered `200` (section 3, "Deploy record -
 Prompt 31 Part A"); `cron.job` then read five rows, all active - this one jobid 8, `30 10 * * *`. Its first run, 2026-10-20 10:30
-UTC, is not observed yet (section 3's step 6). 10:30 UTC = 05:30 CDT / 04:30 CST, before the Monday 11:00 UTC digest (it reads
-`east_feed`) and the 13:00 UTC offers job. `timeout_milliseconds` is set because pg_net's default is a few seconds while one run
-makes up to five reads of the other project (8 s cap each); none of the other four jobs sets it. The same Vault secret, the same
-fail-closed `unset`.
+UTC, left one `east.refresh` audit row (10:30:08Z, `ok` `true` - section 3's step 6). 10:30 UTC = 05:30 CDT / 04:30 CST, before
+the Monday 11:00 UTC digest (it reads `east_feed`) and the 13:00 UTC offers job. `timeout_milliseconds` is set because pg_net's
+default is a few seconds while one run makes up to five reads of the other project (8 s cap each); none of the other four jobs
+sets it. The same Vault secret, the same fail-closed `unset`.
 
 ```sql
 -- Prompt 31 Part A: the daily East feed refresh, 10:30 UTC (created 2026-10-20, jobid 8 - see above)

@@ -17,9 +17,9 @@ afterwards; the editor keeps query history).*
    (created 9/22), `silvis-offers-daily` (created 9/23), the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
    `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z) and, since 2026-10-20,
    `silvis-east-feed-daily` (Prompt 31 Part A - the daily East feed refresh at 10:30 UTC, jobid 8, created after `east-feed-refresh`
-   was deployed and its dry run answered 200; its first run not observed yet). All read the Vault secret `silvis_cron_secret`. For a
-   rebuild, the `cron.schedule` statements of `edge-functions/README.md` section 4 are the reference (section 3 the deploy order);
-   `select jobid, jobname, schedule, active from cron.job` must show the five rows.
+   was deployed and its dry run answered 200; first observed run 2026-10-20 10:30Z - its `east.refresh` audit row, `ok` true). All
+   read the Vault secret `silvis_cron_secret`. For a rebuild, the `cron.schedule` statements of `edge-functions/README.md` section 4
+   are the reference (section 3 the deploy order); `select jobid, jobname, schedule, active from cron.job` must show the five rows.
 
 ## Your own account (first — already done for Faraz on 9/23 - `admin`, roster `s1`; kept for a rebuild)
 

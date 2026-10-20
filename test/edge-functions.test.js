@@ -3661,10 +3661,12 @@ const EFR_DEPLOY = "supabase functions deploy east-feed-refresh --project-ref bz
 const EFR_HASH = "(Get-FileHash " + EFR_DST + " -Algorithm SHA256).Hash.ToLower()";
 const EFR_REMOVE = "Remove-Item " + EFR_DST;
 const EFR_DOWNLOAD = "supabase functions download east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD + " --use-api";
-check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-10-20), section 3's record (DEPLOYED 2026-10-20 01:42:59 UTC, the observed steps 3-5, step 6 not observed; the plan kept as prepared: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, made 2026-10-20 - jobid 8), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
+check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-10-20), section 3's record (DEPLOYED 2026-10-20 01:42:59 UTC, the observed steps 3-5, then step 6 - the first scheduled run, 2026-10-20 10:30 UTC; the plan kept as prepared: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, made 2026-10-20 - jobid 8, its first run observed), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
   // pin moved deliberately 10/20: the deploy's record step - the row says v1 deployed 2026-10-20 01:42:59 UTC and the job active (jobid 8)
+  // pin moved deliberately 10/20 (the first-run record step): the row says the first scheduled run (2026-10-20 10:30 UTC) and its audit row's ok
   const efRow = (readme.match(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*\| never \|$/m) || [""])[0];
   assert.ok(efRow.includes("Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC") && /jobid 8/.test(efRow) && !/NOT deployed|no cron job/.test(efRow), "the table row: " + efRow.slice(0, 200));
+  assert.ok(efRow.includes("(jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`)") && !/not observed/i.test(efRow), "the table row: the first scheduled run, its audit row ok true - never 'not observed yet': " + efRow.slice(0, 200));
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
   assert.ok(i > 0, "section 3's record");
@@ -3684,6 +3686,22 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-
     "a plain `bash scripts/verify-rls.sh` grades 20i on every run (`SILVIS_EAST_REFRESH_DEPLOYED` is gone)",
     "The source's own header still reads `NOT DEPLOYED`", "that wording flips, with its pin, at the next source change",
   ].forEach((s) => assert.ok(obsFlat.includes(s), "the observed paragraph says: " + s));
+  // the first-run record step (10/20): step 6 observed - its own paragraph after the deploy's paragraphs (which stay as written, dated:
+  // "Step 6 - NOT observed yet" above is the deploy-night picture), before the plan; what it does not show is said, never claimed
+  const d6 = obs.indexOf("Step 6 - NOT observed yet"), rs6 = obs.indexOf("Since the deploy's record step a plain `bash scripts/verify-rls.sh` grades 20i on every run");
+  const o6 = obs.indexOf("**Observed - step 6, the first scheduled run (2026-10-20 10:30 UTC, 05:30 CDT; read the same morning):**");
+  assert.ok(d6 > 0 && rs6 > d6 && o6 > rs6, "step 6's observed paragraph follows the deploy's paragraph and the record step's (d6 " + d6 + ", rs6 " + rs6 + ", o6 " + o6 + ")");
+  const o6Flat = obs.slice(o6).replace(/\s+/g, " ");
+  [
+    "Faraz, in the SQL editor, step 6's read with its columns named, `select created_at, detail->>'ok' as ok, detail->>'summary' as summary from audit_log where action = 'east.refresh' and actor_id = 'cron' order by created_at desc limit 3;`",
+    "-> one row: `created_at` 2026-10-20 10:30:08.262041+00, `ok` `true`, `summary` ",
+    "\"Server refresh of the East feed (cron): 22 published week(s) between 2026-09-21 and 2027-04-19; 0 forecast row(s) inside the published coverage deleted; 9 East vacation range(s) for FAK through 2028-04-24; 38 more published week(s) cached (2025-10-20..2029-10-15)\"",
+    "the only `east.refresh` row with `actor_id` `cron`, so the dryRun of 01:55:53Z wrote none (as designed)",
+    "Then Claude Code, read-only: an anonymous REST read of `east_feed`", "60 rows, first week 2025-12-29, last 2027-02-15, the 22 published weeks of the main window (2026-09-21 .. 2027-02-15) with `fetched_at` 2026-10-20 10:30:06.524Z and the other 38 (2025-12-29 .. 2026-09-14) with 10:30:07.546Z - the summary's 22 + 38",
+    "a latest `fetched_at` of 2026-10-15 03:07:29Z",
+    "Not observed: whether a review was reset (the summary names none;", "the run's `errors` list (the read took `ok` and the summary only;",
+  ].forEach((s) => assert.ok(o6Flat.includes(s), "step 6's observed paragraph says: " + s));
+  assert.ok(!/review\(s\) reset|one write|every `fetched_at`|Setup > East feed (showed|read|shows)/.test(o6Flat), "step 6's paragraph claims no review reset, no single write of every row and no Setup reading: " + o6Flat.slice(0, 200));
   [
     "   20i unauthenticated POST east-feed-refresh: HTTP 401  body: {\"error\":\"unauthorized\"}",
     "PASS  east-feed-refresh refuses an unauthenticated POST (401 {\"error\":\"unauthorized\"} - its own x-cron-secret gate, nothing read)",
@@ -3723,6 +3741,13 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-
   // copy before the deploy), the second the source the project SERVES (the uploaded copy is removed first, so it can only read what the
   // download wrote); both must be the same SHA256SUMS line; a missing file or another hash after the deploy: stop, never deploy again
   const flat = rec.replace(/\s+/g, " ");
+  // the first-run record step (10/20): step 6's note keeps the deploy's record-step sentence (dated) and adds its Done after it
+  const st6 = flat.slice(flat.indexOf("6. The next morning"));
+  assert.ok(st6.includes("NOT observed yet: the record step came first (2026-10-20, before the 10:30 UTC run)") && st6.indexOf("Done: the first scheduled run, 2026-10-20 10:30 UTC - Faraz's read: one row (10:30:08Z), `true` and \"Server refresh of the East feed (cron): 22 published week(s) ...\" (observed above).") > st6.indexOf("gets its own line in this record when Faraz pastes it."), "step 6: the record step's note, then its Done");
+  // no stale 'not observed yet' left in the record: the three left are the deploy's dated paragraph (twice) and step 6's dated note
+  const nyAt = [], st6At = asp + rec.indexOf("6. The next morning");
+  rec0.replace(/not observed yet/gi, (m, at) => { nyAt.push(at); return m; });
+  assert.ok(nyAt.length === 3 && nyAt.every((at) => at < o6 || at > st6At), "'not observed yet' only in the deploy's dated paragraph and step 6's dated note: " + nyAt.join(", "));
   assert.ok(flat.indexOf("The first hash proves the source that was uploaded, the second the source the project serves") > 0 && !/proves the source that was deployed/.test(flat), "the first hash proves the upload, the second what is served");
   assert.ok(/The `Remove-Item` takes the uploaded copy away, so the second hash can only read what the download wrote/.test(flat), "why the Remove-Item");
   assert.ok(/The second hash: that same `SHA256SUMS\.txt` line again/.test(flat) && /a missing file or another hash: the function is deployed - stop, do not deploy again/.test(flat), "the second hash must be the same line; what to do when it is not");
@@ -3732,7 +3757,10 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-
   assert.ok(s4.indexOf(CRON) > 0, "section 4 carries the report's cron statement");
   assert.ok(s4.indexOf(CRON) > s4.indexOf("expect four rows after this whole block"), "outside the four-job block");
   // pin moved deliberately 10/20: the deploy's record step - the job exists (made 2026-10-20 by Faraz, jobid 8; cron.job read five rows)
-  assert.ok(!/NOT scheduled yet/.test(s4) && /Created 2026-10-20 by Faraz in the SQL editor/.test(s4) && /jobid 8/.test(s4) && /five rows/.test(s4) && /not observed yet/.test(s4), "section 4: the fifth job made 2026-10-20 (jobid 8), its first run not observed yet");
+  // pin moved deliberately 10/20 (the first-run record step): its first run, 2026-10-20 10:30 UTC, observed - the bullet and the paragraph
+  const s4Flat = s4.replace(/\s+/g, " ");
+  assert.ok(!/NOT scheduled yet/.test(s4) && /Created 2026-10-20 by Faraz in the SQL editor/.test(s4) && /jobid 8/.test(s4) && /five rows/.test(s4) && !/not observed yet/i.test(s4), "section 4: the fifth job made 2026-10-20 (jobid 8), never 'not observed yet'");
+  assert.ok(s4Flat.includes("the fifth, `silvis-east-feed-daily`, scheduled since 2026-10-20 - its first run, 2026-10-20 10:30 UTC, observed (section 3's step 6); it never mails)") && s4Flat.includes("Its first run, 2026-10-20 10:30 UTC, left one `east.refresh` audit row (10:30:08Z, `ok` `true` - section 3's step 6)."), "section 4: the jobs bullet and the fifth job's paragraph say its first run, 2026-10-20 10:30 UTC, observed");
   const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6."));
   assert.ok(readme.indexOf("### east-feed-refresh") > readme.indexOf("### daily-reminder"), "section 5's east-feed-refresh checks follow daily-reminder's");
   assert.ok(/401/.test(s5) && /\{"dryRun":true\}/.test(s5) && /405/.test(s5) && /400/.test(s5), "section 5: 401, the dryRun, 405, 400");

@@ -3396,7 +3396,7 @@ at the end of this section. The Part A client came first - merged to main on 202
 reads a missing function as "unavailable" (no client read was observed before or by the apply - the Blast radius note). Then, by Faraz on 2026-10-20 (UTC; guide section 25.6): the `east-feed-refresh` deploy
 (v1, 01:42:59 UTC), its 20i run, its dryRun proof and its cron job `silvis-east-feed-daily` (`edge-functions/README.md` section 3,
 "Deploy record - Prompt 31 Part A") - the function calls three of these functions; its first scheduled run (2026-10-20 10:30 UTC) is
-not observed yet.
+observed: one `east.refresh` audit row from `cron`, 10:30:08Z, `ok` true (the apply order's last as-run note).
 
 **Why.** Faraz 10/9 (Prompt 31 item 1): "Every East range reviewed 'away', and every range still 'unreviewed', shows to every
 signed-in role exactly like a Silvis vacation." Until now only the scheduler sees those ranges; the rules, the generator and both
@@ -3494,7 +3494,9 @@ apply the client reads
 both RPCs' 404 PGRST202 as "unavailable" and its in-app refresh falls back to the 9/23 loop; since 22:53:18Z every signed-in client
 reads the derived rows, and the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function called
 them before `east-feed-refresh` was deployed (2026-10-20 01:42:59 UTC, v1); it calls them on a live run only - its 20i POSTs stop at
-its gate and its dryRun returns before any of them - and its first scheduled run is 2026-10-20 10:30 UTC (not observed yet).* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
+its gate and its dryRun returns before any of them - and its first scheduled run, 2026-10-20 10:30 UTC, left one `east.refresh`
+audit row from `cron` (10:30:08Z), `ok` true (observed since - the apply order's last as-run note; which functions it called is not in what was
+read).* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
 claim (revision u, on its own branch) - no shared object, either apply order.
 
 **What could break / what offline cannot show.** Offline, on PGlite (WASM PostgreSQL, a scratch folder outside the repo, over this
@@ -3971,6 +3973,16 @@ the deploy (`east-feed-refresh` v1, 01:42:59 UTC; the uploaded and the re-downlo
 the dryRun proof (01:55:53Z, `200`, `"ok":true`) and the cron job `silvis-east-feed-daily` (jobid 8, active) - `edge-functions/README.md`
 section 3. The record step then dropped `SILVIS_EAST_REFRESH_DEPLOYED`; the first scheduled run (2026-10-20 10:30 UTC) is not
 observed yet.*
+
+*As run (the first scheduled run's record, 2026-10-20): the job's first run, 2026-10-20 10:30 UTC (05:30 CDT) - Faraz's `audit_log`
+read in the SQL editor (`edge-functions/README.md` section 3, step 6's read) found exactly one `east.refresh` row with `actor_id`
+`cron` (the 01:55:53Z dryRun wrote none): created 10:30:08Z, `ok` `true`, its summary naming 22 published weeks in the main window,
+0 forecast rows deleted, 9 East vacation ranges and 38 more weeks cached. Then Claude Code's anonymous read of `east_feed`: 60 rows,
+first week 2025-12-29, last 2027-02-15 (the pre-check's 60, first and last - the observed lines at the end), the 22 published weeks of
+the main window (2026-09-21 .. 2027-02-15) with `fetched_at` 2026-10-20T10:30:06.524Z and the other 38 (2025-12-29 .. 2026-09-14) with
+2026-10-20T10:30:07.546Z (the pre-check's `fetched_max=2026-10-15T03:07:29Z`) - the summary's 22 + 38. Not read: the row's
+`errors` (`ok` true - none recorded), any `eastvac.review` audit row and `east_vacation_reviews` (not anon-readable) - whether a
+review reset ran is not known; the summary names none.*
 
 **One command (Faraz):** his apply script `apply-east-vacations.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
 paths; `test/schema.test.js` pins that none sits here) - the private folder's apply-scripts, beside byte copies of the graded files

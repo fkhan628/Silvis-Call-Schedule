@@ -2963,7 +2963,9 @@ A1-A3 prove the reads in SQL), and no in-app refresh since 2026-10-15 cached a f
 DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1; the re-downloaded source's sha256 = the repo file's), its gate graded (verify-rls 20i,
 two PASS lines), its dryRun answered `200` with `"ok":true`, and its cron job `silvis-east-feed-daily` is active (`30 10 * * *`) -
 the observed lines in `edge-functions/README.md` section 3, "Deploy record - Prompt 31 Part A". Its first scheduled run, 2026-10-20
-10:30 UTC, is NOT observed yet (25.6, step (7)); the record of that morning rewrites this line again.*
+10:30 UTC, is observed (25.6, step (7)): one `east.refresh` audit row from `cron`, 10:30:08Z, `ok` true (Faraz's read), and 60
+`east_feed` rows (an anonymous read by Claude Code): the 22 published weeks of the main window with `fetched_at` 2026-10-20
+10:30:06.524Z, the other 38 with 10:30:07.546Z.*
 
 Faraz asked (10/9) for two things in Part A. **Item 1:** every East range reviewed *away*, and every range still *unreviewed*, shows
 to every signed-in role exactly like a Silvis vacation - the word is "vacation", never "East", "Davenport" or "DSG" for anyone but the
@@ -3084,8 +3086,10 @@ window is Part B's (section 24.5); the Davenport side is never written.
   `source` `app` / `vacations.trusted` / `guard` / `reviewResetVia`, the server one per day with actor `cron` (decision 5). Setup >
   East feed reads the newest rows when it opens and after each refresh (the scheduler's `audit_read`; never on the poll) and shows
   them through `eastRefreshStatus`: "Server refresh (daily) <time>: ok - N published week(s) cached", or FAILED with the error and
-  "the cached weeks were kept"; "No refresh on record yet." until the first. Setup's staleness warning fires after 2 days
-  (`EAST_FEED_STALE_DAYS`, decision 5; it was 14 while only the button wrote the cache).
+  "the cached weeks were kept"; "No refresh on record yet." until the first. When the newest row is an in-app one, a second line
+  gives the newest server run, or "No server refresh in the 10 newest refresh records (the daily job runs at 10:30 UTC)." when
+  none of the 10 rows read is the server's. Setup's staleness warning fires after 2 days (`EAST_FEED_STALE_DAYS`, decision 5; it
+  was 14 while only the button wrote the cache).
 - **No phantom-week delete** (decision 14, deferred): a week the Davenport app removed stays cached; a delete would need the same
   guard (never on an empty or sharply shrunk read) and a re-plan of the vacations riding on it.
 
@@ -3117,8 +3121,8 @@ window is Part B's (section 24.5); the Davenport side is never written.
 - **The cron job** (decision 16): `silvis-east-feed-daily`, `30 10 * * *` UTC (05:30 CDT / 04:30 CST - before the Monday 11:00 UTC
   digest, which reads `east_feed`, and the 13:00 UTC offers job), `timeout_milliseconds` 60000 (pg_net's default is a few seconds;
   one run makes up to five reads of the other project), the Vault secret every job reads. No new secret. Scheduled since 2026-10-20
-  (`cron.job` jobid 8, active; its first run, 2026-10-20 10:30 UTC, not observed yet): `edge-functions/README.md` section 4 holds the
-  statement, section 3 the deploy order and its record.
+  (`cron.job` jobid 8, active; its first run, 2026-10-20 10:30 UTC, observed - its `east.refresh` audit row, `ok` true - 25.6):
+  `edge-functions/README.md` section 4 holds the statement, section 3 the deploy order and its record.
 
 ### 25.6 Tests, the apply, the deploy and the ship
 
@@ -3157,9 +3161,15 @@ window is Part B's (section 24.5); the Davenport side is never written.
   failed`; (5) in the SQL editor, the dryRun answered at 01:55:53Z - `200`, the answer starting
   `{"dryRun":true,"ok":true,"error":null,"errors":[]` (only its first 400 characters read); (6) `silvis-east-feed-daily` created
   there (jobid 8, `30 10 * * *`, active - five jobs). The deploy's record step then dropped `SILVIS_EAST_REFRESH_DEPLOYED`:
-  verify-rls grades 20i on every plain run since. (7) is NOT observed yet: the first scheduled run is 2026-10-20 10:30 UTC (05:30
-  CDT); its record follows Faraz's paste-back. The source's header still reads "NOT DEPLOYED" on purpose - the repo copy stays
-  byte-identical to the deployed v1; it flips, with its pin, at the next source change.*
+  verify-rls grades 20i on every plain run since. (7) on 2026-10-20, the first scheduled run (10:30 UTC, 05:30 CDT), read back that
+  morning: Faraz's `audit_log` read in the SQL editor (the README's section 3 step 6 read) - exactly one `east.refresh` row with
+  `actor_id` `cron` (the 01:55:53Z dryRun wrote none), created 10:30:08Z, `ok` `true`, its summary naming 22 published weeks in the
+  main window, 0 forecast rows deleted, 9 East vacation ranges and 38 more weeks cached; then Claude Code's anonymous read of
+  `east_feed` - 60 rows, first week 2025-12-29, last 2027-02-15 (as the 10/19 pre-check read them), the 22 published weeks
+  of the main window (2026-09-21 .. 2027-02-15) with `fetched_at` 2026-10-20 10:30:06.524Z and the other 38 (2025-12-29 .. 2026-09-14)
+  with 10:30:07.546Z (the pre-check's latest 2026-10-15 03:07:29Z) - the summary's 22 + 38. Not read: the row's `errors` (`ok`
+  true - none recorded) and whether a review reset ran (the summary names none). The source's header still reads "NOT DEPLOYED" on
+  purpose - the repo copy stays byte-identical to the deployed v1; it flips, with its pin, at the next source change.*
 - **Rollback** (only on Faraz's and Claude Code's decision), in this order: unschedule the job; leave or delete the function; revert
   the client merge; the database - the 9/30 guard body first, then the five drops (the migration header). The data needs none: a run
   writes only what the in-app refresh writes, and every reset review is in its `eastvac.review` audit row.

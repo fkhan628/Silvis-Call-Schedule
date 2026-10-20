@@ -12786,7 +12786,7 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
   const tone = (k) => state(k) === "ok" ? "#1a8040" : state(k) === "failed" ? "#a83232" : "#8a5a10";
   // Prompt 31 Part A (A3, decision 5): the newest east.refresh audit row (the daily server refresh writes one per run, the in-app
   // refresh one per press) and, when the newest is not the server's, the newest server run - ok, or FAILED with its error
-  // (a failed run keeps the cache). The scheduler's read (audit_read); "no server refresh on record" until the job runs.
+  // (a failed run keeps the cache). The scheduler's read (audit_read, 10 rows); "no server refresh in the 10 newest" when none is the job's.
   const refreshStatus = eastRefreshStatus((refreshAudit && refreshAudit.rows) || []);
   const auditState = (refreshAudit && refreshAudit.state) || "unread";
   const statusLine = (ln, testid) => <div data-testid={testid} data-ok={ln.ok ? "1" : "0"} data-server={ln.server ? "1" : "0"}><span style={{ color: ln.ok ? "#1F2A3A" : "#c04040", fontWeight: ln.ok ? 400 : 700 }}>{ln.text}</span></div>;
@@ -12798,7 +12798,7 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
       </div>
       <div data-testid="east-refresh-status" data-state={auditState} style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
         {refreshStatus.latest ? statusLine(refreshStatus.latest, "east-refresh-latest") : <div style={{ color: "#5B6B82" }}>{auditState === "failed" ? "The refresh record could not be read." : auditState === "ok" ? "No refresh on record yet." : auditState === "skipped" ? "The refresh record was not read - the session token is missing or expired." : "Reading the refresh record..."}</div>}
-        {refreshStatus.latest && !refreshStatus.latest.server && (refreshStatus.lastServer ? statusLine(refreshStatus.lastServer, "east-refresh-server") : <div data-testid="east-refresh-server" style={{ color: "#5B6B82" }}>No server refresh on record yet (the daily job runs once east-feed-refresh is deployed and scheduled).</div>)}
+        {refreshStatus.latest && !refreshStatus.latest.server && (refreshStatus.lastServer ? statusLine(refreshStatus.lastServer, "east-refresh-server") : <div data-testid="east-refresh-server" style={{ color: "#5B6B82" }}>No server refresh in the 10 newest refresh records (the daily job runs at 10:30 UTC).</div>)}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         <button data-testid="east-refresh" onClick={onRefresh} disabled={refreshing} style={{ ...css.btn(true), padding: "5px 12px", opacity: refreshing ? 0.6 : 1 }}>{refreshing ? "Fetching" : "Refresh from Davenport (read-only)"}</button>
