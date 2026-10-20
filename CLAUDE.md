@@ -81,7 +81,8 @@ line, never "no vacations". Client-side and live since 2026.10.18b whatever the 
 non-schedulers read "on vacation" for such a day on the board, the claim sheet and the trade card, and see no East /
 Davenport word. `?public=1`, share and print stay `time_off` only; the calendar feeds (Khan's `?east=1` keeps its away
 events), the digest, e-mails and pay are unchanged and never call the function. The daily server refresh `east-feed-refresh` (the in-app Refresh unattended, gated by the cron
-secret; cron `silvis-east-feed-daily` at 10:30 UTC) is deployed by hand after that apply - `edge-functions/README.md` §3.
+secret; cron `silvis-east-feed-daily` at 10:30 UTC) was deployed by hand after that apply - v1, 2026-10-20 01:42:59 UTC (Faraz),
+its dryRun 200 and the cron job active the same day; its first scheduled run not observed yet - `edge-functions/README.md` §3.
 Phone push since Prompt 30: Web Push + VAPID through Silvis's own `sw.js` (the app folder; no OneSignal, Davenport's root
 worker untouched; the update reset keeps `sw.js`) - build guide, Prompt 30. Its database part was applied, the VAPID keys set and
 send-notification v12 deployed on 2026-10-03; phone push works from the build that ships Prompt 30's client.
@@ -188,6 +189,8 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   `call_schedule_data.data.groupRules` / `surgeonRules` (listed in `docs/SILVIS-CALL-RULES.md` §8 and the seed's
   `openQuestions`; the 9/21 orientation that first listed them is history, `docs/HISTORY.md`), never a code branch.
   Faraz's own Prompt 31 Part A steps, in order: the database apply (done - applied 2026-10-19 22:53:18Z, recorded in
-  `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"), then the `east-feed-refresh` deploy, its dryRun, the cron job (the
-  private apply README's last section; each recorded when done in `edge-functions/README.md` §3). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
+  `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"), then the `east-feed-refresh` deploy, its dryRun, the cron job (done -
+  2026-10-20: v1 deployed 01:42:59 UTC, the dryRun 200 `"ok":true`, `silvis-east-feed-daily` active; recorded in
+  `edge-functions/README.md` §3); left: the first scheduled run (2026-10-20 10:30 UTC), not observed yet - Faraz pastes back
+  Setup > East feed's line or the `east.refresh` audit read (README §3 step 6). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
   vacations' open questions, the rest rule).

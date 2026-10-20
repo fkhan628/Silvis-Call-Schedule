@@ -14473,7 +14473,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // reads the rules doc and ONBOARDING. Pinned on the headings, the names a reader greps for, the decisions' words and the
   // privacy lines. The PREPARED state's words ("NOT applied", "NOT deployed", "applied: _to be filled at the record step_") were
   // pinned too; pin moved deliberately 10/19 (the record step): Faraz applied revision x on 2026-10-19 22:53:18Z, so the applied words
-  // replace "NOT applied"; "NOT deployed" stays until the east-feed-refresh deploy's record step.
+  // replace "NOT applied"; moved again 10/20 (the east-feed-refresh deploy's record step): Faraz deployed east-feed-refresh v1 at
+  // 2026-10-20 01:42:59 UTC and created its cron job silvis-east-feed-daily (jobid 8), so the deployed words replace "NOT deployed";
+  // its first scheduled run (2026-10-20 10:30 UTC) is NOT observed yet, and the docs say so.
   // test/schema.test.js pins the database record (docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations") and guide 4.3.
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");
   {
@@ -14502,10 +14504,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const ptrs = (guide.match(/(?<![\d.\/:-])25\.\d+(?!\d)/g) || []).filter(p => !/^25\.[1-6]$/.test(p));
       assert.deepStrictEqual(ptrs, [], "every 25.<k> pointer names a sub-heading 25.1 .. 25.6");
     });
-    check("P31A5 guide 25: the status line - revision x APPLIED 2026-10-19 22:53:18Z (Faraz, apply-east-vacations.sh), east-feed-refresh NOT deployed with no cron job, the client live since 2026.10.18b (before the apply); the binding texts (the 10/13 report, its critic, the PART A DECISIONS of 10/14); the rules and the generator unchanged", () => {
+    check("P31A5 guide 25: the status line - revision x APPLIED 2026-10-19 22:53:18Z (Faraz, apply-east-vacations.sh), east-feed-refresh DEPLOYED 2026-10-20 01:42:59 UTC (v1) with its cron job (its first scheduled run NOT observed yet), the client live since 2026.10.18b (before the apply); the binding texts (the 10/13 report, its critic, the PART A DECISIONS of 10/14); the rules and the generator unchanged", () => {
       const head = s25.slice(0, s25.indexOf("\n" + SUBS[0]));
       const status = (head.match(/^\*Status: [^\n]*(\n[^\n]+)*/m) || [""])[0];
-      has(flat5(status), ["`feat/east-vacations-part-a`", "revision x", "APPLIED 2026-10-19 22:53:18Z", "2026.10.18b", "`apply-east-vacations.sh`", "`east-feed-refresh` is NOT deployed", "`silvis-east-feed-daily`", "\"unavailable\"", "The deploy's record step rewrites this line again."], "section 25's status line");
+      has(flat5(status), ["`feat/east-vacations-part-a`", "revision x", "APPLIED 2026-10-19 22:53:18Z", "2026.10.18b", "`apply-east-vacations.sh`", "`east-feed-refresh` is DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1;", "its gate graded (verify-rls 20i, two PASS lines)", "its dryRun answered `200` with `\"ok\":true`", "its cron job `silvis-east-feed-daily` is active (`30 10 * * *`)", "\"Deploy record - Prompt 31 Part A\"", "Its first scheduled run, 2026-10-20 10:30 UTC, is NOT observed yet (25.6, step (7))", "\"unavailable\""], "section 25's status line");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): deployed, the job active, the first run NOT observed yet
+      assert.ok(!/is NOT deployed|does not exist|The deploy's record step rewrites this line again/.test(flat5(status)), "section 25's status line no longer says east-feed-refresh is NOT deployed or its job does not exist");
       assert.ok(!/NOT applied/.test(flat5(status)) && !/ships after the apply/.test(flat5(status)), "section 25's status line no longer says NOT applied or that the client ships after the apply");
       // re-check 10/19 (T1): only what the apply observed, the rest by design - never the unobserved "read ... until the apply" claim
       has(flat5(status), ["by design it reads a missing function as \"unavailable\"", "the apply observed no signed-in client read (verify-rls 20e a SKIP line; probe A1-A3 prove the reads in SQL)", "no in-app refresh since 2026-10-15 cached a freshly fetched week"], "section 25's status line: observed vs by design");
@@ -14529,7 +14533,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       has(flat5(sub25(4)), ["`east_vacation_reset_stale(p_from)`", "`runEastReviewResets`", "`derivedVacDb.resetStale`", "decision 4", "critic A7", "`eastVacationReadGuard`", "`read-failed`", "`unresolved`", "`missing`", "`empty-while-cached`",
         "200 + []", "`cacheBefore`", "`eastRefreshStatus`", "\"the cached weeks were kept\"", "`EAST_FEED_STALE_DAYS`", "decision 5", "decision 14"], "25.4");
       has(flat5(sub25(5)), ["`x-cron-secret`", "fails closed", "`eastRefreshWindows`", "`eastExtraWeeks`", "UTC", "critic A9", "decision 15", "merge-duplicates", "`east.refresh`", "`cron`", "dryRun", "502",
-        "`silvis-east-feed-daily`", "`30 10 * * *`", "`timeout_milliseconds` 60000", "decision 16", "never a delete of a cached week", "NOT deployed"], "25.5");
+        "`silvis-east-feed-daily`", "`30 10 * * *`", "`timeout_milliseconds` 60000", "decision 16", "never a delete of a cached week", "deployed 2026-10-20 01:42:59 UTC (v1 - 25.6)", "Scheduled since 2026-10-20 (`cron.job` jobid 8, active;"], "25.5");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): 25.5 says deployed and scheduled
+      assert.ok(!/NOT deployed|NOT scheduled yet/.test(flat5(sub25(5))), "25.5 no longer says NOT deployed / NOT scheduled yet");
     });
     check("P31A5 guide 25.6: the tests (the server mirror under six time zones), the order (the apply with its dry run, the record step, the client, the deploy, the dryRun proof, the cron job), the rollback and what stays open", () => {
       has(flat5(sub25(6)), ["`test/schema.test.js`", "`test/edge-functions.test.js`", "`test/east-feed.test.js`", "[P31A3]", "[P31A5]", "`test/ui/smoke.mjs`", "critic A8", "PGlite",
@@ -14581,7 +14587,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       has(f26, ["DECIDED 10/14", "(1) **(a) the derived SQL function**", "\"set by the scheduler\"", "`silvis-east-feed-daily`", "`30 10 * * *`", "**Still open:**", "build guide " + SEC + "25"], "section 8 item 26");
       assert.ok(f26.indexOf("(1)") < f26.indexOf("(2)") && f26.indexOf("(16)") < f26.indexOf("(17)"), "item 26 numbers the decisions in order");
     });
-    check("P31A5 ONBOARDING: one paragraph for what everyone else sees (every signed-in role; the dot, 'Off: Khan', the Time off line 'set by the scheduler' read-only for the office too, 'on vacation'; the 2-around rule; no East / Davenport word, home ranges not shown; not the public link, share, print, feeds, digest, ER export, e-mails); the East vacations paragraph says the two East cards are the scheduler's (decision 11); the cron line names the prepared fifth job", () => {
+    check("P31A5 ONBOARDING: one paragraph for what everyone else sees (every signed-in role; the dot, 'Off: Khan', the Time off line 'set by the scheduler' read-only for the office too, 'on vacation'; the 2-around rule; no East / Davenport word, home ranges not shown; not the public link, share, print, feeds, digest, ER export, e-mails); the East vacations paragraph says the two East cards are the scheduler's (decision 11); the cron line names the five jobs, silvis-east-feed-daily since 2026-10-20", () => {
       const paras = onboarding.split("\n\n").filter(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p));
       assert.strictEqual(paras.length, 1, "exactly one paragraph leads with **Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A");
       const p = flat5(paras[0]);
@@ -14592,13 +14598,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(/Prompt 31 Part A/.test(ev) && /decision 11/.test(ev) && /"set by the scheduler"/.test(ev), "the East vacations paragraph says the Time off and My schedule East cards are the scheduler's since Part A (decision 11) and what a non-scheduler East surgeon sees");
       const at = onboarding.indexOf("4. The pg_cron jobs are in place");
       const item4 = at < 0 ? "" : onboarding.slice(at, onboarding.indexOf("\n\n", at));
-      assert.ok(/four, all active/.test(item4) && /must show the four rows/.test(item4) && /`silvis-east-feed-daily`/.test(item4) && /fifth/.test(item4), "the cron item keeps the four live jobs and names the prepared fifth, silvis-east-feed-daily");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): five jobs, silvis-east-feed-daily since 2026-10-20
+      assert.ok(/five, all active/.test(item4) && /must show the five rows/.test(item4) && /since 2026-10-20,\s+`silvis-east-feed-daily`/.test(item4) && /jobid 8/.test(item4) && /first run not observed yet/.test(item4) && !/four, all active|the four rows|prepares a fifth|created only after/.test(item4), "the cron item lists five jobs, silvis-east-feed-daily since 2026-10-20 (jobid 8, its first run not observed yet)");
     });
-    check("P31A5 edge-functions/README.md (A2's gap): the Part A paragraph says where a run shows (one east.refresh row, Setup > East feed, the warning days from silvis_vacation_short_days, dates only) and that the four other functions call none of the new SQL functions; it still ends 'Until then ...'; ASCII. HISTORY's report row points at guide section 25", () => {
+    check("P31A5 edge-functions/README.md (A2's gap): the Part A paragraph says where a run shows (one east.refresh row, Setup > East feed, the warning days from silvis_vacation_short_days, dates only) and that the four other functions call none of the new SQL functions; it ends with the five-function sentence (the deploy's record step, 10/20); ASCII. HISTORY's report row points at guide section 25", () => {
       const para = efReadme.split("\n\n").find(pp => pp.startsWith("**Prompt 31 Part A (2026-10-16): a fifth function, `east-feed-refresh`")) || "";
       const f = flat5(para);
       has(f, ["Where a run shows:", "ONE `east.refresh` audit row", "Setup > East feed", "`silvis_vacation_short_days`", "dates only", "call none of the new SQL functions", "assignments, not availability"], "the README's Part A paragraph");
-      assert.ok(/Until then every sentence here about the four functions and the four jobs stays true\.$/.test(f.trim()), "the paragraph still ends with the four-functions sentence (the record step rewords it)");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): 'Until then ...' reworded - five functions, five jobs
+      assert.ok(/Since 2026-10-20 the project serves five functions and has five pg_cron jobs \(section 3's record, section 4\); where a sentence below counts four, it speaks of the four 9\/22 functions or the jobs before Part A\.$/.test(f.trim()) && !/Until then every sentence here/.test(efReadme), "the paragraph ends with the five-function sentence (the deploy's record step)");
       assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(efReadme) && /^[\x09\x0a\x0d\x20-\x7e]*$/.test(historyDoc), "the README and HISTORY stay ASCII");
       const rows = historyDoc.split("\n").filter(l => l.startsWith("| `REPORT-PROMPT-31-2026-10-13.md`"));
       assert.ok(rows.length === 1 && /guide section 25/.test(rows[0]) && /"2026-10-14 - East vacations"/.test(rows[0]) && !/PART-B-DESIGN/.test(rows[0]), "HISTORY's report row points at guide section 25 and the SCHEMA-REVIEW record (and stays apart from the Part B row T12 reads)");
@@ -14607,21 +14615,44 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const vg8 = (guide.match(/^- \*\*Vacation guard \(Prompt 27, [^\n]*/m) || [""])[0];
       assert.ok(vg8.includes("revision x (applied 2026-10-19 22:53 UTC) makes the trigger's East leg read `silvis_derived_vacations()`") && !vg8.includes("revision x (NOT applied)"), "guide 8's vacation guard bullet: revision x (applied 2026-10-19 22:53 UTC), never (NOT applied)");
       const s6 = flat5(sub25(6));
-      assert.ok(s6.includes("*As run: (1) on 2026-10-19 - the `--dry-run` at 04:29Z from the Part A worktree, then the run at 22:52:38Z from the main clone at `b0344bd` (applied 22:53:18Z; a 13:12Z run stopped at APPLY, nothing applied); (2) this record step; (3) came first - main merged and shipped on 10/18 as 2026.10.18b, before the apply; (4)-(7) follow, on Faraz's go.*") && !/\(4\)-\(7\) are done/.test(s6), "guide 25.6's as-run note reads exactly as the record step wrote it ((4)-(7) still follow)");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): (4)-(6) ran on 2026-10-20, (7) is NOT observed yet
+      assert.ok(s6.includes("*As run: (1) on 2026-10-19 - the `--dry-run` at 04:29Z from the Part A worktree, then the run at 22:52:38Z from the main clone at `b0344bd` (applied 22:53:18Z; a 13:12Z run stopped at APPLY, nothing applied); (2) the record step (`8576902`); (3) came first - main merged and shipped on 10/18 as 2026.10.18b, before the apply; (4)-(6) by Faraz on 2026-10-20 (UTC; the evening of 10/19 Central): (4) from the main clone at `477936d` (its `index.ts` the same bytes as at the Part A merge `80c2c2b`, sha256 `ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0`) - `east-feed-refresh` v1 listed ACTIVE at 01:42:59 UTC, the uploaded and the re-downloaded `index.ts` both that sha256, an unauthenticated POST `401`, then that clone's verify-rls (sections 1-20) with the flag: 20i's two PASS lines, each `401` `{\"error\":\"unauthorized\"}`, section 20 64 / 0, `RESULT: 535 passed, 0 failed`; (5) in the SQL editor, the dryRun answered at 01:55:53Z - `200`, the answer starting `{\"dryRun\":true,\"ok\":true,\"error\":null,\"errors\":[]` (only its first 400 characters read); (6) `silvis-east-feed-daily` created there (jobid 8, `30 10 * * *`, active - five jobs). The deploy's record step then dropped `SILVIS_EAST_REFRESH_DEPLOYED`: verify-rls grades 20i on every plain run since. (7) is NOT observed yet: the first scheduled run is 2026-10-20 10:30 UTC (05:30 CDT); its record follows Faraz's paste-back. The source's header still reads \"NOT DEPLOYED\" on purpose - the repo copy stays byte-identical to the deployed v1; it flips, with its pin, at the next source change.*") && !s6.includes("(4)-(7) follow, on Faraz's go") && !/\(7\) (is )?done/.test(s6), "guide 25.6's as-run note: (4)-(6) ran on 2026-10-20 as observed, (7) NOT observed yet");
       const khan = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
       const pa = flat5((khan.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
-      assert.ok(pa.includes("Status: built and live - the client since 2026.10.18b, the database part (revision x) applied 2026-10-19; the server refresh NOT deployed yet - build guide " + SEC + "25") && !/NOT applied yet/.test(pa), "section 3 Khan's Part A status: built and live, revision x applied 2026-10-19 (never NOT applied yet)");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): the server refresh deployed 2026-10-20
+      assert.ok(pa.includes("Status: built and live - the client since 2026.10.18b, the database part (revision x) applied 2026-10-19; the server refresh deployed 2026-10-20 with its daily cron job (its first scheduled run, 2026-10-20 10:30 UTC, not observed yet) - build guide " + SEC + "25") && !/NOT applied yet|NOT deployed yet/.test(pa), "section 3 Khan's Part A status: built and live, revision x applied 2026-10-19, the server refresh deployed 2026-10-20 (never NOT applied / NOT deployed yet)");
       const s8 = rulesDoc.slice(rulesDoc.indexOf("\n## 8. Answered"));
       const i17 = flat5((s8.match(/^17\. \*\*East vacations[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
       assert.ok(i17.includes("revision x (applied 2026-10-19) has it read them through the database's derived rows") && !i17.includes("(NOT applied yet)"), "item 17: revision x (applied 2026-10-19), never (NOT applied yet)");
       const i26 = flat5((s8.match(/^26\. \*\*East vacations seen by everyone signed in[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
-      assert.ok(i26.includes("Status: built and merged, the client live since 2026.10.18b; the database part (revision x) report-first, applied 2026-10-19 22:53 UTC (Faraz's `apply-east-vacations.sh`); the server refresh NOT deployed yet") && !/NOT applied yet/.test(i26), "item 26's status: built and merged, the client live since 2026.10.18b, revision x applied 2026-10-19 22:53 UTC (never NOT applied yet)");
+      // pin moved deliberately 10/20 (the east-feed-refresh deploy's record step): the server refresh deployed 2026-10-20 01:42 UTC
+      assert.ok(i26.includes("Status: built and merged, the client live since 2026.10.18b; the database part (revision x) report-first, applied 2026-10-19 22:53 UTC (Faraz's `apply-east-vacations.sh`); the server refresh `east-feed-refresh` deployed 2026-10-20 01:42 UTC (v1, Faraz) with its cron job `silvis-east-feed-daily` (`edge-functions/README.md` section 3); its first scheduled run (2026-10-20 10:30 UTC) not observed yet - build guide " + SEC + "25") && !/NOT applied yet|NOT deployed yet/.test(i26), "item 26's status: built and merged, the client live since 2026.10.18b, revision x applied 2026-10-19 22:53 UTC, the server refresh deployed 2026-10-20 01:42 UTC (never NOT applied / NOT deployed yet)");
       const op = flat5(onboarding.split("\n\n").find(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p)) || "");
       assert.ok(op.includes("(Prompt 31 Part A, Faraz 10/9; live since 2026-10-19 - tell the group).**") && op.includes("Since the database part was applied on 2026-10-19 (the Part A client has been live since 2026.10.18b),") && !/once it ships|Once the database part is applied/.test(op), "ONBOARDING's paragraph: live since 2026-10-19, the database part was applied on 2026-10-19 (never once it ships)");
       const a1 = efReadme.indexOf("\n1. The database first - `apply-east-vacations.sh`"), a2 = efReadme.indexOf("\n2. The Part A client, on Faraz's go", a1), a3 = efReadme.indexOf("\n3. Deploy - ", a2);
       const st1 = a1 < 0 || a2 < 0 ? "" : flat5(efReadme.slice(a1, a2)), st2 = a2 < 0 || a3 < 0 ? "" : flat5(efReadme.slice(a2, a3));
       assert.ok(st1.includes("and no review is reset. Done: applied 2026-10-19 22:53:18Z and recorded (`docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\") - the three functions exist since."), "the README section 3 step 1: Done: applied 2026-10-19 22:53:18Z and recorded");
       assert.ok(st2.includes("not depend on it. Done: live since 2026.10.18b (2026-10-18), before the apply."), "the README section 3 step 2: Done: live since 2026.10.18b (2026-10-18), before the apply");
+    });
+    // the east-feed-refresh deploy's record step (10/20): Faraz deployed east-feed-refresh v1 (2026-10-20 01:42:59 UTC) and created
+    // silvis-east-feed-daily (jobid 8); its first scheduled run (2026-10-20 10:30 UTC) is NOT observed yet. Every pointer that said
+    // "NOT deployed" / "once deployed" / "NOT scheduled yet" says deployed; a sweep of the guide, ONBOARDING and the rules doc - by bullet,
+    // numbered item or paragraph, so a phrase wrapped onto the next line is caught - refuses the old words beside the server refresh.
+    check("P31A5 deploy record (10/20): east-feed-refresh reads deployed 2026-10-20 where the guide (sections 7, 10, 18.5 question 6) and ONBOARDING point at it; no block of the guide, ONBOARDING or the rules doc that names the server refresh says NOT deployed / once deployed / NOT scheduled yet / does not exist / not created", () => {
+      const s7 = h2(guide, "## 7. East feed");
+      const srv7 = flat5(s7.split(/\n(?=- )/).find(b => b.startsWith("- **The daily server refresh (Prompt 31 Part A")) || "");
+      assert.ok(srv7.includes("never a delete of a cached week. Deployed 2026-10-20 01:42:59 UTC (v1) with its cron job (" + SEC + "25.6); the in-app *Refresh from Davenport* stays."), "section 7's server-refresh bullet: deployed 2026-10-20 (v1)");
+      const b10 = (h2(guide, "## 10. Notifications").match(/^- \*\*East feed refresh \(server, Prompt 31 Part A\)\*\*[^\n]*/m) || [""])[0];
+      assert.ok(b10.endsWith("cron-only, it never mails (" + SEC + "25.5 - deployed 2026-10-20, v1)."), "section 10's bullet: deployed 2026-10-20 (v1)");
+      const q6 = flat5((h2(guide, "## 18. East vacations").match(/^6\. \*\*Who refreshes\.\*\*[^\n]*(\n   [^\n]+)*/m) || [""])[0]);
+      assert.ok(q6.includes("the daily server refresh, deployed with its cron job on 2026-10-20 (" + SEC + "25.5), refreshes the cache for everyone."), "18.5 question 6: deployed with its cron job on 2026-10-20");
+      const op = flat5(onboarding.split("\n\n").find(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p)) || "");
+      assert.ok(op.includes("the daily server refresh (since 2026-10-20) keeps the ranges fresh"), "ONBOARDING's paragraph: the daily server refresh since 2026-10-20");
+      const OLD = /NOT deployed|not deployed|once (it is )?deployed|NOT scheduled yet|does not exist|not created/;
+      const NAMES = /east-feed-refresh|server refresh|silvis-east-feed-daily/;
+      const blocks = [["guide", guide], ["ONBOARDING", onboarding], ["rules", rulesDoc]].flatMap(([n, t]) => t.split(/\n(?=[ \t]*- |[ \t]*\d+\. |\n)/).map(b => [n, flat5(b)]));
+      const hits = blocks.filter(([, b]) => NAMES.test(b) && OLD.test(b)).map(([n, b]) => n + ": " + b.slice(0, 160));
+      assert.deepStrictEqual(hits, [], "no block naming the server refresh still says it is not deployed / not scheduled");
     });
     check("P31A5 privacy: no address-shaped string and no machine path in the Part A docs (guide 25, the rules doc, ONBOARDING, the README)", () => {
       const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;

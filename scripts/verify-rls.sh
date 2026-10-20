@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_EAST_REFRESH_DEPLOYED=1                          also grade 20i (the deployed east-feed-refresh: an unauthenticated POST and a wrong x-cron-secret, each its own 401 {"error":"unauthorized"}): only after the east-feed-refresh deploy; without it 20i prints a SKIP line and counts nothing; the deploy's record step grades 20i on every run and drops this variable
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -17,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_EAST_REFRESH_DEPLOYED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1604,13 +1603,13 @@ echo "== 20. East vacations (2026-10-14, Prompt 31 Part A): silvis_derived_vacat
 # picture); its partly-applied and collision raises are FAILs too. 20g counts the probe's leftovers either way, by the probe's identity only: its auth users,
 # its time_off notes, its east_feed rows (data.probe eastvac31), its review rows (decided_by probe-eastvac31) and the eastvac.review audit rows
 # whose start lies in 2031-01 .. 2031-04 - rows only the probe writes, so each gets its DELETE. 20i (the review of 10/18 - the report's section 5
-# named it) grades the deployed east-feed-refresh, last in the section like 19i: only with SILVIS_EAST_REFRESH_DEPLOYED=1, the run after its deploy
-# (edge-functions/README.md section 3; a SKIP line before), until the deploy's record step drops the flag and grades it on every run. An
+# named it) grades the deployed east-feed-refresh (v1, deployed 2026-10-20 01:42:59 UTC), last in the section like 19i, on every run since the
+# deploy's record step dropped its flag (before that, only the run right after the deploy set it; any other run printed a SKIP line -
+# edge-functions/README.md section 3). An
 # unauthenticated POST and a POST with a wrong x-cron-secret must each be refused by the function's OWN gate: 401 with exactly
-# {"error":"unauthorized"} - a 401 with another body is the gateway's JWT check (a deploy without --no-verify-jwt; the cron's call carries no JWT
-# and would never reach the function), a 404 = not deployed, anything else = the gate let it through. No body is sent, so even a gate that let
-# one through would stop at the body check (400): nothing is read or written.
-EVDEPLOYED20="${SILVIS_EAST_REFRESH_DEPLOYED:-}"
+# {"error":"unauthorized"} - a 401 with another body is the gateway's JWT check (a redeploy without --no-verify-jwt; the cron's call carries no JWT
+# and would never reach the function), a 404 = the function is gone (deleted or renamed since), anything else = the gate let it through. No body is
+# sent, so even a gate that let one through would stop at the body check (400): nothing is read or written.
 # 20a. anon may not execute silvis_derived_vacations (the signed-in display's rows - never the ?public=1 page's)
 line=$(curl -s -o $T/vr20a.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_derived_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
 echo "   20a anon rpc silvis_derived_vacations: $line  body: $(head -c 160 $T/vr20a.json)"
@@ -1773,27 +1772,24 @@ if linked; then
 else
   echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"
 fi
-# 20i. the deployed east-feed-refresh (only with SILVIS_EAST_REFRESH_DEPLOYED=1, after its deploy): an unauthenticated POST, then a POST with a
-# wrong x-cron-secret - each must be the function's own 401 {"error":"unauthorized"} (no body is sent: nothing can run, even past a broken gate)
-if [ "$EVDEPLOYED20" = "1" ]; then
-  line=$(curl -s -o $T/vr20i.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/east-feed-refresh")
-  body20i=$(tr -d ' \r\n' < $T/vr20i.json)
-  echo "   20i unauthenticated POST east-feed-refresh: $line  body: $(head -c 120 $T/vr20i.json)"
-  if [ "$line" = "HTTP 401" ] && [ "$body20i" = '{"error":"unauthorized"}' ]; then
-    ok "east-feed-refresh refuses an unauthenticated POST (401 {\"error\":\"unauthorized\"} - its own x-cron-secret gate, nothing read)"
-  else
-    bad "east-feed-refresh POST without x-cron-secret: $line $(head -c 120 $T/vr20i.json) (expected 401 {\"error\":\"unauthorized\"} from the function's own gate - a 404 = not deployed; a 401 with another body = the gateway's JWT check, a deploy without --no-verify-jwt that the cron's call would never pass; anything else = the gate let it through)"
-  fi
-  line=$(curl -s -o $T/vr20i2.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/east-feed-refresh" -H "x-cron-secret: verify-rls-20i-not-the-secret")
-  body20i2=$(tr -d ' \r\n' < $T/vr20i2.json)
-  echo "   20i POST east-feed-refresh with a wrong x-cron-secret: $line  body: $(head -c 120 $T/vr20i2.json)"
-  if [ "$line" = "HTTP 401" ] && [ "$body20i2" = '{"error":"unauthorized"}' ]; then
-    ok "east-feed-refresh refuses a wrong x-cron-secret (401 {\"error\":\"unauthorized\"} - the gate compares the secret, nothing read)"
-  else
-    bad "east-feed-refresh POST with a wrong x-cron-secret: $line $(head -c 120 $T/vr20i2.json) (expected 401 {\"error\":\"unauthorized\"} - anything else means the gate let a wrong secret through, or the function answering is not the deployed one)"
-  fi
+# 20i. the deployed east-feed-refresh (v1 since 2026-10-20 01:42:59 UTC; graded on every run since the deploy's record step): an unauthenticated
+# POST, then a POST with a wrong x-cron-secret - each must be the function's own 401 {"error":"unauthorized"} (no body is sent: nothing can run,
+# even past a broken gate)
+line=$(curl -s -o $T/vr20i.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/east-feed-refresh")
+body20i=$(tr -d ' \r\n' < $T/vr20i.json)
+echo "   20i unauthenticated POST east-feed-refresh: $line  body: $(head -c 120 $T/vr20i.json)"
+if [ "$line" = "HTTP 401" ] && [ "$body20i" = '{"error":"unauthorized"}' ]; then
+  ok "east-feed-refresh refuses an unauthenticated POST (401 {\"error\":\"unauthorized\"} - its own x-cron-secret gate, nothing read)"
 else
-  echo "   SKIP 20i (set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy: an unauthenticated POST and a wrong x-cron-secret must each be the function's own 401)"
+  bad "east-feed-refresh POST without x-cron-secret: $line $(head -c 120 $T/vr20i.json) (expected 401 {\"error\":\"unauthorized\"} from the function's own gate - a 404 = the function is gone (deployed 2026-10-20 01:42:59 UTC - deleted or renamed since); a 401 with another body = the gateway's JWT check, a redeploy without --no-verify-jwt that the cron's call would never pass; anything else = the gate let it through)"
+fi
+line=$(curl -s -o $T/vr20i2.json -w 'HTTP %{http_code}' -X POST "$URL/functions/v1/east-feed-refresh" -H "x-cron-secret: verify-rls-20i-not-the-secret")
+body20i2=$(tr -d ' \r\n' < $T/vr20i2.json)
+echo "   20i POST east-feed-refresh with a wrong x-cron-secret: $line  body: $(head -c 120 $T/vr20i2.json)"
+if [ "$line" = "HTTP 401" ] && [ "$body20i2" = '{"error":"unauthorized"}' ]; then
+  ok "east-feed-refresh refuses a wrong x-cron-secret (401 {\"error\":\"unauthorized\"} - the gate compares the secret, nothing read)"
+else
+  bad "east-feed-refresh POST with a wrong x-cron-secret: $line $(head -c 120 $T/vr20i2.json) (expected 401 {\"error\":\"unauthorized\"} - anything else means the gate let a wrong secret through, or the function answering is not the deployed one)"
 fi
 
 echo "== 21. trade offers (2026-10-18, revision y): apply_trade writes the receiver's call_offers row + the consent stamps shift_trade_requests.proposed_by / accepted_by - rolled-back probe =="

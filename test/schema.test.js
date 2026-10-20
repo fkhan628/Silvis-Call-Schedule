@@ -5010,9 +5010,10 @@ ok(!/^\|[^\n]*(push_subscriptions|Prompt 30|push\.save)[^\n]*NOT APPLIED/m.test(
   // one sentence that quotes the deploy-day reading as contradicted
   const readmeFlat = readmeAll.replace(/\s+/g, " "), reviewFlat = review.replace(/\s+/g, " ");
   [
-    "numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set` re-versions all four, so always read `supabase functions list` before a redeploy",
+    // pins moved deliberately 10/20 (the east-feed-refresh deploy's record step): a secrets set re-versions every deployed function - five since 2026-10-20
+    "numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set` re-versions every deployed function (four then, five since 2026-10-20), so always read `supabase functions list` before a redeploy",
     "`supabase secrets set` re-versions EVERY deployed function (Davenport lesson: the version number jumps without a code change).",
-    "a rotation re-versions all four again.",
+    "a rotation re-versions every deployed function again - five since 2026-10-20.",
     "the two `secrets set` runs of 10/3 had moved the listed version from v9 to v11",
     "`functions list` would read v10 after the 2026-10-03 03:29Z `secrets set` re-versioned every function (inferred, never listed), v11 after a `--rotate`",
     "like every `secrets set` it re-versions all four functions, no code change",
@@ -5058,7 +5059,8 @@ console.log("- Prompt 30: notification_preferences *_push + push_subscriptions +
 // 2026-10-19 22:53:18Z (log apply-east-vacations-20261019T225238Z.log, APPLIED AND VERIFIED); the file that ran is kept byte for byte -
 // its body sha256-pinned, the apply noted in ONE trailer line - the probe's, the pre-check's and the short-days query's headers read
 // APPLIED, schema.sql's revision x lines read applied, verify-rls section 20 is strict by default (SILVIS_EAST_VACATIONS_APPLIED gone;
-// SILVIS_EAST_REFRESH_DEPLOYED stays until the east-feed-refresh deploy's record step) and the docs carry the observed apply.
+// SILVIS_EAST_REFRESH_DEPLOYED stayed until the east-feed-refresh deploy's record step, 10/20, which dropped it) and the docs carry the
+// observed apply.
 const XV_FILE = "2026-10-14-east-vacations.sql";
 const XV_MIGRATION = path.join(ROOT, "sql", "migrations", XV_FILE);
 const XV_PROBE = path.join(ROOT, "sql", "probes", "east-vacations-probe.sql");
@@ -5394,7 +5396,7 @@ step("Prompt 31 Part A (critic A12): the days under the minimum after the apply 
   ok(!olFlat.includes("The same reading as the trigger:") && olFlat.includes("The 9/30 trigger's reading (sql/migrations/2026-09-30-vacation-guard.sql - the guard live until revision x is applied):") && olFlat.includes("After that apply run sql/probes/vacation-short-days.sql") && olFlat.includes("a covering, non-exact 'home' row still exempts a day here but no longer in the guard"), "the 9/30 over-limit query's header names its reading the 9/30 trigger's, says where it is more lenient than the revision x guard and sends the scheduler to sql/probes/vacation-short-days.sql after that apply");
 }
 
-step("Prompt 31 Part A: verify-rls.sh section 20 - anon REST (20a the derived rows, 20b the reset, 20c / 20d the internal functions, 20h the short days), 20e as a surgeon, the graded probe (56), leftovers (20g), section 15 re-run unchanged; strict since the record step (PROBE_SETUP and a 404 FAIL, no flag); 20i the deployed east-feed-refresh (only with SILVIS_EAST_REFRESH_DEPLOYED=1 - the review of 10/18); graded against a faked CLI and curl");
+step("Prompt 31 Part A: verify-rls.sh section 20 - anon REST (20a the derived rows, 20b the reset, 20c / 20d the internal functions, 20h the short days), 20e as a surgeon, the graded probe (56), leftovers (20g), section 15 re-run unchanged; strict since the record step (PROBE_SETUP and a 404 FAIL, no flag); 20i the deployed east-feed-refresh (the review of 10/18; on every run since the deploy's record step - no flag); graded against a faked CLI and curl");
 ok(/^echo "== 20\. East vacations \(2026-10-14, Prompt 31 Part A\): silvis_derived_vacations \+ east_vacation_reset_stale \+ the re-created vacation guard - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 20 (East vacations)");
 const s20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
 ok(s20.length > 0 && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 19. ') && vr.indexOf('echo "== 20. ') > vr.indexOf('echo "== 15. '), "verify-rls.sh section 20 could not be sliced out (after section 19, up to the next section header or the RESULT line)");
@@ -5407,11 +5409,12 @@ const s20code = s20.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 // after the apply is gone from the whole file (the header, --help, the section's comments and code)
 ok(!/SILVIS_EAST_VACATIONS_APPLIED|EVSTRICT20/.test(vr), "verify-rls.sh no longer reads or documents SILVIS_EAST_VACATIONS_APPLIED (the record step dropped it; strict is the default)");
 // Prompt 31 Part A review (10/18): the report's section 5 named a case 20i - an unauthenticated POST to the deployed east-feed-refresh
-// answers 401, SKIP unless SILVIS_EAST_REFRESH_DEPLOYED=1 - and it was never built, so the 401 was checked once, by hand, in the
-// deploy block; a later redeploy with a broken gate would leave every verify-rls run green. 20i grades it (an unauthenticated POST
-// and a wrong x-cron-secret, each the function's own 401 {"error":"unauthorized"}), as 19i graded send-notification before its
-// record step; the deploy's record step drops the flag (19i's precedent).
-ok(s20code.includes('EVDEPLOYED20="${SILVIS_EAST_REFRESH_DEPLOYED:-}"'), "section 20 reads SILVIS_EAST_REFRESH_DEPLOYED (20i)");
+// answers 401 - and it was never built, so the 401 was checked once, by hand, in the deploy block; a later redeploy with a broken gate
+// would leave every verify-rls run green. 20i grades it (an unauthenticated POST and a wrong x-cron-secret, each the function's own 401
+// {"error":"unauthorized"}). pin moved deliberately 10/20 (the deploy's record step, like Prompt 30's for 19i on 10/3): east-feed-refresh
+// is deployed (v1, 2026-10-20 01:42:59 UTC), so 20i is graded on every run - the flag is gone from the whole file (the header, --help,
+// the section's comments and code); kept intent: 20i grades the deployed function's own gate
+ok(!/SILVIS_EAST_REFRESH_DEPLOYED|EVDEPLOYED20/.test(vr), "verify-rls.sh no longer reads or documents SILVIS_EAST_REFRESH_DEPLOYED (the deploy's record step dropped it; 20i runs on every run)");
 // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - 20i adds the two POSTs to the deployed east-feed-refresh (was
 // eight calls); kept intent: every call of the section is counted and named
 eq((s20code.match(/curl /g) || []).length, 10, "section 20 makes exactly ten calls (20a-20d and 20h anon, 20e three as a surgeon, 20i two to the deployed function);");
@@ -5449,45 +5452,55 @@ ok(s20code.includes("LEFTOVER20_SQL=\"select ((select count(*) from auth.users w
 ok(["delete from public.time_off where note like 'probe-eastvac31%';", "delete from public.east_feed where data->>'probe' = 'eastvac31';", "delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';", "delete from public.audit_log where action = 'eastvac.review' and detail->>'start' between '2031-01-01' and '2031-04-30';", "delete from auth.users where email like 'probe-eastvac31-%@example.test';   -- user_profiles rows cascade"].every((d) => s20code.includes("echo \"      " + d + "\"")), "20g prints DELETEs for the probe's rows only");
 ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 20f / 20g skip (20a-20e and 20h still run)");
 {
-  // 20i (the review of 10/18): last in the section (after 20g, like 19i after 19h), only on its flag, a SKIP line otherwise; each
-  // POST must be answered by the FUNCTION's gate - 401 with exactly {"error":"unauthorized"} (the gateway's JWT check, on a deploy
-  // without --no-verify-jwt, answers 401 with another body, and the cron's call carries no JWT); anything else FAILs
-  const i20 = s20code.indexOf('if [ "$EVDEPLOYED20" = "1" ]; then');
+  // 20i (the review of 10/18): last in the section (after 20g, like 19i after 19h); each POST must be answered by the FUNCTION's
+  // gate - 401 with exactly {"error":"unauthorized"} (the gateway's JWT check, on a redeploy without --no-verify-jwt, answers 401 with
+  // another body, and the cron's call carries no JWT); anything else FAILs. pins moved deliberately 10/20 (the deploy's record step, like
+  // 19i's on 10/3): 20i runs at the section's top level, outside any if - no flag, no SKIP line; kept intent: last in the section, the
+  // two POSTs, each a PASS only on the function's own 401 body
+  const i20 = s20code.indexOf("\nline=$(curl -s -o $T/vr20i.json ");
   ok(i20 > 0 && i20 > s20code.indexOf('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)"') && i20 > s20code.indexOf("LEFTOVER20_SQL="), "20i comes last in section 20, after the probe and its leftover count (20f / 20g), outside the linked-CLI branch");
   const i20code = i20 < 0 ? "" : s20code.slice(i20);
-  ok(/\nelse\n  echo "   SKIP 20i \(set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy[^"\n]*"\nfi$/.test(i20code.replace(/\s+$/, "")), "without SILVIS_EAST_REFRESH_DEPLOYED=1 20i prints one SKIP line and counts nothing (the section's last statement)");
-  ok(i20code.includes("line=$(curl -s -o $T/vr20i.json -w 'HTTP %{http_code}' -X POST \"$URL/functions/v1/east-feed-refresh\")") && i20code.includes("line=$(curl -s -o $T/vr20i2.json -w 'HTTP %{http_code}' -X POST \"$URL/functions/v1/east-feed-refresh\" -H \"x-cron-secret: verify-rls-20i-not-the-secret\")"), "20i's two POSTs: no session, then a wrong x-cron-secret");
-  ok(i20code.includes("body20i=$(tr -d ' \\r\\n' < $T/vr20i.json)") && i20code.includes("body20i2=$(tr -d ' \\r\\n' < $T/vr20i2.json)") && (i20code.match(/if \[ "\$line" = "HTTP 401" \] && \[ "\$body20i2?" = '\{"error":"unauthorized"\}' \]; then\n    ok "/g) || []).length === 2 && (i20code.match(/\n  else\n    bad "east-feed-refresh /g) || []).length === 2, "20i: each POST PASSes only on 401 with exactly {\"error\":\"unauthorized\"} (the function's own gate), and FAILs otherwise");
+  ok(!/SKIP 20i/.test(s20) && !/\n\s*if [^\n]*\n\s+line=\$\(curl -s -o \$T\/vr20i/.test(s20code), "20i prints no SKIP line and no indented copy of it sits behind an if (graded on every run since the deploy's record step)");
+  // review 10/20: structural - an unindented `if` before 20i would pass the indentation-based pins; the if / fi depth before it must be 0
+  const depth20i = s20code.slice(0, i20 < 0 ? 0 : i20).split("\n").reduce((d, l) => d + (/^\s*if\s/.test(l) ? 1 : 0) - (/^\s*fi\s*$/.test(l) ? 1 : 0), 0);
+  ok(i20 > 0 && depth20i === 0, "20i sits behind no if and outside the linked-CLI branch (if / fi depth 0 before it, got " + depth20i + ")");
+  ok(/\nline=\$\(curl -s -o \$T\/vr20i\.json -w 'HTTP %\{http_code\}' -X POST "\$URL\/functions\/v1\/east-feed-refresh"\)\n/.test(s20code) && /\nline=\$\(curl -s -o \$T\/vr20i2\.json -w 'HTTP %\{http_code\}' -X POST "\$URL\/functions\/v1\/east-feed-refresh" -H "x-cron-secret: verify-rls-20i-not-the-secret"\)\n/.test(s20code), "20i's two POSTs at the section's top level (no indentation): no session, then a wrong x-cron-secret");
+  ok(i20code.includes("body20i=$(tr -d ' \\r\\n' < $T/vr20i.json)") && i20code.includes("body20i2=$(tr -d ' \\r\\n' < $T/vr20i2.json)") && (i20code.match(/\nif \[ "\$line" = "HTTP 401" \] && \[ "\$body20i2?" = '\{"error":"unauthorized"\}' \]; then\n  ok "/g) || []).length === 2 && (i20code.match(/\nelse\n  bad "east-feed-refresh /g) || []).length === 2 && /\nfi$/.test(i20code.replace(/\s+$/, "")), "20i: each POST PASSes only on 401 with exactly {\"error\":\"unauthorized\"} (the function's own gate) and FAILs otherwise; the section ends with the second check's fi");
 }
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
-  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h) and 20e");
+  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h, 20i\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h, 20i - 20i since the deploy's record step) and 20e");
   // pin moved deliberately 10/19 (the record step): the header no longer documents SILVIS_EAST_VACATIONS_APPLIED (strict is the default)
   ok(!/SILVIS_EAST_VACATIONS_APPLIED/.test(head), "verify-rls.sh's header no longer documents SILVIS_EAST_VACATIONS_APPLIED (the record step dropped it)");
-  ok(head.includes("#   SILVIS_EAST_REFRESH_DEPLOYED=1                          also grade 20i (the deployed east-feed-refresh: an unauthenticated POST and a wrong x-cron-secret, each its own 401 {\"error\":\"unauthorized\"}): only after the east-feed-refresh deploy; without it 20i prints a SKIP line and counts nothing; the deploy's record step grades 20i on every run and drops this variable"), "verify-rls.sh's header documents SILVIS_EAST_REFRESH_DEPLOYED (20i)");
+  // pin moved deliberately 10/20 (the deploy's record step): the header no longer documents SILVIS_EAST_REFRESH_DEPLOYED (20i on every run)
+  ok(!/SILVIS_EAST_REFRESH_DEPLOYED/.test(head), "verify-rls.sh's header no longer documents SILVIS_EAST_REFRESH_DEPLOYED (the deploy's record step dropped it)");
   // pin moved deliberately 10/14: Prompt 31 Part A review (10/18) - --help lists 20i's flag after SILVIS_EAST_VACATIONS_APPLIED;
   // kept intent: --help names the section 20 flag(s); moved again 10/19 (Part A's record step): SILVIS_EAST_VACATIONS_APPLIED is gone,
-  // SILVIS_EAST_REFRESH_DEPLOYED stays until the deploy's record step
-  ok(/SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_EAST_REFRESH_DEPLOYED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_EAST_VACATIONS_APPLIED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help lists SILVIS_EAST_REFRESH_DEPLOYED (and no longer SILVIS_EAST_VACATIONS_APPLIED)");
+  // SILVIS_EAST_REFRESH_DEPLOYED stays until the deploy's record step; moved again 10/20 (the deploy's record step): it is gone too -
+  // --help's env-var list ends at SILVIS_PREFS_ROWS_BEFORE, then only another prepared migration's or deploy's flag (the merge-tolerant
+  // form of the section 15 / 19 pins)
+  ok(/SILVIS_PREFS_ROWS_BEFORE( \/ SILVIS_[A-Z_]+_(APPLIED|DEPLOYED))* - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))) && !/SILVIS_EAST_VACATIONS_APPLIED|SILVIS_EAST_REFRESH_DEPLOYED/.test(vr.slice(0, vr.indexOf("set -u"))), "verify-rls.sh --help no longer lists SILVIS_EAST_REFRESH_DEPLOYED (nor SILVIS_EAST_VACATIONS_APPLIED)");
 }
 {
   const code20 = vr.slice(vr.indexOf('echo "== 20. '), vrSectionEnd('echo "== 20. '));
   const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
   const run20 = (cliOut, opts) => {
-    // deployed (the review of 10/18): SILVIS_EAST_REFRESH_DEPLOYED=1 - 20i's unauthenticated POST answers i1 / i1Body, its wrong-secret
-    // POST i2 / i2Body (the function's own 401 by default); `fnCalls` counts the calls that reached the function (each curl runs in a
-    // command substitution's subshell, so the fake appends a line to a file) - 0 without the flag
+    // 20i (the review of 10/18): its unauthenticated POST answers i1 / i1Body, its wrong-secret POST i2 / i2Body (the function's own 401
+    // by default); `fnCalls` counts the calls that reached the function (each curl runs in a command substitution's subshell, so the
+    // fake appends a line to a file) - 2 on every run since the deploy's record step
     // pin moved deliberately 10/19 (the record step): no strict option - section 20 reads no apply flag (under set -u, with the variable
     // unset); `pre` adds a line before the section, e.g. a SILVIS_EAST_VACATIONS_APPLIED left in the environment (the apply script set it),
-    // which must change nothing; deployed stays (20i, until the deploy's record step)
+    // which must change nothing; moved again 10/20 (the deploy's record step, like section 19's on 10/3): no deployed option - section 20
+    // reads no deploy flag either (under set -u, with the variable unset) and grades 20i on every run; a SILVIS_EAST_REFRESH_DEPLOYED
+    // left in the environment (set for the run after the deploy, or empty) goes through `pre` and must change nothing
     const UNAUTH = '{"error":"unauthorized"}';
-    const o = Object.assign({ pre: "", deployed: false, surgeon: false, leftover: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", h: "401", eDer: "200", eDerBody: "[]", eRes: "400", eResBody: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}', eSh: "403", i1: "401", i1Body: UNAUTH, i2: "401", i2Body: UNAUTH }, opts || {});
+    const o = Object.assign({ pre: "", surgeon: false, leftover: 0, shape: "envelope", a: "401", b: "401", c: "401", d: "401", h: "401", eDer: "200", eDerBody: "[]", eRes: "400", eResBody: '{"code":"EV001","message":"EAST_RESET_NOT_ALLOWED: ..."}', eSh: "403", i1: "401", i1Body: UNAUTH, i2: "401", i2Body: UNAUTH }, opts || {});
     const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
       : o.shape === "bare" ? "printf '[\\n  {\\n    \"leftover\": " + o.leftover + "\\n  }\\n]\\n'"
       : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"leftover\": " + o.leftover + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"";
     const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
       "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
-      (o.pre ? o.pre + "\n" : "") + "SILVIS_EAST_REFRESH_DEPLOYED='" + (o.deployed ? "1" : "") + "'\n" + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      (o.pre ? o.pre + "\n" : "") + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
       "q() { " + qBody + "; }\n" +
       "curl() { local of='' prev='' code='' sur='' sec='' u='' body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; case \"$a\" in http*) u=\"$a\";; *SURGEONTOKEN*) sur=1;; x-cron-secret:*) sec=1;; esac; prev=\"$a\"; done; " +
       "case \"$u\" in " +
@@ -5511,50 +5524,58 @@ ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)
   // the CLI's error body in the shape the live apply logs show (a JSON message; CONTEXT after the sentinel), here with '<' / '>' escaped
   // as \u003c / \u003e - a form section 20 decodes; the live CLI 2.120.0 carried them unescaped on 10/19 (the raw live replay below)
   const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"').replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
-  const N20 = XV_CASES.length + 6;   // 20a-20d + 20h + 56 cases + 20g
+  // pin moved deliberately 10/20 (the deploy's record step): 20i's two calls count on every run now (the function is deployed)
+  const N20 = XV_CASES.length + 8;   // 20a-20d + 20h + 56 cases + 20g + 20i's two
   const ra = run20(msgOf(after));
-  eq(ra.result, [N20, 0], "section 20 against the AFTER picture (20a-20d and 20h 401, every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  eq(ra.result, [N20, 0], "section 20 against the AFTER picture (20a-20d and 20h 401, every case, leftover 0, 20i the function's own 401 twice): every check PASS (" + fails(ra) + ");");
   ok(/SKIP 20e/.test(ra.out), "... 20e skipped without a surgeon token");
-  // 20i (the review of 10/18): without SILVIS_EAST_REFRESH_DEPLOYED the default count does not move - a SKIP line, nothing asked of
-  // the function; with it, two more checks (N20I), each the function's own 401 {"error":"unauthorized"} or a FAIL
-  ok(/^   SKIP 20i \(set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy/m.test(ra.out) && ra.fnCalls === 0 && !/^ +20i /m.test(ra.out), "... 20i skipped without SILVIS_EAST_REFRESH_DEPLOYED - no call reaches the function (" + ra.fnCalls + ")");
-  const N20I = 2;   // 20i: the unauthenticated POST and the wrong x-cron-secret
-  const rdep = run20(msgOf(after), { deployed: true });
-  eq(rdep.result, [N20 + N20I, 0], "with SILVIS_EAST_REFRESH_DEPLOYED=1 20i adds two PASSes (an unauthenticated POST and a wrong x-cron-secret, each 401 {\"error\":\"unauthorized\"}) (" + fails(rdep) + ");");
-  ok(rdep.fnCalls === 2 && /^PASS  east-feed-refresh refuses an unauthenticated POST \(401/m.test(rdep.out) && /^PASS  east-feed-refresh refuses a wrong x-cron-secret \(401/m.test(rdep.out) && !/SKIP 20i/.test(rdep.out), "... the two POSTs reached the function and each PASS line names what was refused");
-  eq(run20(msgOf(after), { deployed: true, surgeon: true }).result, [N20 + 3 + N20I, 0], "... beside 20e's three;");
-  eq(run20(msgOf(after), { deployed: true, i1: "404", i1Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}', i2: "404", i2Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}' }).result, [N20, 2], "20i fails a function that is not deployed (404 - the flag says it is);");
-  eq(run20(msgOf(after), { deployed: true, i1Body: '{"code":401,"message":"Missing authorization header"}', i2Body: '{"code":401,"message":"Missing authorization header"}' }).result, [N20, 2], "20i fails the GATEWAY's 401 (a deploy without --no-verify-jwt: the cron's call carries no JWT and would never reach the function);");
-  eq(run20(msgOf(after), { deployed: true, i1: "400", i1Body: '{"error":"the body must be {} or {\\"dryRun\\": <boolean>}; nothing was read or written"}' }).result, [N20 + 1, 1], "20i fails an unauthenticated POST that got past the gate (400 at the body check);");
-  eq(run20(msgOf(after), { deployed: true, i2: "200", i2Body: '{"dryRun":false,"ok":true}' }).result, [N20 + 1, 1], "20i fails a wrong x-cron-secret that is let through;");
-  eq(run20(msgOf(after), { deployed: true, i1: "000", i1Body: "", i2: "000", i2Body: "" }).result, [N20, 2], "20i fails when the function cannot be reached (HTTP 000);");
+  // 20i (the review of 10/18): graded with no flag since the deploy's record step - two checks, each the function's own 401
+  // {"error":"unauthorized"} or a FAIL; a deploy flag left in the environment changes nothing: set (the run after the deploy) or
+  // empty (an empty flag is what turned a flag-gated 20i into a SKIP line)
+  ok(ra.fnCalls === 2 && /^PASS  east-feed-refresh refuses an unauthenticated POST \(401/m.test(ra.out) && /^PASS  east-feed-refresh refuses a wrong x-cron-secret \(401/m.test(ra.out) && !/SKIP 20i/.test(ra.out), "... 20i graded with no flag: the two POSTs reached the function (" + ra.fnCalls + ") and each PASS line names what was refused");
+  ["export SILVIS_EAST_REFRESH_DEPLOYED=1", "SILVIS_EAST_REFRESH_DEPLOYED="].forEach((pre) => {
+    const r = run20(msgOf(after), { pre });
+    eq([r.result, r.fnCalls], [[N20, 0], 2], "section 20 with `" + pre + "` before it grades the same (" + N20 + " / 0, 20i's two calls made) - the flag is ignored (" + fails(r) + ");");
+  });
+  eq(run20(msgOf(after), { i1: "404", i1Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}', i2: "404", i2Body: '{"code":"NOT_FOUND","message":"Requested function was not found"}' }).result, [N20 - 2, 2], "20i fails a function that is gone (404 - it is deployed since 2026-10-20 01:42:59 UTC);");
+  eq(run20(msgOf(after), { i1Body: '{"code":401,"message":"Missing authorization header"}', i2Body: '{"code":401,"message":"Missing authorization header"}' }).result, [N20 - 2, 2], "20i fails the GATEWAY's 401 (a redeploy without --no-verify-jwt: the cron's call carries no JWT and would never reach the function);");
+  eq(run20(msgOf(after), { i1: "400", i1Body: '{"error":"the body must be {} or {\\"dryRun\\": <boolean>}; nothing was read or written"}' }).result, [N20 - 1, 1], "20i fails an unauthenticated POST that got past the gate (400 at the body check);");
+  eq(run20(msgOf(after), { i2: "200", i2Body: '{"dryRun":false,"ok":true}' }).result, [N20 - 1, 1], "20i fails a wrong x-cron-secret that is let through;");
+  eq(run20(msgOf(after), { i1: "000", i1Body: "", i2: "000", i2Body: "" }).result, [N20 - 2, 2], "20i fails when the function cannot be reached (HTTP 000);");
   eq(run20(msgOf(after), { surgeon: true }).result, [N20 + 3, 0], "with SILVIS_SURGEON_JWT 20e adds three PASSes (the derived rows a JSON array, the reset 400 EV001, the short days refused 403);");
   // the record step (10/19): the 2026-10-19 live picture exactly as Faraz's log printed it (SCHEMA-REVIEW's observed block - the 56 lines
   // of step 6 of apply-east-vacations-20261019T225238Z.log - inside the CLI's 400 envelope; 20a-20d and 20h 401), the apply's flag left in
-  // the environment ignored; 20i a SKIP line (not deployed) - the log's section 20 graded 62 / 0
+  // the environment ignored; 20i a SKIP line (not deployed) - the log's section 20 graded 62 / 0. pin moved deliberately 10/20 (the
+  // deploy's record step, like section 19's): 20i answered as the deploy run of 2026-10-20 observed it (the function's own 401
+  // {"error":"unauthorized"} twice) and both flags left in the environment ignored - since the deploy's record step 20i adds its two
+  // PASSes: 64 / 0
   const liveMsg = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + XV_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
-  const rlive = run20(liveMsg, { pre: "export SILVIS_EAST_VACATIONS_APPLIED=1" });
-  eq(rlive.result, [N20, 0], "section 20 against the 2026-10-19 AFTER picture as the log printed it (20a-20d and 20h 401, the 56 lines, leftover 0), the leftover flag ignored - 62 / 0 (" + fails(rlive) + ");");
+  const rlive = run20(liveMsg, { pre: "export SILVIS_EAST_VACATIONS_APPLIED=1 SILVIS_EAST_REFRESH_DEPLOYED=" });
+  eq(rlive.result, [N20, 0], "section 20 against the 2026-10-19 AFTER picture as the log printed it (20a-20d and 20h 401, the 56 lines, leftover 0) plus 20i as deployed, the leftover flags ignored - 64 / 0 (" + fails(rlive) + ");");
+  // the deploy's record step (10/20): 20i prints its four lines exactly as Faraz's run after the deploy printed them (main 477936d, RESULT
+  // 535 passed, 0 failed - edge-functions/README.md section 3's deploy record), and both PASS lines are those of that run
+  const DEPLOY20I = ["   20i unauthenticated POST east-feed-refresh: HTTP 401  body: {\"error\":\"unauthorized\"}", "PASS  east-feed-refresh refuses an unauthenticated POST (401 {\"error\":\"unauthorized\"} - its own x-cron-secret gate, nothing read)", "   20i POST east-feed-refresh with a wrong x-cron-secret: HTTP 401  body: {\"error\":\"unauthorized\"}", "PASS  east-feed-refresh refuses a wrong x-cron-secret (401 {\"error\":\"unauthorized\"} - the gate compares the secret, nothing read)"];
+  ok(rlive.out.includes("\n" + DEPLOY20I.join("\n") + "\n") && rlive.fnCalls === 2, "the live replay prints 20i's four lines as the deploy run printed them (the function's own 401 twice, the two PASS lines)");
   // section 20 echoes the results before it decodes them: the raw replay prints the 56 lines exactly as the log's section 20 did (<E> raw)
   ok(XV_OBSERVED_BLOCK.length > 0 && rlive.out.includes("\n" + XV_OBSERVED_BLOCK.split("\n").map((l) => "   " + l).join("\n") + "\n"), "the raw live replay prints the 56 lines as the log's section 20 printed them (R7's <E> raw)");
   const liveMsgEsc = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + XV_LIVE_LINES_ESC.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
-  eq(run20(liveMsgEsc, { pre: "export SILVIS_EAST_VACATIONS_APPLIED=1" }).result, [N20, 0], "... and the same block with '<' / '>' escaped as \\u003c / \\u003e (a JSON encoder that escapes them) grades the same - 62 / 0;");
+  eq(run20(liveMsgEsc, { pre: "export SILVIS_EAST_VACATIONS_APPLIED=1 SILVIS_EAST_REFRESH_DEPLOYED=" }).result, [N20, 0], "... and the same block with '<' / '>' escaped as \\u003c / \\u003e (a JSON encoder that escapes them) grades the same - 64 / 0;");
   {
-    // the count is read from the record, not restated: today's section 20 (20i still a SKIP until the deploy's record step) must be the
-    // apply log's section 20 as SCHEMA-REVIEW's observed apply paragraph quotes it
+    // the count is read from the record, not restated: today's section 20 less 20i's two calls (graded since the deploy's record step)
+    // must be the apply log's section 20 as SCHEMA-REVIEW's observed apply paragraph quotes it (the apply ran before the deploy)
     const obApply = review.slice(review.indexOf("observed (apply, 2026-10-19):")).replace(/\s+/g, " ");
     const logged = (obApply.match(/`RESULT: 533 passed, 0 failed` - section 20 (\d+) \/ (\d+)/) || []).slice(1).map(Number);
-    eq(logged, [N20, 0], "section 20's count must equal the apply log's section 20 as the observed apply paragraph quotes it (62 / 0);");
+    eq(logged, [N20 - 2, 0], "section 20's count less 20i's two must equal the apply log's section 20 as the observed apply paragraph quotes it (62 / 0);");
   }
   const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: silvis_derived_vacations is absent - sql/migrations/2026-10-14-east-vacations.sql is not applied\\nCONTEXT:  ..."}';
   const beforePic = { a: "404", b: "404", c: "404", d: "404", h: "404" };
   // pins moved deliberately 10/19 (the record step): the not-applied picture is a FAIL with no flag (it passed before; strict was the flag's)
   const rbf = run20(setup, beforePic);
-  eq(rbf.result, [1, 6], "section 20 since the record step (five 404s, PROBE_SETUP): six FAILs with no flag; the leftover check runs (" + fails(rbf) + ");");
+  eq(rbf.result, [3, 6], "section 20 since the record step (five 404s, PROBE_SETUP): six FAILs with no flag; the leftover check and 20i's two still run (" + fails(rbf) + ");");
   ok(/FAIL  East vacations probe: PROBE_SETUP - silvis_derived_vacations is absent \(the functions exist since the 2026-10-19 apply\)/.test(rbf.out) && ["silvis_derived_vacations", "east_vacation_reset_stale", "silvis_east_ranges", "silvis_east_people", "silvis_vacation_short_days"].every((f) => rbf.out.includes("FAIL  anon rpc " + f + ": HTTP 404")), "section 20 names the missing functions (PROBE_SETUP) and the five anon 404s");
-  eq(run20(setup, Object.assign({ pre: "SILVIS_EAST_VACATIONS_APPLIED=" }, beforePic)).result, [1, 6], "section 20: an empty SILVIS_EAST_VACATIONS_APPLIED no longer turns the 404s and PROBE_SETUP into PASSes;");
-  eq(run20(setup, Object.assign({ surgeon: true }, beforePic)).result, [4, 6], "... (20e's three calls answered as after the apply do not hide them);");
-  eq(run20(setup, Object.assign({ surgeon: true, eDer: "404", eRes: "404", eSh: "404" }, beforePic)).result, [1, 9], "... and 20e's three 404s FAIL too;");
+  eq(run20(setup, Object.assign({ pre: "SILVIS_EAST_VACATIONS_APPLIED=" }, beforePic)).result, [3, 6], "section 20: an empty SILVIS_EAST_VACATIONS_APPLIED no longer turns the 404s and PROBE_SETUP into PASSes;");
+  eq(run20(setup, Object.assign({ surgeon: true }, beforePic)).result, [6, 6], "... (20e's three calls answered as after the apply do not hide them);");
+  eq(run20(setup, Object.assign({ surgeon: true, eDer: "404", eRes: "404", eSh: "404" }, beforePic)).result, [3, 9], "... and 20e's three 404s FAIL too;");
   eq(run20(msgOf(after), { h: "200" }).result, [N20 - 1, 1], "an anon 200 on the short days FAILs (20h);");
   eq(run20(msgOf(after), { surgeon: true, eSh: "200" }).result, [N20 + 2, 1], "a surgeon's 200 on the short days FAILs (20e - the East-tagged ids are the scheduler's and the server's only);");
   const rb = run20(msgOf(Object.assign({}, after, { G4: "ok", A6: "rows=6 (NO refusal)", R2: "n=2 (NO refusal)", R13: "kept=E 02-06..02-07 away" })), { b: "400" });
@@ -5568,13 +5589,13 @@ ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)
   eq(rq.result, [N20 - 1, 1], "section 20 fails a non-zero leftover count (read from a plain terminal's bare-array -o json the same as the agent envelope);");
   ok(/LEFT ROWS BEHIND/.test(rq.out) && rq.out.includes("delete from public.east_vacation_reviews where decided_by = 'probe-eastvac31';") && rq.out.includes("delete from auth.users where email like 'probe-eastvac31-%@example.test';"), "section 20 names the leftovers and prints their DELETEs");
   eq(run20(msgOf(after), { shape: "error" }).result, [N20 - 1, 1], "20g fails a leftover count it cannot read;");
-  eq(run20('{"message": "connection refused"}').result, [6, 1], "section 20 fails a run with no sentinel-terminated PROBE_RESULTS (20a-20d, 20h and the leftover check still run);");
+  eq(run20('{"message": "connection refused"}').result, [8, 1], "section 20 fails a run with no sentinel-terminated PROBE_RESULTS (20a-20d, 20h, the leftover check and 20i's two still run);");
   const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql/migrations/2026-10-14-east-vacations.sql is partly applied\\nCONTEXT:  ..."}';
   const rp = run20(part);
-  eq(rp.result, [6, 1], "the partly-applied raise is a FAIL;");
+  eq(rp.result, [8, 1], "the partly-applied raise is a FAIL;");
   ok(/FAIL  East vacations probe: PROBE_SETUP: time_off_vacation_guard does not read silvis_derived_vacations - sql\/migrations\/2026-10-14-east-vacations\.sql is partly applied/.test(rp.out), "... and the FAIL line names the raise");
   const col = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in 2031-01 .. 2031-04 (x) - the probe fixtures would collide\\nCONTEXT:  ..."}';
-  eq(run20(col).result, [6, 1], "a collision raise is a FAIL;");
+  eq(run20(col).result, [8, 1], "a collision raise is a FAIL;");
 }
 
 step("Prompt 31 Part A: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - no apply-east-vacations.sh under scripts/, no tracked file runs one from scripts/");
@@ -5583,7 +5604,7 @@ step("Prompt 31 Part A: no apply script in the repo (Faraz 10/1: apply scripts l
   [XV_MIGRATION, XV_PROBE, XV_PRECHECK, XV_SHORT_PROBE, path.join(ROOT, "sql", "schema.sql"), path.join(ROOT, "scripts", "verify-rls.sh")].forEach((p) =>
     ok(fs.existsSync(p) && !/bash scripts\/apply-|scripts\/apply-east-vacations\.sh/.test(read(p)), path.relative(ROOT, p) + " is missing or names an in-repo apply script (they live outside the repo since 10/1)"));
 }
-console.log("- Prompt 31 Part A: five NEW functions (silvis_east_people / silvis_east_ranges / silvis_derived_vacations / east_vacation_reset_stale / silvis_vacation_short_days - critic A12) + time_off_vacation_guard re-created to read the derived rows (report-first, applied 2026-10-19 22:53:18Z; the file kept as it ran, sha256-pinned; revision x), mirrored, probe (56) + pre-check + vacation-short-days.sql + verify-rls section 20 (strict; 20i still behind its deploy flag) graded against a faked CLI");
+console.log("- Prompt 31 Part A: five NEW functions (silvis_east_people / silvis_east_ranges / silvis_derived_vacations / east_vacation_reset_stale / silvis_vacation_short_days - critic A12) + time_off_vacation_guard re-created to read the derived rows (report-first, applied 2026-10-19 22:53:18Z; the file kept as it ran, sha256-pinned; revision x), mirrored, probe (56) + pre-check + vacation-short-days.sql + verify-rls section 20 (strict; 20i graded on every run since the east-feed-refresh deploy's record step) graded against a faked CLI");
 
 // ---- Prompt 31 Part A (A5): the database record - docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations" (the migration header's record
 // step names it), table (a)'s helper line and guide 4.3. Pins moved deliberately 10/19 (the record step): the applied words (the status
@@ -5637,14 +5658,21 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (APPLIED 2026-10-19
   let rb = -1;
   XV_ROLLBACK.forEach((l) => { const i = xrRb.indexOf(l); ok(i > rb, "the rollback (its own block) lists, in order: " + l); rb = i; });
   ok(xf.includes("select cron.unschedule('silvis-east-feed-daily');"), "the rollback stops the server refresh's job first, when it exists");
+  // the east-feed-refresh deploy's record step (10/20): the rollback's as-run note says the job exists since 2026-10-20 (jobid 8)
+  ok(xf.includes("*As run: the job did not exist at the apply (`east_job=no` after it); it exists since 2026-10-20 (jobid 8, active - `edge-functions/README.md` section 3), so a rollback now unschedules it first.*") && !xf.includes("*As run: the job does not exist yet"), "the rollback's as-run note: the job exists since 2026-10-20 (jobid 8)");
   // the as-run notes (the record step, 10/19): what could break, the verify-rls table, the apply order, the one command
   // (the record step's review, 10/19): the Blast radius note says what the apply observed and what is by design; the status paragraph
   // claims no client read; the known gap's note names the reading of each side of the apply
-  ok(xf.includes("*As run: the Part A client shipped first (2026.10.18b, CI build `ee47331`, 2026-10-18 18:26:47Z). Observed by the apply: no signed-in REST read (verify-rls 20e a SKIP line - no surgeon token; probe A1-A3 prove a surgeon's, the coordinator's and a viewer's read in SQL) and no in-app refresh since 2026-10-15 03:07:29Z that cached a freshly fetched week - the pre-check's `east_feed` read `fetched_max=2026-10-15T03:07:29Z` before and after the apply (each such write stamps `fetched_at` with its fetch time; a refresh whose week read came back empty would not move it, so the reading cannot show whether a review reset ran in between). By design (not observed):") && !/no reset has run/.test(xf) && xf.includes("the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function calls them until `east-feed-refresh` is deployed.*") && !/fell back to its 9\/23 loop/.test(xf) && !/since 22:53:18Z every signed-in client reads the derived rows, and the scheduler's in-app refresh resets/.test(xf), "the Blast radius as-run note: what the apply observed (no client read, no refresh since 10/15), the rest by design");
+  ok(xf.includes("*As run: the Part A client shipped first (2026.10.18b, CI build `ee47331`, 2026-10-18 18:26:47Z). Observed by the apply: no signed-in REST read (verify-rls 20e a SKIP line - no surgeon token; probe A1-A3 prove a surgeon's, the coordinator's and a viewer's read in SQL) and no in-app refresh since 2026-10-15 03:07:29Z that cached a freshly fetched week - the pre-check's `east_feed` read `fetched_max=2026-10-15T03:07:29Z` before and after the apply (each such write stamps `fetched_at` with its fetch time; a refresh whose week read came back empty would not move it, so the reading cannot show whether a review reset ran in between). By design (not observed):") && !/no reset has run/.test(xf) && xf.includes("the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function called them before `east-feed-refresh` was deployed (2026-10-20 01:42:59 UTC, v1); it calls them on a live run only - its 20i POSTs stop at its gate and its dryRun returns before any of them - and its first scheduled run is 2026-10-20 10:30 UTC (not observed yet).*") && !xf.includes("No edge function calls them until `east-feed-refresh` is deployed.") && !/fell back to its 9\/23 loop/.test(xf) && !/since 22:53:18Z every signed-in client reads the derived rows, and the scheduler's in-app refresh resets/.test(xf), "the Blast radius as-run note: what the apply observed (no client read, no refresh since 10/15), the rest by design");
   ok(xf.includes("live since 2026.10.18b; by design it reads a missing function as \"unavailable\" (no client read was observed before or by the apply - the Blast radius note).") && !/it read the missing functions as "unavailable" until the apply/.test(xf), "the status paragraph claims no observed client read");
   ok(xf.includes("*As run: 0 days under the minimum - before the apply by the 9/30 reading, after it by the guard's reading (silvis_vacation_short_days).*") && !/by both readings, before and after/.test(xf), "the known gap's as-run note: the 9/30 reading before, the guard's after");
   ok(xf.includes("*As run (2026-10-19): the live probe AFTER read all 56 cases exactly as their header strings") && xf.includes("section 20 graded 62 / 0, leftover 0.*"), "what could break carries its as-run note (the live probe AFTER, section 20 62 / 0)");
   ok(xf.includes("*As run (the record step, 2026-10-19): `SILVIS_EAST_VACATIONS_APPLIED` no longer exists - section 20 is strict by default") && xf.includes("`SILVIS_EAST_REFRESH_DEPLOYED` stays until the deploy's record step (20i).*"), "the verify-rls table carries its as-run note (the apply flag gone, the deploy flag kept)");
+  // the east-feed-refresh deploy's record step (10/20): the status paragraph, the verify-rls table and the apply order carry what ran
+  // on 2026-10-20 - each 10/19 as-run note stays as it was written (dated), a new dated note follows it
+  ok(xf.includes("Then, by Faraz on 2026-10-20 (UTC; guide section 25.6): the `east-feed-refresh` deploy (v1, 01:42:59 UTC), its 20i run, its dryRun proof and its cron job `silvis-east-feed-daily` (`edge-functions/README.md` section 3, \"Deploy record - Prompt 31 Part A\") - the function calls three of these functions; its first scheduled run (2026-10-20 10:30 UTC) is not observed yet.") && !xf.includes("Still to come, on Faraz's go (guide section 25.6)"), "the status paragraph: the deploy, 20i, the dryRun proof and the cron job ran on 2026-10-20; the first scheduled run not observed yet");
+  ok(xf.includes("*As run (the deploy's record step, 2026-10-20): `SILVIS_EAST_REFRESH_DEPLOYED` no longer exists - section 20 grades 20i on every run (`east-feed-refresh` v1 is deployed since 2026-10-20 01:42:59 UTC: a 404, the gateway's 401 or anything but the function's own `401` `{\"error\":\"unauthorized\"}` FAILs); the last run with the flag (2026-10-20, the main clone at `477936d`, its script sections 1-20) read 20i's two PASS lines and section 20 64 / 0.*") && xf.indexOf("*As run (the deploy's record step, 2026-10-20): `SILVIS_EAST_REFRESH_DEPLOYED` no longer exists") > xf.indexOf("`SILVIS_EAST_REFRESH_DEPLOYED` stays until the deploy's record step (20i).*") && xf.indexOf("*As run (the deploy's record step, 2026-10-20): `SILVIS_EAST_REFRESH_DEPLOYED` no longer exists") < xf.indexOf("**Apply order:**"), "the verify-rls table: the 10/19 note, then the deploy's record-step note (the flag gone, 20i on every run)");
+  ok(xf.includes("*As run (the deploy's record step, 2026-10-20): the rest of item 9 by Faraz on 2026-10-20 (UTC) - from the main clone at `477936d`: the deploy (`east-feed-refresh` v1, 01:42:59 UTC; the uploaded and the re-downloaded source both sha256 `ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0`, `edge-functions/east-feed-refresh/index.ts`'s) and its 20i run (with the flag, that clone's script, sections 1-20: `RESULT: 535 passed, 0 failed`, 20i's two PASS lines); in the SQL editor: the dryRun proof (01:55:53Z, `200`, `\"ok\":true`) and the cron job `silvis-east-feed-daily` (jobid 8, active) - `edge-functions/README.md` section 3. The record step then dropped `SILVIS_EAST_REFRESH_DEPLOYED`; the first scheduled run (2026-10-20 10:30 UTC) is not observed yet.*") && xf.indexOf("*As run (the deploy's record step, 2026-10-20): the rest of item 9") > xf.indexOf("*As run (2026-10-19): items 1-7 by `apply-east-vacations.sh`") && xf.indexOf("*As run (the deploy's record step, 2026-10-20): the rest of item 9") < xf.indexOf("**One command (Faraz):**"), "the apply order: the 10/19 note, then the rest of item 9 as it ran on 2026-10-20 (the first scheduled run not observed)");
   ok(xf.includes("*As run (2026-10-19): items 1-7 by `apply-east-vacations.sh`") && xf.includes("kept byte for byte as it ran (sha256 `" + XV_APPLIED_SHA256 + "`)") && xf.includes("`SILVIS_EAST_VACATIONS_APPLIED` no longer exists") && xf.includes("five of the eight files") && xf.includes("so the script is one-shot"), "the apply order carries its as-run note (the script's steps, the file kept as it ran with its sha256, five graded files changed - one-shot, the flag gone)");
   ok(xf.includes("Faraz ran it on 2026-10-19 from the main clone at `b0344bd`"), "the one-command paragraph says when it ran");
   // pin moved deliberately 10/19 (the record step): the placeholder is gone - the observed paragraph from Faraz's log replaces it
@@ -5686,12 +5714,17 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (APPLIED 2026-10-19
   ok(xvBullet.startsWith("- **East vacations, derived (2026-10-14, Prompt 31 Part A, report-first, applied 2026-10-19 22:53 UTC; `sql/migrations/2026-10-14-east-vacations.sql`, revision x).**") && /decision \(a\)/.test(xvBullet), "guide 4.3 carries the revision x bullet (report-first, applied 2026-10-19 22:53 UTC)");
   ["silvis_east_people()", "silvis_east_ranges()", "silvis_derived_vacations()", "east_vacation_reset_stale(p_from)", "silvis_vacation_short_days(p_from, p_to)", "time_off_vacation_guard()"].forEach((f) => ok(new RegExp("^\\| `" + xvEsc(f) + "`", "m").test(g43.slice(g43.indexOf("- **East vacations, derived (2026-10-14,"))), "guide 4.3's revision x table has a row for " + f));
   ok(/56 cases in its header/.test(xvProof) && /east-vacations-precheck\.sql/.test(xvProof) && /vacation-short-days\.sql/.test(xvProof) && /section 20 \(/.test(xvProof) && /section 15/.test(xvProof) && /`apply-east-vacations\.sh`/.test(xvProof) && /"2026-10-14 - East vacations"/.test(xvProof) && /section 20 \([^)]*strict since the record step - a PROBE_SETUP or an anon 404 FAILs\)/.test(xvProof) && !/SILVIS_EAST_VACATIONS_APPLIED/.test(xvProof) && !/_to be filled/.test(xvProof) && /applied: 2026-10-19 22:53:18 UTC by Faraz/.test(xvProof) && /AFTER 56 \/ 56, verify-rls 533 \/ 0 with section 20 graded strictly \(62 \/ 0; 20a-20d and 20h HTTP 401\)/.test(xvProof) && /the migration file kept as it ran, its sha256 pinned/.test(xvProof), "guide 4.3's revision x Proof line: the probe (56), the pre-check, the short days, verify-rls sections 20 (strict since the record step) and 15, the apply script, the record and the applied line (2026-10-19 22:53:18 UTC, AFTER 56 / 56, 533 / 0 with section 20 62 / 0)");
+  // the east-feed-refresh deploy's record step (10/20): table (a)'s east_feed row and guide 4.3's Proof line say the function is deployed
+  ok(/^\| `east_feed` \|[^\n]*the daily server refresh `east-feed-refresh` \(deployed 2026-10-20 01:42:59 UTC, v1; its cron job `silvis-east-feed-daily` created the same day - `edge-functions\/README\.md` section 3\) writes the same rows/m.test(review) && !/`east-feed-refresh` \(not deployed yet\)/.test(review), "table (a)'s east_feed row: east-feed-refresh deployed 2026-10-20 01:42:59 UTC (v1), its cron job created the same day");
+  ok(xvProof.endsWith("`east-feed-refresh` is deployed since 2026-10-20 01:42:59 UTC (v1) and its cron job `silvis-east-feed-daily` was created the same day (§25.6).") && !/is NOT deployed and its cron job not created/.test(xvProof), "guide 4.3's revision x Proof line ends: east-feed-refresh deployed since 2026-10-20 01:42:59 UTC (v1), its cron job created the same day");
   const vgBulletX = (g43.match(/^- \*\*Vacation guard \(2026-09-30, [^\n]*/m) || [""])[0];
   ok(vgBulletX.includes("Revision x (Prompt 31 Part A, 2026-10-14 - report-first, applied 2026-10-19 22:53 UTC)") && vgBulletX.includes("`silvis_derived_vacations()`") && /Known gap \(review 10\/1\): only a `time_off` write is checked/.test(vgBulletX), "guide 4.3's vacation guard bullet points at revision x (the East leg on the derived rows) and keeps its known gap");
   // the record step (10/19): CLAUDE.md says revision x is applied (its East vacations sentence and Faraz's Part A steps)
   const claudeMd = read(path.join(ROOT, "CLAUDE.md"));
   const cmFlat = claudeMd.replace(/\s+/g, " ");
   ok(cmFlat.includes("revision x applied 2026-10-19 22:53:18Z (Faraz's `apply-east-vacations.sh`; `docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\")") && cmFlat.includes("the database apply (done - applied 2026-10-19 22:53:18Z") && !cmFlat.includes("before revision x, Faraz's `apply-east-vacations.sh`, is applied"), "CLAUDE.md: revision x applied 2026-10-19 22:53:18Z (the East vacations sentence and Faraz's Part A steps)");
+  // the east-feed-refresh deploy's record step (10/20): CLAUDE.md says the function was deployed (v1) and its first scheduled run is open
+  ok(cmFlat.includes("was deployed by hand after that apply - v1, 2026-10-20 01:42:59 UTC (Faraz), its dryRun 200 and the cron job active the same day; its first scheduled run not observed yet") && cmFlat.includes("the cron job (done - 2026-10-20: v1 deployed 01:42:59 UTC") && cmFlat.includes("left: the first scheduled run (2026-10-20 10:30 UTC), not observed yet") && !cmFlat.includes("is deployed by hand after that apply"), "CLAUDE.md: east-feed-refresh v1 deployed 2026-10-20 01:42:59 UTC with its dryRun and cron job; the first scheduled run left");
 }
 console.log("- Prompt 31 Part A (A5): docs/SCHEMA-REVIEW.md's revision x record (APPLIED 2026-10-19 22:53:18Z, the observed apply pinned, the probe block frozen by sha256; the migration verbatim, the 56 probe cases with their AFTER strings, the gates and guard md5s re-derived), table (a)'s helper line, guide 4.3, CLAUDE.md");
 
@@ -6262,8 +6295,10 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
   ok(rulesDoc.includes("Since revision y (applied 2026-10-20 00:41 UTC; Faraz 10/18, D1 claim parity, D2 submitted receivers only, D3 the consent stamps) a trade records the receiver's offer the way a claim does") && rulesDoc.includes("when he agreed to it himself (a return leg only when both surgeons agreed themselves) and is already submitted in the day's period") && rulesDoc.includes("(one the scheduler accepted for him, the return leg of a trade the scheduler proposed for the giver, a past day,") && !rulesDoc.includes("until revision y is applied") && !rulesDoc.includes("`apply_trade` writes none today") && !rulesDoc.includes("`apply_trade` writes none — an open item"), "the rules doc's section 8 says a trade records the receiver's offer since revision y (applied 2026-10-20 00:41 UTC)");
 }
 // pin moved deliberately (revision y's record step, D8): section 21 added (the trade offer probe, strict from the start - apply-trade-offer.sh
-// never pinned or ran verify-rls.sh) and the header's "+ trade offers probe (21)"; the east-feed-refresh deploy's record step moves it next
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "f1e2f96ed835882fa1d0265bb700af263bd7a227b6571dc83b253ea72d223ccf", "scripts/verify-rls.sh must stay at revision y's record-step bytes (section 21 added) until the east-feed-refresh deploy's record step moves it;");
+// never pinned or ran verify-rls.sh) and the header's "+ trade offers probe (21)"; moved again 10/20 (the east-feed-refresh deploy's record
+// step): 20i graded on every run - SILVIS_EAST_REFRESH_DEPLOYED / EVDEPLOYED20 dropped from the header, --help and section 20; 20i joins
+// the header's anon checks; section 21 unchanged
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "8f592b79d3ecd086379c586e5e8cd99fffc072603c8ee776500fe28d85dcc3fd", "scripts/verify-rls.sh must stay at the east-feed-refresh deploy's record-step bytes until its next deliberate change;");
 ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
 console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");

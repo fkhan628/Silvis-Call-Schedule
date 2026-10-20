@@ -2680,8 +2680,8 @@ acheck("P30 equality table: for every input (prefs on / off / missing, every e-m
    4. the real handler, types stripped (Node's stripTypeScriptTypes, as the P30 harness does), against a fake Silvis and
       a fake Davenport: the gate, dryRun, the in-app order of the writes, rows equal to what the in-app refresh writes
       (re-stated with east-feed.js from the app's own lines, pinned), every failure path, never a delete of a week;
-   5. edge-functions/README.md: NOT deployed, the deploy order, the cron line with timeout_milliseconds 60000, the
-      dryRun proof and the rollback.
+   5. edge-functions/README.md: deployed 2026-10-20 (v1 - section 3's record, the plan kept as prepared), the deploy order, the
+      cron line with timeout_milliseconds 60000 (the job made 2026-10-20, jobid 8), the dryRun proof and the rollback.
    ===================================================================== */
 const cp = require("child_process");
 const ER_API = ["EAST_AHEAD_DAYS", "EAST_VACATIONS_HORIZON_DAYS", "efPad2", "efFmt", "efParse", "efAddD", "efIsDateStr", "efMonday",
@@ -3597,7 +3597,11 @@ check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET fr
   assert.ok(!/user_profiles|notification|resend|push_subscriptions|office_contacts|email/i.test(code), "no contact read, no mail, no push");
   assert.ok(!/east_feed[^\n]*"DELETE"|"DELETE"[^\n]*east_feed/.test(code), "no DELETE of east_feed");
   assert.strictEqual((code.match(/method: "DELETE"/g) || []).length, 1, "the one DELETE is the forecast prune");
-  assert.ok(/NOT DEPLOYED/.test(erSrc.split("\n").slice(0, 12).join("\n")), "the header says NOT DEPLOYED");
+  // pin kept deliberately 10/20 (the deploy's record step): this source IS the deployed east-feed-refresh v1 (deployed 2026-10-20
+  // 01:42:59 UTC by Faraz; the uploaded copy and the re-download both hashed ff717c93...), so its header stays as deployed - README
+  // section 3 ("Deploy record - Prompt 31 Part A") says the NOT DEPLOYED wording flips, with this pin, at the next source change
+  assert.ok(/NOT DEPLOYED/.test(erSrc.split("\n").slice(0, 12).join("\n")), "the header keeps its as-deployed NOT DEPLOYED until the next source change");
+  assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(ER_PATH)).digest("hex"), "ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0", "edge-functions/east-feed-refresh/index.ts must stay byte-identical to the deployed v1 (sha256 of the 10/20 upload and re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(erSrc), "the source is ASCII");
 });
 check("A2 pins on the in-app refresh this function mirrors (index-source.html refreshEastFeed) - the lines the re-statement above runs: the main read with the codes, the plan (planVacationCache or keepCachedVacations), the two row maps, the merge-duplicates upsert, coverageOf + the forecast prune, the reload, the reset floor fromMon, the extra leg (fetchEastWeeks over eastWin.extra, eastExtraWeeks, keepCachedVacations over the reloaded cache) - and their order", () => {
@@ -3657,13 +3661,36 @@ const EFR_DEPLOY = "supabase functions deploy east-feed-refresh --project-ref bz
 const EFR_HASH = "(Get-FileHash " + EFR_DST + " -Algorithm SHA256).Hash.ToLower()";
 const EFR_REMOVE = "Remove-Item " + EFR_DST;
 const EFR_DOWNLOAD = "supabase functions download east-feed-refresh --project-ref bzhsroegtagqhutbnsrp --workdir " + EFR_WD + " --use-api";
-check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), section 3's record (PREPARED, NOT deployed: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, NOT scheduled yet), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
-  assert.ok(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*NOT deployed[^\n]*\| never \|$/m.test(readme), "the table row");
+check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-10-20), section 3's record (DEPLOYED 2026-10-20 01:42:59 UTC, the observed steps 3-5, step 6 not observed; the plan kept as prepared: the order - database apply first, the client, the deploy with --no-verify-jwt, the 401, the dryRun proof through pg_net, then the cron), section 4's cron statement exactly as the report gives it with timeout_milliseconds 60000 (outside the four-job block, made 2026-10-20 - jobid 8), section 5's safe checks, the rollback (unschedule first); ASCII; the four live jobs unchanged", () => {
+  // pin moved deliberately 10/20: the deploy's record step - the row says v1 deployed 2026-10-20 01:42:59 UTC and the job active (jobid 8)
+  const efRow = (readme.match(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*\| never \|$/m) || [""])[0];
+  assert.ok(efRow.includes("Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC") && /jobid 8/.test(efRow) && !/NOT deployed|no cron job/.test(efRow), "the table row: " + efRow.slice(0, 200));
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
   assert.ok(i > 0, "section 3's record");
-  const rec = s3.slice(i, s3.indexOf("\n### ", i + 10));
-  assert.ok(/^### Deploy record - Prompt 31 Part A \(east-feed-refresh[^\n]*\) - PREPARED, NOT deployed$/m.test(rec), "the heading says PREPARED, NOT deployed");
+  const rec0 = s3.slice(i, s3.indexOf("\n### ", i + 10));
+  // pin moved deliberately 10/20: the deploy's record step - DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1); the observed paragraph
+  // first, then the plan kept as prepared (Prompt 30's layout) - the plan's pins below read the plan alone
+  assert.ok(/^### Deploy record - Prompt 31 Part A \(east-feed-refresh, the daily East feed refresh\) - DEPLOYED 2026-10-20 01:42:59 UTC by Faraz \(v1\)$/m.test(rec0) && !/PREPARED, NOT deployed/.test(rec0), "the heading says DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1)");
+  const asp = rec0.indexOf("*As prepared (10/16-10/19; kept as the plan");
+  assert.ok(asp > 0, "the plan is kept, marked as prepared");
+  const obs = rec0.slice(0, asp), rec = rec0.slice(asp), obsFlat = obs.replace(/\s+/g, " ");
+  [
+    "`calendar-sync` v7 (2026-09-25 13:20:14), `office-notifications` v6 (2026-09-24 07:52:16), `send-notification` v12 (2026-10-03 16:37:59), `daily-reminder` v9 (2026-10-01 04:11:46)",
+    "`east-feed-refresh` **v1 ACTIVE (2026-10-20 01:42:59)**", "main `477936d`", "`ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0`", "-> `401`",
+    "`RESULT: 535 passed, 0 failed`", "section 20 64 / 0", "`13a4a982d76345948731a339a4e024b10a76ad2d197e31e034f82185526b0180`",
+    "`status_code` 200", "`{\"dryRun\":true,\"ok\":true,\"error\":null,\"errors\":[],\"failed\":false,\"source\":\"cron\",", "the content's first 400 characters", "was not pasted and is not recorded here",
+    "8 `silvis-east-feed-daily` `30 10 * * *`", "Step 6 - NOT observed yet", "2026-10-20 10:30 UTC",
+    "a plain `bash scripts/verify-rls.sh` grades 20i on every run (`SILVIS_EAST_REFRESH_DEPLOYED` is gone)",
+    "The source's own header still reads `NOT DEPLOYED`", "that wording flips, with its pin, at the next source change",
+  ].forEach((s) => assert.ok(obsFlat.includes(s), "the observed paragraph says: " + s));
+  [
+    "   20i unauthenticated POST east-feed-refresh: HTTP 401  body: {\"error\":\"unauthorized\"}",
+    "PASS  east-feed-refresh refuses an unauthenticated POST (401 {\"error\":\"unauthorized\"} - its own x-cron-secret gate, nothing read)",
+    "   20i POST east-feed-refresh with a wrong x-cron-secret: HTTP 401  body: {\"error\":\"unauthorized\"}",
+    "PASS  east-feed-refresh refuses a wrong x-cron-secret (401 {\"error\":\"unauthorized\"} - the gate compares the secret, nothing read)",
+  ].forEach((l) => assert.ok(obs.split("\n").indexOf(l) >= 0, "20i's line verbatim, on a line of its own: " + l));
+  assert.ok(!/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(obs) && !/[A-Za-z]:\\+Users\\/i.test(obs), "no function id (a uuid) and no machine path in the observed paragraph");
   // pin moved deliberately 10/14: Prompt 31 Part A A4 - Cowork's 10/16 4:40 AM review: the deploy line carries the workdir on the line
   // and reads --no-verify-jwt --use-api (was: --workdir $wd ... --no-verify-jwt)
   assert.ok(rec.indexOf(EFR_DEPLOY) > 0, "the deploy command");
@@ -3704,7 +3731,8 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   const CRON = "select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$\n  select net.http_post(\n    url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',\n    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',\n      coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),\n    body := '{}'::jsonb,\n    timeout_milliseconds := 60000);\n$$);";
   assert.ok(s4.indexOf(CRON) > 0, "section 4 carries the report's cron statement");
   assert.ok(s4.indexOf(CRON) > s4.indexOf("expect four rows after this whole block"), "outside the four-job block");
-  assert.ok(/NOT scheduled yet/.test(s4), "marked NOT scheduled yet");
+  // pin moved deliberately 10/20: the deploy's record step - the job exists (made 2026-10-20 by Faraz, jobid 8; cron.job read five rows)
+  assert.ok(!/NOT scheduled yet/.test(s4) && /Created 2026-10-20 by Faraz in the SQL editor/.test(s4) && /jobid 8/.test(s4) && /five rows/.test(s4) && /not observed yet/.test(s4), "section 4: the fifth job made 2026-10-20 (jobid 8), its first run not observed yet");
   const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6."));
   assert.ok(readme.indexOf("### east-feed-refresh") > readme.indexOf("### daily-reminder"), "section 5's east-feed-refresh checks follow daily-reminder's");
   assert.ok(/401/.test(s5) && /\{"dryRun":true\}/.test(s5) && /405/.test(s5) && /400/.test(s5), "section 5: 401, the dryRun, 405, 400");
@@ -3721,13 +3749,16 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (NOT deployed), se
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
 });
 // Prompt 31 Part A review (10/18): the report's case 20i (verify-rls.sh, the deployed function's gate) was never built, and the deploy
-// record checked the 401 once, by hand - a later redeploy with a broken gate would leave every verify-rls run green. 20i is built now
-// (behind SILVIS_EAST_REFRESH_DEPLOYED=1, test/schema.test.js grades it): the record runs it right after the deploy, before the dryRun
-// proof, and its record step drops the flag - as Prompt 30's did with 19i.
+// record checked the 401 once, by hand - a later redeploy with a broken gate would leave every verify-rls run green. 20i was built then
+// (behind SILVIS_EAST_REFRESH_DEPLOYED=1 until the deploy's record step of 10/20, which dropped the flag - as Prompt 30's did with 19i;
+// test/schema.test.js grades it on every run since): the record ran it right after the deploy, before the dryRun proof; this check
+// reads the plan kept as prepared.
 check("A2 review (10/18): section 3's record runs verify-rls 20i right after the deploy (SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh - the function's own 401 {\"error\":\"unauthorized\"} for an unauthenticated POST and a wrong x-cron-secret), before the dryRun proof; the record step drops the flag (20i on every plain run, as 19i); section 5 names 20i beside its first two checks", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
-  const rec = i < 0 ? "" : s3.slice(i, s3.indexOf("\n### ", i + 10));
+  const rec0 = i < 0 ? "" : s3.slice(i, s3.indexOf("\n### ", i + 10));
+  // pin moved deliberately 10/20: the deploy's record step - these pins read the plan kept as prepared
+  const rec = rec0.indexOf("*As prepared") < 0 ? "" : rec0.slice(rec0.indexOf("*As prepared"));
   const flat = rec.replace(/\s+/g, " ");
   const RUN = "`SILVIS_EAST_REFRESH_DEPLOYED=1 bash scripts/verify-rls.sh`";
   const at = flat.indexOf(RUN);
@@ -3737,7 +3768,9 @@ check("A2 review (10/18): section 3's record runs verify-rls 20i right after the
   const s6 = flat.slice(flat.indexOf("6. The next morning"));
   assert.ok(/drops `SILVIS_EAST_REFRESH_DEPLOYED`/.test(s6) && /grades 20i on every plain run/.test(s6) && /19i/.test(s6), "step 6's record step drops the flag - every plain verify-rls run grades 20i from then on, as 19i");
   const s5 = readme.slice(readme.indexOf("### east-feed-refresh"), readme.indexOf("## 6.")).replace(/\s+/g, " ");
-  assert.ok(/`scripts\/verify-rls\.sh` 20i/.test(s5) && s5.includes("`SILVIS_EAST_REFRESH_DEPLOYED=1`"), "section 5 says its first two checks are verify-rls.sh's 20i");
+  // pin moved deliberately 10/20: the deploy's record step dropped SILVIS_EAST_REFRESH_DEPLOYED - section 5's heading says deployed and 20i is
+  // graded on every plain run
+  assert.ok(/`scripts\/verify-rls\.sh` 20i, graded on every plain run since the deploy's record step/.test(s5) && !s5.includes("`SILVIS_EAST_REFRESH_DEPLOYED=1`") && /^### east-feed-refresh \(Prompt 31 Part A - v1, deployed 2026-10-20 01:42:59 UTC\)$/m.test(readme) && !/these hold once it is/.test(readme), "section 5: v1 deployed, its first two checks verify-rls.sh's 20i on every plain run (no flag)");
 });
 check("A4 (Cowork 10/16 4:40 AM): the function header's deploy line is section 3's (the workdir on the line, --no-verify-jwt --use-api); section 3's four-function block lists with --workdir $wd like its deploy lines; section 7's delete of east-feed-refresh carries the workdir; no machine path", () => {
   const head = erSrc.slice(0, erSrc.indexOf("import { serve }"));

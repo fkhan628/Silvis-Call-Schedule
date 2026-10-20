@@ -16,7 +16,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `schedule_days` | The schedule, one row per day: `primary_id`, `backup_id`, per-role locks, `source`, `external_cover`, `note`, `version` (compare-and-swap on publish). Anon-read. |
 | `time_off` | Vacations only, self-entered, no approval; a trigger refuses a range over a day the surgeon is published (and the day before, for primary). Anon-read. Vacation guard (Faraz 9/30, prepared 2026-09-30 - report-first, **applied live 2026-10-01 16:53 UTC** - section at the end): a second trigger, `time_off_vacation_guard_trg`, refuses a non-scheduler's vacation that would leave fewer than `groupRules.vacations.minSurgeonsAround` (default 2) active surgeons around (`VG001 VACATION_TOO_FEW_AROUND`). Since revision x (Prompt 31 Part A, **applied live 2026-10-19 22:53 UTC** - section at the end) its East leg reads `silvis_derived_vacations()`. |
 | `availability` | Dated availability statements by kind/role (windows, whitelists, backup-only, no-backup…). Anon-read. No-primary days (Faraz 10/1, Prompt 28): surgeons write single-day `backup_only` rows only through `save_offers` -> `save_no_primary` (prepared 2026-10-01 - report-first, **applied live 2026-10-02 12:05 UTC** - section at the end); the scheduler (Setup) and the office can still write availability rows directly; RLS unchanged (no surgeon write policy). |
-| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
+| `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (deployed 2026-10-20 01:42:59 UTC, v1; its cron job `silvis-east-feed-daily` created the same day - `edge-functions/README.md` section 3) writes the same rows as the in-app refresh, with the service role. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, **applied live 2026-10-20 00:41 UTC** - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
@@ -3393,9 +3393,10 @@ record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grade
 weekend pair claim, prepared on its own branch; w - phone push - was the last applied before it). Nothing in the repo applies it: the
 apply script lives outside the repo (Faraz 10/1); Faraz ran it and pasted the log back, and the record step filled the observed lines
 at the end of this section. The Part A client came first - merged to main on 2026-10-18 and live since 2026.10.18b; by design it
-reads a missing function as "unavailable" (no client read was observed before or by the apply - the Blast radius note). Still to come, on Faraz's go (guide section 25.6): the `east-feed-refresh` deploy,
-its 20i run, its dryRun proof and its cron job (`edge-functions/README.md` section 3, "Deploy record - Prompt 31 Part A") - the
-function calls three of these functions.
+reads a missing function as "unavailable" (no client read was observed before or by the apply - the Blast radius note). Then, by Faraz on 2026-10-20 (UTC; guide section 25.6): the `east-feed-refresh` deploy
+(v1, 01:42:59 UTC), its 20i run, its dryRun proof and its cron job `silvis-east-feed-daily` (`edge-functions/README.md` section 3,
+"Deploy record - Prompt 31 Part A") - the function calls three of these functions; its first scheduled run (2026-10-20 10:30 UTC) is
+not observed yet.
 
 **Why.** Faraz 10/9 (Prompt 31 item 1): "Every East range reviewed 'away', and every range still 'unreviewed', shows to every
 signed-in role exactly like a Silvis vacation." Until now only the scheduler sees those ranges; the rules, the generator and both
@@ -3491,8 +3492,9 @@ before and after the apply (each such write stamps `fetched_at` with its fetch t
 not move it, so the reading cannot show whether a review reset ran in between). By design (not observed): before the
 apply the client reads
 both RPCs' 404 PGRST202 as "unavailable" and its in-app refresh falls back to the 9/23 loop; since 22:53:18Z every signed-in client
-reads the derived rows, and the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function calls
-them until `east-feed-refresh` is deployed.* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
+reads the derived rows, and the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function called
+them before `east-feed-refresh` was deployed (2026-10-20 01:42:59 UTC, v1); it calls them on a live run only - its 20i POSTs stop at
+its gate and its dryRun returns before any of them - and its first scheduled run is 2026-10-20 10:30 UTC (not observed yet).* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
 claim (revision u, on its own branch) - no shared object, either apply order.
 
 **What could break / what offline cannot show.** Offline, on PGlite (WASM PostgreSQL, a scratch folder outside the repo, over this
@@ -3924,6 +3926,11 @@ sql/migrations/2026-10-14-east-vacations.sql is not applied`. AFTER it, 56 cases
 *As run (the record step, 2026-10-19): `SILVIS_EAST_VACATIONS_APPLIED` no longer exists - section 20 is strict by default (an anon
 404 and PROBE_SETUP are FAILs); `SILVIS_EAST_REFRESH_DEPLOYED` stays until the deploy's record step (20i).*
 
+*As run (the deploy's record step, 2026-10-20): `SILVIS_EAST_REFRESH_DEPLOYED` no longer exists - section 20 grades 20i on every run
+(`east-feed-refresh` v1 is deployed since 2026-10-20 01:42:59 UTC: a 404, the gateway's 401 or anything but the function's own `401`
+`{"error":"unauthorized"}` FAILs); the last run with the flag (2026-10-20, the main clone at `477936d`, its script sections 1-20)
+read 20i's two PASS lines and section 20 64 / 0.*
+
 **Apply order:**
 
 1. Pre-check `sql/probes/east-vacations-precheck.sql` (read-only): the objects row must read `people_fn=no ranges_fn=no derived_fn=no reset_fn=no short_fn=no guard=yes guard_derived=no`
@@ -3957,6 +3964,14 @@ until the deploy's record step. Item 9's client came first (2026.10.18b, 2026-10
 cron job follow, on Faraz's go; `edge-functions/east-feed-refresh/index.ts` keeps sha256
 `ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0` for it.*
 
+*As run (the deploy's record step, 2026-10-20): the rest of item 9 by Faraz on 2026-10-20 (UTC) - from the main clone at `477936d`:
+the deploy (`east-feed-refresh` v1, 01:42:59 UTC; the uploaded and the re-downloaded source both sha256
+`ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0`, `edge-functions/east-feed-refresh/index.ts`'s) and its 20i run
+(with the flag, that clone's script, sections 1-20: `RESULT: 535 passed, 0 failed`, 20i's two PASS lines); in the SQL editor:
+the dryRun proof (01:55:53Z, `200`, `"ok":true`) and the cron job `silvis-east-feed-daily` (jobid 8, active) - `edge-functions/README.md`
+section 3. The record step then dropped `SILVIS_EAST_REFRESH_DEPLOYED`; the first scheduled run (2026-10-20 10:30 UTC) is not
+observed yet.*
+
 **One command (Faraz):** his apply script `apply-east-vacations.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine
 paths; `test/schema.test.js` pins that none sits here) - the private folder's apply-scripts, beside byte copies of the graded files
 and their SHA256SUMS. Its shape is `apply-push-notifications.sh`'s post-10/3 one (critic A3): step 0 checks the branch, the commit and
@@ -3984,7 +3999,8 @@ notify pgrst, 'reload schema';
 ```
 
 The client reads the missing functions as "unavailable" (today's picture) and resets reviews with its 9/23 loop again.
-*As run: the job does not exist yet (`east_job=no` after the apply).*
+*As run: the job did not exist at the apply (`east_job=no` after it); it exists since 2026-10-20 (jobid 8, active -
+`edge-functions/README.md` section 3), so a rollback now unschedules it first.*
 
 **The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed lines; table (a)'s helper line; `sql/schema.sql`
 revision x ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's headers; verify-rls section

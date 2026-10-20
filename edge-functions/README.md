@@ -1,8 +1,9 @@
 # Silvis edge functions - deploy and verification runbook
 
-Four Deno edge functions for the Silvis Supabase project `bzhsroegtagqhutbnsrp`,
+Five Deno edge functions for the Silvis Supabase project `bzhsroegtagqhutbnsrp`: four
 retargeted from the Davenport (DSG) functions on 2026-09-22
-(the 9/22 review of what changed in each is history, `docs/HISTORY.md`).
+(the 9/22 review of what changed in each is history, `docs/HISTORY.md`), and
+`east-feed-refresh` (Prompt 31 Part A, deployed 2026-10-20 - section 3).
 
 | slug | source | caller | can it send mail? |
 |---|---|---|---|
@@ -10,7 +11,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
-| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, NOT deployed and no cron job yet (section 3's "Deploy record - Prompt 31 Part A") | never |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first run not observed yet); record in section 3's "Deploy record - Prompt 31 Part A" | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -59,9 +60,10 @@ refusals are in section 5. Deploy the client build that sends `trade_id` (a push
 `send-notification` v6, or trade mail from an older client answers 400 until the users reload.
 Open decision (review 2026-09-23, not in this deploy): a minimum length for the CONFIGURED `CRON_SECRET`
 (`cronSecretMatches` refuses an unset / empty configured value and any short, prefix or missing header,
-but accepts a one-character configured value). Adding a floor blind could lock the four pg_cron jobs
-out on redeploy; Faraz confirms the live secret's length (never its value) first, then the floor lands
-in both `@cronSecret` blocks with a test, or the secret is rotated per section 4 before it does.
+but accepts a one-character configured value). Adding a floor blind could lock the pg_cron jobs (five
+since 2026-10-20) out on redeploy; Faraz confirms the live secret's length (never its value) first, then
+the floor lands in every `@cronSecret` block (daily-reminder, office-notifications and, since Prompt 31
+Part A, east-feed-refresh) with a test, or the secret is rotated per section 4 before it does.
 
 **Prompt 15 (East vacations, 2026-09-23): nothing deployed.** No function
 changed for this prompt and none was redeployed. The feature is the client
@@ -73,7 +75,7 @@ office digest, the daily reminder (both modes) and `calendar-sync` are unchanged
 on purpose: they show assignments, not availability, and a derived East
 vacation is never an assignment.
 
-**Prompt 31 Part A (2026-10-16): a fifth function, `east-feed-refresh`, is in this folder - NOT deployed, no cron job.**
+**Prompt 31 Part A (2026-10-16): a fifth function, `east-feed-refresh`, is in this folder - deployed 2026-10-20 01:42:59 UTC (v1), its cron job `silvis-east-feed-daily` created the same day (section 3's record).**
 It is the daily server refresh of the East feed cache (`east_feed`), so the cache stays fresh without anyone pressing
 Refresh from Davenport (the in-app refresh stays). One run is the in-app refresh, unattended: the same windows, the
 same plan, the writes in the same order, the review reset through the one SQL function both refreshes call. It adds
@@ -86,7 +88,8 @@ row per run (`actor_id` `cron`), which Setup > East feed's refresh line reads fo
 error and "the cached weeks were kept" - and which names, dates only, the days a new or changed East range leaves under
 the vacation minimum (`silvis_vacation_short_days`) and the published days held inside it. The other four functions are
 unchanged by Part A and call none of the new SQL functions: the calendar feeds, the digest and the reminders show
-assignments, not availability. Until then every sentence here about the four functions and the four jobs stays true.
+assignments, not availability. Since 2026-10-20 the project serves five functions and has five pg_cron jobs (section 3's
+record, section 4); where a sentence below counts four, it speaks of the four 9/22 functions or the jobs before Part A.
 
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
@@ -100,8 +103,8 @@ since 9/22, `silvis-offers-daily` since 9/23, `silvis-open-shifts-weekly` - seen
 Vault (`silvis_cron_secret`) at run time; both functions answered pg_net
 `dryRun` posts with 200 (the 9/22 review, section 6 - history, `docs/HISTORY.md`). The version
 numbers quoted above are as of 2026-09-22 18:31 UTC; a `supabase secrets set`
-re-versions all four, so always read `supabase functions list` before a
-redeploy, and keep the download-and-byte-compare convention in section 3 so
+re-versions every deployed function (four then, five since 2026-10-20), so always
+read `supabase functions list` before a redeploy, and keep the download-and-byte-compare convention in section 3 so
 the repo stays the source of truth.
 
 ## 0. Prerequisites
@@ -134,7 +137,7 @@ the repo stays the source of truth.
 |---|---|---|
 | `RESEND_API_KEY` | office-notifications, send-notification, daily-reminder | Resend API key |
 | `NOTIFICATION_FROM_EMAIL` | office-notifications, send-notification, daily-reminder | e.g. `Silvis Call Schedule <schedule@your-verified-domain>` - REQUIRED, no fallback |
-| `CRON_SECRET` | daily-reminder (sole gate), office-notifications (cron path) | long random string; generate with `openssl rand -hex 32` or PowerShell `-join ((1..48) | % { '{0:x}' -f (Get-Random -Max 16) })` |
+| `CRON_SECRET` | daily-reminder (sole gate), office-notifications (cron path), east-feed-refresh (sole gate; deployed 2026-10-20) | long random string; generate with `openssl rand -hex 32` or PowerShell `-join ((1..48) | % { '{0:x}' -f (Get-Random -Max 16) })` |
 | `VAPID_PUBLIC_KEY` | send-notification (Prompt 30 phone push) | base64url of the 65-byte uncompressed P-256 point (87 characters, starts `B`); handed to the app by `GET ?vapid=public`. Set ONLY by `setup-push-keys.sh` (the apply-scripts folder), which generates the pair on Faraz's PC and sets all three through `supabase secrets set --env-file` - never pasted, never printed, never in an argument |
 | `VAPID_PRIVATE_KEY` | send-notification (Prompt 30 phone push) | base64url of the 32-byte P-256 scalar (43 characters); signs the VAPID tokens; never leaves the function (no response, no log) |
 | `VAPID_SUBJECT` | send-notification (Prompt 30 phone push) | `https://fkhan628.github.io/Silvis-Call-Schedule/` (the app's URL - no address). Missing / malformed VAPID secrets = no push (the send's `push.error` reads `push not configured`, `GET ?vapid=public` and `POST ?push=test` answer 503); the e-mail is unaffected. `setup-push-keys.sh --rotate` replaces an existing pair - then every device must tap Reset subscription, then Enable (the old subscriptions were made for the old public key) |
@@ -157,7 +160,7 @@ the file exists deletes it on any failure too. It refuses when any of the three 
 `supabase secrets set` re-versions EVERY deployed function (Davenport lesson:
 the version number jumps without a code change). Set secrets BEFORE the first
 deploy so the functions come up configured. (Done 2026-09-22 - see the deploy
-record at the top; a rotation re-versions all four again.) Exactly what moves
+record at the top; a rotation re-versions every deployed function again - five since 2026-10-20.) Exactly what moves
 (observed 2026-10-03, section 3 "Deploy record - Prompt 30"): each `secrets set`
 raises every function's listed VERSION by one and leaves its listed UPDATED_AT
 alone - so the update time (and the download-and-`cmp` convention), not the
@@ -182,7 +185,7 @@ alter table public.office_notification_state enable row level security;
 
 The function writes this row with an UPSERT, so it does not need seeding.
 
-## 3. Deploy commands (all four with --no-verify-jwt)
+## 3. Deploy commands (every function with --no-verify-jwt)
 
 ```powershell
 $wd = "<cli-workdir>"
@@ -193,7 +196,9 @@ supabase functions deploy daily-reminder       --workdir $wd --project-ref bzhsr
 supabase functions list --workdir $wd --project-ref bzhsroegtagqhutbnsrp
 ```
 
-Why `--no-verify-jwt` on all four: the gateway toggle only checks for ANY valid
+`east-feed-refresh` (v1, deployed 2026-10-20) has its own lines - the workdir on each line, `--use-api` - in its record below.
+
+Why `--no-verify-jwt` on all five: the gateway toggle only checks for ANY valid
 project JWT (the public anon key qualifies), so it is not a security boundary.
 Each function carries its own gate instead:
 
@@ -203,6 +208,7 @@ Each function carries its own gate instead:
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
 | send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, deployed 2026-09-25 05:36 UTC): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties. A follower (Prompt 20 F3, v8, deployed 2026-09-27 00:46 UTC: a viewer / coordinator whose `user_profiles.follows` names roster surgeons) only ever RECEIVES - added after this gate for `trade_*` / `shift_claimed` / `open_shifts` / `schedule_published`, never counted in `targetIds`, the cap or the party check; as a caller it is the same 403 - and never one of Prompt 19's scheduler-linked `trade_applied` copies either. Prompt 30 (phone push, v12 - deployed 2026-10-03 16:37:59 UTC): GET `?vapid=public` - the public key only, no auth (no other GET is served: 405); POST `?push=test` - any GoTrue-verified session (viewer, follower, APP and the office included - it is answered before the role read), its own devices only, no body read; every other POST is judged by the gate above exactly as before, and its push goes only to the people its e-mail is resolved for (before their e-mail flags; each on his own `*_push` switch) |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
+| east-feed-refresh | OFF (must stay OFF - the cron's pg_net call carries no JWT; a gateway 401 FAILs verify-rls 20i) | `x-cron-secret` == `CRON_SECRET`, fail closed, before the method, the body or any read (the `@cronSecret` block, byte-identical to daily-reminder's and office-notifications'); no CORS; v1 deployed 2026-10-20 01:42:59 UTC |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
 for that function. Always deploy from the CLI, and after any deploy re-run the
@@ -217,7 +223,56 @@ container, and the new laptop has no Docker. The download writes over
 a download that wrote nothing (or wrote somewhere else) then fails the compare on a missing file instead
 of passing it on the uploaded one.
 
-### Deploy record - Prompt 31 Part A (east-feed-refresh, the daily East feed refresh) - PREPARED, NOT deployed
+### Deploy record - Prompt 31 Part A (east-feed-refresh, the daily East feed refresh) - DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1)
+
+**Observed (Faraz, 2026-10-20 UTC - the evening of 10/19 Central; Windows PowerShell, one line at a time, then the SQL editor;
+Supabase CLI 2.120.0; pasted back), after `apply-east-vacations.sh` (revision x, applied 2026-10-19 22:53:18Z): steps 3, 4 and 5
+done, step 6 NOT observed yet.** Step 3: `functions list` before: `calendar-sync` v7 (2026-09-25 13:20:14), `office-notifications`
+v6 (2026-09-24 07:52:16), `send-notification` v12 (2026-10-03 16:37:59), `daily-reminder` v9 (2026-10-01 04:11:46), all ACTIVE -
+each as at its last listing (Prompt 30's record below). The file was copied from the main clone at main `477936d`, not from the
+`silvis-p31a` worktree the plan names - the same bytes: the copy's sha256
+`ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0` = the `east-vacations/edge-functions/east-feed-refresh/index.ts`
+line of apply-scripts' `SHA256SUMS.txt` = `edge-functions/east-feed-refresh/index.ts` at `477936d` (its last change `ff0f0f9`; the
+same bytes at the Part A merge `80c2c2b`). The deploy line as planned (the workdir on the line, `--no-verify-jwt --use-api`) ->
+`Deployed Functions on project bzhsroegtagqhutbnsrp: east-feed-refresh`. `functions list` after: `east-feed-refresh` **v1 ACTIVE
+(2026-10-20 01:42:59)**, the other four unchanged (versions and times). The uploaded copy removed, the download (`--use-api`) wrote
+the function's `index.ts` back into the workdir and the second hash read `ff717c93...` again: the source the project serves is
+byte-identical to the repo file. The unauthenticated `curl.exe` POST -> `401`. Then 20i, from the main clone at `477936d` (its
+`scripts/verify-rls.sh` the Part A database record step's bytes, sha256
+`13a4a982d76345948731a339a4e024b10a76ad2d197e31e034f82185526b0180`, sections 1-20), through Git's `bash.exe` from PowerShell with
+`$env:SILVIS_WORKDIR` (the `supa-silvis` workdir) and `$env:SILVIS_EAST_REFRESH_DEPLOYED="1"` - not Git Bash at a worktree's root,
+as the plan reads: every section ran, every graded check PASS, `RESULT: 535 passed, 0 failed` (the apply's 533 + 20i's two; section
+20 64 / 0 - 20a-20d and 20h `HTTP 401` `42501`, the probe's 56 cases PASS, leftover count 0; 19i's two PASS; the SKIP lines 3
+(`SILVIS_JWT`), 6 (`SILVIS_SURGEON_JWT`), 7c-7e, 8c / 8d, 9d, 14c, 18e, 19f and 20e). 20i's four lines, verbatim:
+
+```
+   20i unauthenticated POST east-feed-refresh: HTTP 401  body: {"error":"unauthorized"}
+PASS  east-feed-refresh refuses an unauthenticated POST (401 {"error":"unauthorized"} - its own x-cron-secret gate, nothing read)
+   20i POST east-feed-refresh with a wrong x-cron-secret: HTTP 401  body: {"error":"unauthorized"}
+PASS  east-feed-refresh refuses a wrong x-cron-secret (401 {"error":"unauthorized"} - the gate compares the secret, nothing read)
+```
+
+535 is that script's count; `scripts/verify-rls.sh` since `d48e010` (revision y's record step) adds section 21, which this run did
+not include. Step 4, the dryRun proof through pg_net in the SQL editor (the step's statement: the secret from Vault, the body
+`{"dryRun":true}`, `timeout_milliseconds := 60000`), read back with
+`select id, status_code, created, left(content::text, 400) as content from net._http_response where content::text like '{"dryRun":true%' order by created desc limit 1;`:
+row 717, `status_code` 200, created 2026-10-20 01:55:53Z, the content's first 400 characters
+`{"dryRun":true,"ok":true,"error":null,"errors":[],"failed":false,"source":"cron","today":"2026-10-19","from":"2026-09-21","to":"2027-04-19","weeks":22,"coverage":{"from":"2026-09-21","to":"2027-02-21"},"forecastRowsDeleted":null,"forecastDeleteError":null,"vacations":{"codes":["FAK"],"ranges":9,"to":"2028-04-24","rewrittenWeeks":0,"unresolved":[],"error":null,"trusted":true,"guard":[]},"reviewRese`
+- only those were read; the rest, the `"would"` part (what a live run writes), was not pasted and is not recorded here (by design
+a dry run writes nothing - the source; no read-back checked it). Step 5: section 4's `silvis-east-feed-daily` statement in the SQL
+editor (after step 4; the minute is not in the paste), then `select jobid, jobname, schedule, active from cron.job;` -> five rows,
+all `true`: 1 `silvis-daily-reminder-hourly` `0 * * * *`, 2 `silvis-office-digest-weekly` `0 11 * * 1`, 3 `silvis-offers-daily`
+`0 13 * * *`, 5 `silvis-open-shifts-weekly` `0 12 * * 1`, 8 `silvis-east-feed-daily` `30 10 * * *`. Step 6 - NOT observed yet: the
+first scheduled run is 2026-10-20 10:30 UTC (05:30 CDT); its `east.refresh` audit row (`actor_id` `cron`) - Setup > East feed, or
+step 6's `audit_log` read - is Faraz's to paste, and gets its own line here. Until then no live run of the function has been
+observed: what stands is the gate (20i), the byte-compare and the dryRun's first 400 characters.
+
+Since this record step a plain `bash scripts/verify-rls.sh` grades 20i on every run (`SILVIS_EAST_REFRESH_DEPLOYED` is gone), as 19i
+since Prompt 30's record step. The source's own header still reads `NOT DEPLOYED` (pinned in `test/edge-functions.test.js`) on
+purpose: the repo copy stays byte-identical to the deployed v1 (sha256 `ff717c93...`), and that wording flips, with its pin, at the
+next source change.
+
+*As prepared (10/16-10/19; kept as the plan, each step with its Done or NOT observed note):*
 
 Source `edge-functions/east-feed-refresh/index.ts`, a new slug (nothing to back up; its header says what one run
 does). No new secret: `CRON_SECRET` is the one the live jobs use, and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are
@@ -269,7 +324,8 @@ The order (Faraz, one step at a time; the expected result in brackets):
    `{"error":"unauthorized"}` (a `401` with another body is the gateway's JWT check: a deploy without `--no-verify-jwt`,
    which the cron's call - it carries no JWT - would never pass); then `RESULT: <n> passed, 0 failed`]. The `curl.exe`
    line above reads the status only; 20i reads the body too, and keeps reading it on every later run once the record
-   step drops the flag (step 6).
+   step drops the flag (step 6). Done: 2026-10-20, from the main clone at `477936d` (the same bytes): v1 at 01:42:59 UTC, both
+   hashes `ff717c93...`, `401`, then 20i's two PASS lines through Git's `bash.exe` from PowerShell (observed above).
 4. The dryRun proof, through pg_net in the SQL editor (no cron job needed; nothing is written - no `east_feed` row, no
    prune, no reset, no audit row):
    ```sql
@@ -284,15 +340,20 @@ The order (Faraz, one step at a time; the expected result in brackets):
    ```
    [`200` and content starting `{"dryRun":true,"ok":true,`; its `"would"` names what a live run writes - the
    published weeks of the main window, the weeks outside it, the forecast prune, the reset's `p_from`. `"ok":false`
-   names the problem in `"errors"` - settle it before step 5.]
+   names the problem in `"errors"` - settle it before step 5.] Done: 2026-10-20 01:55:53Z - `200`, the content starting
+   `{"dryRun":true,"ok":true,`, read back with a filtered query; only its first 400 characters were read, so its `"would"` is not
+   recorded (observed above).
 5. The cron job `silvis-east-feed-daily` - section 4's statement in the SQL editor, then
-   `select jobid, jobname, schedule, active from cron.job;` [five rows]. The first run is the next 10:30 UTC.
+   `select jobid, jobname, schedule, active from cron.job;` [five rows]. The first run is the next 10:30 UTC. Done: made
+   2026-10-20, after step 4 - five rows, all active, this one jobid 8 (observed above).
 6. The next morning: Setup > East feed shows the server refresh (with the Part A client), or in the SQL editor
    `select created_at, detail->>'ok', detail->>'summary' from audit_log where action = 'east.refresh' and actor_id = 'cron' order by created_at desc limit 3;`
    [`true` and "Server refresh of the East feed (cron): N published week(s) ..."]. Paste back; the record step then
    fills this record (versions, times, the proofs, the 20i lines), rewords the sentences about the four functions and
    jobs, and drops `SILVIS_EAST_REFRESH_DEPLOYED` from `scripts/verify-rls.sh`, which then grades 20i on every plain run
-   (as 19i since Prompt 30's record step).
+   (as 19i since Prompt 30's record step). NOT observed yet: the record step came first (2026-10-20, before the 10:30 UTC run) -
+   the flag is dropped (the deploy and 20i's two PASS lines are what dropping it needs), and the morning's audit row gets its own
+   line in this record when Faraz pastes it.
 
 Rollback: section 7.
 
@@ -652,7 +713,7 @@ select cron.schedule('silvis-offers-daily', '0 13 * * *', $$
     body := '{"mode":"offers"}'::jsonb);
 $$);
 
-select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; all four exist today (the hourly reminder and the weekly digest since 9/22, silvis-offers-daily since 9/23, silvis-open-shifts-weekly - read-only check 2026-09-28, first observed run 2026-09-28 12:00Z)
+select jobid, jobname, schedule, active from cron.job;                 -- expect four rows after this whole block; these four exist today, the fifth (below) since 2026-10-20 (the hourly reminder and the weekly digest since 9/22, silvis-offers-daily since 9/23, silvis-open-shifts-weekly - read-only check 2026-09-28, first observed run 2026-09-28 12:00Z)
 select * from cron.job_run_details order by start_time desc limit 10;  -- after the first run
 ```
 
@@ -673,28 +734,31 @@ Notes
 - Nothing secret is stored in `cron.job.command`: the command names the Vault
   row, and `vault.decrypted_secrets` is readable only as the postgres role
   (Faraz in the SQL editor), never through the REST API or the anon key. This
-  supersedes the Davenport posture (secret pasted into the command). The four live jobs read the Vault
+  supersedes the Davenport posture (secret pasted into the command). The four live jobs above read the Vault
   row the same way, as the SQL above writes them (the first two since 9/22, `silvis-offers-daily` since 9/23,
-  `silvis-open-shifts-weekly` active by the read-only `cron.job` check of 2026-09-28).
+  `silvis-open-shifts-weekly` active by the read-only `cron.job` check of 2026-09-28), and so does the fifth,
+  `silvis-east-feed-daily` (created 2026-10-20, the statement below).
 - Rotate: change the Vault row's value (`vault.update_secret` on the
   `silvis_cron_secret` row) and set the same new value with
   `supabase secrets set CRON_SECRET=<new>`. The jobs read the new value on
   their next tick without an `alter_job`; until both sides agree the cron
   calls get 401 and nothing is sent (fail closed).
-- The four jobs run unattended (the first two since 2026-09-22, `silvis-offers-daily` since 2026-09-23,
-  `silvis-open-shifts-weekly` - first observed run 2026-09-28 12:00Z). A live send results only from the
+- The jobs run unattended (the first two since 2026-09-22, `silvis-offers-daily` since 2026-09-23,
+  `silvis-open-shifts-weekly` - first observed run 2026-09-28 12:00Z; the fifth, `silvis-east-feed-daily`, scheduled since
+  2026-10-20 - its first run, 2026-10-20 10:30 UTC, not observed yet; it never mails). A live send results only from the
   inputs listed in section 6 (a linked account whose reminder hour matches;
   rows in `office_contacts` plus a non-empty digest diff).
 
-Prompt 31 Part A - the fifth job, the daily server refresh of the East feed cache. NOT scheduled yet: run this only
-after `east-feed-refresh` is deployed and its dryRun proof passed (section 3, "Deploy record - Prompt 31 Part A").
-10:30 UTC = 05:30 CDT / 04:30 CST, before the Monday 11:00 UTC digest (it reads `east_feed`) and the 13:00 UTC offers
-job. `timeout_milliseconds` is set because pg_net's default is a few seconds while one run makes up to five reads of
-the other project (8 s cap each); none of the four live jobs sets it. The same Vault secret, the same fail-closed
-`unset`.
+Prompt 31 Part A - the fifth job, the daily server refresh of the East feed cache. Created 2026-10-20 by Faraz in the SQL editor
+with the statement below, after `east-feed-refresh` was deployed and its dryRun proof answered `200` (section 3, "Deploy record -
+Prompt 31 Part A"); `cron.job` then read five rows, all active - this one jobid 8, `30 10 * * *`. Its first run, 2026-10-20 10:30
+UTC, is not observed yet (section 3's step 6). 10:30 UTC = 05:30 CDT / 04:30 CST, before the Monday 11:00 UTC digest (it reads
+`east_feed`) and the 13:00 UTC offers job. `timeout_milliseconds` is set because pg_net's default is a few seconds while one run
+makes up to five reads of the other project (8 s cap each); none of the other four jobs sets it. The same Vault secret, the same
+fail-closed `unset`.
 
 ```sql
--- Prompt 31 Part A: the daily East feed refresh, 10:30 UTC (NOT scheduled yet - see above)
+-- Prompt 31 Part A: the daily East feed refresh, 10:30 UTC (created 2026-10-20, jobid 8 - see above)
 select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$
   select net.http_post(
     url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',
@@ -703,7 +767,7 @@ select cron.schedule('silvis-east-feed-daily', '30 10 * * *', $$
     body := '{}'::jsonb,
     timeout_milliseconds := 60000);
 $$);
-select jobid, jobname, schedule, active from cron.job;   -- five rows once this job exists
+select jobid, jobname, schedule, active from cron.job;   -- five rows since 2026-10-20 (jobids 1, 2, 3, 5 and 8, all active)
 ```
 
 ## 5. Verification - safe steps (no mail can result)
@@ -895,7 +959,7 @@ admin accounts); on any other day it reads and answers `sent: 0`. Proof after
 deploying: one dryRun POST through pg_net from the SQL editor (or the curl above)
 and quote the 200 body in the deploy record (section 3).
 
-### east-feed-refresh (Prompt 31 Part A - NOT deployed; these hold once it is)
+### east-feed-refresh (Prompt 31 Part A - v1, deployed 2026-10-20 01:42:59 UTC)
 ```powershell
 # no secret -> 401 before any work (nothing read; a preflight gets the same 401)
 curl.exe -s -i -X POST "$URL/east-feed-refresh" | Select-Object -First 1
@@ -914,8 +978,8 @@ curl.exe -s -i "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" | Select-Obj
 #       "weeks":N,"coverage":{"from":...,"to":...},...,"vacations":{"codes":["FAK"],"ranges":N,...,"trusted":true,"guard":[]},...,
 #       "extra":{"from":...,"to":...,"weeks":N,...},"newRanges":[...],...,"would":{"upsert":N,"weekRows":N,"rewrittenRows":N,"prune":{...},"reset":{"p_from":"<Monday>"},"extra":N}}
 ```
-The first two checks are `scripts/verify-rls.sh` 20i - with `SILVIS_EAST_REFRESH_DEPLOYED=1` after the deploy (section 3),
-on every plain run once the deploy's record step drops the flag - which also requires the function's own body
+The first two checks are `scripts/verify-rls.sh` 20i, graded on every plain run since the deploy's record step (the flag is
+gone; the run after the deploy read both PASS - section 3) - which also requires the function's own body
 `{"error":"unauthorized"}` (a 401 with another body is the gateway's JWT check).
 A LIVE call (`{}`) writes what the in-app Refresh from Davenport writes (`east_feed` rows, the forecast prune, the
 review reset, one `east.refresh` audit row) and never mails; the daily cron job is its intended caller. Only `{}` and

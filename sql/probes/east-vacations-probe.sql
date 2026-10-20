@@ -23,8 +23,8 @@
 -- As run: the migration was applied 2026-10-19 22:53:18Z (schema.sql revision x); the probe read PROBE_SETUP (silvis_derived_vacations
 -- is absent) before it and all 56 cases below as listed after it. Until the record step verify-rls read PROBE_SETUP and the anon 404s
 -- as the not-applied picture (unless its flag for the run right after the apply was set); since the record step, which dropped that
--- flag, section 20 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is history (20i still waits for the east-feed-refresh
--- deploy).
+-- flag, section 20 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is history (20i, the deployed east-feed-refresh's
+-- gate, is graded on every run since its deploy's record step, 2026-10-20).
 --
 -- The roster is READ from the live blob (call_schedule_data 'main'), never written - not even inside the transaction: the active
 -- surgeons (active not false, not type 'external') in roster order, the minimum (groupRules.vacations.minSurgeonsAround, absent /

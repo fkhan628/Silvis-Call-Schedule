@@ -13,13 +13,13 @@ afterwards; the editor keeps query history).*
 2. **Authentication → Email templates** (optional): the default "Invite user" and "Reset password" templates work; the app
    detects `#type=invite` / `#type=recovery` in the URL hash and opens the set-a-password form.
 3. `sql/schema.sql` is applied (Prompt 2). Re-running it is safe.
-4. The pg_cron jobs are in place — four, all active: `silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
-   (created 9/22), `silvis-offers-daily` (created 9/23) and the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
-   `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z). All read
-   the Vault secret `silvis_cron_secret`. For a rebuild, the `cron.schedule` statements of `edge-functions/README.md`
-   section 4 are the reference; `select jobid, jobname, schedule, active from cron.job` must show the four rows. Prompt 31 Part A
-   prepares a fifth, `silvis-east-feed-daily` (the daily East feed refresh), created only after `east-feed-refresh` is deployed and its
-   dry run passed (`edge-functions/README.md` sections 3 and 4).
+4. The pg_cron jobs are in place — five, all active: `silvis-daily-reminder-hourly` and `silvis-office-digest-weekly`
+   (created 9/22), `silvis-offers-daily` (created 9/23), the Monday open-shifts e-mail `silvis-open-shifts-weekly` (a read-only
+   `cron.job` check on 2026-09-28 listed it with schedule `0 12 * * 1`; first observed run 2026-09-28 12:00Z) and, since 2026-10-20,
+   `silvis-east-feed-daily` (Prompt 31 Part A - the daily East feed refresh at 10:30 UTC, jobid 8, created after `east-feed-refresh`
+   was deployed and its dry run answered 200; its first run not observed yet). All read the Vault secret `silvis_cron_secret`. For a
+   rebuild, the `cron.schedule` statements of `edge-functions/README.md` section 4 are the reference (section 3 the deploy order);
+   `select jobid, jobname, schedule, active from cron.job` must show the five rows.
 
 ## Your own account (first — already done for Faraz on 9/23 - `admin`, roster `s1`; kept for a rebuild)
 
@@ -171,7 +171,7 @@ such a day is refused
 (the E / O / F / EV badges in Mine and Following and the offer painter's East words are the scheduler's only too - the painter says
 "not available"), and *home* ranges do not show at all. Nothing changes on the public link, its share links, the printout, the
 calendar feeds, the office digest, the ER export or any e-mail. A change - an away / home decision, or a range the Davenport app
-changes - reaches everyone within about a minute of the next refresh, and the daily server refresh (once deployed) keeps the
+changes - reaches everyone within about a minute of the next refresh, and the daily server refresh (since 2026-10-20) keeps the
 ranges fresh without anyone opening the app.
 
 **My call - Silvis + Davenport (for the person with an East code - Khan today; Prompt 31 Part B).** On their own **Mine**
