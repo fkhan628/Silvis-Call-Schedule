@@ -2956,7 +2956,7 @@ client is live since 2026.10.18b. The database half - revision x, `sql/migration
 and is APPLIED 2026-10-19 22:53:18Z (Faraz, `apply-east-vacations.sh`, kept outside the repo; the observed lines in
 `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"). The client shipped before the apply; by design it reads a missing function as
 "unavailable" and, since the apply, the derived rows - the apply observed no signed-in client read (verify-rls 20e a SKIP line; probe
-A1-A3 prove the reads in SQL) and no in-app refresh that wrote the cache since the client shipped. `east-feed-refresh` is NOT
+A1-A3 prove the reads in SQL), and no in-app refresh since 2026-10-15 cached a freshly fetched week. `east-feed-refresh` is NOT
 deployed and its cron job `silvis-east-feed-daily` does not exist (`edge-functions/README.md` section 3) - Faraz's next steps, 25.6. The deploy's
 record step rewrites this line again.*
 

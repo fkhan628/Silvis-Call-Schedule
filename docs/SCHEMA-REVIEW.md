@@ -3486,8 +3486,9 @@ export, e-mails or pay read (they keep reading `time_off` and never call the new
 called by no client and no edge function until the Part A client ships and the server refresh is deployed; *As run: the Part A client
 shipped first (2026.10.18b, CI build `ee47331`, 2026-10-18 18:26:47Z). Observed by the apply: no signed-in REST read (verify-rls 20e
 a SKIP line - no surgeon token; probe A1-A3 prove a surgeon's, the coordinator's and a viewer's read in SQL) and no in-app refresh
-that wrote the cache - the pre-check's `east_feed` read `fetched_max=2026-10-15T03:07:29Z` before and after the apply, so the last
-cache write predates 2026.10.18b and no reset has run through either path since it shipped. By design (not observed): before the
+since 2026-10-15 03:07:29Z that cached a freshly fetched week - the pre-check's `east_feed` read `fetched_max=2026-10-15T03:07:29Z`
+before and after the apply (each such write stamps `fetched_at` with its fetch time; a refresh whose week read came back empty would
+not move it, so the reading cannot show whether a review reset ran in between). By design (not observed): before the
 apply the client reads
 both RPCs' 404 PGRST202 as "unavailable" and its in-app refresh falls back to the 9/23 loop; since 22:53:18Z every signed-in client
 reads the derived rows, and the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function calls
