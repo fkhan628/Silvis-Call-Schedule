@@ -19,7 +19,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_feed` | Cached Davenport `schedule_weeks` rows by week Monday. Anon-read. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): the cached vacation ranges are read past RLS by `silvis_east_ranges()` (the derived rows, the guard, the review reset), and the daily server refresh `east-feed-refresh` (not deployed yet) writes the same rows as the in-app refresh, with the service role. |
 | `east_overrides` | Manual per-day corrections to the East feed (`busy` true/false). Anon-read. |
 | `east_forecast` | East forecast rows (`scripts/east-forecast.js --sql`), one per week Monday, kept out of `east_feed` so a forecast can never read as a published Davenport row. Anon-read. Added to `schema.sql` and applied to the live DB 2026-09-22 (14 forecast-week rows observed 2026-09-23). |
-| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
+| `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, **applied live 2026-10-20 00:41 UTC** - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). |
 | `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself; since 2026-10-03 16:30 UTC `push.save` / `push.delete` from `save_push_subscription` / `delete_push_subscription`, Prompt 30 - the function writes the row for every role, in the same transaction as its own write). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
@@ -4093,10 +4093,10 @@ grades section 20 strictly with no flag (20i still a SKIP until the deploy's rec
 
 ## 2026-10-18 - apply_trade writes the receiver's offer (revision y): shift_trade_requests.proposed_by / accepted_by + trade_insert_guard / trade_update_guard / apply_trade re-created (Faraz 10/18; `sql/migrations/2026-10-18-trade-offer.sql`)
 
-**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer.sh`, after Part A's `apply-east-vacations.sh`.**
+**Status: APPLIED 2026-10-20 00:41:25Z** (Faraz - `apply-trade-offer.sh`, which exports `AI_AGENT`, from the main clone at `b0344bd`, after Part A's `apply-east-vacations.sh`; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.
 Revision y (u stays reserved for the weekend pair claim; x - Part A - went first (applied 2026-10-19 22:53:18Z): its apply script pinned
-`scripts/verify-rls.sh` until Part A's record step; this section's record step edits it next - D8). Nothing in the repo applies it: the apply script lives
-outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the observed line at the end.
+`scripts/verify-rls.sh` until Part A's record step; this section's record step added its section 21 - D8). Nothing in the repo applies it: the apply script lives
+outside the repo (Faraz 10/1); Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section.
 
 **Why.** A claim is an offer made on the spot (Prompt 14 part 2c, 9/23): `claim_open_slot` upserts the claimer's `call_offers`
 row. A trade did not: `apply_trade` moved the slot and wrote no offer, so a receiver already submitted for the day's offer period
@@ -4112,6 +4112,7 @@ a receiver already submitted in the day's period (one or more offers in it), nev
 the row is written only for a receiver who agreed himself, recorded on the trade row, whoever later applies it. D4 the merge
 hands the row to him on a role change. D5 no backfill unless the pre-check lists legs (then its own report-first step). D6 a
 primary leg onto his No primary day writes none. D7 two audit booleans. D8 after Part A.
+*As run: the pre-check listed no leg (`in_period=0 uncovered=0`, before and after) - D5's backfill step is not needed.*
 
 **The objects** (the migration verbatim is the file; schema.sql mirrors it):
 
@@ -4161,6 +4162,9 @@ offer on the day he gave stays (deleting it in a frozen period would hit `call_o
 claim can still race a save that turns the claimer rules-only (`claim_open_slot` takes no such lock - unchanged); Faraz accepting as the receiver past the return
 leg's rule writes the giver's return row (the giver proposed that day himself); a trade accepted before revision y writes no row,
 and one proposed before it and accepted after it writes the leg-1 receiver's row only (the proposer's agreement was never stamped).
+*As run: `legs=4 in_period=0 uncovered=0 open_trades=0` before and after - no applied leg lies in an offer period and no pending or accepted
+trade existed, so no row carries a null stamp into a later apply; `keys_without_offers=s5` (2026-11-02, published) unchanged. The apply wrote
+no `call_offers` row (the probe rolled back, leftover 0).*
 
 **Proof.** `sql/probes/trade-offer-probe.sql` (rolled back; 32 cases in its header - P1 the catalog, S1-S9 the stamps never from
 the client, A1-A11 who agreed decides whoever applies (A2: the backup return leg takes the lock too), M1-M3 the merge, R1-R8 the
@@ -4176,6 +4180,8 @@ probe never writes the roster; that branch is the offline check above - the lock
 keys, each stamp rule); the 16th - dropping the no-period test - is equivalent (the submitted test skips the
 same legs). Review 10/18 (four lenses, each finding re-checked): the lock moved before the reads for every leg, R1 / R4 given an
 offer so they test the rules-only branch, the probe's guard reads `time_off` on 2029-12-31 too, the pre-check prints `listed`.
+*As run (2026-10-20): the live probe AFTER read all 32 cases exactly as their header strings, leftover 0; the trade probe's 34 and the claim
+probe's 15 read the same before and after (steps 2 and 7); the outside-surgeon branch stays proved offline only.*
 
 The gate (the pre-check's first rows):
 
@@ -4187,12 +4193,22 @@ after:  cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=ye
 both:   apply_trade=definer insert_guard=invoker update_guard=invoker offers_guard=invoker; anon=f authenticated=t public=f; offers_force=f owner_match=yes
 ```
 
+*As run: the live pre-check read exactly these rows before and after.*
+
 **The order** (Faraz's apply script `apply-trade-offer.sh`, kept outside the repo; `--dry-run` first): 0. the sha256 pins of the
 graded files and the Silvis CLI link; 1. agent mode and the pre-check (the gate before, Part A applied, the facts printed); 2. the
 columns-absent check; 3. probe BEFORE (PROBE_SETUP ... accepted_by is absent); 4. APPLY in capitals, then the migration; 5. the gate
 after; 6. probe AFTER, every case graded against its header line, and the probe's own leftover count; 7. the PASTE THIS BACK block.
 Run nothing else that writes trades, offers or vacations during the run (the probe holds the `time_off` SHARE lock and the offers
 advisory locks of each consenting receiver for under a second).
+*As run (2026-10-20): `apply-trade-offer.sh` (Faraz, main clone at `b0344bd`, pins from `fed3151` - all eight matched) ran its steps
+0-7 in this order - 0 the sha256 pins and the CLI link, 1 agent mode and the pre-check (the gate before: `cols=none` is the
+columns-absent check, `east_vacations=yes` Part A applied; the facts printed), 2 the regression probes BEFORE (trade-guards 34,
+claim-open-slot 15 cases), 3 probe BEFORE, 4 APPLY and the migration, 5 the gate after, 6 probe AFTER and its leftover count, 7 the
+regression probes AFTER - then the PASTE THIS BACK block. The list above numbers them otherwise: it has no regression-probe step, and
+its step 2 is part of the script's step 1. Three earlier runs applied nothing (the observed lines). The record step changes three of
+the eight graded files (the migration through its trailer - its body's sha256 `fab079015ef4df0098b8b4e516c6382531825e3c8946d214ac0e7381fcf2a10d`
+unchanged - the probe's and the pre-check's headers), so the script is one-shot: a re-run or `--dry-run` needs its pins refreshed.*
 
 **Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - offer rows already written stay, and the
 `trade.apply` rows with `offer` / `return_offer` true name the legs that wrote or merged one; the two columns stay, with their
@@ -4214,4 +4230,69 @@ gains a section that runs and grades `sql/probes/trade-offer-probe.sql` (its 32 
 script does) and its sha256 pin moves - only after Part A's record step, since Part A's apply script pins the file until then; the
 test pins with them.
 
-observed: (the record step fills this - nothing in this section has run against the live project).
+observed (apply, 2026-10-20): applied 2026-10-20 00:41:25Z (`apply-trade-offer.sh` step 4: the migration file through
+`supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz (log `apply-trade-offer-20261020T004005Z.log`,
+outside the repo, result `APPLIED AND VERIFIED`; repo HEAD `b0344bd` on `main`, the pins from `fed3151`; the migration's sha256
+`fab079015ef4df0098b8b4e516c6382531825e3c8946d214ac0e7381fcf2a10d` and the other seven graded files' matched (`all eight matched: yes`); supabase CLI 2.120.0
+in its agent-mode envelope (`AI_AGENT=1`), the workdir linked to `bzhsroegtagqhutbnsrp` (the known-good read `silvis=true davenport=false`);
+APPLY typed at the prompt). Step 1, the pre-check (read-only) - gate before: `cols=none insert_trg=yes update_trg=yes offers_trg=yes
+east_vacations=yes`; bodies before
+`apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe`
+(revisions m / p / n / j); sigs / grants / rls `apply_trade=definer insert_guard=invoker update_guard=invoker offers_guard=invoker` |
+`anon=f authenticated=t public=f` | `offers_force=f owner_match=yes`; its facts (never a stop), as the log printed them:
+
+```text
+6 legs: legs=4 in_period=0 uncovered=0 open_trades=0
+7 modes 2026-11-02: period=2026-11-02 status=published keys_without_offers=s5
+```
+
+No applied leg lies in an offer period (D5: no backfill). Step 2, the regression probes BEFORE: trade-guards 34 cases, claim-open-slot
+15 cases. Step 3, probe BEFORE: `PROBE_SETUP: shift_trade_requests.accepted_by is absent - sql/migrations/2026-10-18-trade-offer.sql is
+not applied` (nothing else ran). Step 5, gate after: `cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes
+east_vacations=yes`; bodies after
+`apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b offers_guard=c48783939fd53dc56be90af140297abe`
+(y / y / y / j); sigs / grants / rls and facts rows 6 and 7 unchanged. Step 6, probe AFTER - 32 cases, each as its header states, as
+the log's paste-back block printed them (in its order, sorted by name; no line carries a double quote, `<`, `>` or `&`):
+
+```text
+A1=st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off
+A10=st=applied by=s1/s3 o1=primary/s3/app o2=backup/s1/app a=true/true
+A11=st=applied by=scheduler/s3 o1=primary/s3/app o2=none a=true/false
+A2=st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t
+A3=st=applied by=scheduler/s3 o1=primary/s3/app a=true/false
+A4=m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false
+A5=st=applied by=s2/scheduler o1=none a=false/false
+A6=st=applied by=s2/scheduler o1=none a=false/false
+A7=st=applied by=s2/s3 o1=primary/s3/app a=true/false upd=scheduler
+A8=st=applied by=s2/s1 o1=primary/s1/app a=true/false
+A9=st=applied by=scheduler/scheduler o1=none a=false/false held=s4
+M1=st=applied by=s2/s4 o1=either/s4/app a=true/false
+M2=st=applied by=s2/s4 o1=primary/scheduler/email-relay a=true/false
+M3=st=applied by=s2/s4 o1=either/scheduler/email-relay a=true/false
+P1=cols=proposed_by,accepted_by definer=t loop=t stamps=t anon=f auth=t
+R1=st=applied by=s2/s5 o1=none a=false/false
+R2=st=applied by=s2/s6 o1=none a=false/false
+R3=st=applied by=s2/s3 o1=none a=false/false
+R4=st=applied by=s2/s5 o1=none a=false/false
+R5=st=applied by=s2/s6 o1=primary/s6/app a=true/false
+R6=st=applied by=s2/s1 o1=none a=false/false
+R7=lock=f/t st=applied by=s2/s4 o1=none a=false/false
+R8=st=applied by=s2/s4 o1=backup/s4/app a=true/false
+S1=st=pending by=s2/null
+S2=st=pending by=s2/null
+S3=st=accepted by=s2/s3
+S4=st=accepted by=s2/s3
+S5=st=accepted by=scheduler/scheduler
+S6=st=accepted by=s1/scheduler
+S7=st=accepted by=s2/scheduler
+S8=st=accepted by=scheduler/scheduler
+S9=st=accepted by=scheduler/s1
+```
+
+then the probe's leftover count: 0 (persisted nothing). Step 7, the regression probes AFTER: both read the same as before the migration
+(trade-guards 34, claim-open-slot 15 cases). The apply script runs no `scripts/verify-rls.sh` (no RESULT line). Three earlier runs
+applied nothing: the `--dry-run` at 20261019T051637Z (`main`, `fed3151`) stopped at step 1 - `east_vacations=no`, Part A not applied yet
+(D8), `APPLY confirmation: not reached`, `migration: not run`; the `--dry-run` at 20261019T230250Z (`main`, `b0344bd`) read steps 0-3
+and stopped there by design - `DRY RUN - nothing applied`; the 20261019T234350Z run (`main`, `b0344bd`) stopped at step 4 - the APPLY
+answer was not APPLY (`APPLY confirmation: refused`, `migration: not run`). Not re-run against the live project after the record step:
+verify-rls section 21 (added by this step) grades the probe on the next plain `bash scripts/verify-rls.sh`.

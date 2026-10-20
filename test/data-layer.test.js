@@ -14724,7 +14724,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   /* ---------------- revision y (10/18): the trade consent stamps are the database's alone ---------------- */
   console.log("\n[Y] revision y (10/18): the client never sends or reads the consent stamps; one trade PATCH, status + decided_at only");
   {
-    // sql/migrations/2026-10-18-trade-offer.sql (report-first, not applied): shift_trade_requests.proposed_by / accepted_by are written by
+    // sql/migrations/2026-10-18-trade-offer.sql (applied 2026-10-20 00:41:25Z, recorded in docs/SCHEMA-REVIEW.md): shift_trade_requests.proposed_by /
+    // accepted_by are written by
     // the trade triggers only - apply_trade reads them to decide whose offer a trade writes. A client that sent one would be overwritten
     // anyway (test/schema.test.js pins the triggers); these pins keep the client honest: it names neither column, its one PATCH of a
     // trade row carries status + decided_at only, and its insert carries the proposal keys only (the 1583 / 1596 pins above).
@@ -14744,6 +14745,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual((s.match(/\/rest\/v1\/shift_trade_requests/g) || []).length, 1, "one REST path to shift_trade_requests (the PATCH); reads go through readAuthOnlyTable, the insert through db.insert");
       assert.deepStrictEqual(["accepted", "declined", "cancelled"].map((st) => s.includes("await patchTradeStatus(g, \"" + st + "\")")), [true, true, true], "accept, decline and cancel each PATCH through it");
       assert.strictEqual((s.match(/db\.(insert|update|upsert)\("shift_trade_requests"/g) || []).length, 1, "one db.* write to the trades table: the proposal insert");
+    });
+    // the record step (10/20): the comment at the trade check says what apply_trade writes since the apply, never "does not yet write"
+    check("Y3 tradeEligibility's comment says apply_trade writes the receiver's call_offers row since revision y (applied 2026-10-20 00:41:25Z) - and where it writes none, the conflict stays", () => {
+      const s = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+      const at = s.indexOf("  const tradeEligibility = (day, role, candidateId, opts) => {");
+      assert.ok(at > 0, "tradeEligibility");
+      const fn = s.slice(at, s.indexOf("\n  };\n", at)).replace(/\n\s*\/\/ /g, " ");
+      assert.ok(fn.includes("Since revision y (applied 2026-10-20 00:41:25Z, recorded in docs/SCHEMA-REVIEW.md) apply_trade() writes his call_offers row, as a claim does, when he agreed himself (for a return leg, both surgeons did) and is submitted for the day's period; where it writes none - the scheduler accepting for him, say (the record lists the cases) - a traded day off his offers / list still reads as a conflict on the held slot."), "the comment names revision y's write and the legs it skips");
+      assert.ok(!/does not yet write/.test(fn) && !/call_offers row \(open\)/.test(s), "no 'does not yet write' / 'call_offers row (open)' is left");
+      assert.ok(fn.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }"), "the check itself is unchanged (claim: true)");
     });
   }
 

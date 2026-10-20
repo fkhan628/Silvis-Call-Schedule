@@ -1,11 +1,15 @@
 -- ============================================================================
--- Silvis Call Schedule - trade offer PROBE (2026-10-18, revision y; sql/migrations/2026-10-18-trade-offer.sql, REPORT-FIRST, NOT APPLIED).
+-- Silvis Call Schedule - trade offer PROBE (2026-10-18, revision y; sql/migrations/2026-10-18-trade-offer.sql, REPORT-FIRST; APPLIED 2026-10-20 00:41:25Z).
 -- Proves the consent stamps (shift_trade_requests.proposed_by / accepted_by) and apply_trade's receiver offer rows on the LIVE
 -- database WITHOUT PERSISTING ANYTHING. Same mechanism as the other probes: ONE batch through the linked CLI (one implicit
 -- transaction, no BEGIN/COMMIT); every case records into probe_results; the LAST statement raises 'PROBE_RESULTS K=...;END', so
 -- everything - users, periods, offers, days, trades, audit rows - rolls back. A batch ending in RAISE persists nothing.
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/trade-offer-probe.sql
---   (graded by the private apply-scripts/apply-trade-offer.sh, value for value against the header lines below)
+--   (graded by the private apply-scripts/apply-trade-offer.sh and, since the record step, by scripts/verify-rls.sh section 21, value for value against the header lines below)
+-- As run: the migration was applied 2026-10-20 00:41:25Z (schema.sql revision y); the probe read PROBE_SETUP (shift_trade_requests.accepted_by
+-- is absent) before it and all 32 cases below as listed after it, leftover count 0 (apply-trade-offer.sh steps 3 and 6). Since the record step
+-- verify-rls section 21 runs it on every run, grades each case against its line below and counts the leftovers it could leave; it FAILs
+-- a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel - there was never a not-applied grading.
 -- Run nothing else that writes trades, offers or vacations at the same time: the probe takes the time_off SHARE lock (apply_trade)
 -- and the per-person offers advisory locks (each consenting receiver's, in person order) for the length of the batch - well under a second.
 -- Identity: users probe-tradeoffer-<uuid>@example.test; trades detail 'probe-tradeoffer <K>'; periods label 'probe-tradeoffer P?';

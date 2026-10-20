@@ -90,7 +90,7 @@ const RETURN_LEG_MIGRATION = path.join(ROOT, "sql", "migrations", RETURN_LEG_FIL
 // sha256 of S1's trade_insert_guard body (git show f9ad08f:sql/migrations/2026-09-24-give-kind.sql) - the follow-up re-creates it
 const S1_INSERT_GUARD_SHA256 = "0866c8228ef8e8b209c7c0d5925f27f901e909ef409675046ae73fac7da3dbbd";
 const AUDIT_MIGRATION = path.join(ROOT, "sql", "migrations", "2026-09-24-trade-audit-names.sql");   // Prompt 16 follow-up 5b: the newest for claim_open_slot (applied 2026-09-24); its apply_trade (revision m) is frozen by sha256 since revision y
-// Revision y (2026-10-18, Faraz - report-first, NOT applied): the newest for apply_trade, trade_insert_guard and trade_update_guard
+// Revision y (2026-10-18, Faraz - report-first; applied 2026-10-20 00:41:25Z): the newest for apply_trade, trade_insert_guard and trade_update_guard
 const TRADE_OFFER_FILE = "2026-10-18-trade-offer.sql";
 const TRADE_OFFER_MIGRATION = path.join(ROOT, "sql", "migrations", TRADE_OFFER_FILE);
 // sha256 of the bodies revision y supersedes, frozen as applied: apply_trade (revision m, the 5b file) and trade_update_guard (revision n, the give-kind file)
@@ -384,7 +384,7 @@ ok(!/\r/.test(vr), "verify-rls.sh has CRLF line endings");
 ok(/s\/;END\.\*\$\/\//.test(vr), "verify-rls.sh must cut the PROBE_RESULTS message at the ;END sentinel (s/;END.*$//)");
 ok(!/PROBE_RESULTS \[\^"\]\*/.test(vr), "verify-rls.sh must not end the PROBE_RESULTS message at a double quote (CLI wrapper shape is not guaranteed)");
 // the 10/3 lesson (an agent's fake CLI fell through to the real one on PATH): every faked verify-rls run below (sections 13, 14d,
-// 15, 16, 18, 19) starts the section's code only after proving its fakes are bash functions - never the supabase / curl on PATH -
+// 15, 16, 18, 19, 20, 21) starts the section's code only after proving its fakes are bash functions - never the supabase / curl on PATH -
 // and aborts otherwise (ABORT-FAKES, exit 99, before any line of the section runs); and no line of verify-rls.sh reaches past a
 // function to the real CLI (`command supabase`, `env supabase`, `\supabase`, SUPABASE_BIN ...), which a function cannot shadow
 const fakesGuard = (names) => names.map((n) => "[ \"$(type -t " + n + ")\" = function ]").join(" && ") + " || { echo ABORT-FAKES; exit 99; }\n";
@@ -4675,7 +4675,9 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   // offers, prepared, not applied): its header line names sql/migrations/2026-10-18-trade-offer.sql, and its record step turns it applied;
   // pin moved deliberately 10/19 (Part A's record step): revision x's three lines read applied 2026-10-19 22:53:18Z; only revision y's header
   // line may still say it
-  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !/sql\/migrations\/2026-10-18-trade-offer\.sql/.test(l)).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but revision y's own (prepared, not applied)");
+  // pin moved deliberately (revision y's record step): revision y's header line reads applied 2026-10-20 00:41:25Z; no line may say it - the
+  // next prepared revision widens this again, naming its own file
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l)).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left (revision y's record step)");
 }
 
 step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
@@ -5695,19 +5697,45 @@ console.log("- Prompt 31 Part A (A5): docs/SCHEMA-REVIEW.md's revision x record 
 
 /* ---------------------------------------------- revision y (2026-10-18): a trade writes the receiver's offer */
 // Faraz 10/18: "build revision y as recommended (D3 consent stamps, D2 submitted receivers only, D1 claim parity, and the rest as
-// recommended)". sql/migrations/2026-10-18-trade-offer.sql (report-first, NOT applied - Faraz runs apply-trade-offer.sh, kept outside the
-// repo, AFTER Part A's): two consent-stamp columns on shift_trade_requests written by the trade triggers only, and apply_trade writing
-// each agreeing, submitted receiver's call_offers row the way claim_open_slot does. Pinned here: the file's shape and its mirror; each
+// recommended)". sql/migrations/2026-10-18-trade-offer.sql (report-first; APPLIED 2026-10-20 00:41:25Z by Faraz with apply-trade-offer.sh, kept
+// outside the repo, after Part A's): two consent-stamp columns on shift_trade_requests written by the trade triggers only, and apply_trade
+// writing each agreeing, submitted receiver's call_offers row the way claim_open_slot does. Pinned here: the file's shape and its mirror; each
 // body = the live one with the y lines undone, byte for byte; the loop's conditions in order; no declared variable that collides with a
 // column or alias of the body (the 42702 lesson - a variable `r` beside revision m's `jsonb_array_elements(roster) r` alias fails every
 // apply, a fault only a run sees); the stamps never taken from the client; the audit keys; the probe and pre-check shapes; the docs'
-// PREPARED words; and scripts/verify-rls.sh pinned at Part A's record-step bytes (D8: Part A applied first; revision y's record step adds
-// its section).
+// applied words; the trailer and the body sha256; and scripts/verify-rls.sh section 21, added by the record step (D8), which grades the
+// probe on every plain run.
+// pins moved deliberately (the record step, like Part A's): log apply-trade-offer-20261020T004005Z.log, APPLIED AND VERIFIED (repo HEAD
+// b0344bd on main, the pins from fed3151 - all eight matched); the file kept as it ran plus ONE trailer line, the probe's and the
+// pre-check's headers turned APPLIED with their as-run notes, SCHEMA-REVIEW's observed paragraph copied from the log (frozen by sha256),
+// the docs' applied words and verify-rls.sh section 21 (its sha256 moved).
 const Y_PROBE = path.join(ROOT, "sql", "probes", "trade-offer-probe.sql");
 const Y_PRECHECK = path.join(ROOT, "sql", "probes", "trade-offer-precheck.sql");
 const ySha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
-step("revision y: migration 2026-10-18-trade-offer.sql - LF / ASCII, the two stamp columns, trade_insert_guard + trade_update_guard + apply_trade (nothing else), both triggers re-created, apply_trade's grants re-run, the reload; every statement byte-identical in schema.sql");
-const yMig = read(TRADE_OFFER_MIGRATION);
+// sha256 of the applied file, observed 2026-10-20: the log's graded-files line of apply-trade-offer.sh (apply-trade-offer-20261020T004005Z.log,
+// repo HEAD b0344bd on main, the pins from fed3151 - all eight matched: yes). The repo copy carries ONE trailer line after the applied body
+// (the record step); the body (everything before it) is what is hashed.
+const Y_APPLIED_SHA256 = "fab079015ef4df0098b8b4e516c6382531825e3c8946d214ac0e7381fcf2a10d";
+const Y_TRAILER = "\n-- applied 2026-10-20 00:41:25Z by Faraz";
+// the whole trailer line, pinned exactly: written once by the record step, frozen like the body it annotates (no apostrophe, no machine path)
+const Y_TRAILER_LINE = "-- applied 2026-10-20 00:41:25Z by Faraz (apply-trade-offer.sh, the script exports AI_AGENT; repo HEAD b0344bd on main, its pins from fed3151 - all eight matched; the regression probes read the same before and after - trade-guards 34, claim-open-slot 15 cases; three earlier runs applied nothing: a --dry-run at 20261019T051637Z (main fed3151) stopped at step 1 - Part A was not applied yet, a --dry-run at 20261019T230250Z (main b0344bd) passed steps 0-3 and stopped after the probe BEFORE, and a run at 20261019T234350Z (main b0344bd) stopped at step 4 - the answer at the APPLY prompt was not APPLY); the body above this line is the applied file, sha256 " + Y_APPLIED_SHA256 + " - its header is the text as it ran (its \"REPORT-FIRST, NOT APPLIED\" and its Order note - the apply script of Part A pins scripts/verify-rls.sh - predate the record step, which added verify-rls section 21 to run and grade sql/probes/trade-offer-probe.sql on every run); test/schema.test.js pins it; the revision y section of docs/SCHEMA-REVIEW.md (2026-10-18) quotes the probe observed right after)";
+step("revision y: migration 2026-10-18-trade-offer.sql - LF / ASCII, the two stamp columns, trade_insert_guard + trade_update_guard + apply_trade (nothing else), both triggers re-created, apply_trade's grants re-run, the reload; every statement byte-identical in schema.sql; APPLIED 2026-10-20 00:41:25Z, the file kept as it ran (body sha256 + ONE trailer line)");
+const yBuf = fs.existsSync(TRADE_OFFER_MIGRATION) ? fs.readFileSync(TRADE_OFFER_MIGRATION) : null;
+ok(yBuf, "missing file " + path.relative(ROOT, TRADE_OFFER_MIGRATION));
+const yMig = yBuf.toString("utf8");
+let yBody = yMig;
+{
+  // the record step (10/20): the file that ran is the file that is kept - the body hashed, the apply noted after it in ONE line
+  const at = yBuf.indexOf(Y_TRAILER);
+  ok(at > 0, "the trade-offer migration must carry its trailer line `" + Y_TRAILER.slice(1) + " ...` after the applied body (the record step)");
+  const tail = at > 0 ? yBuf.slice(at + 1).toString("utf8") : "";
+  ok(tail.split("\n").length === 2 && tail.endsWith("\n") && tail.indexOf("\n") === tail.length - 1, "trade-offer migration: exactly ONE trailer line (and its LF) after the applied body, nothing after it");
+  ok(tail.includes("the body above this line is the applied file, sha256 " + Y_APPLIED_SHA256) && tail.includes("apply-trade-offer.sh") && tail.includes("AI_AGENT") && tail.includes("repo HEAD b0344bd") && tail.includes("its pins from fed3151") && tail.includes("20261019T051637Z (main fed3151) stopped at step 1") && tail.includes("20261019T230250Z (main b0344bd) passed steps 0-3") && tail.includes("20261019T234350Z (main b0344bd) stopped at step 4") && tail.includes("which added verify-rls section 21") && tail.includes("the revision y section of docs/SCHEMA-REVIEW.md (2026-10-18) quotes the probe observed right after"), "the trailer names the applied sha256, the script, the agent mode, the HEAD it ran at and its pins, the three earlier runs, the as-ran header wording, verify-rls section 21 and the record");
+  ok(!/'/.test(tail) && !/bash scripts\/apply-|[A-Za-z]:[\\/]/.test(tail), "the trailer carries no apostrophe, no scripts/apply- path and no machine path");
+  eq(tail, Y_TRAILER_LINE + "\n", "the trade-offer migration's trailer line must read exactly as the record step wrote it (frozen);");
+  eq(ySha(at > 0 ? yBuf.slice(0, at + 1) : yBuf), Y_APPLIED_SHA256, "trade-offer migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
+  if (at > 0) yBody = yBuf.slice(0, at + 1).toString("utf8");
+}
 ok(!/\r/.test(yMig) && /^[\x00-\x7f]*$/.test(yMig), "the trade-offer migration is LF and ASCII");
 checkInsertGuard("trade-offer migration", yMig, true, true, true);
 checkUpdateGuard("trade-offer migration", yMig, true);
@@ -5717,8 +5745,8 @@ const yCode = yMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
 ok(!/\b(create|drop) (table|policy|index|publication|view)\b|drop function|drop column|alter policy|security_invoker/i.test(yCode), "the migration creates and drops no table, policy, index, view or publication, and drops no function or column");
 ok(!/call_offers_guard\(|call_offers_delete_guard|claim_open_slot\(|offer_status\(|save_offers\(|save_no_primary\(/.test(yCode), "the migration's statements re-create no other function (call_offers_guard, claim_open_slot, offer_status, save_offers, save_no_primary stay as they are)");
 ok(!/^-- supersedes:/m.test(yMig) && !/^-- PREPARED FOLLOW-UP/m.test(yMig), "no supersedes line (no other 2026-10-18 file) and not a NOT-MIRRORED follow-up");
-ok(yMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST learns the two columns)");
-const yStmts = psTopStatements(yMig);
+ok(yBody.endsWith("\nnotify pgrst, 'reload schema';\n"), "the applied body ends with `notify pgrst, 'reload schema';` (PostgREST learns the two columns)");
+const yStmts = psTopStatements(yBody);
 ok(!yStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row outside function bodies (no backfill - D5)");
 eq(yStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
   "alter table public.shift_trade_requests add column if not exists proposed_by text;",
@@ -5748,6 +5776,7 @@ const Y_DDL = "alter table public.shift_trade_requests add column if not exists 
   const yHdr = yMig.slice(0, yMig.indexOf(Y_DDL));
   const yHdrFlat = yHdr.replace(/\n-- ?/g, " ");
   ok(yHdr.includes("\n--   bash <run folder>/apply-trade-offer.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + TRADE_OFFER_FILE + "   (what it runs)\n"), "the migration header carries the two apply lines (Faraz's script, outside the repo; what it runs)");
+  // pin kept deliberately (the record step): the header is the text as it ran (the body is sha256-pinned); the APPLIED note is the trailer line
   ok(/REPORT-FIRST, NOT APPLIED/.test(yHdr) && /Blast radius\./.test(yHdr) && /Who it binds\./.test(yHdr) && yHdrFlat.includes("ONE implicit transaction") && yHdrFlat.includes("Order: after Part A"), "the migration header says report-first / not applied, who it binds, the blast radius, one transaction, and that it runs after Part A");
   ok(yHdrFlat.includes("D3 consent stamps, D2 submitted receivers only, D1 claim parity"), "the migration header quotes Faraz's go (D3, D2, D1)");
   const Y_ROLLBACK = [
@@ -5930,7 +5959,9 @@ ok(yProbe.includes("create temp table probe_results (k text, v text);\ngrant ins
   ok(code.includes("                                                  or '2029-12-31' between start_date and end_date)"), "the collision guard reads time_off on 2029-12-31 too (the day of s1's PP offer - OF002 would end the run otherwise)");
 }
 const yProbeHdr = yProbe.slice(0, yProbe.indexOf("create temp table probe_results"));
-ok(/REPORT-FIRST, NOT APPLIED\)/.test(yProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(yProbeHdr) && /\n-- 32 cases\.\n/.test(yProbeHdr), "the probe header: report-first / not applied, nothing persisted, 32 cases");
+// pin moved deliberately (revision y's record step): the header reads APPLIED 2026-10-20 00:41:25Z with its as-run note (the pay precedent);
+// the 32 case lines below it are unchanged
+ok(/REPORT-FIRST; APPLIED 2026-10-20 00:41:25Z\)\.\n/.test(yProbeHdr) && !/NOT APPLIED/.test(yProbeHdr) && /^-- As run: the migration was applied 2026-10-20 00:41:25Z \(schema\.sql revision y\); /m.test(yProbeHdr) && yProbeHdr.replace(/\n-- ?/g, " ").includes("all 32 cases below as listed after it, leftover count 0 (apply-trade-offer.sh steps 3 and 6)") && yProbeHdr.replace(/\n-- ?/g, " ").includes("it FAILs a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel") && /WITHOUT PERSISTING ANYTHING/.test(yProbeHdr) && /\n-- 32 cases\.\n/.test(yProbeHdr), "the probe header: report-first, APPLIED 2026-10-20 00:41:25Z, its as-run note (32 / 32, leftover 0; section 21 grades it, a PROBE_SETUP FAILs), nothing persisted, 32 cases");
 const Y_AFTER = {
   P1: "cols=proposed_by,accepted_by definer=t loop=t stamps=t anon=f auth=t",
   S1: "st=pending by=s2/null", S2: "st=pending by=s2/null", S3: "st=accepted by=s2/s3", S4: "st=accepted by=s2/s3",
@@ -5971,6 +6002,10 @@ ok(!/\r/.test(yPre) && /^[\x00-\x7f]*$/.test(yPre), "the trade offer pre-check i
   const hdr = yPre.slice(0, yPre.indexOf("with objects as ("));
   ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says READ-ONLY and when to run it");
   ok(hdr.includes("cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes") && hdr.includes("cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes"), "the header states the gate before and after the apply");
+  // pin moved deliberately (revision y's record step): the header reads APPLIED 2026-10-20 00:41:25Z and carries the as-run gate, bodies and facts
+  const hdrFlat = hdr.replace(/\n-- ?/g, " ");
+  ok(/REPORT-FIRST; APPLIED 2026-10-20 00:41:25Z\)\. READ-ONLY/.test(hdrFlat) && !/NOT APPLIED/.test(hdr), "the pre-check's header reads REPORT-FIRST; APPLIED 2026-10-20 00:41:25Z (no NOT APPLIED left)");
+  ok(hdrFlat.includes("As run (2026-10-20): before the apply the gate read cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes and right after it cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes;") && hdrFlat.includes("row 2 apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 before (revisions m / p / n) and apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b after (y / y / y), offers_guard=c48783939fd53dc56be90af140297abe both times;") && hdrFlat.includes("row 6 legs=4 in_period=0 uncovered=0 open_trades=0 and row 7 period=2026-11-02 status=published keys_without_offers=s5 both times (no backfill - D5)"), "the pre-check's as-run note: the gate before / after, the six body md5s, offers_guard both times, rows 6 and 7 both times");
   const code = yPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
   ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
   ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code), "the pre-check writes, locks and changes nothing");
@@ -5982,50 +6017,255 @@ ok(!/\r/.test(yPre) && /^[\x00-\x7f]*$/.test(yPre), "the trade offer pre-check i
   ok(!/display_name|email|\bnote\b|\.detail\b|from_surgeon_name|to_surgeon_name/.test(code), "facts only: no display name, email, note, trade detail or stored name is read");
 }
 
-step("revision y: schema.sql's header revision y line (after x, before the same-day rule), SCHEMA-REVIEW.md's PREPARED section (the last one), table (a), guide 4.3 / section 17 and the rules doc's section 8 say prepared, not applied; scripts/verify-rls.sh at Part A's record-step bytes; no apply script in the repo");
+step("revision y: verify-rls.sh section 21 - the graded probe (21a: 32 cases by name + the count of 32) and its leftovers (21b: apply-trade-offer.sh's seven counts in three columns - tagged / in_window / audit_in_window; in-window rows FAIL only after PROBE_RESULTS, the audit rows listed for review), strict from the start (no flag - PROBE_SETUP FAILs), no REST call; graded against a faked CLI, the 2026-10-20 live picture replayed");
+ok(/^echo "== 21\. trade offers \(2026-10-18, revision y\): apply_trade writes the receiver's call_offers row \+ the consent stamps shift_trade_requests\.proposed_by \/ accepted_by - rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 21 (trade offers)");
+const s21 = vr.slice(vr.indexOf('echo "== 21. '), vrSectionEnd('echo "== 21. '));
+ok(s21.length > 0 && vr.indexOf('echo "== 21. ') > vr.indexOf('echo "== 20. ') && vrSectionEnd('echo "== 21. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 21 could not be sliced out (after section 20, the last section before the RESULT line)");
+ok(/^# Section 21 \(17 = the weekend pair claim, taken on its own branch; 20 = Prompt 31 Part A's East vacations, the section above\)\.$/m.test(s21), "section 21's comment says why it is 21 (17 is on its own branch, 20 the section above)");
+ok(/^# sql\/migrations\/2026-10-18-trade-offer\.sql \(report-first; applied 2026-10-20 00:41:25Z, revision y\): /m.test(s21) && !/NOT applied/.test(s21), "section 21's comment says the migration is applied 2026-10-20 00:41:25Z (report-first; revision y)");
+const s21code = s21.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+eq((s21code.match(/-X (POST|PATCH|DELETE|PUT)|curl /g) || []).length, 0, "section 21 goes over no REST call (the probe runs through the linked CLI; its P1 reads anon=f from the catalog);");
+ok(!/SILVIS_/.test(s21code) && !/SILVIS_TRADE_OFFER/.test(vr), "section 21 reads no environment flag - strict from the start (the record step added it after the apply; no SILVIS_TRADE_OFFER_* flag anywhere in the script)");
+ok(/PROBE21="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/trade-offer-probe\.sql"/.test(s21code) && s21code.includes("out=$(supabase db query --linked --workdir \"$WORKDIR\" -f \"$PROBE21\" 2>&1 | grep -v 'new version\\|recommend updating\\|Using workdir\\|Initialising' | tr -d '\\n')"), "21a runs sql/probes/trade-offer-probe.sql through the linked CLI (the other probes' filter)");
+ok(/if ! echo "\$out" \| grep -q 'PROBE_RESULTS' && echo "\$out" \| grep -q 'PROBE_SETUP: shift_trade_requests\.accepted_by is absent'; then\n\s+bad "trade offer probe: PROBE_SETUP - shift_trade_requests\.accepted_by is absent \(the columns exist since the 2026-10-20 apply\)"\n\s+elif ! echo "\$out" \| grep -q 'PROBE_RESULTS' && echo "\$out" \| grep -q 'PROBE_SETUP: '; then\n\s+bad "trade offer probe: /.test(s21code) && !/ok "trade offer probe: [^"\n]*absent/.test(s21code), "21a: PROBE_SETUP absent FAILs (strict from the start); every other PROBE_SETUP (partly applied, the collision guard, the profile rows) FAILs too - each only when no PROBE_RESULTS came back (a PROBE_RESULTS is graded case by case)");
+ok(s21code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'") && s21code.includes('case_val21()   { CV21=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV21="${l#"$1="}"; return 0;; esac; done <<< "$lines21"; }'), "section 21 decodes the results ONCE and reads each case in plain bash (section 20's reader)");
+ok(s21code.includes("n21=$(echo \"$lines21\" | grep -c .)") && s21code.includes('[ "$n21" = "32" ] && ok "trade offer probe: 32 cases reported'), "21a counts the cases the probe reported - exactly 32: with the 32 graded names, the set apply-trade-offer.sh requires (P1 S1-S9 A1-A11 M1-M3 R1-R8)");
+const Y_CASES = Object.keys(Y_AFTER);
+Y_CASES.forEach((k) => ok(s21code.includes("\n    expect_eq21 " + k.padEnd(3) + " \"" + Y_AFTER[k] + "\" "), "section 21 must grade " + k + " as `expect_eq21 " + k.padEnd(3) + " \"" + Y_AFTER[k] + "\" ...` (the probe header's AFTER string)"));
+eq((s21code.match(/\n    expect_eq21 /g) || []).length, Y_CASES.length, "section 21 grades exactly the 32 cases;");
+ok(s21code.includes("LEFTOVER21_SQL=\"select ((select count(*) from auth.users where email like 'probe-tradeoffer-%@example.test') + (select count(*) from public.shift_trade_requests where detail like 'probe-tradeoffer%') + (select count(*) from public.call_periods where label like 'probe-tradeoffer%'))::int as tagged, ((select count(*) from public.schedule_days where day between '2031-05-01' and '2031-09-30' or day between '2020-06-01' and '2020-06-30') + (select count(*) from public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31') + (select count(*) from public.availability where start_date <= '2031-09-30' and end_date >= '2031-05-01'))::int as in_window, (select count(*) from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30'))::int as audit_in_window\""), "21b counts apply-trade-offer.sh's seven leftover terms in three columns: tagged (its users, trades, periods), in_window (schedule_days / call_offers / availability rows in its windows) and audit_in_window (trade.apply audit rows naming a day in them)");
+["public.schedule_days where day between '2031-05-01' and '2031-09-30' or day between '2020-06-01' and '2020-06-30'", "public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31'", "public.availability where start_date <= '2031-09-30' and end_date >= '2031-05-01'"].forEach((w) =>
+  ok(yProbe.includes("(select 1 from " + w + ")") && s21code.includes("(select count(*) from " + w + ")"), "21b's window `" + w + "` is the probe's collision guard's (a row there after a run that wrote its fixtures - PROBE_RESULTS - can only be the probe's)"));
 {
-  const xAt = header.search(/^-- Revision 2026-10-14 x /m), yAt = header.search(/^-- Revision 2026-10-18 y \(trade offers, sql\/migrations\/2026-10-18-trade-offer\.sql, report-first, NOT yet applied\): /m);
-  ok(xAt > 0 && yAt > xAt && yAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-18 y ('report-first, NOT yet applied' until the record step) after revision x and before the same-day rule");
+  // the guard reads no audit_log, so 21b keeps the trade.apply audit rows apart (review only): fold them back if the guard ever reads them
+  const guard = yProbe.slice(yProbe.indexOf("-- the collision guard first"), yProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in the probe window"));
+  ok(guard.length > 0 && !/audit_log/.test(guard) && s21code.includes("(select count(*) from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30'))::int as audit_in_window"), "21b counts the trade.apply audit rows in their own column - the probe's collision guard does not read audit_log");
+}
+ok(["delete from public.shift_trade_requests where detail like 'probe-tradeoffer%';", "delete from public.call_periods where label like 'probe-tradeoffer%';", "delete from auth.users where email like 'probe-tradeoffer-%@example.test';   -- user_profiles rows cascade"].every((d) => s21code.includes("echo \"      " + d + "\"")) && !/delete from public\.(schedule_days|call_offers|availability|audit_log)/.test(s21code), "21b prints DELETEs for the tagged rows only - never for a day, offer, availability or audit row (a probe row and a real one look alike)");
+// review 10/20 (re-check): 21b reads how 21a ended - results (the sentinel: the probe wrote its fixtures; an in-window row FAILs), setup
+// (a PROBE_SETUP raise and no PROBE_RESULTS: every raise of the setup block comes before its first write in the windows - rows this
+// run never wrote, review only), none (neither - unknown, review only); the audit rows apart (the guard never reads audit_log - review only)
+ok(s21code.includes("  end21=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end21=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end21=setup; fi\n") && !/passed21/.test(s21code), "21b: end21 = results / setup / none from 21a's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
+ok(/LEFT ROWS BEHIND \(in_window=\$win21 [^\n]*after a run that wrote its fixtures\)/.test(s21code) && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown; review them before removing anything:\"") && s21code.includes("echo \"   21b: $aud21 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run (an earlier leak whose days were since removed); review them, never delete audit history blindly:\""), "21b: in-window rows FAIL after results only; after setup they predate the run (real rows, or an earlier run's leak), after none unknown - both listed for review; the audit rows are listed for review on their own");
+{
+  // every PROBE_SETUP raise of the setup block (the DO block before the first `end $$;`) comes before its first write in the windows
+  const setupEnd = yProbe.indexOf("\nend $$;"), firstDay = yProbe.indexOf("insert into public.schedule_days");
+  const raises = []; let at = yProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0 && at < setupEnd) { raises.push(at); at = yProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  ok(setupEnd > 0 && firstDay > 0 && firstDay < setupEnd && raises.length === 4 && raises.every((x) => x < firstDay), "the probe's setup block raises its four PROBE_SETUP (the collision guard, the absent, the partly-applied and the profile-rows check) before its first write in the windows (the schedule_days insert) - what 21b's 'setup' reading rests on (" + raises.length + " raises)");
+  ok(yProbe.indexOf("raise exception 'PROBE_SETUP: no probe user %'") > setupEnd, "act()'s no-probe-user raise sits after the setup block (each case catches it - it lands in PROBE_RESULTS)");
+}
+ok(s21code.includes('echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI section 21 prints one SKIP line");
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) via the linked Supabase CLI$/m.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20");
+}
+// the record step (10/20): the 32 probe AFTER lines of the live run as Faraz's log printed them (apply-trade-offer-20261020T004005Z.log, its
+// paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision y observed block (frozen by sha256 in the docs step), not rebuilt
+// from the header's strings; no line carries a double quote, < > or & (the header step pins that)
+const Y_OBSERVED_BLOCK = (() => {
+  const at = review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)"), ob = at < 0 ? -1 : review.indexOf("observed (apply, 2026-10-20):", at);
+  const b = ob < 0 ? -1 : review.indexOf("```text\nA1=", ob);
+  return b < 0 ? "" : review.slice(b + 8, review.indexOf("\n```", b + 8));
+})();
+const Y_LIVE_LINES = Y_OBSERVED_BLOCK ? Y_OBSERVED_BLOCK.split("\n") : [];
+eq(Y_LIVE_LINES.length, 32, "the faked live run replays SCHEMA-REVIEW's revision y observed probe AFTER block - 32 lines;");
+eq(Y_LIVE_LINES.slice().sort(), Y_CASES.map((k) => k + "=" + Y_AFTER[k]).sort(), "... each line its header's AFTER string (the log graded 32 / 32);");
+{
+  const code21 = s21;
+  const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
+  const run21 = (cliOut, opts) => {
+    // linked (default true); tagged / inWindow / audit: 21b's three counts (tagged, in_window, audit_in_window); shape: the leftover read
+    // as the agent envelope, a plain terminal's bare array, an error, or noaudit (a row without audit_in_window - must fail as unreadable); pre: a line before the section (e.g. a flag left in the environment - none exists, so it must change nothing).
+    // The fakes record every call (each runs in a command substitution's subshell, so each appends a line to a file): the CLI must be
+    // asked for the trade offer probe once and curl never; q must be asked for the probe's leftover query.
+    const o = Object.assign({ linked: true, tagged: 0, inWindow: 0, audit: 0, shape: "envelope", pre: "" }, opts || {});
+    const row = "{\\n      \"tagged\": " + o.tagged + ",\\n      \"in_window\": " + o.inWindow + (o.shape === "noaudit" ? "" : ",\\n      \"audit_in_window\": " + o.audit) + "\\n    }";
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  " + row + "\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    " + row + "\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" + (o.pre ? o.pre + "\n" : "") +
+      "linked() { " + (o.linked ? "true" : "false") + "; }\n" +
+      "q() { case \"$1\" in *probe-tradeoffer*) ;; *) echo WRONG-LEFTOVER-SQL;; esac; " + qBody + "; }\n" +
+      "curl() { echo curl >> \"$T/curl.calls\"; printf 'HTTP 599'; }\n" +
+      "supabase() { echo sb >> \"$T/sb.calls\"; case \"$*\" in *'-f '*/sql/probes/trade-offer-probe.sql*) ;; *) echo WRONG-PROBE-FILE;; esac; echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" +
+      fakesGuard(["linked", "q", "supabase", "curl"]) + code21 +
+      "\necho \"CALLS $(cat \"$T/curl.calls\" 2>/dev/null | wc -l | tr -d ' ') $(cat \"$T/sb.calls\" 2>/dev/null | wc -l | tr -d ' ')\"\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 21: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 21's faked run: a fake did not resolve to a bash function - aborted before the section ran");
+    ok(!/WRONG-PROBE-FILE|WRONG-LEFTOVER-SQL/.test(r.stdout || ""), "section 21's faked run asked the CLI for another file or q for another query");
+    const out = r.stdout || "";
+    return { out, result: (out.match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "", calls: (out.match(/^CALLS (\d+) (\d+)$/m) || []).slice(1).map(Number) };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  // the CLI's error body (a JSON message; CONTEXT after the sentinel)
+  const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"') + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}';
+  const N21 = Y_CASES.length + 2;   // the 32 cases + the count of 32 (21a) + the leftover count (21b)
+  const ra = run21(msgOf(Y_AFTER));
+  eq(ra.result, [N21, 0], "section 21 against the AFTER picture (the 32 header strings, leftover 0): every check PASS (" + fails(ra) + ");");
+  eq(ra.calls, [0, 1], "... one CLI run (the probe) and no REST call;");
+  // the live picture inside the CLI 2.120.0 error envelope as the apply log shows it ({"_tag":"Error",...} around the 400 body)
+  const liveEnv = JSON.stringify({ _tag: "Error", error: { code: "DbQueryUnexpectedStatusError", message: 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Y_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\\n"}' } });
+  const rlive = run21(liveEnv);
+  eq(rlive.result, [N21, 0], "section 21 against the 2026-10-20 AFTER picture as the log printed it (32 lines, leftover 0) - 34 / 0 (" + fails(rlive) + ");");
+  ok(Y_LIVE_LINES.length === 32 && rlive.out.includes("\n" + Y_LIVE_LINES.map((l) => "   " + l).join("\n") + "\n"), "the live replay prints the 32 lines as the log's paste-back block printed them");
+  const setup = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: shift_trade_requests.accepted_by is absent - sql/migrations/2026-10-18-trade-offer.sql is not applied\\nCONTEXT:  ..."}';
+  const rbf = run21(setup);
+  eq(rbf.result, [1, 1], "the not-applied picture (PROBE_SETUP: accepted_by is absent) FAILs with no flag - strict from the start; the leftover check runs (" + fails(rbf) + ");");
+  ok(/^FAIL  trade offer probe: PROBE_SETUP - shift_trade_requests\.accepted_by is absent \(the columns exist since the 2026-10-20 apply\)$/m.test(rbf.out), "... and its FAIL line says the columns exist since the apply");
+  eq(run21(setup, { pre: "export SILVIS_TRADE_OFFER_APPLIED=1" }).result, [1, 1], "... a SILVIS_TRADE_OFFER_APPLIED left in the environment changes nothing (no such flag exists);");
+  const rbw = run21(setup, { inWindow: 2 });
+  eq(rbw.result, [0, 1], "the absent raise (before the probe's first write in its windows) with two in-window rows: 21a FAILs, the rows are rows this run never wrote - listed for review, not a leftover (" + fails(rbw) + ");");
+  ok(rbw.out.includes("   21b: 2 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a)") && !/LEFT ROWS BEHIND|delete from public\.(schedule_days|call_offers|availability|audit_log)/.test(rbw.out), "... with their SELECTs, no LEFT ROWS BEHIND and no DELETE");
+  const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: apply_trade / trade_update_guard / trade_insert_guard is not revision y - sql/migrations/2026-10-18-trade-offer.sql is partly applied\\nCONTEXT:  ..."}';
+  const rp = run21(part);
+  eq(rp.result, [1, 1], "the partly-applied raise is a FAIL;");
+  ok(/FAIL  trade offer probe: PROBE_SETUP: apply_trade \/ trade_update_guard \/ trade_insert_guard is not revision y - sql\/migrations\/2026-10-18-trade-offer\.sql is partly applied/.test(rp.out), "... and the FAIL line names the raise");
+  const col = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in the probe window (schedule_days / call_offers / call_periods / availability / time_off in 2031-05..2031-09, 2020-06 or on 2029-12-31, or a probe-tradeoffer trade) - the probe fixtures would collide\\nCONTEXT:  ..."}';
+  const rc = run21(col, { inWindow: 3 });
+  eq(rc.result, [0, 1], "a collision raise is a FAIL, and the three in-window rows it met are rows this run never wrote - listed for review, not a leftover (" + fails(rc) + ");");
+  ok(rc.out.includes("   21b: 3 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise") && rc.out.includes("      select * from public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31';") && !/LEFT ROWS BEHIND|delete from public\.(schedule_days|call_offers|availability|audit_log)/.test(rc.out), "... with their SELECTs and no DELETE");
+  const rw = run21(msgOf(Y_AFTER), { inWindow: 2 });
+  eq(rw.result, [N21 - 1, 1], "in-window rows after a run that wrote its fixtures (PROBE_RESULTS) FAIL (LEFT ROWS BEHIND);");
+  ok(/LEFT ROWS BEHIND \(in_window=2 /.test(rw.out) && rw.out.includes("      select * from public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31';") && !rw.out.includes("select * from public.audit_log") && !/delete from public\.(schedule_days|call_offers|availability|audit_log)/.test(rw.out), "... listed with SELECTs, never a DELETE (an untagged probe row and a real one look alike)");
+  const rt = run21(msgOf(Y_AFTER), { tagged: 4, shape: "bare" });
+  eq(rt.result, [N21 - 1, 1], "tagged leftovers FAIL (read from a plain terminal's bare-array -o json the same as the agent envelope);");
+  ok(["delete from public.shift_trade_requests where detail like 'probe-tradeoffer%';", "delete from public.call_periods where label like 'probe-tradeoffer%';", "delete from auth.users where email like 'probe-tradeoffer-%@example.test';"].every((d) => rt.out.includes(d)), "... with the DELETEs of the rows only the probe writes");
+  eq(run21(msgOf(Y_AFTER), { shape: "error" }).result, [N21 - 1, 1], "21b fails a leftover count it cannot read;");
+  eq(run21('{"message": "connection refused"}').result, [1, 1], "a run with no sentinel-terminated PROBE_RESULTS FAILs (the leftover check still runs);");
+  // review 10/20 (re-check): after a run that reported neither PROBE_RESULTS nor PROBE_SETUP, in-window rows are unknown - never 'live rows'
+  for (const [what, cli] of [["no sentinel", '{"message": "connection refused"}'], ["a cut-off PROBE_RESULTS (no ;END)", msgOf(Y_AFTER).replace(";END", "")]]) {
+    const rn = run21(cli, { inWindow: 2 });
+    eq(rn.result, [0, 1], what + " with two in-window rows: 21a FAILs, 21b lists them for review (" + fails(rn) + ");");
+    ok(rn.out.includes("   21b: 2 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown") && !/LEFT ROWS BEHIND|stopped at a PROBE_SETUP|delete from public\.(schedule_days|call_offers|availability|audit_log)/.test(rn.out), "... " + what + ": 'unknown', never 'live rows' or LEFT ROWS BEHIND, no DELETE");
+  }
+  const prof = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: handle_new_auth_user did not create the profile rows\\nCONTEXT:  ..."}';
+  const rpf = run21(prof, { inWindow: 2 });
+  eq(rpf.result, [0, 1], "the profile-rows raise (after the auth.users insert, before any write in the windows) with two in-window rows: 21a FAILs, this run wrote none of them (" + fails(rpf) + ");");
+  ok(rpf.out.includes("the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above)") && !/LEFT ROWS BEHIND|live rows, not leftovers/.test(rpf.out), "... listed for review as rows this run never wrote (never 'live rows' - an earlier leak looks the same)");
+  const raud = run21(msgOf(Y_AFTER), { audit: 2 });
+  eq(raud.result, [N21, 0], "two trade.apply audit rows naming a window day after a clean run: no FAIL - the guard never reads audit_log, they may predate the run (" + fails(raud) + ");");
+  ok(raud.out.includes("   21b: 2 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run") && raud.out.includes("      select * from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30');") && !/LEFT ROWS BEHIND|delete from public\.audit_log/.test(raud.out), "... listed for review with their SELECT, never a DELETE of audit history");
+  eq(run21(msgOf(Y_AFTER), { shape: "noaudit" }).result, [N21 - 1, 1], "a leftover row without audit_in_window is unreadable (a FAIL), never read as 0;");
+  // review 10/20 (third pass): a PROBE_SETUP inside a case of a sentinel-terminated PROBE_RESULTS (act()'s, caught by its case) is graded
+  // case by case - only that case FAILs; cut off before ;END it is a missing sentinel and 21b's 'unknown'
+  const actR8 = msgOf(Object.assign({}, Y_AFTER, { R8: "ERR P0001 PROBE_SETUP: no probe user u9" }));
+  const ra8 = run21(actR8);
+  eq(ra8.result, [N21 - 1, 1], "a caught act() PROBE_SETUP in R8: graded case by case, R8 alone FAILs (" + fails(ra8) + ");");
+  ok(/^FAIL  trade offer probe R8: [^\n]*\(got 'ERR P0001 PROBE_SETUP: no probe user u9', expected '/m.test(ra8.out) && !/FAIL  trade offer probe: PROBE_SETUP/.test(ra8.out), "... its FAIL shows the real value, never a setup stop");
+  eq(run21(actR8, { inWindow: 2 }).result, [N21 - 2, 2], "... with two in-window rows it is a run that wrote its fixtures: LEFT ROWS BEHIND too;");
+  const ra8cut = run21(actR8.replace(";END", ""), { inWindow: 2 });
+  eq(ra8cut.result, [0, 1], "the same cut off before ;END: a missing sentinel, the in-window rows unknown (" + fails(ra8cut) + ");");
+  ok(/FAIL  trade offer probe reported no sentinel-terminated PROBE_RESULTS/.test(ra8cut.out) && ra8cut.out.includes("so whether the probe wrote them is unknown"), "... the no-sentinel FAIL and 21b's 'unknown' line");
+  // every reported case line counts, whatever its name (a key outside [A-Z][0-9]+ cannot hide an extra case)
+  for (const extra of ["XY_EXTRA=anything", "A1b=x", "GIVE_SETUP=ok"]) eq(run21(msgOf(Y_AFTER).replace(";END", ";" + extra + ";END")).result, [N21 - 1, 1], "an extra case line " + extra + " FAILs the count of 32;");
+  eq(run21(msgOf(Object.assign({}, Y_AFTER, { R1: "st=applied by=s2/s5 o1=backup/s5/app a=true/false" }))).result, [N21 - 1, 1], "a rules-only receiver given an offer (D2) FAILs R1 alone;");
+  eq(run21(msgOf(Object.assign({}, Y_AFTER, { S1: "st=pending by=s9/s9", A5: "st=applied by=s2/scheduler o1=primary/s3/app a=true/false" }))).result, [N21 - 2, 2], "a client's stamps kept (S1) and an offer without the receiver's consent (A5) FAIL - exactly those two;");
+  const miss = Object.assign({}, Y_AFTER); delete miss.R8;
+  eq(run21(msgOf(miss)).result, [N21 - 2, 2], "a lost case FAILs twice (its own grade and the count of 32);");
+  eq(run21(msgOf(Object.assign({}, Y_AFTER, { X1: "x" }))).result, [N21 - 1, 1], "an extra case FAILs the count of 32 (the set must be exactly the header's, as apply-trade-offer.sh grades it);");
+  eq(run21(msgOf(Y_AFTER).replace("R8=", "R8=" + Y_AFTER.R8 + ";R8=")).result, [N21 - 1, 1], "a doubled case FAILs the count of 32;");
+  const ru = run21(msgOf(Y_AFTER), { linked: false });
+  ok(JSON.stringify(ru.result) === "[0,0]" && /^   SKIP 21 \(supabase CLI not linked at \/nonexistent\)$/m.test(ru.out) && ru.calls[1] === 0, "without a linked CLI section 21 prints its SKIP line and asks nothing");
+}
+
+step("revision y: schema.sql's header revision y line (after x, before the same-day rule), SCHEMA-REVIEW.md's revision y section (the last one), table (a), guide 4.3 / section 17 and the rules doc's section 8 say applied 2026-10-20 00:41:25Z; scripts/verify-rls.sh at revision y's record-step bytes (section 21); no apply script in the repo");
+{
+  // pin moved deliberately (revision y's record step): the header line reads applied 2026-10-20 00:41:25Z after the probe (x's precedent)
+  const xAt = header.search(/^-- Revision 2026-10-14 x /m), yAt = header.search(/^-- Revision 2026-10-18 y \(trade offers, sql\/migrations\/2026-10-18-trade-offer\.sql, applied 2026-10-20 00:41:25Z after the probe\): /m);
+  ok(xAt > 0 && yAt > xAt && yAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-18 y ('applied 2026-10-20 00:41:25Z after the probe' since the record step) after revision x and before the same-day rule");
+  ok(!/trade-offer\.sql[^\n]*NOT yet applied/.test(schema), "no schema.sql line says revision y's file is NOT yet applied (the record step)");
   const revY = header.slice(yAt).split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
-  ok(/consent stamps/.test(revY) && /proposed_by/.test(revY) && /accepted_by/.test(revY) && /never taken from the client/.test(revY) && /already submitted/.test(revY) && /No policy, grant, index, other function or anon surface changes/.test(revY) && /Letter u stays taken by the weekend pair claim/.test(revY) && /runs after Part A's/.test(revY) && !/x is pending/.test(revY), "revision y names the stamps (never from the client), the submitted receiver, what does not change, the taken letter u and the order after Part A");
+  ok(/consent stamps/.test(revY) && /proposed_by/.test(revY) && /accepted_by/.test(revY) && /never taken from the client/.test(revY) && /already submitted/.test(revY) && /No policy, grant, index, other function or anon surface changes/.test(revY) && /Letter u stays taken by the weekend pair claim/.test(revY) && /ran after Part A's/.test(revY) && /x was the last applied before it/.test(revY) && !/x is pending/.test(revY) && !/runs after Part A's/.test(revY), "revision y names the stamps (never from the client), the submitted receiver, what does not change, the taken letter u and the order as run (x was the last applied before it; its apply script ran after Part A's)");
   ok(/^-- 2026-10-18 y \(sql\/migrations\/2026-10-18-trade-offer\.sql, report-first; Faraz 10\/18 - D1 claim parity, D2 submitted receivers only,$/m.test(schema), "apply_trade's comment block carries the revision y paragraph");
 }
 {
   ok(/^## 2026-10-18 - apply_trade writes the receiver's offer \(revision y\): shift_trade_requests\.proposed_by \/ accepted_by \+ trade_insert_guard \/ trade_update_guard \/ apply_trade re-created \(Faraz 10\/18; `sql\/migrations\/2026-10-18-trade-offer\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-18 - apply_trade writes the receiver's offer (revision y)' section");
   const at = review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)"), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
-  const yr = at < 0 ? "" : review.slice(at);
+  const yr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const yrFlat = yr.replace(/\s+/g, " ");
   ok(at > review.indexOf("## 2026-10-14 - East vacations:") && end < 0, "the revision y section is the last one, after Part A's");
   ok(yr.includes("x - Part A - went first (applied 2026-10-19 22:53:18Z)") && !/x - Part A - is prepared and goes first/.test(yr), "revision y's sentence on the order reads as run: x - Part A - went first (applied 2026-10-19 22:53:18Z)");
-  ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-trade-offer\.sh`, after Part A's `apply-east-vacations\.sh`\.\*\*/m.test(yr) && !/\*\*Status: APPLIED/.test(yr), "the status line reads PREPARED - report-first, NOT applied - after Part A - until the record step");
-  ["**Why.**", "**The decisions.**", "**The objects**", "**The conditions**", "**The write**", "**Who it binds.**", "**What it changes for the receiver (D1).**", "**Blast radius.**", "**Proof.**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**"].forEach((a) => ok(yr.includes(a), "the revision y section lacks " + a));
-  ok(/^observed: \(the record step fills this[^\n]*/m.test(yr), "the observed placeholder (nothing has run against the live project)");
+  // pin moved deliberately (revision y's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
+  ok(/^\*\*Status: APPLIED 2026-10-20 00:41:25Z\*\* \(Faraz - `apply-trade-offer\.sh`, which exports `AI_AGENT`[^)]*; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(yr) && !/^\*\*Status: PREPARED/m.test(yr), "the status line reads APPLIED 2026-10-20 00:41:25Z (Faraz - apply-trade-offer.sh, which exports AI_AGENT ...; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
+  ok(yrFlat.includes("from the main clone at `b0344bd`, after Part A's `apply-east-vacations.sh`; the observed lines at the end)") && yrFlat.includes("this section's record step added its section 21 - D8)") && !/edits it next/.test(yr) && yrFlat.includes("Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section.") && !/the record step fills the observed line/.test(yr), "the status paragraph reads as run: the main clone at b0344bd after Part A's script, verify-rls section 21 added by the record step, the log pasted back and the observed lines filled");
+  ["**Why.**", "**The decisions.**", "**The objects**", "**The conditions**", "**The write**", "**Who it binds.**", "**What it changes for the receiver (D1).**", "**Blast radius.**", "**Proof.**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved (apply, 2026-10-20): applied 2026-10-20 00:41:25Z"].forEach((a, i, all) => {
+    ok(yr.includes(a), "the revision y section lacks " + a);
+    if (i > 0) ok(yr.indexOf(a) > yr.indexOf(all[i - 1]), "the revision y section must keep its order: " + all[i - 1] + " before " + a);
+  });
+  // the as-run notes (the record step, x's precedent): the decisions, the blast radius, the proof, the gate, the order
+  ok(yr.includes("D8 after Part A.\n*As run: the pre-check listed no leg (`in_period=0 uncovered=0`, before and after) - D5's backfill step is not needed.*\n"), "the decisions carry their as-run note (no leg listed - no backfill)");
+  ok(yrFlat.includes("*As run: `legs=4 in_period=0 uncovered=0 open_trades=0` before and after - no applied leg lies in an offer period and no pending or accepted trade existed, so no row carries a null stamp into a later apply; `keys_without_offers=s5` (2026-11-02, published) unchanged. The apply wrote no `call_offers` row (the probe rolled back, leftover 0).*"), "the blast radius carries its as-run note (the facts before and after; no open trade; no offer row written)");
+  ok(yrFlat.includes("*As run (2026-10-20): the live probe AFTER read all 32 cases exactly as their header strings, leftover 0; the trade probe's 34 and the claim probe's 15 read the same before and after (steps 2 and 7); the outside-surgeon branch stays proved offline only.*"), "the proof carries its as-run note (32 / 32, leftover 0, the regression probes unchanged, the outside-surgeon branch offline only)");
+  ok(yr.includes("owner_match=yes\n```\n\n*As run: the live pre-check read exactly these rows before and after.*\n\n**The order**"), "the gate block carries its as-run note, right after the block");
+  // review 10/20: the as-run note gives the order as the script numbered it (the log's step 2 and 7 are the regression probes; the
+  // reviewed list above has no such step) - never "steps 0-7 ... in order" over a list the log numbers otherwise
+  ok(yrFlat.includes("*As run (2026-10-20): `apply-trade-offer.sh` (Faraz, main clone at `b0344bd`, pins from `fed3151` - all eight matched) ran its steps 0-7 in this order - 0 the sha256 pins and the CLI link, 1 agent mode and the pre-check (the gate before: `cols=none` is the columns-absent check, `east_vacations=yes` Part A applied; the facts printed), 2 the regression probes BEFORE (trade-guards 34, claim-open-slot 15 cases), 3 probe BEFORE, 4 APPLY and the migration, 5 the gate after, 6 probe AFTER and its leftover count, 7 the regression probes AFTER - then the PASTE THIS BACK block. The list above numbers them otherwise: it has no regression-probe step, and its step 2 is part of the script's step 1. Three earlier runs applied nothing (the observed lines). The record step changes three of the eight graded files (the migration through its trailer - its body's sha256 `" + Y_APPLIED_SHA256 + "` unchanged - the probe's and the pre-check's headers), so the script is one-shot: a re-run or `--dry-run` needs its pins refreshed.*") && !yrFlat.includes("all eight matched), in order;"), "the order carries its as-run note (the script's steps 0-7 as the log numbers them, the clone and its pins, three graded files changed - one-shot)");
+  // pin moved deliberately (the record step): the placeholder is gone - the observed paragraph from Faraz's log replaces it
+  ok(!/^observed: \(the record step fills this/m.test(yr) && !/_to be filled/.test(yr), "the section has no observed placeholder since the record step");
   // the md5 of each body (pg_proc.prosrc = the text between its $$ quotes), derived from the files - before: m / p / n / j, after: y / y / y / j
   // (review 10/18: a body edit must fail here until the record of the gate is updated; the apply script's pins come from the same bodies)
   const bodyMd5 = (s, name) => { const t = functionText(s, name) || "", a = t.indexOf("$$") + 2; return crypto.createHash("md5").update(t.slice(a, t.lastIndexOf("$$"))).digest("hex"); };
   const jMd5 = bodyMd5(schema, "call_offers_guard");
   const Y_BODIES_BEFORE = "apply_trade=" + bodyMd5(auditMig, "apply_trade") + " insert_guard=" + bodyMd5(fuMig, "trade_insert_guard") + " update_guard=" + bodyMd5(giveMig, "trade_update_guard") + " offers_guard=" + jMd5;
-  const Y_BODIES_AFTER = "apply_trade=" + bodyMd5(yMig, "apply_trade") + " insert_guard=" + bodyMd5(yMig, "trade_insert_guard") + " update_guard=" + bodyMd5(yMig, "trade_update_guard") + " offers_guard=" + jMd5;
+  const Y_BODIES_AFTER = "apply_trade=" + bodyMd5(yBody, "apply_trade") + " insert_guard=" + bodyMd5(yBody, "trade_insert_guard") + " update_guard=" + bodyMd5(yBody, "trade_update_guard") + " offers_guard=" + jMd5;
   ok(yr.includes("before: cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes\n        " + Y_BODIES_BEFORE + "\n") && yr.includes("after:  cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes\n        " + Y_BODIES_AFTER + "\n"), "the section's gate states the bodies' md5 derived from the files - before: " + Y_BODIES_BEFORE + " / after: " + Y_BODIES_AFTER);
-  ok(Y_BODIES_BEFORE.startsWith("apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 "), "the before md5 are the live bodies' (m / p / n), as the pre-check read them on PGlite");
+  // pin moved deliberately (the record step): the derived md5s equal the ones the live pre-check read before / after the apply
+  eq([Y_BODIES_BEFORE, Y_BODIES_AFTER], ["apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65 insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 offers_guard=c48783939fd53dc56be90af140297abe", "apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b offers_guard=c48783939fd53dc56be90af140297abe"], "the bodies the live pre-check read before / after (2026-10-20, apply-trade-offer-20261020T004005Z.log);");
   ok(!/B6 report|xmax/.test(yr), "the section names neither the B6 report nor xmax (reviewB6 runs to the end of the file)");
+  {
+    const oat = yr.indexOf("observed (apply, 2026-10-20): applied 2026-10-20 00:41:25Z");
+    ok(oat > 0 && oat > yr.indexOf("**The record step, ONE commit:**"), "the section must end with the 'observed (apply, 2026-10-20): applied 2026-10-20 00:41:25Z ...' paragraph");
+    const ob = oat < 0 ? "" : yr.slice(oat).replace(/\n+$/, "");
+    const obFlat = ob.replace(/\s+/g, " ");
+    ok(obFlat.includes("exit 0, an empty result `\"rows\": []`, no `ERROR:`") && obFlat.includes("log `apply-trade-offer-20261020T004005Z.log`, outside the repo, result `APPLIED AND VERIFIED`") && obFlat.includes("repo HEAD `b0344bd` on `main`, the pins from `fed3151`") && obFlat.includes("`" + Y_APPLIED_SHA256 + "`") && obFlat.includes("(`all eight matched: yes`)") && obFlat.includes("supabase CLI 2.120.0") && obFlat.includes("(`AI_AGENT=1`)") && obFlat.includes("`bzhsroegtagqhutbnsrp` (the known-good read `silvis=true davenport=false`)") && obFlat.includes("APPLY typed at the prompt)"), "the observed apply names the CLI exit, the log and its result, the repo HEAD and its pins, the applied sha256 (all eight matched), the CLI version and agent mode, the project and the typed APPLY");
+    ok(obFlat.includes("gate before: `cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes`; bodies before `" + Y_BODIES_BEFORE + "` (revisions m / p / n / j)") && obFlat.includes("`apply_trade=definer insert_guard=invoker update_guard=invoker offers_guard=invoker` | `anon=f authenticated=t public=f` | `offers_force=f owner_match=yes`") && ob.includes("```text\n6 legs: legs=4 in_period=0 uncovered=0 open_trades=0\n7 modes 2026-11-02: period=2026-11-02 status=published keys_without_offers=s5\n```"), "the observed apply records the pre-check gate, the bodies, the sigs / grants / rls before and the two facts as the log printed them (counts and roster ids only)");
+    ok(obFlat.includes("Step 2, the regression probes BEFORE: trade-guards 34 cases, claim-open-slot 15 cases.") && obFlat.includes("Step 3, probe BEFORE: `PROBE_SETUP: shift_trade_requests.accepted_by is absent - sql/migrations/2026-10-18-trade-offer.sql is not applied` (nothing else ran)."), "the observed apply records the regression probes and the probe BEFORE");
+    ok(obFlat.includes("Step 5, gate after: `cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes`; bodies after `" + Y_BODIES_AFTER + "` (y / y / y / j); sigs / grants / rls and facts rows 6 and 7 unchanged."), "the observed apply records the gate after, revision y's bodies and the unchanged rows");
+    // the 32 AFTER lines as the log printed them, in one text block, frozen on their own: the sha256 of the 32 lines (each with its LF) as
+    // the paste-back block of apply-trade-offer-20261020T004005Z.log printed them under "probe after cases:" (indent removed, machine-compared
+    // with the log at the record step), so a later, justified edit of a probe AFTER string never forces a rewrite of this record
+    const blockAt = ob.indexOf("```text\nA1=");
+    const block = blockAt < 0 ? "" : ob.slice(blockAt + 8, ob.indexOf("\n```", blockAt + 8));
+    eq(block.split("\n").length, 32, "the observed probe AFTER lists 32 lines (one per case);");
+    eq(crypto.createHash("sha256").update(block + "\n").digest("hex"), "bc5afd12d6c461d51463266250b175f1eb8483b01230db3e5d67d1136171d32c",
+      "the observed probe AFTER block must be the 32 lines exactly as the 20261020T004005Z log printed them (frozen sha256);");
+    ok(obFlat.includes("then the probe's leftover count: 0 (persisted nothing). Step 7, the regression probes AFTER: both read the same as before the migration (trade-guards 34, claim-open-slot 15 cases).") && obFlat.includes("The apply script runs no `scripts/verify-rls.sh` (no RESULT line)."), "the observed apply records the leftover 0, the regression probes after and that no verify-rls RESULT exists for this apply");
+    ok(!/RESULT: \d+ passed/.test(ob), "the observed paragraph states no verify-rls RESULT figure (the apply ran none)");
+    ok(obFlat.includes("the `--dry-run` at 20261019T051637Z (`main`, `fed3151`) stopped at step 1 - `east_vacations=no`, Part A not applied yet (D8), `APPLY confirmation: not reached`, `migration: not run`") && obFlat.includes("the `--dry-run` at 20261019T230250Z (`main`, `b0344bd`) read steps 0-3 and stopped there by design - `DRY RUN - nothing applied`") && obFlat.includes("the 20261019T234350Z run (`main`, `b0344bd`) stopped at step 4 - the APPLY answer was not APPLY (`APPLY confirmation: refused`, `migration: not run`)"), "the observed apply records the three earlier runs, none of which applied anything");
+    ok(!/typed '|you typed|Program Files|[A-Za-z]:[\\/]/.test(ob), "the observed paragraph quotes no typed answer and no machine path (the 234350Z answer held private paths)");
+    ok(obFlat.includes("Not re-run against the live project after the record step: verify-rls section 21 (added by this step) grades the probe on the next plain `bash scripts/verify-rls.sh`."), "the observed paragraph says nothing live was re-run by the record step");
+    // the observed paragraph is a frozen record copied from the log (checked against apply-trade-offer-20261020T004005Z.log at the record
+    // step), so it is frozen whole by sha256 - the probe block's own sha above stays; any later edit is deliberate (a new sha with its
+    // reason), never silent
+    eq(crypto.createHash("sha256").update(ob).digest("hex"), "8405a6879b9fc670ca0fc7998d7ab1be277426060d283695374aaae3e8095a69", "the observed (apply, 2026-10-20) paragraph must read exactly as the record step copied it from the log (frozen sha256);");
+  }
+  // pin moved deliberately (the record step): table (a)'s row reads applied live
   const tradeRow = review.split("\n").find((l) => l.startsWith("| `shift_trade_requests` |")) || "";
-  ok(tradeRow.includes("Revision y (prepared 2026-10-18 - report-first, NOT applied - section at the end): `proposed_by` / `accepted_by`"), "table (a)'s shift_trade_requests row names revision y's two columns, prepared, not applied");
+  ok(tradeRow.includes("Revision y (prepared 2026-10-18 - report-first, **applied live 2026-10-20 00:41 UTC** - section at the end): `proposed_by` / `accepted_by`") && !/NOT applied/.test(tradeRow), "table (a)'s shift_trade_requests row names revision y's two columns, prepared 2026-10-18, applied live 2026-10-20 00:41 UTC");
 }
 {
+  // pins moved deliberately (the record step): guide 4.3's bullet and proof line, section 17 and the rules doc read applied
   const yBullet = (g43.match(/^- \*\*Trade offers \(2026-10-18, revision y, [^\n]*/m) || [""])[0];
-  ok(yBullet.startsWith("- **Trade offers (2026-10-18, revision y, report-first, NOT applied - Faraz runs `apply-trade-offer.sh` after Part A's; `sql/migrations/2026-10-18-trade-offer.sql`).**") && /never anon/.test(yBullet) && /a client's value is overwritten/.test(yBullet), "guide 4.3 carries the revision y bullet (prepared, not applied; apply_trade never anon; the stamps never from the client)");
-  ok(/^Proof: `sql\/probes\/trade-offer-probe\.sql` \(rolled back; 32 cases in its header[^\n]*applied: _to be filled at the record step_\.$/m.test(g43), "guide 4.3's revision y proof line (32 cases; applied at the record step)");
+  ok(yBullet.startsWith("- **Trade offers (2026-10-18, revision y, report-first, applied 2026-10-20 00:41 UTC; `sql/migrations/2026-10-18-trade-offer.sql`).**") && /never anon/.test(yBullet) && /a client's value is overwritten/.test(yBullet) && yBullet.includes("(a return leg only when both surgeons agreed themselves - the giver proposed the trade and the other accepted it)") && yBullet.includes("not a primary leg onto his No primary day") && !/not onto his No primary day/.test(yBullet) && !/NOT applied/.test(yBullet), "guide 4.3 carries the revision y bullet (applied 2026-10-20 00:41 UTC; apply_trade never anon; the stamps never from the client)");
+  const yProof = (g43.match(/^Proof: `sql\/probes\/trade-offer-probe\.sql` \(rolled back; 32 cases in its header[^\n]*/m) || [""])[0];
+  ok(/`scripts\/verify-rls\.sh` section 21[^\n]*applied: 2026-10-20 00:41:25 UTC by Faraz[^\n]*AFTER 32 \/ 32[^\n]*leftovers 0[^\n]*its sha256 pinned\.$/.test(yProof) && !/_to be filled/.test(yProof) && !/\d+ \/ 0\b/.test(yProof.replace(/32 \/ 32|34 \/ 15/g, "")), "guide 4.3's revision y proof line names verify-rls section 21 and the apply (2026-10-20 00:41:25 UTC, 32 / 32, leftovers 0, the file's sha256 pinned) - no verify-rls N / 0 figure");
+  ok(yProof.includes("section 21 (the graded probe - its 32 AFTER strings, the count of 32 - and its leftover count; added by the record step, a PROBE_SETUP FAILs; not yet run live)") && yProof.includes("(apply_trade `a9ab025feaba32b3fdc3a65f3cdfbc65` -> `b5cca6f0f35b07923e6facb940d1f180`, insert_guard `dd067d544c89c5622ab7e3687dcde5a0` -> `303f173367b9c386dc0786bc4892657a`, update_guard `7319d0c5ba9b001f554b7a7db7a227f5` -> `304e0fddfcbda63c48340314003d441b`, offers_guard `c48783939fd53dc56be90af140297abe` unchanged)") && yProof.includes("facts `legs=4 in_period=0 uncovered=0 open_trades=0` (no backfill - D5)"), "guide 4.3's proof line: section 21 not yet run live; the four bodies' md5 before -> after; the facts");
   const g17 = guide.slice(guide.indexOf("## 17. Offers"), guide.indexOf("\n## 18."));
-  ok(g17.replace(/\n/g, " ").includes("closing that is revision y (`sql/migrations/2026-10-18-trade-offer.sql`, prepared 10/18 — report-first, NOT applied; §4.3)") && g17.includes("the `apply_trade()` offer upsert (prepared 10/18 as revision y - report-first, NOT applied, §4.3)"), "guide section 17 says the offer upsert is revision y, prepared, not applied");
+  const g17flat = g17.replace(/\n/g, " ");
+  ok(g17flat.includes("Since revision y (`sql/migrations/2026-10-18-trade-offer.sql`, applied 2026-10-20 00:41 UTC; §4.3) `apply_trade` writes the receiver's row") && g17.includes("the `apply_trade()` offer upsert is done - revision y, applied 2026-10-20 00:41 UTC (§4.3).*") && !g17flat.includes("still writes no offer row") && !/revision y[^)]*NOT applied/.test(g17flat) && !g17flat.includes("does not yet write the offer row — open)") && g17flat.includes("`apply_trade()` did not yet write the offer row — done 10/20: revision y (applied 2026-10-20 00:41 UTC, §4.3) writes it for a receiver who agreed himself (for a return leg, both surgeons did) and is submitted in the day's period)") && g17flat.includes("and the `apply_trade()` offer upsert (done: revision y, applied 2026-10-20 00:41 UTC, §4.3)."), "guide section 17 says the offer upsert is done - revision y, applied 2026-10-20 00:41 UTC (the Trades paragraph, the status block and part 3c)");
+  // review 10/20: a return leg needs both surgeons' own agreement (A11: the scheduler proposed - o2=none); an outside surgeon gets no row
+  // but never reads as a conflict (rules.eligibility reads his own slot ok - generator.js: never in fixedViolations)
+  ok(g17flat.includes("(the consent stamps `proposed_by` / `accepted_by`; a return leg only when both surgeons agreed themselves - the giver proposed the trade and the other accepted it)") && g17flat.includes("a leg it writes no row for (one the scheduler accepted for the receiver, the return leg of a trade the scheduler proposed for the giver, a past day, a receiver in the period's `rules_only_ids`, a primary leg onto his No primary day, a trade accepted before the apply) still reads as a conflict on his held slot (the day editor names it; Generate keeps it and lists it under `fixedViolations`). An outside surgeon gets no row either, but his held slot is judged on the slot's facts only and never reads as a conflict.") && !g17flat.includes("an outside surgeon, a primary leg"), "guide section 17's Trades paragraph names the return-leg rule, the legs that still write no row and read as a conflict, and the outside surgeon apart (no row, never a conflict)");
   const rulesDoc = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md"), "utf8").replace(/\n/g, " ");
-  ok(rulesDoc.includes("trade records no offer until revision y is applied (`apply_trade` writes none today; revision y, prepared 10/18 — report-first, NOT applied — writes the receiver's offer") && !rulesDoc.includes("`apply_trade` writes none — an open item"), "the rules doc's section 8 says a trade records no offer until revision y is applied");
+  ok(rulesDoc.includes("Since revision y (applied 2026-10-20 00:41 UTC; Faraz 10/18, D1 claim parity, D2 submitted receivers only, D3 the consent stamps) a trade records the receiver's offer the way a claim does") && rulesDoc.includes("when he agreed to it himself (a return leg only when both surgeons agreed themselves) and is already submitted in the day's period") && rulesDoc.includes("(one the scheduler accepted for him, the return leg of a trade the scheduler proposed for the giver, a past day,") && !rulesDoc.includes("until revision y is applied") && !rulesDoc.includes("`apply_trade` writes none today") && !rulesDoc.includes("`apply_trade` writes none — an open item"), "the rules doc's section 8 says a trade records the receiver's offer since revision y (applied 2026-10-20 00:41 UTC)");
 }
-// pin moved deliberately 10/19 (Part A's record step, D8): apply-east-vacations.sh pinned and ran this file at 76fd286a... (APPLIED
-// 2026-10-19 22:53:18Z); the record step made section 20 strict; apply-trade-offer.sh does not pin verify-rls.sh (its eight graded
-// files - dry run 20261019T230250Z); revision y's record step and the east-feed-refresh deploy's record step each move it again
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "13a4a982d76345948731a339a4e024b10a76ad2d197e31e034f82185526b0180", "scripts/verify-rls.sh must stay at Part A's record-step bytes until revision y's record step (or the east-feed-refresh deploy's) moves it (D8);");
-ok(!/trade-offer-probe\.sql/.test(fs.readFileSync(VERIFY, "utf8")), "verify-rls.sh does not run revision y's probe yet (its record step adds it)");
+// pin moved deliberately (revision y's record step, D8): section 21 added (the trade offer probe, strict from the start - apply-trade-offer.sh
+// never pinned or ran verify-rls.sh) and the header's "+ trade offers probe (21)"; the east-feed-refresh deploy's record step moves it next
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "f1e2f96ed835882fa1d0265bb700af263bd7a227b6571dc83b253ea72d223ccf", "scripts/verify-rls.sh must stay at revision y's record-step bytes (section 21 added) until the east-feed-refresh deploy's record step moves it;");
+ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
-console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (PREPARED, not applied) and verify-rls.sh at Part A's record-step bytes");
+console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");
 
 console.log("schema.test.js: " + N + " assertions passed");

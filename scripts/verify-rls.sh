@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -1794,6 +1794,128 @@ if [ "$EVDEPLOYED20" = "1" ]; then
   fi
 else
   echo "   SKIP 20i (set SILVIS_EAST_REFRESH_DEPLOYED=1 after the east-feed-refresh deploy: an unauthenticated POST and a wrong x-cron-secret must each be the function's own 401)"
+fi
+
+echo "== 21. trade offers (2026-10-18, revision y): apply_trade writes the receiver's call_offers row + the consent stamps shift_trade_requests.proposed_by / accepted_by - rolled-back probe =="
+# Section 21 (17 = the weekend pair claim, taken on its own branch; 20 = Prompt 31 Part A's East vacations, the section above).
+# sql/migrations/2026-10-18-trade-offer.sql (report-first; applied 2026-10-20 00:41:25Z, revision y): shift_trade_requests.proposed_by / accepted_by,
+# the consent stamps, written by trade_insert_guard / trade_update_guard for EVERY caller (a client's value is overwritten), and apply_trade (security
+# definer, EXECUTE for authenticated, never anon) writing each agreeing, submitted receiver's call_offers row the way claim_open_slot does. Nothing
+# here goes over REST (the probe's P1 reads anon=f from the catalog); section 5 re-runs apply_trade's checks, locks and writes and section 7
+# claim_open_slot's, unchanged (the apply script read their 34 / 15 cases the same before and after the apply). 21a runs sql/probes/trade-offer-probe.sql through the linked CLI
+# (rolls itself back; 32 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever
+# their names, must be exactly 32, so with the 32 graded names the set is exactly its header's). The columns exist since the apply, so the probe's
+# PROBE_SETUP (shift_trade_requests.accepted_by is absent) is a FAIL - strict from the start: the record step added this section after the apply,
+# with no flag; its partly-applied raise and its collision guard (PROBE_SETUP: live rows already sit in the probe window) are FAILs too. 21b counts
+# the probe's leftovers either way - apply-trade-offer.sh's seven counts, in three columns: tagged = rows only the probe writes (its auth users,
+# its trades 'probe-tradeoffer <K>', its periods 'probe-tradeoffer P?'), each with its DELETE; in_window = schedule_days / call_offers /
+# availability rows in its windows (2031-05..2031-09, 2020-06, 2029-12-31) - apply_trade rewrites a day's source to 'trade' and writes the
+# receivers' offers untagged; audit_in_window = trade.apply audit rows naming a day in them. The collision guard refuses to start while such a
+# day, offer or availability row exists, so after a run that wrote its fixtures (PROBE_RESULTS) an in_window row can only be the probe's - a
+# FAIL. Every PROBE_SETUP raise of its setup block (the collision guard, the absent, the partly-applied and the profile-rows check) comes
+# before its first write in the windows (the schedule_days insert), so after one they are rows this run never wrote - real rows, or an
+# earlier run's leak (see any tagged rows); act()'s no-probe-user raise is caught by its case and lands in PROBE_RESULTS, so 21a too reads a
+# PROBE_SETUP as the run's end only when no PROBE_RESULTS came back. After a run that reported neither (a setup error or cut-off output)
+# nobody can tell. Those two are listed for review, never counted as a leftover and never given a DELETE (a probe row and a real one look
+# alike). The guard never reads audit_log, so an audit_in_window row may predate the run (an earlier leak whose days were since removed):
+# listed for review, never a FAIL on its own - a leak of this run would leave its day rows behind too.
+if linked; then
+  # 21a. the graded probe
+  PROBE21="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/trade-offer-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE21" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: shift_trade_requests.accepted_by is absent'; then
+    bad "trade offer probe: PROBE_SETUP - shift_trade_requests.accepted_by is absent (the columns exist since the 2026-10-20 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "trade offer probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, a fixture collision or the profile rows - ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "trade offer probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    results21=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//; s/[[:space:]]*$//')
+    echo "$results21" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE (no AFTER string carries < > & or a double quote, a wrong value may); the
+    # graders then read a case in plain bash (no process per case - 32 of them)
+    lines21=$(echo "$results21" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val21()   { CV21=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV21="${l#"$1="}"; return 0;; esac; done <<< "$lines21"; }
+    expect_eq21()  { case_val21 "$1"; v="$CV21"; [ "$v" = "$2" ] && ok "trade offer probe $1: $3" || bad "trade offer probe $1: $3 (got '$v', expected '$2')"; }
+    n21=$(echo "$lines21" | grep -c .)
+    [ "$n21" = "32" ] && ok "trade offer probe: 32 cases reported (with the 32 graded below, exactly its header's P1 S1-S9 A1-A11 M1-M3 R1-R8)" || bad "trade offer probe: $n21 cases reported, not the 32 of its header (P1 S1-S9 A1-A11 M1-M3 R1-R8 - a case lost, doubled or added without a grade here)"
+    expect_eq21 P1  "cols=proposed_by,accepted_by definer=t loop=t stamps=t anon=f auth=t" "the two stamp columns; apply_trade security definer with its offer loop; both trade triggers stamp; apply_trade executable by authenticated, never anon"
+    expect_eq21 S1  "st=pending by=s2/null" "a surgeon's give sent as accepted with both stamps s9 is stored pending, stamped by the trigger (the client's values overwritten)"
+    expect_eq21 S2  "st=pending by=s2/null" "the scheduler patching both stamps on a pending row changes neither"
+    expect_eq21 S3  "st=accepted by=s2/s3" "the receiver accepting while sending both stamps s9 is stamped with his own id"
+    expect_eq21 S4  "st=accepted by=s2/s3" "the scheduler patching both stamps on an accepted row changes neither"
+    expect_eq21 S5  "st=accepted by=scheduler/scheduler" "the scheduler inserting an already accepted give s2 to s3 is stamped scheduler / scheduler"
+    expect_eq21 S6  "st=accepted by=s1/scheduler" "the scheduler inserting an already accepted give from himself (s1) is stamped s1 / scheduler"
+    expect_eq21 S7  "st=accepted by=s2/scheduler" "a give the receiver declined and the scheduler moved to accepted is stamped accepted by the scheduler"
+    expect_eq21 S8  "st=accepted by=scheduler/scheduler" "a session with no signed-in user inserting an already accepted give is stamped scheduler / scheduler"
+    expect_eq21 S9  "st=accepted by=scheduler/s1" "the scheduler inserting an already accepted give to himself (s1) is stamped scheduler / s1"
+    expect_eq21 A1  "st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off" "the receiver accepts and applies a give in the published period: his offer (primary, his own, app), audit offer=true; the frozen-period bypass is off again"
+    expect_eq21 A2  "st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t" "a two-way trade the giver applies: both receivers' offers (the backup return leg too), audit true/true; the return leg takes s2's offers lock"
+    expect_eq21 A3  "st=applied by=scheduler/s3 o1=primary/s3/app a=true/false" "the scheduler proposes a one-way trade, the receiver accepts, the scheduler applies: the receiver's offer"
+    expect_eq21 A4  "m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false" "a locked slot: the receiver's apply is refused, the scheduler applies - the receiver agreed, so his offer"
+    expect_eq21 A5  "st=applied by=s2/scheduler o1=none a=false/false" "the scheduler accepts for the receiver, the receiver applies (Retry apply): no offer - he never agreed"
+    expect_eq21 A6  "st=applied by=s2/scheduler o1=none a=false/false" "an unlinked admin accepts for the receiver and applies: no offer"
+    expect_eq21 A7  "st=applied by=s2/s3 o1=primary/s3/app a=true/false upd=scheduler" "the receiver accepts, an unlinked admin applies: his offer; the day is updated by the scheduler"
+    expect_eq21 A8  "st=applied by=s2/s1 o1=primary/s1/app a=true/false" "a give to the scheduler (s1), who accepts as the receiver and applies: his own offer"
+    expect_eq21 A9  "st=applied by=scheduler/scheduler o1=none a=false/false held=s4" "the receiver accepts, the scheduler moves the receiver to s4 and applies: s4 holds the day with no offer (he never agreed)"
+    expect_eq21 A10 "st=applied by=s1/s3 o1=primary/s3/app o2=backup/s1/app a=true/true" "a trade from s1 with a return day and no return role: both offers, the return leg as backup"
+    expect_eq21 A11 "st=applied by=scheduler/s3 o1=primary/s3/app o2=none a=true/false" "the scheduler proposes a two-way trade s2 to s3, s3 accepts and applies: s3's offer only (s2 never agreed to the return leg)"
+    expect_eq21 M1  "st=applied by=s2/s4 o1=either/s4/app a=true/false" "s4 takes primary over his backup offer (seed-owned): merged to either and handed to him (app)"
+    expect_eq21 M2  "st=applied by=s2/s4 o1=primary/scheduler/email-relay a=true/false" "s4 takes primary over his primary offer (seed-owned): the row is kept as it was"
+    expect_eq21 M3  "st=applied by=s2/s4 o1=either/scheduler/email-relay a=true/false" "s4 takes backup over his either offer (seed-owned): the row is kept as it was"
+    expect_eq21 R1  "st=applied by=s2/s5 o1=none a=false/false" "s5 is rules-only in the period (even with an offer there): no offer"
+    expect_eq21 R2  "st=applied by=s2/s6 o1=none a=false/false" "s6 has no offer in the period (not started): no offer"
+    expect_eq21 R3  "st=applied by=s2/s3 o1=none a=false/false" "a day outside every period: no offer"
+    expect_eq21 R4  "st=applied by=s2/s5 o1=none a=false/false" "two periods hold the day - s5 rules-only in the earliest, submitted in the later: no offer (the earliest start wins)"
+    expect_eq21 R5  "st=applied by=s2/s6 o1=primary/s6/app a=true/false" "two periods hold the day - s6 submitted in the earliest, rules-only in the later: his offer"
+    expect_eq21 R6  "st=applied by=s2/s1 o1=none a=false/false" "a past day in a closed period, the scheduler accepting as the receiver and applying: no offer"
+    expect_eq21 R7  "lock=f/t st=applied by=s2/s4 o1=none a=false/false" "a primary leg onto s4's No primary day: no offer (s4's offers lock taken)"
+    expect_eq21 R8  "st=applied by=s2/s4 o1=backup/s4/app a=true/false" "a backup leg onto s4's No primary day: his backup offer"
+  fi
+  # 21b. leftovers, by the probe's identity (tagged), its windows (in_window) and the audit rows naming a day in them (audit_in_window) -
+  # together apply-trade-offer.sh's leftover count
+  LEFTOVER21_SQL="select ((select count(*) from auth.users where email like 'probe-tradeoffer-%@example.test') + (select count(*) from public.shift_trade_requests where detail like 'probe-tradeoffer%') + (select count(*) from public.call_periods where label like 'probe-tradeoffer%'))::int as tagged, ((select count(*) from public.schedule_days where day between '2031-05-01' and '2031-09-30' or day between '2020-06-01' and '2020-06-30') + (select count(*) from public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31') + (select count(*) from public.availability where start_date <= '2031-09-30' and end_date >= '2031-05-01'))::int as in_window, (select count(*) from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30'))::int as audit_in_window"
+  r=$(q "$LEFTOVER21_SQL")
+  rflat21=$(echo "$r" | tr -d ' \n')
+  tagged21=$(echo "$rflat21" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win21=$(echo "$rflat21" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  aud21=$(echo "$rflat21" | grep -oE '"audit_in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  # how 21a ended: results = the sentinel (the probe wrote its fixtures); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first write in the windows); none = neither (a setup error or cut-off output - nobody can tell)
+  end21=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end21=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end21=setup; fi
+  if [ -z "$tagged21" ] || [ -z "$win21" ] || [ -z "$aud21" ]; then
+    bad "trade offer probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  else
+    if [ "$tagged21" = "0" ] && [ "$win21" = "0" ]; then
+      ok "trade offer probe persisted nothing (leftover count 0: auth.users probe-tradeoffer-* / shift_trade_requests and call_periods probe-tradeoffer* / schedule_days, call_offers and availability rows in 2031-05..2031-09, 2020-06 or on 2029-12-31)"
+    fi
+    if [ "$tagged21" != "0" ]; then
+      bad "trade offer probe LEFT ROWS BEHIND (tagged=$tagged21 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.shift_trade_requests where detail like 'probe-tradeoffer%';"
+      echo "      delete from public.call_periods where label like 'probe-tradeoffer%';"
+      echo "      delete from auth.users where email like 'probe-tradeoffer-%@example.test';   -- user_profiles rows cascade"
+    fi
+    if [ "$win21" != "0" ]; then
+      if [ "$end21" = "results" ]; then
+        bad "trade offer probe LEFT ROWS BEHIND (in_window=$win21 - schedule_days / call_offers / availability rows in the probe windows after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real one look alike), then report:"
+      elif [ "$end21" = "setup" ]; then
+        echo "   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+      else
+        echo "   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown; review them before removing anything:"
+      fi
+      echo "      select * from public.schedule_days where day between '2031-05-01' and '2031-09-30' or day between '2020-06-01' and '2020-06-30';"
+      echo "      select * from public.call_offers where day between '2031-05-01' and '2031-09-30' or day = '2029-12-31';"
+      echo "      select * from public.availability where start_date <= '2031-09-30' and end_date >= '2031-05-01';"
+    fi
+    if [ "$aud21" != "0" ]; then
+      echo "   21b: $aud21 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run (an earlier leak whose days were since removed); review them, never delete audit history blindly:"
+      echo "      select * from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30');"
+    fi
+  fi
+else
+  echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

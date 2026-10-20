@@ -141,7 +141,7 @@
 -- (the merged ranges; a 'home' review exempts only its exact range - stricter than 9/30 for a stale covering review); the time_off leg and
 -- everything else are the 9/30 body. No table, column, policy, trigger, row or anon surface changes. Letter u stays taken by the weekend pair
 -- claim; w was the last applied before it.
--- Revision 2026-10-18 y (trade offers, sql/migrations/2026-10-18-trade-offer.sql, report-first, NOT yet applied): Faraz 10/18 - a trade
+-- Revision 2026-10-18 y (trade offers, sql/migrations/2026-10-18-trade-offer.sql, applied 2026-10-20 00:41:25Z after the probe): Faraz 10/18 - a trade
 -- records the receiver's offer like a claim does, so a traded day off a submitted receiver's offers / dated list no longer reads as a
 -- conflict on his held slot. Two NEW nullable columns on shift_trade_requests, the consent stamps, written by the trade triggers only:
 -- proposed_by (trade_insert_guard: the proposer's own roster id when the caller is the from surgeon, else 'scheduler') and accepted_by
@@ -154,8 +154,8 @@
 -- the other role -> 'either', owner fields handed over only when the role changes), source 'app', entered_by the receiver, the OF003
 -- bypass through silvis.claim_in_progress; and the trade.apply audit detail gains offer / return_offer. trade_insert_guard() and
 -- trade_update_guard() are their revision p / n bodies plus the stamp lines. No policy, grant, index, other function or anon surface
--- changes. Letter u stays taken by the weekend pair claim; x is applied (2026-10-19 22:53:18Z; independent - either apply order on the database, but this
--- file's apply script runs after Part A's, whose step 0 pinned scripts/verify-rls.sh until x's record step).
+-- changes. Letter u stays taken by the weekend pair claim; x was the last applied before it (2026-10-19 22:53:18Z; independent - either apply order on the database, but this
+-- file's apply script ran after Part A's, whose step 0 pinned scripts/verify-rls.sh until x's record step).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================

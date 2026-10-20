@@ -933,11 +933,13 @@ painting it"):** a surgeon who is submitted for the period — either mode — m
 day outside his dated list: taking it himself is his own choice, like painting the day (`claim_open_slot` also records the
 offer). The claim is read as if his dated lists did not exist — so his other rules, his recurring available days
 included, still apply. That is exactly how claims and trades already worked in the live Nov 2026 – Jan 2027 period, so
-nothing changes there; a surgeon who never painted (rules-only / not started) keeps his list on claims, as before. A
-trade records no offer until revision y is applied (`apply_trade` writes none today; revision y, prepared 10/18 —
-report-first, NOT applied — writes the receiver's offer the way a claim does when he agreed himself and is already
-submitted in the period: Faraz 10/18, D1 claim parity, D2 submitted receivers only, D3 the consent stamps), so until then a
-traded day off his list later shows as a conflict on his held slot; a claimed day does not (`claim_open_slot` records the offer — except for a claimer listed in
+nothing changes there; a surgeon who never painted (rules-only / not started) keeps his list on claims, as before. Since
+revision y (applied 2026-10-20 00:41 UTC; Faraz 10/18, D1 claim parity, D2 submitted receivers only, D3 the consent stamps) a
+trade records the receiver's offer the way a claim does when he agreed to it himself (a return leg only when both surgeons
+agreed themselves) and is already submitted in the day's period, so his traded day off his list reads offered; a traded day it
+records none for (one the scheduler accepted for him, the return leg of a trade the scheduler proposed for the giver, a past
+day, a receiver listed in the period's `rules_only_ids`, a primary leg onto his No primary day, a trade accepted before the
+apply) still shows as a conflict on his held slot. A claimed day does not (`claim_open_slot` records the offer — except for a claimer listed in
 the period's `rules_only_ids`, whose claim writes none, so his claimed day off his list can show the same conflict).
 **Imports:** the importer
 retires a surgeon's month lists and their available rows only for an "only these days" period; in a preferred period

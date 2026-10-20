@@ -4717,8 +4717,11 @@ function CallSchedule() {
     // The claim flag (Prompt 14 U3c, 9/23): a trade acceptance is an offer made on the spot (rules doc 2c, the same
     // reading as a board claim) - the exhaustive surgeon's hard 'not-offered' is skipped, the soft 'outside-offers'
     // still surfaces, and (10/18, Faraz "taking it counts as painting it") a receiver submitted for the day's period is
-    // read as if his dated lists did not exist; every other hard rule stands. apply_trade() does not yet write the
-    // call_offers row (open) - so a traded day off his offers / list later reads as a conflict on the held slot.
+    // read as if his dated lists did not exist; every other hard rule stands. Since revision y (applied 2026-10-20 00:41:25Z,
+    // recorded in docs/SCHEMA-REVIEW.md) apply_trade() writes his call_offers row, as a claim does, when he agreed himself
+    // (for a return leg, both surgeons did) and is submitted for the day's period; where it writes none - the scheduler
+    // accepting for him, say (the record lists the cases) - a traded day off his offers / list still reads as a conflict on
+    // the held slot.
     try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }
     catch (e) {
       console.warn("trade eligibility check failed:", e);

@@ -1,9 +1,17 @@
 -- ============================================================================
--- Silvis Call Schedule - trade offer PRE-CHECK (2026-10-18, revision y; sql/migrations/2026-10-18-trade-offer.sql, REPORT-FIRST,
--- NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right after it
+-- Silvis Call Schedule - trade offer PRE-CHECK (2026-10-18, revision y; sql/migrations/2026-10-18-trade-offer.sql, REPORT-FIRST;
+-- APPLIED 2026-10-20 00:41:25Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right after it
 -- (Faraz's apply script, kept outside the repo, does both): rows 1-5 are the gate, rows 6-7 are facts for the record (D5: a backfill
 -- of the legs row 6 lists would be its own report-first step - never a stop here). It runs before the migration, so it never names
 -- the two new columns outside catalog lookups (pg_attribute).
+-- As run (2026-10-20): before the apply the gate read cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes and right
+-- after it cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes; row 2 apply_trade=a9ab025feaba32b3fdc3a65f3cdfbc65
+-- insert_guard=dd067d544c89c5622ab7e3687dcde5a0 update_guard=7319d0c5ba9b001f554b7a7db7a227f5 before (revisions m / p / n) and
+-- apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b
+-- after (y / y / y), offers_guard=c48783939fd53dc56be90af140297abe both times; rows 3-5 the same both times; row 6 legs=4 in_period=0 uncovered=0
+-- open_trades=0 and row 7 period=2026-11-02 status=published keys_without_offers=s5 both times (no backfill - D5) - docs/SCHEMA-REVIEW.md
+-- "2026-10-18 - apply_trade writes the receiver's offer (revision y)" quotes them. This header was kept byte for byte as reviewed until the
+-- apply (the apply script pinned its sha256); the record step turned it APPLIED.
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/trade-offer-precheck.sql
 --
