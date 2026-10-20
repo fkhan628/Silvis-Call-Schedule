@@ -14600,6 +14600,26 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const rows = historyDoc.split("\n").filter(l => l.startsWith("| `REPORT-PROMPT-31-2026-10-13.md`"));
       assert.ok(rows.length === 1 && /guide section 25/.test(rows[0]) && /"2026-10-14 - East vacations"/.test(rows[0]) && !/PART-B-DESIGN/.test(rows[0]), "HISTORY's report row points at guide section 25 and the SCHEMA-REVIEW record (and stays apart from the Part B row T12 reads)");
     });
+    check("P31A5 record step (10/19): revision x reads applied everywhere the record step said so - guide 8's vacation guard bullet, guide 25.6's as-run note, the rules doc (Khan's Part A status, items 17 and 26), ONBOARDING's paragraph, the edge-functions README section 3 steps 1 and 2 (a revert of one sentence fails)", () => {
+      const vg8 = (guide.match(/^- \*\*Vacation guard \(Prompt 27, [^\n]*/m) || [""])[0];
+      assert.ok(vg8.includes("revision x (applied 2026-10-19 22:53 UTC) makes the trigger's East leg read `silvis_derived_vacations()`") && !vg8.includes("revision x (NOT applied)"), "guide 8's vacation guard bullet: revision x (applied 2026-10-19 22:53 UTC), never (NOT applied)");
+      const s6 = flat5(sub25(6));
+      assert.ok(s6.includes("*As run: (1) on 2026-10-19 - the `--dry-run` at 04:29Z from the Part A worktree, then the run at 22:52:38Z from the main clone at `b0344bd` (applied 22:53:18Z; a 13:12Z run stopped at APPLY, nothing applied); (2) this record step; (3) came first - main merged and shipped on 10/18 as 2026.10.18b, before the apply; (4)-(7) follow, on Faraz's go.*") && !/\(4\)-\(7\) are done/.test(s6), "guide 25.6's as-run note reads exactly as the record step wrote it ((4)-(7) still follow)");
+      const khan = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
+      const pa = flat5((khan.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
+      assert.ok(pa.includes("Status: built and live - the client since 2026.10.18b, the database part (revision x) applied 2026-10-19; the server refresh NOT deployed yet - build guide " + SEC + "25") && !/NOT applied yet/.test(pa), "section 3 Khan's Part A status: built and live, revision x applied 2026-10-19 (never NOT applied yet)");
+      const s8 = rulesDoc.slice(rulesDoc.indexOf("\n## 8. Answered"));
+      const i17 = flat5((s8.match(/^17\. \*\*East vacations[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
+      assert.ok(i17.includes("revision x (applied 2026-10-19) has it read them through the database's derived rows") && !i17.includes("(NOT applied yet)"), "item 17: revision x (applied 2026-10-19), never (NOT applied yet)");
+      const i26 = flat5((s8.match(/^26\. \*\*East vacations seen by everyone signed in[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
+      assert.ok(i26.includes("Status: built and merged, the client live since 2026.10.18b; the database part (revision x) report-first, applied 2026-10-19 22:53 UTC (Faraz's `apply-east-vacations.sh`); the server refresh NOT deployed yet") && !/NOT applied yet/.test(i26), "item 26's status: built and merged, the client live since 2026.10.18b, revision x applied 2026-10-19 22:53 UTC (never NOT applied yet)");
+      const op = flat5(onboarding.split("\n\n").find(p => /^\*\*Vacations set by the scheduler - what everyone else sees \(Prompt 31 Part A/.test(p)) || "");
+      assert.ok(op.includes("(Prompt 31 Part A, Faraz 10/9; live since 2026-10-19 - tell the group).**") && op.includes("Since the database part was applied on 2026-10-19 (the Part A client has been live since 2026.10.18b),") && !/once it ships|Once the database part is applied/.test(op), "ONBOARDING's paragraph: live since 2026-10-19, the database part was applied on 2026-10-19 (never once it ships)");
+      const a1 = efReadme.indexOf("\n1. The database first - `apply-east-vacations.sh`"), a2 = efReadme.indexOf("\n2. The Part A client, on Faraz's go", a1), a3 = efReadme.indexOf("\n3. Deploy - ", a2);
+      const st1 = a1 < 0 || a2 < 0 ? "" : flat5(efReadme.slice(a1, a2)), st2 = a2 < 0 || a3 < 0 ? "" : flat5(efReadme.slice(a2, a3));
+      assert.ok(st1.includes("and no review is reset. Done: applied 2026-10-19 22:53:18Z and recorded (`docs/SCHEMA-REVIEW.md` \"2026-10-14 - East vacations\") - the three functions exist since."), "the README section 3 step 1: Done: applied 2026-10-19 22:53:18Z and recorded");
+      assert.ok(st2.includes("not depend on it. Done: live since 2026.10.18b (2026-10-18), before the apply."), "the README section 3 step 2: Done: live since 2026.10.18b (2026-10-18), before the apply");
+    });
     check("P31A5 privacy: no address-shaped string and no machine path in the Part A docs (guide 25, the rules doc, ONBOARDING, the README)", () => {
       const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g;
       [["guide 25", s25], ["rules", rulesDoc], ["ONBOARDING", onboarding], ["README", efReadme]].forEach(([n, t]) => {

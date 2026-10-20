@@ -3392,8 +3392,8 @@ record lane ran nothing live); the next plain `bash scripts/verify-rls.sh` grade
 `b0344bd`; the observed lines at the end). Was PREPARED - report-first, NOT applied until then. Revision x (u stays reserved for the
 weekend pair claim, prepared on its own branch; w - phone push - was the last applied before it). Nothing in the repo applies it: the
 apply script lives outside the repo (Faraz 10/1); Faraz ran it and pasted the log back, and the record step filled the observed lines
-at the end of this section. The Part A client came first - merged to main on 2026-10-18 and live since 2026.10.18b, it read the
-missing functions as "unavailable" until the apply. Still to come, on Faraz's go (guide section 25.6): the `east-feed-refresh` deploy,
+at the end of this section. The Part A client came first - merged to main on 2026-10-18 and live since 2026.10.18b; by design it
+reads a missing function as "unavailable" (no client read was observed before or by the apply - the Blast radius note). Still to come, on Faraz's go (guide section 25.6): the `east-feed-refresh` deploy,
 its 20i run, its dryRun proof and its cron job (`edge-functions/README.md` section 3, "Deploy record - Prompt 31 Part A") - the
 function calls three of these functions.
 
@@ -3469,7 +3469,7 @@ names - dates only - the days a new or changed range puts under the minimum (`si
 held inside it. After the apply the scheduler lists such days with `sql/probes/vacation-short-days.sql` (the new reading);
 `sql/probes/vacation-guard-overlimit.sql` keeps the 9/30 reading (a covering, non-exact `home` row still exempts a day there) and is
 the BEFORE picture only. Server enforcement in `claim_open_slot` (`CL009`), `apply_trade` and `call_offers_guard` (`OF002`) stays out
-of Prompt 31 (decision 17): those read `time_off` only, as before. *As run: 0 days under the minimum by both readings, before and after.*
+of Prompt 31 (decision 17): those read `time_off` only, as before. *As run: 0 days under the minimum - before the apply by the 9/30 reading, after it by the guard's reading (silvis_vacation_short_days).*
 
 **The silent-empty guard is the caller's (critic A7).** An RLS-blocked Davenport read answers HTTP 200 + `[]`: one unattended run
 that trusted it would clear the cached ranges, and the reset over that cache would delete every review as `removed`. So a refresh
@@ -3484,9 +3484,14 @@ the derived rows once - a materialized CTE over a cache of about ten ranges a ye
 trigger or row; nothing the public page, the share page, print, the calendar feeds, the office digest, the daily reminder, the ER
 export, e-mails or pay read (they keep reading `time_off` and never call the new functions - anon cannot). The new functions are
 called by no client and no edge function until the Part A client ships and the server refresh is deployed; *As run: the Part A client
-shipped first (2026.10.18b, 2026-10-18) and read both RPCs' 404 PGRST202 as "unavailable" (the in-app refresh fell back to its 9/23
-loop); since 22:53:18Z every signed-in client reads the derived rows, and the scheduler's in-app refresh resets through
-`east_vacation_reset_stale`. No edge function calls them until `east-feed-refresh` is deployed.* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
+shipped first (2026.10.18b, CI build `ee47331`, 2026-10-18 18:26:47Z). Observed by the apply: no signed-in REST read (verify-rls 20e
+a SKIP line - no surgeon token; probe A1-A3 prove a surgeon's, the coordinator's and a viewer's read in SQL) and no in-app refresh
+that wrote the cache - the pre-check's `east_feed` read `fetched_max=2026-10-15T03:07:29Z` before and after the apply, so the last
+cache write predates 2026.10.18b and no reset has run through either path since it shipped. By design (not observed): before the
+apply the client reads
+both RPCs' 404 PGRST202 as "unavailable" and its in-app refresh falls back to the 9/23 loop; since 22:53:18Z every signed-in client
+reads the derived rows, and the scheduler's next in-app refresh resets through `east_vacation_reset_stale`. No edge function calls
+them until `east-feed-refresh` is deployed.* The one behaviour change is the guard's stricter `home` reading above. Independent of the weekend pair
 claim (revision u, on its own branch) - no shared object, either apply order.
 
 **What could break / what offline cannot show.** Offline, on PGlite (WASM PostgreSQL, a scratch folder outside the repo, over this
@@ -4012,7 +4017,7 @@ absent - sql/migrations/2026-10-14-east-vacations.sql is not applied` (nothing e
 definer;silvis_east_people() invoker;silvis_east_ranges() invoker;silvis_vacation_short_days(date, date) invoker`; EXECUTE after:
 `anon=none authenticated=east_vacation_reset_stale,silvis_derived_vacations public=none`; facts after: rows 3, 4 and 6-8 unchanged, row
 `5 ranges: merged=11 away=8 home=1 unreviewed=2 derived=10`. Step 6, probe AFTER - 56 cases, every one as the probe table above lists,
-as the log printed them (sorted by case; no line carries a double quote; R7's `<E>` shown decoded):
+as the log printed them (sorted by case; no line carries a double quote; R7's `<E>` as the CLI carried it, unescaped):
 
 ```text
 A1=rows=6

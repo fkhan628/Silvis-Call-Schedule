@@ -2954,9 +2954,10 @@ report and apply). The binding design is `PART-B-DESIGN.md` with its critic corr
 *Status: built on branch `feat/east-vacations-part-a` (worktree `silvis-p31a`) and merged to main on 2026-10-18 (`80c2c2b`); the
 client is live since 2026.10.18b. The database half - revision x, `sql/migrations/2026-10-14-east-vacations.sql` - was report-first
 and is APPLIED 2026-10-19 22:53:18Z (Faraz, `apply-east-vacations.sh`, kept outside the repo; the observed lines in
-`docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"). The client shipped before the apply and read the new functions as
-"unavailable" (today's picture until then); since the apply it reads the derived rows. `east-feed-refresh` is NOT deployed and its
-cron job `silvis-east-feed-daily` does not exist (`edge-functions/README.md` section 3) - Faraz's next steps, 25.6. The deploy's
+`docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"). The client shipped before the apply; by design it reads a missing function as
+"unavailable" and, since the apply, the derived rows - the apply observed no signed-in client read (verify-rls 20e a SKIP line; probe
+A1-A3 prove the reads in SQL) and no in-app refresh that wrote the cache since the client shipped. `east-feed-refresh` is NOT
+deployed and its cron job `silvis-east-feed-daily` does not exist (`edge-functions/README.md` section 3) - Faraz's next steps, 25.6. The deploy's
 record step rewrites this line again.*
 
 Faraz asked (10/9) for two things in Part A. **Item 1:** every East range reviewed *away*, and every range still *unreviewed*, shows
