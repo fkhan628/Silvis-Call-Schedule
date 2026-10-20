@@ -3563,9 +3563,27 @@ eq((s16code.match(/\n    expect_(eq|np|err)16 /g) || []).length, NP_CASES.length
 // ready-to-paste DELETEs) and s3's availability / call_offers in the window (in_window; SELECTs to review, never a DELETE) - not every
 // row of anyone in 2030-11 / over 2020-04-06 (a legitimate long statement of s5 was reported as a leftover and its DELETE printed);
 // kept intent: a non-zero count after a run that passed the collision guard is a FAIL naming LEFT ROWS BEHIND.
+// moved again 10/20 (section 21's three endings): the in_window FAIL holds after a run that wrote its fixtures (PROBE_RESULTS) only -
+// the end16 pins below; a tagged row FAILs after any run
 ok(["(select count(*) from auth.users where email like 'probe-noprimary-%@example.test')", "(select count(*) from public.schedule_days where source = 'probe-noprimary')", "(select count(*) from public.time_off where note = 'probe-noprimary')", "(select count(*) from public.call_periods where label like 'probe np %')", "(select count(*) from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary')", "(select count(*) from public.call_offers where note = 'probe-noprimary'))::int as tagged", "(select count(*) from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date))", "(select count(*) from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30'))::int as in_window"].every((t) => s16code.includes(t)) && /LEFT ROWS BEHIND/.test(s16code), "16d counts leftovers by the probe's identity (tagged: auth.users / schedule_days / time_off / call_periods / availability / call_offers tagged probe-noprimary; in_window: s3's availability / call_offers) and fails on non-zero");
 ok(!/count\(\*\) from public\.(availability|call_offers) where (start_date|day|')/.test(s16code) && !/delete from public\.(availability|call_offers) where (\(start_date|start_date|day|person_id)/.test(s16code), "16d never counts nor deletes another person's availability / call_offers row by date alone, and prints no DELETE for an untagged row");
 ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 16c / 16d skip (16a / 16b still run)");
+// pins moved deliberately 10/20 (section 21's three endings, read the same here): 16d reads how 16c ended - results (the sentinel: the
+// probe wrote its fixtures; an in-window row FAILs), setup (a PROBE_SETUP raise and no PROBE_RESULTS: every raise sits in the setup block
+// before its first write in the window - rows this run never wrote, review only), none (neither - unknown, review only). Until then
+// passed16 read the absent raise as a run past the guard (an in-window row after it FAILed, though that run wrote nothing) and every
+// other ending - a cut-off PROBE_RESULTS included - as 'a live row, not a leftover'. 16c's own order stays: no case raises a
+// PROBE_SETUP, so none can sit inside a PROBE_RESULTS (pinned below) - unlike 21a's act()
+ok(s16code.includes("  end16=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end16=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end16=setup; fi\n") && !/passed16/.test(s16code), "16d: end16 = results / setup / none from 16c's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
+ok(/if \[ "\$end16" = "results" \]; then\n\s+bad "no-primary probe LEFT ROWS BEHIND \(in_window=\$win16 [^\n]*after a run that wrote its fixtures\)/.test(s16code) && s16code.includes("echo \"   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (16c), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s16code.includes("echo \"   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (16c), so whether the probe wrote them is unknown; review them before removing anything:\"") && !/live row, not a leftover/.test(s16code), "16d: in-window rows FAIL after results only; after setup this run wrote none of them (real rows, or an earlier run's leak), after none unknown - both listed for review, never 'a live row, not a leftover'");
+{
+  // every PROBE_SETUP raise of the probe sits in its setup block (the DO block before the first `end $$;`), before its first write in the
+  // window (the availability insert); no case raises one - what 16d's 'setup' reading and 16c's order rest on
+  const setupEnd = npProbe.indexOf("\nend $$;"), firstWin = npProbe.indexOf("insert into public.availability");
+  const raises = []; let at = npProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0) { raises.push(at); at = npProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  ok(setupEnd > 0 && firstWin > 0 && firstWin < setupEnd && raises.length === 3 && raises.every((x) => x < firstWin), "the no-primary probe raises its three PROBE_SETUP (the collision guard, the absent and the profile-rows check) in its setup block before its first write in the window (the availability insert), and nowhere else (" + raises.length + " raises)");
+  ok(npProbe.indexOf("insert into public.call_offers") > firstWin && !/PROBE_SETUP/.test(npProbe.slice(setupEnd).replace(/^--[^\n]*$/gm, "")), "... the call_offers fixtures come after it, and no line after the setup block (a case, the report) carries a PROBE_SETUP");
+}
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   // pins moved deliberately 10/2 (the record step): the header still names section 16 and its anon checks; the header and --help
@@ -3627,11 +3645,15 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   eq(rq.result, [NP_CASES.length + 2, 1], "section 16 fails a non-zero tagged leftover count;");
   ok(/LEFT ROWS BEHIND \(tagged=3/.test(rq.out) && rq.out.includes("delete from public.schedule_days where source = 'probe-noprimary';") && rq.out.includes("delete from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary';"), "section 16 names the tagged leftovers and prints their DELETEs");
   const rw = run16(msgOf(after), { win: 2 });
-  eq(rw.result, [NP_CASES.length + 2, 1], "section 16 fails s3's rows left in the window after a run that passed the collision guard;");
-  ok(/LEFT ROWS BEHIND \(in_window=2/.test(rw.out) && rw.out.includes("select * from public.availability where person_id = 's3'") && !/delete from public\.(availability|call_offers)/.test(rw.out), "... and prints SELECTs to review, never a DELETE of an untagged row (a probe row and a real entry of s3 look alike)");
+  eq(rw.result, [NP_CASES.length + 2, 1], "section 16 fails s3's rows left in the window after a run that wrote its fixtures (PROBE_RESULTS);");
+  ok(/LEFT ROWS BEHIND \(in_window=2 [^\n]*after a run that wrote its fixtures\)/.test(rw.out) && rw.out.includes("select * from public.availability where person_id = 's3'") && !/delete from public\.(availability|call_offers)/.test(rw.out), "... and prints SELECTs to review, never a DELETE of an untagged row (a probe row and a real entry of s3 look alike)");
   // pin moved deliberately 10/2 (the record step): the PROBE_SETUP run is a FAIL itself now (16a / 16b answer 401 here); kept intent:
   // the guard passed before the absent raise, so s3's rows in the window after it are still a leftover (FAIL)
-  eq(run16(setup, { win: 1 }).result, [2, 2], "an absent-function run passed the guard too (the absent raise comes after it): s3's rows in the window then are a leftover (FAIL) beside the PROBE_SETUP FAIL;");
+  // moved again 10/20 (the three endings): the absent raise comes after the guard but before the probe's first write in the window, so
+  // that run wrote none of s3's rows - they are listed for review beside the PROBE_SETUP FAIL, never a LEFT ROWS BEHIND
+  const rbw = run16(setup, { win: 1 });
+  eq(rbw.result, [2, 1], "an absent-function run (the raise before the probe's first write in its window) with one in-window row: 16c FAILs, the row is one this run never wrote - listed for review, not a leftover (" + fails(rbw) + ");");
+  ok(rbw.out.includes("   16d: s3 has 1 availability / call_offers row(s) in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (16c), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above)") && rbw.out.includes("      select * from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30';") && !/LEFT ROWS BEHIND|delete from public\.(availability|call_offers)/.test(rbw.out), "... with its SELECTs, no LEFT ROWS BEHIND and no DELETE");
   eq(run16(msgOf(after), { shape: "bare" }).result, [NP_CASES.length + 3, 0], "16d reads a plain terminal's bare-array -o json the same as the agent envelope;");
   eq(run16(msgOf(after), { shape: "error" }).result, [NP_CASES.length + 2, 1], "16d fails a leftover count it cannot read;");
   eq(run16('{"message": "connection refused"}').result, [3, 1], "section 16 fails a run with no sentinel-terminated PROBE_RESULTS (16a / 16b and the leftover check still run);");
@@ -3639,7 +3661,19 @@ ok(s16code.includes('echo "   SKIP 16 (supabase CLI not linked at $WORKDIR)"'), 
   eq(run16(collide).result, [3, 1], "the probe's collision guard is a FAIL, never 'not applied';");
   const rc = run16(collide, { win: 2 });
   eq(rc.result, [2, 1], "a collision with s3's live rows in the window: 16c FAILs, 16d neither passes nor fails them (the probe wrote nothing) - " + fails(rc));
-  ok(!/LEFT ROWS BEHIND/.test(rc.out) && /an untagged one is a live row, not a leftover/.test(rc.out) && !/delete from public\.(availability|call_offers)/.test(rc.out), "... and lists them for review only, never as leftovers and never with a DELETE");
+  // pin moved deliberately 10/20 (the three endings): the review line says this run wrote none of them (real rows, or an earlier run's
+  // leak), never 'a live row, not a leftover' (an earlier leak looks the same)
+  ok(!/LEFT ROWS BEHIND/.test(rc.out) && rc.out.includes("   16d: s3 has 2 availability / call_offers row(s) in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (16c), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:") && !/live row, not a leftover/.test(rc.out) && !/delete from public\.(availability|call_offers)/.test(rc.out), "... and lists them for review only, never as leftovers and never with a DELETE");
+  const prof = '{"message": "ERROR: P0001: PROBE_SETUP: handle_new_auth_user did not create the profile rows"}';
+  const rpf = run16(prof, { win: 2 });
+  eq(rpf.result, [2, 1], "the profile-rows raise (after the auth.users insert, before any write in the window) with two in-window rows: 16c FAILs, this run wrote none of them (" + fails(rpf) + ");");
+  ok(/^FAIL  no-primary probe reported no sentinel-terminated PROBE_RESULTS \(setup error, a fixture collision or truncated output: /m.test(rpf.out) && rpf.out.includes("the probe stopped at a PROBE_SETUP raise before writing any row in its window (16c), so this run wrote none of them") && !/LEFT ROWS BEHIND|live row, not a leftover/.test(rpf.out), "... 16c's FAIL, then the rows listed for review as rows this run never wrote");
+  // after a run that reported neither PROBE_RESULTS nor PROBE_SETUP, in-window rows are unknown - never 'live rows', never LEFT ROWS BEHIND
+  for (const [what, cli] of [["no sentinel", '{"message": "connection refused"}'], ["a cut-off PROBE_RESULTS (no ;END)", msgOf(after).replace(";END", "")]]) {
+    const rn = run16(cli, { win: 2 });
+    eq(rn.result, [2, 1], what + " with two in-window rows: 16c FAILs, 16d lists them for review (" + fails(rn) + ");");
+    ok(rn.out.includes("   16d: s3 has 2 availability / call_offers row(s) in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (16c), so whether the probe wrote them is unknown; review them before removing anything:") && !/LEFT ROWS BEHIND|stopped at a PROBE_SETUP|live row, not a leftover|delete from public\.(availability|call_offers)/.test(rn.out), "... " + what + ": 'unknown', never 'live rows' or LEFT ROWS BEHIND, no DELETE");
+  }
 }
 
 step("Prompt 28: no apply script in the repo (Faraz 10/1: the one-command apply scripts carry machine paths and live outside the repo) - none under scripts/, no tracked SQL or SCHEMA-REVIEW line runs one from scripts/");
@@ -4168,6 +4202,23 @@ eq((s18code.match(/\n    expect_(eq|err|ap)18 /g) || []).length, AP_CASES.length
 ok(s18code.includes("LEFTOVER18_SQL=\"select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window\"") && /LEFT ROWS BEHIND/.test(s18code), "18g counts leftovers by the probe's identity (tagged: its auth users and its audit rows; in_window: app_call_days in its window, guarded by to_regclass) and fails on non-zero");
 ok(s18code.includes("echo \"      delete from auth.users where email like 'probe-appdays-%@example.test';   -- profiles and their app_call_days rows cascade\"") && !/delete from public\.app_call_days/.test(s18code), "18g prints DELETEs for tagged rows only - never for an app_call_days row (a probe row and a real APP day look alike)");
 ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI 18f / 18g skip (18a-18e still run)");
+// pins moved deliberately 10/20 (section 21's three endings, read the same here): 18g reads how 18f ended - results (the sentinel: the
+// probe ran its cases; an in-window row FAILs), setup (a PROBE_SETUP raise and no PROBE_RESULTS: every raise sits in the setup block,
+// which writes no app_call_days row - rows this run never wrote, review only), none (neither - unknown, review only). Until then
+// passed18 read the absent raise as a run past the guard - in this probe the absent raise comes BEFORE the guard (it reads the table) -
+// and every other ending - a cut-off PROBE_RESULTS included - as 'live rows, not leftovers'. 18f's own order stays: no case raises a
+// PROBE_SETUP, so none can sit inside a PROBE_RESULTS (pinned below) - unlike 21a's act()
+ok(s18code.includes("  end18=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end18=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end18=setup; fi\n") && !/passed18/.test(s18code), "18g: end18 = results / setup / none from 18f's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
+ok(/if \[ "\$end18" = "results" \]; then\n\s+bad "APP days probe LEFT ROWS BEHIND \(in_window=\$win18 [^\n]*after a run that ran its cases\)/.test(s18code) && s18code.includes("echo \"   18g: $win18 app_call_days row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (18f), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s18code.includes("echo \"   18g: $win18 app_call_days row(s) sit in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (18f), so whether the probe wrote them is unknown; review them before removing anything:\"") && !/live rows, not leftovers/.test(s18code), "18g: in-window rows FAIL after results only; after setup this run wrote none of them (real rows, or an earlier run's leak), after none unknown - both listed for review, never 'live rows, not leftovers'");
+{
+  // every PROBE_SETUP raise of the probe sits in its setup block (the DO block before the first `end $$;`), which writes no app_call_days
+  // row (case A1's save_app_days writes the first); no case raises one - what 18g's 'setup' reading and 18f's order rest on
+  const setupEnd = apProbe.indexOf("\nend $$;"), firstWin = apProbe.indexOf("r := public.save_app_days(");
+  const raises = []; let at = apProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0) { raises.push(at); at = apProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  const setupBlock = setupEnd > 0 ? apProbe.slice(apProbe.lastIndexOf("\ndo $$", setupEnd), setupEnd) : "";
+  ok(setupEnd > 0 && firstWin > setupEnd && raises.length === 4 && raises.every((x) => x < setupEnd) && setupBlock.length > 0 && !/app_call_days\s*\(|into public\.app_call_days|save_app_days/.test(setupBlock), "the APP days probe raises its four PROBE_SETUP (the absent, the partly-applied, the collision guard and the profile-rows check) in its setup block, which writes no app_call_days row, and nowhere else (" + raises.length + " raises)");
+  ok(!/PROBE_SETUP/.test(apProbe.slice(setupEnd).replace(/^--[^\n]*$/gm, "")), "... no line after the setup block (a case, the report) carries a PROBE_SETUP");
+}
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   // pins moved deliberately 10/2 (the record step): the header still names section 18 and its anon checks; the header and --help
@@ -4234,23 +4285,43 @@ ok(s18code.includes('echo "   SKIP 18f/18g (supabase CLI not linked at $WORKDIR)
   eq(rq.result, [AP_CASES.length + 4, 1], "section 18 fails a non-zero tagged leftover count (read from a plain terminal's bare-array -o json the same as the agent envelope);");
   ok(/LEFT ROWS BEHIND \(tagged=3/.test(rq.out) && rq.out.includes("delete from auth.users where email like 'probe-appdays-%@example.test';") && rq.out.includes("delete from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %';"), "section 18 names the tagged leftovers and prints their DELETEs");
   const rw = run18(msgOf(after), { win: 2 });
-  eq(rw.result, [AP_CASES.length + 4, 1], "section 18 fails app_call_days rows left in the window after a run that passed the collision guard;");
-  ok(/LEFT ROWS BEHIND \(in_window=2/.test(rw.out) && rw.out.includes("select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';") && !/delete from public\.app_call_days/.test(rw.out), "... and prints a SELECT to review, never a DELETE of an untagged row");
+  eq(rw.result, [AP_CASES.length + 4, 1], "section 18 fails app_call_days rows left in the window after a run that ran its cases (PROBE_RESULTS);");
+  ok(/LEFT ROWS BEHIND \(in_window=2 [^\n]*after a run that ran its cases\)/.test(rw.out) && rw.out.includes("select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';") && !/delete from public\.app_call_days/.test(rw.out), "... and prints a SELECT to review, never a DELETE of an untagged row");
   // pins moved deliberately 10/2 (the record step): the two 18g shape checks run against the applied picture (the not-applied one
   // FAILs by itself now); kept intent: 18g reads the bare array as the envelope and FAILs a count it cannot read
   eq(run18(msgOf(after), { shape: "bare" }).result, [AP_CASES.length + 5, 0], "18g reads a plain terminal's bare-array -o json the same as the agent envelope;");
   eq(run18(msgOf(after), { shape: "error" }).result, [AP_CASES.length + 4, 1], "18g fails a leftover count it cannot read;");
   // kept intent (the no-primary record step's form): an absent-table run passed the guard too (the absent raise comes after it), so
   // app_call_days rows in the window after it are a leftover (FAIL) beside the PROBE_SETUP FAIL
-  eq(run18(setup, { win: 1 }).result, [4, 2], "an absent-table run passed the guard too: rows in the window then are a leftover (FAIL) beside the PROBE_SETUP FAIL;");
+  // moved again 10/20 (the three endings): in this probe the absent raise comes BEFORE the guard (the guard reads the table), and the
+  // in_window count reads 0 while the table is absent (to_regclass) - a non-zero count beside it is the counterfactual, and that run
+  // wrote nothing: listed for review beside the PROBE_SETUP FAIL, never a LEFT ROWS BEHIND
+  const rbw = run18(setup, { win: 1 });
+  eq(rbw.result, [4, 1], "an absent-table run (the raise before the guard and before any write) with one in-window row: 18f FAILs, the row is one this run never wrote - listed for review, not a leftover (" + fails(rbw) + ");");
+  ok(rbw.out.includes("   18g: 1 app_call_days row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (18f), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above)") && rbw.out.includes("      select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';") && !/LEFT ROWS BEHIND|delete from public\.app_call_days/.test(rbw.out), "... with its SELECT, no LEFT ROWS BEHIND and no DELETE");
   eq(run18('{"message": "connection refused"}').result, [5, 1], "section 18 fails a run with no sentinel-terminated PROBE_RESULTS (18a-18d and the leftover check still run);");
   const collide = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2030-12 or on 2020-05-04) - the probe fixtures would collide\\nCONTEXT:  ..."}';
   eq(run18(collide).result, [5, 1], "the probe's collision guard is a FAIL, never 'not applied';");
   const rc = run18(collide, { win: 2 });
   eq(rc.result, [4, 1], "a collision with live rows in the window: 18f FAILs, 18g neither passes nor fails them (the probe wrote nothing) - " + fails(rc));
-  ok(!/LEFT ROWS BEHIND/.test(rc.out) && /they are live rows, not leftovers/.test(rc.out) && !/delete from public\.app_call_days/.test(rc.out), "... and lists them for review only, never as leftovers and never with a DELETE");
+  // pin moved deliberately 10/20 (the three endings): the review line says this run wrote none of them (real rows, or an earlier run's
+  // leak), never 'live rows, not leftovers' (an earlier leak looks the same)
+  ok(!/LEFT ROWS BEHIND/.test(rc.out) && rc.out.includes("   18g: 2 app_call_days row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (18f), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:") && !/live rows, not leftovers/.test(rc.out) && !/delete from public\.app_call_days/.test(rc.out), "... and lists them for review only, never as leftovers and never with a DELETE");
   const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: user_profiles.is_app is absent - sql/migrations/2026-10-02-app-call-days.sql is partly applied\\nCONTEXT:  ..."}';
   eq(run18(part).result, [5, 1], "the partly-applied raise is a FAIL;");
+  // the partly-applied and the profile-rows raises (before any write in the window) with two in-window rows: this run wrote none of them
+  const prof = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: handle_new_auth_user did not create the profile rows\\nCONTEXT:  ..."}';
+  for (const [what, cli] of [["the partly-applied raise", part], ["the profile-rows raise", prof]]) {
+    const rs = run18(cli, { win: 2 });
+    eq(rs.result, [4, 1], what + " with two in-window rows: 18f FAILs, 18g lists them as rows this run never wrote (" + fails(rs) + ");");
+    ok(rs.out.includes("   18g: 2 app_call_days row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (18f), so this run wrote none of them") && !/LEFT ROWS BEHIND|live rows, not leftovers|delete from public\.app_call_days/.test(rs.out), "... " + what + ": review only, no LEFT ROWS BEHIND, no DELETE");
+  }
+  // after a run that reported neither PROBE_RESULTS nor PROBE_SETUP, in-window rows are unknown - never 'live rows', never LEFT ROWS BEHIND
+  for (const [what, cli] of [["no sentinel", '{"message": "connection refused"}'], ["a cut-off PROBE_RESULTS (no ;END)", msgOf(after).replace(";END", "")]]) {
+    const rn = run18(cli, { win: 2 });
+    eq(rn.result, [4, 1], what + " with two in-window rows: 18f FAILs, 18g lists them for review (" + fails(rn) + ");");
+    ok(rn.out.includes("   18g: 2 app_call_days row(s) sit in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (18f), so whether the probe wrote them is unknown; review them before removing anything:") && !/LEFT ROWS BEHIND|stopped at a PROBE_SETUP|live rows, not leftovers|delete from public\.app_call_days/.test(rn.out), "... " + what + ": 'unknown', never 'live rows' or LEFT ROWS BEHIND, no DELETE");
+  }
 }
 
 step("Prompt 29: no apply script in the repo (Faraz 10/1: apply scripts live outside it) - none under scripts/, no tracked SQL / SCHEMA-REVIEW line runs one from scripts/");
@@ -6099,7 +6170,7 @@ ok(["delete from public.shift_trade_requests where detail like 'probe-tradeoffer
 // (a PROBE_SETUP raise and no PROBE_RESULTS: every raise of the setup block comes before its first write in the windows - rows this
 // run never wrote, review only), none (neither - unknown, review only); the audit rows apart (the guard never reads audit_log - review only)
 ok(s21code.includes("  end21=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end21=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end21=setup; fi\n") && !/passed21/.test(s21code), "21b: end21 = results / setup / none from 21a's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
-ok(/LEFT ROWS BEHIND \(in_window=\$win21 [^\n]*after a run that wrote its fixtures\)/.test(s21code) && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown; review them before removing anything:\"") && s21code.includes("echo \"   21b: $aud21 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run (an earlier leak whose days were since removed); review them, never delete audit history blindly:\""), "21b: in-window rows FAIL after results only; after setup they predate the run (real rows, or an earlier run's leak), after none unknown - both listed for review; the audit rows are listed for review on their own");
+ok(/LEFT ROWS BEHIND \(in_window=\$win21 [^\n]*after a run that wrote its fixtures\)/.test(s21code) && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s21code.includes("echo \"   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown; review them before removing anything:\"") && s21code.includes("echo \"   21b: $aud21 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run (an earlier leak whose days were since removed); review them, never delete audit history blindly:\""), "21b: in-window rows FAIL after results only; after setup this run wrote none of them (real rows, or an earlier run's leak), after none unknown - both listed for review; the audit rows are listed for review on their own");
 {
   // every PROBE_SETUP raise of the setup block (the DO block before the first `end $$;`) comes before its first write in the windows
   const setupEnd = yProbe.indexOf("\nend $$;"), firstDay = yProbe.indexOf("insert into public.schedule_days");
@@ -6196,7 +6267,7 @@ eq(Y_LIVE_LINES.slice().sort(), Y_CASES.map((k) => k + "=" + Y_AFTER[k]).sort(),
   const prof = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: handle_new_auth_user did not create the profile rows\\nCONTEXT:  ..."}';
   const rpf = run21(prof, { inWindow: 2 });
   eq(rpf.result, [0, 1], "the profile-rows raise (after the auth.users insert, before any write in the windows) with two in-window rows: 21a FAILs, this run wrote none of them (" + fails(rpf) + ");");
-  ok(rpf.out.includes("the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above)") && !/LEFT ROWS BEHIND|live rows, not leftovers/.test(rpf.out), "... listed for review as rows this run never wrote (never 'live rows' - an earlier leak looks the same)");
+  ok(rpf.out.includes("the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above)") && !/LEFT ROWS BEHIND|live rows, not leftovers/.test(rpf.out), "... listed for review as rows this run never wrote (never 'live rows' - an earlier leak looks the same)");
   const raud = run21(msgOf(Y_AFTER), { audit: 2 });
   eq(raud.result, [N21, 0], "two trade.apply audit rows naming a window day after a clean run: no FAIL - the guard never reads audit_log, they may predate the run (" + fails(raud) + ");");
   ok(raud.out.includes("   21b: 2 trade.apply audit row(s) name a day in the probe windows - the collision guard does not read audit_log, so they may predate this run") && raud.out.includes("      select * from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2031-05-01' and '2031-09-30' or (detail ->> 'day') between '2020-06-01' and '2020-06-30');") && !/LEFT ROWS BEHIND|delete from public\.audit_log/.test(raud.out), "... listed for review with their SELECT, never a DELETE of audit history");
@@ -6317,8 +6388,9 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
 // pin moved deliberately (revision y's record step, D8): section 21 added (the trade offer probe, strict from the start - apply-trade-offer.sh
 // never pinned or ran verify-rls.sh) and the header's "+ trade offers probe (21)"; moved again 10/20 (the east-feed-refresh deploy's record
 // step): 20i graded on every run - SILVIS_EAST_REFRESH_DEPLOYED / EVDEPLOYED20 dropped from the header, --help and section 20; 20i joins
-// the header's anon checks; section 21 unchanged
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "8f592b79d3ecd086379c586e5e8cd99fffc072603c8ee776500fe28d85dcc3fd", "scripts/verify-rls.sh must stay at the east-feed-refresh deploy's record-step bytes until its next deliberate change;");
+// the header's anon checks; section 21 unchanged; moved again 10/20 (section 21's three endings read in 16d and 18g): end16 / end18 replace
+// passed16 / passed18 - only those two leftover blocks and their comments changed, every other byte as at the deploy's record step
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "fb74411598ad81f1d8844c1452f0eabe9de85fdd0fb801bdaaff7be41e979aad", "scripts/verify-rls.sh must stay at the 16d / 18g three-endings bytes until its next deliberate change;");
 ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
 console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");

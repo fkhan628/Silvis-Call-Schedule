@@ -1150,15 +1150,22 @@ if linked; then
   # 16d. leftovers, by the probe's identity only (review 10/1): tagged = rows only the probe writes (its users, its schedule_days /
   # time_off / call_periods, its tagged availability / call_offers fixtures); in_window = s3's availability / call_offers rows in its
   # window (2030-11; availability also over 2020-04-06) - the rows save_no_primary / save_offers write there carry no tag. The
-  # collision guard refuses to start while any in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent
-  # raise before the apply) they can only be the probe's; after a run that stopped at the guard they are live rows it never wrote -
-  # listed for review, never counted as a leftover and never given a DELETE (a probe row and a real entry of s3 look alike).
+  # collision guard refuses to start while any in_window row exists, so after a run that wrote its fixtures (PROBE_RESULTS) they can
+  # only be the probe's - a FAIL. Every PROBE_SETUP raise of the probe (the collision guard, the absent and the profile-rows check)
+  # sits in its setup block before its first write in the window (the availability insert), so after one they are rows this run
+  # never wrote - real rows, or an earlier run's leak (see any tagged rows); no case raises a PROBE_SETUP, so none can sit inside a
+  # PROBE_RESULTS. After a run that reported neither (a setup error or cut-off output) nobody can tell. Those two are listed for
+  # review, never counted as a leftover and never given a DELETE (a probe row and a real entry of s3 look alike).
   LEFTOVER16_SQL="select ((select count(*) from auth.users where email like 'probe-noprimary-%@example.test') + (select count(*) from public.schedule_days where source = 'probe-noprimary') + (select count(*) from public.time_off where note = 'probe-noprimary') + (select count(*) from public.call_periods where label like 'probe np %') + (select count(*) from public.availability where note = 'probe-noprimary' or source = 'probe-noprimary') + (select count(*) from public.call_offers where note = 'probe-noprimary'))::int as tagged, ((select count(*) from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date)) + (select count(*) from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30'))::int as in_window"
   r=$(q "$LEFTOVER16_SQL")
   rflat16=$(echo "$r" | tr -d ' \n')
   tagged16=$(echo "$rflat16" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
   win16=$(echo "$rflat16" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
-  passed16=""; echo "$out" | grep -qE 'PROBE_RESULTS .*;END|PROBE_SETUP: save_no_primary is absent' && passed16=1
+  # how 16c ended: results = the sentinel (the probe wrote its fixtures); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first write in the window); none = neither (a setup error or cut-off output - nobody can tell)
+  end16=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end16=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end16=setup; fi
   if [ -z "$tagged16" ] || [ -z "$win16" ]; then
     bad "no-primary probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
   elif [ "$tagged16" = "0" ] && [ "$win16" = "0" ]; then
@@ -1174,10 +1181,12 @@ if linked; then
       echo "      delete from auth.users where email like 'probe-noprimary-%@example.test';   -- user_profiles rows cascade"
     fi
     if [ "$win16" != "0" ]; then
-      if [ "$passed16" = "1" ]; then
-        bad "no-primary probe LEFT ROWS BEHIND (in_window=$win16 - s3's availability / call_offers rows in the probe window after a run that passed its collision guard): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real entry of s3 look alike), then report:"
+      if [ "$end16" = "results" ]; then
+        bad "no-primary probe LEFT ROWS BEHIND (in_window=$win16 - s3's availability / call_offers rows in the probe window after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real entry of s3 look alike), then report:"
+      elif [ "$end16" = "setup" ]; then
+        echo "   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (16c), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
       else
-        echo "   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the probe stopped before writing anything (16c), so an untagged one is a live row, not a leftover; review them:"
+        echo "   16d: s3 has $win16 availability / call_offers row(s) in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (16c), so whether the probe wrote them is unknown; review them before removing anything:"
       fi
       echo "      select * from public.availability where person_id = 's3' and ((start_date <= '2030-11-30' and end_date >= '2030-11-01') or '2020-04-06' between start_date and end_date);"
       echo "      select * from public.call_offers where person_id = 's3' and day between '2030-11-01' and '2030-11-30';"
@@ -1352,16 +1361,23 @@ if linked; then
   # 18g. leftovers, by the probe's identity only: tagged = its auth users (profiles and their app_call_days rows cascade) and its
   # appdays.save audit rows (summaries 'probe app ...'); in_window = app_call_days rows in 2030-12 or on 2020-05-04 (read through
   # query_to_xml, guarded by to_regclass: before the apply - or after a rollback - the table does not exist). The collision guard
-  # refuses to start while an in_window row exists, so after a run that got past it (PROBE_RESULTS, or the absent raise - a FAIL
-  # itself since the record step) such rows can only be the probe's; after a run that stopped at the guard (or at the
-  # partly-applied raise) they are live rows it never wrote - listed for review, never counted as a leftover and never given a
-  # DELETE (a probe row and a real APP day look alike).
+  # refuses to start while an in_window row exists, so after a run that ran its cases (PROBE_RESULTS) such rows can only be the
+  # probe's - a FAIL. Every PROBE_SETUP raise of the probe (the absent and the partly-applied checks, then the collision guard - it
+  # reads the table - and the profile-rows check) sits in its setup block, which writes no app_call_days row (case A1 writes the
+  # first), so after one they are rows this run never wrote - real rows, or an earlier run's leak (see any tagged rows); no case
+  # raises a PROBE_SETUP, so none can sit inside a PROBE_RESULTS. After a run that reported neither (a setup error or cut-off output)
+  # nobody can tell. Those two are listed for review, never counted as a leftover and never given a DELETE (a probe row and a real
+  # APP day look alike).
   LEFTOVER18_SQL="select ((select count(*) from auth.users where email like 'probe-appdays-%@example.test') + (select count(*) from public.audit_log where action = 'appdays.save' and detail->>'summary' like 'probe app %'))::int as tagged, (case when to_regclass('public.app_call_days') is null then 0 else (xpath('/row/n/text()', query_to_xml('select count(*) as n from public.app_call_days where day between ''2030-12-01'' and ''2030-12-31'' or day = ''2020-05-04''', false, true, '')))[1]::text::int end) as in_window"
   r=$(q "$LEFTOVER18_SQL")
   rflat18=$(echo "$r" | tr -d ' \n')
   tagged18=$(echo "$rflat18" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
   win18=$(echo "$rflat18" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
-  passed18=""; echo "$out" | grep -qE 'PROBE_RESULTS .*;END|PROBE_SETUP: app_call_days is absent' && passed18=1
+  # how 18f ended: results = the sentinel (the probe ran its cases); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first write in the window); none = neither (a setup error or cut-off output - nobody can tell)
+  end18=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end18=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end18=setup; fi
   if [ -z "$tagged18" ] || [ -z "$win18" ]; then
     bad "APP days probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
   elif [ "$tagged18" = "0" ] && [ "$win18" = "0" ]; then
@@ -1373,10 +1389,12 @@ if linked; then
       echo "      delete from auth.users where email like 'probe-appdays-%@example.test';   -- profiles and their app_call_days rows cascade"
     fi
     if [ "$win18" != "0" ]; then
-      if [ "$passed18" = "1" ]; then
-        bad "APP days probe LEFT ROWS BEHIND (in_window=$win18 - app_call_days rows in the probe window after a run that passed its collision guard): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real APP day look alike), then report:"
+      if [ "$end18" = "results" ]; then
+        bad "APP days probe LEFT ROWS BEHIND (in_window=$win18 - app_call_days rows in the probe window after a run that ran its cases): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real APP day look alike), then report:"
+      elif [ "$end18" = "setup" ]; then
+        echo "   18g: $win18 app_call_days row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (18f), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
       else
-        echo "   18g: $win18 app_call_days row(s) sit in the probe window - the probe stopped before writing anything (18f), so they are live rows, not leftovers; review them:"
+        echo "   18g: $win18 app_call_days row(s) sit in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (18f), so whether the probe wrote them is unknown; review them before removing anything:"
       fi
       echo "      select * from public.app_call_days where day between '2030-12-01' and '2030-12-31' or day = '2020-05-04';"
     fi
@@ -1897,7 +1915,7 @@ if linked; then
       if [ "$end21" = "results" ]; then
         bad "trade offer probe LEFT ROWS BEHIND (in_window=$win21 - schedule_days / call_offers / availability rows in the probe windows after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real one look alike), then report:"
       elif [ "$end21" = "setup" ]; then
-        echo "   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them - they predate it (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+        echo "   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the probe stopped at a PROBE_SETUP raise before writing any row in its windows (21a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
       else
         echo "   21b: $win21 schedule_days / call_offers / availability row(s) sit in the probe windows - the run reported neither PROBE_RESULTS nor PROBE_SETUP (21a), so whether the probe wrote them is unknown; review them before removing anything:"
       fi
