@@ -4534,3 +4534,314 @@ sha256 pin; the probe's and the pre-check's headers; guide 4.3's bullet; `script
 with them.
 
 observed: (the record step fills this - nothing in this section has run against the live project).
+
+## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa): east_vacation_reset_stale re-created (Faraz 10/20; `sql/migrations/2026-10-21-east-reset-backstop.sql`)
+
+**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-reset-backstop.sh`.**
+Revision aa (u stays reserved for the weekend pair claim; z went to the push follow-ups, prepared in parallel - this revision's
+records follow z's, and the two are independent on the database). The report drafted the change as revision z
+(`REPORT-RESET-BACKSTOP-2026-10-20.md`, private folder; its offline drafts `revision-z-drafts/`). Nothing in the repo applies it: the
+apply script lives outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the observed line
+at the end of this section.
+
+**Why.** `east_vacation_reset_stale(p_from)` (revision x, applied 2026-10-19 22:53:18Z) deletes every review of an East person
+ending on or after `p_from` whose exact range is no longer a merged cached range, and trusts the cache completely: when the cache
+holds none of his ranges, every review of his in scope goes as `removed`. Two callers run it with `p_from` = the main window's Monday
+(Central today - 28): the in-app *Refresh from Davenport* (the scheduler's token, builds since 2026.10.18b) and, since 2026-10-20, the
+daily unattended `east-feed-refresh` (the service role, 10:30 UTC). Their silent-empty guard (critic A7, `eastVacationReadGuard`)
+catches the realistic failure - an RLS-blocked read answers 200 + [] while the cache still holds his ranges - but it uses the cache as
+its witness, so it cannot see a cache that already lost his ranges: a write to `east_feed` outside the two guarded refreshes (the
+Table / SQL editor, a scheduler REST session - `east_feed_write_sched` allows it), a future regression of `planVacationCache` /
+`keepCachedVacations`, or a hand call of the reset. Then a blocked or empty read passes the guard and the reset deletes every review
+of his, silently, in a run that reads `ok` true; the ranges come back `unreviewed`, which counts as away, so a range reviewed *home*
+blocks Khan in the generator and counts him off in the vacation guard until it is re-reviewed. Recoverable only by hand from the
+`eastvac.review` audit rows. The reviews are a second, independent witness - a review exists only because a range of his was once
+cached - and the backstop reads the gap between the two. Faraz 10/20: "finish the backlog", with every recommended decision.
+
+**The decisions** (the report's section 6, all as recommended). D1 build it. D2 the test, per East person: reviews ending on or after
+`p_from` and no merged cached range of his (`silvis_east_ranges`) ending on or after `p_from`, no upper bound. D3 a kept person gets
+nothing deleted or returned and one `eastvac.reset.kept` audit row (the return type and both callers unchanged - not an EV003
+refusal, not a marker row). D4 the audit row only, no `raise notice`. D5 the row as drafted: action `eastvac.reset.kept`, keys
+`summary`, `person_id`, `from`, `kept`, `reviews` `[{start, end, decision}]`, written on every call while the state lasts. D6 the
+callers do not name it now (it needs an `east-feed-refresh` redeploy and a client ship; revisit if it ever fires). D7 the 9/23 client
+fallback loop unchanged. D8 the way out after a true removal is by hand. D9 after Faraz's pending plain `verify-rls.sh` run. D10 the
+file `sql/migrations/2026-10-21-east-reset-backstop.sql` - the letter aa, not z (taken by the push follow-ups), dated a day of its own,
+so no `-- supersedes:` line.
+
+**The objects** (the migration verbatim below; schema.sql mirrors it):
+
+| object | before | after |
+|---|---|---|
+| `east_vacation_reset_stale(p_from date)` | revision x (2026-10-14) | revision x's body byte for byte plus three insertions: (1) the declarations `v_held text[]` and `k record`; (2) after the advisory lock, ONE reading of the East people the cache holds a merged range of ending on or after `p_from`, then the kept loop; (3) `and w.person_id = any (v_held)` in x's delete loop. Signature, `returns table (person_id, start_date, end_date, decision, reason)`, security definer, volatile, `search_path = public, pg_temp`, the grants, `EV001` / `EV002` and the lock `east_vacation_reviews:reset` unchanged; the comment replaced |
+| every table, column, policy, trigger, grant, row, other function and the anon surface | - | **unchanged** |
+| PostgREST schema cache | - | `notify pgrst, 'reload schema';` (a no-op for the callers) |
+
+**Design notes.** The refusals come first: `EV001` and `EV002` are raised before the cache or the reviews are read - pinned in
+`test/schema.test.js` on the body's text; no probe reading can see the order (B2 sees that each refused call raises and leaves no
+kept row). ONE reading
+decides who is kept: `v_held` is read once and both loops test it, so no person is both kept and reset (under READ COMMITTED each
+statement takes its own snapshot, and the two refreshes can overlap). The person test is x's reading, `silvis_east_ranges()` - a
+forecast row or a malformed entry never counts, and ranges are merged before they are tested. Every column inside the new statements
+is qualified (the RETURNS TABLE columns are PL/pgSQL variables - the 42702 trap of the revision y review). Only deleted rows are
+returned, so `derivedVacDb.resetStale` (`config.js`) and the edge function's `reviewResets` need no change; a kept person shows in
+neither caller, and the audit row is the only signal (D6).
+
+**What it changes** (at the reset: the cache / his reviews ending on or after `p_from`):
+
+| state | revision x today | revision aa |
+|---|---|---|
+| a range of his ending on or after `p_from` is cached (the normal case; the 2026-10-20 10:30 UTC run left this state) | stale reviews reset (`changed` / `removed`) | the same rows, order, returns and audit rows (the existing probe reads 56 / 56 unchanged; probes B8 and B15 - a range reviewed *home* holds him too) |
+| none cached, reviews exist (a blocked or emptied read after the cache lost his ranges, or a hand call) | every review deleted, nearly all as `removed`, one `eastvac.review` row each; when the ranges come back they read `unreviewed` - the decisions are lost | nothing deleted or returned; one `eastvac.reset.kept` row; when the ranges come back with the same dates, the decisions are back (probe B11) |
+| none cached, and Davenport truly holds none of his (**the cost**) | reviews deleted (correct) | reviews stay until any range of his ending on or after `p_from` is cached again; then the normal reset clears every review whose dates differ |
+| none cached, no review in scope | nothing | nothing - no audit row |
+| a refused caller | `EV001` / `EV002` | the same, before anything is read |
+
+The cost, in full: a truly removed range's review stays until a range of his shows again - harmless on its own (a review with no
+range derives nothing: `silvis_east_ranges` left-joins reviews onto cached ranges; the guard and the display ignore it; the
+scheduler's East list shows cached ranges only). A range re-added with exactly the same dates gets its old decision back - *away*
+reads like *unreviewed* to everyone but the scheduler; *home* is the risky direction (no vacation, not counted by the guard, nobody
+decided) - which already happens today when a range is removed and re-added between two refreshes; aa widens that window to "while
+the cache holds no range of his ending on or after `p_from`". This mirrors the trade the guard already makes (`empty-while-cached`
+keeps the cached ranges on the same terms). A last range shortened to end before `p_from` keeps the old review instead of resetting
+it as `changed` (harmless, as above). One audit row per call while the state lasts - at most one a day from the cron, one per in-app
+press (the Activity log shows the newest 150 rows). An early `p_from` weakens the test (the cache keeps past ranges): a hand call
+passes the main window's Monday, which the pre-check prints.
+
+**Who it binds.**
+
+| caller | revision x today | revision aa |
+|---|---|---|
+| anon | 42501 (no EXECUTE) | unchanged |
+| a surgeon (Khan too), the coordinator, a viewer / follower / APP | `EV001` | unchanged - before any read, no kept row |
+| the scheduler: the in-app Refresh (builds since 2026.10.18b: `runEastReviewResets` -> `derivedVacDb.resetStale`) | resets | resets, or keeps; the kept row carries his roster id (else his auth uid) and his display name, like `logAudit` |
+| the service role: `east-feed-refresh` (daily 10:30 UTC) | resets | resets, or keeps; the kept row's actor `cron`, name `east-feed-refresh (cron)` |
+| the SQL editor / linked CLI (no signed-in user) | resets | resets, or keeps; actor `cron`, name `no signed-in user (SQL)` |
+| the 9/23 client loop: the current client only while the function is missing (after a rollback of x); an installed build older than 2026.10.18b on every refresh, with no guard and no call of the function | client-side resets | unchanged - aa never sees it (D7) |
+| verify-rls section 20 (the revision x probe, R1-R14 among its 56 cases) | as its header | unchanged: its fixtures hold a range of E ending after every `p_from` it passes (offline 56 / 56 after aa) |
+
+The kept row is the scheduler's to read (`audit_read`); rows from the cron or a no-user session carry actor `cron`, nobody's id;
+the Activity log shows it by its summary and no reader filters on it; verify-rls 20g's `eastvac.review` leftover count is unaffected.
+
+**Blast radius.** One function body replaced, with the same signature, return type, grants, security and lock; no table, column,
+policy, trigger, row or anon surface; PostgREST reloaded. While every East person with reviews in scope holds a cached range ending
+on or after `p_from` (the state the 2026-10-20 run left - an expectation the pre-check's row 5 prints), the function deletes, returns
+and audits exactly what revision x does; otherwise that person's reviews stay, with one audit row. Unchanged: both callers (client
+2026.10.20b, `east-feed-refresh` v1) and the cron job; the A7 guard; `silvis_east_ranges`, `silvis_derived_vacations`, the vacation
+guard and the short days; the display, `?public=1` and everything that leaves the app. The repo change is SQL, tests and docs only -
+not runtime inputs, so no CI build, no version bump, the live app untouched. x's migration stays byte for byte (its body is
+sha256-pinned with its trailer). Residuals (recorded, not fixed): a partial loss (some of his ranges gone, one ending on or after
+`p_from` still cached) is not covered - nothing covers it today either; the held reading and the delete loop's own `cur` reading are
+two statements with two snapshots, so an unguarded `east_feed` write committing between them can still reset a held person's reviews
+as `removed` (the advisory lock serializes resets, not cache writes; it needs an unguarded writer in that instant); an installed build
+older than 2026.10.18b has no guard and its own 9/23 loop deletes the reviews by REST without calling the function (D7); an early
+`p_from` on a hand call weakens the test; two East people are proven offline only (the live roster has one, and the probes never
+write the blob).
+
+**The migration** (`sql/migrations/2026-10-21-east-reset-backstop.sql`, every statement after its header):
+
+```sql
+create or replace function public.east_vacation_reset_stale(p_from date) returns table (person_id text, start_date date, end_date date, decision text, reason text)
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me       uuid := auth.uid();
+  v_role   text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_actor  text;
+  v_name   text;
+  v_held   text[];
+  k        record;
+  x        record;
+  n        int;
+begin
+  if me is null then
+    if v_role in ('anon', 'authenticated') then
+      raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+    end if;
+    v_actor := 'cron';
+    v_name := case when v_role = 'service_role' then 'east-feed-refresh (cron)' else 'no signed-in user (SQL)' end;
+  elsif not public.silvis_is_sched() then
+    raise exception 'EAST_RESET_NOT_ALLOWED: only the scheduler or the server refresh resets East vacation reviews (nothing was deleted)' using errcode = 'EV001';
+  else
+    v_actor := coalesce(public.silvis_person_id(), me::text);
+    v_name := coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                       (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                         where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                       'Unknown');
+  end if;
+  if p_from is null then
+    raise exception 'EAST_RESET_BAD_FROM: give the first day whose reviews may be reset (nothing was deleted)' using errcode = 'EV002';
+  end if;
+  -- one reset at a time (the in-app refresh and the server refresh may meet)
+  perform pg_advisory_xact_lock(hashtext('east_vacation_reviews:reset'));
+  -- revision aa (the backstop behind the callers' silent-empty guard, critic A7): the East people the cache holds a merged range of
+  -- ending on or after p_from, read ONCE - both loops below decide by it, so a person is either kept or reset, never both
+  select coalesce(array_agg(distinct r.person_id), '{}'::text[]) into v_held
+    from public.silvis_east_ranges() r
+   where r.end_date >= p_from;
+  -- a person with reviews ending on or after p_from but NO such range keeps every one of them: a blocked or emptied read looks
+  -- exactly like "every range removed" - nothing of his is deleted or returned, and ONE eastvac.reset.kept audit row says so
+  for k in
+    select q.pid, q.pname, count(*)::int as kept,
+           jsonb_agg(jsonb_build_object('start', w."start", 'end', w."end", 'decision', w.decision) order by w."start", w."end") as reviews
+      from public.east_vacation_reviews w
+      join (select p.person_id as pid, p.name as pname, p.ord from public.silvis_east_people() p) q on q.pid = w.person_id
+     where w."end" >= p_from
+       and w.person_id <> all (v_held)
+     group by q.pid, q.pname, q.ord
+     order by q.ord
+  loop
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (v_actor, v_name, 'eastvac.reset.kept',
+            jsonb_build_object('summary', 'East vacation reviews of ' || k.pname || ' kept: the cache holds no East vacation of his ending on or after ' || to_char(p_from, 'YYYY-MM-DD') || ', so his ' || k.kept || ' review(s) ending then were not reset (a blocked or emptied Davenport read looks the same)',
+                               'person_id', k.pid, 'from', p_from, 'kept', k.kept, 'reviews', k.reviews));
+  end loop;
+  for x in
+    with cur as materialized (
+      select r.person_id as pid, r.start_date as s, r.end_date as e from public.silvis_east_ranges() r
+    ),
+    ppl as materialized (
+      select p.person_id as pid, p.name as pname, p.ord from public.silvis_east_people() p
+    )
+    select w.id as rid, w.person_id as pid, w."start" as s, w."end" as e, w.decision as dec, q.pname,
+           case when exists (select 1 from cur c where c.pid = w.person_id and c.s <= w."end" and c.e >= w."start")
+                then 'changed' else 'removed' end as why
+      from public.east_vacation_reviews w
+      join ppl q on q.pid = w.person_id
+     where w."end" >= p_from
+       and w.person_id = any (v_held)
+       and not exists (select 1 from cur c where c.pid = w.person_id and c.s = w."start" and c.e = w."end")
+     order by q.ord, w."start", w."end"
+  loop
+    delete from public.east_vacation_reviews d where d.id = x.rid;
+    get diagnostics n = row_count;
+    continue when n = 0;
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (v_actor, v_name, 'eastvac.review',
+            jsonb_build_object('summary', 'East vacation ' || to_char(x.s, 'YYYY-MM-DD') || '..' || to_char(x.e, 'YYYY-MM-DD') || ' ' || x.pname || ': reset (' || x.why || ')',
+                               'person_id', x.pid, 'start', x.s, 'end', x.e, 'decision', 'reset', 'reason', x.why, 'removed', 1, 'was', x.dec));
+    person_id := x.pid;
+    start_date := x.s;
+    end_date := x.e;
+    decision := x.dec;
+    reason := x.why;
+    return next;
+  end loop;
+end $$;
+revoke all on function public.east_vacation_reset_stale(date) from public;
+revoke all on function public.east_vacation_reset_stale(date) from anon;
+grant execute on function public.east_vacation_reset_stale(date) to authenticated;
+grant execute on function public.east_vacation_reset_stale(date) to service_role;
+comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x) with revision aa''s backstop: the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them; but an East person the cache holds NO merged range of ending on or after p_from keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit row - a blocked or emptied read looks the same (defence in depth behind the callers'' silent-empty guard, critic A7). The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon.';
+
+notify pgrst, 'reload schema';
+```
+
+**The pre-check** - `sql/probes/east-reset-backstop-precheck.sql` (read-only: one SELECT of `ord, section, role, detail` - catalog
+facts, counts and dates only). Rows 1-4 are the gate; rows 5-6 are facts and never stop the run:
+
+```text
+before: 1 objects  reset_fn=yes ranges_fn=yes people_fn=yes backstop=no
+        2 body     definer=t volatile=v path=yes body_md5=ecd1e0de45cc01e127617fb943e7d99e
+after:  1 objects  reset_fn=yes ranges_fn=yes people_fn=yes backstop=yes
+        2 body     definer=t volatile=v path=yes body_md5=cf8a2882f00f3d81f6c3ca111a1ca1ae
+both:   3 grants   public=f anon=f authenticated=t service_role=t result=TABLE(person_id text, start_date date, end_date date, decision text, reason text)
+        4 owner    owner_match=yes reviews_force=f audit_force=f
+facts:  5 backstop p_from=<the Monday of Central today - 28> east_people=<n> held=<n> would_keep=<people>/<reviews> would_reset=<reviews>
+        6 audit    resets_since_x=<n> by_cron=<n> kept_rows=<n> refreshes_since_x=<n>
+```
+
+The md5 is of the reset's `prosrc`: x's is derived from `sql/migrations/2026-10-14-east-vacations.sql` by the slicing that reproduces
+the guard's live-observed md5, aa's from this file; PGlite's `md5(prosrc)` reads both the same. Any other md5 before the apply is a
+STOP (the live body is not x's). Row 5 expected live: `east_people=1 held=1 would_keep=0/0` - an expectation from the 2026-10-20 run,
+never a stop; `would_keep` above 0 means revision x would delete those reviews at the next reset unless that run's read brings his
+ranges back - report it at once.
+
+**The probe** - `sql/probes/east-reset-backstop-probe.sql` (rolled back: every observation into a temp table, the last statement
+raises `PROBE_RESULTS ...;END`). Its setup raises, before any fixture: the collision guard (`PROBE_SETUP: live rows already sit in
+2031-12-29 .. 2032-06-30 ...` - an `east_feed` week in the window, a review ending in 2032 or later, a cached East vacation entry
+ending on or after 2031-12-29, or an `eastvac.review` / `eastvac.reset.kept` audit row of the window); `PROBE_SETUP:
+east_vacation_reset_stale is absent - revision x ... is not applied`; BEFORE this file `PROBE_SETUP: east_vacation_reset_stale has
+no backstop - sql/migrations/2026-10-21-east-reset-backstop.sql is not applied` (the body holds no `eastvac.reset.kept`). Identity:
+one throwaway admin `probe-eastreset32-<uuid>@example.test` ("probe admin"), reviews `decided_by` `probe-eastreset32`, `east_feed`
+rows with `data.probe` `eastreset32`, audit rows whose `start` / `from` lie in 2032-01 .. 2032-06. E is the first East person of the
+live roster, read and never written; `p_from` 2032-01-19 (a Monday); E's reviews away 01-12..01-13 (never in scope), away
+02-02..02-03, home 02-09..02-10, away 03-01..03-02; no cached range of E ending on or after 2031-12-29 at the start (the collision guard
+refuses otherwise). B8-B10 and B15 each insert one cached week, read the result and raise `PROBE_UNDO` inside their own block (the
+variables survive the rollback). A summary's live name reads as the letter E, and B4's `pid` reads E when the kept row's `person_id`
+is E's roster id (`other` otherwise - the live id is never printed).
+
+| case | what | AFTER |
+|---|---|---|
+| B1 | postgres: security, volatility, search_path, result, EXECUTE, the backstop in the body | `reset=definer/volatile path=yes result=TABLE(person_id text, start_date date, end_date date, decision text, reason text) exec=authenticated,service_role public=no backstop=yes` |
+| B2 | an anon role claim with no user, then `reset(null)` - each refused call raises `EV001` / `EV002` and leaves no kept row (the order is pinned in `test/schema.test.js`) | `anon=EV001 null=EV002 kept_rows=0` |
+| B3 | service_role: `reset('2032-01-19')`, no cached range of E ending on or after 01-19 | `n=0 reviews=E 01-12..01-13 away,E 02-02..02-03 away,E 02-09..02-10 home,E 03-01..03-02 away` |
+| B4 | its audit rows | `kept_rows=1 review_rows=0 actor=cron name=east-feed-refresh (cron) kept=3 from=2032-01-19 reviews=02-02..02-03/away,02-09..02-10/home,03-01..03-02/away keys=from,kept,person_id,reviews,summary pid=E sum=East vacation reviews of E kept: the cache holds no East vacation of his ending on or after 2032-01-19, so his 3 review(s) ending then were not reset (a blocked or emptied Davenport read looks the same)` |
+| B5 | the admin (= the scheduler): `reset('2032-01-19')` | `n=0 kept_rows=1 actor=self name=probe admin` |
+| B6 | no signed-in user: `reset('2032-01-19')` | `n=0 kept_rows=1 actor=cron name=no signed-in user (SQL)` |
+| B7 | no signed-in user: `reset('2032-03-03')` - no review of his ends that late | `n=0 kept_rows=0` |
+| B8 | (undone) a cached range of E ending ON `p_from` (01-15..01-19) - the normal reset | `n=3 02-02..02-03/away/removed,02-09..02-10/home/removed,03-01..03-02/away/removed kept_rows=0 review_rows=3` |
+| B9 | (undone) a cached range ending the day before (01-14..01-18) - kept | `n=0 kept_rows=1` |
+| B10 | (undone) only a forecast row carries a range of E (02-02..02-03) - kept | `n=0 kept_rows=1` |
+| B11 | service_role: a range of E shows again with exactly 02-02..02-03 - the normal reset; the kept decision is back | `n=2 02-09..02-10/home/removed,03-01..03-02/away/removed kept_rows=0 state=02-02..02-03/away` |
+| B12 | its audit rows (x's shape, unchanged) | `review_rows=2 actor=cron name=east-feed-refresh (cron) keys=decision,end,person_id,reason,removed,start,summary,was was=home,away` |
+| B13 | the fixture reviews left | `kept=E 01-12..01-13 away,E 02-02..02-03 away` |
+| B14 | no `time_off` row, no live `east_feed` row and no other audit row written | `time_off=same east_feed=same other_audit=0` |
+| B15 | (undone) a cached range of E ending after `p_from` whose exact review is *home* (02-09..02-10) - held, the normal reset | `n=2 02-02..02-03/away/removed,03-01..03-02/away/removed kept_rows=0 review_rows=2` |
+
+The leftover count must read 0 after every run (the apply script's step 6; after the record step, verify-rls section 23):
+
+```sql
+select ((select count(*) from auth.users where email like 'probe-eastreset32-%@example.test') + (select count(*) from public.east_feed where data->>'probe' = 'eastreset32') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastreset32') + (select count(*) from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30'))::int as leftover
+```
+
+**Offline** (PGlite, 2026-10-20, scratch - main's `sql/schema.sql` at `47f5245` (revisions x and y as live) with the usual Supabase
+stubs and INVENTED East data, not live data: three FAK ranges, one ending 2028-04-24, and two reviews). Before: the gate read the
+"before" rows (x's md5), the revision x probe 56 / 56, this probe `PROBE_SETUP: east_vacation_reset_stale has no backstop`. After the
+file: the gate read the "after" rows (aa's md5 - `md5(prosrc)` equals the file slice's), this probe 15 / 15, the revision x probe 56
+/ 56 with the same case=value pairs as before, leftover 0 and nothing persisted (the users, profiles, audit rows, reviews,
+`east_feed` and `time_off` read the same before and after both probes). The file re-runs (15 / 15 again). Rollback (x's file re-run):
+x's md5 back, this probe PROBE_SETUP, the revision x probe 56 / 56 with the same pairs. The tree's `sql/schema.sql` alone (no
+migration run) reads the "after" gate and both probes green. Revision x's body with the backstop marker added as a comment, so the
+probe passes its PROBE_SETUP check (B1 then reads green only through that marker), reads B3-B6, B8-B13 and B15 red (B3 `n=3 ...
+removed`, B11 `state=02-02..02-03/unreviewed`, B15 `n=0` - B3 already deleted them). Eleven one-change mutants each turned a
+named case red: `>` for `>=` (B8); the held set from the raw cache (B10); the delete loop ignoring it (B3); the kept loop ignoring
+it (B8, B11); no kept row (B4); the kept row as `eastvac.review` (B4); its reviews without the decision (B4); the kept loop counting
+reviews ending before `p_from` (B4, B7); the held set from `silvis_derived_vacations()` or with `r.state <> 'home'` - a range
+reviewed *home* dropped from it (B15, the only red); the kept row's `person_id` not the kept person (B4 `pid=other`). On the
+earlier 14-case probe (B4 without `pid`, no B15) the last three left every case green - why B4 reads `pid` and B15 exists.
+Two East people (offline only): the held one's stale review reset, the other kept both reviews with exactly one kept row (`kept` 2).
+An empty cache with no reviews: 0 rows and 0 audit rows. Re-run 2026-10-20 on `25ad475`'s `sql/schema.sql` (revision z merged and
+mirrored): the same readings, and z's probe 46 / 46 with the same case=value pairs before and after this file and after its rollback.
+
+**The order** (Faraz's apply script `apply-east-reset-backstop.sh`, kept outside the repo; `--dry-run` first - steps 0-3 only): 0. the
+repo root, the sha256 pins of the graded files (this file, the pre-check, the probe, `sql/probes/east-vacations-probe.sql`,
+`sql/migrations/2026-10-14-east-vacations.sql`) and the Silvis CLI link; 1. agent mode and the pre-check (rows 1-4 the "before"
+gate - `backstop=yes` means already applied, another md5 means the live body is not x's: STOP; rows 5-6 printed as facts); 2. the
+regression probe `sql/probes/east-vacations-probe.sql` BEFORE (its 56 case=value pairs kept); 3. probe BEFORE (`PROBE_SETUP:
+east_vacation_reset_stale has no backstop`; any other PROBE_SETUP stops); 4. APPLY in capitals, then this file (on a reported
+failure the gate is read once: `backstop=no` with x's md5 = not applied, STOP; `backstop=yes` with aa's md5 = applied after the
+commit, go on; anything else UNKNOWN, STOP); 5. the gate after; 6. probe AFTER, every case graded against its header line, then its
+leftover count 0; 7. the regression probe AFTER (the same 56 pairs); then the PASTE THIS BACK block. Like revision y's script it runs
+no `scripts/verify-rls.sh` - the record step adds section 23 (22 goes to revision z's record step, which comes first). When (D9):
+after Faraz's pending plain `bash scripts/verify-rls.sh` run (sections 20 and 21 the baseline), outside 10:25-10:40 UTC (the cron
+job), and not while Refresh is pressed - the probes hold the reset's advisory lock for under a second.
+
+**Rolling back** (only on Claude Code's and Faraz's decision; nothing is lost - this file writes no review; `eastvac.reset.kept` rows
+written meanwhile stay as history, naming the people and reviews aa kept):
+
+```text
+supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-14-east-vacations.sql   (revision x - idempotent)
+```
+
+Re-running x's applied file re-creates x's reset body, re-creates the four other functions and the vacation guard with the bodies
+they hold live (so they do not change), re-runs the grants and reloads PostgREST, as one implicit transaction.
+
+**The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed line (pre-check rows 5-6 before and after
+included); the migration's ONE trailer line (applied <UTC>, the body's sha256, the script, HEAD and pins) - the body stays frozen;
+`sql/schema.sql` revision aa ("applied <UTC> after the probe") and its line in the derived-functions block; the probe's and the
+pre-check's "As run" headers; `scripts/verify-rls.sh` section 23 (this probe graded by name against its header, plus its leftover
+count; strict, so a PROBE_SETUP FAILs - its sha256 pin moves); revision x's section gains an "As run" pointer after its sentence on
+the caller's guard; the guide's 4.3 / 25.1 / 25.4 / 25.6 and the rules doc's Khan reset bullet and section 8 item 26 (4); optionally
+CLAUDE.md's East feed sentence; the test pins with them. No change to `edge-functions/`, `index-source.html`, `config.js` or
+`east-feed.js`.
+
+observed: (the record step fills this - nothing in this section has run against the live project).

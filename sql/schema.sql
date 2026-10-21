@@ -166,6 +166,14 @@
 -- notification_preferences gains shift_reminders_push (boolean not null default true: the day-before shift reminder's phone switch,
 -- independent of shift_reminders_email; prefs_own unchanged). No table, policy, trigger, existing function, row or anon surface changes.
 -- Letter u stays taken by the weekend pair claim; y was the last applied before it (2026-10-20 00:41:25Z; independent - either apply order).
+-- Revision 2026-10-21 aa (East reset backstop, sql/migrations/2026-10-21-east-reset-backstop.sql, report-first, NOT yet applied): Faraz
+-- 10/20 ("finish the backlog" - the recommended decisions of the private report that drafted it as z) - east_vacation_reset_stale(p_from)
+-- is re-created with a backstop behind the callers' silent-empty guard (critic A7): an East person with reviews ending on or after
+-- p_from but no merged cached range ending then keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit
+-- row; everyone else is reset exactly as before. The body is revision x's plus three insertions (two declarations; the held reading
+-- and the kept loop after the advisory lock; one predicate in the delete loop); the signature, the result, security definer, the
+-- grants, EV001 / EV002 and the lock are unchanged. No table, column, policy, trigger, row or anon surface changes. Letter u stays
+-- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's.
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -529,6 +537,9 @@ create index if not exists east_vacation_reviews_person_idx on public.east_vacat
 -- silvis_vacation_short_days(p_from, p_to) - the ONE SQL definition of the days under the vacation minimum by the guard's reading (time_off
 -- rows plus the derived rows; the service role only - the server refresh's east.refresh audit and sql/probes/vacation-short-days.sql read it;
 -- critic A12). Kept after east_feed, the reviews and time_off: a sql body is validated when it is created.
+-- Revision aa (2026-10-21, sql/migrations/2026-10-21-east-reset-backstop.sql - report-first, NOT yet applied) re-creates the reset below
+-- with its backstop: an East person whose reviews end on or after p_from but whom the cache holds no merged range of ending then keeps
+-- them all, with one eastvac.reset.kept audit row (behind the callers' silent-empty guard, critic A7); everyone else is reset as before.
 create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)
 language sql stable security invoker set search_path = public, pg_temp as $$
   select e.r ->> 'id', upper(e.r ->> 'code'), coalesce(nullif(btrim(e.r ->> 'name'), ''), e.r ->> 'id'), e.ord
@@ -621,6 +632,8 @@ declare
   v_role   text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
   v_actor  text;
   v_name   text;
+  v_held   text[];
+  k        record;
   x        record;
   n        int;
 begin
@@ -644,6 +657,28 @@ begin
   end if;
   -- one reset at a time (the in-app refresh and the server refresh may meet)
   perform pg_advisory_xact_lock(hashtext('east_vacation_reviews:reset'));
+  -- revision aa (the backstop behind the callers' silent-empty guard, critic A7): the East people the cache holds a merged range of
+  -- ending on or after p_from, read ONCE - both loops below decide by it, so a person is either kept or reset, never both
+  select coalesce(array_agg(distinct r.person_id), '{}'::text[]) into v_held
+    from public.silvis_east_ranges() r
+   where r.end_date >= p_from;
+  -- a person with reviews ending on or after p_from but NO such range keeps every one of them: a blocked or emptied read looks
+  -- exactly like "every range removed" - nothing of his is deleted or returned, and ONE eastvac.reset.kept audit row says so
+  for k in
+    select q.pid, q.pname, count(*)::int as kept,
+           jsonb_agg(jsonb_build_object('start', w."start", 'end', w."end", 'decision', w.decision) order by w."start", w."end") as reviews
+      from public.east_vacation_reviews w
+      join (select p.person_id as pid, p.name as pname, p.ord from public.silvis_east_people() p) q on q.pid = w.person_id
+     where w."end" >= p_from
+       and w.person_id <> all (v_held)
+     group by q.pid, q.pname, q.ord
+     order by q.ord
+  loop
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (v_actor, v_name, 'eastvac.reset.kept',
+            jsonb_build_object('summary', 'East vacation reviews of ' || k.pname || ' kept: the cache holds no East vacation of his ending on or after ' || to_char(p_from, 'YYYY-MM-DD') || ', so his ' || k.kept || ' review(s) ending then were not reset (a blocked or emptied Davenport read looks the same)',
+                               'person_id', k.pid, 'from', p_from, 'kept', k.kept, 'reviews', k.reviews));
+  end loop;
   for x in
     with cur as materialized (
       select r.person_id as pid, r.start_date as s, r.end_date as e from public.silvis_east_ranges() r
@@ -657,6 +692,7 @@ begin
       from public.east_vacation_reviews w
       join ppl q on q.pid = w.person_id
      where w."end" >= p_from
+       and w.person_id = any (v_held)
        and not exists (select 1 from cur c where c.pid = w.person_id and c.s = w."start" and c.e = w."end")
      order by q.ord, w."start", w."end"
   loop
@@ -679,7 +715,7 @@ revoke all on function public.east_vacation_reset_stale(date) from public;
 revoke all on function public.east_vacation_reset_stale(date) from anon;
 grant execute on function public.east_vacation_reset_stale(date) to authenticated;
 grant execute on function public.east_vacation_reset_stale(date) to service_role;
-comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x): the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them. The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon. The caller skips it when its Davenport read failed or came back empty while the cache holds ranges.';
+comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x) with revision aa''s backstop: the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them; but an East person the cache holds NO merged range of ending on or after p_from keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit row - a blocked or emptied read looks the same (defence in depth behind the callers'' silent-empty guard, critic A7). The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon.';
 
 create or replace function public.silvis_vacation_short_days(p_from date, p_to date) returns table (day date, around int, active int, minimum int, off_ids text[], derived_only_ids text[])
 language sql stable security invoker set search_path = public, pg_temp as $$
