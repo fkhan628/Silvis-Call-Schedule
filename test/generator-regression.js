@@ -65,8 +65,18 @@
 // The WF November fixture case (test/fixtures/water-fill-2026-10-07-to-2027-01-03.json,
 // two bestOf-200 runs, ~2 s) lives in its OWN chain step, test/water-fill.test.js: the 9/23
 // review measured this harness at 9.9-11.1 s loaded with it inside (fix stage, 9/23).
-// If a CI runner lands above ~8 s quiet, drop R4 to bestOf 1 (BEST_OF_DEFAULT
-// [6, 5, 2, 1]) before anything else; never raise the budget to hide it.
+// The levers, by their measured cost (10/20, REPORT-CI-TIMING-2026-10-20.md, a history document kept in the
+// private folder; 145 CI runs): since the 10/18 rest-rule merge the slowest hosted runners (R3 at 19-21.4 ms per
+// candidate, 15 of 26 runs) read 8.98-9.95 s, 46 ms under the budget at worst. (1) The 10/18 rest rule's on / off
+// block cost 1.9-2.1 s of that (80 bestOf-2 runs). Since 10/20 its rule-on Jan-Mar half IS the main loop's R3 runs
+// (A1: same ctx, range, seed and bestOf 2; one seed re-run there and pinned deep-equal; only while BEST_OF[2] === 2
+// - a SILVIS_GEN_BEST_OF soak other than 2 runs them again), ~0.8 s, and it compares 10 seeds instead of 20 (A2), ~0.65 s more:
+// about -1.4 s there, so the slowest run seen would read ~8.5 s (a local A/B on 10/20, R3 at ~15 ms per candidate:
+// the file 6.80-7.32 s -> 5.78-5.96 s over five alternating runs each, the block 1.37-1.46 s -> 0.44-0.50 s over
+// three). What is left of the block (~0.6 s on those runners: the pinned R3 seed re-run, 10 Nov-Dec runs with the rule, 10 without, 10
+// Jan-Mar without) is the next lever - its own chain step, as water-fill and painting got. (2) R4 at bestOf 1
+// (BEST_OF_DEFAULT [6, 5, 2, 1]) buys only ~0.15-0.2 s (its 25 runs: 0.37-0.42 s there, 0.28-0.31 s locally).
+// The summary line names the CPU (os.cpus()). Never raise the budget to hide a slow runner.
 // ~77 % of a candidate is inside rules.weekendUnitPatterns
 // and eligibility, so nothing on the generator side can buy the 4x that
 // bestOf 25 everywhere would need - review findings rules-2 / harness-1 /
@@ -81,6 +91,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const os = require("os");                  // the summary line names the CPU (10/20)
 const R = require("../rules.js");          // buildContext only
 const SA = require("./seed-adapter.js");
 const GEN = require("../generator.js");
@@ -1306,6 +1317,15 @@ const r2Results = [];
 const r4Results = []; // Prompt 12 V
 const r2Json = new Set();
 const R4_SEED = (s) => s % 2 === 0; // R4 on the even seeds only (budget; see the header)
+// 10/20 (the CI timing report, A1 + A2; see the header): the 10/18 rest rule's on / off comparison (before the timings)
+// runs REST_SEEDS seeds per range (20 until 10/20). Its rule-on Jan-Mar call is this loop's R3 call - same ctx, same
+// range, same { seed, bestOf: 2 } - so for seeds 1..REST_SEEDS the loop keeps the output and its restated short rests
+// and the block runs none of them again (one, REST_PIN, is re-run there and must be deep-equal). Only while
+// BEST_OF[2] === 2: a SILVIS_GEN_BEST_OF soak other than 2 (or another R3 bestOf) runs the block's own rule-on runs as before.
+const REST_SEEDS = 10;
+const REST_PIN = 1;
+const REST_REUSE = BEST_OF[2] === 2 && REST_SEEDS <= SEEDS;
+const r3RestOn = {}; // seed -> { out, rests } (10/20 A1)
 for (let s = 1; s <= SEEDS; s++) {
   RANGES.forEach((range, ri) => {
     if (range.name.indexOf("R4") === 0 && !R4_SEED(s)) return;
@@ -1314,7 +1334,8 @@ for (let s = 1; s <= SEEDS; s++) {
     const el = Date.now() - t;
     timing[range.name].ms += el; timing[range.name].runs++; timing[range.name].candidates += out.diagnostics.candidatesTried;
     checkRun(out, range, s, range.name.indexOf("R4") === 0);
-    checkRest(out, range, ACTON); // 10/18: the engine's short-rest entries = the restated short rests
+    const rests = checkRest(out, range, ACTON); // 10/18: the engine's short-rest entries = the restated short rests
+    if (ri === 2 && REST_REUSE && s <= REST_SEEDS) r3RestOn[s] = { out, rests }; // 10/20 A1: the rest block's rule-on Jan-Mar run
     if (ri === 1) { r2Results.push({ seed: s, score: out.diagnostics.score.total, out }); r2Json.add(JSON.stringify(out.schedule)); }
     if (ri === 3) r4Results.push({ seed: s, out }); // Prompt 12 V: the R4 runs are re-read at the end (standing East days)
   });
@@ -2930,22 +2951,32 @@ const OSL_WHOLE = { n: 0 };
 
 // 10/18 (Faraz, Acton's rest preference): Generate avoids leaving him a single day off between call stretches - the same seeds
 // with the rule on (the seed) and with his key removed: his short rests drop; the rule is soft, so it never opens a slot the
-// run without it filled; the soft term reaches the preview (checkRest on every run with the rule).
+// run without it filled; the soft term reaches the preview (checkRest on every run with the rule). 10 seeds since 10/20 (A2;
+// 20 until then), and the Jan-Mar runs with the rule are the main loop's R3 runs (A1; see REST_SEEDS above the main loop).
 {
   CUR.range = "10/18 rest rule on / off"; CUR.seed = "-"; CUR.day = "-";
   const srOff = JSON.parse(JSON.stringify(input.surgeonRules)); delete srOff[ACTON].restBetweenStretches;
   const ctxOff = R.buildContext(Object.assign({}, input, { surgeonRules: srOff }));
   if (ctxOff.warnings.length) fail("buildContext warnings (rest rule off): " + JSON.stringify(ctxOff.warnings));
   eq([ctx.per[ACTON].restBetween, ctxOff.per[ACTON].restBetween], [{ minDaysOff: 2, weight: REST_W }, null], "the two contexts differ by Acton's rule alone");
-  const RS = 20, stats = {};
+  const RS = REST_SEEDS, stats = {};
   [RANGES[1], RANGES[2]].forEach((range) => {
     const st = stats[range.name] = { on: 0, off: 0, openOn: 0, openOff: 0, runs: 0 };
+    // 10/20 A1: the rule-on Jan-Mar runs are the main loop's R3 runs (checkRest restated them there); the pin re-runs one
+    // here, after every fixture in between, and needs the same bytes - schedule and diagnostics
+    const reuse = REST_REUSE && range === RANGES[2];
+    if (reuse) {
+      CUR.range = range.name + " (rest rule on, the main loop's run)"; CUR.seed = REST_PIN;
+      eq(Object.keys(r3RestOn).map(Number), Array.from({ length: RS }, (x, i) => i + 1), "10/20 A1: the main loop kept its R3 runs for seeds 1.." + RS);
+      const fresh = GEN.generate(ctx, range.start, range.end, { seed: REST_PIN, bestOf: 2 });
+      ok(JSON.stringify(fresh) === JSON.stringify(r3RestOn[REST_PIN].out), "10/20 A1: the main loop's R3 run of seed " + REST_PIN + " must be deep-equal to a fresh rule-on call here (schedule + diagnostics) - reusing it is unsafe otherwise");
+    }
     for (let s = 1; s <= RS; s++) {
       CUR.range = range.name + " (rest rule on / off)"; CUR.seed = s;
-      const on = GEN.generate(ctx, range.start, range.end, { seed: s, bestOf: 2 });
+      const on = reuse ? r3RestOn[s].out : GEN.generate(ctx, range.start, range.end, { seed: s, bestOf: 2 });
       const off = GEN.generate(ctxOff, range.start, range.end, { seed: s, bestOf: 2 });
       const inRange = (x) => (x.first >= range.start && x.first <= range.end) || (x.last >= range.start && x.last <= range.end);
-      st.on += checkRest(on, range, ACTON).filter(inRange).length;
+      st.on += (reuse ? r3RestOn[s].rests : checkRest(on, range, ACTON)).filter(inRange).length;
       st.off += shortRests(makeView(off), ACTON, addDays(range.start, -30), addDays(range.end, 30), 2).filter(inRange).length;
       ok(!off.diagnostics.softPenalties.some((p) => /^short-rest/.test(p.reason)), "without the key no run carries a short-rest entry");
       st.openOn += on.diagnostics.uncovered.length; st.openOff += off.diagnostics.uncovered.length; st.runs++;
@@ -2954,15 +2985,18 @@ const OSL_WHOLE = { n: 0 };
     ok(st.openOn <= st.openOff, range.name + ": the soft rule opens no slot the runs without it filled (" + st.openOn + " open with it vs " + st.openOff + " without)");
   });
   ok(REST_SEEN.rests > 0 && REST_SEEN.entries > 0, "the short-rest restatement was exercised (" + JSON.stringify(REST_SEEN) + ")");
-  console.log("10/18 rest rule (Acton, minDaysOff 2): short rests with / without the rule over " + RS + " seeds at bestOf 2 - " + Object.keys(stats).map((k) => k + " " + stats[k].on + " / " + stats[k].off + " (open slots " + stats[k].openOn + " / " + stats[k].openOff + ")").join("; ") + "; restated on " + REST_SEEN.runs + " runs: " + REST_SEEN.rests + " short rest(s), " + REST_SEEN.entries + " preview entr(ies)");
+  console.log("10/18 rest rule (Acton, minDaysOff 2): short rests with / without the rule over " + RS + " seeds at bestOf 2 - " + Object.keys(stats).map((k) => k + " " + stats[k].on + " / " + stats[k].off + " (open slots " + stats[k].openOn + " / " + stats[k].openOff + ")").join("; ") + "; restated on " + REST_SEEN.runs + " runs: " + REST_SEEN.rests + " short rest(s), " + REST_SEEN.entries + " preview entr(ies); " + (REST_REUSE ? "the Jan-Mar runs with the rule are the main loop's R3 runs (seed " + REST_PIN + " re-run: deep-equal)" : "the Jan-Mar runs with the rule ran here (R3 at bestOf " + BEST_OF[2] + ", no reuse)"));
   CUR.range = "-"; CUR.seed = "-";
 }
 
 const total = Date.now() - T_FILE;
+// 10/20 (the CI timing report): the logs never named the runner's CPU - the summary line does (read after the clock stops)
+const CPUS = os.cpus() || [];
+const CPU_LINE = "os.cpus(): " + CPUS.length + " x " + ((CPUS[0] && String(CPUS[0].model || "").replace(/\s+/g, " ").trim()) || "(no model reported)");
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
 console.log("Prompt 32 overSoftLimit (every checked run): " + OVER_SEEN.n + " day(s) listed, " + OVER_SEEN.outside + " of them outside the range; " + OVER_SEEN.trimmed + " over day(s) of the touched months left out (the run gave the holder no primary that month)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 32 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 32 fixture runs + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ") - " + CPU_LINE);
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

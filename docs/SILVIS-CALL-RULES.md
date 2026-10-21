@@ -962,7 +962,8 @@ slots (the two previews are in the private history folder, `preview-2027-01-04-t
 Engine: `rules.js` (`buildContext` → `P.restBetween`, the `short-rest` term in `eligibility()`); proof: `test/rules.test.js`
 (one day off penalized, two fine, a run fine, his split fine, both roles, a holiday unit, edge-only attribution, malformed
 values), `test/generator-regression.js` (the short rests restated independently on every run and equal to the preview's
-entries; on 20 seeds his short rests drop from 27 to 4 in Nov – Dec and from 182 to 16 in Jan – Mar, no slot opened) and
+entries; on 10 seeds his short rests drop from 15 to 3 in Nov – Dec and from 102 to 8 in Jan – Mar, no slot opened; the 20
+seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16) and
 `test/data-layer.test.js` (the words, My rules, the Setup summary read as rules.js reads the key). Readings taken: item 27.
 
 **Still open:**
