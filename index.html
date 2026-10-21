@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-4tv41dm1rL32ZOSxEK9IbY+XwvxD70c4i1qhgZmJf4c=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-Aj7WJJEvd8xeGu/52eM1Y19Ptxv0cqlG2x1zbvllijY=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-T+MNrNBKQ0GWWdDIk/o5wde1C/3keuDXSBteqgKF8YQ=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-ZMyvFI6fLKwJRh2x7epiT0BKOzSgLhA88zvyQD1ckck=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -186,7 +186,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.20a";
+    var APP_VERSION = "2026.10.20b";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -803,6 +803,8 @@ function CallSchedule() {
   const [pushNeedsTap, setPushNeedsTap] = useState(false);
   const [pushCols, setPushCols] = useState("unknown");
   const pushColsRef = useRef("unknown");
+  const [pushRemCol, setPushRemCol] = useState("unknown");
+  const pushRemColRef = useRef("unknown");
   const pushKeyRef = useRef(null);
   const pushArmedRef = useRef("");
   const pushLinkDoneRef = useRef(false);
@@ -6404,7 +6406,8 @@ function CallSchedule() {
         } = await notifPrefsDb.save({
           personId
         }, notifPrefsRef.current[personId] || {}, {
-          push: pushColsRef.current === "ok"
+          push: pushColsRef.current === "ok",
+          reminderPush: pushRemColRef.current === "ok"
         });
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, {
@@ -6433,7 +6436,8 @@ function CallSchedule() {
         } = await notifPrefsDb.save({
           profileId: pid
         }, followerPrefRef.current, {
-          push: pushColsRef.current === "ok"
+          push: pushColsRef.current === "ok",
+          reminderPush: pushRemColRef.current === "ok"
         });
         if (error) throw new Error(`follower notif pref save failed: ${String(error).slice(0, 200)}`);
       } catch (e) {
@@ -7229,6 +7233,8 @@ function CallSchedule() {
   useEffect(() => {
     pushColsRef.current = "unknown";
     setPushCols("unknown");
+    pushRemColRef.current = "unknown";
+    setPushRemCol("unknown");
   }, [pushUid]);
   useEffect(() => {
     if (view !== "settings" || isPublicMode || !pushUid || !pushInfo) return;
@@ -7256,6 +7262,12 @@ function CallSchedule() {
       notifPrefsDb.pushColumns().then(c => {
         pushColsRef.current = c;
         setPushCols(c);
+      });
+    }
+    if (pushRemColRef.current !== "ok" && pushRemColRef.current !== "unavailable") {
+      notifPrefsDb.reminderPushColumn().then(c => {
+        pushRemColRef.current = c;
+        setPushRemCol(c);
       });
     }
   }, [pushCardOpen, pushUid, refreshPushState]);
@@ -14366,14 +14378,25 @@ function CallSchedule() {
         flexDirection: "column",
         gap: 6
       }
-    }, mySurgeon ? pushRows([["schedule_updates_push", "Schedule published, open shifts, changes affecting me"], ["trade_updates_push", "Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, u => saveNotifPref(mySurgeon, u)) : pushRows([["schedule_updates_push", "Schedule published, open shifts, shifts taken"], ["trade_updates_push", "Trade proposed / accepted / declined"]], followerPref, followerPrefsEditable, saveFollowerPref)), React.createElement("p", {
+    }, mySurgeon ? pushRows([["schedule_updates_push", "Schedule published, open shifts, changes affecting me"], ["trade_updates_push", "Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, u => saveNotifPref(mySurgeon, u)) : pushRows([["schedule_updates_push", "Schedule published, open shifts, shifts taken"], ["trade_updates_push", "Trade proposed / accepted / declined"]], followerPref, followerPrefsEditable, saveFollowerPref), pushRemCol === "ok" && (mySurgeon ? pushRows([["shift_reminders_push", "Reminder the day before my call"]], notifPrefs[mySurgeon], true, u => saveNotifPref(mySurgeon, u)) : pushRows([["shift_reminders_push", "Reminder the day before their call"]], followerPref, followerPrefsEditable, saveFollowerPref))), pushRemCol === "failed" && React.createElement("p", {
+      "data-testid": "push-reminder-unavailable",
+      "data-state": "failed",
+      style: {
+        fontSize: 11,
+        color: dkSubtext,
+        margin: "6px 0 0",
+        lineHeight: 1.5
+      }
+    }, "Couldn't check the reminder switch - reload the app to try again."), React.createElement("p", {
+      "data-testid": "push-prefs-note",
+      "data-state": pushRemCol,
       style: {
         fontSize: 10,
         color: dkSubtext,
         margin: "6px 0 0",
         lineHeight: 1.5
       }
-    }, "These cover every device you turned on. Reminders stay e-mail only for now.")) : React.createElement("p", {
+    }, pushRemCol === "ok" ? "These cover every device you turned on; reminders arrive at the hour set under Email." : "These cover every device you turned on. Reminders stay e-mail only for now.")) : React.createElement("p", {
       "data-testid": "push-prefs-none",
       style: {
         fontSize: 11,
