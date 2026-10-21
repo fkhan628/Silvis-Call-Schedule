@@ -5806,7 +5806,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // surgeon - valid before AND after revision o: person_id is the key before, UNIQUE after; profile_id for a follower)
       assert.strictEqual((cfg.match(/db\.upsert\("notification_preferences", req\.row, \{ onConflict: req\.onConflict \}\)/g) || []).length, 1, "notifPrefsDb.save must upsert with { onConflict: req.onConflict }");
       // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
-      assert.ok(src.includes('notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok" })'), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
+      // pin moved deliberately (revision z, 10/20): ... and { reminderPush: <shift_reminders_push exists - its own probe> }
+      assert.ok(src.includes('notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok", reminderPush: pushRemColRef.current === "ok" })'), "saveNotifPref (a surgeon's row) must save through notifPrefsDb.save({ personId }, ...)");
       assert.ok(!/db\.upsert\("notification_preferences"/.test(src) && !/db\.upsert\("notification_preferences", (row|req\.row)\)/.test(cfg), "no prefs upsert without on_conflict is left (and none outside notifPrefsDb)");
     });
     // ---- Prompt 20 R2 (Faraz 9/25): the follower's own prefs row - saved and read by profile_id ----
@@ -8424,7 +8425,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const sf = src.slice(s0, src.indexOf("\n  };\n", s0));
       const gate = sf.indexOf('if (followerPrefStateRef.current !== "ok" || !pid) return;');
       // pin moved deliberately (Prompt 30): the save also passes { push: <the two *_push columns exist> }
-      assert.ok(gate > 0 && gate < sf.indexOf('notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok" })'), "no write unless the read answered ok (never before revision o, never over an unknown row)");
+      // pin moved deliberately (revision z, 10/20): ... and { reminderPush: <shift_reminders_push exists> }
+      assert.ok(gate > 0 && gate < sf.indexOf('notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok", reminderPush: pushRemColRef.current === "ok" })'), "no write unless the read answered ok (never before revision o, never over an unknown row)");
       assert.ok(/notifPrefsDb\.loadFollower\(pid\)/.test(src), "the follower's row is read by profile_id");
     });
   }
@@ -12660,7 +12662,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const probe = "notification_preferences?select=" + MIG_COLS.join(",") + "&limit=1";
       assert.ok(CFG.includes("/rest/v1/" + probe + "`"), "config.js pushColumns probes both columns");
       assert.ok(VR.includes('"$URL/rest/v1/' + probe + '"'), "verify-rls 19e probes both columns");
-      assert.deepStrictEqual(Array.from(new Set(Array.from(SRC.matchAll(/\["([a-z_]+_push)","/g)).map(m => m[1]))).sort(), MIG_COLS.slice().sort(), "the Settings switches (surgeon and follower rows) name exactly the two columns");
+      // pin moved deliberately (revision z, 10/20): the card's third switch names revision z's shift_reminders_push (its own probe and
+      // save key - the [Z] cross pins below hold it to that migration); the two live rows still name exactly the revision w columns
+      assert.deepStrictEqual(Array.from(new Set(Array.from(SRC.matchAll(/\["([a-z_]+_push)","/g)).map(m => m[1]))).filter(c => c !== "shift_reminders_push").sort(), MIG_COLS.slice().sort(), "the Settings switches' first two rows (surgeon and follower) name exactly the two columns");
       assert.ok(/\/trade_updates_push\/\.test\(url\.searchParams\.get\("select"\)/.test(SMK), "the smoke answers the column probe locally");
       assert.ok(EDGE.includes('rest("notification_preferences?select=*")'), "the edge reads every prefs column (select=*) - the push switches arrive with the e-mail flags");
     });
@@ -12803,6 +12807,82 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       assert.ok(n >= 200, "covered " + n + " payloads");
       assert.ok(SW.includes("Array.from(p.body).length <= 300"), "sw.js counts the body in characters, as the edge cuts it");
+    });
+  })();
+
+  /* ---------------- [Z] Revision z (Faraz 10/20, the push follow-ups report): integration cross pins ---------------- */
+  // The database half (revision z's migration - replace_push_subscription and notification_preferences.shift_reminders_push) and
+  // the app half were built apart; these hold them to each other, as [P30] does for revision w: the wrapper's parameter names = what
+  // config.js posts, in order; the hash it deletes by = the device flag's (_hash: SHA-256 of the endpoint, the first 8 bytes as
+  // lower-case hex) and the same 16-hex shape on both sides; the column = the client's own probe, its save key, the card's third
+  // switch, daily-reminder's REMINDER_PUSH_PREF and the smoke mock's matcher, default on (D10). The migration is found by its
+  // contents (the file that creates the wrapper); until it is on the branch its side reads "compared when present".
+  console.log("\n[Z] revision z - cross pins (the migration when present, config.js, helpers.js, the card, daily-reminder, the smoke mock)");
+  await (async () => {
+    const rd = (...p) => fs.readFileSync(path.join(ROOT, ...p), "utf8").replace(/\r\n/g, "\n");
+    const SRC = rd("index-source.html"), CFG = rd("config.js"), SMK = rd("test", "ui", "smoke.mjs"), DR = rd("edge-functions", "daily-reminder", "index.ts");
+    const migDir = path.join(ROOT, "sql", "migrations");
+    const zName = fs.readdirSync(migDir).filter((f) => /\.sql$/.test(f)).find((f) => /create or replace function public\.replace_push_subscription\(/.test(fs.readFileSync(path.join(migDir, f), "utf8")));
+    const ZMIG = zName ? rd("sql", "migrations", zName).split("\n").filter((l) => !/^\s*--/.test(l)).join("\n") : null;
+    const tag = ZMIG ? " (migration " + zName + ")" : " (the migration is not on this branch yet - its side compared when present)";
+    const PARAMS = ["p_endpoint", "p_p256dh", "p_auth", "p_label", "p_replaces"];
+    const acheckZ = async (name, fn) => { try { await fn(); pass++; console.log("ok   " + name); } catch (e) { fail++; console.log("FAIL " + name + "\n     -> " + (e && e.message ? e.message : e)); } };
+    check("[Z] the wrapper: config.js posts exactly p_endpoint, p_p256dh, p_auth, p_label, p_replaces, in that order, from ONE call site (pushDb.saveReplacing) through _rpc (a POST body - never a URL); index-source.html never names it; the migration's signature and grants match" + tag, () => {
+      const calls = Array.from(CFG.matchAll(/pushDb\._rpc\("replace_push_subscription", \{ ([^}]*) \}\)/g));
+      assert.strictEqual(calls.length, 1, "config.js calls replace_push_subscription once (pushDb.saveReplacing)");
+      assert.deepStrictEqual(calls[0][1].match(/\bp_[a-z0-9]+(?=:)/g), PARAMS, "the parameter names, in order");
+      assert.strictEqual(CFG.split("/rest/v1/rpc/replace_push_subscription").length - 1, 0, "the RPC path is built in _rpc only");
+      assert.ok(!SRC.includes("replace_push_subscription"), "index-source.html never names the wrapper (config.js pushDb is the only caller)");
+      if (ZMIG) {
+        const m = /create or replace function public\.replace_push_subscription\(([^)]*)\) returns jsonb\nlanguage plpgsql volatile security definer set search_path = public, pg_temp as \$\$/.exec(ZMIG);
+        assert.ok(m, "the migration defines the wrapper as a volatile definer with search_path pinned");
+        assert.deepStrictEqual(m[1].split(",").map((s) => s.trim().split(/\s+/)[0]), PARAMS, "the migration's parameter names, in the client's order");
+        assert.ok(m[1].split(",").every((s) => /\btext\b/.test(s)), "five text parameters");
+        assert.ok(/revoke all on function public\.replace_push_subscription\(text, text, text, text, text\) from public;/.test(ZMIG) && /revoke all on function public\.replace_push_subscription\(text, text, text, text, text\) from anon;/.test(ZMIG) && /grant execute on function public\.replace_push_subscription\(text, text, text, text, text\) to authenticated;/.test(ZMIG), "EXECUTE for authenticated only (revoked from PUBLIC and anon)");
+        assert.ok(/public\.save_push_subscription\(p_endpoint, p_p256dh, p_auth, p_label\)/.test(ZMIG), "it wraps the unchanged save - every refusal (PUSH_CODES), the cap and the audit row stay save's");
+      }
+    });
+    await acheckZ("[Z] the hash: config.js's _hash (the flag's ep) = SHA-256 of the endpoint's UTF-8, the first 8 bytes as lower-case hex = the SQL's left(encode(sha256(convert_to(.., 'UTF8')), 'hex'), 16); saveReplacing's shape test = the SQL's '^[0-9a-f]{16}$'" + tag, async () => {
+      const pd = vm.runInContext("pushDevice", sandbox);
+      const env0 = pd.env;
+      sandbox.TextEncoder = TextEncoder;
+      pd.env = () => Object.assign(env0(), { subtle: require("crypto").webcrypto.subtle });
+      try {
+        for (const ep of ["https://fcm.googleapis.com/fcm/send/abc", "https://web.push.apple.com/QOp-x_y", "https://updates.push.services.mozilla.com/wpush/v2/" + "z".repeat(300), ""]) {
+          const want = require("crypto").createHash("sha256").update(ep, "utf8").digest("hex").slice(0, 16);
+          assert.strictEqual(await pd._hash(ep), want, "the client's hash of " + ep.slice(0, 40));
+          assert.ok(/^[0-9a-f]{16}$/.test(want));
+        }
+      } finally { pd.env = env0; }
+      assert.ok(CFG.includes('if (typeof replaces !== "string" || !/^[0-9a-f]{16}$/.test(replaces)) return pushDb.save(endpoint, p256dh, auth, label);'), "the client's shape test");
+      if (ZMIG) {
+        assert.ok(ZMIG.includes("p_replaces ~ '^[0-9a-f]{16}$'"), "the SQL's shape test is the same");
+        assert.ok(ZMIG.includes("left(encode(sha256(convert_to(p_endpoint, 'UTF8')), 'hex'), 16)") && ZMIG.includes("left(encode(sha256(convert_to(s.endpoint, 'UTF8')), 'hex'), 16) = p_replaces"), "the SQL hashes the same way (the new endpoint's skipped, the old row's matched)");
+        assert.ok(/where s\.profile_id = me and /.test(ZMIG), "it deletes only the caller's own rows");
+      }
+    });
+    check("[Z] the column shift_reminders_push on every side - the client's own probe (never widening pushColumns), notifPrefSaveRequest's reminderPush key, the card's third switch (surgeon and follower), daily-reminder's REMINDER_PUSH_PREF and its pushTargets call, the smoke's matcher; the migration adds it boolean not null default true (D10: a missing row or key is on)" + tag, () => {
+      const COL = "shift_reminders_push";
+      assert.ok(CFG.includes("/rest/v1/notification_preferences?select=" + COL + "&limit=1`"), "config.js reminderPushColumn probes it alone");
+      assert.ok(CFG.includes("/rest/v1/notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1`"), "pushColumns still probes exactly the two revision w columns (D15)");
+      const row = H.notifPrefSaveRequest({ personId: "s1" }, { [COL]: false }, "2026-10-20T00:00:00Z", { push: true, reminderPush: true }).row;
+      assert.deepStrictEqual(Object.keys(row).filter((k) => /_push$/.test(k)).sort(), ["schedule_updates_push", COL, "trade_updates_push"].sort(), "with reminderPush the save names it");
+      assert.strictEqual(row[COL], false);
+      assert.ok(!(COL in H.notifPrefSaveRequest({ personId: "s1" }, {}, "t", { push: true }).row), "without reminderPush it never names it (the pre-z body)");
+      assert.deepStrictEqual(Array.from(SRC.matchAll(/\[\["shift_reminders_push","([^"]+)"\]\]/g)).map((m) => m[1]), ["Reminder the day before my call", "Reminder the day before their call"], "the card's third switch, a surgeon's and a follower's");
+      assert.ok(DR.includes('const REMINDER_PUSH_PREF = "' + COL + '";') && DR.includes("const t = pushTargets(audience, fols, REMINDER_PUSH_PREF);"), "daily-reminder pushes on that switch alone");
+      assert.ok(/\/_push\/\.test\(url\.searchParams\.get\("select"\)/.test(SMK) || /shift_reminders_push/.test(SMK), "the smoke answers the probe locally");
+      if (ZMIG) assert.ok(ZMIG.includes("alter table public.notification_preferences add column if not exists " + COL + " boolean not null default true;"), "the migration's column: boolean not null default true");
+    });
+    check("[Z] the answer the client reads: the wrapper answers save's { ok, action, devices, audit } plus replaced - config.js reads only result.action / devices / saved (no new key), and both smoke mocks answer exactly those five keys", () => {
+      const push = CFG.slice(CFG.indexOf("const pushDb = {"), CFG.indexOf("\n// ---- Call pay"));
+      assert.deepStrictEqual(Array.from(new Set(Array.from(push.matchAll(/\.result\.([a-z_]+)/g)).map((m) => m[1]))).sort(), ["action", "devices", "saved"], "no new key read");
+      // the shared route's answer names the path on its line; the push step's store answers on the line after its 404 branch
+      const lines = SMK.split("\n").filter((l) => /\{ ok: true, action: [^}]*\breplaced: /.test(l));
+      assert.ok(lines.length >= 2 && lines.some((l) => l.includes('replace_push_subscription")')), "the smoke mock answers the wrapper (shared route + the push step), got " + lines.length);
+      assert.ok(SMK.includes('if (url.pathname === "/rest/v1/rpc/replace_push_subscription") {'), "the push step's route serves the wrapper");
+      lines.forEach((l) => { const o = /\{ (ok: true,[^}]*)\}/.exec(l)[1]; assert.deepStrictEqual(Array.from(o.matchAll(/\b([a-z_]+): /g)).map((m) => m[1]), ["ok", "action", "devices", "audit", "replaced"], "the smoke mock's answer keys: " + l.trim().slice(0, 120)); });
+      if (ZMIG) assert.ok(/\|\| jsonb_build_object\('replaced', /.test(ZMIG), "the migration's answer: save's object plus replaced");
     });
   })();
 

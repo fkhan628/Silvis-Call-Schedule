@@ -6107,6 +6107,9 @@ function followedIdsOf(p, rosterIds) {
 // Prompt 30 (phone push): opts.push === true - the two push columns exist (config.js notifPrefsDb.pushColumns() read "ok") -
 // adds trade_updates_push / schedule_updates_push (cur's value !== false, the e-mail flags' rule). Without it the row is
 // exactly the pre-Prompt-30 one (no *_push key): before the migration a body naming a missing column is refused (PGRST204).
+// Revision z (the day-before reminder as push, Faraz 10/20): opts.reminderPush === true - the column exists (config.js
+// notifPrefsDb.reminderPushColumn() read "ok", a probe of its own) - adds shift_reminders_push (the same rule). It is
+// independent of opts.push: before revision z the body never names it, so a save stays exactly today's.
 function notifPrefSaveRequest(owner, cur, nowIso, opts) {
   const o = owner && typeof owner === "object" ? owner : {};
   const personId = typeof o.personId === "string" && o.personId ? o.personId : "";
@@ -6124,6 +6127,7 @@ function notifPrefSaveRequest(owner, cur, nowIso, opts) {
     flags.trade_updates_push = c.trade_updates_push !== false;
     flags.schedule_updates_push = c.schedule_updates_push !== false;
   }
+  if (opts && opts.reminderPush === true) flags.shift_reminders_push = c.shift_reminders_push !== false;
   return personId
     ? { onConflict: "person_id", row: { person_id: personId, ...flags } }
     : { onConflict: "profile_id", row: { profile_id: profileId, ...flags } };

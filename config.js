@@ -408,6 +408,10 @@ const db = {
 // the pre-Prompt-30 one. pushColumns(): GET ?select=trade_updates_push,schedule_updates_push&limit=1 with the user's JWT ->
 // "ok" (PostgREST knows both columns; RLS may answer [] - a 200 is the proof), "unavailable" (400 42703: the migration is
 // not applied - the phone switches stay hidden and no save names them), "failed" (anything else). Never throws.
+// Revision z (the day-before reminder as push, Faraz 10/20 D15): reminderPushColumn() is a probe of its OWN - GET
+// ?select=shift_reminders_push&limit=1 -> "ok" / "unavailable" (400 42703 naming that column: revision z not applied, or
+// rolled back) / "failed". It never widens pushColumns(), so a missing new column hides only the third phone switch, never
+// the two live ones; save(owner, cur, { reminderPush: true }) names shift_reminders_push only after it read "ok".
 const notifPrefsDb = {
   async save(owner, cur, opts) {
     const req = notifPrefSaveRequest(owner, cur, new Date().toISOString(), opts);
@@ -420,6 +424,16 @@ const notifPrefsDb = {
       if (res.ok) return "ok";
       const body = await res.text().catch(() => "");
       return res.status === 400 && /42703|does not exist/.test(body) && /_push/.test(body) ? "unavailable" : "failed";
+    } catch (e) {
+      return "failed";
+    }
+  },
+  async reminderPushColumn() {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/notification_preferences?select=shift_reminders_push&limit=1`, { headers: dbAuthHeaders() });
+      if (res.ok) return "ok";
+      const body = await res.text().catch(() => "");
+      return res.status === 400 && /42703|does not exist/.test(body) && /shift_reminders_push/.test(body) ? "unavailable" : "failed";
     } catch (e) {
       return "failed";
     }
@@ -444,11 +458,15 @@ const notifPrefsDb = {
 // ---- Phone push (Prompt 30, Faraz 10/2: "Davenport's look, Silvis's own push"; sql/migrations/2026-10-03-push-notifications.sql) ----
 // Web Push with VAPID through Silvis's OWN worker (sw.js, scope = the app folder) - no third-party push SDK (Davenport's push
 // app and its worker at the origin root stay untouched; two of them on one origin conflict). The ONLY client file that names
-// the three push RPCs and the edge function's two push routes:
+// the four push RPCs (revision z added replace_push_subscription) and the edge function's two push routes:
 //   pushDb.publicKey()   GET  <functions>/send-notification?vapid=public (no auth: the key is public) -> { state: "ok", key } |
 //                        { state: "unavailable", status } (404 / 405 / 503 - the function is not deployed with push yet, or
 //                        its VAPID secrets are missing) | { state: "failed", error }
 //   pushDb.save(...)     POST rpc/save_push_subscription { p_endpoint, p_p256dh, p_auth, p_label } - the only write path
+//   pushDb.saveReplacing(..., replaces)  POST rpc/replace_push_subscription { p_endpoint, p_p256dh, p_auth, p_label, p_replaces }
+//                        (revision z): the same save, plus this account's earlier row for THIS device removed in the same
+//                        transaction - the row whose endpoint hashes to `replaces` (the flag's ep). No well-formed hash, or the
+//                        function missing (before the apply, after a rollback): the plain save above, today's behaviour
 //   pushDb.remove(ep)    POST rpc/delete_push_subscription { p_endpoint }
 //   pushDb.status(ep)    POST rpc/push_subscription_status { p_endpoint } -> { state: "ok", saved, devices } | { state: "unavailable" } | { state: "failed" }
 //   pushDb.sendTest()    POST <functions>/send-notification?push=test (the caller's own devices; every signed-in role)
@@ -486,6 +504,14 @@ const pushDb = {
   },
   save(endpoint, p256dh, auth, label) {
     return pushDb._rpc("save_push_subscription", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_label: label || null });
+  },
+  // Revision z (the re-arm's stale rows, Faraz 10/20 D2 / D4): every check, refusal (PS001-PS007), the cap and the push.save
+  // audit row stay save_push_subscription's - the server runs it after the delete, in one transaction (a refusal rolls the
+  // delete back). The server never deletes another account's row or the endpoint being saved. Answers as save() does.
+  async saveReplacing(endpoint, p256dh, auth, label, replaces) {
+    if (typeof replaces !== "string" || !/^[0-9a-f]{16}$/.test(replaces)) return pushDb.save(endpoint, p256dh, auth, label);
+    const r = await pushDb._rpc("replace_push_subscription", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_label: label || null, p_replaces: replaces });
+    return r.ok || !r.unavailable ? r : pushDb.save(endpoint, p256dh, auth, label);
   },
   remove(endpoint) {
     return pushDb._rpc("delete_push_subscription", { p_endpoint: endpoint });
@@ -530,6 +556,11 @@ const pushDb = {
 //              worker on the origin, Silvis's included): permission granted + this account's flag + no worker / no
 //              subscription -> register, subscribe silently, save; a changed endpoint is re-saved; a subscription without
 //              this account's flag is asked about (status RPC) - ours: the flag comes back; not ours: unsubscribed locally.
+//              Revision z (Faraz 10/20 D2 / D5): both saves replace this account's earlier row by the flag's hash
+//              (saveReplacing), and a refused re-save of a changed endpoint answers needs-tap (it said "skipped" and the card
+//              kept reading On while the server held no row for the current endpoint).
+//   (enable and state, revision z D4 / D5: Enable replaces by this account's own flag hash too - a failed silent re-arm ends
+//              in Enable; state() counts the flag as on only when its hash is the current subscription's.)
 //   teardown - sign-out: delete the row with the still-valid token, THEN unsubscribe, clear the flag - capped (4 s).
 //   dropForeign - a different account signing in on the in-place card: the previous account's subscription is unsubscribed
 //              locally (its token is dead - the server drops the row on the next 404 / 410) and other accounts' flags go.
@@ -679,8 +710,11 @@ const pushDevice = {
       try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
       return { ok: false, step: "save", permission: perm, message: k ? "this browser's push address is not one the app sends to - nothing was saved" : "this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)" };
     }
-    // (6) save - a refusal unsubscribes what (5) made and writes no flag
-    const saved = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
+    // (6) save - a refusal unsubscribes what (5) made and writes no flag. Revision z (D4): this account's own flag on this
+    // device names its earlier row (a failed silent re-arm ends here) - replaced in the same transaction; the server skips a
+    // hash equal to the new endpoint's, and without a flag (or before the apply) this is the plain save
+    const own = pushDevice._readFlag(profileId);
+    const saved = await pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, own && own.ep);
     if (!saved.ok) {
       try { await sub.unsubscribe(); } catch (x) { /* best effort */ }
       return { ok: false, step: "save", permission: perm, message: pushErrorWords(saved.error, saved.status) };
@@ -731,10 +765,12 @@ const pushDevice = {
         const hash = await pushDevice._hash(sub.endpoint);
         if (flag && flag.ep === hash) return { action: "none" };
         if (flag) {
-          // the browser handed this subscription a new endpoint (pushsubscriptionchange while the app was closed): re-save it
+          // the browser handed this subscription a new endpoint (pushsubscriptionchange while the app was closed): re-save it,
+          // replacing this account's row for the old one (revision z, D2). A refusal (PS007, PS006, offline) is needs-tap
+          // (D5): the flag keeps the old hash, so state() reads Off and Enable - or the next start - replaces by it
           const k = pushDevice._keysOf(sub);
-          const r = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
-          if (!r.ok) return { action: "skipped", error: pushErrorWords(r.error, r.status) };
+          const r = await pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, flag.ep);
+          if (!r.ok) return { action: "needs-tap", error: pushErrorWords(r.error, r.status) };
           pushDevice._writeFlag(profileId, hash);
           return { action: "saved" };
         }
@@ -755,7 +791,8 @@ const pushDevice = {
       sub = await pushDevice._subscribe(reg, k0.key);
       const k = pushDevice._keysOf(sub);
       if (!pushEndpointAllowed(k.endpoint)) { try { await sub.unsubscribe(); } catch (x) { /* best effort */ } return { action: "needs-tap" }; }
-      const r = await pushDb.save(k.endpoint, k.p256dh, k.auth, label || null);
+      // revision z (D2): the wiped registration's row (the flag's hash) is replaced in the same transaction
+      const r = await pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, flag.ep);
       if (!r.ok) { try { await sub.unsubscribe(); } catch (x) { /* best effort */ } return { action: "needs-tap" }; }
       pushDevice._writeFlag(profileId, await pushDevice._hash(k.endpoint));
       return { action: "resubscribed" };
@@ -806,7 +843,15 @@ const pushDevice = {
       try { reg = await pushDevice.registration(false); } catch (x) { reg = null; }
       sub = await pushDevice._sub(reg);
     }
-    const flag = !!pushDevice._readFlag(profileId);
+    // Revision z (D5): this account's flag counts as on only when its hash is the CURRENT subscription's - a flag left from
+    // an endpoint the browser has since replaced (a refused re-save) reads Off with "tap Enable ... to turn it back on",
+    // never "On" while the server holds no row for this endpoint. The hash in its own try: _hash needs crypto.subtle, and
+    // without it (or on any throw) the reading is today's - the flag's presence alone.
+    const f = pushDevice._readFlag(profileId);
+    let flag = !!f;
+    if (f && sub) {
+      try { flag = f.ep === await pushDevice._hash(sub.endpoint); } catch (x) { flag = true; }
+    }
     const label = pushDeviceLabel(s.ua, s.mtp);
     return {
       state: pushStateOf({ supported: s.supported, ios: s.ios, standalone: s.standalone, permission, hasReg: !!reg, hasSub: !!sub, flag }),

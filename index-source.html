@@ -1013,12 +1013,17 @@ function CallSchedule() {
   // the silent re-arm on start could not turn this device back on (the state line asks for a tap); pushCols = whether the two
   // *_push columns exist (notifPrefsDb.pushColumns(): "ok" | "unavailable" | "failed" | "unknown") - the phone switches show
   // only on "ok", and only then does a prefs save name them (pushColsRef: saveNotifPref is a []-memoized callback).
+  // Revision z (the day-before reminder as push, Faraz 10/20 D15): pushRemCol = whether shift_reminders_push exists
+  // (notifPrefsDb.reminderPushColumn(), a probe of its own, the same four states) - the third phone switch shows only on
+  // "ok" and only then does a save name it; anything else hides that one switch, never the two live ones.
   const [pushInfo, setPushInfo] = useState(null);
   const [pushMsg, setPushMsg] = useState("");
   const [pushBusy, setPushBusy] = useState("");
   const [pushNeedsTap, setPushNeedsTap] = useState(false);
   const [pushCols, setPushCols] = useState("unknown");
   const pushColsRef = useRef("unknown");
+  const [pushRemCol, setPushRemCol] = useState("unknown");
+  const pushRemColRef = useRef("unknown");
   const pushKeyRef = useRef(null);      // the server's public key, prefetched when the card opens ({ uid, key })
   const pushArmedRef = useRef("");      // the account the start-up re-arm already ran for (once per account per page load)
   const pushLinkDoneRef = useRef(false); // the ?tab= deep link is read once per page load
@@ -5300,8 +5305,9 @@ function CallSchedule() {
       try {
         // on_conflict=person_id (Prompt 20 F1): the table's primary key moves to id in revision o; person_id stays UNIQUE.
         // The body names person_id and never profile_id (config.js notifPrefsDb.save / helpers.notifPrefSaveRequest, P20 R2).
-        // Prompt 30: the two *_push columns ride along only once they exist (pushColsRef "ok"); before that the body is unchanged
-        const { error: prefErr } = await notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok" });
+        // Prompt 30: the two *_push columns ride along only once they exist (pushColsRef "ok"); before that the body is unchanged.
+        // Revision z: shift_reminders_push likewise, on its own probe (pushRemColRef "ok")
+        const { error: prefErr } = await notifPrefsDb.save({ personId }, notifPrefsRef.current[personId] || {}, { push: pushColsRef.current === "ok", reminderPush: pushRemColRef.current === "ok" });
         if (prefErr) throw new Error(`notif pref save failed: ${String(prefErr).slice(0, 200)}`);
         auditRef.current.logAudit("prefs.save", `Saved notification prefs for ${auditRef.current.nameOf(personId)}`, { person_id: personId });
       } catch(e) { console.warn("Save notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
@@ -5324,7 +5330,7 @@ function CallSchedule() {
       followerSaveTimerRef.current = null;
       setNotifPrefsSaving(true);
       try {
-        const { error } = await notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok" });
+        const { error } = await notifPrefsDb.save({ profileId: pid }, followerPrefRef.current, { push: pushColsRef.current === "ok", reminderPush: pushRemColRef.current === "ok" });
         if (error) throw new Error(`follower notif pref save failed: ${String(error).slice(0, 200)}`);
       } catch(e) { console.warn("Save follower notif pref error:", e); showToast("Couldn't save notification settings - check your connection and try again.", "error"); }
       setNotifPrefsSaving(false);
@@ -5798,7 +5804,7 @@ function CallSchedule() {
     }).catch((e) => console.warn("phone notifications: the start-up check failed:", e));
   }, [isPublicMode, pushUid, userProfile, refreshPushState]);
   // A different account: its own column probe (the answer is per database, but a failed probe must not stick to the next account)
-  useEffect(() => { pushColsRef.current = "unknown"; setPushCols("unknown"); }, [pushUid]);
+  useEffect(() => { pushColsRef.current = "unknown"; setPushCols("unknown"); pushRemColRef.current = "unknown"; setPushRemCol("unknown"); }, [pushUid]);
   // The card: its state on every open, the server's public key prefetched (the Enable tap then awaits nothing before the
   // permission prompt but what it must), and whether the two *_push columns exist (once per account; a failed probe retries).
   // Push UX 1(a) (10/10): while this device's push is off, the first Settings visit per account and page load opens the
@@ -5821,6 +5827,10 @@ function CallSchedule() {
     }
     if (pushColsRef.current !== "ok" && pushColsRef.current !== "unavailable") {
       notifPrefsDb.pushColumns().then((c) => { pushColsRef.current = c; setPushCols(c); });
+    }
+    // revision z: the reminder switch's column, on its own probe (once per account; a failed probe retries)
+    if (pushRemColRef.current !== "ok" && pushRemColRef.current !== "unavailable") {
+      notifPrefsDb.reminderPushColumn().then((c) => { pushRemColRef.current = c; setPushRemCol(c); });
     }
   }, [pushCardOpen, pushUid, refreshPushState]);
   // push UX follow-up (10/12): back in the foreground (e.g. from the phone's Settings, where the Blocked lines send people) the
@@ -8727,8 +8737,14 @@ function CallSchedule() {
                             {mySurgeon
                               ? pushRows([["schedule_updates_push","Schedule published, open shifts, changes affecting me"],["trade_updates_push","Trade proposed / accepted / declined"]], notifPrefs[mySurgeon], true, (u) => saveNotifPref(mySurgeon, u))
                               : pushRows([["schedule_updates_push","Schedule published, open shifts, shifts taken"],["trade_updates_push","Trade proposed / accepted / declined"]], followerPref, followerPrefsEditable, saveFollowerPref)}
+                            {/* Revision z (Faraz 10/20 D8 / D13 / D15): the day-before reminder's own phone switch, on its own column probe -
+                                shown only once shift_reminders_push exists; the follower's reads "their call" (his own row, his own hour). */}
+                            {pushRemCol === "ok" && (mySurgeon
+                              ? pushRows([["shift_reminders_push","Reminder the day before my call"]], notifPrefs[mySurgeon], true, (u) => saveNotifPref(mySurgeon, u))
+                              : pushRows([["shift_reminders_push","Reminder the day before their call"]], followerPref, followerPrefsEditable, saveFollowerPref))}
                           </div>
-                          <p style={{fontSize:10,color:dkSubtext,margin:"6px 0 0",lineHeight:1.5}}>These cover every device you turned on. Reminders stay e-mail only for now.</p>
+                          {pushRemCol === "failed" && <p data-testid="push-reminder-unavailable" data-state="failed" style={{fontSize:11,color:dkSubtext,margin:"6px 0 0",lineHeight:1.5}}>{"Couldn't check the reminder switch - reload the app to try again."}</p>}
+                          <p data-testid="push-prefs-note" data-state={pushRemCol} style={{fontSize:10,color:dkSubtext,margin:"6px 0 0",lineHeight:1.5}}>{pushRemCol === "ok" ? "These cover every device you turned on; reminders arrive at the hour set under Email." : "These cover every device you turned on. Reminders stay e-mail only for now."}</p>
                         </> : <p data-testid="push-prefs-none" style={{fontSize:11,color:dkSubtext,margin:0,lineHeight:1.5}}>{"Only your own tests reach this account's phones - phone notifications follow a roster link or the surgeons you follow."}</p>}
                     </div>
                   </div>

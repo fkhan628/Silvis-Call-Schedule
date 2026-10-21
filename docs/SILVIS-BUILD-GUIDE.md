@@ -316,6 +316,9 @@ Proof: `sql/probes/east-vacations-probe.sql` (rolled back; 56 cases in its heade
 - **Trade offers (2026-10-18, revision y, report-first, applied 2026-10-20 00:41 UTC; `sql/migrations/2026-10-18-trade-offer.sql`).** Faraz 10/18: a trade records the receiver's offer the way a claim does (D1 claim parity, D2 submitted receivers only, D3 the consent stamps; the report `REPORT-APPLY-TRADE-OFFER-2026-10-18.md`, private folder). Two NEW nullable columns on `shift_trade_requests` - `proposed_by` / `accepted_by`, a roster id when that surgeon agreed himself, else `scheduler` - written by `trade_insert_guard` / `trade_update_guard` only (a client's value is overwritten, the scheduler's PATCH included); `apply_trade` (security definer, EXECUTE for authenticated, never anon - unchanged) writes, after the day rows, the `call_offers` row of each leg's receiver who agreed himself (a return leg only when both surgeons agreed themselves - the giver proposed the trade and the other accepted it), on a day today or later inside an offer period where he is already submitted, not rules-only, not an outside surgeon and not a primary leg onto his No primary day - every leg's reads under `save_offers`' per-person advisory lock; the claim's merge, `OFFER_FROZEN` bypassed for that write only, and `offer` / `return_offer` in the `trade.apply` audit row. No policy, grant, index, other function or anon surface changes; the client sends and reads no stamp.
 Proof: `sql/probes/trade-offer-probe.sql` (rolled back; 32 cases in its header - P1 the catalog, S1-S9 the stamps, A1-A11 who agreed decides whoever applies, M1-M3 the merge, R1-R8 the receivers and days that get none and the two that do (R5, R8); its collision guard first, then PROBE_SETUP before the apply), `sql/probes/trade-offer-precheck.sql` (read-only: the objects gate with Part A's function, the four bodies' md5, the signatures, the grants, no FORCE RLS and the owner match; facts: applied legs in a period without a covering offer), `scripts/verify-rls.sh` section 21 (the graded probe - its 32 AFTER strings, the count of 32 - and its leftover count; added by the record step, a PROBE_SETUP FAILs; not yet run live), one command: Faraz's apply script `apply-trade-offer.sh` (kept outside the repo; `--dry-run` first), the record in `docs/SCHEMA-REVIEW.md` "2026-10-18 - apply_trade writes the receiver's offer (revision y)"; applied: 2026-10-20 00:41:25 UTC by Faraz (`apply-trade-offer.sh`, the script exports `AI_AGENT`; from the main clone at `b0344bd`, the pins from `fed3151`; two earlier `--dry-run`s and a run that stopped at the APPLY prompt applied nothing) - the pre-check gate `cols=none insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes` before and `cols=proposed_by,accepted_by insert_trg=yes update_trg=yes offers_trg=yes east_vacations=yes` after (apply_trade `a9ab025feaba32b3fdc3a65f3cdfbc65` -> `b5cca6f0f35b07923e6facb940d1f180`, insert_guard `dd067d544c89c5622ab7e3687dcde5a0` -> `303f173367b9c386dc0786bc4892657a`, update_guard `7319d0c5ba9b001f554b7a7db7a227f5` -> `304e0fddfcbda63c48340314003d441b`, offers_guard `c48783939fd53dc56be90af140297abe` unchanged), facts `legs=4 in_period=0 uncovered=0 open_trades=0` (no backfill - D5), probe BEFORE `PROBE_SETUP`, AFTER 32 / 32, leftovers 0, the regression probes 34 / 15 the same before and after; the migration file kept as it ran, its sha256 pinned.
 
+- **Phone push follow-ups (2026-10-20, revision z, report-first, NOT applied - Faraz runs `apply-push-followups.sh`; `sql/migrations/2026-10-20-push-followups.sql`).** Faraz 10/20: "finish the backlog" with every recommended decision of the push follow-ups report (B: D2 the wrapper, D3 silent; C: D8 (a), D10-D13; D17 one migration - the report `REPORT-PUSH-FOLLOWUPS-2026-10-20.md`, private folder). One NEW function `replace_push_subscription(p_endpoint, p_p256dh, p_auth, p_label, p_replaces)` (security definer, volatile - POST only, `search_path = public, pg_temp`; EXECUTE for authenticated, never anon - revoked from PUBLIC and anon): it deletes the caller's OWN earlier row whose endpoint's first 16 hex of SHA-256 equal `p_replaces` (the device's flag - the client's `_hash`; never another account's row, never the endpoint being saved; a malformed or null hash deletes nothing), then calls `save_push_subscription` (unchanged) in the same transaction - a refusal there (PS002-PS007) rolls the delete back, and the cap is counted after the delete; no audit row for the replaced row; the answer is save's plus `replaced`. One NEW column `notification_preferences.shift_reminders_push` (boolean not null default true: the day-before shift reminder's phone switch, independent of `shift_reminders_email`, a follower's row too; `prefs_own` unchanged, never anon-readable). No table, policy, trigger, existing function or anon surface changes; the client before the wrapper ships, or after a rollback, saves through `save_push_subscription` as today. The client half (the re-arm and Enable through the wrapper, the third phone switch) and `daily-reminder` v10 (its push, deployed LAST - D16): section 22.5.
+Proof: `sql/probes/push-followups-probe.sql` (rolled back; 46 cases in its header - P1-P3 the catalog, H1 the client's hash, R1-R7 a re-arm and the hashes that replace nothing, K1 the answer's keys, O1-O2 another account's row, M1-M2a the move, B1-B4 a refusal after the delete, C1-C6s the cap, N1-N3 anon and no signed-in user, F1-F7 the column; its collision guard first, then PROBE_SETUP before the apply), `sql/probes/push-followups-precheck.sql` (read-only: the objects gate, save's body md5 unchanged, the signatures, the grants, no FORCE RLS and the owners; facts: prefs rows, devices, push audit rows - counts only), the Prompt 30 probe's 51 cases before and after, one command: Faraz's apply script `apply-push-followups.sh` (kept outside the repo; `--dry-run` first), the record in `docs/SCHEMA-REVIEW.md` "2026-10-20 - phone push follow-ups (revision z)"; applied: _to be filled at the record step_.
+
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
 `payloadLooksWiped` (retarget to: no `schedule_days` rows would be written AND no vacations AND no availability),
@@ -2515,7 +2518,12 @@ deliberate addition beside Davenport's four), **Diagnose**, **Reset subscription
 devices; hidden while Blocked), a monospace message box, and "Which events reach your phones": two switches (`schedule_updates_push`,
 `trade_updates_push` - a linked surgeon's own row, a follower's own row by profile_id, editable only once his row was read),
 shown only when `notifPrefsDb.pushColumns()` reads "ok" (else "Phone switches are available after the next update."); an
-unlinked account that follows nobody reads that only its own tests reach its phones. Nothing on `?public=1`.
+unlinked account that follows nobody reads that only its own tests reach its phones. Nothing on `?public=1`. Revision z (22.5 -
+PREPARED: its database half not applied, `daily-reminder` v10 not deployed) adds a third switch, "Reminder the day before my
+call" (a follower: "Reminder the day before their call") on `shift_reminders_push`, shown only when its OWN probe
+`notifPrefsDb.reminderPushColumn()` reads "ok" - never by widening `pushColumns()`, so a missing column hides that one switch,
+never the two live ones; the note under the switches then reads "These cover every device you turned on; reminders arrive at the
+hour set under Email." (until then "These cover every device you turned on. Reminders stay e-mail only for now.").
 
 **Push UX (b)-(f) (10/11) - what each state shows** (`helpers.pushCardParts(state)` decides the lines and buttons; the card
 reads it). (b) The **Pop-ups on this device** box below (pop-ups while the app is open - not phone push) names its buttons for
@@ -2562,6 +2570,9 @@ closed, and with push still off the first Settings visit after the reload opens 
   503 -> "available after the next update"); `registration(true)` active within 10 s (else "Not ready yet - wait a few seconds
   and tap Enable phone notifications again."); `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` (an InvalidStateError from
   an old key: drop it, subscribe again); `rpc/save_push_subscription` with exactly `{ p_endpoint, p_p256dh, p_auth, p_label }`
+  - since revision z (22.5), when this account's own flag is on the device, `rpc/replace_push_subscription` with those four keys
+  plus `p_replaces` = the flag's hash, so the earlier row for this device goes in the same transaction (the plain save while the
+  function is missing) -
   (a refusal unsubscribes what was made, writes no flag and shows the function's words - PS001-PS007); the flag
   `silvis-push-on-<profileId>` = `{ v: 1, ep: <first 16 hex of SHA-256(endpoint)>, at }`; after 1.5 s a read-back (the
   subscription + the status RPC) -> "Subscribed (as <name>)." or "Permission granted, but this device is not registered yet -
@@ -2575,7 +2586,12 @@ closed, and with push still off the first Settings visit after the reload opens 
   silently; a subscription without the flag -> the status RPC decides (ours: the flag comes back; not ours: unsubscribed
   locally - a shared PC); the flag + permission + no worker / no subscription (a Davenport update's reset) -> re-register,
   subscribe silently, save, new flag; any failure -> "needs-tap" (the off line asks for a tap). The server drops the old
-  endpoint on its next 404 / 410.
+  endpoint on its next 404 / 410. Since revision z (22.5): both silent saves go through `pushDb.saveReplacing` - the flag's hash
+  names this account's row for the old endpoint, which the server deletes with the save (one transaction; only the caller's
+  own row, never the endpoint being saved); a refused re-save of a moved endpoint is "needs-tap" too (it read "skipped" while
+  the card still said On); and `pushDevice.state()` counts the flag as on only when its hash is the current subscription's (in
+  its own try - without `crypto.subtle` the reading is today's). Before the apply, or after a rollback, the plain save, and the
+  old endpoint goes on its next 404 / 410 as before.
 - **Sign-out** (`handleSignOut`, and `signOutForLink` before its sign-out): `pushDevice.teardown(id, 4000)` BEFORE
   `auth.signOut()` - the row delete with the still-valid token, THEN `unsubscribe()`, the flag cleared; capped at 4 s, never
   blocking. **An in-place account switch** (`adoptSignedInUser`'s different-account branch): `pushDevice.dropForeign(newId)` -
@@ -2644,8 +2660,55 @@ closed, and with push still off the first Settings visit after the reload opens 
   so a legal 180-character body used to turn generic), and `pushDb.sendTest` reads a pre-Prompt-30 function's role-gate 403
   ("not allowed: role viewer may not send notifications" - the test route never answers 403) as "needs the next update", like
   its 400 for a surgeon.
-- Not in this prompt: the 6 AM / Monday reminder (daily-reminder) and its `shift_reminders_push` switch; suppressing the
-  duplicate desktop pop-up for the same event.
+- Not in this prompt: the 6 AM / Monday reminder (daily-reminder) and its `shift_reminders_push` switch - built since as
+  revision z's day-before shift reminder (22.5, PREPARED); suppressing the duplicate desktop pop-up for the same event.
+
+### 22.5 Revision z - the push follow-ups (Faraz 10/20, "finish the backlog"; PREPARED, NOT applied or deployed)
+
+The push follow-ups report (10/20, history - `docs/HISTORY.md`) with every recommended decision. One migration, revision z
+(`sql/migrations/2026-10-20-push-followups.sql`, Faraz's `apply-push-followups.sh` - section 4.3; D17: B's function and C's
+column, each with its own rollback lines - `docs/SCHEMA-REVIEW.md` "2026-10-20 - phone push follow-ups (revision z)"); one
+redeploy, `daily-reminder` v10
+(`edge-functions/README.md` section 3, "Deploy record - push reminders (revision z)"); `send-notification` unchanged (A, D1: its
+header's Prompt 30 wording keeps waiting for its next source change).
+
+- **B - the re-arm's stale rows (D2-D7).** A silent re-arm (a moved endpoint, or a registration Davenport's reset wiped) used to
+  INSERT a new row beside the old one, which went only on the account's next push (404 / 410) or a Send test, and counted
+  against the 10-device cap meanwhile. The wrapper `replace_push_subscription(p_endpoint, p_p256dh, p_auth, p_label,
+  p_replaces)` deletes the caller's own row whose endpoint hashes to `p_replaces` (the device flag's 16 hex), then runs the
+  unchanged `save_push_subscription` - every refusal, the cap and the audit row stay save's; no audit row for the replaced row
+  (D3). `config.js` `pushDb.saveReplacing` sends it only with a well-formed hash and falls back to the plain save when the
+  function is missing (404 PGRST202 / 42883 - before the apply, after a rollback); a refusal is answered, never retried as a
+  plain save. The re-arm's two saves and Enable (D4, this account's own flag) go through it; a refused re-save of a moved
+  endpoint answers needs-tap, and `state()` reads Off for a flag whose hash is not the current subscription's (D5 - the card no
+  longer says On while the server holds no row). No server-side prune (D6); Davenport's reset is not changed from here (D7). The
+  no-flag cases (site data cleared, an in-place account switch) still wait for the next 404 / 410 or a Send test.
+- **C - the day-before reminder as phone push (D8-D16).** The day-before shift reminder only (D8; the Monday open-shifts and the
+  offers crons stay e-mail). `daily-reminder` gains send-notification's `@webPush` / `@pushPlan` blocks and device glue, copied
+  byte for byte (D9 a - pinned identical by `test/edge-functions.test.js`), and its own plain-JS `@reminderPush` block: after the
+  follower e-mails, in its own try, the person on call tomorrow at his reminder hour (D11: `reminder_hour_central`, else 17) and
+  every follower of that surgeon at his own hour (D13) get "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 -
+  backup Khan." (a follower: the e-mail's line under "Silvis Call (following Dr. X)") - tag `silvis-reminder-<yyyymmdd>-<role>`,
+  a tap opens My schedule (D14) - on `shift_reminders_push` alone, default on (D10), whatever the e-mail switch or address
+  (D12). The answer gains `push` (roster ids, follower tags, notification tags - never an endpoint, a key or the words); a
+  dryRun plans and counts devices (`select=id,profile_id`) and sends nothing. The client: the third phone switch on its own
+  probe (D15 - 22.2) and its save key (`notifPrefSaveRequest(..., { reminderPush: true })` only after that probe read ok).
+- **Order (D16).** The SQL apply - `apply-push-followups.sh`, its steps in the order the migration header and
+  `docs/SCHEMA-REVIEW.md` "The order" give them: the pre-check, probe BEFORE (PROBE_SETUP), the Prompt 30 probe BEFORE (its 51
+  cases), APPLY, the gate after, probe AFTER (its 46 cases), the Prompt 30 probe AFTER (the same 51), the paste-back - then the
+  client (the switch visible - tell the group: D10 makes it on for everyone), then the `daily-reminder` deploy LAST (the hourly
+  job pushes within the hour), then the dryRun; the rollback in reverse - the backed-up v9 FIRST, then the SQL (with the column
+  gone and v10 still live, a missing key would read as on). Either half of the client works before the apply and after a
+  rollback: a missing function or column reads as "unavailable".
+- **Tests.** `test/push.test.js`: `saveReplacing` (the five keys, the fallback on PGRST202 / 42883, a refusal never retried, no /
+  a malformed hash -> the plain save), the re-arm (the wrapper with the flag's hash; needs-tap on PS007 / offline with the old flag
+  kept; the fallback), Enable (its own flag's hash, never another account's), `state()` (a stale flag reads Off; no
+  `crypto.subtle` keeps today's reading), the column's own probe and save key, the card's third switch per probe state, and a
+  mutant for each. `test/edge-functions.test.js`: the copies identical, the `@reminderPush` block run, and the real handler
+  (types stripped, a fixed clock) against a fake Silvis / Resend / push service - the e-mail part equal to the pre-z logic for
+  every input, the decrypted pushes, 404 / 410 / 500, dryRun, the missing secrets and table; mutants bind. `test/data-layer.test.js`
+  [Z] cross pins hold the client to the migration (compared when the migration is on the branch); `test/ui/smoke.mjs` answers the
+  wrapper and the probe locally and checks the third switch, the re-arm through the wrapper, the fallback and the column absent.
 
 ## 23. Monthly caps and the weighted load (Faraz 10/9 and 10/11; Prompt 32)
 

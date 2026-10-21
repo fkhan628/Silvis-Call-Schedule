@@ -189,6 +189,14 @@ function mkBrowser(o) {
     if (u.pathname.endsWith("/functions/v1/send-notification") && u.search === "?vapid=public") return respond(200, { publicKey: KEY });
     if (u.pathname.endsWith("/functions/v1/send-notification") && u.search === "?push=test") return respond(200, { push: { sent: 1, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 1, failed: 0, removed: 0 }, error: null } });
     if (u.pathname.endsWith("/rpc/save_push_subscription")) return respond(200, { ok: true, action: "added", devices: 1, audit: true });
+    // revision z: the wrapper - present (the default: after the apply), missing (o.replace "missing" / "42883": before the apply or
+    // after a rollback) or refusing (o.replace "PS007": the cap - every refusal is save_push_subscription's)
+    if (u.pathname.endsWith("/rpc/replace_push_subscription")) {
+      if (o.replace === "missing") return respond(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.replace_push_subscription(p_auth, p_endpoint, p_label, p_p256dh, p_replaces) in the schema cache" });
+      if (o.replace === "42883") return respond(404, { code: "42883", details: null, hint: null, message: "function public.replace_push_subscription(text, text, text, text, text) does not exist" });
+      if (o.replace === "PS007") return respond(400, { code: "PS007", details: null, hint: null, message: "PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)" });
+      return respond(200, { ok: true, action: "added", devices: 1, audit: true, replaced: 1 });
+    }
     if (u.pathname.endsWith("/rpc/delete_push_subscription")) { if (o.removeHangs) return new Promise(() => {}); return respond(200, { ok: true, removed: 1, devices: 0, audit: true }); }
     if (u.pathname.endsWith("/rpc/push_subscription_status")) return respond(200, { ok: true, saved: o.saved !== false, devices: 1 });
     if (u.pathname.endsWith("/rest/v1/notification_preferences")) return respond(201, []);
@@ -479,6 +487,13 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.strictEqual(b.row.schedule_updates_push, true, "a missing key is on");
     const f = H.notifPrefSaveRequest({ profileId: UID }, { schedule_updates_push: false }, "t", { push: true });
     assert.deepStrictEqual([f.onConflict, f.row.profile_id, "person_id" in f.row, f.row.schedule_updates_push, f.row.trade_updates_push], ["profile_id", UID, false, false, true]);
+    // revision z (D15): opts.reminderPush adds shift_reminders_push on its own (the column has its own probe); never without it
+    assert.ok(!("shift_reminders_push" in b.row), "opts.push alone never names the reminder column");
+    const z = H.notifPrefSaveRequest({ personId: "s1" }, { shift_reminders_push: false }, "t", { push: true, reminderPush: true });
+    assert.deepStrictEqual([z.row.shift_reminders_push, z.row.trade_updates_push, z.row.schedule_updates_push], [false, true, true]);
+    const z2 = H.notifPrefSaveRequest({ profileId: UID }, {}, "t", { reminderPush: true });
+    assert.deepStrictEqual([z2.row.shift_reminders_push, "trade_updates_push" in z2.row, "schedule_updates_push" in z2.row], [true, false, false], "a missing key is on; independent of opts.push");
+    assert.deepStrictEqual(H.notifPrefSaveRequest({ personId: "s1" }, cur, "t", { push: true, reminderPush: false }).row, b.row, "reminderPush false = the Prompt 30 body");
   });
 
   /* ================================ [SW] sw.js ================================ */
@@ -621,6 +636,51 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const [w1, w2] = b.calls.map(x => JSON.parse(x.body));
     assert.deepStrictEqual([w1.trade_updates_push, w1.schedule_updates_push, "trade_updates_push" in w2], [false, true, false]);
   });
+  // revision z (D15): the reminder switch's column has a probe of its OWN - a missing column hides only that switch
+  const remColCheck = async (S) => {
+    for (const [ans, want] of [[undefined, "ok"], [{ status: 400, body: { code: "42703", details: null, hint: null, message: "column notification_preferences.shift_reminders_push does not exist" } }, "unavailable"], [{ status: 400, body: { code: "42703", message: "column notification_preferences.trade_updates_push does not exist" } }, "failed"], [{ status: 500, body: "x" }, "failed"], [{ status: 401, body: { code: "PGRST301" } }, "failed"]]) {
+      const b = mkBrowser({ answers: (p, m) => (m === "GET" && /notification_preferences/.test(p) ? (ans || { status: 200, body: [] }) : undefined) });
+      assert.strictEqual(await loadClient(S, b).notifPrefsDb.reminderPushColumn(), want, JSON.stringify(ans));
+      assert.deepStrictEqual(b.calls.map(c => c.method + " " + c.path), ["GET /rest/v1/notification_preferences?select=shift_reminders_push&limit=1"], "one GET naming the reminder column alone");
+      assert.ok(/^Bearer /.test(b.calls[0].auth || ""), "the user's JWT");
+    }
+    // the two live switches' probe is untouched: it still names exactly its two columns
+    const b = mkBrowser({ answers: (p, m) => (m === "GET" && /shift_reminders_push/.test(p) ? { status: 400, body: { code: "42703", message: "column notification_preferences.shift_reminders_push does not exist" } } : undefined) });
+    const c = loadClient(S, b);
+    assert.strictEqual(await c.notifPrefsDb.pushColumns(), "ok", "a missing reminder column never hides the two live switches");
+    assert.strictEqual(await c.notifPrefsDb.reminderPushColumn(), "unavailable");
+    await c.notifPrefsDb.save({ personId: "s1" }, { shift_reminders_push: false }, { push: true, reminderPush: true });
+    await c.notifPrefsDb.save({ personId: "s1" }, { shift_reminders_push: false }, { push: true });
+    const [w1, w2] = b.calls.filter(x => x.method === "POST").map(x => JSON.parse(x.body));
+    assert.deepStrictEqual([w1.shift_reminders_push, "shift_reminders_push" in w2, w2.trade_updates_push], [false, false, true], "the save names the column only with reminderPush");
+  };
+  await check("notifPrefsDb.reminderPushColumn (revision z, D15): ok (200, even []) / unavailable (400 42703 naming shift_reminders_push - not another column) / failed; its own GET, never widening pushColumns (which still reads ok while the new column is missing); save(..., { reminderPush: true }) names it, without it the body has no such key", remColCheck);
+  // revision z (D2 / D4): the wrapper, with the plain save as the fallback while the function is missing
+  const saveReplacingCheck = async (S) => {
+    const H16 = await sha16(EP2);
+    const run = async (o, replaces) => { const b = mkBrowser(o); const r = await loadClient(S, b).pushDb.saveReplacing(EP1, b64u(P256DH), b64u(AUTHB), "Chrome on Windows", replaces); return { b, r: plain(r), paths: b.calls.map(c => c.path) }; };
+    let x = await run({}, H16);
+    assert.deepStrictEqual(x.paths, ["/rest/v1/rpc/replace_push_subscription"], "a well-formed hash: the wrapper only");
+    const body = JSON.parse(x.b.calls[0].body);
+    assert.deepStrictEqual(Object.keys(body), ["p_endpoint", "p_p256dh", "p_auth", "p_label", "p_replaces"], "the five keys, in the function's order");
+    assert.deepStrictEqual(body, { p_endpoint: EP1, p_p256dh: b64u(P256DH), p_auth: b64u(AUTHB), p_label: "Chrome on Windows", p_replaces: H16 });
+    assert.ok(x.b.calls[0].method === "POST" && /^Bearer /.test(x.b.calls[0].auth || ""), "a POST with the user's JWT, the endpoint in the body only");
+    assert.deepStrictEqual([x.r.ok, x.r.result.action, x.r.result.replaced], [true, "added", 1]);
+    for (const miss of ["missing", "42883"]) {
+      x = await run({ replace: miss }, H16);
+      assert.deepStrictEqual(x.paths, ["/rest/v1/rpc/replace_push_subscription", "/rest/v1/rpc/save_push_subscription"], miss + ": the function is missing -> the plain save, today's behaviour");
+      assert.deepStrictEqual(Object.keys(JSON.parse(x.b.calls[1].body)), ["p_endpoint", "p_p256dh", "p_auth", "p_label"], miss + ": the plain save's four keys");
+      assert.ok(x.r.ok, miss + ": answered by the plain save");
+    }
+    x = await run({ replace: "PS007" }, H16);
+    assert.deepStrictEqual(x.paths, ["/rest/v1/rpc/replace_push_subscription"], "a refusal is the answer - never a second save past it");
+    assert.deepStrictEqual([x.r.ok, x.r.status, x.r.unavailable], [false, 400, false]);
+    for (const bad of [null, undefined, "", "x", "ABCDEF0123456789", "0123456789abcde", "0123456789abcdef0", 42]) {
+      x = await run({}, bad);
+      assert.deepStrictEqual(x.paths, ["/rest/v1/rpc/save_push_subscription"], "no well-formed hash (" + JSON.stringify(bad) + "): the plain save");
+    }
+  };
+  await check("pushDb.saveReplacing (revision z, D2): a well-formed 16-hex hash -> POST rpc/replace_push_subscription with exactly { p_endpoint, p_p256dh, p_auth, p_label, p_replaces }; the function missing (404 PGRST202 / 42883 - before the apply, after a rollback) -> the plain save_push_subscription; a refusal (PS007) is answered, never retried as a plain save; no / a malformed hash -> the plain save alone", saveReplacingCheck);
   const enableCheck = async (S) => {
     const b = mkBrowser({ permission: "default", answer: "granted" });
     const c = loadClient(S, b);
@@ -679,6 +739,28 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.deepStrictEqual(b.log.filter(l => /^(subscribe|unsubscribe)/.test(l)), ["subscribe", "unsubscribe device-2", "subscribe"]);
     assert.strictEqual(b.ls.getItem("silvis-push-on-" + UID2), null);
   });
+  // revision z (D4): Enable passes this account's OWN flag hash too - a failed silent re-arm (needs-tap) ends in Enable, and that
+  // is where its stale row used to be made; never another account's flag; the permission prompt stays the FIRST await
+  const enableReplaceCheck = async (S) => {
+    const H2 = await sha16(EP2);
+    let b = mkBrowser({ permission: "granted", answer: "granted", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: H2, at: "t" }), ["silvis-push-on-" + UID2]: JSON.stringify({ v: 1, ep: "fedcba9876543210", at: "t" }) } });
+    let r = await loadClient(S, b).pushDevice.enable(UID, "Chrome on Windows", { name: "Khan", readbackMs: 0 });
+    assert.strictEqual(r.message, "Subscribed (as Khan).", JSON.stringify(r));
+    assert.strictEqual(b.log[0], "requestPermission", "still the first thing the tap does");
+    assert.deepStrictEqual(fetches(b, /(save|replace)_push_subscription$/).map(c => c.path), ["/rest/v1/rpc/replace_push_subscription"]);
+    assert.deepStrictEqual(JSON.parse(fetches(b, /replace_push/)[0].body), { p_endpoint: EP1, p_p256dh: b64u(P256DH), p_auth: b64u(AUTHB), p_label: "Chrome on Windows", p_replaces: H2 }, "this account's own flag hash - never the other account's");
+    assert.strictEqual(JSON.parse(b.ls.getItem("silvis-push-on-" + UID)).ep, await sha16(EP1), "the flag follows the new endpoint");
+    // the function missing: the plain save (four keys), Enable succeeds as today
+    b = mkBrowser({ permission: "granted", answer: "granted", replace: "missing", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: H2, at: "t" }) } });
+    r = await loadClient(S, b).pushDevice.enable(UID, "Chrome on Windows", { name: "Khan", readbackMs: 0 });
+    assert.strictEqual(r.message, "Subscribed (as Khan).");
+    assert.deepStrictEqual(fetches(b, /(save|replace)_push_subscription$/).map(c => c.path), ["/rest/v1/rpc/replace_push_subscription", "/rest/v1/rpc/save_push_subscription"]);
+    // a refusal through the wrapper: unsubscribed, no flag rewritten, the function's own words
+    b = mkBrowser({ permission: "granted", answer: "granted", replace: "PS007", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: H2, at: "t" }) } });
+    r = await loadClient(S, b).pushDevice.enable(UID, "x", { readbackMs: 0 });
+    assert.deepStrictEqual([r.ok, r.message, JSON.parse(b.ls.getItem("silvis-push-on-" + UID)).ep, !!silvisReg(b).pushManager.sub], [false, "this account has phone notifications on 10 devices already - turn one off first (nothing was saved)", H2, false]);
+  };
+  await check("enable (revision z, D4): this account's own flag on the device -> rpc/replace_push_subscription with p_replaces = its hash (another account's flag never rides); the function missing -> the plain save, Enable as today; a refusal unsubscribes and leaves the flag", enableReplaceCheck);
   const rearmCheck = async (S) => {
     // (a) permission not granted: no call at all
     for (const p of ["default", "denied"]) {
@@ -687,23 +769,40 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
       assert.deepStrictEqual([r.action, b.calls.length, b.N.requests, b.log.filter(l => /^(register|getRegistrations)/.test(l)).length], ["off-permission", 0, 0, 0], p + ": no network, no registration read, no prompt");
       assert.ok(b.ls.getItem("silvis-push-on-" + UID), "the flag stays (a later re-allow re-arms)");
     }
-    // (b) the three conditions: flag + granted + the registration wiped (a Davenport update's reset)
+    // (b) the three conditions: flag + granted + the registration wiped (a Davenport update's reset). Revision z (D2): the save
+    // replaces this account's row for the wiped endpoint - the flag's hash rides as p_replaces
     let b = mkBrowser({ permission: "granted", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP2), at: "t" }) } });
     let r = await loadClient(S, b).pushDevice.rearm(UID, "Chrome on Windows");
     assert.strictEqual(r.action, "resubscribed");
     assert.strictEqual(b.N.requests, 0, "never a prompt");
     assert.ok(silvisReg(b) && silvisReg(b).pushManager.sub, "re-registered and subscribed");
-    assert.strictEqual(fetches(b, /save_push/).length, 1, "saved");
+    assert.deepStrictEqual(fetches(b, /_push_subscription$/).filter(c => /save_|replace_/.test(c.path)).map(c => c.path), ["/rest/v1/rpc/replace_push_subscription"], "saved through the wrapper, once");
+    assert.deepStrictEqual([JSON.parse(fetches(b, /replace_push/)[0].body).p_endpoint, JSON.parse(fetches(b, /replace_push/)[0].body).p_replaces], [EP1, await sha16(EP2)], "the new endpoint, replacing the wiped one's row");
     assert.strictEqual(JSON.parse(b.ls.getItem("silvis-push-on-" + UID)).ep, await sha16(EP1), "the flag follows the new endpoint");
+    // ... before the apply / after a rollback: the plain save, exactly today's
+    b = mkBrowser({ permission: "granted", replace: "missing", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP2), at: "t" }) } });
+    r = await loadClient(S, b).pushDevice.rearm(UID, "Chrome on Windows");
+    assert.deepStrictEqual([r.action, fetches(b, /save_push/).length, JSON.parse(fetches(b, /save_push/)[0].body).p_endpoint], ["resubscribed", 1, EP1], "the function missing: the plain save");
     // (c) the same hash: nothing at all goes out
     b = mkBrowser({ permission: "granted", silvisSub: EP1, lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }) } });
     r = await loadClient(S, b).pushDevice.rearm(UID, "x");
     assert.deepStrictEqual([r.action, b.calls.length, b.N.requests], ["none", 0, 0]);
-    // (d) another hash (the browser changed the endpoint): re-saved silently
+    // (d) another hash (the browser changed the endpoint): re-saved silently, replacing the old endpoint's row (revision z, D2)
     b = mkBrowser({ permission: "granted", silvisSub: EP2, lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }) } });
     r = await loadClient(S, b).pushDevice.rearm(UID, "x");
-    assert.deepStrictEqual([r.action, fetches(b, /save_push/).length, JSON.parse(fetches(b, /save_push/)[0].body).p_endpoint, b.N.requests], ["saved", 1, EP2, 0]);
+    assert.deepStrictEqual([r.action, fetches(b, /replace_push/).length, fetches(b, /save_push/).length, JSON.parse(fetches(b, /replace_push/)[0].body).p_endpoint, JSON.parse(fetches(b, /replace_push/)[0].body).p_replaces, b.N.requests], ["saved", 1, 0, EP2, await sha16(EP1), 0]);
     assert.strictEqual(JSON.parse(b.ls.getItem("silvis-push-on-" + UID)).ep, await sha16(EP2));
+    // (d') revision z (D5): a refused re-save (PS007 - the cap; or offline) is needs-tap, never "skipped" - the flag keeps the OLD hash
+    // (so the card reads Off and Enable replaces by it), nothing is unsubscribed, never a prompt
+    for (const o of [{ replace: "PS007" }, { answers: (p) => (/replace_push/.test(p) ? { status: 503, body: "upstream" } : undefined) }]) {
+      b = mkBrowser(Object.assign({ permission: "granted", silvisSub: EP2, lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }) } }, o));
+      r = await loadClient(S, b).pushDevice.rearm(UID, "x");
+      assert.deepStrictEqual([r.action, JSON.parse(b.ls.getItem("silvis-push-on-" + UID)).ep, !!silvisReg(b).pushManager.sub, b.N.requests], ["needs-tap", await sha16(EP1), true, 0], "refused re-save: " + JSON.stringify(r));
+      assert.strictEqual(fetches(b, /save_push/).length, 0, "a refusal is never retried as a plain save");
+    }
+    b = mkBrowser({ permission: "granted", silvisSub: EP2, replace: "PS007", lsInit: { ["silvis-push-on-" + UID]: JSON.stringify({ v: 1, ep: await sha16(EP1), at: "t" }) } });
+    r = await loadClient(S, b).pushDevice.rearm(UID, "x");
+    assert.strictEqual(r.error, "this account has phone notifications on 10 devices already - turn one off first (nothing was saved)", "the refusal's own words ride along");
     // (e) a subscription without this account's flag: the server decides
     b = mkBrowser({ permission: "granted", silvisSub: EP1, saved: true });
     r = await loadClient(S, b).pushDevice.rearm(UID, "x");
@@ -774,6 +873,20 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     let s = await st({ permission: "granted", silvisSub: EP1, lsInit: await flagOf(EP1) });
     assert.deepStrictEqual([s.state, s.label, s.worker, s.hasSub, s.flag, s.hostname], ["on", "Chrome on Windows", "active", true, true, "fkhan628.github.io"]);
     assert.strictEqual((await st({ permission: "granted", silvisSub: EP1 })).state, "off", "no flag");
+    // revision z (D5): a flag left from an endpoint the browser has since replaced (a refused re-save) reads Off - never "On"
+    // while the server holds no row for this endpoint; Off asks for a tap (pushStateWords' needsTap line)
+    const stale = await st({ permission: "granted", silvisSub: EP1, lsInit: await flagOf(EP2) });
+    assert.deepStrictEqual([stale.state, stale.flag, stale.hasSub], ["off", false, true], "a stale flag: " + JSON.stringify(stale));
+    assert.strictEqual(loadHelpers(S.helpers).pushStateWords(stale.state, { needsTap: true }).line, "Off for this device - tap Enable phone notifications to turn it back on.");
+    // ... the hash in its own try: without crypto.subtle the reading is today's (the flag's presence) - never a throw
+    {
+      const b = mkBrowser({ permission: "granted", silvisSub: EP1, lsInit: await flagOf(EP2) });
+      const c = loadClient(S, b);
+      const env0 = c.pushDevice.env;
+      c.pushDevice.env = () => Object.assign(env0(), { subtle: null });
+      const s0 = await c.pushDevice.state(UID);
+      assert.deepStrictEqual([s0.state, s0.flag], ["on", true], "no crypto.subtle: today's reading");
+    }
     assert.strictEqual((await st({ permission: "denied" })).state, "blocked");
     assert.strictEqual((await st({ noSW: true })).state, "unsupported");
     const ios = await st({ ua: UA_IPHONE });
@@ -802,7 +915,8 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     [S.config, S.helpers, S.index].forEach((t, i) => {
       assert.ok(!/serviceWorker\.ready|\.getRegistration\(/.test(code(t)), ["config.js", "helpers.js", "index-source.html"][i] + " reads serviceWorker.ready / getRegistration(");
     });
-    ["save_push_subscription", "delete_push_subscription", "push_subscription_status", "?vapid=public", "?push=test"].forEach(n => {
+    // review 10/20: revision z's wrapper is under the one-place rule too
+    ["save_push_subscription", "replace_push_subscription", "delete_push_subscription", "push_subscription_status", "?vapid=public", "?push=test"].forEach(n => {
       assert.strictEqual(S.index.indexOf(n), -1, "index-source.html names " + n + " - config.js pushDb is the one place");
       assert.ok(S.config.includes(n), "config.js names " + n);
     });
@@ -982,7 +1096,9 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(adopt.indexOf("pushDevice.dropForeign(user.id)") > adopt.indexOf("if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {") && adopt.indexOf("pushDevice.dropForeign(user.id)") < adopt.indexOf("if (user) lastAuthUidRef.current = user.id;"), "dropForeign in the different-account branch");
     ["push-card", "push-badge", "push-line", "push-state", "push-enable", "push-disable", "push-diagnose", "push-reset", "push-test", "push-msg", "push-prefs", "push-pref", "push-prefs-unavailable", "push-prefs-none"].forEach(t => assert.ok(idx.includes('data-testid="' + t + '"') || idx.includes("pbtn(\"" + t + "\""), "testid " + t));
     assert.ok(idx.includes('"Turn this on once on each device you want alerts on. iPhone / iPad: first Share > Add to Home Screen, then open the app from that icon."'), "the card's one line");
-    ["Which events reach your phones", "Schedule published, open shifts, changes affecting me", "Schedule published, open shifts, shifts taken", "These cover every device you turned on. Reminders stay e-mail only for now.", "Phone switches are available after the next update."].forEach(w => assert.ok(idx.includes(w), w));
+    ["Which events reach your phones", "Schedule published, open shifts, changes affecting me", "Schedule published, open shifts, shifts taken", "These cover every device you turned on. Reminders stay e-mail only for now.", "Phone switches are available after the next update.",
+      // revision z: the reworded note once the reminder column exists, and the third switch's two wordings
+      "These cover every device you turned on; reminders arrive at the hour set under Email.", "Reminder the day before my call", "Reminder the day before their call"].forEach(w => assert.ok(idx.includes(w), w));
     const at = idx.indexOf('data-testid="push-card"'), before = idx.slice(0, at);
     assert.ok(before.lastIndexOf("{view===") === before.lastIndexOf('{view==="settings" && !isPublicMode && <>') && before.lastIndexOf("openSettingsCards.") === before.lastIndexOf("openSettingsCards.notifSettings && <>"), "the card sits in Settings > Notification settings (never on ?public=1)");
     assert.ok(idx.indexOf('data-testid="push-card"') < idx.indexOf('<div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>'), "the Phone notifications box is the first box, above Email");
@@ -990,6 +1106,25 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(!idx.includes("No device push in this app"), "the addNotification comment is corrected");
     assert.ok(/^[\x00-\x7F]*$/.test(idx), "index-source.html stays pure ASCII");
   });
+  // revision z (D15): the reminder column's own probe on the card's open (once per account, a failed probe retries, reset on a
+  // different account), and both prefs saves name it only after it read "ok"; the two live switches' probe is untouched
+  const remPinsCheck = (S) => {
+    const idx = S.index;
+    const eff = between(S, "  const pushCardOpen = view === \"settings\"", "  // push UX follow-up (10/12): back in the foreground");
+    assert.ok(eff.includes("if (pushColsRef.current !== \"ok\" && pushColsRef.current !== \"unavailable\") {\n      notifPrefsDb.pushColumns().then((c) => { pushColsRef.current = c; setPushCols(c); });\n    }"), "the two live switches' probe is unchanged");
+    assert.ok(eff.includes("if (pushRemColRef.current !== \"ok\" && pushRemColRef.current !== \"unavailable\") {\n      notifPrefsDb.reminderPushColumn().then((c) => { pushRemColRef.current = c; setPushRemCol(c); });\n    }"), "the reminder column's own probe, on the card's open");
+    assert.ok(idx.includes("useEffect(() => { pushColsRef.current = \"unknown\"; setPushCols(\"unknown\"); pushRemColRef.current = \"unknown\"; setPushRemCol(\"unknown\"); }, [pushUid]);"), "a different account probes again");
+    const saves = idx.split("\n").filter(l => /await notifPrefsDb\.save\(/.test(l));
+    assert.strictEqual(saves.length, 2, "two prefs saves (surgeon, follower)");
+    saves.forEach(l => assert.ok(l.includes("{ push: pushColsRef.current === \"ok\", reminderPush: pushRemColRef.current === \"ok\" }"), "the save names the reminder column only after its probe read ok: " + l.trim().slice(0, 120)));
+    assert.ok(idx.includes("{pushRemCol === \"ok\" && (mySurgeon\n                              ? pushRows([[\"shift_reminders_push\",\"Reminder the day before my call\"]], notifPrefs[mySurgeon], true, (u) => saveNotifPref(mySurgeon, u))\n                              : pushRows([[\"shift_reminders_push\",\"Reminder the day before their call\"]], followerPref, followerPrefsEditable, saveFollowerPref))}"), "the third switch, guarded by its own probe");
+    assert.ok(!/rest\/v1\/[^`"]*shift_reminders_push/.test(idx), "index-source.html never builds a REST path naming the column - config.js does");
+    assert.strictEqual(S.config.split("notification_preferences?select=shift_reminders_push&limit=1").length - 1, 1, "config.js probes the column once");
+    assert.ok(S.config.includes("notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1"), "pushColumns still probes exactly its two columns (D15: never widened)");
+    assert.strictEqual(S.config.split("await pushDb.saveReplacing(").length - 1, 3, "three saves through the wrapper: enable, and the re-arm's two");
+    assert.ok(!/pushDb\.save\(k\.endpoint/.test(S.config), "no flow calls the plain save directly any more (the wrapper falls back to it)");
+  };
+  await check("revision z client pins (D2 / D4 / D15): the reminder column's own probe beside the unchanged pushColumns one, reset per account; both prefs saves pass reminderPush only after it read ok; the third switch behind its probe; config.js probes the column once and never widens pushColumns; enable and both re-arm saves go through saveReplacing", remPinsCheck);
   // Push UX 1(a) (10/10): collapsed, Notification settings left the Account card's Biometric button as the only "Enable"
   // in sight. The effect and the header's toggle, lifted and run: push off (or the iPhone Home Screen state) opens the card
   // on the first Settings visit per account and page load; a close sticks; a tap on the header is never overridden.
@@ -1104,7 +1239,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     const code = babelJsx(S.index.slice(a + "              {".length, b + "\n              })()".length), "push-card.jsx");
     const H = loadHelpers(S.helpers);
     const scope = Object.assign({
-      React: ReactStub, pushInfo: info, pushNeedsTap: false, pushBusy: "", pushMsg: "", pushCols: "ok",
+      React: ReactStub, pushInfo: info, pushNeedsTap: false, pushBusy: "", pushMsg: "", pushCols: "ok", pushRemCol: "ok",
       pushStateWords: H.pushStateWords, pushCardParts: H.pushCardParts,
       css: { btn: (p) => ({ primary: !!p }) }, T: { text: "#text", success: "#success", open: "#open", muted: "#muted" },
       dk: false, dkCardBorder: "#border", dkText: "#title", dkSubtext: "#muted", mono: "monospace",
@@ -1115,6 +1250,46 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     return vm.runInContext(code, scope, { filename: "push-card.jsx" });
   };
   const DESKTOP = { ios: false, standalone: false, device: "Chrome on Windows", label: "Chrome on Windows", hostname: "localhost" };
+  // revision z (D8 / D13 / D15): the third phone switch and the note per reminder-column state - "ok" shows "Reminder the day
+  // before my call" (a follower: "... their call") on shift_reminders_push and the reworded note; "unavailable" / "unknown" keep the
+  // two live switches and today's "e-mail only" note; "failed" says so - never hiding the two live switches
+  const REM_OK = "These cover every device you turned on; reminders arrive at the hour set under Email.";
+  const REM_OLD = "These cover every device you turned on. Reminders stay e-mail only for now.";
+  const remCardStates = (S) => {
+    const keysOf = (t) => byTestId(t, "push-pref").map(l => l.props["data-key"]);
+    const textsOf = (t) => byTestId(t, "push-pref").map(l => textOf(l).trim());
+    let saved = [];
+    let t = renderPushCard(S, { state: "on", ...DESKTOP }, { saveNotifPref: (id, u) => saved.push([id, u]) });
+    assert.deepStrictEqual(keysOf(t), ["schedule_updates_push", "trade_updates_push", "shift_reminders_push"], "ok: the third switch");
+    assert.strictEqual(textsOf(t)[2], "Reminder the day before my call");
+    assert.strictEqual(textOf(byTestId(t, "push-prefs-note")[0]), REM_OK);
+    const third = allOf(byTestId(t, "push-pref").find(l => l.props["data-key"] === "shift_reminders_push"), x => x.type === "input")[0];
+    assert.deepStrictEqual([third.props.checked, third.props.disabled], [true, false], "a missing key reads on (D10), editable");
+    third.props.onChange({ target: { checked: false } });
+    assert.deepStrictEqual(plain(saved), [["s2", { shift_reminders_push: false }]], "a tap saves the surgeon's own row");
+    t = renderPushCard(S, { state: "on", ...DESKTOP }, { notifPrefs: { s2: { shift_reminders_push: false } } });
+    assert.strictEqual(allOf(byTestId(t, "push-pref").find(l => l.props["data-key"] === "shift_reminders_push"), x => x.type === "input")[0].props.checked, false, "an explicit false reads off");
+    saved = [];
+    t = renderPushCard(S, { state: "on", ...DESKTOP }, { mySurgeon: null, isFollowing: true, followerPref: {}, followerPrefsEditable: true, saveFollowerPref: (u) => saved.push(u) });
+    assert.deepStrictEqual(textsOf(t), ["Schedule published, open shifts, shifts taken", "Trade proposed / accepted / declined", "Reminder the day before their call"], "a follower's third switch");
+    allOf(byTestId(t, "push-pref")[2], x => x.type === "input")[0].props.onChange({ target: { checked: false } });
+    assert.deepStrictEqual(plain(saved), [{ shift_reminders_push: false }], "a follower saves his own row");
+    t = renderPushCard(S, { state: "on", ...DESKTOP }, { mySurgeon: null, isFollowing: true, followerPref: null, followerPrefsEditable: false });
+    assert.strictEqual(allOf(byTestId(t, "push-pref")[2], x => x.type === "input")[0].props.disabled, true, "a follower's third switch before his row was read: disabled, like the other two");
+    for (const st of ["unavailable", "unknown"]) {
+      t = renderPushCard(S, { state: "on", ...DESKTOP }, { pushRemCol: st });
+      assert.deepStrictEqual(keysOf(t), ["schedule_updates_push", "trade_updates_push"], st + ": the two live switches only");
+      assert.strictEqual(textOf(byTestId(t, "push-prefs-note")[0]), REM_OLD, st + ": today's note");
+      assert.strictEqual(byTestId(t, "push-reminder-unavailable").length, 0);
+    }
+    t = renderPushCard(S, { state: "on", ...DESKTOP }, { pushRemCol: "failed" });
+    assert.deepStrictEqual(keysOf(t), ["schedule_updates_push", "trade_updates_push"], "failed: the two live switches stay");
+    assert.strictEqual(textOf(byTestId(t, "push-reminder-unavailable")[0]), "Couldn't check the reminder switch - reload the app to try again.");
+    t = renderPushCard(S, { state: "on", ...DESKTOP }, { pushCols: "unavailable", pushRemCol: "ok" });
+    assert.deepStrictEqual([byTestId(t, "push-pref").length, byTestId(t, "push-prefs-unavailable").length], [0, 1], "the two live columns missing: no phone switch at all (as before)");
+    t = renderPushCard(S, { state: "blocked", ...DESKTOP });
+    byTestId(t, "push-pref").forEach(l => assert.strictEqual(l.props.style.color, "#muted", "blocked: the third switch greyed like the others"));
+  };
   const cardRenderCheck = (S) => {
     // (c) Safari on an iPhone / iPad: ONE instruction (the state line), no push button at all; the phone switches stay
     let t = renderPushCard(S, { state: "ios-home-screen", ios: true, standalone: false, device: "iPhone", label: "iPhone", hostname: "fkhan628.github.io" });
@@ -1140,7 +1315,8 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.strictEqual(note.length, 1, "blocked: the switches' note");
     assert.strictEqual(textOf(note[0]), BLOCKED_PREFS_NOTE);
     let inputs = allOf(byTestId(t, "push-prefs")[0], x => x.type === "input");
-    assert.strictEqual(inputs.length, 2, "two phone switches");
+    // revision z: three phone switches once the reminder column exists (pushRemCol "ok")
+    assert.strictEqual(inputs.length, 3, "three phone switches");
     inputs.forEach(i => assert.strictEqual(i.props.disabled, false, "blocked: a surgeon's switch stays editable"));
     byTestId(t, "push-pref").forEach(l => { assert.strictEqual(l.props.style.color, "#muted", "blocked: greyed"); assert.strictEqual(l.props.style.cursor, "pointer", "blocked: still clickable"); });
     // a follower, his row read: editable, greyed, the note; his row not read yet: disabled as before
@@ -1158,6 +1334,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     // still checking this device: as before
     t = renderPushCard(S, null);
     assert.strictEqual(textOf(byTestId(t, "push-state")[0]), "Checking this device...");
+    remCardStates(S);
     assert.deepStrictEqual(buttonsOf(t), ["push-diagnose", "push-reset", "push-test"]);
     assert.strictEqual(byTestId(t, "push-line").length, 1);
   };
@@ -1308,6 +1485,27 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
   await mutant("pushIsDay regex-only (an impossible date opens)", "helpers",
     "  return dt.getUTCFullYear() === Number(m[1]) && dt.getUTCMonth() === Number(m[2]) - 1 && dt.getUTCDate() === Number(m[3]);\n};",
     "  return true;\n};", realDayCheck);
+  // revision z (D2 / D4 / D5 / D15): each check must turn red when its piece is undone
+  await mutant("the re-arm's saves without the flag's hash (the stale row is made again)", "config",
+    "pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, flag.ep);", "pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, null);", rearmCheck);
+  await mutant("Enable without its own flag hash", "config",
+    "pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, own && own.ep);", "pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, null);", enableReplaceCheck);
+  await mutant("saveReplacing without the fallback (before the apply every re-arm and Enable would fail)", "config",
+    "return r.ok || !r.unavailable ? r : pushDb.save(endpoint, p256dh, auth, label);", "return r;", saveReplacingCheck);
+  await mutant("a refused re-save answering 'skipped' again (the card kept reading On)", "config",
+    'if (!r.ok) return { action: "needs-tap", error: pushErrorWords(r.error, r.status) };', 'if (!r.ok) return { action: "skipped", error: pushErrorWords(r.error, r.status) };', rearmCheck);
+  await mutant("state() ignoring the flag's hash", "config",
+    "      try { flag = f.ep === await pushDevice._hash(sub.endpoint); } catch (x) { flag = true; }\n", "", stateCheck);
+  await mutant("state()'s hash without its own try (no crypto.subtle would throw)", "config",
+    "      try { flag = f.ep === await pushDevice._hash(sub.endpoint); } catch (x) { flag = true; }\n", "      flag = f.ep === await pushDevice._hash(sub.endpoint);\n", stateCheck);
+  await mutant("pushColumns widened to the reminder column (D15: a missing column would hide the two live switches)", "config",
+    "notification_preferences?select=trade_updates_push,schedule_updates_push&limit=1", "notification_preferences?select=trade_updates_push,schedule_updates_push,shift_reminders_push&limit=1", remColCheck);
+  await mutant("the third switch shown without its probe", "index",
+    '{pushRemCol === "ok" && (mySurgeon', "{(mySurgeon", cardRenderCheck);
+  await mutant("the prefs saves naming the reminder column before its probe read ok", "index",
+    'reminderPush: pushRemColRef.current === "ok"', "reminderPush: true", remPinsCheck);
+  await mutant("the reworded note shown before the column exists", "index",
+    '{pushRemCol === "ok" ? "These cover every device you turned on; reminders arrive', '{true ? "These cover every device you turned on; reminders arrive', cardRenderCheck);
   await mutant("the password-update sign-out without the push teardown", "index",
     "    if (uid) { try { await pushDevice.teardown(uid, 4000); } catch (e) { console.warn(\"push teardown after the password update failed (signing out anyway):\", e); } }\n", "", pwSignOutCheck);
 

@@ -1257,7 +1257,11 @@ check("P20 F3 source pins - daily-reminder (reminder mode): after the surgeons' 
   assert.ok(iLoop > 0 && iPlan > iLoop, "followers after the surgeons' loop");
   assert.ok(h.includes("followerReminderPlan(followers, onCall, now.hour, DEFAULT_REMINDER_HOUR)"), "the follower's own hour, else the function default");
   assert.ok(h.includes('rest("user_profiles?select=*&role=in.(viewer,coordinator)")') && h.includes('rest("notification_preferences?select=*")'), "the follower accounts + every prefs row (a follower's row is keyed by profile_id)");
-  assert.ok(!/rest[(]["`][^"`]*(follows|profile_id)/.test(drSrc), "no read names a revision-o column (a 400 before the apply)");
+  // pin moved deliberately (revision z, 10/20): the reminder's phone push reads push_subscriptions by profile_id (the device
+  // table's own column since revision w - send-notification's glue, copied byte for byte); the rule stays for the e-mail
+  // side's tables, where a revision-o column would 400 a read
+  assert.ok(!/rest[(]["`](user_profiles|notification_preferences)[^"`]*(follows|profile_id)/.test(drSrc), "no user_profiles / notification_preferences read names a revision-o column (a 400 before the apply)");
+  assert.ok(Array.from(drSrc.matchAll(/rest[(]["`]([a-z_]+)[^"`]*profile_id/g)).every((m) => m[1] === "push_subscriptions"), "only the device reads name profile_id");
   const fb = h.slice(iPlan - 1200, h.indexOf("return json(200, {", iPlan));
   assert.ok(/followerReminderLine\(nameOf\(e\.surgeon\), e\.role, tomorrow, e\.otherLabel\)/.test(fb), "the third-party line");
   assert.ok(/if \(dryRun\) \{[^]*dry_run_composed/.test(fb), "dryRun composes and sends nothing");
@@ -3815,6 +3819,591 @@ check("A4 (Cowork 10/16 4:40 AM): the function header's deploy line is section 3
   const rule = s3.slice(s3.indexOf("After deploying, follow the Davenport convention")).replace(/\s+/g, " ");
   assert.ok(rule.indexOf("`supabase functions download <slug> --workdir $wd --project-ref bzhsroegtagqhutbnsrp --use-api`") > 0, "the general rule's download line carries --use-api: " + rule.slice(0, 200));
   assert.ok(/--use-api` unbundles on the server[^.]*Docker/.test(rule) && /remove the uploaded copy first/.test(rule), "the rule says why --use-api and why the uploaded copy goes first");
+});
+
+/* =====================================================================
+   Revision z (Faraz 10/20 - the push follow-ups report, D8-D16): the day-before reminder as phone push, in daily-reminder.
+     1. the copies: send-notification's '@webPush' and '@pushPlan' blocks, its device glue (the VAPID pair through
+        pushBookkeeping), the VAPID constants and the UUID_SHAPE line are in daily-reminder BYTE FOR BYTE (as @logRedact /
+        @followers / @cronSecret); send-notification itself is unchanged (its v12 hash pin above);
+     2. the plain-JS '@reminderPush' block, lifted beside @logRedact + @followers + @pushPlan and run: whom (the person at
+        his hour, the followers of that surgeon at theirs - whatever either's e-mail switch or address), the one switch
+        shift_reminders_push, the words, the tag and the tab, the merged answer and the dryRun plan;
+     3. the REAL handler, types stripped (as the P30 harness does), on a fixed clock against a fake Silvis, Resend and push
+        service: the e-mail part of the answer and the e-mails sent equal the pre-z logic re-stated here, for every input;
+        the pushes (decrypted); 404 / 410 deleted, 500 fail_count + 1; dryRun sends and writes nothing and reads no endpoint;
+        no VAPID secrets / no device table -> push.error; no endpoint, key, payload text or address in the answer or a log;
+     4. source pins (where the fan-out sits, the header, the deploy line, the modes that never push) and the README's
+        PREPARED record (the deploy lines, the order, the rollback).
+   ===================================================================== */
+const zBlock = (src, name, tag) => {
+  const re = (s) => new RegExp("^// @" + tag + "-" + s + "[ \\t]*$", "m");
+  const i = src.search(re("start")), j = src.search(re("end"));
+  assert.ok(i >= 0 && j > i, name + " carries '// @" + tag + "-start' / '// @" + tag + "-end' on lines of their own");
+  assert.strictEqual(src.split("\n").filter((l) => l.trim() === "// @" + tag + "-start").length, 1, name + ": the @" + tag + " block exists once");
+  return src.slice(i, j);
+};
+const Z_GLUE_START = "// The VAPID pair, imported once per isolate";
+const zSnGlue = () => { const i = snSrc.indexOf(Z_GLUE_START), b = snSrc.indexOf("async function pushBookkeeping(", i); assert.ok(i > 0 && b > i, "send-notification's device glue"); return snSrc.slice(i, snSrc.indexOf("\n}\n", b) + 3); };
+const zDrGlue = () => { const a = "// @pushGlue-copy-start\n", i = drSrc.indexOf(a), j = drSrc.indexOf("// @pushGlue-copy-end\n"); assert.ok(i > 0 && j > i, "daily-reminder's '@pushGlue-copy' markers"); return drSrc.slice(i + a.length, j); };
+check("revision z (1): daily-reminder carries send-notification's '@webPush' and '@pushPlan' blocks, its device glue (vapidKeyPair, pushLogSafe, readPushSubscriptions, pushSender, pushBookkeeping), the VAPID constants and the UUID_SHAPE line BYTE FOR BYTE - one copy each, no drift (send-notification itself stays the deployed v12: the hash pin above)", () => {
+  ["webPush", "pushPlan"].forEach((tag) => assert.strictEqual(zBlock(drSrc, "daily-reminder", tag), zBlock(snSrc, "send-notification", tag), "daily-reminder's @" + tag + " block is byte-identical to send-notification's (one copy per function, no drift)"));
+  const glue = zSnGlue();
+  assert.strictEqual(zDrGlue(), glue, "the device glue is byte-identical to send-notification's");
+  ["function vapidKeyPair(", "function pushLogSafe(", "async function readPushSubscriptions(", "function pushSender(", "async function pushBookkeeping("].forEach((f) => {
+    assert.ok(glue.includes(f), "the glue holds " + f);
+    assert.strictEqual(drSrc.split(f).length - 1, 1, "daily-reminder defines " + f + " once");
+  });
+  const lines = snSrc.split("\n").filter((l) => /^const (VAPID_PUBLIC_KEY|VAPID_PRIVATE_KEY|VAPID_SUBJECT|UUID_SHAPE) = /.test(l) || l.startsWith("// Prompt 30 phone push: the VAPID pair"));
+  assert.strictEqual(lines.length, 5, "send-notification's VAPID comment, three constants and UUID_SHAPE");
+  const drLines = drSrc.split("\n");
+  lines.forEach((l) => assert.strictEqual(drLines.filter((x) => x === l).length, 1, "daily-reminder carries the line once, byte for byte: " + l.slice(0, 80)));
+  assert.ok(drSrc.indexOf('const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "";') < drSrc.indexOf("// @webPush-start"), "the constants sit with the other environment reads, above the blocks");
+});
+let RP = null;
+check("revision z (2): the plain-JS '@reminderPush' block (no type annotation, no I/O, no e-mail flag) evaluates beside @logRedact + @followers + @pushPlan and defines REMINDER_PUSH_PREF (shift_reminders_push), REMINDER_PUSH_TAB (myschedule), reminderPushWhen / Line / Tag / Plan / Payload / Merge / DryRun / Refresh", () => {
+  const b = zBlock(drSrc, "daily-reminder", "reminderPush");
+  plainJs(b, "daily-reminder @reminderPush");
+  const code = b.replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/\bfetch\(|\bDeno\.|\brest\(|\bconsole\./.test(code), "no I/O inside the block - the handler does it");
+  assert.ok(!/_email/.test(code), "the reminder's push never names an e-mail flag (D12)");
+  RP = new Function(blockOf(drSrc, "daily-reminder", "logRedact") + blockOf(drSrc, "daily-reminder", "followers") + zBlock(drSrc, "daily-reminder", "pushPlan") + b +
+    "\nreturn { REMINDER_PUSH_PREF, REMINDER_PUSH_TAB, REMINDER_PUSH_FRAME, reminderPushWhen, reminderPushLine, reminderPushTag, reminderPushPlan, reminderPushPayload, reminderPushMerge, reminderPushDryRun, reminderPushRefresh, followerIndex, followerReminderPlan, pushDeliver, pushSummary, PUSH_TABS };")();
+  assert.strictEqual(RP.REMINDER_PUSH_PREF, "shift_reminders_push");
+  assert.ok(P30_CONTRACT_TABS.indexOf(RP.REMINDER_PUSH_TAB) >= 0 && RP.REMINDER_PUSH_TAB === "myschedule", "the tap opens My schedule (a contract tab)");
+});
+// one fixture for the pure checks and the handler: tomorrow Wed 10/21, Burchett (s2) primary, Khan (s1) backup
+const Z_DAY = "2026-10-21";
+const Z_NAMES = { s1: "Khan", s2: "Burchett", s3: "Acton", s4: "Philip", s5: "Fierce", s6: "Sarkar" };
+const Z_ON = [{ person_id: "s2", role: "primary", otherLabel: "Khan" }, { person_id: "s1", role: "backup", otherLabel: "Burchett" }];
+const Z_F = { f1: p30Id("f1aaaaaa"), f2: p30Id("f2bbbbbb"), f3: p30Id("f3cccccc"), f4: p30Id("f4dddddd") };
+const Z_A = { a1: p30Id("a1a1a1a1"), a2: p30Id("a2a2a2a2"), a5: p30Id("a5a5a5a5") };
+const Z_PROFILES = () => [
+  { id: Z_A.a1, role: "admin", person_id: "s1", email: "s1@example.org", display_name: null, follows: [] },
+  { id: Z_A.a2, role: "surgeon", person_id: "s2", email: "s2@example.org", display_name: null, follows: [] },
+  { id: Z_A.a5, role: "surgeon", person_id: "s2", email: null, display_name: null, follows: [] },                          // a second account for s2
+  { id: Z_F.f1, role: "viewer", person_id: null, email: "f1@example.org", display_name: "Follower one", follows: ["s2"] },
+  { id: Z_F.f2, role: "coordinator", person_id: null, email: null, display_name: null, follows: ["s2", "s1"] },           // both surgeons, no address
+  { id: Z_F.f3, role: "viewer", person_id: null, email: "f3@example.org", display_name: null, follows: ["s1"] },
+  { id: Z_F.f4, role: "viewer", person_id: null, email: "f4@example.org", display_name: null, follows: ["s2"] },
+];
+const Z_PREFS = () => [
+  { person_id: "s2", profile_id: null, shift_reminders_email: false },                                    // e-mail off, no push key: pushed
+  { person_id: "s1", profile_id: null, shift_reminders_push: false },                                     // push off, e-mail on: mailed
+  { person_id: null, profile_id: Z_F.f2, shift_reminders_email: false, reminder_hour_central: 17 },       // a follower: e-mail off, push on
+  { person_id: null, profile_id: Z_F.f3, reminder_hour_central: 20 },                                     // a follower at 20:00
+  { person_id: null, profile_id: Z_F.f4, shift_reminders_push: false },                                   // a follower: push off, e-mail on
+];
+const zPlanFixture = (hour) => {
+  const followers = RP.followerIndex(Z_PROFILES().filter((p) => p.role === "viewer" || p.role === "coordinator"), Z_PREFS());
+  const prefsById = {}; Z_PREFS().forEach((p) => { if (p.person_id) prefsById[p.person_id] = p; });
+  const accounts = { s2: [Z_A.a2, Z_A.a5], s1: [Z_A.a1] };
+  const h = hour === undefined ? 17 : hour;
+  return RP.reminderPushPlan(Z_ON, Z_DAY, Z_NAMES, prefsById, accounts, followers, RP.followerReminderPlan(followers, Z_ON, h, 17), h, 17);
+};
+const zTk = (e) => e.targets.map((t) => t.kind + ":" + t.key), zSk = (e) => e.skipped.map((s) => s.kind + ":" + s.key);
+check("revision z (2): reminderPushPlan - one entry per role on call tomorrow; the person only at HIS hour (else 17), a follower of that surgeon only at HIS OWN hour, whatever either's e-mail switch or address (D12 / D13); shift_reminders_push alone decides (an explicit false is skipped_pref_off, a missing row or key is on - D10); a follower of both surgeons gets one notice per role; a person without an account is a target with no device; the words (D14) and one tag per day and role", () => {
+  if (!RP) throw new Error("the @reminderPush block did not load");
+  const plan = zPlanFixture();
+  assert.deepStrictEqual(plan.map((e) => [e.role, e.surgeon, e.tag]), [["primary", "s2", "silvis-reminder-20261021-primary"], ["backup", "s1", "silvis-reminder-20261021-backup"]]);
+  assert.strictEqual(plan[0].line, "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 - backup Khan.");
+  assert.strictEqual(plan[1].line, "Tomorrow (Wed 10/21) you are on Silvis backup call, 07:00 to 07:00 - primary Burchett.");
+  assert.strictEqual(plan[0].followerLine, "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Wed 10/21), backup Khan", "a follower reads the e-mail's followerReminderLine");
+  assert.strictEqual(plan[1].followerLine, "Reminder: Dr. Khan is on backup call at Silvis tomorrow (Wed 10/21), primary Burchett");
+  // primary: s2 (e-mail off, push key absent) on BOTH his accounts; f1; f2 (no address, e-mail off - still pushed); f4 push off
+  assert.deepStrictEqual(zTk(plan[0]), ["person:s2", "follower:f1aaaaaa", "follower:f2bbbbbb"]);
+  assert.deepStrictEqual(plan[0].targets[0].profileIds, [Z_A.a2, Z_A.a5]);
+  assert.deepStrictEqual(zSk(plan[0]), ["follower:f4dddddd"]);
+  plan[0].targets.filter((t) => t.kind === "follower").forEach((t) => { assert.deepStrictEqual(t.followedNames, ["Burchett"]); assert.deepStrictEqual(t.via, ["s2"]); });
+  // backup: s1 push off (his e-mail on) -> skipped_pref_off; f2 again (he follows both: his second notice); f3's hour is 20:00
+  assert.deepStrictEqual(zTk(plan[1]), ["follower:f2bbbbbb"]);
+  assert.deepStrictEqual(zSk(plan[1]), ["person:s1"]);
+  assert.deepStrictEqual(plan[1].targets[0].followedNames, ["Khan"]);
+  // 20:00: only f3 (his own hour); the persons (default 17) are not reminded now - and nobody is "skipped" for the hour
+  const at20 = zPlanFixture(20);
+  assert.deepStrictEqual(at20.map(zTk), [[], ["follower:f3cccccc"]]);
+  assert.deepStrictEqual(at20.map(zSk), [[], []]);
+  assert.deepStrictEqual(zPlanFixture(18).map(zTk), [[], []], "18:00 is nobody's hour");
+  // a person's own hour; the followed surgeon's prefs never decide for his follower (and the reverse)
+  const own6 = RP.reminderPushPlan(Z_ON, Z_DAY, Z_NAMES, { s2: { person_id: "s2", reminder_hour_central: 6, shift_reminders_push: true } }, { s2: [Z_A.a2] }, [], [], 6, 17);
+  assert.deepStrictEqual(own6.map(zTk), [["person:s2"], []]);
+  const fOnly = RP.followerIndex([Z_PROFILES()[3]], []);
+  const sOff = RP.reminderPushPlan(Z_ON, Z_DAY, Z_NAMES, { s2: { person_id: "s2", shift_reminders_push: false } }, { s2: [Z_A.a2] }, fOnly, RP.followerReminderPlan(fOnly, Z_ON, 17, 17), 17, 17);
+  assert.deepStrictEqual([zTk(sOff[0]), zSk(sOff[0])], [["follower:f1aaaaaa"], ["person:s2"]], "s2's switch off does not stop his follower");
+  // no account: a target with no device to read (skipped_no_device once delivered); an outside primary is no entry
+  const noAcc = RP.reminderPushPlan([{ person_id: "s3", role: "primary", otherLabel: "OPEN" }], Z_DAY, Z_NAMES, {}, {}, [], [], 17, 17);
+  assert.deepStrictEqual(noAcc[0].targets, [{ key: "s3", kind: "person", profileIds: [] }]);
+  assert.strictEqual(noAcc[0].line, "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 - backup OPEN.");
+  assert.deepStrictEqual(RP.reminderPushPlan([{ person_id: null, role: "primary" }, { person_id: "s4", role: "night" }], Z_DAY, Z_NAMES, {}, {}, [], [], 17, 17), [], "no person / an unknown role: no entry");
+  assert.ok(["primary", "backup"].every((r) => P30_SW_TAG.test(RP.reminderPushTag(Z_DAY, r))), "both tags fit sw.js's rule");
+  assert.strictEqual(RP.reminderPushWhen("2026-12-31"), "Thu 12/31");
+});
+check("revision z (2): reminderPushPayload - exactly { v, title, body, tag, tab }: 'Silvis Call' + the person's line, or 'Silvis Call (following Dr. X)' + the follower line; the reminder's tag and tab myschedule; no day, never a url; sw.js would show it (the tag rule, a contract tab, at most 180 characters)", () => {
+  if (!RP) throw new Error("the @reminderPush block did not load");
+  const plan = zPlanFixture();
+  const p = RP.reminderPushPayload(plan[0], plan[0].targets[0]);
+  assert.deepStrictEqual(p, { v: 1, title: "Silvis Call", body: "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 - backup Khan.", tag: "silvis-reminder-20261021-primary", tab: "myschedule" });
+  const f = RP.reminderPushPayload(plan[1], plan[1].targets[0]);
+  assert.deepStrictEqual(f, { v: 1, title: "Silvis Call (following Dr. Khan)", body: "Reminder: Dr. Khan is on backup call at Silvis tomorrow (Wed 10/21), primary Burchett", tag: "silvis-reminder-20261021-backup", tab: "myschedule" });
+  [p, f].forEach((x) => { assert.ok(P30_SW_TAG.test(x.tag) && P30_CONTRACT_TABS.indexOf(x.tab) >= 0 && Array.from(x.body).length <= 180 && !("url" in x) && !("params" in x), JSON.stringify(x)); });
+  const long = RP.reminderPushPayload(Object.assign({}, plan[0], { line: "x ".repeat(200) }), plan[0].targets[0]);
+  assert.ok(Array.from(long.body).length <= 180 && /\.\.\.$/.test(long.body), "a long line is cut as every push body is");
+});
+acheck("revision z (2): delivery over the plan with a fake send, then reminderPushMerge - the counts summed over the roles (sent + failed + skipped_no_device + skipped_pref_off = every role's targets), removed = 404 / 410, the lists with their role, the notification tags; reminderPushDryRun - composed / skipped_no_device by device count, skipped_pref_off, devices_found; no endpoint in either", async () => {
+  if (!RP) throw new Error("the @reminderPush block did not load");
+  const plan = zPlanFixture();
+  const subs = {
+    [Z_A.a2]: [{ id: p30Id("d0000001"), profile_id: Z_A.a2, endpoint: p30Fcm("m-a2"), fail_count: 0 }],
+    [Z_A.a5]: [{ id: p30Id("d0000002"), profile_id: Z_A.a5, endpoint: p30Fcm("m-a5"), fail_count: 0 }],
+    [Z_F.f1]: [{ id: p30Id("d0000003"), profile_id: Z_F.f1, endpoint: p30Fcm("m-f1"), fail_count: 2 }],
+    [Z_F.f2]: [{ id: p30Id("d0000004"), profile_id: Z_F.f2, endpoint: p30Fcm("m-f2"), fail_count: 0 }],
+  };
+  const status = { [p30Fcm("m-a5")]: 410, [p30Fcm("m-f1")]: 500 };
+  const sent = [], logs = [];
+  const parts = [];
+  for (const e of plan) {
+    const d = await RP.pushDeliver(e.targets, subs, (t) => RP.reminderPushPayload(e, t), async (s, text) => { sent.push([s.endpoint, JSON.parse(text).tag]); return { status: status[s.endpoint] || 201 }; }, { log: (l) => logs.push(l) });
+    parts.push({ entry: e, summary: RP.pushSummary(d, e.skipped, true) });
+  }
+  const m = RP.reminderPushMerge(parts);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(m)), {
+    sent: 3, failed: 1, removed: 1, skipped_no_device: 0, skipped_pref_off: 2, devices: { sent: 3, failed: 1, removed: 1 }, error: null,
+    results: [{ person_id: "s2", role: "primary", status: "sent" }, { person_id: "s1", role: "backup", status: "skipped_pref_off" }],
+    followers: [{ follower: "f1aaaaaa", via: ["s2"], role: "primary", status: "failed" }, { follower: "f2bbbbbb", via: ["s2"], role: "primary", status: "sent" },
+      { follower: "f4dddddd", via: ["s2"], role: "primary", status: "skipped_pref_off" }, { follower: "f2bbbbbb", via: ["s1"], role: "backup", status: "sent" }],
+    tags: ["silvis-reminder-20261021-primary", "silvis-reminder-20261021-backup"],
+  });
+  assert.strictEqual(m.sent + m.failed + m.skipped_no_device + m.skipped_pref_off, 6, "the invariant over both roles' targets (4 + 2 skipped)");
+  assert.deepStrictEqual(sent.map((x) => x[0].slice(-4) + " " + x[1].replace(/^silvis-reminder-20261021-/, "")).sort(), ["m-a2 primary", "m-a5 primary", "m-f1 primary", "m-f2 backup", "m-f2 primary"].sort(), "f2's device gets both notices, each with its own tag");
+  const dry = RP.reminderPushDryRun(plan, { [Z_A.a2]: 1, [Z_A.a5]: 1, [Z_F.f2]: 1 });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(dry)), {
+    dry_run: true, composed: 3, skipped_no_device: 1, skipped_pref_off: 2, devices_found: 4, error: null,
+    results: [{ person_id: "s2", role: "primary", status: "dry_run_composed" }, { person_id: "s1", role: "backup", status: "skipped_pref_off" }],
+    followers: [{ follower: "f1aaaaaa", via: ["s2"], role: "primary", status: "skipped_no_device" }, { follower: "f2bbbbbb", via: ["s2"], role: "primary", status: "dry_run_composed" },
+      { follower: "f4dddddd", via: ["s2"], role: "primary", status: "skipped_pref_off" }, { follower: "f2bbbbbb", via: ["s1"], role: "backup", status: "dry_run_composed" }],
+    tags: ["silvis-reminder-20261021-primary", "silvis-reminder-20261021-backup"],
+  });
+  const wire = JSON.stringify(m) + JSON.stringify(dry) + logs.join("\n");
+  assert.ok(!/fcm\.googleapis|https?:|@|"title"|"body"/.test(wire), "no endpoint, URL, address or words in the answers or the log lines: " + wire.slice(0, 300));
+});
+
+// review 10/20: one device in both roles (a follower of both of tomorrow's surgeons) - the next role reads the rows as the role before
+// left them: a 404 / 410 row dropped, a sent row at fail_count 0, a failed row at the count just written; untouched rows as read; the
+// input map is not changed
+acheck("revision z (2): reminderPushRefresh - after one role's delivery, the rows the next role reads: gone rows dropped, sent rows fail_count 0, failed rows the count just written, the rest as read (a new map, the input untouched); then a second delivery over the refreshed rows never sends to a gone row and counts a failure on from the first", async () => {
+  if (!RP) throw new Error("the @reminderPush block did not load");
+  const id = (n) => p30Id("c000000" + n);
+  const subs = {
+    [Z_F.f2]: [{ id: id(1), profile_id: Z_F.f2, endpoint: p30Fcm("r-gone"), fail_count: 2 }, { id: id(2), profile_id: Z_F.f2, endpoint: p30Fcm("r-fail"), fail_count: 2 }],
+    [Z_A.a2]: [{ id: id(3), profile_id: Z_A.a2, endpoint: p30Fcm("r-ok"), fail_count: 5 }, { id: id(4), profile_id: Z_A.a2, endpoint: p30Fcm("r-idle"), fail_count: 7 }],
+  };
+  const before = JSON.stringify(subs);
+  const out = RP.reminderPushRefresh(subs, { okIds: [id(3)], goneIds: [id(1)], failedRows: [{ id: id(2), fail_count: 3 }] });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(out)), {
+    [Z_F.f2]: [{ id: id(2), profile_id: Z_F.f2, endpoint: p30Fcm("r-fail"), fail_count: 3 }],
+    [Z_A.a2]: [{ id: id(3), profile_id: Z_A.a2, endpoint: p30Fcm("r-ok"), fail_count: 0 }, { id: id(4), profile_id: Z_A.a2, endpoint: p30Fcm("r-idle"), fail_count: 7 }],
+  });
+  assert.strictEqual(JSON.stringify(subs), before, "the input map is not changed");
+  assert.deepStrictEqual(RP.reminderPushRefresh(subs, null), subs, "nothing delivered: the rows as read");
+  assert.deepStrictEqual(RP.reminderPushRefresh(null, { goneIds: [id(1)] }), {}, "no rows: an empty map");
+  // the two roles over ONE device list, as the handler runs them
+  const t = [{ key: "f2bbbbbb", kind: "follower", profileIds: [Z_F.f2], via: ["s2"], followedNames: ["Burchett"] }];
+  const status = { [p30Fcm("r-gone")]: 410, [p30Fcm("r-fail")]: 500 };
+  const sentTo = [];
+  const send = async (s) => { sentTo.push(s.endpoint.slice(-6)); return { status: status[s.endpoint] || 201 }; };
+  let rows = { [Z_F.f2]: subs[Z_F.f2] };
+  const d1 = await RP.pushDeliver(t, rows, () => ({ v: 1 }), send, { log: () => {} });
+  rows = RP.reminderPushRefresh(rows, d1);
+  const d2 = await RP.pushDeliver(t, rows, () => ({ v: 1 }), send, { log: () => {} });
+  assert.deepStrictEqual(sentTo.sort(), ["r-fail", "r-fail", "r-gone"], "the gone device is sent to once, the failing one twice");
+  assert.deepStrictEqual([d1.goneIds, d2.goneIds], [[id(1)], []], "the gone row is removed once");
+  assert.deepStrictEqual([d1.failedRows, d2.failedRows], [[{ id: id(2), fail_count: 3 }], [{ id: id(2), fail_count: 4 }]], "the second failure counts on from the first (2 -> 3 -> 4)");
+});
+
+/* ---- the real daily-reminder handler, types stripped, on a fixed clock ---- */
+const Z_URL = "https://fake-project.supabase.test";
+const Z_SECRET = "a-32-character-cron-secret-tests";
+let Z_JS = null;
+function zHandlerJs() {
+  if (Z_JS) return Z_JS;
+  const { stripTypeScriptTypes } = require("node:module");
+  const imp = /^import \{ serve \} from "https:\/\/deno\.land\/std@[0-9.]+\/http\/server\.ts";$/m;
+  assert.ok(imp.test(drSrc), "daily-reminder's one import is the std serve");
+  const orig = process.emitWarning;
+  process.emitWarning = function (w, ...rest) { const t = typeof rest[0] === "string" ? rest[0] : rest[0] && rest[0].type; if (t === "ExperimentalWarning") return; return orig.call(process, w, ...rest); };
+  try { Z_JS = stripTypeScriptTypes(drSrc.replace(imp, "")); } finally { process.emitWarning = orig; }
+  return Z_JS;
+}
+// nowIso fixes the clock the handler reads (new Date() / Date.now()); the Central hour and tomorrow follow from it
+function zHandler(env, w, nowIso) {
+  let handler = null;
+  const say = (...a) => w.logs.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+  const Deno = { env: { get: (k) => (Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined) } };
+  const FIXED = Date.parse(nowIso);
+  class ZDate extends Date { constructor(...a) { if (a.length === 0) super(FIXED); else super(...a); } static now() { return FIXED; } }
+  new Function("Deno", "serve", "fetch", "console", "Date", zHandlerJs())(Deno, (h) => { handler = h; }, zFetch(w), { log: say, warn: say, error: say, info: say }, ZDate);
+  assert.strictEqual(typeof handler, "function", "the handler registered with serve");
+  return handler;
+}
+function zWorld(over) {
+  const w = Object.assign({
+    roster: Object.entries(Z_NAMES).map(([id, name]) => ({ id, name, code: name.slice(0, 3).toUpperCase() })),
+    day: { day: Z_DAY, primary_id: "s2", backup_id: "s1", external_cover: null, note: "harness note" },
+    profiles: Z_PROFILES(), prefs: Z_PREFS(), subs: [], pushStatus: {}, mailStatus: 200, subsRead: 200,
+  }, over || {});
+  w.calls = []; w.mails = []; w.pushes = []; w.patches = []; w.deletes = []; w.subSelects = []; w.logs = [];
+  return w;
+}
+function zFetch(w) {
+  return async (url, init) => {
+    const o = init || {};
+    const u = new URL(String(url));
+    const method = String(o.method || "GET").toUpperCase();
+    const hdr = (k) => { const h = o.headers || {}; if (typeof h.get === "function") return h.get(k); const key = Object.keys(h).find((x) => x.toLowerCase() === k.toLowerCase()); return key ? h[key] : null; };
+    w.calls.push(method + " " + u.origin + u.pathname + decodeURIComponent(u.search));
+    const ok = (x, status) => new Response(JSON.stringify(x), { status: status || 200, headers: { "Content-Type": "application/json" } });
+    const ids = (f) => (/^in\.\((.*)\)$/.test(f || "") ? f.slice(4, -1).split(",").map((s) => s.replace(/^"|"$/g, "")) : /^eq\./.test(f || "") ? [f.slice(3)] : null);
+    const pick = (row, sel) => Object.fromEntries(String(sel).split(",").map((c) => [c, row[c] === undefined ? null : row[c]]));
+    if (u.origin === Z_URL && u.pathname.indexOf("/rest/v1/") === 0) {
+      assert.strictEqual(hdr("Authorization"), "Bearer service-role-key-for-tests", "every read and write uses the service role");
+      const table = u.pathname.slice(9), q = u.searchParams, sel = q.get("select");
+      if (method === "GET") {
+        if (table === "schedule_days") return ok(w.day && q.get("day") === "eq." + w.day.day ? [w.day] : []);
+        if (table === "call_schedule_data") return ok([{ data: { roster: w.roster } }]);
+        if (table === "notification_preferences" && sel === "*") { const l = ids(q.get("person_id")); return ok(l ? w.prefs.filter((p) => p.person_id && l.indexOf(p.person_id) >= 0) : w.prefs); }
+        if (table === "user_profiles" && q.get("person_id")) { const l = ids(q.get("person_id")); return ok(w.profiles.filter((p) => p.person_id && l.indexOf(p.person_id) >= 0).map((p) => pick(p, sel))); }
+        if (table === "user_profiles" && sel === "*" && q.get("role") === "in.(viewer,coordinator)") return ok(w.profiles.filter((p) => p.role === "viewer" || p.role === "coordinator"));
+        if (table === "push_subscriptions") {
+          if (w.subsRead !== 200) return new Response('{"code":"42P01","message":"relation public.push_subscriptions does not exist"}', { status: w.subsRead });
+          const l = ids(q.get("profile_id"));
+          assert.ok(l && /^in\./.test(q.get("profile_id")), "a device read always filters by account: " + u.search);
+          w.subSelects.push(sel);
+          return ok(w.subs.filter((s) => l.indexOf(s.profile_id) >= 0).map((s) => pick(s, sel)));
+        }
+      } else if (table === "push_subscriptions") {
+        const l = ids(q.get("id"));
+        assert.ok(l && hdr("Prefer") === "return=minimal", "bookkeeping by row id, return=minimal");
+        if (method === "PATCH") { const b = JSON.parse(o.body); w.patches.push({ ids: l, body: b }); w.subs.forEach((s) => { if (l.indexOf(s.id) >= 0) Object.assign(s, b); }); return new Response(null, { status: 204 }); }
+        if (method === "DELETE") { w.deletes.push(l); w.subs = w.subs.filter((s) => l.indexOf(s.id) < 0); return new Response(null, { status: 204 }); }
+      }
+      throw new Error("the fake PostgREST does not serve " + method + " " + table + u.search);
+    }
+    if (u.href === "https://api.resend.com/emails") { const b = JSON.parse(o.body); w.mails.push({ to: b.to[0], subject: b.subject }); return ok({ id: "mail" }, w.mailStatus); }
+    if (/^https:\/\/fcm\.googleapis\.com\/fcm\/send\//.test(u.href)) {
+      w.pushes.push({ endpoint: u.href, method, headers: o.headers, body: new Uint8Array(o.body), redirect: o.redirect });
+      // a status, or (review 10/20) a list answered one request at a time - 201 once it runs out
+      const sv = w.pushStatus[u.href];
+      const st = Array.isArray(sv) ? (sv.length ? sv.shift() : 201) : (sv == null ? 201 : sv);
+      return new Response(st >= 300 ? "the push service refuses " + u.href : "", { status: st });
+    }
+    throw new Error("unexpected fetch " + method + " " + u.href);
+  };
+}
+async function zEnv(over) {
+  const v = await p30Vapid();
+  return { v, env: Object.assign({ SUPABASE_URL: Z_URL, SUPABASE_SERVICE_ROLE_KEY: "service-role-key-for-tests", RESEND_API_KEY: "resend-key-for-tests", NOTIFICATION_FROM_EMAIL: "Silvis Test <sender@example.org>", CRON_SECRET: Z_SECRET,
+    VAPID_PUBLIC_KEY: v.publicB64u, VAPID_PRIVATE_KEY: v.privateB64u, VAPID_SUBJECT: "https://fkhan628.github.io/Silvis-Call-Schedule/" }, over || {}) };
+}
+async function zCall(handler, body, secret) {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (secret !== null) headers.set("x-cron-secret", secret === undefined ? Z_SECRET : secret);
+  const res = await handler({ method: "POST", url: Z_URL + "/functions/v1/daily-reminder", headers, json: async () => body });
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+  return { status: res.status, text, body: parsed };
+}
+// devices: [[account id, token, status?, fail_count?]] -> push_subscriptions rows + the device keys by endpoint
+async function zDevices(w, list) {
+  const keys = {};
+  let n = 0;
+  for (const [pid, token, st, fail] of list) {
+    const dev = await p30Device(token);
+    n++;
+    keys[dev.endpoint] = dev;
+    w.subs.push({ id: p30Id("e000000" + n.toString(16)), profile_id: pid, endpoint: dev.endpoint, p256dh: dev.p256dh, auth: dev.auth, fail_count: fail || 0 });
+    if (st != null) w.pushStatus[dev.endpoint] = st;
+  }
+  return keys;
+}
+// the pre-z reminder mode's e-mail side, RE-STATED (the handler's lines before revision z): the persons' loop on their own
+// hour / shift_reminders_email / address, then the followers through the @followers block (FOL)
+function zOldEmail(w, hour, dryRun) {
+  const DEFAULT = 17, tomorrow = w.day.day, names = {};
+  w.roster.forEach((r) => { names[r.id] = r.name; });
+  const nameOf = (id) => (id ? (names[id] || id) : "OPEN");
+  const d = w.day;
+  const primaryLabel = d.primary_id ? nameOf(d.primary_id) : (d.external_cover ? d.external_cover + " (external cover)" : "OPEN");
+  const backupLabel = nameOf(d.backup_id);
+  const onCall = [];
+  if (d.primary_id) onCall.push({ person_id: String(d.primary_id), role: "primary", otherLabel: backupLabel });
+  if (d.backup_id) onCall.push({ person_id: String(d.backup_id), role: "backup", otherLabel: primaryLabel });
+  const prefsById = {}, emailById = {};
+  w.prefs.forEach((p) => { if (p.person_id && onCall.some((o) => o.person_id === p.person_id)) prefsById[p.person_id] = p; });
+  w.profiles.filter((p) => p.person_id && onCall.some((o) => o.person_id === p.person_id)).forEach((row) => { const pid = String(row.person_id); const email = typeof row.email === "string" && row.email.trim() ? row.email.trim() : null; if (!(pid in emailById) || (!emailById[pid] && email)) emailById[pid] = email; });
+  const mailOk = w.mailStatus >= 200 && w.mailStatus < 300;
+  const part = { date_tomorrow: tomorrow, current_hour: hour, dry_run: dryRun, on_call: onCall.length, sent: 0, failed: 0, skipped_wrong_hour: 0, skipped_off: 0, skipped_no_email: 0, results: [] };
+  const to = [];
+  for (const o of onCall) {
+    const pref = prefsById[o.person_id] || {};
+    const userHour = typeof pref.reminder_hour_central === "number" ? pref.reminder_hour_central : DEFAULT;
+    if (userHour !== hour) { part.skipped_wrong_hour++; part.results.push({ person_id: o.person_id, role: o.role, status: "skipped_wrong_hour", user_hour: userHour }); continue; }
+    if (pref.shift_reminders_email === false) { part.skipped_off++; part.results.push({ person_id: o.person_id, role: o.role, status: "skipped_off" }); continue; }
+    const email = emailById[o.person_id] || null;
+    if (!email) { part.skipped_no_email++; part.results.push({ person_id: o.person_id, role: o.role, status: "skipped_no_email" }); continue; }
+    if (dryRun) { part.results.push({ person_id: o.person_id, role: o.role, status: "dry_run_composed" }); continue; }
+    to.push(email);
+    if (mailOk) { part.sent++; part.results.push({ person_id: o.person_id, role: o.role, status: "sent" }); } else { part.failed++; part.results.push({ person_id: o.person_id, role: o.role, status: "failed_" + w.mailStatus }); }
+  }
+  const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const [y, mo, dd] = tomorrow.split("-").map(Number);
+  const dayLabel = WD[new Date(Date.UTC(y, mo - 1, dd)).getUTCDay()] + ", " + MO[mo - 1] + " " + dd;
+  const followers = FOL.followerIndex(w.profiles.filter((p) => p.role === "viewer" || p.role === "coordinator"), w.prefs);
+  const plan = FOL.followerReminderPlan(followers, onCall, hour, DEFAULT);
+  const f = { accounts: followers.length, planned: plan.length, sent: 0, failed: 0, skipped_wrong_hour: 0, skipped_off: 0, skipped_no_email: 0, results: [], sample: null };
+  for (const e of plan) {
+    const line = FOL.followerReminderLine(nameOf(e.surgeon), e.role, tomorrow, e.otherLabel);
+    const subject = "Call reminder - tomorrow (" + dayLabel + ") Dr. " + nameOf(e.surgeon) + " is Silvis " + e.role.toUpperCase();
+    if (!f.sample) f.sample = { subject, line };
+    const r = { follower: e.follower, surgeon: e.surgeon, role: e.role };
+    if (e.status === "skipped_wrong_hour") { f.skipped_wrong_hour++; f.results.push(Object.assign(r, { status: e.status, user_hour: e.user_hour })); continue; }
+    if (e.status === "skipped_off") { f.skipped_off++; f.results.push(Object.assign(r, { status: e.status })); continue; }
+    if (e.status === "skipped_no_email") { f.skipped_no_email++; f.results.push(Object.assign(r, { status: e.status })); continue; }
+    if (dryRun) { f.results.push(Object.assign(r, { status: "dry_run_composed" })); continue; }
+    to.push(e.email);
+    if (mailOk) { f.sent++; f.results.push(Object.assign(r, { status: "sent" })); } else { f.failed++; f.results.push(Object.assign(r, { status: "failed_" + w.mailStatus })); }
+  }
+  part.followers = f;
+  return { part, to };
+}
+const zEmailPart = (b) => { const c = Object.assign({}, b); delete c.push; return c; };
+const Z_AT17 = "2026-10-20T22:00:00Z";   // Tue 10/20 17:00 CDT - the default reminder hour; tomorrow = Wed 10/21
+const zDecoded = async (w, keys, token) => Promise.all(w.pushes.filter((p) => p.endpoint === p30Fcm(token)).map(async (p) => JSON.parse(Buffer.from((await p30Decrypt(p.body, keys[p.endpoint])).plain.slice(0, -1)).toString("utf8"))));
+acheck("revision z (3) handler: a live hourly run at 17:00 Central - the e-mail part of the answer and the e-mails sent equal the pre-z logic; the pushes: s2 (e-mail off, push on) on both his accounts, s1 (push off, e-mail on) not pushed, f1 / f2 at their hour (f2: no address, e-mail off - pushed, one notice per surgeon he follows), f3 (20:00) and f4 (push off) not; 201 sent, 410 deleted, 500 fail_count + 1; the decrypted payloads; a valid VAPID token; redirect manual; the answer's push lists; no endpoint / key / address / words out", async () => {
+  if (!FOL) throw new Error("followers block did not load");
+  const { v, env } = await zEnv();
+  const w = zWorld();
+  const keys = await zDevices(w, [[Z_A.a1, "z-s1"], [Z_A.a2, "z-s2"], [Z_A.a5, "z-s2b", 410], [Z_F.f1, "z-f1", 500, 2], [Z_F.f2, "z-f2"], [Z_F.f3, "z-f3"], [Z_F.f4, "z-f4"]]);
+  const r = await zCall(zHandler(env, w, Z_AT17), {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  const old = zOldEmail(w, 17, false);
+  assert.deepStrictEqual(zEmailPart(r.body), old.part, "the e-mail part is the pre-z answer");
+  assert.deepStrictEqual(w.mails.map((m) => m.to), old.to, "the same e-mails to the same addresses");
+  assert.deepStrictEqual(old.to, ["s1@example.org", "f1@example.org", "f4@example.org"], "fixture: s1, f1 and f4 are mailed; s2 and f2 have the e-mail off");
+  assert.deepStrictEqual(r.body.push, {
+    sent: 3, failed: 1, removed: 1, skipped_no_device: 0, skipped_pref_off: 2, devices: { sent: 3, failed: 1, removed: 1 }, error: null,
+    results: [{ person_id: "s2", role: "primary", status: "sent" }, { person_id: "s1", role: "backup", status: "skipped_pref_off" }],
+    followers: [{ follower: "f1aaaaaa", via: ["s2"], role: "primary", status: "failed" }, { follower: "f2bbbbbb", via: ["s2"], role: "primary", status: "sent" },
+      { follower: "f4dddddd", via: ["s2"], role: "primary", status: "skipped_pref_off" }, { follower: "f2bbbbbb", via: ["s1"], role: "backup", status: "sent" }],
+    tags: ["silvis-reminder-20261021-primary", "silvis-reminder-20261021-backup"],
+  });
+  assert.deepStrictEqual(w.pushes.map((p) => p.endpoint).sort(), ["z-f1", "z-f2", "z-f2", "z-s2", "z-s2b"].map(p30Fcm).sort(), "never s1's, f3's or f4's device; f2's device twice (two notices)");
+  assert.ok(w.pushes.every((p) => p.redirect === "manual"), "a 3xx is never followed");
+  assert.deepStrictEqual(w.subSelects, ["id,profile_id,endpoint,p256dh,auth,fail_count"], "one device read, send-notification's columns");
+  assert.deepStrictEqual(await zDecoded(w, keys, "z-s2"), [{ v: 1, title: "Silvis Call", body: "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 - backup Khan.", tag: "silvis-reminder-20261021-primary", tab: "myschedule" }]);
+  const f2 = (await zDecoded(w, keys, "z-f2")).sort((a, b) => (a.tag < b.tag ? -1 : 1));
+  assert.deepStrictEqual(f2, [
+    { v: 1, title: "Silvis Call (following Dr. Khan)", body: "Reminder: Dr. Khan is on backup call at Silvis tomorrow (Wed 10/21), primary Burchett", tag: "silvis-reminder-20261021-backup", tab: "myschedule" },
+    { v: 1, title: "Silvis Call (following Dr. Burchett)", body: "Reminder: Dr. Burchett is on primary call at Silvis tomorrow (Wed 10/21), backup Khan", tag: "silvis-reminder-20261021-primary", tab: "myschedule" },
+  ]);
+  const jwt = /^vapid t=([^,]+), k=/.exec(w.pushes[0].headers.Authorization)[1];
+  const tok = await p30Jwt(jwt, v.pubRaw);
+  assert.ok(tok.ok && tok.claims.sub === env.VAPID_SUBJECT && tok.claims.exp === Math.floor(Date.parse(Z_AT17) / 1000) + 43200, "a valid VAPID token on the fixed clock");
+  const row = (token) => w.subs.find((s) => s.endpoint === p30Fcm(token));
+  assert.ok(!row("z-s2b"), "the 410 device's row is deleted");
+  assert.strictEqual(row("z-f1").fail_count, 3, "the 500 device: fail_count + 1, never deleted");
+  assert.ok(typeof row("z-s2").last_ok_at === "string" && row("z-s2").fail_count === 0, "the sent row's last_ok_at");
+  p30NoSecrets(w, r, keys);
+  assert.ok(!/Tomorrow \(|Reminder: Dr\./.test(JSON.stringify(r.body.push) + w.logs.join("\n")), "the words never reach the answer's push part or a log line");
+  assert.ok(w.logs.some((l) => /^\[daily-reminder\] push: tags=silvis-reminder-20261021-primary,silvis-reminder-20261021-backup sent=3 failed=1 removed=1 no_device=0 pref_off=2$/.test(l)), "the push log line: " + w.logs.filter((l) => /push:/.test(l)).join(" | "));
+  // review 10/20: a live hourly answer never matches README step 4's dryRun read-back (the old '{"date_tomorrow"%' did)
+  assert.ok(!zLike(ZR_DRY_LIKE, r.text) && zLike("{\"date_tomorrow\"%", r.text), "the live answer is not the dryRun read-back's row: " + r.text.slice(0, 80));
+});
+// review 10/20: a follower of both of tomorrow's surgeons (f2: s2 primary, s1 backup) with ONE device, the handler's one device read
+// serving both roles
+acheck("revision z (3) handler: one device in both roles (a follower of both surgeons) - a 404 / 410 device is sent to once and removed once (the second role finds no device), a device failing in both roles ends at fail_count + 2, sent then failed ends at 1 - the second role reads the rows as the first left them", async () => {
+  const { env } = await zEnv();
+  const cases = [
+    ["410", 410, (w, r, ep) => {
+      assert.strictEqual(w.pushes.filter((p) => p.endpoint === ep).length, 1, "410: one request to the gone device, never a second");
+      assert.strictEqual(w.deletes.length, 1, "410: one DELETE");
+      assert.ok(r.body.push.removed === 1 && r.body.push.devices.removed === 1, "410: removed 1 (not 2): " + JSON.stringify(r.body.push));
+      assert.deepStrictEqual(r.body.push.followers.filter((f) => f.follower === "f2bbbbbb"), [{ follower: "f2bbbbbb", via: ["s2"], role: "primary", status: "gone" }, { follower: "f2bbbbbb", via: ["s1"], role: "backup", status: "skipped_no_device" }], "410: the backup role finds no device");
+      assert.ok(!w.subs.some((s) => s.endpoint === ep), "410: the row is gone");
+    }],
+    ["500 twice", [500, 500], (w, r, ep) => {
+      assert.strictEqual(w.pushes.filter((p) => p.endpoint === ep).length, 2, "500 twice: one request per role");
+      assert.deepStrictEqual(w.patches.map((p) => p.body.fail_count), [3, 4], "500 twice: fail_count 2 -> 3 -> 4 (not 3 twice)");
+      assert.strictEqual(w.subs.find((s) => s.endpoint === ep).fail_count, 4, "500 twice: the row ends at 4");
+    }],
+    ["201 then 500", [201, 500], (w, r, ep) => {
+      assert.deepStrictEqual(w.patches.map((p) => p.body.fail_count), [0, 1], "201 then 500: sent (0), then the failure counts on from it (1, not 3)");
+      assert.strictEqual(w.subs.find((s) => s.endpoint === ep).fail_count, 1, "201 then 500: the row ends at 1");
+    }],
+  ];
+  for (const [label, st, judge] of cases) {
+    const w = zWorld();
+    await zDevices(w, [[Z_F.f2, "both-f2", st, 2]]);
+    const r = await zCall(zHandler(env, w, Z_AT17), {});
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 200));
+    judge(w, r, p30Fcm("both-f2"));
+  }
+});
+acheck("revision z (3) handler: dryRun at 17:00 - nothing sent (no e-mail, no push), nothing written (no PATCH / DELETE), the device read names no endpoint (select=id,profile_id), the plan with its device counts; the e-mail part equals the pre-z dryRun; at a non-matching hour the dryRun still imports the VAPID pair (error null) and plans nobody", async () => {
+  const { env } = await zEnv();
+  const w = zWorld();
+  await zDevices(w, [[Z_A.a1, "d-s1"], [Z_A.a2, "d-s2"], [Z_A.a5, "d-s2b"], [Z_F.f2, "d-f2"]]);
+  const r = await zCall(zHandler(env, w, Z_AT17), { dryRun: true });
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(zEmailPart(r.body), zOldEmail(w, 17, true).part, "the e-mail part is the pre-z dryRun");
+  assert.deepStrictEqual([w.mails.length, w.pushes.length, w.patches.length, w.deletes.length], [0, 0, 0, 0], "nothing sent, nothing written");
+  assert.deepStrictEqual(w.subSelects, ["id,profile_id"], "the dryRun's device count reads no endpoint and no key");
+  assert.deepStrictEqual(r.body.push, {
+    dry_run: true, composed: 3, skipped_no_device: 1, skipped_pref_off: 2, devices_found: 4, error: null,
+    results: [{ person_id: "s2", role: "primary", status: "dry_run_composed" }, { person_id: "s1", role: "backup", status: "skipped_pref_off" }],
+    followers: [{ follower: "f1aaaaaa", via: ["s2"], role: "primary", status: "skipped_no_device" }, { follower: "f2bbbbbb", via: ["s2"], role: "primary", status: "dry_run_composed" },
+      { follower: "f4dddddd", via: ["s2"], role: "primary", status: "skipped_pref_off" }, { follower: "f2bbbbbb", via: ["s1"], role: "backup", status: "dry_run_composed" }],
+    tags: ["silvis-reminder-20261021-primary", "silvis-reminder-20261021-backup"],
+  });
+  const w2 = zWorld();
+  const r2 = await zCall(zHandler(env, w2, "2026-10-20T15:00:00Z"), { dryRun: true });   // 10:00 CDT - nobody's hour
+  assert.deepStrictEqual(r2.body.push, { dry_run: true, composed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices_found: 0, error: null, results: [], followers: [], tags: ["silvis-reminder-20261021-primary", "silvis-reminder-20261021-backup"] });
+  assert.deepStrictEqual(w2.subSelects, [], "nobody to count: no device read");
+  const w3 = zWorld();
+  const r3 = await zCall(zHandler(Object.assign({}, env, { VAPID_PRIVATE_KEY: "" }), w3, "2026-10-20T15:00:00Z"), { dryRun: true });
+  assert.strictEqual(r3.body.push.error, "push not configured", "the dryRun says push is not configured at any hour");
+  assert.strictEqual(r3.body.push.dry_run, true);
+  // review 10/20: README step 4's read-back pattern matches each real dryRun answer (planned, nobody's hour, not configured)
+  [r, r2, r3].forEach((x, i) => assert.ok(zLike(ZR_DRY_LIKE, x.text), "README's dryRun read-back matches the real dryRun answer " + i + ": " + x.text.slice(0, 80)));
+});
+acheck("revision z (3) handler: the channels and failures are independent - for every input (no VAPID secrets, the device table missing, a failing mailer, another hour, nobody's push on, a person without an account) the e-mail part and the e-mails sent equal the pre-z logic; push.error says why push did not run ('push not configured' / 'push_subscriptions unavailable: HTTP 404 ...'); an hour with nobody to push reads no device and imports no key; a person without an account is skipped_no_device; no row / nobody on call answers as before (no push key)", async () => {
+  const { env } = await zEnv();
+  const allPushOff = Z_PREFS().map((p) => Object.assign({}, p, { shift_reminders_push: false })).concat([{ person_id: null, profile_id: Z_F.f1, shift_reminders_push: false }]);
+  const rows = [
+    ["no VAPID secrets", { env: { VAPID_PRIVATE_KEY: "" } }, Z_AT17, (p) => assert.deepStrictEqual(p, { sent: 0, failed: 0, removed: 0, skipped_no_device: 0, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: "push not configured" })],
+    ["the device table missing", { subsRead: 404 }, Z_AT17, (p) => assert.ok(/^push_subscriptions unavailable: HTTP 404/.test(p.error) && p.sent === 0, JSON.stringify(p))],
+    ["a failing mailer", { mailStatus: 500 }, Z_AT17, (p) => assert.ok(p.sent === 4 && p.failed === 0 && p.error === null, "push unaffected by the mailer: " + JSON.stringify(p))],
+    ["18:00 - nobody's hour", {}, "2026-10-20T23:00:00Z", (p, w) => { assert.ok(p.sent === 0 && p.results.length === 0 && p.followers.length === 0 && p.error === null, JSON.stringify(p)); assert.deepStrictEqual(w.subSelects, [], "no device read"); }],
+    ["20:00 - f3's own hour", {}, "2026-10-21T01:00:00Z", (p) => assert.deepStrictEqual(p.followers, [{ follower: "f3cccccc", via: ["s1"], role: "backup", status: "sent" }])],
+    ["every push switch off", { prefs: allPushOff }, Z_AT17, (p, w) => { assert.ok(p.sent === 0 && p.skipped_pref_off === 6, JSON.stringify(p)); assert.deepStrictEqual(w.subSelects, [], "nobody to push: no device read"); }],
+    ["a primary without an account", { day: { day: Z_DAY, primary_id: "s3", backup_id: "s1", external_cover: null, note: null } }, Z_AT17, (p) => assert.deepStrictEqual(p.results, [{ person_id: "s3", role: "primary", status: "skipped_no_device" }, { person_id: "s1", role: "backup", status: "skipped_pref_off" }])],
+  ];
+  for (const [label, over, at, judge] of rows) {
+    const w = zWorld(Object.assign({}, over, { env: undefined }));
+    const keys = await zDevices(w, [[Z_A.a1, "i-s1"], [Z_A.a2, "i-s2"], [Z_F.f1, "i-f1"], [Z_F.f2, "i-f2"], [Z_F.f3, "i-f3"], [Z_F.f4, "i-f4"]]);
+    const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "2-digit", hour12: false }).format(new Date(at))) % 24;
+    const r = await zCall(zHandler(Object.assign({}, env, over.env || {}), w, at), {});
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 200));
+    const old = zOldEmail(w, hour, false);
+    assert.deepStrictEqual(zEmailPart(r.body), old.part, label + ": the e-mail part");
+    assert.deepStrictEqual(w.mails.map((m) => m.to), old.to, label + ": the e-mails sent");
+    judge(r.body.push, w);
+    if (over.env) assert.strictEqual(w.subSelects.length + w.pushes.length, 0, label + ": no device read, nothing pushed");
+    p30NoSecrets(w, r, keys);
+  }
+  // no row for tomorrow / nobody on call: the early answers are unchanged - no push key, nothing read
+  for (const day of [null, { day: Z_DAY, primary_id: null, backup_id: null, external_cover: "Outside", note: null }]) {
+    const w = zWorld({ day });
+    const r = await zCall(zHandler(env, w, Z_AT17), {});
+    assert.ok(r.status === 200 && r.body && !("push" in r.body) && r.body.sent === 0, JSON.stringify(r.body));
+    assert.ok(!w.calls.some((c) => /push_subscriptions/.test(c)), "nothing read");
+    // review 10/20: on such a day even the dryRun's answer has no dry_run key - README step 4's read-back returns no row (its bracket)
+    const rd = await zCall(zHandler(env, zWorld({ day }), Z_AT17), { dryRun: true });
+    assert.ok(rd.status === 200 && !("push" in rd.body) && !zLike(ZR_DRY_LIKE, rd.text), "no row / nobody on call: the dryRun answer never matches the read-back: " + rd.text.slice(0, 80));
+  }
+  // the gate is unchanged: no secret / a wrong one -> 401 before any read
+  const w4 = zWorld();
+  const h4 = zHandler(env, w4, Z_AT17);
+  assert.strictEqual((await zCall(h4, {}, null)).status, 401);
+  assert.strictEqual((await zCall(h4, { dryRun: true }, "wrong")).status, 401);
+  assert.deepStrictEqual(w4.calls, [], "nothing read on a 401");
+});
+check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER the follower block and before the final answer, in its own try (a failure answered as push.error), reads no e-mail flag, no address and none of the e-mail answer; the push side's followers are kept after the follower e-mail loop; the profiles read adds the account id; the dryRun reads devices with select=id,profile_id only; the modes open-shifts / offers never push; no console line interpolates an endpoint; the header says prepared, NOT deployed, names the VAPID secrets and the deploy line (--workdir, --no-verify-jwt, --use-api)", () => {
+  const h = drSrc.slice(drSrc.indexOf("serve(async (req) =>"));
+  const iLoop = h.indexOf("const r = await sendEmail(e.email, subject, html, `follower=${e.follower} surgeon=${e.surgeon} role=${e.role}`);");
+  const iKeep = h.indexOf("pushFollowers = followers; pushFollowerPlan = plan;");
+  const iFolCatch = h.indexOf("console.error(`[daily-reminder] followers: ${why}`);");
+  const iPush = h.indexOf("let pushOut: any;");
+  const iRet = h.lastIndexOf("return json(200, {");
+  assert.ok(iLoop > 0 && iKeep > iLoop && iFolCatch > iKeep, "the push side's followers are kept after the follower e-mail loop, inside the follower try");
+  assert.ok(iPush > iFolCatch && iRet > iPush, "the fan-out comes after the follower block and before the final answer");
+  const fan = h.slice(iPush, iRet), fanCode = fan.replace(/\/\/[^\n]*/g, "");
+  assert.ok(/\n    try \{\n[\s\S]*\n    \} catch \(e\) \{\n[\s\S]*pushOut = \{ \.\.\.pushEmpty\(why\), /.test(fan), "its own try / catch, a failure answered as push.error");
+  assert.ok(!/_email\b|emailById|\bresults\b|followersOut/.test(fanCode), "the fan-out reads no e-mail flag, no address and nothing of the e-mail answer");
+  assert.ok(fanCode.includes("reminderPushPlan(onCall, tomorrow, names, prefsById, accountsById, pushFollowers, pushFollowerPlan, now.hour, DEFAULT_REMINDER_HOUR)"), "the plan: the same hour rule and default as the e-mail (D11)");
+  assert.ok(fanCode.includes("await countPushDevices(") && fanCode.includes("await readPushSubscriptions(") && fanCode.indexOf("else if (dryRun)") < fanCode.indexOf("await readPushSubscriptions("), "dryRun counts, a live run reads the devices");
+  assert.ok(/push: pushOut,\s*\}\);/.test(h.slice(iRet, iRet + 500)), "the answer carries push");
+  assert.ok(h.includes("rest(`user_profiles?select=id,person_id,email&person_id=${inList}`)"), "the profiles read adds the account id");
+  assert.ok(/rest\(`push_subscriptions\?select=id,profile_id&profile_id=in\.\(\$\{ids\.join\(","\)\}\)`\)/.test(drSrc), "the dryRun count's columns");
+  ["async function runOpenShifts(", "async function runOffers("].forEach((fn) => {
+    const at = drSrc.indexOf(fn), body = drSrc.slice(at, drSrc.indexOf("\n}\n", at));
+    assert.ok(at > 0 && !/pushDeliver|readPushSubscriptions|countPushDevices|vapidKeyPair|reminderPush|push_subscriptions/.test(body), fn + " never pushes (D8)");
+  });
+  drSrc.split("\n").filter((l) => /console\.(log|warn|error|info)\(/.test(l)).forEach((l) => assert.ok(!/\$\{[^}]*(endpoint|p256dh|\.auth\b|payloadText|\.line\b|followerLine)/.test(l) && !/\+\s*[\w.]*(endpoint|p256dh)/.test(l), "no console line interpolates an endpoint / key / the words: " + l.trim().slice(0, 120)));
+  const head = drSrc.slice(0, drSrc.indexOf("import "));
+  assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - prepared, NOT deployed; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the header: prepared, NOT deployed, the record named");
+  assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
+  assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
+});
+// the PREPARED record's deploy block (Faraz's PowerShell, one line at a time; the workdir on every supabase line)
+const ZR_WD = EFR_WD;
+const ZR_DST = "\"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\daily-reminder\\index.ts\"";
+const ZR_BAK_DIR = "\"$env:USERPROFILE\\projects\\supa-silvis\\backup-daily-reminder-v9\"";
+const ZR_BAK = "\"$env:USERPROFILE\\projects\\supa-silvis\\backup-daily-reminder-v9\\index.ts\"";
+const ZR_SRC = "\"$env:USERPROFILE\\projects\\Silvis-Call-Schedule\\edge-functions\\daily-reminder\\index.ts\"";
+const ZR_LIST = "supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir " + ZR_WD;
+const ZR_DOWNLOAD = "supabase functions download daily-reminder --project-ref bzhsroegtagqhutbnsrp --workdir " + ZR_WD + " --use-api";
+const ZR_DEPLOY = "supabase functions deploy daily-reminder --project-ref bzhsroegtagqhutbnsrp --workdir " + ZR_WD + " --no-verify-jwt --use-api";
+const ZR_HASH = (f) => "(Get-FileHash " + f + " -Algorithm SHA256).Hash.ToLower()";
+// the dryRun read-back's LIKE pattern (README step 4: the dryRun's own answer - its first three keys, "dry_run":true) and SQL LIKE
+// emulated (% any run, _ any one character; the pattern carries no escape) - the handler checks run it against the real answers
+const ZR_DRY_LIKE = "{\"date_tomorrow\":\"%\",\"current_hour\":%,\"dry_run\":true,%";
+const zLike = (pat, text) => new RegExp("^" + pat.split("").map((c) => (c === "%" ? "[\\s\\S]*" : c === "_" ? "[\\s\\S]" : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("") + "$").test(String(text));
+check("revision z (4): edge-functions/README.md - section 3's 'Deploy record - push reminders (revision z)' is PREPARED, NOT deployed, sits first among the records, and carries the order (the SQL apply, the client, this deploy LAST, the dryRun), the deploy block line for line (list; back up the live v9 by download + hash; copy the merged source + hash; deploy --no-verify-jwt --use-api; list; remove the uploaded copy; download + hash; the 401), the dryRun through pg_net and the rollback (the backup FIRST, then the SQL); section 1 names daily-reminder beside send-notification for the VAPID secrets; section 5 shows the dryRun's push object; section 7 the rollback; ASCII, no placeholder, no machine path", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### Deploy record - push reminders (revision z)");
+  assert.ok(i > 0 && i === s3.indexOf("### Deploy record"), "the record, first among section 3's records");
+  const rec = s3.slice(i, s3.indexOf("\n### ", i + 10));
+  assert.ok(/^### Deploy record - push reminders \(revision z\) - PREPARED, NOT deployed$/m.test(rec), "the heading says PREPARED, NOT deployed");
+  const psAt = rec.indexOf("```powershell\n") + 14, ps = rec.slice(psAt, psAt + rec.slice(psAt).search(/\n[ \t]*```/));
+  assert.deepStrictEqual(ps.split("\n").map((l) => l.trim()), [
+    ZR_LIST,
+    "New-Item -ItemType Directory -Force " + ZR_BAK_DIR + " | Out-Null",
+    "Remove-Item " + ZR_DST + " -ErrorAction SilentlyContinue",
+    ZR_DOWNLOAD,
+    "Copy-Item " + ZR_DST + " " + ZR_BAK + " -Force",
+    ZR_HASH(ZR_BAK),
+    "Copy-Item " + ZR_SRC + " " + ZR_DST + " -Force",
+    ZR_HASH(ZR_DST),
+    ZR_DEPLOY,
+    ZR_LIST,
+    "Remove-Item " + ZR_DST,
+    ZR_DOWNLOAD,
+    ZR_HASH(ZR_DST),
+    "curl.exe -s -o NUL -w \"%{http_code}\" -X POST \"https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder\"",
+  ], "the deploy block, line for line");
+  assert.ok(!/<[A-Za-z][A-Za-z -]*>|\$wd\b/.test(ps) && !/[A-Za-z]:\\+Users\\/i.test(rec), "no placeholder, no $wd, no machine path");
+  const flat = rec.replace(/\s+/g, " ");
+  assert.ok(flat.includes("030a1366e7d31feb6665034687c2bc3c4e142c136b936841a998342cf85df1b6"), "the backup's expected hash (the v9 code, unchanged in the repo since 325b1e1)");
+  const order = ["apply-push-followups.sh", "the client", ZR_DEPLOY, "'{\"dryRun\":true}'::jsonb"].map((s) => rec.indexOf(s));
+  order.forEach((k, n) => assert.ok(k > 0 && (n === 0 || k > order[n - 1]), "the order: the apply, the client, the deploy LAST, the dryRun (step " + n + ")"));
+  assert.ok(/D16/.test(rec) && /within the hour|first push within the hour/.test(flat), "why the deploy is last (D16: the hourly job pushes within the hour)");
+  // pin moved deliberately (review 10/20): the read-back singles out the dryRun's OWN answer (its first three keys, "dry_run":true) - the
+  // old '{"date_tomorrow"%' matched every live hourly answer too, so a :00 run inside the wait stood in for it; the handler checks below
+  // run this exact pattern against the real answers
+  assert.ok(flat.includes("select status_code, created, content::jsonb -> 'push' as push from net._http_response where content::text like '" + ZR_DRY_LIKE + "' order by created desc limit 1;"), "the dryRun read-back reads the push part of the dryRun's own row only");
+  assert.ok(flat.includes("the hourly job's live answers (`\"dry_run\":false`) never match") && flat.includes("`select status_code, created, left(content::text, 200) from net._http_response order by created desc limit 3;`"), "the bracket says why the filter is the dryRun's own and how to read a no-row / nobody-on-call answer");
+  assert.ok(flat.includes("words `docs/ONBOARDING.md`'s phone lines live"), "step 5's record step words ONBOARDING's phone lines live (the day-before reminder on the phone)");
+  assert.ok(/Rollback/.test(rec) && flat.indexOf("redeploy the backed-up v9 FIRST") > 0 && flat.indexOf("redeploy the backed-up v9 FIRST") < flat.indexOf("then the SQL rollback"), "the rollback: the backup first, then the SQL (a missing key reads as on)");
+  assert.ok(/tell the group/i.test(flat) && /D10/.test(rec), "D10's consequence: tell the group before the deploy");
+  const s1 = readme.slice(readme.indexOf("## 1."), readme.indexOf("## 2."));
+  ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"].forEach((k) => { const row = s1.split("\n").find((l) => l.startsWith("| `" + k + "` |")) || ""; assert.ok(/send-notification[^|]*daily-reminder/.test(row), k + "'s row names daily-reminder too: " + row.slice(0, 120)); });
+  const dr = readme.slice(readme.indexOf("### daily-reminder"), readme.indexOf("### east-feed-refresh"));
+  assert.ok(dr.includes("\"push\":{\"dry_run\":true,\"composed\":") && /revision z/.test(dr), "section 5: the dryRun's push object");
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(/daily-reminder/.test(s7) && /revision z/.test(s7) && s7.indexOf("backup-daily-reminder-v9") > 0, "section 7: the rollback of revision z's deploy");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
 });
 
 (async () => {

@@ -10,7 +10,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
-| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts |
+| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (PREPARED, NOT deployed - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only) |
 | `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A" | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
@@ -91,6 +91,14 @@ unchanged by Part A and call none of the new SQL functions: the calendar feeds, 
 assignments, not availability. Since 2026-10-20 the project serves five functions and has five pg_cron jobs (section 3's
 record, section 4); where a sentence below counts four, it speaks of the four 9/22 functions or the jobs before Part A.
 
+**Revision z (2026-10-20): `daily-reminder` v10 is PREPARED, NOT deployed (section 3's "Deploy record - push reminders (revision z)").**
+The day-before shift reminder goes to the phones too (the push follow-ups report, decisions D8-D16): the person on call
+tomorrow at his reminder hour and every follower of that surgeon at his own hour, on the one switch `shift_reminders_push`
+(revision z's new column; only an explicit false is off), whatever the e-mail switch or address. The push code is
+send-notification's own (`@webPush` / `@pushPlan` and the device glue, copied byte for byte and pinned identical by
+`test/edge-functions.test.js`); `send-notification` itself does not change and is not redeployed. The order is the
+database apply, the client (its third phone switch), this deploy LAST, the dryRun; the rollback runs in reverse (section 7).
+
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
 unauthenticated GET, the other three answered 401 without their gate - see
@@ -138,9 +146,9 @@ the repo stays the source of truth.
 | `RESEND_API_KEY` | office-notifications, send-notification, daily-reminder | Resend API key |
 | `NOTIFICATION_FROM_EMAIL` | office-notifications, send-notification, daily-reminder | e.g. `Silvis Call Schedule <schedule@your-verified-domain>` - REQUIRED, no fallback |
 | `CRON_SECRET` | daily-reminder (sole gate), office-notifications (cron path), east-feed-refresh (sole gate; deployed 2026-10-20) | long random string; generate with `openssl rand -hex 32` or PowerShell `-join ((1..48) | % { '{0:x}' -f (Get-Random -Max 16) })` |
-| `VAPID_PUBLIC_KEY` | send-notification (Prompt 30 phone push) | base64url of the 65-byte uncompressed P-256 point (87 characters, starts `B`); handed to the app by `GET ?vapid=public`. Set ONLY by `setup-push-keys.sh` (the apply-scripts folder), which generates the pair on Faraz's PC and sets all three through `supabase secrets set --env-file` - never pasted, never printed, never in an argument |
-| `VAPID_PRIVATE_KEY` | send-notification (Prompt 30 phone push) | base64url of the 32-byte P-256 scalar (43 characters); signs the VAPID tokens; never leaves the function (no response, no log) |
-| `VAPID_SUBJECT` | send-notification (Prompt 30 phone push) | `https://fkhan628.github.io/Silvis-Call-Schedule/` (the app's URL - no address). Missing / malformed VAPID secrets = no push (the send's `push.error` reads `push not configured`, `GET ?vapid=public` and `POST ?push=test` answer 503); the e-mail is unaffected. `setup-push-keys.sh --rotate` replaces an existing pair - then every device must tap Reset subscription, then Enable (the old subscriptions were made for the old public key) |
+| `VAPID_PUBLIC_KEY` | send-notification (Prompt 30 phone push); daily-reminder (revision z, the reminder's push - PREPARED, NOT deployed: it reads the same project-wide pair, nothing to set) | base64url of the 65-byte uncompressed P-256 point (87 characters, starts `B`); handed to the app by `GET ?vapid=public`. Set ONLY by `setup-push-keys.sh` (the apply-scripts folder), which generates the pair on Faraz's PC and sets all three through `supabase secrets set --env-file` - never pasted, never printed, never in an argument |
+| `VAPID_PRIVATE_KEY` | send-notification (Prompt 30 phone push); daily-reminder (revision z, the reminder's push - PREPARED, NOT deployed: it reads the same project-wide pair, nothing to set) | base64url of the 32-byte P-256 scalar (43 characters); signs the VAPID tokens; never leaves the function (no response, no log) |
+| `VAPID_SUBJECT` | send-notification (Prompt 30 phone push); daily-reminder (revision z, the reminder's push - PREPARED, NOT deployed: it reads the same project-wide pair, nothing to set) | `https://fkhan628.github.io/Silvis-Call-Schedule/` (the app's URL - no address). Missing / malformed VAPID secrets = no push (the send's `push.error` reads `push not configured`, `GET ?vapid=public` and `POST ?push=test` answer 503); the e-mail is unaffected. `setup-push-keys.sh --rotate` replaces an existing pair - then every device must tap Reset subscription, then Enable (the old subscriptions were made for the old public key) |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | all | injected automatically by Supabase - do not set |
 
 ```powershell
@@ -197,6 +205,7 @@ supabase functions list --workdir $wd --project-ref bzhsroegtagqhutbnsrp
 ```
 
 `east-feed-refresh` (v1, deployed 2026-10-20) has its own lines - the workdir on each line, `--use-api` - in its record below.
+So does revision z's `daily-reminder` redeploy (PREPARED): a backup of the live v9 first, the workdir on each line, `--use-api`.
 
 Why `--no-verify-jwt` on all five: the gateway toggle only checks for ANY valid
 project JWT (the public anon key qualifies), so it is not a security boundary.
@@ -222,6 +231,110 @@ container, and the new laptop has no Docker. The download writes over
 `$wd\supabase\functions\<slug>\index.ts`, the copy that was just uploaded - so remove the uploaded copy first:
 a download that wrote nothing (or wrote somewhere else) then fails the compare on a missing file instead
 of passing it on the uploaded one.
+
+### Deploy record - push reminders (revision z) - PREPARED, NOT deployed
+
+*Prepared 2026-10-20 (Claude Code, from the push follow-ups report's decisions D8-D17; Faraz's go "finish the backlog"). Nothing
+is deployed, applied or set; this record is the plan, to be filled in by the record step after Faraz runs it.*
+
+Source `edge-functions/daily-reminder/index.ts` (its header's "PHONE PUSH" paragraph says what changes). One function changes:
+`daily-reminder`, listed v9 since the 10/3 key rotation - the Prompt 26 code deployed 2026-10-01 04:11:46 UTC from `325b1e1`, the
+repo file unchanged from then until this change (its sha256 then
+`030a1366e7d31feb6665034687c2bc3c4e142c136b936841a998342cf85df1b6`). This deploy lists one version above whatever `functions list`
+reads then (v10 while it reads v9; every `secrets set` re-versions all five functions). All three of
+its modes are in that one file, so the deploy carries the Monday open-shifts and the daily offers jobs too - their code does not change
+(test/edge-functions.test.js pins that neither mode pushes). `send-notification` stays the deployed v12 (its source is unchanged, so its
+header's Prompt 30 wording keeps waiting for its next source change - report A, D1); `calendar-sync`, `office-notifications` and
+`east-feed-refresh` are untouched and are NOT redeployed. No new secret: the three VAPID secrets `setup-push-keys.sh` set on 2026-10-03
+are project-wide, so the function reads them as deployed - nothing to set, nothing re-versioned by this step.
+
+What changes (D8-D14): in the hourly default mode, after the follower e-mails and in its own try (a push failure never changes the
+e-mail answer), the day-before reminder also goes to the phones of the person on call tomorrow at HIS reminder hour
+(`reminder_hour_central`, else 17 - the e-mail's hour, D11) and of every follower of that surgeon at HIS OWN hour (one notice per
+followed surgeon on call, D13), on the one switch `shift_reminders_push` (revision z's column; only an explicit false is off, D10) -
+whatever the e-mail switch or address (D12). The words (D14): "Tomorrow (Wed 10/21) you are on Silvis primary call, 07:00 to 07:00 -
+backup Khan." under "Silvis Call"; a follower reads the e-mail's line under "Silvis Call (following Dr. X)"; tag
+`silvis-reminder-<yyyymmdd>-<role>`, a tap opens My schedule. 404 / 410 deletes the device row; any other failure bumps `fail_count`
+(never deleted, never retried - the 10/3 rule). The answer gains `push` (counts, roster ids, follower tags and the notification tags -
+never an endpoint, a key or the words); `push.error` reads `push not configured` without the VAPID secrets and `push_subscriptions
+unavailable: HTTP 404 ...` without the table. The modes `open-shifts` and `offers` do not push (D8).
+
+ORDER (D16, Faraz's, one step at a time - the expected result in brackets):
+
+1. The database first - `apply-push-followups.sh` (the private apply-scripts folder; revision z,
+   `sql/migrations/2026-10-20-push-followups.sql`: `replace_push_subscription` and the column `shift_reminders_push`) - its steps in
+   the order the migration header and `docs/SCHEMA-REVIEW.md` "The order" give them: the pre-check, probe BEFORE (PROBE_SETUP), the
+   Prompt 30 probe BEFORE (its 51 cases), APPLY, the gate after, probe AFTER (its 46 cases), the Prompt 30 probe AFTER (the same 51),
+   the paste-back - then its record step (`docs/SCHEMA-REVIEW.md` "2026-10-20 - phone push follow-ups (revision z)"). On its own
+   the apply changes nothing for anyone: today's client never names the function or the column, and v9 never pushes. The new client reads a missing function / column as
+   "unavailable" (either order is safe for it); v10 does NOT - it reads a missing key as on - so this deploy never goes before the apply.
+2. Then the client, on Faraz's go: its own probe reads the column, and the third phone switch "Reminder the day before my call" (a
+   follower: "... their call") appears beside the two live ones - so everyone can turn the reminder push off BEFORE the first one goes
+   out. D10's consequence: the column defaults to on, so from this deploy every on-call person with phone notifications on gets the
+   reminder at his hour - tell the group first.
+3. THIS deploy, LAST (D16): the hourly job `silvis-daily-reminder-hourly` (`0 * * * *`) sends the first push within the hour that
+   matches someone's reminder hour. Windows PowerShell, one line at a time, each line complete on its own (no `$wd`), every supabase
+   line with the Silvis-linked `supa-silvis` workdir on it (a line without `--workdir` walks up to the Davenport-linked folder); the
+   source is the main clone's file at the commit that carries revision z; `--use-api` deploys and downloads without Docker. The public
+   repo names the folders through `$env:USERPROFILE` (no user name here).
+   ```powershell
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\projects\supa-silvis\backup-daily-reminder-v9" | Out-Null
+   Remove-Item "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts" -ErrorAction SilentlyContinue
+   supabase functions download daily-reminder --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --use-api
+   Copy-Item "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts" "$env:USERPROFILE\projects\supa-silvis\backup-daily-reminder-v9\index.ts" -Force
+   (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\backup-daily-reminder-v9\index.ts" -Algorithm SHA256).Hash.ToLower()
+   Copy-Item "$env:USERPROFILE\projects\Silvis-Call-Schedule\edge-functions\daily-reminder\index.ts" "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts" -Force
+   (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts" -Algorithm SHA256).Hash.ToLower()
+   supabase functions deploy daily-reminder --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --no-verify-jwt --use-api
+   supabase functions list --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis"
+   Remove-Item "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts"
+   supabase functions download daily-reminder --project-ref bzhsroegtagqhutbnsrp --workdir "$env:USERPROFILE\projects\supa-silvis" --use-api
+   (Get-FileHash "$env:USERPROFILE\projects\supa-silvis\supabase\functions\daily-reminder\index.ts" -Algorithm SHA256).Hash.ToLower()
+   curl.exe -s -o NUL -w "%{http_code}" -X POST "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder"
+   ```
+   [The first list: the five live functions ACTIVE, `daily-reminder` v9 (2026-10-01 04:11:46). The backup: the first `Remove-Item`
+   clears any older workdir copy, so the backup holds only what the download wrote - the live code; its hash `030a1366...` (above; if it
+   differs, compare it CRLF-normalised, as Prompt 26's record did - any other difference: stop, nothing is deployed yet). The second hash:
+   exactly the `push-followups/edge-functions/daily-reminder/index.ts` line of apply-scripts' `SHA256SUMS.txt` - anything else, stop
+   before the deploy. Then `daily-reminder` one version up, ACTIVE, the other four unchanged (versions and times). The second
+   `Remove-Item` takes the uploaded copy away, so the last hash can only read what the download wrote - the source the project now
+   serves: that same `SHA256SUMS.txt` line again (a missing file or another hash: the function is deployed - stop, do not deploy again,
+   and paste the download's output back). Then `401` - the gate, nothing read.] The first hash proves the backup, the second the
+   source that was uploaded, the third the source the project serves.
+4. The dryRun, through pg_net in the SQL editor (nothing is sent or written; the device count reads `select=id,profile_id` - no
+   endpoint):
+   ```sql
+   select net.http_post(
+     url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
+     headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+       coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+     body := '{"dryRun":true}'::jsonb,
+     timeout_milliseconds := 60000);
+   -- pg_net answers asynchronously: wait 20-30 s, then
+   select status_code, created, content::jsonb -> 'push' as push from net._http_response where content::text like '{"date_tomorrow":"%","current_hour":%,"dry_run":true,%' order by created desc limit 1;
+   ```
+   [`200` and `push` `{"dry_run": true, ..., "error": null, ...}` with the two tags `silvis-reminder-<tomorrow>-primary` / `-backup`:
+   the dryRun always imports the VAPID pair, so `error` null says push is configured at any hour; `"error": "push not configured"` -
+   the secrets are missing or malformed (settle it first). Run at a reminder hour (17:00 Central, the default) it also lists who would
+   be pushed (`dry_run_composed`) and `devices_found`. The filter is the dryRun's own answer - its first three keys `date_tomorrow`,
+   `current_hour`, `dry_run` with `"dry_run":true`; the hourly job's live answers (`"dry_run":false`) never match, so a :00 run inside
+   the wait never stands in for it. No row: the answer has not landed yet (wait and re-run the read), or tomorrow has no
+   `schedule_days` row (`{"message":"no schedule row for tomorrow",...}`) or nobody on call (no `dry_run` key) - both answer as before,
+   with no `push` key; read those with `select status_code, created, left(content::text, 200) from net._http_response order by created
+   desc limit 3;`.]
+5. Paste back; the record step fills this record (the versions and times, the three hashes, the 401, the dryRun's `push`), moves its
+   heading to DEPLOYED, adds a sha256 pin of the deployed source to `test/edge-functions.test.js` (as the Part A and Prompt 30 records
+   did) and words `docs/ONBOARDING.md`'s phone lines live (the day-before reminder reaches the phone - on by default, at the hour set
+   under Email; the third switch turns it off). Then the first live push is the cron's own run at the first matching hour: its pg_net
+   response row carries `push` (`sent`, `failed`, `removed`, the roster ids and follower tags), and the function log one
+   `[daily-reminder] push: tags=... sent=...` line.
+
+Rollback - in reverse (D16): redeploy the backed-up v9 FIRST (`Copy-Item` the `backup-daily-reminder-v9\index.ts` copy over the workdir
+copy, then step 3's deploy line, then `functions list`), then the SQL rollback (revision z's header gives the column's and the
+function's own lines). Never the other way round: with the column dropped while v10 still runs, a missing key reads as on and the
+function would push with no switch to stop it. The client needs nothing - a missing function / column reads as "unavailable" (the
+third switch hides, Enable and the re-arm fall back to the plain save). Section 7.
 
 ### Deploy record - Prompt 31 Part A (east-feed-refresh, the daily East feed refresh) - DEPLOYED 2026-10-20 01:42:59 UTC by Faraz (v1)
 
@@ -407,7 +520,9 @@ Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID straight
 Davenport app's OneSignal app, its repo and the user-site root worker are never touched). One function changes:
 `send-notification` (the live v9 code - `functions list` would read v10 after the 2026-10-03 03:29Z `secrets set` re-versioned
 every function (inferred, never listed), v11 after a `--rotate`; this deploy is one above whatever it reads then; `calendar-sync`, `office-notifications` and `daily-reminder` are untouched and are NOT
-redeployed - the 6 AM / Monday reminders stay e-mail only, a follow-up). What changes: every send that has a push switch
+redeployed - the 6 AM / Monday reminders stay e-mail only, a follow-up *(built 2026-10-20 as revision z's day-before
+reminder push, `daily-reminder` v10 - PREPARED, NOT deployed: "Deploy record - push reminders (revision z)" above)*). What
+changes: every send that has a push switch
 (`schedule_updates_push` - publish, manual edit, vacation logged, open shifts, shift taken, offers heads-up / frozen;
 `trade_updates_push` - trade proposed / accepted / declined / applied, a give included) also pushes to the devices
 (`push_subscriptions`) of the SAME people its e-mail is resolved for - resolved BEFORE their e-mail flags, each on his own
@@ -419,7 +534,9 @@ mistake answers 401 / 403 for EVERY device, and an automatic prune would then wi
 a `--rotate` drops its old subscription (config.js), whose endpoint then answers 404 / 410 and goes on the next send. A
 re-arm after another app's update reset saves a new row beside the dead one (the client holds only a hash); the dead row
 goes on the account's next send (404 / 410), and Send test clears it at once. Replacing the row in
-`save_push_subscription` itself is a follow-up (a migration change).
+`save_push_subscription` itself is a follow-up (a migration change). *(Built 2026-10-20 as revision z's wrapper
+`replace_push_subscription` - PREPARED, NOT applied; the re-arm and Enable replace the device's earlier row by its flag's hash, the
+plain save while the function is missing - guide section 22.3.)*
 The answer gains `push` (counts for every caller; the per-recipient lists `results` / `followers` for an admin / scheduler
 only; `push: null` for `test` / `shift_reminder`). Two routes: `GET ?vapid=public` (no auth, the public key only) and
 `POST ?push=test` (any verified session, its own devices). No endpoint, key, payload text or address in any answer or log.
@@ -933,6 +1050,12 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #                    "results":[{"follower":"<id8>","surgeon":"s2","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed",...}],
 #                    "sample":{"subject":"Call reminder - tomorrow (...) Dr. <Name> is Silvis PRIMARY","line":"Reminder: Dr. <Name> is on primary call at Silvis tomorrow (Fri 10/9), backup <Name>"}|null}}
 #   (Prompt 20 F3: one entry per follower x followed surgeon on call tomorrow; "followers":{"error":"..."} when the follower read failed)
+#   revision z (v10 - PREPARED, NOT deployed; section 3): the answer also carries the phone push's plan, nothing sent or written:
+#       "push":{"dry_run":true,"composed":N,"skipped_no_device":N,"skipped_pref_off":N,"devices_found":N,"error":null,
+#               "results":[{"person_id":"s?","role":"primary","status":"dry_run_composed"|"skipped_no_device"|"skipped_pref_off"}],
+#               "followers":[{"follower":"<id8>","via":["s?"],"role":"backup","status":...}],"tags":["silvis-reminder-<yyyymmdd>-primary","silvis-reminder-<yyyymmdd>-backup"]}
+#   ("error":"push not configured" without the VAPID secrets; a live run's "push" is send-notification's shape - sent, failed, removed,
+#   skipped_no_device, skipped_pref_off, devices, error - plus the role on each results / followers entry and the tags)
 # mode open-shifts dry run (Prompt 13 part 5c): reads schedule_days for today..today+30, composes the Monday notice, sends NOTHING, writes NO feed row
 curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"open-shifts","dryRun":true}'
 #   -> {"mode":"open-shifts","dry_run":true,"open":N,"through":"YYYY-MM-DD","published_through":"YYYY-MM-DD"|null,"window_end":"YYYY-MM-DD","sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":[{"person_id":"s?","status":"dry_run_composed"}...]}
@@ -1037,6 +1160,9 @@ never typed into a shell.
   the phones of the same people (each on his own `*_push` switch) - the devices they turned on with Enable, which comes with the
   build that ships the Prompt 30 client - and `POST ?push=test` with a session is one real push to the caller's own devices
   (the Settings "Send test" button - any signed-in role, never anyone else's devices).
+- Revision z (PREPARED, NOT deployed - section 3): once `daily-reminder` v10 is deployed, its live `{}` at a person's (or a
+  follower's) reminder hour also pushes the day-before reminder to his phones on `shift_reminders_push`, whatever his e-mail switch -
+  the hourly cron is its intended caller, and a dryRun proves it without a push.
 - The third and fourth pg_cron jobs, `silvis-offers-daily` (created 2026-09-23) and `silvis-open-shifts-weekly` (active by the read-only `cron.job` check of 2026-09-28; first observed run 2026-09-28 12:00Z) (section 4) - the daily offers timeline and the Monday open-shifts notice run unattended.
 
 Planned first live proofs (Prompt 10 acceptance, run by Faraz): one real office
@@ -1051,6 +1177,14 @@ Redeploying an older `index.ts` from git history with the same commands is the
 rollback. Keep the convention: before overwriting a deployed function, download
 it to `edge-functions/deployed-backup-<date>/<slug>/index.ts` (untracked or in a
 PR), byte-diff after deploying.
+
+`daily-reminder` (revision z, once deployed), in this order - the reverse of D16: redeploy the backed-up v9 FIRST (the
+`$env:USERPROFILE\projects\supa-silvis\backup-daily-reminder-v9\index.ts` copy that section 3's record takes before its deploy:
+`Copy-Item` it over the workdir's `supabase\functions\daily-reminder\index.ts`, then that record's deploy line and `functions list`),
+then the SQL rollback (the header of `sql/migrations/2026-10-20-push-followups.sql`: the column's and the function's own
+lines). With the column dropped while v10 still runs, a missing key reads as on and the function would push with no switch. The
+client needs no rollback: a missing function or column reads as "unavailable" (the third phone switch hides; Enable and the re-arm
+fall back to the plain save).
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)

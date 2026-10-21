@@ -219,7 +219,10 @@
 //     sign-out order, Blocked (no Send test, the switches editable with
 //     their note), ?public=1, iPhone Safari (one instruction, no push
 //     button) / Home Screen at 390 px, an installed Android app's Blocked
-//     line); a
+//     line; revision z: the third switch "Reminder the day before my call"
+//     and its save, the re-arm through rpc/replace_push_subscription with
+//     the flag's hash, the fallback to the plain save when it is missing,
+//     the reminder column absent on its own probe); a
 //     third page runs data management end to end with recorded writes: JSON
 //     export shape/counts = live anon data, malformed imports refused with no
 //     write, factory reset needs the typed RESET, records the snapshot BEFORE
@@ -1656,16 +1659,20 @@ const P30_EP2 = "https://fcm.googleapis.com/fcm/send/smoke-device-2";
 // The push requests (the public-key GET, the test POST, the three RPCs, the *_push column probe): answered by the harness on
 // EVERY page - never passed through to the live project, whose function / migration this branch does not assume. The shared
 // route answers the applied + deployed picture with no device saved; the Prompt 30 step's own context has its own store.
-const P30_RPC_RE = /^\/rest\/v1\/rpc\/(save_push_subscription|delete_push_subscription|push_subscription_status)$/;
+// Revision z (Faraz 10/20): the wrapper replace_push_subscription and the reminder column's own probe
+// (select=shift_reminders_push) are answered here too - the applied picture; the Prompt 30 step's own route plays the missing
+// function / column on demand (the client's fallbacks).
+const P30_RPC_RE = /^\/rest\/v1\/rpc\/(save_push_subscription|replace_push_subscription|delete_push_subscription|push_subscription_status)$/;
 const p30IsPush = (url, method) => (url.pathname === "/functions/v1/send-notification" && ((method === "GET" && url.searchParams.get("vapid") === "public") || (method === "POST" && url.searchParams.get("push") === "test")))
   || P30_RPC_RE.test(url.pathname)
-  || (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /trade_updates_push/.test(url.searchParams.get("select") || ""));
+  || (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /_push/.test(url.searchParams.get("select") || ""));
 const p30SharedAnswer = (url, method) => {
   if (url.pathname === "/functions/v1/send-notification") return method === "GET" ? { status: 200, body: { publicKey: P30_VAPID } } : { status: 200, body: { push: { sent: 0, failed: 0, removed: 0, skipped_no_device: 1, skipped_pref_off: 0, devices: { sent: 0, failed: 0, removed: 0 }, error: null } } };
   if (url.pathname.endsWith("/save_push_subscription")) return { status: 200, body: { ok: true, action: "added", devices: 1, audit: true } };
+  if (url.pathname.endsWith("/replace_push_subscription")) return { status: 200, body: { ok: true, action: "added", devices: 1, audit: true, replaced: 0 } };
   if (url.pathname.endsWith("/delete_push_subscription")) return { status: 200, body: { ok: true, removed: 0, devices: 0, audit: false } };
   if (url.pathname.endsWith("/push_subscription_status")) return { status: 200, body: { ok: true, saved: false, devices: 0 } };
-  return { status: 200, body: [] }; // the *_push column probe: both columns exist
+  return { status: 200, body: [] }; // the *_push column probes: both revision w columns and revision z's shift_reminders_push exist
 };
 const routeSupabase = async (route, scope) => {
   // scope: "session" when installed by the A3 session scenario's context (its blob stamp is kept apart); Playwright
@@ -13140,7 +13147,10 @@ try {
     const P30_UID = "00000000-0000-4000-8000-0000000030a1";
     const P30_PROFILE = { id: P30_UID, person_id: "s2", role: "surgeon", display_name: null, email: null, created_at: "2026-10-02T00:00:00Z" };
     const P30_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: P30_UID, role: "authenticated", email: "push-surgeon@example.com", exp: Math.floor(Date.now() / 1000) + SMOKE_JWT_LIFE_SEC })}.c2ln`;
-    const p30 = { calls: [], order: [], saved: new Map(), cols: "ok", errors: [], expected400: 0, profile: null };
+    // revision z: replace "ok" (the wrapper applied) | "missing" (404 PGRST202 - before the apply / after a rollback: the client
+    // falls back to the plain save); remCol "ok" | "unavailable" (the reminder column's own probe answering 400 42703)
+    const p30 = { calls: [], order: [], saved: new Map(), cols: "ok", remCol: "ok", replace: "ok", errors: [], expected400: 0, expected404: 0, profile: null };
+    const p30Hash16 = (ep) => crypto.createHash("sha256").update(String(ep), "utf8").digest("hex").slice(0, 16);
     const p30Route = async (route) => {
       const req = route.request();
       const url = new URL(req.url());
@@ -13160,12 +13170,25 @@ try {
       if (url.pathname === "/functions/v1/send-notification" && method === "GET" && url.searchParams.get("vapid") === "public") return json(200, { publicKey: P30_VAPID });
       if (url.pathname === "/functions/v1/send-notification" && method === "POST" && url.searchParams.get("push") === "test") { const n = p30.saved.size; return json(200, { push: { sent: n ? 1 : 0, failed: 0, removed: 0, skipped_no_device: n ? 0 : 1, skipped_pref_off: 0, devices: { sent: n, failed: 0, removed: 0 }, error: null } }); }
       if (url.pathname === "/rest/v1/rpc/save_push_subscription") { const had = p30.saved.has(b.p_endpoint); p30.saved.set(b.p_endpoint, { p256dh: b.p_p256dh, auth: b.p_auth, label: b.p_label }); return json(200, { ok: true, action: had ? "kept" : "added", devices: p30.saved.size, audit: !had }); }
+      // revision z: the wrapper - this account's earlier row for the device (its endpoint hashes to p_replaces, never the endpoint
+      // being saved) goes, then the same save
+      if (url.pathname === "/rest/v1/rpc/replace_push_subscription") {
+        if (p30.replace !== "ok") { p30.expected404++; return json(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.replace_push_subscription(p_auth, p_endpoint, p_label, p_p256dh, p_replaces) in the schema cache" }); }
+        let gone = 0;
+        if (/^[0-9a-f]{16}$/.test(b.p_replaces || "") && p30Hash16(b.p_endpoint) !== b.p_replaces) for (const ep of Array.from(p30.saved.keys())) if (p30Hash16(ep) === b.p_replaces) { p30.saved.delete(ep); gone++; }
+        const had = p30.saved.has(b.p_endpoint); p30.saved.set(b.p_endpoint, { p256dh: b.p_p256dh, auth: b.p_auth, label: b.p_label }); return json(200, { ok: true, action: had ? "kept" : "added", devices: p30.saved.size, audit: !had, replaced: gone });
+      }
       if (url.pathname === "/rest/v1/rpc/delete_push_subscription") { const had = p30.saved.delete(b.p_endpoint); return json(200, { ok: true, removed: had ? 1 : 0, devices: p30.saved.size, audit: had }); }
       if (url.pathname === "/rest/v1/rpc/push_subscription_status") return json(200, { ok: true, saved: p30.saved.has(b.p_endpoint), devices: p30.saved.size });
       if (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /trade_updates_push/.test(url.searchParams.get("select") || "")) {
         if (p30.cols === "ok") return json(200, []);
         p30.expected400++;
         return json(400, { code: "42703", details: null, hint: null, message: "column notification_preferences.trade_updates_push does not exist" });
+      }
+      if (method === "GET" && url.pathname === "/rest/v1/notification_preferences" && /shift_reminders_push/.test(url.searchParams.get("select") || "")) {
+        if (p30.remCol === "ok") return json(200, []);
+        p30.expected400++;
+        return json(400, { code: "42703", details: null, hint: null, message: "column notification_preferences.shift_reminders_push does not exist" });
       }
       if (method === "GET") return json(200, []);
       return json(method === "POST" ? 201 : 200, []);
@@ -13245,6 +13268,7 @@ try {
         const t = msg.text();
         if (EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t))) return;
         if (/status of 400/.test(t) && p30.expected400 > 0) { p30.expected400--; return; } // the forced 42703 probe answer
+        if (/status of 404/.test(t) && p30.expected404 > 0) { p30.expected404--; return; } // revision z: the wrapper missing (the fallback step)
         p30.errors.push(label + " console: " + t.slice(0, 200));
       });
     };
@@ -13342,6 +13366,22 @@ try {
         let row = null; try { row = JSON.parse(posts.length ? posts[0].body : "null"); } catch (e) {}
         if (posts.length !== 1 || !row || row.person_id !== "s2" || row.trade_updates_push !== false || row.schedule_updates_push !== true || row.trade_updates_email !== true || !("schedule_updates_email" in row)) fail("P30 phone switches: " + JSON.stringify(posts.map(x => x.body)));
         else ok("P30 phone switches: one POST notification_preferences?on_conflict=person_id with trade_updates_push:false, schedule_updates_push:true beside the e-mail flags");
+        // revision z (D8 / D15): the reminder column's own probe read ok -> the third switch "Reminder the day before my call"
+        // (shift_reminders_push) and the reworded note; a save names it, a tap on it saves false
+        const rem = pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=shift_reminders_push] input[type=checkbox]");
+        const remText = await pg.$eval("[data-testid=push-card]", (el) => { const l = el.querySelector("[data-testid=push-pref][data-key=shift_reminders_push]"); const n = el.querySelector("[data-testid=push-prefs-note]"); return { label: l ? l.textContent.trim() : null, note: n ? n.textContent.trim() : null }; });
+        if (!(await rem.count()) || remText.label !== "Reminder the day before my call" || remText.note !== "These cover every device you turned on; reminders arrive at the hour set under Email." || row.shift_reminders_push !== true) fail("P30 (revision z) the reminder switch: " + JSON.stringify({ remText, rowHas: row && row.shift_reminders_push }));
+        else {
+          c0 = p30.calls.length;
+          await rem.click();
+          await pg.waitForTimeout(1200);
+          const rPosts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+          let rRow = null; try { rRow = JSON.parse(rPosts.length ? rPosts[0].body : "null"); } catch (e) {}
+          if (rPosts.length !== 1 || !rRow || rRow.shift_reminders_push !== false || rRow.trade_updates_push !== false || rRow.shift_reminders_email !== true) fail("P30 (revision z) the reminder switch's save: " + JSON.stringify(rPosts.map(x => x.body)));
+          else ok("P30 (revision z): the third phone switch 'Reminder the day before my call' + 'reminders arrive at the hour set under Email'; a tap saves shift_reminders_push:false (the e-mail reminder flag untouched)");
+          await rem.click(); // back where it was
+          await pg.waitForTimeout(800);
+        }
       }
       // (5) the version-change reset keeps the Silvis push worker (and the root dummy); the start-up check finds the same hash
       c0 = p30.calls.length;
@@ -13352,7 +13392,9 @@ try {
       regs = await swRegs(pg);
       const sub1 = await pg.evaluate(async () => { const r = (await navigator.serviceWorker.getRegistrations()).find(x => x.scope === new URL("./", location.href).href.split("?")[0]); const s = r ? await r.pushManager.getSubscription() : null; return s ? s.endpoint.slice(-14) : null; });
       if (!regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || sub1 !== "smoke-device-1") fail("P30 update reset: after the version-change reload registrations " + JSON.stringify(regs) + ", subscription " + sub1);
-      else if (pushCalls(c0, /rpc\/save_push_subscription$/).length) fail("P30 update reset: the start-up check re-saved an unchanged subscription");
+      // pin moved deliberately (revision z, review 10/20): a re-save with a well-formed flag goes through the wrapper, so the negative check
+      // counts both save routes
+      else if (pushCalls(c0, /rpc\/(save|replace)_push_subscription$/).length) fail("P30 update reset: the start-up check re-saved an unchanged subscription");
       else ok("P30 update reset (version change): the sw.js registration and its subscription survive (the keep-predicate's sw.js rule); the root dummy too; the start-up check saved nothing (same hash)");
       // (6) re-arm: the Silvis registration wiped (what Davenport's update reset does), permission still granted, the flag kept
       await pg.evaluate(async () => { const base = new URL("./", location.href).href.split("?")[0]; for (const r of await navigator.serviceWorker.getRegistrations()) if (r.scope === base) await r.unregister(); localStorage.setItem("smoke-p30-asks", "0"); localStorage.setItem("smoke-p30-next-ep", "https://fcm.googleapis.com/fcm/send/smoke-device-2"); });
@@ -13361,14 +13403,29 @@ try {
       c0 = p30.calls.length;
       await pg.reload({ waitUntil: "domcontentloaded" });
       await pg.waitForSelector("button[data-tab=settings]", { timeout: 30000 });
-      await waitFor(async () => pushCalls(c0, /rpc\/save_push_subscription$/).length > 0, 15000, 200);
+      // revision z (D2): the re-arm saves through the wrapper, replacing this account's row for the wiped endpoint (the flag's hash)
+      await waitFor(async () => pushCalls(c0, /rpc\/(save|replace)_push_subscription$/).length > 0, 15000, 200);
       await pg.waitForTimeout(500);
       regs = await swRegs(pg);
-      const reSaves = pushCalls(c0, /rpc\/save_push_subscription$/);
+      const reSaves = pushCalls(c0, /rpc\/(save|replace)_push_subscription$/);
       const asks2 = await lsGet(pg, "smoke-p30-asks");
       let reBody = null; try { reBody = JSON.parse(reSaves[0].body); } catch (e) {}
-      if (!regs.includes(SIL_REG) || reSaves.length !== 1 || !reBody || reBody.p_endpoint !== P30_EP2 || asks2 !== "0") fail("P30 re-arm: registrations " + JSON.stringify(regs) + ", saves " + JSON.stringify(reSaves.map(x => x.body)) + ", permission asks " + asks2);
-      else ok("P30 re-arm on start: the wiped registration came back (sw.js at the folder scope), the new subscription was saved (smoke-device-2) - no permission prompt");
+      if (!regs.includes(SIL_REG) || reSaves.length !== 1 || !/replace_push_subscription$/.test(reSaves[0].path) || !reBody || reBody.p_endpoint !== P30_EP2 || reBody.p_replaces !== p30Hash16(P30_EP1) || p30.saved.has(P30_EP1) || !p30.saved.has(P30_EP2) || asks2 !== "0") fail("P30 re-arm: registrations " + JSON.stringify(regs) + ", saves " + JSON.stringify(reSaves.map(x => x.path + " " + x.body)) + ", stored " + JSON.stringify(Array.from(p30.saved.keys())) + ", permission asks " + asks2);
+      else ok("P30 re-arm on start: the wiped registration came back (sw.js at the folder scope), the new subscription saved (smoke-device-2) through rpc/replace_push_subscription replacing smoke-device-1's row by the flag's hash (revision z) - no permission prompt, no stale row left");
+      // (6b) revision z's fallback: the wrapper missing (before the apply / after a rollback) - the same re-arm saves with the plain
+      // save_push_subscription after the 404, exactly today's path; the card reads On
+      p30.replace = "missing";
+      await pg.evaluate(async () => { const base = new URL("./", location.href).href.split("?")[0]; for (const r of await navigator.serviceWorker.getRegistrations()) if (r.scope === base) await r.unregister(); });
+      c0 = p30.calls.length;
+      await pg.reload({ waitUntil: "domcontentloaded" });
+      await pg.waitForSelector("button[data-tab=settings]", { timeout: 30000 });
+      await waitFor(async () => pushCalls(c0, /rpc\/save_push_subscription$/).length > 0, 15000, 200);
+      await pg.waitForTimeout(500);
+      const fb = pushCalls(c0, /rpc\/(save|replace)_push_subscription$/).map(x => x.path.replace(/^\/rest\/v1\/rpc\//, ""));
+      let fbBody = null; try { fbBody = JSON.parse(pushCalls(c0, /rpc\/save_push_subscription$/)[0].body); } catch (e) {}
+      p30.replace = "ok";
+      if (JSON.stringify(fb) !== JSON.stringify(["replace_push_subscription", "save_push_subscription"]) || !fbBody || fbBody.p_endpoint !== P30_EP2 || JSON.stringify(Object.keys(fbBody).sort()) !== JSON.stringify(["p_auth", "p_endpoint", "p_label", "p_p256dh"])) fail("P30 (revision z) fallback: " + JSON.stringify({ fb, fbBody }));
+      else ok("P30 (revision z) fallback: with the wrapper missing (404 PGRST202) the re-arm saved through the plain save_push_subscription (four keys) - today's behaviour");
       // Push UX 1(a): push on (a fresh page load) -> Settings leaves Notification settings closed
       await pg.click("button[data-tab=settings]"); await pg.waitForTimeout(1500);
       const expOn = await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded").catch(() => null);
@@ -13431,7 +13488,8 @@ try {
       if (regs.includes(SIL_REG) || !regs.includes(ROOT_REG) || pushCalls(c0, /rpc\/delete_push_subscription$/).length !== 1 || s.msg !== "Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications." || (await lsGet(pg, "silvis-push-on-" + P30_UID)) !== null) fail("P30 Reset: " + JSON.stringify({ regs, msg: s.msg }));
       else ok("P30 Reset: the row deleted, unsubscribed, ONLY the Silvis push worker unregistered (the root dummy survives), the flag cleared - 'Reset done. Close and reopen the app (or reload the page), then tap Enable phone notifications.'");
       // (11) the columns probe answering 400 42703 (the migration not applied): the switches hidden, the e-mail upsert names no *_push key
-      p30.cols = "unavailable";
+      // (revision z's column is absent too - it can only come after revision w)
+      p30.cols = "unavailable"; p30.remCol = "unavailable";
       await loadApp(pg, P30_BASE);
       await openCard(pg);
       await pg.waitForSelector("[data-testid=push-prefs-unavailable]", { timeout: 10000 });
@@ -13446,6 +13504,27 @@ try {
       await pg.locator("[data-testid=notif-pref] input[type=checkbox]").first().click(); // back where it was
       await pg.waitForTimeout(800);
       p30.cols = "ok";
+      // (11b) revision z (D15): revision w applied, revision z not (or rolled back) - the reminder column's own probe answers 400 42703:
+      // the two live phone switches stay, the third is hidden, the note keeps "Reminders stay e-mail only for now.", and a save names
+      // the two *_push columns but never shift_reminders_push
+      await loadApp(pg, P30_BASE);
+      await openCard(pg);
+      await pg.waitForSelector("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref]", { timeout: 10000 });
+      // review 10/20: a timed-out wait no longer passes silently - the note's data-state is read and required below ("unavailable", and no
+      // "Couldn't check" line): "unknown" (the probe never fired) or "failed" (42703 misread) renders the same two switches and note, so
+      // only data-state proves the probe read unavailable; the fail line then shows the state it found
+      await pg.waitForSelector("[data-testid=push-prefs-note][data-state=unavailable]", { timeout: 10000 }).catch(() => null);
+      const zr = await pg.$eval("[data-testid=push-card]", (el) => ({ keys: Array.from(el.querySelectorAll("[data-testid=push-pref]")).map(l => l.getAttribute("data-key")), note: (el.querySelector("[data-testid=push-prefs-note]") || { textContent: "" }).textContent.trim(), state: (el.querySelector("[data-testid=push-prefs-note]") || { getAttribute: () => null }).getAttribute("data-state"), failedLine: !!el.querySelector("[data-testid=push-reminder-unavailable]") }));
+      c0 = p30.calls.length;
+      await pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=schedule_updates_push] input[type=checkbox]").click();
+      await pg.waitForTimeout(1200);
+      const zPosts = pushCalls(c0, /^\/rest\/v1\/notification_preferences\?on_conflict=person_id$/).filter(x => x.method === "POST");
+      let zRow = null; try { zRow = JSON.parse(zPosts.length ? zPosts[0].body : "null"); } catch (e) {}
+      if (zr.state !== "unavailable" || zr.failedLine || JSON.stringify(zr.keys) !== JSON.stringify(["schedule_updates_push", "trade_updates_push"]) || zr.note !== "These cover every device you turned on. Reminders stay e-mail only for now." || zPosts.length !== 1 || !zRow || !("schedule_updates_push" in zRow) || "shift_reminders_push" in zRow) fail("P30 (revision z) the reminder column absent: " + JSON.stringify({ zr, posts: zPosts.map(x => x.body) }));
+      else ok("P30 (revision z) the reminder column absent (400 42703 on its own probe): its probe read unavailable (data-state, no 'Couldn't check' line), the two live phone switches stay, no third, 'Reminders stay e-mail only for now.', the save names no shift_reminders_push");
+      await pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=schedule_updates_push] input[type=checkbox]").click(); // back where it was
+      await pg.waitForTimeout(800);
+      p30.remCol = "ok";
       // (12) sign-out: Enable again, then Sign out - the delete request BEFORE the unsubscribe, both before /auth/v1/logout
       await loadApp(pg, P30_BASE);
       await openCard(pg);
@@ -13475,7 +13554,8 @@ try {
       if (s.state !== "blocked" || s.badge !== "Blocked" || s.line !== `Blocked for ${host}. To allow it, open this site's settings in the browser (the icon left of the address), set Notifications to Allow, then reload and tap Enable phone notifications.` || s.buttons.includes("Enable phone notifications")) fail("P30 blocked: " + JSON.stringify(s));
       else ok(`P30 blocked: badge 'Blocked', '${s.line.slice(0, 60)}...' (no Davenport clause on ${host}), no Enable`);
       if (JSON.stringify(s.buttons) !== JSON.stringify(["Diagnose", "Reset subscription"])) fail("P30 blocked: the buttons " + JSON.stringify(s.buttons) + " - want Diagnose / Reset subscription only (no Send test)");
-      else if (bp.note !== "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on." || bp.disabled.length !== 2 || bp.disabled.some(Boolean)) fail("P30 blocked: the phone switches " + JSON.stringify(bp));
+      // pin moved deliberately (revision z): three phone switches once the reminder column exists (was 2)
+      else if (bp.note !== "This device is blocked (see above), so nothing reaches it. These switches still apply to every other device you turned on." || bp.disabled.length !== 3 || bp.disabled.some(Boolean)) fail("P30 blocked: the phone switches " + JSON.stringify(bp));
       else {
         c0 = p30.calls.length;
         await pg.locator("[data-testid=push-prefs][data-owner=person] [data-testid=push-pref][data-key=trade_updates_push] input[type=checkbox]").click();
@@ -13492,7 +13572,7 @@ try {
       await pg.goto(P30_BASE + "?public=1&tab=settings", { waitUntil: "domcontentloaded" });
       await pg.waitForTimeout(3000);
       const pubCard = await pg.$("[data-testid=push-card]");
-      const pubPush = p30.calls.slice(c0).filter(x => /push_subscription|vapid=public|push=test|trade_updates_push/.test(x.path));
+      const pubPush = p30.calls.slice(c0).filter(x => /push_subscription|vapid=public|push=test|trade_updates_push|shift_reminders_push/.test(x.path));
       const regsPub = await swRegs(pg);
       if (pubCard || pubPush.length || JSON.stringify(regsPub) !== JSON.stringify(regsBefore) || pg.url() !== P30_BASE + "?public=1&tab=settings") fail("P30 ?public=1: " + JSON.stringify({ card: !!pubCard, push: pubPush.map(x => x.path), regsPub, regsBefore, url: pg.url() }));
       else ok("P30 ?public=1: no Phone notifications card, no registration change, no push request, the URL untouched");

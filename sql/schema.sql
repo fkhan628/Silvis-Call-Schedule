@@ -156,6 +156,16 @@
 -- trade_update_guard() are their revision p / n bodies plus the stamp lines. No policy, grant, index, other function or anon surface
 -- changes. Letter u stays taken by the weekend pair claim; x was the last applied before it (2026-10-19 22:53:18Z; independent - either apply order on the database, but this
 -- file's apply script ran after Part A's, whose step 0 pinned scripts/verify-rls.sh until x's record step).
+-- Revision 2026-10-20 z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql, report-first, NOT yet applied): Faraz 10/20 -
+-- "finish the backlog" with every recommended decision of the push follow-ups report (B: D2 the wrapper, D3 silent, D4-D7; C: D8 (a),
+-- D10 default on, D11 one hour, D12 independent, D13 followers; D17 one migration). One NEW function replace_push_subscription(p_endpoint,
+-- p_p256dh, p_auth, p_label, p_replaces) (security definer, volatile, search_path public, pg_temp; EXECUTE for authenticated, never anon):
+-- it deletes the caller's OWN earlier row whose endpoint's first 16 hex of SHA-256 equal p_replaces (the device's flag; never another
+-- account's row, never the endpoint being saved; a malformed or null hash deletes nothing), then calls save_push_subscription (unchanged)
+-- in the same transaction - a refusal there rolls the delete back; no audit row for the replaced row (D3); the answer gains replaced.
+-- notification_preferences gains shift_reminders_push (boolean not null default true: the day-before shift reminder's phone switch,
+-- independent of shift_reminders_email; prefs_own unchanged). No table, policy, trigger, existing function, row or anon surface changes.
+-- Letter u stays taken by the weekend pair claim; y was the last applied before it (2026-10-20 00:41:25Z; independent - either apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -1776,6 +1786,7 @@ create table if not exists public.notification_preferences (
   shift_reminders_email     boolean not null default true,
   trade_updates_push        boolean not null default true,                -- Prompt 30 (revision w): phone switches, independent of e-mail
   schedule_updates_push     boolean not null default true,                -- Prompt 30 (revision w)
+  shift_reminders_push      boolean not null default true,                -- revision z: the day-before shift reminder, independent of e-mail
   reminder_hour_central     integer check (reminder_hour_central between 0 and 23),
   updated_at                timestamptz not null default now(),
   constraint notification_preferences_one_owner check (num_nonnulls(person_id, profile_id) = 1)
@@ -1801,6 +1812,11 @@ alter table public.notification_preferences add column if not exists trade_updat
 alter table public.notification_preferences add column if not exists schedule_updates_push boolean not null default true;
 comment on column public.notification_preferences.trade_updates_push is 'Prompt 30: phone notifications for trade proposed / accepted / declined / applied (a give included). Default on; only an explicit false opts out. Independent of trade_updates_email.';
 comment on column public.notification_preferences.schedule_updates_push is 'Prompt 30: phone notifications for schedule published, manual edit, open shifts, shift taken, vacation logged, offers heads-up / frozen. Default on; only an explicit false opts out. Independent of schedule_updates_email.';
+-- revision z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql - report-first, NOT yet applied): the day-before shift
+-- reminder's phone switch on an EXISTING table (a constant default: no rewrite; every existing row - a surgeon's or a follower's - reads
+-- on). prefs_own covers it; the daily-reminder edge function reads it with the service role once its push fan-out is deployed.
+alter table public.notification_preferences add column if not exists shift_reminders_push boolean not null default true;
+comment on column public.notification_preferences.shift_reminders_push is 'Revision z: phone notifications for the day-before shift reminder (daily-reminder, at reminder_hour_central). Default on; only an explicit false opts out. Independent of shift_reminders_email.';
 
 create table if not exists public.audit_log (
   id          uuid primary key default gen_random_uuid(),
@@ -2323,6 +2339,42 @@ revoke all on function public.push_subscription_status(text) from public;
 revoke all on function public.push_subscription_status(text) from anon;
 grant execute on function public.push_subscription_status(text) to authenticated;
 comment on function public.push_subscription_status(text) is 'Prompt 30: whether THIS endpoint is saved for the caller, and how many devices the caller has (Settings > Diagnose, the start-up ownership check). Volatile on purpose: PostgREST refuses GET, so the endpoint never lands in a URL. PS001 PUSH_NOT_SIGNED_IN.';
+
+-- ---------- phone push follow-ups (revision z; sql/migrations/2026-10-20-push-followups.sql - report-first, NOT yet applied)
+-- Faraz 10/20 (D2 the wrapper, D3 silent): the re-arm save. A re-armed device (a new endpoint, or a registration Davenport's update
+-- reset wiped) saved a NEW row and left its old one until the next 404 / 410 or a Send test. The device keeps only the first 16 hex of
+-- SHA-256(endpoint) - its flag, never the endpoint - so the server deletes the caller's own earlier row by that hash, then runs
+-- save_push_subscription (unchanged - still the only path that inserts, updates or moves a row) in the same transaction: a refusal
+-- there rolls the delete back; the delete comes before the cap is counted. A malformed or null hash, or the hash of the endpoint being
+-- saved, deletes nothing; another account's row is never touched. No audit row for the replaced row (like the edge function's 404 / 410
+-- delete). EXECUTE for authenticated, never anon; POST only (volatile).
+create or replace function public.replace_push_subscription(p_endpoint text, p_p256dh text, p_auth text, p_label text, p_replaces text) returns jsonb
+language plpgsql volatile security definer set search_path = public, pg_temp as $$
+declare
+  me     uuid := auth.uid();
+  v_gone integer := 0;
+begin
+  if me is null then
+    raise exception 'PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account' using errcode = 'PS001';
+  end if;
+  -- the lock save_push_subscription takes (re-entrant in this transaction): the delete, the cap and a move read the same rows
+  perform pg_advisory_xact_lock(hashtext('push_subscriptions:save'));
+  -- THIS account's earlier row for THIS device: its endpoint hashes (first 16 hex of SHA-256 - the device's flag) to p_replaces.
+  -- Never another account's row, never the endpoint being saved; a malformed or null hash replaces nothing.
+  if p_replaces ~ '^[0-9a-f]{16}$' and p_endpoint is not null
+     and left(encode(sha256(convert_to(p_endpoint, 'UTF8')), 'hex'), 16) <> p_replaces then
+    delete from public.push_subscriptions s
+     where s.profile_id = me and left(encode(sha256(convert_to(s.endpoint, 'UTF8')), 'hex'), 16) = p_replaces;
+    get diagnostics v_gone = row_count;
+  end if;
+  -- every check, refusal (PS001-PS007), the cap and the push.save audit row stay save_push_subscription's; a refusal there
+  -- rolls the delete back with it (one transaction)
+  return public.save_push_subscription(p_endpoint, p_p256dh, p_auth, p_label) || jsonb_build_object('replaced', v_gone);
+end $$;
+revoke all on function public.replace_push_subscription(text, text, text, text, text) from public;
+revoke all on function public.replace_push_subscription(text, text, text, text, text) from anon;
+grant execute on function public.replace_push_subscription(text, text, text, text, text) to authenticated;
+comment on function public.replace_push_subscription(text, text, text, text, text) is 'Revision z: the re-arm save - deletes the caller''s own earlier row for this device (its endpoint''s first 16 hex of SHA-256 = p_replaces, the device''s flag; never another account''s row, never the endpoint being saved; a malformed or null hash deletes nothing), then runs save_push_subscription in the same transaction (every refusal PS001-PS007, the cap and the push.save audit row are its; a refusal rolls the delete back). Answers save''s {ok, action, devices, audit} plus replaced (0 or 1). No audit row for the replaced row (D3). POST only (volatile). Never returns the endpoint or the keys.';
 
 -- ============================================================================
 -- Row Level Security
