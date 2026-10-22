@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-T+MNrNBKQ0GWWdDIk/o5wde1C/3keuDXSBteqgKF8YQ=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-ZMyvFI6fLKwJRh2x7epiT0BKOzSgLhA88zvyQD1ckck=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-6rEhjpOHkYZ+37coFeSN4uSniXz9Sp5Yh0ePQLPwCOw=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-gJ7O/dVugp69QvXBu2ATNwneu4cOGwDe8p+1zew10xA=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -60,7 +60,7 @@
        inline so dark mode's selectors keep working. */
     .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
     .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
-    .cal-cell { min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell { display: flex; flex-direction: column; min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
     .cal-cell:focus-visible { outline: 2px solid #FF5F05; outline-offset: 1px; }
     .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
     .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
@@ -72,7 +72,16 @@
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
     /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
     .cal-os-short { display: none; }
-    .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
+       the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
+       day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
+    .cal-vac { margin: auto -5px -3px; padding: 2px 5px; font-size: 9.5px; font-weight: 600; line-height: 1.25; border-radius: 6px; white-space: normal; overflow-wrap: anywhere; border-top: 2px solid transparent; background-clip: padding-box; }
+    .cal-vac.cal-vac-l { margin-left: -5px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+    .cal-vac.cal-vac-r { margin-right: -5px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .cal-vac:not(.cal-vac-l) { margin-left: 0; }
+    .cal-vac:not(.cal-vac-r) { margin-right: 0; }
+    .cal-cell.cal-preview .cal-vac { margin-bottom: 0; }
+    .cal-vac-who { white-space: nowrap; }
     /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
        "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
     .cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }
@@ -87,6 +96,7 @@
        saved assignment. Nothing is written until Accept & Publish. */
     .cal-cell.cal-preview { outline: 2px dashed #7a4fbf; outline-offset: -2px; background-image: repeating-linear-gradient(135deg, rgba(122,79,191,0.08) 0 6px, transparent 6px 12px) !important; }
     .cal-preview-tag { position: absolute; bottom: 2px; left: 4px; font-size: 8px; font-weight: 800; letter-spacing: 0.6px; color: #7a4fbf; }
+    .cal-cell.cal-preview { padding-bottom: 13px; }
     .setup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
@@ -115,13 +125,17 @@
        as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
     .mine-hol-letter { display: none; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
-       role letter, holiday name, weekend label and NOTE tag give way (line
+       role letter and holiday name give way (the weekend label and NOTE tag are gone since 10/21) (line
        order = role, the cell title still spells everything out), the pill
        shows the 3-letter code and never shrinks below its text (vis-001; the
        harness asserts no pill is clipped), the padlock shrinks to 7px. */
     @media (max-width: 600px) {
       .cal-grid { gap: 2px; }
       .cal-cell { min-height: 66px; padding: 3px 2px 2px; font-size: 10px; border-radius: 4px; }
+      .cal-vac { margin-bottom: -2px; padding: 1px 2px; font-size: 8.5px; border-radius: 4px; }
+      .cal-vac.cal-vac-l { margin-left: -2px; }
+      .cal-vac.cal-vac-r { margin-right: -2px; }
+      .cal-vac-icon { display: none; }
       .cal-line { gap: 1px; }
       .cal-pill { padding: 0 1px; flex-shrink: 0; max-width: none; }
       .cal-pill.cal-open { padding: 0; letter-spacing: 0 !important; font-size: 9.5px; }
@@ -129,7 +143,7 @@
       .cal-lock { width: 6px; height: 6px; }
       .cal-name { display: none; }
       .cal-code { display: inline; }
-      .cal-hol, .cal-wk-label, .cal-note { display: none; }
+      .cal-hol { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-os-long { display: none; }
@@ -145,7 +159,7 @@
       /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
       .editor-kbd-hint { display: none; }
       /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
-         B line / vacation dots (smaller, no tracking, and the cell grows). */
+         B line / vacation bar (smaller, no tracking, and the cell grows). */
       .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
       .cal-preview-tag { font-size: 7px; letter-spacing: 0; left: 2px; bottom: 1px; }
       /* Tables wider than the phone scroll INSIDE their card (never the page):
@@ -186,7 +200,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.20b";
+    var APP_VERSION = "2026.10.21a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -8005,6 +8019,20 @@ function CallSchedule() {
     });
     return map;
   }, [eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]);
+  const calVac = d => {
+    const out = (vacByDay[d] || []).map(id => ({
+      id,
+      east: null
+    }));
+    (eastVacByDay[d] || []).forEach(m => {
+      if (m.state !== "home" && !out.some(v => v.id === m.id)) out.push({
+        id: m.id,
+        east: m.state
+      });
+    });
+    return out;
+  };
+  const calVacKey = d => calVac(d).map(v => v.id + (v.east === "unreviewed" ? "?" : "")).sort().join(",");
   const eastVacConflictRows = useMemo(() => {
     if (!rulesCtx || typeof eastVacationConflicts !== "function") return [];
     try {
@@ -11527,7 +11555,7 @@ function CallSchedule() {
         className: "cal-line"
       }, React.createElement("span", {
         className: "cal-role"
-      }, role), body, locked ? React.createElement(Padlock, {
+      }, role), body, locked && !isPublicMode && (isScheduler || !holder && slotIsOpen(day, holder, todayStr)) ? React.createElement(Padlock, {
         className: "cal-lock",
         title: (role === "P" ? "Primary" : "Backup") + " locked"
       }) : null);
@@ -11974,16 +12002,7 @@ function CallSchedule() {
           background: wk ? dk ? "#0F2140" : "#eef3f8" : "transparent",
           borderRadius: radius
         }
-      }, h, h === "Fri" ? React.createElement("span", {
-        className: "cal-wk-label",
-        style: {
-          fontWeight: 500,
-          letterSpacing: 0,
-          textTransform: "none",
-          marginLeft: 4,
-          fontSize: 9
-        }
-      }, "weekend unit") : null);
+      }, h);
     }), gridDays.map(d => {
       const pv = previewGen && previewGen.schedule ? previewGen.schedule[d] : null;
       const a = pv || schedule[d] || null;
@@ -12015,6 +12034,16 @@ function CallSchedule() {
       if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
       if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
       const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);
+      const vacHere = calVac(d);
+      const col = gridDays.indexOf(d) % 7;
+      const pvAt = dd => !!(previewGen && previewGen.schedule && previewGen.schedule[dd]);
+      const dPrev = fmt(addD(dt, -1)),
+        dNext = fmt(addD(dt, 1));
+      const vacJoin = {
+        l: vacHere.length > 0 && col > 0 && pvAt(dPrev) === isPreview && calVacKey(dPrev) === calVacKey(d),
+        r: vacHere.length > 0 && col < 6 && pvAt(dNext) === isPreview && calVacKey(dNext) === calVacKey(d)
+      };
+      const vacTitle = [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ");
       return React.createElement("div", {
         key: d,
         className: "cal-cell" + (isPreview ? " cal-preview" : ""),
@@ -12112,39 +12141,30 @@ function CallSchedule() {
       }, appE.short), React.createElement("span", {
         className: "cal-app-code",
         "data-testid": "cal-app-code"
-      }, appGridLabel[appE.profileId] || appE.short)), ((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && React.createElement("div", {
-        className: "cal-dots",
-        title: [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")
-      }, (vacByDay[d] || []).map(pid => React.createElement("span", {
-        key: pid,
-        "data-vac": pid,
+      }, appGridLabel[appE.profileId] || appE.short)), vacHere.length > 0 && React.createElement("div", {
+        className: "cal-vac" + (vacJoin.l ? " cal-vac-l" : "") + (vacJoin.r ? " cal-vac-r" : ""),
+        "data-testid": "cal-vac",
+        "data-vac-ids": vacHere.map(v => v.id).join(","),
+        title: vacTitle,
         style: {
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          background: textColorOf(pid),
-          display: "inline-block"
+          background: T.vacBar,
+          color: T.vacText
         }
-      })), (eastVacByDay[d] || []).map(m => React.createElement("span", {
-        key: "ev" + m.id,
-        "data-eastvac": m.id,
-        "data-eastvac-state": m.state,
-        "data-eastvac-feedbusy": m.feedBusy ? "1" : undefined,
-        title: nameOf(m.id) + ": East (Davenport) vacation - " + (m.state === "home" ? m.feedBusy ? "home, but the East feed says busy that day - the feed wins (no east-clear; check the Davenport schedule or the override)" : "home: available at Silvis (no East call)" : m.state === "away" ? "away: a Silvis vacation" : "unreviewed: treated as a Silvis vacation until decided"),
-        style: eastVacMarkStyle(m.state, dk, textColorOf(m.id))
-      }))), a && a.note && React.createElement("span", {
-        className: "cal-note",
-        title: a.note,
-        style: {
-          position: "absolute",
-          bottom: 2,
-          right: 4,
-          fontSize: 8,
-          color: "#9aa4ae",
-          fontWeight: 700,
-          letterSpacing: 0.5
-        }
-      }, "NOTE"), isPreview && React.createElement("span", {
+      }, React.createElement("span", {
+        className: "cal-vac-icon",
+        "aria-hidden": "true"
+      }, "🏖️\xA0"), vacHere.map((v, i) => React.createElement(React.Fragment, {
+        key: v.id
+      }, i ? " " : "", React.createElement("span", {
+        className: "cal-vac-who",
+        "data-vac": v.east ? undefined : v.id,
+        "data-eastvac": v.east ? v.id : undefined,
+        "data-eastvac-state": v.east ? v.east : undefined
+      }, React.createElement("span", {
+        className: "cal-name"
+      }, nameOf(v.id), v.east === "unreviewed" ? "?" : ""), React.createElement("span", {
+        className: "cal-code"
+      }, codeOf(v.id), v.east === "unreviewed" ? "?" : ""), i < vacHere.length - 1 ? "," : "")))), isPreview && React.createElement("span", {
         className: "cal-preview-tag",
         title: "Generated preview - not saved"
       }, "PREVIEW"));
@@ -12195,13 +12215,30 @@ function CallSchedule() {
       style: {
         fontStyle: "italic"
       }
-    }, "Atwell"), " = external cover"), React.createElement("span", {
+    }, "Atwell"), " = external cover"), !isPublicMode && (isScheduler || gridDays.some(gd => {
+      const g = schedule[gd];
+      return !!g && slotIsOpen(gd, null, todayStr) && (g.primaryLocked && !dayHolder(g, "primary") || g.backupLocked && !g.backup);
+    })) && React.createElement("span", {
+      "data-testid": "legend-lock",
       style: {
         display: "inline-flex",
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", null, "dots = vacations"), gridDays.some(gd => overSoftByDay[gd]) && React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot", isScheduler ? "" : " (ask the scheduler)"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", {
+      "data-testid": "legend-vac"
+    }, React.createElement("span", {
+      style: {
+        background: T.vacBar,
+        color: T.vacText,
+        borderRadius: 4,
+        padding: "0 5px",
+        fontWeight: 600
+      }
+    }, React.createElement("span", {
+      className: "cal-vac-icon",
+      "aria-hidden": "true"
+    }, "🏖️\xA0"), "name"), " = on vacation"), gridDays.some(gd => overSoftByDay[gd]) && React.createElement("span", {
       "data-testid": "legend-over-soft"
     }, React.createElement("span", {
       style: {
@@ -12235,13 +12272,7 @@ function CallSchedule() {
         gap: 5
       },
       title: "A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"
-    }, React.createElement("span", {
-      style: eastVacMarkStyle("unreviewed", dk)
-    }), " unreviewed ", React.createElement("span", {
-      style: eastVacMarkStyle("away", dk, dkSubtext)
-    }), " away ", React.createElement("span", {
-      style: eastVacMarkStyle("home", dk)
-    }), " home = East vacation"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
+    }, React.createElement("strong", null, "name?"), " in the vacation bar = an East vacation not reviewed yet (an away range shows as a plain name; home shows nothing - the hover keeps the state)"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
       css: css,
       ck: "cal_weekrows",
       defaultOpen: true,
