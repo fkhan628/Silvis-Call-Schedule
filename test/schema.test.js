@@ -4754,7 +4754,9 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   // widened 10/21 for revision aa (the East reset backstop, prepared after z, not applied): its header line and its line in the
   // derived-functions block name sql/migrations/2026-10-21-east-reset-backstop.sql, and its record step turns them applied (the aa block
   // below counts the two)
-  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-20-push-followups.sql") && !l.includes("sql/migrations/2026-10-21-east-reset-backstop.sql")).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but on revision z's and revision aa's own lines (revision y's record step; revision z prepared 10/20, revision aa 10/21)");
+  // pin moved deliberately 10/22 (revision z's record step): revision z's three lines read applied 2026-10-22 04:33:15Z, so only revision
+  // aa's own lines may still say it
+  ok(schema.includes("\n-- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)\n") && schema.includes("\n-- Prompt 30 (phone push, sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z): the two phone switches on an\n") && schema.includes("\n-- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only.") && schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-21-east-reset-backstop.sql")).length === 0, "schema.sql's push comments (the revision line, the columns, the table block, the policies) read applied 2026-10-03 16:30:43Z (four places); no 'report-first, NOT yet applied' is left but on revision aa's own lines (revision z's record step, 10/22; revision aa prepared 10/21)");
 }
 
 step("Prompt 30: the probe - self-rolling-back, PROBE_SETUP (absent) first, the two column checks next, three throwaway users, random-tagged endpoints, 51 cases each stating its AFTER string in the header, readbacks as postgres");
@@ -5554,7 +5556,9 @@ ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)
 }
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
-  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h, 20i\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h, 20i - 20i since the deploy's record step) and 20e");
+  // widened 10/22 (the review of revision z's record step): section 22's anon checks (22c-22e) may follow 20i in the list; kept intent:
+  // the header names section 20, 20a-20d, 20h and 20i in that order, and 20e
+  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h, 20i(, 22c-22e)?\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h, 20i - 20i since the deploy's record step) and 20e");
   // pin moved deliberately 10/19 (the record step): the header no longer documents SILVIS_EAST_VACATIONS_APPLIED (strict is the default)
   ok(!/SILVIS_EAST_VACATIONS_APPLIED/.test(head), "verify-rls.sh's header no longer documents SILVIS_EAST_VACATIONS_APPLIED (the record step dropped it)");
   // pin moved deliberately 10/20 (the deploy's record step): the header no longer documents SILVIS_EAST_REFRESH_DEPLOYED (20i on every run)
@@ -6164,7 +6168,8 @@ ok(!/\r/.test(yPre) && /^[\x00-\x7f]*$/.test(yPre), "the trade offer pre-check i
 step("revision y: verify-rls.sh section 21 - the graded probe (21a: 32 cases by name + the count of 32) and its leftovers (21b: apply-trade-offer.sh's seven counts in three columns - tagged / in_window / audit_in_window; in-window rows FAIL only after PROBE_RESULTS, the audit rows listed for review), strict from the start (no flag - PROBE_SETUP FAILs), no REST call; graded against a faked CLI, the 2026-10-20 live picture replayed");
 ok(/^echo "== 21\. trade offers \(2026-10-18, revision y\): apply_trade writes the receiver's call_offers row \+ the consent stamps shift_trade_requests\.proposed_by \/ accepted_by - rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 21 (trade offers)");
 const s21 = vr.slice(vr.indexOf('echo "== 21. '), vrSectionEnd('echo "== 21. '));
-ok(s21.length > 0 && vr.indexOf('echo "== 21. ') > vr.indexOf('echo "== 20. ') && vrSectionEnd('echo "== 21. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 21 could not be sliced out (after section 20, the last section before the RESULT line)");
+// pin moved deliberately 10/22 (revision z's record step): section 22 follows section 21, so 21 ends where 22 begins
+ok(s21.length > 0 && vr.indexOf('echo "== 21. ') > vr.indexOf('echo "== 20. ') && vrSectionEnd('echo "== 21. ') === vr.indexOf('\necho "== 22. '), "verify-rls.sh section 21 could not be sliced out (after section 20, before section 22)");
 ok(/^# Section 21 \(17 = the weekend pair claim, taken on its own branch; 20 = Prompt 31 Part A's East vacations, the section above\)\.$/m.test(s21), "section 21's comment says why it is 21 (17 is on its own branch, 20 the section above)");
 ok(/^# sql\/migrations\/2026-10-18-trade-offer\.sql \(report-first; applied 2026-10-20 00:41:25Z, revision y\): /m.test(s21) && !/NOT applied/.test(s21), "section 21's comment says the migration is applied 2026-10-20 00:41:25Z (report-first; revision y)");
 const s21code = s21.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -6201,7 +6206,9 @@ ok(/LEFT ROWS BEHIND \(in_window=\$win21 [^\n]*after a run that wrote its fixtur
 ok(s21code.includes('echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI section 21 prints one SKIP line");
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
-  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) via the linked Supabase CLI$/m.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20");
+  // pin moved deliberately 10/22 (revision z's record step): the header names section 22 after section 21; moved again 10/22 (the
+  // record step's review): section 22 carries anon checks too (22c-22e), so the header calls it "anon checks and probe" and lists them
+  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) \+ push follow-ups anon checks and probe \(22\) via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*20h, 20i, 22c-22e\)/.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20, then section 22 (the push follow-ups anon checks and probe), and lists 22c-22e among the anon checks");
 }
 // the record step (10/20): the 32 probe AFTER lines of the live run as Faraz's log printed them (apply-trade-offer-20261020T004005Z.log, its
 // paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision y observed block (frozen by sha256 in the docs step), not rebuilt
@@ -6413,8 +6420,13 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
 // never pinned or ran verify-rls.sh) and the header's "+ trade offers probe (21)"; moved again 10/20 (the east-feed-refresh deploy's record
 // step): 20i graded on every run - SILVIS_EAST_REFRESH_DEPLOYED / EVDEPLOYED20 dropped from the header, --help and section 20; 20i joins
 // the header's anon checks; section 21 unchanged; moved again 10/20 (section 21's three endings read in 16d and 18g): end16 / end18 replace
-// passed16 / passed18 - only those two leftover blocks and their comments changed, every other byte as at the deploy's record step
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "fb74411598ad81f1d8844c1452f0eabe9de85fdd0fb801bdaaff7be41e979aad", "scripts/verify-rls.sh must stay at the 16d / 18g three-endings bytes until its next deliberate change;");
+// passed16 / passed18 - only those two leftover blocks and their comments changed, every other byte as at the deploy's record step;
+// pin moved deliberately 10/22 (revision z's record step): section 22 added after section 21 (the push follow-ups probe, strict from the
+// start - apply-push-followups.sh never pinned or ran verify-rls.sh) and the header's "+ push follow-ups probe (22)"; every other byte as
+// at the 16d / 18g change; moved again 10/22 (the record step's review): section 22 gains the plan's anon REST checks 22c-22e (its title
+// and the header name them), its reader drops the trailing-whitespace trim after the ;END cut, its not-linked SKIP line reads 22a/22b;
+// sections 1-21 unchanged byte for byte (section 21 keeps its inherited trim)
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "4ec5bfd8cb4f09fb6647a14e6debf0ff378230416fd911a00c880b550c60df5b", "scripts/verify-rls.sh must stay at revision z's record-step bytes (section 22 added; 22c-22e and the untrimmed reader since its review) until its next deliberate change;");
 ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
 console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");
@@ -6422,12 +6434,17 @@ console.log("- revision y (2026-10-18): the trade offer migration, its mirror, t
 /* ---------------------------------------------- revision z (2026-10-20): phone push follow-ups */
 // Faraz 10/20: "finish the backlog" with every recommended decision of the private report REPORT-PUSH-FOLLOWUPS-2026-10-20.md (B: D2 the
 // wrapper, D3 silent, D4-D7; C: D8 (a) the day-before shift reminder only, D10 default on, D11 one hour, D12 independent, D13 followers;
-// D17 ONE migration). sql/migrations/2026-10-20-push-followups.sql (report-first, NOT applied - Faraz runs apply-push-followups.sh, kept
-// outside the repo): replace_push_subscription - the re-arm save: the caller's own earlier row for the device deleted by the device's
-// flag hash (the client's _hash), then save_push_subscription, unchanged, in the same transaction - and
+// D17 ONE migration). sql/migrations/2026-10-20-push-followups.sql (report-first; APPLIED 2026-10-22 04:33:15Z by Faraz with
+// apply-push-followups.sh, kept outside the repo): replace_push_subscription - the re-arm save: the caller's own earlier row for the device
+// deleted by the device's flag hash (the client's _hash), then save_push_subscription, unchanged, in the same transaction - and
 // notification_preferences.shift_reminders_push. Pinned here: the file's shape and its mirror; the function = the report's B4 draft byte
 // for byte (no defect forced a change); save's body untouched; the probe and pre-check shapes, the probe's vector hash recomputed; the
-// docs' PREPARED words; and scripts/verify-rls.sh left byte-unchanged (its section comes with the record step, as revision y's did).
+// docs' applied words; the trailer and the body sha256; and scripts/verify-rls.sh section 22, added by the record step, which grades the
+// probe on every plain run.
+// pins moved deliberately (the record step, 10/22, like revision y's): log apply-push-followups-20261022T043032Z.log, APPLIED AND
+// VERIFIED (repo HEAD cc4cecc on main, the pins from 25ad475 - all five matched); the file kept as it ran plus ONE trailer line, the
+// probe's and the pre-check's headers turned APPLIED with their as-run notes, SCHEMA-REVIEW's observed paragraph copied from the log
+// (frozen by sha256), the docs' applied words and verify-rls.sh section 22 (its sha256 moved). daily-reminder v10 is NOT deployed.
 // The offline proof (PGlite, outside the repo - never a dependency): PROBE_SETUP before, 46 / 46 after, nothing persisted, the Prompt 30
 // probe's 51 the same before / after / after the rollback, 18 of 21 mutants red (three equivalent; the five audit-row shapes the review
 // found the first R1a blind to are red since its batch_rows=) - the SCHEMA-REVIEW record.
@@ -6481,19 +6498,42 @@ const Z_GATE_AFTER = "replace_fn=yes reminder_col=yes save_fn=yes sha256=yes";
 const Z_VECTOR = "https://fcm.googleapis.com/fcm/send/probe-pushz-vector";
 const Z_VECTOR_HASH = crypto.createHash("sha256").update(Buffer.from(Z_VECTOR, "utf8")).digest("hex").slice(0, 16);
 const zBodyMd5 = (s, name) => { const t = functionText(s, name) || "", a = t.indexOf("$$") + 2; return crypto.createHash("md5").update(t.slice(a, t.lastIndexOf("$$"))).digest("hex"); };
+const zSha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+// sha256 of the applied file, observed 2026-10-22: the log's graded-files line of apply-push-followups.sh (apply-push-followups-20261022T043032Z.log,
+// repo HEAD cc4cecc on main, the pins from 25ad475 - all five matched: yes). The repo copy carries ONE trailer line after the applied body
+// (the record step); the body (everything before it) is what is hashed.
+const Z_APPLIED_SHA256 = "4e5185d7061f6729a214decca0a3442b7e494ed5c7429259bd297fa22a4f0146";
+const Z_TRAILER = "\n-- applied 2026-10-22 04:33:15Z by Faraz";
+// the whole trailer line, pinned exactly: written once by the record step, frozen like the body it annotates (no apostrophe, no machine path)
+const Z_TRAILER_LINE = "-- applied 2026-10-22 04:33:15Z by Faraz (apply-push-followups.sh, its CLI in agent mode - AI_AGENT=1; repo HEAD cc4cecc on main, its pins from 25ad475 - all five matched; the Prompt 30 probe read the same 51 cases before and after; one earlier run applied nothing: a --dry-run at 20261022T042712Z (main cc4cecc) passed steps 0-3 and stopped after the Prompt 30 probe BEFORE); the body above this line is the applied file, sha256 " + Z_APPLIED_SHA256 + " - its header is the text as it ran (its \"REPORT-FIRST, NOT APPLIED\" and its Order note - this apply first, then the client - predate the record step: the client had shipped first, 2026.10.20b, and fell back until this apply; the record step added verify-rls section 22 to run and grade sql/probes/push-followups-probe.sql on every run; the daily-reminder v10 deploy comes later, LAST); test/schema.test.js pins it; the revision z section of docs/SCHEMA-REVIEW.md (2026-10-20) quotes the probe observed right after)";
 
-step("revision z: migration 2026-10-20-push-followups.sql - LF / ASCII, ONE new function (the report's B4 draft byte for byte) with its grants and comment, ONE new column with its comment, the reload; nothing else; every statement byte-identical in schema.sql");
-const zMig = read(Z_MIGRATION);
+step("revision z: migration 2026-10-20-push-followups.sql - LF / ASCII, ONE new function (the report's B4 draft byte for byte) with its grants and comment, ONE new column with its comment, the reload; nothing else; every statement byte-identical in schema.sql; APPLIED 2026-10-22 04:33:15Z, the file kept as it ran (body sha256 + ONE trailer line)");
+const zBuf = fs.existsSync(Z_MIGRATION) ? fs.readFileSync(Z_MIGRATION) : null;
+ok(zBuf, "missing file " + path.relative(ROOT, Z_MIGRATION));
+const zMig = zBuf.toString("utf8");
+let zBody = zMig;
+{
+  // the record step (10/22): the file that ran is the file that is kept - the body hashed, the apply noted after it in ONE line
+  const at = zBuf.indexOf(Z_TRAILER);
+  ok(at > 0, "the push follow-ups migration must carry its trailer line `" + Z_TRAILER.slice(1) + " ...` after the applied body (the record step)");
+  const tail = at > 0 ? zBuf.slice(at + 1).toString("utf8") : "";
+  ok(tail.split("\n").length === 2 && tail.endsWith("\n") && tail.indexOf("\n") === tail.length - 1, "push follow-ups migration: exactly ONE trailer line (and its LF) after the applied body, nothing after it");
+  ok(tail.includes("the body above this line is the applied file, sha256 " + Z_APPLIED_SHA256) && tail.includes("apply-push-followups.sh") && tail.includes("AI_AGENT=1") && tail.includes("repo HEAD cc4cecc") && tail.includes("its pins from 25ad475 - all five matched") && tail.includes("a --dry-run at 20261022T042712Z (main cc4cecc) passed steps 0-3") && tail.includes("the client had shipped first, 2026.10.20b") && tail.includes("the record step added verify-rls section 22") && tail.includes("the daily-reminder v10 deploy comes later, LAST") && tail.includes("the revision z section of docs/SCHEMA-REVIEW.md (2026-10-20) quotes the probe observed right after"), "the trailer names the applied sha256, the script, the agent mode, the HEAD it ran at and its pins, the earlier dry run, the client shipped first, verify-rls section 22, the deploy still to come and the record");
+  ok(!/'/.test(tail) && !/bash scripts\/apply-|[A-Za-z]:[\\/]/.test(tail), "the trailer carries no apostrophe, no scripts/apply- path and no machine path");
+  eq(tail, Z_TRAILER_LINE + "\n", "the push follow-ups migration's trailer line must read exactly as the record step wrote it (frozen);");
+  eq(zSha(at > 0 ? zBuf.slice(0, at + 1) : zBuf), Z_APPLIED_SHA256, "push follow-ups migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
+  if (at > 0) zBody = zBuf.slice(0, at + 1).toString("utf8");
+}
 ok(!/\r/.test(zMig) && /^[\x00-\x7f]*$/.test(zMig), "the push follow-ups migration is LF and ASCII");
 ok(migFiles.includes(Z_FILE) && !PREPARED_NOT_MIRRORED.includes(Z_FILE), "sql/migrations/" + Z_FILE + " is a mirrored migration (not exempt)");
 eq(Array.from(zMig.matchAll(/^create or replace function public\.([a-z_]+)\(/gm)).map((m) => m[1]), ["replace_push_subscription"], "the migration creates exactly one function, replace_push_subscription;");
 ok(zMig.includes("\n" + Z_FN + "\n" + Z_GRANTS + "\n"), "the migration's function and its three grant lines must read exactly as the report's B4 draft (no defect forced a change):\n" + Z_FN + "\n" + Z_GRANTS);
 eq(functionText(zMig, "replace_push_subscription"), Z_FN, "replace_push_subscription() must be the B4 draft byte for byte;");
 ok(!/^-- supersedes:/m.test(zMig) && !/^-- PREPARED FOLLOW-UP/m.test(zMig), "no supersedes line (no other 2026-10-20 file, no function redefined) and not a NOT-MIRRORED follow-up");
-ok(zMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';` (PostgREST learns the function and the column)");
+ok(zBody.endsWith("\nnotify pgrst, 'reload schema';\n"), "the applied body ends with `notify pgrst, 'reload schema';` (PostgREST learns the function and the column)");
 const zCode = zMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
 ok(!/\b(create|drop) (table|policy|index|trigger|publication|view)\b|drop function|drop column|alter policy|alter publication|read_all|prefs_own/i.test(zCode), "the migration's statements create or drop no table, policy, index, trigger, view or publication, drop no function or column, and touch no policy or the anon loop");
-const zStmts = psTopStatements(zMig);
+const zStmts = psTopStatements(zBody);
 ok(!zStmts.some((st) => /^(insert|update|delete)\b/i.test(st)), "the migration writes no row outside the function body");
 eq(zStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
   Z_FN.split("\n")[0],
@@ -6511,6 +6551,8 @@ zStmts.filter((st) => st !== "notify pgrst, 'reload schema';").forEach((st) => o
 {
   const zHdr = zMig.slice(0, zMig.indexOf("\n-- ============================================================================\n\n"));
   const zHdrFlat = zHdr.replace(/\n-- ?/g, " ");
+  // pin kept deliberately (the record step, 10/22): the header is the text as it ran (the body is sha256-pinned); the APPLIED note is the
+  // trailer line
   ok(zHdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(zHdr), "the migration header says REPORT-FIRST, NOT APPLIED");
   ok(zHdr.includes("\n--   bash <run folder>/apply-push-followups.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + Z_FILE + "   (what it runs)\n"), "the migration header carries the two apply lines (Faraz's script, outside the repo; what it runs)");
   ok(/Who it binds\./.test(zHdr) && /Blast radius\./.test(zHdr) && zHdrFlat.includes("ONE implicit transaction") && zHdrFlat.includes("Order (D16): this apply first, then the client") && zHdrFlat.includes("then the daily-reminder deploy LAST"), "the migration header says who it binds, the blast radius, one transaction, and D16's order (the apply, the client, daily-reminder LAST)");
@@ -6538,7 +6580,7 @@ step("revision z: replace_push_subscription - PS001 first, save's lock, the call
   ok(!/save_push_subscription\(text, text, text, text\) (from|to)/.test(zCode) && !/comment on function public\.save_push_subscription/.test(zCode), "the migration re-grants and re-comments nothing of save_push_subscription");
 }
 
-step("revision z: schema.sql - the header revision z line (after y, before the same-day rule), the function after the Prompt 30 block (before Row Level Security), the column in the from-scratch create table and after the Prompt 30 alters; only revision z's lines (and revision aa's, prepared after it) say report-first, NOT yet applied");
+step("revision z: schema.sql - the header revision z line (after y, before the same-day rule), the function after the Prompt 30 block (before Row Level Security), the column in the from-scratch create table and after the Prompt 30 alters; revision z's three lines read applied 2026-10-22 04:33:15Z (the record step) - only revision aa's, prepared after it, still say report-first, NOT yet applied");
 {
   ok(functionText(schema, "replace_push_subscription") === Z_FN, "schema.sql's replace_push_subscription must equal the migration's (the B4 draft)");
   ok(schema.includes("\n" + Z_FN + "\n" + Z_GRANTS + "\n"), "schema.sql carries the function with its three grant lines right after it");
@@ -6548,15 +6590,19 @@ step("revision z: schema.sql - the header revision z line (after y, before the s
   ok(at(Z_COLUMN) > at("comment on column public.notification_preferences.schedule_updates_push is") && at(Z_COLUMN) < at("create table if not exists public.audit_log (") && schema.includes("\n" + Z_COLUMN + "\n" + Z_COLUMN_COMMENT + "\n"), "the add-column line and its comment sit after the Prompt 30 alters, before audit_log");
   const prefsTbl = sliceBetween(schema, "create table if not exists public.notification_preferences (", "\n);") || "";
   ok(/\n  shift_reminders_push      boolean not null default true,  +-- revision z: /.test(prefsTbl), "schema.sql's notification_preferences create table carries shift_reminders_push (a from-scratch schema)");
-  const yAt = header.search(/^-- Revision 2026-10-18 y /m), zAt = header.search(/^-- Revision 2026-10-20 z \(phone push follow-ups, sql\/migrations\/2026-10-20-push-followups\.sql, report-first, NOT yet applied\): /m);
-  ok(yAt > 0 && zAt > yAt && zAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-20 z ('report-first, NOT yet applied' until the record step) after revision y and before the same-day rule");
+  // pin moved deliberately 10/22 (revision z's record step): the header line reads applied 2026-10-22 04:33:15Z after the probe (y's precedent)
+  const yAt = header.search(/^-- Revision 2026-10-18 y /m), zAt = header.search(/^-- Revision 2026-10-20 z \(phone push follow-ups, sql\/migrations\/2026-10-20-push-followups\.sql, applied 2026-10-22 04:33:15Z after the probe\): /m);
+  ok(yAt > 0 && zAt > yAt && zAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-20 z ('applied 2026-10-22 04:33:15Z after the probe' since the record step) after revision y and before the same-day rule");
   // widened 10/21: revision aa's header line (prepared) follows z's, so z's text ends at the next Revision line too (y's reading)
   const revZ = header.slice(zAt).split("\n-- Revision ")[0].split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
   ok(/replace_push_subscription\(p_endpoint, p_p256dh, p_auth, p_label, p_replaces\)/.test(revZ) && /never anon/.test(revZ) && /never another account's row/.test(revZ) && /no audit row for the replaced row \(D3\)/.test(revZ) && /shift_reminders_push \(boolean not null default true/.test(revZ) && /No table, policy, trigger, existing function, row or anon surface changes/.test(revZ) && /Letter u stays taken by the weekend pair claim/.test(revZ) && /y was the last applied before it/.test(revZ), "revision z names the function (own rows, never anon, silent), the column, what does not change, the taken letter u and y as the last applied");
   // widened 10/21: revision aa's two lines (prepared after z; they name its own file) are counted in the aa block
+  // pin moved deliberately 10/22 (revision z's record step): z's three lines - the header line, the column's block comment, the function's
+  // block comment - read applied 2026-10-22 04:33:15Z; no schema.sql line pairs 'NOT yet applied' with z's file
   const zLines = schema.split("\n").filter((l) => /report-first, NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-21-east-reset-backstop.sql"));
-  eq(zLines.length, 3, "exactly three schema.sql lines say 'report-first, NOT yet applied' - revision z's header line, its column comment and its function block (the record step turns them applied; revision aa's two aside);");
-  ok(zLines.every((l) => l.includes("sql/migrations/" + Z_FILE)), "every 'report-first, NOT yet applied' line names sql/migrations/" + Z_FILE);
+  eq(zLines.length, 0, "no schema.sql line says 'report-first, NOT yet applied' but revision aa's two (revision z's record step);");
+  ok(!/push-followups\.sql[^\n]*NOT yet applied/.test(schema), "no schema.sql line says revision z's file is NOT yet applied (the record step)");
+  ok(schema.includes("\n-- revision z (phone push follow-ups, sql/migrations/" + Z_FILE + " - report-first; applied 2026-10-22 04:33:15Z): the day-before shift\n") && schema.includes("\n-- ---------- phone push follow-ups (revision z; sql/migrations/" + Z_FILE + " - report-first; applied 2026-10-22 04:33:15Z)\n"), "the column's and the function's block comments read 'report-first; applied 2026-10-22 04:33:15Z' (Prompt 30's form)");
 }
 
 step("revision z: the probe - self-rolling-back, the collision guard first, PROBE_SETUP absent, the partly-applied check, three throwaway users, random-tagged endpoints and one fixed vector (its hash recomputed), 46 cases each stating its AFTER string, no write outside the probe's own rows");
@@ -6640,7 +6686,12 @@ eq(Object.keys(Z_AFTER).length, 46, "the contract's 46 probe cases;");
   Object.keys(Z_AFTER).forEach((k) => ok(code.includes("insert into probe_results values ('" + k + "', ") || new RegExp("foreach k in array array\\[[^\\]]*'" + k + "'").test(code), "the probe lacks case " + k));
 }
 const zProbeHdr = zProbe.slice(0, zProbe.indexOf("create temp table probe_results"));
-ok(/REPORT-FIRST, NOT APPLIED\)/.test(zProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(zProbeHdr) && /\n-- 46 cases\.\n/.test(zProbeHdr), "the probe header: report-first / not applied, nothing persisted, 46 cases");
+// pin moved deliberately 10/22 (revision z's record step): the header reads APPLIED 2026-10-22 04:33:15Z with its as-run note (y's
+// precedent); the 46 case lines below it are unchanged (the next block reads each)
+{
+  const hFlat = zProbeHdr.replace(/\n-- ?/g, " ");
+  ok(/REPORT-FIRST; APPLIED 2026-10-22 04:33:15Z\)\.\n/.test(zProbeHdr) && !/NOT APPLIED/.test(zProbeHdr) && /^-- As run: the migration was applied 2026-10-22 04:33:15Z \(schema\.sql revision z\); /m.test(zProbeHdr) && hFlat.includes("all 46 cases below as listed after it, leftover count 0 (apply-push-followups.sh steps 2 and 6)") && hFlat.includes("(graded by the private apply-push-followups.sh and, since the record step, by scripts/verify-rls.sh section 22, value for value against the header lines below)") && hFlat.includes("it FAILs a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel") && /WITHOUT PERSISTING ANYTHING/.test(zProbeHdr) && /\n-- 46 cases\.\n/.test(zProbeHdr), "the probe header: report-first, APPLIED 2026-10-22 04:33:15Z, its as-run note (46 / 46, leftover 0; section 22 grades it, a PROBE_SETUP FAILs), nothing persisted, 46 cases");
+}
 {
   const hdrAfter = {};
   zProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+[as]?)\s+.* -> (.*)$/); if (m) hdrAfter[m[1]] = m[2]; });
@@ -6656,8 +6707,12 @@ const zPre = read(Z_PRECHECK);
 ok(!/\r/.test(zPre) && /^[\x00-\x7f]*$/.test(zPre), "the push follow-ups pre-check is LF and ASCII");
 {
   const hdr = zPre.slice(0, zPre.indexOf("with objects as ("));
-  ok(/REPORT-FIRST, NOT APPLIED\)/.test(hdr) && /READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header says report-first / not applied, READ-ONLY and when to run it");
+  // pin moved deliberately 10/22 (revision z's record step): the header reads APPLIED 2026-10-22 04:33:15Z and carries the as-run gate,
+  // bodies, signatures, grants, rls and facts (y's precedent)
+  const hdrFlat = hdr.replace(/\n-- ?/g, " ");
+  ok(/REPORT-FIRST; APPLIED 2026-10-22 04:33:15Z\)\. READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdrFlat) && !/NOT APPLIED/.test(hdr) && /Run it BEFORE the apply/.test(hdr), "the pre-check's header reads REPORT-FIRST; APPLIED 2026-10-22 04:33:15Z (no NOT APPLIED left), READ-ONLY and when to run it");
   ok(hdr.includes(Z_GATE_BEFORE) && hdr.includes(Z_GATE_AFTER), "the header states the gate before and after the apply");
+  ok(hdrFlat.includes("As run (2026-10-22): before the apply the gate read " + Z_GATE_BEFORE + " and right after it " + Z_GATE_AFTER + ";") && hdrFlat.includes("row 2 save=10c2561dbe84d22b116491deb92e95ad replace=none before and save=10c2561dbe84d22b116491deb92e95ad replace=966c4117d3e5a1e1d5224dcade3e63ad after (save's the applied Prompt 30 body both times);") && hdrFlat.includes("row 3 save=definer/volatile replace=none paths=1 before and save=definer/volatile replace=definer/volatile paths=2 after; row 4 save=f/t/f replace=none before and save=f/t/f replace=f/t/f after; row 5 subs_force=f audit_force=f owner_match=yes both times;") && hdrFlat.includes("row 6 rows=2 person=2 profile=0 reminder_push=absent before and rows=2 person=2 profile=0 reminder_push_on=2 reminder_push_off=0 after (every existing row on);") && hdrFlat.includes("rows 7 devices=3 accounts=1 most_on_one_account=3 failing=0 never_delivered=0 label_pairs_seen_twice=1 and 8 push_rows=3 added_30d=3 moved_30d=0 both times"), "the pre-check's as-run note: the gate before / after, the bodies, the signatures, the grants, rls, and the facts rows 6-8 as the log printed them");
   const code = zPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
   ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement (a select with CTEs) ordered by ord, role");
   ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code.replace(/'[^']*'/g, "''")), "the pre-check writes, locks and changes nothing");
@@ -6668,7 +6723,297 @@ ok(!/\r/.test(zPre) && /^[\x00-\x7f]*$/.test(zPre), "the push follow-ups pre-che
   ok(!/display_name|email|\.endpoint\b|endpoint like|\bauth\b|p256dh/.test(code.replace(/reminder_push|shift_reminders_email/g, "")), "counts only: no display name, email, endpoint or key is read (the device label only grouped and counted)");
 }
 
-step("revision z: docs - SCHEMA-REVIEW.md's PREPARED section (followed only by revision aa's: the function verbatim, the probe table = the probe header's 46 cases, the gate with the bodies' md5 derived from the files, the order, the rollback, the record step), table (a), guide 4.3; scripts/verify-rls.sh untouched (its section comes with the record step, as revision y's did); no apply script in the repo");
+step("revision z: verify-rls.sh section 22 - the graded probe (22a: 46 cases by name + the count of 46) and its leftovers (22b: the probe's own identity in three columns - tagged / person / audit; person rows FAIL only after PROBE_RESULTS, the audit rows listed for review), strict from the start (no flag - PROBE_SETUP FAILs), and the anon REST checks (22c the function refused, 22d its five keys known to PostgREST, 22e the column's anon GET 200 []); graded against a faked CLI and a faked curl, the 2026-10-22 live picture replayed");
+ok(/^echo "== 22\. phone push follow-ups \(2026-10-20, revision z\): replace_push_subscription \+ notification_preferences\.shift_reminders_push - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 22 (the push follow-ups; since the record step's review its title names the anon refusals, as section 19's does)");
+const s22 = vr.slice(vr.indexOf('echo "== 22. '), vrSectionEnd('echo "== 22. '));
+ok(s22.length > 0 && vr.indexOf('echo "== 22. ') > vr.indexOf('echo "== 21. ') && vrSectionEnd('echo "== 22. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 22 could not be sliced out (after section 21, the last section before the RESULT line - 23 is revision aa's record step's)");
+ok(/^# Section 22 \(17 = the weekend pair claim, taken on its own branch; 21 = revision y's trade offers, the section above\)\.$/m.test(s22), "section 22's comment says why it is 22 (17 is on its own branch, 21 the section above)");
+ok(/^# sql\/migrations\/2026-10-20-push-followups\.sql \(report-first; applied 2026-10-22 04:33:15Z, revision z\): /m.test(s22) && !/NOT applied/.test(s22), "section 22's comment says the migration is applied 2026-10-22 04:33:15Z (report-first; revision z)");
+const s22code = s22.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+// the review of the record step (10/22): the plan's anon checks - 22c / 22d one anon POST of rpc/replace_push_subscription with exactly the
+// migration's five keys (22d reads the same answer's body), 22e one anon GET of the column; no other REST call, no token but the anon key,
+// no write verb but that POST (the probe's N1 / F7 read anon's privileges inside the database - only these see PostgREST)
+{
+  const s22curl = s22code.split("\n").filter((l) => /\bcurl /.test(l));
+  eq(s22curl.length, 2, "section 22 makes exactly two REST calls (22c's POST - 22d reads its answer - and 22e's GET);");
+  eq((s22code.match(/-X (POST|PATCH|DELETE|PUT)/g) || []).length, 1, "section 22's one write verb is 22c's POST (no PATCH, DELETE or PUT);");
+  ok(s22curl.every((l) => /-H "apikey: \$ANON" -H "Authorization: Bearer \$ANON"/.test(l) && !/SILVIS_|JWT|service_role/i.test(l)), "section 22's REST calls go as anon only");
+  const zParams = ((zMig.match(/create or replace function public\.replace_push_subscription\(([^)]*)\)/) || [])[1] || "").split(",").map((p) => p.trim().split(/\s+/)[0]);
+  eq(zParams, ["p_endpoint", "p_p256dh", "p_auth", "p_label", "p_replaces"], "the migration's replace_push_subscription takes the five keys;");
+  const c22 = s22curl.find((l) => l.startsWith("line=$(curl -s -o $T/vr22c.json -w 'HTTP %{http_code}' -X POST \"$URL/rest/v1/rpc/replace_push_subscription\" "));
+  const b22 = c22 && /-d '(\{[^']*\})'\)$/.exec(c22);
+  let body22 = null; try { body22 = b22 ? JSON.parse(b22[1]) : null; } catch (e) { body22 = null; }
+  eq(body22 ? Object.keys(body22) : [], zParams, "22c POSTs exactly the migration's five keys, in order (PostgREST resolves the function by its key names);");
+  ok(body22 && body22.p_endpoint === "https://fcm.googleapis.com/fcm/send/verify-rls" && /^B[A-Z]{86}$/.test(body22.p_p256dh) && body22.p_label === null && body22.p_replaces === "0000000000000000" && !/probe-pushz/.test(c22), "22c's body is obviously fake (19b's endpoint and keys; a hash that names no row) - never the probe's tag");
+  ok(s22curl.includes("line=$(curl -s -o $T/vr22e.json -w 'HTTP %{http_code}' \"$URL/rest/v1/notification_preferences?select=shift_reminders_push&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\")"), "22e GETs notification_preferences?select=shift_reminders_push&limit=1 as anon");
+  ok(s22code.indexOf("line=$(curl -s -o $T/vr22c.json") > s22code.indexOf('echo "   SKIP 22a/22b (supabase CLI not linked at $WORKDIR)"') && s22code.indexOf("line=$(curl -s -o $T/vr22e.json") > s22code.indexOf("line=$(curl -s -o $T/vr22c.json"), "22c-22e run after the linked block (with or without the CLI), 22c before 22e");
+}
+ok(!/SILVIS_/.test(s22code) && !/SILVIS_PUSH_FOLLOWUPS|SILVIS_REMINDER_PUSH/.test(vr), "section 22 reads no environment flag - strict from the start (the record step added it after the apply; no SILVIS_PUSH_FOLLOWUPS_* flag anywhere in the script)");
+ok(/PROBE22="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/push-followups-probe\.sql"/.test(s22code) && s22code.includes("out=$(supabase db query --linked --workdir \"$WORKDIR\" -f \"$PROBE22\" 2>&1 | grep -v 'new version\\|recommend updating\\|Using workdir\\|Initialising' | tr -d '\\n')"), "22a runs sql/probes/push-followups-probe.sql through the linked CLI (the other probes' filter)");
+ok(/if ! echo "\$out" \| grep -q 'PROBE_RESULTS' && echo "\$out" \| grep -q 'PROBE_SETUP: replace_push_subscription is absent'; then\n\s+bad "push follow-ups probe: PROBE_SETUP - replace_push_subscription is absent \(the function and the column exist since the 2026-10-22 apply\)"\n\s+elif ! echo "\$out" \| grep -q 'PROBE_RESULTS' && echo "\$out" \| grep -q 'PROBE_SETUP: '; then\n\s+bad "push follow-ups probe: /.test(s22code) && !/ok "push follow-ups probe: [^"\n]*absent/.test(s22code), "22a: PROBE_SETUP absent FAILs (strict from the start); every other PROBE_SETUP (partly applied, the collision guard, the profile rows) FAILs too - each only when no PROBE_RESULTS came back (a PROBE_RESULTS is graded case by case)");
+ok(s22code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'") && s22code.includes('case_val22()   { CV22=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV22="${l#"$1="}"; return 0;; esac; done <<< "$lines22"; }'), "section 22 decodes the results ONCE and reads each case in plain bash (section 21's reader)");
+ok(s22code.includes("n22=$(echo \"$lines22\" | grep -c .)") && s22code.includes('[ "$n22" = "46" ] && ok "push follow-ups probe: 46 cases reported'), "22a counts the cases the probe reported - exactly 46: with the 46 graded names, the set apply-push-followups.sh requires");
+// the review of the record step (10/22): the grader is pinned - exact string equality, never a prefix or a pattern (an answer that grew a
+// suffix, e.g. O1 with ' replaced=0', must FAIL; the faked runs below prove it) - and the reader trims nothing after the ;END cut (a trim
+// could only reach the last case, R7; section 21's reader keeps its inherited trim)
+eq((s22code.match(/expect_eq22\(\)/g) || []).length, 1, "section 22 defines expect_eq22 once;");
+ok(s22code.includes("    expect_eq22()  { case_val22 \"$1\"; v=\"$CV22\"; [ \"$v\" = \"$2\" ] && ok \"push follow-ups probe $1: $3\" || bad \"push follow-ups probe $1: $3 (got '$v', expected '$2')\"; }\n"), "22a's expect_eq22 grades by exact string equality: [ \"$v\" = \"$2\" ] (never [[ == ]], a prefix or a pattern)");
+ok(s22code.includes("    results22=$(echo \"$out\" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')\n") && !/\[\[:space:\]\]/.test(s22code), "22a cuts the results at ;END and trims nothing after it (the last case, R7, is graded value for value)");
+ok(s22code.includes("  tagged22=$(echo \"$rflat22\" | grep -oE '\"tagged\":\"?[0-9]+' | head -1 | tr -cd '0-9')\n  per22=$(echo \"$rflat22\" | grep -oE '\"person\":\"?[0-9]+' | head -1 | tr -cd '0-9')\n  aud22=$(echo \"$rflat22\" | grep -oE '\"audit\":\"?[0-9]+' | head -1 | tr -cd '0-9')\n  ") && s22code.includes("  if [ -z \"$tagged22\" ] || [ -z \"$per22\" ] || [ -z \"$aud22\" ]; then\n    bad \"push follow-ups probe leftover count could not be read: "), "22b reads each count whole (every digit) and FAILs a row missing any of the three as unreadable");
+const Z_CASES = Object.keys(Z_AFTER);
+Z_CASES.forEach((k) => ok(s22code.includes("\n    expect_eq22 " + k.padEnd(3) + " \"" + Z_AFTER[k] + "\" "), "section 22 must grade " + k + " as `expect_eq22 " + k.padEnd(3) + " \"" + Z_AFTER[k] + "\" ...` (the probe header's AFTER string)"));
+eq((s22code.match(/\n    expect_eq22 /g) || []).length, Z_CASES.length, "section 22 grades exactly the 46 cases;");
+const Z_LEFTOVER_SQL = "select ((select count(*) from auth.users where email like 'probe-pushz-%@example.test') + (select count(*) from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%'))::int as tagged, ((select count(*) from public.user_profiles where person_id = 's9pushz') + (select count(*) from public.notification_preferences where person_id = 's9pushz'))::int as person, (select count(*) from public.audit_log where action like 'push.%' and detail ->> 'summary' like 'probe pushz %')::int as audit";
+ok(s22code.includes("LEFTOVER22_SQL=\"" + Z_LEFTOVER_SQL + "\""), "22b counts the probe's leftovers by its own identity in three columns: tagged (its users, its endpoints), person (user_profiles / notification_preferences rows of person s9pushz) and audit (push.% rows with its display names)");
+{
+  // what 22b counts is what the probe writes: its users (built with ||), its endpoints (the random base and the fixed vector, one prefix),
+  // the person id it links and his prefs row (the collision guard's two person-id reads, term for term), the display names its audit rows
+  // carry; the guard reads no audit_log, so 22b keeps those rows apart (review only) - fold them back if the guard ever reads them
+  const pcode = zProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  ok(pcode.includes("'probe-pushz-' || u || '@example.test'") && pcode.includes("base := 'https://fcm.googleapis.com/fcm/send/probe-pushz-' || tag || '-';") && pcode.includes("('ev', 'https://fcm.googleapis.com/fcm/send/probe-pushz-vector')"), "22b's tagged terms are what the probe writes: probe-pushz-<uuid>@example.test users, endpoints under https://fcm.googleapis.com/fcm/send/probe-pushz- (the vector included)");
+  ["public.user_profiles where person_id = 's9pushz'", "public.notification_preferences where person_id = 's9pushz'"].forEach((w) =>
+    ok(pcode.includes("exists (select 1 from " + w + ")") && s22code.includes("(select count(*) from " + w + ")"), "22b's person term `" + w + "` is the probe's collision guard's (a row there after a run that wrote its fixtures - PROBE_RESULTS - can only be the probe's)"));
+  const guard = zProbe.slice(zProbe.indexOf("-- the collision guard first"), zProbe.indexOf("raise exception 'PROBE_SETUP: live rows already carry the probe identity"));
+  ok(guard.length > 0 && !/audit_log/.test(guard) && pcode.includes("display_name = 'probe pushz surgeon'") && pcode.includes("display_name = 'probe pushz viewer two'") && pcode.includes("display_name = 'probe pushz viewer three'"), "22b counts the push.% audit rows with the probe's display names ('probe pushz ...') in their own column - the probe's collision guard does not read audit_log");
+}
+// the review of the record step (10/22): a DELETE names the probe's tag or it is not printed - every line of section 22 that says
+// "delete from" (any table, any wording) must be one statement whose only condition is a tagged identity (its endpoints' prefix or its
+// users' e-mail pattern), a trailing SQL comment allowed; a roster id (s9pushz), a profile, a prefs row or an audit row is never a tag
+const Z_TAGGED_DELETE = /^delete from (public\.push_subscriptions where endpoint like 'https:\/\/fcm\.googleapis\.com\/fcm\/send\/probe-pushz-%'|auth\.users where email like 'probe-pushz-%@example\.test');( +-- [^;]*)?$/;
+const zUntaggedDeletes = (text) => text.split("\n").filter((l) => /delete\s+from/i.test(l)).map((l) => l.trim().replace(/^echo "\s*/, "").replace(/"$/, "")).filter((l) => !Z_TAGGED_DELETE.test(l));
+{
+  const del22 = s22code.split("\n").filter((l) => /delete\s+from/i.test(l));
+  eq(del22.length, 2, "section 22's code says 'delete from' on exactly two lines (the tagged DELETEs);");
+  eq(zUntaggedDeletes(s22code), [], "every 'delete from' line of section 22 names the probe's tag as its only condition;");
+  ok(["delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%';", "delete from auth.users where email like 'probe-pushz-%@example.test';   -- profiles, a follower's prefs row and their push rows cascade"].every((d) => s22code.includes("echo \"      " + d + "\"")), "22b prints DELETEs for the tagged rows only - never for a profile, a prefs row or an audit row (a roster id is no tag; audit history is reviewed, never deleted blindly)");
+  // the matcher itself must bind: the review's M10 (a person-keyed push DELETE) and other untagged shapes are caught, the two tagged pass
+  eq(zUntaggedDeletes(["      echo \"      delete from public.push_subscriptions where profile_id in (select id from public.user_profiles where person_id = 's9pushz');\"", "delete from public.notification_preferences where person_id = 's9pushz';", "DELETE FROM public.audit_log where detail ->> 'summary' like 'probe pushz %';", "delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%' or true;", "delete from auth.users where email like 'probe-pushz-%@example.test'; delete from public.user_profiles;"].join("\n")).length, 5, "the DELETE matcher flags every untagged or widened DELETE (a person-keyed one, a prefs row, audit history, an OR, a second statement);");
+}
+ok(s22code.includes("  end22=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end22=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end22=setup; fi\n") && !/passed22/.test(s22code), "22b: end22 = results / setup / none from 22a's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
+ok(/LEFT ROWS BEHIND \(person=\$per22 [^\n]*after a run that wrote its fixtures\)/.test(s22code) && s22code.includes("echo \"   22b: $per22 user_profiles / notification_preferences row(s) of person s9pushz - the probe stopped at a PROBE_SETUP raise before writing any row of s9pushz (22a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s22code.includes("echo \"   22b: $per22 user_profiles / notification_preferences row(s) of person s9pushz - the run reported neither PROBE_RESULTS nor PROBE_SETUP (22a), so whether the probe wrote them is unknown; review them before removing anything:\"") && s22code.includes("echo \"   22b: $aud22 push.% audit row(s) carry a 'probe pushz' summary - the collision guard does not read audit_log and an account's audit rows outlive it, so they may predate this run (an earlier leak whose users were since removed); review them, never delete audit history blindly:\""), "22b: person rows FAIL after results only; after setup this run wrote none of them (real rows, or an earlier run's leak), after none unknown - both listed for review; the audit rows are listed for review on their own");
+ok(s22code.includes("echo \"      select id, role, person_id, display_name from public.user_profiles where person_id = 's9pushz';\"") && !/select \* from public\.user_profiles/.test(s22code), "22b's review SELECT of a profile names no contact column (never select * from user_profiles - it holds the e-mail)");
+{
+  // every PROBE_SETUP raise of the setup block (the DO block before the first `end $$;`) comes before its first write of person s9pushz
+  const setupEnd = zProbe.indexOf("\nend $$;"), firstPerson = zProbe.indexOf("update public.user_profiles set person_id = 's9pushz'");
+  const raises = []; let at = zProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0 && at < setupEnd) { raises.push(at); at = zProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  ok(setupEnd > 0 && firstPerson > 0 && firstPerson < setupEnd && raises.length === 4 && raises.every((x) => x < firstPerson), "the probe's setup block raises its four PROBE_SETUP (the collision guard, the absent, the partly-applied and the profile-rows check) before its first write of person s9pushz (the user_profiles update) - what 22b's 'setup' reading rests on (" + raises.length + " raises)");
+  ok(zProbe.indexOf("raise exception 'PROBE_SETUP: no probe user %'") > setupEnd && zProbe.indexOf("insert into public.notification_preferences (person_id) values ('s9pushz');") > setupEnd, "act()'s no-probe-user raise and the s9pushz prefs row sit after the setup block (each case catches the raise - it lands in PROBE_RESULTS)");
+}
+ok(s22code.includes('echo "   SKIP 22a/22b (supabase CLI not linked at $WORKDIR)"') && !/SKIP 22 \(/.test(s22code), "without a linked CLI section 22 prints one SKIP line for 22a / 22b (22c-22e still run - section 19's / 20's form)");
+// the record step (10/22): the 46 probe AFTER lines of the live run as Faraz's log printed them (apply-push-followups-20261022T043032Z.log,
+// its paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision z observed block (frozen by sha256 in the docs step), not
+// rebuilt from the header's strings; no line carries a double quote, ; < > or & (the header step pins that)
+const Z_OBSERVED_BLOCK = (() => {
+  const at = review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)"), ob = at < 0 ? -1 : review.indexOf("observed (apply, 2026-10-22):", at);
+  const b = ob < 0 ? -1 : review.indexOf("```text\nB1=", ob);
+  return b < 0 ? "" : review.slice(b + 8, review.indexOf("\n```", b + 8));
+})();
+const Z_LIVE_LINES = Z_OBSERVED_BLOCK ? Z_OBSERVED_BLOCK.split("\n") : [];
+eq(Z_LIVE_LINES.length, 46, "the faked live run replays SCHEMA-REVIEW's revision z observed probe AFTER block - 46 lines;");
+eq(Z_LIVE_LINES.slice().sort(), Z_CASES.map((k) => k + "=" + Z_AFTER[k]).sort(), "... each line its header's AFTER string (the log graded 46 / 46);");
+{
+  const code22 = s22;
+  const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
+  // 22c's live answer: the anon refusal 20a-20d and 20h read on 2026-10-19 (HTTP 401 with the database's 42501 naming the function);
+  // a 404 PGRST202 is PostgREST's "not in the schema cache" (as the 9/23 painter's Save read it); 22e's 42703 is section 19e's form
+  const Z_42501 = '{"code":"42501","details":null,"hint":null,"message":"permission denied for function replace_push_subscription"}';
+  const Z_PGRST202 = '{"code":"PGRST202","details":"Searched for the function public.replace_push_subscription with parameters p_auth, p_endpoint, p_label, p_p256dh, p_replaces or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.","hint":null,"message":"Could not find the function public.replace_push_subscription(p_auth, p_endpoint, p_label, p_p256dh, p_replaces) in the schema cache"}';
+  const Z_COL42703 = '{"code":"42703","details":null,"hint":null,"message":"column notification_preferences.shift_reminders_push does not exist"}';
+  const run22 = (cliOut, opts) => {
+    // linked (default true); tagged / person / audit: 22b's three counts; shape: the leftover read as the agent envelope, a plain
+    // terminal's bare array, an error, or noaudit / noperson (a row without audit / person - must fail as unreadable); pre: a line before
+    // the section (e.g. a flag left in the environment - none exists, so it must change nothing); c / cBody: 22c's anon POST answer
+    // (default the live refusal: 401 with the database's 42501 for the function, which 22d reads); e / eBody: 22e's anon GET answer
+    // (default 200 []).
+    // The fakes record every call (each runs in a command substitution's subshell, so each appends a line to a file): the CLI must be
+    // asked for the push follow-ups probe once; curl is a bash function (proven by the fakes guard, like the CLI's) that answers 22c's
+    // anon POST of exactly the five keys and 22e's anon GET - any other request, verb, body or token prints WRONG-REST-* on stderr;
+    // q must be asked for the probe's leftover query. Every run's output is checked for a DELETE that does not name the probe's tag.
+    const o = Object.assign({ linked: true, tagged: 0, person: 0, audit: 0, shape: "envelope", pre: "", c: "401", cBody: Z_42501, e: "200", eBody: "[]" }, opts || {});
+    const cols = [["tagged", o.tagged]].concat(o.shape === "noperson" ? [] : [["person", o.person]], o.shape === "noaudit" ? [] : [["audit", o.audit]]);
+    const row = "{\\n" + cols.map(([k, v]) => "      \"" + k + "\": " + v).join(",\\n") + "\\n    }";
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  " + row + "\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    " + row + "\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" + (o.pre ? o.pre + "\n" : "") +
+      "linked() { " + (o.linked ? "true" : "false") + "; }\n" +
+      "q() { case \"$1\" in *probe-pushz*s9pushz*'probe pushz %'*) ;; *) echo WRONG-LEFTOVER-SQL;; esac; " + qBody + "; }\n" +
+      "curl() { local of='' prev='' u='' d='' auth='' post='' code=599 body='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$prev\" = '-d' ] && d=\"$a\"; " +
+      "[ \"$prev\" = '-H' ] && case \"$a\" in 'Authorization: '*) auth=\"$a\";; esac; [ \"$a\" = POST ] && post=1; case \"$a\" in http*) u=\"$a\";; esac; prev=\"$a\"; done; " +
+      "echo curl >> \"$T/curl.calls\"; [ \"$auth\" = 'Authorization: Bearer x' ] || echo WRONG-REST-AUTH >&2; " +
+      "case \"$u\" in " +
+      "\"$URL/rest/v1/rpc/replace_push_subscription\") [ -n \"$post\" ] || echo WRONG-REST-VERB >&2; case \"$d\" in '{\"p_endpoint\":'*',\"p_p256dh\":'*',\"p_auth\":'*',\"p_label\":'*',\"p_replaces\":'*'}') ;; *) echo WRONG-REST-BODY >&2;; esac; code=" + o.c + "; body=" + sq(o.cBody) + ";; " +
+      "\"$URL/rest/v1/notification_preferences?select=shift_reminders_push&limit=1\") [ -z \"$post\" ] && [ -z \"$d\" ] || echo WRONG-REST-VERB >&2; code=" + o.e + "; body=" + sq(o.eBody) + ";; " +
+      "*) echo \"WRONG-REST-URL $u\" >&2;; esac; [ -n \"$of\" ] && printf '%s' \"$body\" > \"$of\"; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo sb >> \"$T/sb.calls\"; case \"$*\" in *'-f '*/sql/probes/push-followups-probe.sql*) ;; *) echo WRONG-PROBE-FILE;; esac; echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" +
+      fakesGuard(["linked", "q", "supabase", "curl"]) + code22 +
+      "\necho \"CALLS $(cat \"$T/curl.calls\" 2>/dev/null | wc -l | tr -d ' ') $(cat \"$T/sb.calls\" 2>/dev/null | wc -l | tr -d ' ')\"\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 22: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 22's faked run: a fake did not resolve to a bash function - aborted before the section ran");
+    ok(!/WRONG-PROBE-FILE|WRONG-LEFTOVER-SQL/.test(r.stdout || ""), "section 22's faked run asked the CLI for another file or q for another query");
+    ok(!/WRONG-REST/.test(r.stderr || ""), "section 22's faked run sent a REST call other than 22c's anon POST of the five keys or 22e's anon GET: " + (r.stderr || "").split("\n").filter((l) => /WRONG-REST/.test(l)).join(" | ").slice(0, 300));
+    const out = r.stdout || "";
+    ok(zUntaggedDeletes(out).length === 0, "section 22 printed a DELETE that does not name the probe's tag: " + zUntaggedDeletes(out).join(" | ").slice(0, 300));
+    return { out, result: (out.match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "", calls: (out.match(/^CALLS (\d+) (\d+)$/m) || []).slice(1).map(Number) };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  // the CLI's error body (a JSON message; CONTEXT after the sentinel)
+  const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"') + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\\n"}';
+  const R22 = 3;   // 22c-22e (anon REST - green unless a run says otherwise), graded with or without the CLI
+  const N22 = Z_CASES.length + 2 + R22;   // the 46 cases + the count of 46 (22a) + the leftover count (22b) + 22c-22e
+  const ANY_DELETE = /delete\s+from/i;
+  const TAGGED_TWO = ["delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%';", "delete from auth.users where email like 'probe-pushz-%@example.test';   -- profiles, a follower's prefs row and their push rows cascade"];
+  const deletesOf = (x) => x.out.split("\n").filter((l) => ANY_DELETE.test(l)).map((l) => l.trim());
+  const ra = run22(msgOf(Z_AFTER));
+  eq(ra.result, [N22, 0], "section 22 against the AFTER picture (the 46 header strings, leftover 0, 22c 401 with 42501, 22e 200 []): every check PASS (" + fails(ra) + ");");
+  eq(ra.calls, [2, 1], "... one CLI run (the probe) and two REST calls (22c's anon POST - 22d reads its answer - and 22e's anon GET);");
+  ok(/^PASS  anon rpc replace_push_subscription refused \(HTTP 401 - the function exists, execute revoked from anon\)$/m.test(ra.out) && /^PASS  PostgREST knows replace_push_subscription's five keys \(the anon call reached the database, which refused it 42501\)/m.test(ra.out) && /^PASS  PostgREST knows notification_preferences\.shift_reminders_push \(anon 200 \[\] - no row for anon\)/m.test(ra.out), "... 22c refused, 22d the five keys known (the database's 42501), 22e the column known (200 [])");
+  // the live picture inside the CLI 2.120.0 error envelope as the apply logs show it ({"_tag":"Error",...} around the 400 body)
+  const liveEnv = JSON.stringify({ _tag: "Error", error: { code: "DbQueryUnexpectedStatusError", message: 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Z_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\\n"}' } });
+  const rlive = run22(liveEnv);
+  eq(rlive.result, [N22, 0], "section 22 against the 2026-10-22 AFTER picture as the log printed it (46 lines, leftover 0) with 22c-22e green - 51 / 0 (" + fails(rlive) + ");");
+  ok(Z_LIVE_LINES.length === 46 && rlive.out.includes("\n" + Z_LIVE_LINES.map((l) => "   " + l).join("\n") + "\n"), "the live replay prints the 46 lines as the log's paste-back block printed them");
+  // the not-applied picture exactly as both 2026-10-22 logs printed the probe BEFORE (step 2), in the CLI's error envelope
+  const setup = JSON.stringify({ _tag: "Error", error: { code: "DbQueryUnexpectedStatusError", message: 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: replace_push_subscription is absent - sql/migrations/2026-10-20-push-followups.sql is not applied\\nCONTEXT:  PL/pgSQL function inline_code_block line 17 at RAISE\\n"}' } });
+  const rbf = run22(setup);
+  eq(rbf.result, [1 + R22, 1], "the not-applied picture (PROBE_SETUP: replace_push_subscription is absent - the probe BEFORE as the log printed it) FAILs with no flag - strict from the start; the leftover check runs (" + fails(rbf) + ");");
+  ok(/^FAIL  push follow-ups probe: PROBE_SETUP - replace_push_subscription is absent \(the function and the column exist since the 2026-10-22 apply\)$/m.test(rbf.out), "... and its FAIL line says the function and the column exist since the apply");
+  eq(run22(setup, { pre: "export SILVIS_PUSH_FOLLOWUPS_APPLIED=1" }).result, [1 + R22, 1], "... a SILVIS_PUSH_FOLLOWUPS_APPLIED left in the environment changes nothing (no such flag exists);");
+  const rbw = run22(setup, { person: 2 });
+  eq(rbw.result, [R22, 1], "the absent raise (before the probe's first write of person s9pushz) with two person rows: 22a FAILs, the rows are rows this run never wrote - listed for review, not a leftover (" + fails(rbw) + ");");
+  ok(rbw.out.includes("   22b: 2 user_profiles / notification_preferences row(s) of person s9pushz - the probe stopped at a PROBE_SETUP raise before writing any row of s9pushz (22a)") && rbw.out.includes("      select * from public.notification_preferences where person_id = 's9pushz';") && !/LEFT ROWS BEHIND/.test(rbw.out) && !ANY_DELETE.test(rbw.out), "... with their SELECTs, no LEFT ROWS BEHIND and no DELETE");
+  const part = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: notification_preferences.shift_reminders_push is absent - sql/migrations/2026-10-20-push-followups.sql is partly applied\\nCONTEXT:  ..."}';
+  const rp = run22(part);
+  eq(rp.result, [1 + R22, 1], "the partly-applied raise is a FAIL;");
+  ok(/FAIL  push follow-ups probe: PROBE_SETUP: notification_preferences\.shift_reminders_push is absent - sql\/migrations\/2026-10-20-push-followups\.sql is partly applied/.test(rp.out), "... and the FAIL line names the raise");
+  const col = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already carry the probe identity (a probe-pushz user or endpoint, or person s9pushz) - the probe fixtures would collide\\nCONTEXT:  ..."}';
+  const rc = run22(col, { person: 3 });
+  eq(rc.result, [R22, 1], "a collision raise is a FAIL, and the three person rows it met are rows this run never wrote - listed for review, not a leftover (" + fails(rc) + ");");
+  ok(rc.out.includes("   22b: 3 user_profiles / notification_preferences row(s) of person s9pushz - the probe stopped at a PROBE_SETUP raise") && rc.out.includes("      select id, role, person_id, display_name from public.user_profiles where person_id = 's9pushz';") && !/LEFT ROWS BEHIND/.test(rc.out) && !ANY_DELETE.test(rc.out), "... with their SELECTs and no DELETE");
+  const rw = run22(msgOf(Z_AFTER), { person: 2 });
+  eq(rw.result, [N22 - 1, 1], "person rows after a run that wrote its fixtures (PROBE_RESULTS) FAIL (LEFT ROWS BEHIND);");
+  ok(/LEFT ROWS BEHIND \(person=2 /.test(rw.out) && rw.out.includes("      select * from public.notification_preferences where person_id = 's9pushz';") && !rw.out.includes("select * from public.audit_log") && !ANY_DELETE.test(rw.out), "... listed with SELECTs, never a DELETE (a roster id is no tag of its own)");
+  const rt = run22(msgOf(Z_AFTER), { tagged: 4, shape: "bare" });
+  eq(rt.result, [N22 - 1, 1], "tagged leftovers FAIL (read from a plain terminal's bare-array -o json the same as the agent envelope);");
+  eq(deletesOf(rt), TAGGED_TWO, "... with exactly the two DELETEs of the rows only the probe writes (and no other);");
+  eq(run22(msgOf(Z_AFTER), { shape: "error" }).result, [N22 - 1, 1], "22b fails a leftover count it cannot read;");
+  eq(run22('{"message": "connection refused"}').result, [1 + R22, 1], "a run with no sentinel-terminated PROBE_RESULTS FAILs (the leftover check still runs);");
+  // after a run that reported neither PROBE_RESULTS nor PROBE_SETUP, person rows are unknown - never 'live rows'
+  for (const [what, cli] of [["no sentinel", '{"message": "connection refused"}'], ["a cut-off PROBE_RESULTS (no ;END)", msgOf(Z_AFTER).replace(";END", "")]]) {
+    const rn = run22(cli, { person: 2 });
+    eq(rn.result, [R22, 1], what + " with two person rows: 22a FAILs, 22b lists them for review (" + fails(rn) + ");");
+    ok(rn.out.includes("   22b: 2 user_profiles / notification_preferences row(s) of person s9pushz - the run reported neither PROBE_RESULTS nor PROBE_SETUP (22a), so whether the probe wrote them is unknown") && !/LEFT ROWS BEHIND|stopped at a PROBE_SETUP/.test(rn.out) && !ANY_DELETE.test(rn.out), "... " + what + ": 'unknown', never 'live rows' or LEFT ROWS BEHIND, no DELETE");
+  }
+  const prof = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: handle_new_auth_user did not create the profile rows\\nCONTEXT:  ..."}';
+  const rpf = run22(prof, { person: 2 });
+  eq(rpf.result, [R22, 1], "the profile-rows raise (after the auth.users insert, before any write of person s9pushz) with two person rows: 22a FAILs, this run wrote none of them (" + fails(rpf) + ");");
+  ok(rpf.out.includes("the probe stopped at a PROBE_SETUP raise before writing any row of s9pushz (22a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above)") && !/LEFT ROWS BEHIND|live rows, not leftovers/.test(rpf.out), "... listed for review as rows this run never wrote (never 'live rows' - an earlier leak looks the same)");
+  const raud = run22(msgOf(Z_AFTER), { audit: 2 });
+  eq(raud.result, [N22, 0], "two push.% audit rows with the probe's display names after a clean run: no FAIL - the guard never reads audit_log and audit rows outlive their account, they may predate the run (" + fails(raud) + ");");
+  ok(raud.out.includes("   22b: 2 push.% audit row(s) carry a 'probe pushz' summary - the collision guard does not read audit_log and an account's audit rows outlive it, so they may predate this run") && raud.out.includes("      select * from public.audit_log where action like 'push.%' and detail ->> 'summary' like 'probe pushz %';") && !/LEFT ROWS BEHIND/.test(raud.out) && !ANY_DELETE.test(raud.out), "... listed for review with their SELECT, never a DELETE of audit history");
+  eq(run22(msgOf(Z_AFTER), { shape: "noaudit" }).result, [N22 - 1, 1], "a leftover row without audit is unreadable (a FAIL), never read as 0;");
+  // the review of the record step (10/22): ONE leaked row, on each ending - a tagged row FAILs with its two DELETEs whatever the ending
+  // (an earlier leak trips the next run's collision guard: the setup ending is where the DELETEs are needed); a person row FAILs after
+  // results and is listed for review after setup / none; an audit row is listed for review on every ending, never a FAIL of its own.
+  // (p, f) = 22a's own PASS / FAIL count on that ending.
+  [{ k: "results", what: "a results (PROBE_RESULTS)", cli: msgOf(Z_AFTER), p: Z_CASES.length + 1, f: 0 },
+    { k: "setup", what: "a setup (the collision guard's PROBE_SETUP)", cli: col, p: 0, f: 1 },
+    { k: "none", what: "a none (no sentinel)", cli: '{"message": "connection refused"}', p: 0, f: 1 }].forEach((z) => {
+    const t1 = run22(z.cli, { tagged: 1 });
+    eq(t1.result, [z.p + R22, z.f + 1], "ONE tagged leftover after " + z.what + " ending FAILs (" + fails(t1) + ");");
+    ok(/^FAIL  push follow-ups probe LEFT ROWS BEHIND \(tagged=1 - rows only the probe writes\)/m.test(t1.out) && JSON.stringify(deletesOf(t1)) === JSON.stringify(TAGGED_TWO), "... with exactly its two tagged DELETEs (" + z.k + " ending)");
+    const p1 = run22(z.cli, { person: 1 });
+    if (z.k === "results") {
+      eq(p1.result, [z.p + R22, z.f + 1], "ONE person row after " + z.what + " ending FAILs (LEFT ROWS BEHIND) (" + fails(p1) + ");");
+      ok(/^FAIL  push follow-ups probe LEFT ROWS BEHIND \(person=1 - /m.test(p1.out) && p1.out.includes("      select * from public.notification_preferences where person_id = 's9pushz';") && !ANY_DELETE.test(p1.out), "... listed with its SELECTs, never a DELETE (results ending)");
+    } else {
+      eq(p1.result, [z.p + R22, z.f], "ONE person row after " + z.what + " ending is listed for review, not a FAIL of its own (" + fails(p1) + ");");
+      ok(p1.out.includes("   22b: 1 user_profiles / notification_preferences row(s) of person s9pushz - " + (z.k === "setup" ? "the probe stopped at a PROBE_SETUP raise before writing any row of s9pushz (22a)" : "the run reported neither PROBE_RESULTS nor PROBE_SETUP (22a), so whether the probe wrote them is unknown")) && p1.out.includes("      select id, role, person_id, display_name from public.user_profiles where person_id = 's9pushz';") && !/LEFT ROWS BEHIND/.test(p1.out) && !ANY_DELETE.test(p1.out), "... listed with its SELECTs, no LEFT ROWS BEHIND, no DELETE (" + z.k + " ending)");
+    }
+    const a1 = run22(z.cli, { audit: 1 });
+    eq(a1.result, [z.p + 1 + R22, z.f], "ONE push.% audit row with the probe's display names after " + z.what + " ending: no FAIL of its own, the leftover count PASS (" + fails(a1) + ");");
+    ok(a1.out.includes("   22b: 1 push.% audit row(s) carry a 'probe pushz' summary - the collision guard does not read audit_log") && a1.out.includes("      select * from public.audit_log where action like 'push.%' and detail ->> 'summary' like 'probe pushz %';") && !/LEFT ROWS BEHIND/.test(a1.out) && !ANY_DELETE.test(a1.out), "... listed for review with its SELECT, never a DELETE of audit history (" + z.k + " ending)");
+  });
+  // the review of the record step (10/22): a row without person is unreadable on any ending (never LEFT ROWS BEHIND (person=), never a
+  // mere listing); a two-digit count prints whole
+  const rnp = run22(msgOf(Z_AFTER), { shape: "noperson" });
+  eq(rnp.result, [N22 - 1, 1], "a leftover row without person after results is unreadable (a FAIL), never read as 0 or as a person leftover;");
+  ok(/^FAIL  push follow-ups probe leftover count could not be read: /m.test(rnp.out) && !/LEFT ROWS BEHIND/.test(rnp.out), "... its FAIL says the count could not be read");
+  const rnps = run22(col, { shape: "noperson" });
+  eq(rnps.result, [R22, 2], "... and after a setup ending (the collision guard) - 22a's FAIL and the unreadable count (" + fails(rnps) + ");");
+  ok(/^FAIL  push follow-ups probe leftover count could not be read: /m.test(rnps.out) && !/   22b: /.test(rnps.out), "... (setup) its FAIL says the count could not be read - no listing");
+  const r10 = run22(msgOf(Z_AFTER), { tagged: 10 });
+  eq(r10.result, [N22 - 1, 1], "ten tagged leftovers FAIL;");
+  ok(/^FAIL  push follow-ups probe LEFT ROWS BEHIND \(tagged=10 - rows only the probe writes\)/m.test(r10.out), "... and the FAIL line prints the whole count (tagged=10 - never its first digit)");
+  // a PROBE_SETUP inside a case of a sentinel-terminated PROBE_RESULTS (act()'s, caught by its case) is graded case by case - only that
+  // case FAILs; cut off before ;END it is a missing sentinel and 22b's 'unknown'
+  const actF7 = msgOf(Object.assign({}, Z_AFTER, { F7: "ERR P0001 PROBE_SETUP: no probe user u9" }));
+  const raf = run22(actF7);
+  eq(raf.result, [N22 - 1, 1], "a caught act() PROBE_SETUP in F7: graded case by case, F7 alone FAILs (" + fails(raf) + ");");
+  ok(/^FAIL  push follow-ups probe F7: [^\n]*\(got 'ERR P0001 PROBE_SETUP: no probe user u9', expected 'rows=0'\)$/m.test(raf.out) && !/FAIL  push follow-ups probe: PROBE_SETUP/.test(raf.out), "... its FAIL shows the real value, never a setup stop");
+  eq(run22(actF7, { person: 2 }).result, [N22 - 2, 2], "... with two person rows it is a run that wrote its fixtures: LEFT ROWS BEHIND too;");
+  const rafcut = run22(actF7.replace(";END", ""), { person: 2 });
+  eq(rafcut.result, [R22, 1], "the same cut off before ;END: a missing sentinel, the person rows unknown (" + fails(rafcut) + ");");
+  ok(/FAIL  push follow-ups probe reported no sentinel-terminated PROBE_RESULTS/.test(rafcut.out) && rafcut.out.includes("so whether the probe wrote them is unknown"), "... the no-sentinel FAIL and 22b's 'unknown' line");
+  // every reported case line counts, whatever its name (a key outside [A-Z][0-9]+ cannot hide an extra case)
+  for (const extra of ["XY_EXTRA=anything", "R1b=x", "PUSH_SETUP=ok"]) eq(run22(msgOf(Z_AFTER).replace(";END", ";" + extra + ";END")).result, [N22 - 1, 1], "an extra case line " + extra + " FAILs the count of 46;");
+  // wrong values: another account's row deleted (O2), an audit row for the replaced rows (R1a, D3) and anon executing the wrapper (N1)
+  const ro2 = run22(msgOf(Object.assign({}, Z_AFTER, { O2: "ok action=added devices=3 audit=true replaced=1 e5=none" })));
+  eq(ro2.result, [N22 - 1, 1], "another account's row replaced (O2) FAILs O2 alone (" + fails(ro2) + ");");
+  ok(/^FAIL  push follow-ups probe O2: [^\n]*\(got 'ok action=added devices=3 audit=true replaced=1 e5=none', expected 'ok action=added devices=3 audit=true replaced=0 e5=U2'\)$/m.test(ro2.out), "... its FAIL line shows the value read and the one expected");
+  eq(run22(msgOf(Object.assign({}, Z_AFTER, { R1a: "save=3 delete=0 sums=probe pushz surgeon: phone notifications on (iPhone) batch_rows=5", N1: "replaced (NO refusal) ok action=added devices=1 audit=true replaced=0" }))).result, [N22 - 2, 2], "an audit row for each replaced row (R1a batch_rows=5 - D3) and anon executing the wrapper (N1) FAIL - exactly those two;");
+  eq(run22(msgOf(Object.assign({}, Z_AFTER, { F1: "shift_reminders_push=false shift_reminders_email=true trade_updates_push=true schedule_updates_push=true" }))).result, [N22 - 1, 1], "a reminder switch that does not default on (F1 - D10) FAILs F1 alone;");
+  // the review of the record step (10/22): exact grading - an answer that EXTENDS its expected string FAILs (a prefix grader would pass it):
+  // O1 and R3, plain saves, gaining ' replaced=0'; and the last case, R7, with a trailing space FAILs like any other (no trim after ;END)
+  const rsuf = run22(msgOf(Object.assign({}, Z_AFTER, { O1: Z_AFTER.O1 + " replaced=0", R3: Z_AFTER.R3 + " replaced=0" })));
+  eq(rsuf.result, [N22 - 2, 2], "O1 and R3 extended by ' replaced=0' FAIL - exactly those two (" + fails(rsuf) + ");");
+  ok(/^FAIL  push follow-ups probe O1: [^\n]*\(got 'ok action=added devices=1 audit=true replaced=0', expected 'ok action=added devices=1 audit=true'\)$/m.test(rsuf.out) && /^FAIL  push follow-ups probe R3: [^\n]*\(got 'ok action=added devices=2 audit=true replaced=0', expected 'ok action=added devices=2 audit=true'\)$/m.test(rsuf.out), "... each FAIL line shows the longer value read and the one expected");
+  const r7 = run22(msgOf(Object.assign({}, Z_AFTER, { R7: Z_AFTER.R7 + " " })));
+  eq(r7.result, [N22 - 1, 1], "the last case (R7) with a trailing space FAILs, as any other case would (" + fails(r7) + ");");
+  ok(/^FAIL  push follow-ups probe R7: [^\n]*\(got 'ok action=kept devices=2 audit=false replaced=0 e3=U1 ', expected 'ok action=kept devices=2 audit=false replaced=0 e3=U1'\)$/m.test(r7.out), "... its FAIL line shows the trailing space");
+  const miss = Object.assign({}, Z_AFTER); delete miss.F7;
+  eq(run22(msgOf(miss)).result, [N22 - 2, 2], "a lost case FAILs twice (its own grade and the count of 46);");
+  const missS = Object.assign({}, Z_AFTER); delete missS.C6s;
+  eq(run22(msgOf(missS)).result, [N22 - 2, 2], "a lost readback case (C6s - a suffixed name) FAILs twice too;");
+  eq(run22(msgOf(Object.assign({}, Z_AFTER, { X1: "x" }))).result, [N22 - 1, 1], "an extra case FAILs the count of 46 (the set must be exactly the header's, as apply-push-followups.sh grades it);");
+  eq(run22(msgOf(Z_AFTER).replace("F7=", "F7=" + Z_AFTER.F7 + ";F7=")).result, [N22 - 1, 1], "a doubled case FAILs the count of 46;");
+  // 22c-22e (the review of the record step, 10/22): graded as section 19 grades its RPCs (19b) and 19e its columns
+  eq(run22(msgOf(Z_AFTER), { c: "403" }).result, [N22, 0], "22c: a 403 refusal (with the database's 42501) passes as a 401 does;");
+  const r404 = run22(msgOf(Z_AFTER), { c: "404", cBody: Z_PGRST202 });
+  eq(r404.result, [N22 - 2, 2], "22c / 22d: a 404 PGRST202 (the schema cache does not know the five keys - the live client would fall back to the plain save without a word) FAILs both (" + fails(r404) + ");");
+  ok(/^FAIL  anon rpc replace_push_subscription: HTTP 404 \(the function exists since the 2026-10-22 apply - or the schema cache is stale\)$/m.test(r404.out) && /^FAIL  anon rpc replace_push_subscription: PGRST202 - PostgREST's schema cache does not know the function or its five keys/m.test(r404.out), "... naming the 404 and PGRST202");
+  const rgw = run22(msgOf(Z_AFTER), { cBody: '{"message":"Invalid API key"}' });
+  eq(rgw.result, [N22 - 1, 1], "22d: a 401 that is not the database's 42501 for the function (a gateway's - the call never reached it) FAILs 22d alone (" + fails(rgw) + ");");
+  ok(/^FAIL  anon rpc replace_push_subscription: no 42501 for the function in the answer \(HTTP 401: \{"message":"Invalid API key"\}\)/m.test(rgw.out), "... and says the call never reached the database through the five keys");
+  eq(run22(msgOf(Z_AFTER), { cBody: '{"code":"42501","details":null,"hint":null,"message":"permission denied for function save_push_subscription"}' }).result, [N22 - 1, 1], "22d: a 42501 for another function FAILs 22d;");
+  eq(run22(msgOf(Z_AFTER), { c: "400", cBody: '{"code":"PS001","details":null,"hint":null,"message":"PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account"}' }).result, [N22 - 2, 2], "22c / 22d: a 400 (anon reached the body - the revoke did not take) FAILs both;");
+  eq(run22(msgOf(Z_AFTER), { eBody: '[{"shift_reminders_push":true}]' }).result, [N22 - 1, 1], "22e: an answer WITH a row FAILs (anon must never read a prefs row);");
+  const r42703 = run22(msgOf(Z_AFTER), { e: "400", eBody: Z_COL42703 });
+  eq(r42703.result, [N22 - 1, 1], "22e: a 400 42703 (the column unknown - the client would hide the third switch) FAILs;");
+  ok(/^FAIL  anon GET notification_preferences shift_reminders_push: HTTP 400 42703 \(the column exists since the 2026-10-22 apply/m.test(r42703.out), "... naming 42703");
+  const r400 = run22(msgOf(Z_AFTER), { e: "400", eBody: '{"code":"PGRST100","message":"x"}' });
+  eq(r400.result, [N22 - 1, 1], "22e: a 400 without 42703 FAILs;");
+  ok(/^FAIL  anon GET notification_preferences shift_reminders_push: HTTP 400 without 42703 \(/m.test(r400.out) && !/HTTP 400 42703/.test(r400.out), "... as 'HTTP 400 without 42703', never as a 42703 (the second re-check, 10/22: a mutant printing 42703 for every 400 survived)");
+  // the second re-check (10/22): every other branch of 22c / 22e is run - a 200 to the RPC (anon ran the function) and a 22e answer
+  // that is neither 200 nor 400
+  const r200 = run22(msgOf(Z_AFTER), { c: "200", cBody: '{"ok":true,"action":"added","devices":1,"audit":true,"replaced":0}' });
+  eq(r200.result, [N22 - 2, 2], "22c / 22d: a 200 (anon ran the function) FAILs both (" + fails(r200) + ");");
+  ok(/^FAIL  anon rpc replace_push_subscription: HTTP 200 \(expected 401\/403; anything else - a 200 or a 400 included - means anon reached the body\)$/m.test(r200.out) && !/^PASS  anon rpc replace_push_subscription refused/m.test(r200.out), "... 22c names the 200 and never passes it");
+  for (const st of ["401", "404", "206", "000"]) {
+    const re = run22(msgOf(Z_AFTER), { e: st, eBody: "[]" });
+    eq(re.result, [N22 - 1, 1], "22e: an HTTP " + st + " (neither 200 nor 400) FAILs;");
+    ok(new RegExp("^FAIL  anon GET notification_preferences shift_reminders_push: HTTP " + st + " \\(expected 200 \\[\\]\\)$", "m").test(re.out), "... and says it expected 200 []");
+  }
+  // the not-applied picture over REST too (both 2026-10-22 logs' BEFORE: no function, no column): every graded part FAILs
+  eq(run22(setup, { c: "404", cBody: Z_PGRST202, e: "400", eBody: Z_COL42703 }).result, [1, 4], "the not-applied picture (PROBE_SETUP absent, 22c 404 / 22d PGRST202, 22e 400 42703): four FAILs, the leftover check PASS;");
+  const ru = run22(msgOf(Z_AFTER), { linked: false });
+  eq(ru.result, [R22, 0], "without a linked CLI section 22 still grades 22c-22e (anon REST, no CLI needed);");
+  ok(/^   SKIP 22a\/22b \(supabase CLI not linked at \/nonexistent\)$/m.test(ru.out) && JSON.stringify(ru.calls) === "[2,0]", "... prints its SKIP line for 22a / 22b, asks the CLI nothing and sends 22c-22e's two anon calls");
+}
+
+step("revision z: docs - SCHEMA-REVIEW.md's revision z section (followed only by revision aa's: APPLIED 2026-10-22 04:33:15Z, the function verbatim, the probe table = the probe header's 46 cases, the gate with the bodies' md5 derived from the files, the order and its as-run note, the rollback, the record step, the observed paragraph from the log - frozen), tables (a) / (b), guide 4.3 / 22, ONBOARDING's three switches; scripts/verify-rls.sh section 22; no apply script in the repo");
 {
   ok(/^## 2026-10-20 - phone push follow-ups \(revision z\): replace_push_subscription \+ notification_preferences\.shift_reminders_push \(Faraz 10\/20; `sql\/migrations\/2026-10-20-push-followups\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-10-20 - phone push follow-ups (revision z)' section");
   const at = review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)"), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
@@ -6676,8 +7021,12 @@ step("revision z: docs - SCHEMA-REVIEW.md's PREPARED section (followed only by r
   const zr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const zrFlat = zr.replace(/\s+/g, " ");
   ok(at > review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && review.indexOf("\n## ", end + 1) < 0)), "the revision z section is the last one, after revision y's (revision aa's, 10/21, alone may follow it)");
-  ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-push-followups\.sh`\.\*\*$/m.test(zr) && !/\*\*Status: APPLIED/.test(zr), "the status line reads PREPARED - report-first, NOT applied - until the record step");
-  ["**Why.**", "**The decisions**", "**The objects**", "**The hash.**", "**What it deletes.**", "**The column.**", "**Who it binds.**", "**Blast radius.**", "**Proof.**", "| case | actor / call | AFTER |", "The gate (the pre-check's first rows", "**The order**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved: (the record step fills this"].forEach((a, i, all) => {
+  // pin moved deliberately 10/22 (revision z's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
+  ok(/^\*\*Status: APPLIED 2026-10-22 04:33:15Z\*\* \(Faraz - `apply-push-followups\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(zr) && !/^\*\*Status: PREPARED/m.test(zr), "the status line reads APPLIED 2026-10-22 04:33:15Z (Faraz - apply-push-followups.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
+  // review 10/22 (the order as run): D16 ordered the apply, then the client - the client shipped first (2026.10.20b) and fell back until the
+  // apply; the daily-reminder deploy is still to come, LAST
+  ok(zrFlat.includes("y - trade offers - was the last applied before it, 2026-10-20 00:41:25Z)") && zrFlat.includes("Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section and added verify-rls section 22.") && zrFlat.includes("Across the follow-ups D16 ordered this apply, then the client, then the `daily-reminder` deploy LAST, then its dryRun with the cron secret. As run, the client went first: it shipped in 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date), before the apply, and fell back until it") && zrFlat.includes("this apply followed (2026-10-22 04:33:15Z, about 25 hours later);") && zrFlat.includes("the `daily-reminder` v10 deploy and its dryRun are still to come, LAST, after Faraz tells the group.") && !zrFlat.includes("Across the follow-ups the order is D16's: this apply, then the client") && !/the record step fills the observed line/.test(zr), "the status paragraph reads as run: y the last applied before it, the log pasted back and the observed lines filled, verify-rls section 22 added, and the order as run - the client first (2026.10.20b), then this apply, the daily-reminder deploy still to come, LAST");
+  ["**Why.**", "**The decisions**", "**The objects**", "**The hash.**", "**What it deletes.**", "**The column.**", "**Who it binds.**", "**Blast radius.**", "**Proof.**", "| case | actor / call | AFTER |", "The gate (the pre-check's first rows", "**The order**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved (apply, 2026-10-22): applied 2026-10-22 04:33:15Z"].forEach((a, i, all) => {
     ok(zr.includes(a), "the revision z section lacks " + a);
     if (i > 0) ok(zr.indexOf(a) > zr.indexOf(all[i - 1]), "the revision z section must keep its order: " + all[i - 1] + " before " + a);
   });
@@ -6688,30 +7037,83 @@ step("revision z: docs - SCHEMA-REVIEW.md's PREPARED section (followed only by r
   // the md5 of each body (pg_proc.prosrc = the text between its $$ quotes), derived from the files: save's = the applied Prompt 30 body
   // before and after (revision z never re-creates it); replace's = the migration's
   const Z_BODIES_BEFORE = "save=" + zBodyMd5(psBody, "save_push_subscription") + " replace=none";
-  const Z_BODIES_AFTER = "save=" + zBodyMd5(psBody, "save_push_subscription") + " replace=" + zBodyMd5(zMig, "replace_push_subscription");
+  const Z_BODIES_AFTER = "save=" + zBodyMd5(psBody, "save_push_subscription") + " replace=" + zBodyMd5(zBody, "replace_push_subscription");
   ok(zr.includes("before: " + Z_GATE_BEFORE + "\n        " + Z_BODIES_BEFORE + "\n") && zr.includes("after:  " + Z_GATE_AFTER + "\n        " + Z_BODIES_AFTER + "\n"), "the section's gate states the bodies' md5 derived from the files - before: " + Z_BODIES_BEFORE + " / after: " + Z_BODIES_AFTER);
-  eq(Z_BODIES_AFTER, "save=10c2561dbe84d22b116491deb92e95ad replace=966c4117d3e5a1e1d5224dcade3e63ad", "the bodies as the pre-check read them on PGlite (10/20);");
+  // pin moved deliberately 10/22 (the record step): the derived md5s equal the ones the live pre-check read before / after the apply
+  eq([Z_BODIES_BEFORE, Z_BODIES_AFTER], ["save=10c2561dbe84d22b116491deb92e95ad replace=none", "save=10c2561dbe84d22b116491deb92e95ad replace=966c4117d3e5a1e1d5224dcade3e63ad"], "the bodies the live pre-check read before / after (2026-10-22, apply-push-followups-20261022T043032Z.log);");
   ok(zr.includes("```text\n" + Z_ROLLBACK.filter((l) => !/^(part [BC] |then:)/.test(l)).join("\n") + "\n```"), "the section's rollback lists the three statements of the migration header, in order");
   ok(zrFlat.includes("46 / 46 cases after, nothing persisted") && zrFlat.includes("the Prompt 30 probe's 51 cases read the same before, after and after the rollback") && zrFlat.includes("18 of 21 one-change mutants") && zrFlat.includes("R1a's `batch_rows=` now counts every audit row the batch wrote") && zrFlat.includes("`reminder_push_on=3 reminder_push_off=0`"), "the Proof records the offline run: 46 / 46, nothing persisted, the Prompt 30 probe unchanged, the mutants (the review's five audit-row shapes red through R1a's batch_rows=), the rows written before the migration reading on");
-  ok(/^observed: \(the record step fills this[^\n]*/m.test(zr), "the observed placeholder (nothing has run against the live project)");
+  // the as-run notes (the record step, y's precedent): the blast radius, the proof, the gate, the order, the record step
+  ok(zrFlat.includes("*As run: the pre-check's facts read `rows=2 person=2 profile=0` before and after - both prefs rows on right after the apply (`reminder_push_on=2 reminder_push_off=0`);") && zrFlat.includes("The apply wrote no row (the probe rolled back, leftover 0).") && zrFlat.includes("nothing pushes the day-before reminder until `daily-reminder` v10 is deployed.*"), "the blast radius carries its as-run note (the facts before and after, both rows on, nothing written, no reminder push before the deploy)");
+  ok(zrFlat.includes("*As run (2026-10-22): the live probe BEFORE read `PROBE_SETUP` (replace_push_subscription is absent) and AFTER all 46 cases exactly as their header strings, leftover 0; the Prompt 30 probe's 51 cases read the same before and after (steps 3 and 7); the pre-check read both prefs rows on after the apply.*"), "the proof carries its as-run note (46 / 46, leftover 0, the Prompt 30 probe unchanged)");
+  ok(zr.includes("owner_match=yes\n```\n\n*As run: the live pre-check read exactly these rows before and after (before the apply rows 3 and 4 read `replace=none`, `paths=1`).*\n\n**The order**"), "the gate block carries its as-run note, right after the block");
+  // the as-run note gives the order as the script numbered it (the log's 0-7, then the paste-back block - the list's step 8, unnumbered in
+  // the log), the client first across the follow-ups, and the one-shot pins
+  ok(zrFlat.includes("*As run (2026-10-22): `apply-push-followups.sh` (Faraz, main clone at `cc4cecc`, pins from `25ad475` - all five matched) ran its steps 0-7 in this order - 0 the sha256 pins and the CLI link, 1 agent mode and the pre-check (the gate before, save's md5 the applied Prompt 30 body; the facts printed), 2 probe BEFORE, 3 the Prompt 30 probe BEFORE (its 51 cases), 4 APPLY and the migration, 5 the gate after (every prefs row on, 2 of 2), 6 probe AFTER and its leftover count, 7 the Prompt 30 probe AFTER (the same 51) - then the PASTE THIS BACK block, the list's step 8, unnumbered in the log; the list above and the log number the steps alike.") && zrFlat.includes("Across the follow-ups the client went first: 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date) shipped before the apply and fell back until 2026-10-22 04:33:15Z, about 25 hours later") && zrFlat.includes("The record step changes three of the five graded files (the migration through its trailer - its body's sha256 `" + Z_APPLIED_SHA256 + "` unchanged - the probe's and the pre-check's headers), so the script is one-shot: a re-run or `--dry-run` needs its pins refreshed (`push-notifications-probe.sql` and `daily-reminder/index.ts` keep theirs).*"), "the order carries its as-run note (the script's steps 0-7 as the log numbers them, the clone and its pins, the client first, three graded files changed - one-shot)");
+  // pin moved deliberately 10/22 (the record step's review): the anon REST checks the plan named are built (22c-22e) - N1 / F7 never
+  // stood in for them (they run inside the database, never through PostgREST); the expected plain-run count and the client build named
+  ok(zrFlat.includes("*As run (the record step, 2026-10-22): all of the above - verify-rls section 22 runs and grades the probe (its 46 AFTER strings by name, the count of 46) and counts its leftovers through the linked CLI, as section 21 does for revision y's, and goes over REST as anon (22c-22e, as section 19 does for Prompt 30's): 22c the function refused 401 / 403; 22d PostgREST knowing its five keys - the refusal is the database's `42501` for the function, while a `404` `PGRST202` FAILs (the live client would fall back to the plain save without a word); 22e an anon GET `select=shift_reminders_push` -> 200 `[]`. The probe's own N1 / F7 read the same privileges inside the database, never through PostgREST.") && !/all of the above but the anon REST checks|read anon's side on every run/.test(zrFlat), "the record step carries its as-run note: section 22 through the CLI and over REST as anon (22c-22e - the plan's anon checks; N1 / F7 never stand in for them)");
+  ok(zrFlat.includes("A plain `bash scripts/verify-rls.sh` with no token is then expected to read `RESULT: 620 passed, 0 failed` - the 535 of the 2026-10-20 run (sections 1-20), section 21's 34 and section 22's 51 (neither run live yet).") && 535 + 34 + 51 === 620, "the as-run note states the plain run's expected count: 620 (535 + section 21's 34 + section 22's 51 - its 46 cases, the count, the leftover check and 22c-22e)");
+  ok(zrFlat.includes("`config.js` changes in three comments only (the function and the column applied since 2026-10-22 04:33:15Z), so merging this step to `main` is a client build: CI bumps `APP_VERSION` and Pages redeploys, with no change in behaviour."), "the as-run note says the merge is a client build (config.js comments only - a version bump, no behaviour change)");
+  // pin moved deliberately 10/22 (the record step): the placeholder is gone - the observed paragraph from Faraz's log replaces it
+  ok(!/^observed: \(the record step fills this/m.test(zr) && !/_to be filled/.test(zr) && !/PLACEHOLDER/.test(zr), "the section has no observed placeholder since the record step");
   ok(!/B6 report|xmax/.test(zr), "the section names neither the B6 report nor xmax (reviewB6 runs to the end of the file)");
+  {
+    const oat = zr.indexOf("observed (apply, 2026-10-22): applied 2026-10-22 04:33:15Z");
+    ok(oat > 0 && oat > zr.indexOf("**The record step, ONE commit:**"), "the section must end with the 'observed (apply, 2026-10-22): applied 2026-10-22 04:33:15Z ...' paragraph");
+    const ob = oat < 0 ? "" : zr.slice(oat).replace(/\n+$/, "");
+    const obFlat = ob.replace(/\s+/g, " ");
+    ok(obFlat.includes("exit 0, an empty result `\"rows\": []`, no `ERROR:`") && obFlat.includes("log `apply-push-followups-20261022T043032Z.log`, outside the repo, result `APPLIED AND VERIFIED`") && obFlat.includes("repo HEAD `cc4cecc` on `main`, the pins from `25ad475`") && obFlat.includes("`" + Z_APPLIED_SHA256 + "`") && obFlat.includes("(`all five matched: yes`)") && obFlat.includes("supabase CLI 2.120.0") && obFlat.includes("(`AI_AGENT=1`)") && obFlat.includes("`bzhsroegtagqhutbnsrp` (the known-good read `silvis=true davenport=false`)") && obFlat.includes("APPLY typed at the prompt)"), "the observed apply names the CLI exit, the log and its result, the repo HEAD and its pins, the applied sha256 (all five matched), the CLI version and agent mode, the project and the typed APPLY");
+    ok(obFlat.includes("gate before: `" + Z_GATE_BEFORE + "`; bodies before `" + Z_BODIES_BEFORE + "` (save's the applied Prompt 30 body); sigs / grants / rls `save=definer/volatile replace=none paths=1` | `save=f/t/f replace=none` | `subs_force=f audit_force=f owner_match=yes`") && ob.includes("```text\n6 prefs: rows=2 person=2 profile=0 reminder_push=absent\n7 devices: devices=3 accounts=1 most_on_one_account=3 failing=0 never_delivered=0 label_pairs_seen_twice=1\n8 audit: push_rows=3 added_30d=3 moved_30d=0\n```"), "the observed apply records the pre-check gate, the bodies, the sigs / grants / rls before and the three facts as the log printed them (counts only)");
+    ok(obFlat.includes("Step 2, probe BEFORE: `PROBE_SETUP: replace_push_subscription is absent - sql/migrations/2026-10-20-push-followups.sql is not applied` (nothing else ran). Step 3, the Prompt 30 probe BEFORE: 51 cases, each as its header states."), "the observed apply records the probe BEFORE and the Prompt 30 probe BEFORE");
+    ok(obFlat.includes("Step 5, gate after: `" + Z_GATE_AFTER + "`; bodies after `" + Z_BODIES_AFTER + "` (save's unchanged; replace's the migration's); sigs / grants / rls `save=definer/volatile replace=definer/volatile paths=2` | `save=f/t/f replace=f/t/f` | `subs_force=f audit_force=f owner_match=yes`; every existing prefs row on (2 of 2)") && ob.includes("```text\n6 prefs: rows=2 person=2 profile=0 reminder_push_on=2 reminder_push_off=0\n7 devices: devices=3 accounts=1 most_on_one_account=3 failing=0 never_delivered=0 label_pairs_seen_twice=1\n8 audit: push_rows=3 added_30d=3 moved_30d=0\n```"), "the observed apply records the gate after, the bodies, the sigs / grants / rls and the facts after (every prefs row on)");
+    // the 46 AFTER lines as the log printed them, in one text block, frozen on their own: the sha256 of the 46 lines (each with its LF) as
+    // the paste-back block of apply-push-followups-20261022T043032Z.log printed them under "probe after cases:" (indent removed,
+    // machine-compared with the log at the record step), so a later, justified edit of a probe AFTER string never forces a rewrite of this record
+    const blockAt = ob.indexOf("```text\nB1=");
+    const block = blockAt < 0 ? "" : ob.slice(blockAt + 8, ob.indexOf("\n```", blockAt + 8));
+    eq(block.split("\n").length, 46, "the observed probe AFTER lists 46 lines (one per case);");
+    eq(crypto.createHash("sha256").update(block + "\n").digest("hex"), "d7c84ee42f2f1c0c9f3741a99d7f999fb1485b191f97a6ffbf4989405773d433",
+      "the observed probe AFTER block must be the 46 lines exactly as the 20261022T043032Z log printed them (frozen sha256);");
+    ok(!/[";<>&]/.test(block), "no observed AFTER line carries a double quote, ; < > or &");
+    ok(obFlat.includes("then the probe's leftover count: 0 (persisted nothing). Step 7, the Prompt 30 probe AFTER: the same 51 cases as before the migration, case for case.") && obFlat.includes("The apply script runs no `scripts/verify-rls.sh` (no RESULT line)."), "the observed apply records the leftover 0, the Prompt 30 probe after and that no verify-rls RESULT exists for this apply");
+    ok(!/RESULT: \d+ passed/.test(ob), "the observed paragraph states no verify-rls RESULT figure (the apply ran none)");
+    ok(obFlat.includes("One earlier run applied nothing: the `--dry-run` at 20261022T042712Z (`main`, `cc4cecc`, the same pins) read steps 0-3 as above and stopped there by design - `DRY RUN - nothing applied`, `APPLY confirmation: not reached`, `migration: not run`."), "the observed apply records the earlier dry run, which applied nothing");
+    ok(!/typed '|you typed|Program Files|[A-Za-z]:[\\/]|supa-silvis|scoop/.test(ob), "the observed paragraph quotes no typed answer and no machine path (the logs name the workdir and the CLI's local path)");
+    ok(obFlat.includes("Not re-run against the live project after the record step: verify-rls section 22 (added by this step) grades the probe on the next plain `bash scripts/verify-rls.sh`. The `daily-reminder` v10 deploy has not run (`edge-functions/README.md` section 3, \"Deploy record - push reminders (revision z)\")."), "the observed paragraph says nothing live was re-run by the record step and the deploy has not run");
+    // the observed paragraph is a frozen record copied from the log (checked against apply-push-followups-20261022T043032Z.log at the record
+    // step), so it is frozen whole by sha256 - the probe block's own sha above stays; any later edit is deliberate (a new sha with its
+    // reason), never silent
+    eq(crypto.createHash("sha256").update(ob).digest("hex"), "c6f101a56894318886d84f271d08c0d06cd91dace04b93098500c3dae698827d", "the observed (apply, 2026-10-22) paragraph must read exactly as the record step copied it from the log (frozen sha256);");
+  }
+  // pins moved deliberately 10/22 (the record step): tables (a) and (b) read applied live
+  const APPLIED_Z = "Revision z (prepared 2026-10-20 - report-first, **applied live 2026-10-22 04:33 UTC** - section at the end)";
   const prefsRow = review.split("\n").find((l) => l.startsWith("| `notification_preferences` |")) || "";
-  ok(prefsRow.includes("Revision z (prepared 2026-10-20 - report-first, NOT applied - section at the end): `shift_reminders_push` (boolean not null default true;"), "table (a)'s notification_preferences row names revision z's column, prepared, not applied");
+  ok(prefsRow.includes(APPLIED_Z + ": `shift_reminders_push` (boolean not null default true;") && !/Revision z \(prepared 2026-10-20 - report-first, NOT applied/.test(prefsRow), "table (a)'s notification_preferences row names revision z's column, applied live 2026-10-22 04:33 UTC");
   const subsRow = review.split("\n").find((l) => l.startsWith("| `push_subscriptions` |")) || "";
-  ok(subsRow.includes("Revision z (prepared 2026-10-20 - report-first, NOT applied - section at the end): `replace_push_subscription()` wraps it for the re-arm") && subsRow.includes("write = `save_push_subscription()` only"), "table (a)'s push_subscriptions row names revision z's wrapper, prepared, not applied (save stays the only write path)");
-  // review 10/20: table (b) (who reads / writes) names revision z too, as Prompt 30's prepare build did; the record step moves both
-  // tables and ONBOARDING's phone lines (the third switch from the apply)
+  ok(subsRow.includes(APPLIED_Z + ": `replace_push_subscription()` wraps it for the re-arm") && subsRow.includes("write = `save_push_subscription()` only") && !/Revision z \(prepared 2026-10-20 - report-first, NOT applied/.test(subsRow), "table (a)'s push_subscriptions row names revision z's wrapper, applied live (save stays the only write path)");
   const prefsRowB = tblB.split("\n").find((l) => l.startsWith("| `notification_preferences` |")) || "";
-  ok(prefsRowB.endsWith("; Revision z (prepared 2026-10-20 - report-first, NOT applied - section at the end): `shift_reminders_push` rides the same row and policy |"), "table (b)'s notification_preferences row: shift_reminders_push rides prefs_own (prepared, not applied)");
+  ok(prefsRowB.endsWith("; " + APPLIED_Z + ": `shift_reminders_push` rides the same row and policy |"), "table (b)'s notification_preferences row: shift_reminders_push rides prefs_own (applied live)");
   const subsRowB = tblB.split("\n").find((l) => l.startsWith("| `push_subscriptions` - applied 2026-10-03 16:30 UTC |")) || "";
-  ok(subsRowB.endsWith("; Revision z (prepared 2026-10-20 - report-first, NOT applied - section at the end): `replace_push_subscription()` (security definer) deletes the caller's own earlier row by its endpoint's 16-hex hash, then calls the save, in one transaction (no audit row for the replaced row) |"), "table (b)'s push_subscriptions row: the wrapper's own-row delete (prepared, not applied)");
+  ok(subsRowB.endsWith("; " + APPLIED_Z + ": `replace_push_subscription()` (security definer) deletes the caller's own earlier row by its endpoint's 16-hex hash, then calls the save, in one transaction (no audit row for the replaced row) |"), "table (b)'s push_subscriptions row: the wrapper's own-row delete (applied live)");
+  ok(!/Revision z \(prepared 2026-10-20 - report-first, NOT applied/.test(review), "no SCHEMA-REVIEW line still calls revision z prepared, not applied");
   ok(zrFlat.includes("**The record step, ONE commit:** this status -> APPLIED <timestamp> with the observed line; tables (a) / (b)'s `notification_preferences` and `push_subscriptions` rows; `docs/ONBOARDING.md`'s phone lines (three switches from the apply"), "the record step moves tables (a) / (b) and ONBOARDING's phone lines");
 }
 {
+  // pins moved deliberately 10/22 (the record step): guide 4.3's bullet and proof line read applied, the deploy still pending
   const zBullet = (g43.match(/^- \*\*Phone push follow-ups \(2026-10-20, revision z, [^\n]*/m) || [""])[0];
-  ok(zBullet.startsWith("- **Phone push follow-ups (2026-10-20, revision z, report-first, NOT applied - Faraz runs `apply-push-followups.sh`; `sql/migrations/2026-10-20-push-followups.sql`).**") && /never anon/.test(zBullet) && /never another account's row/.test(zBullet) && /no audit row for the replaced row/.test(zBullet) && /`notification_preferences\.shift_reminders_push`/.test(zBullet), "guide 4.3 carries the revision z bullet (prepared, not applied; never anon; own rows only; silent; the column)");
-  ok(/^Proof: `sql\/probes\/push-followups-probe\.sql` \(rolled back; 46 cases in its header[^\n]*`sql\/probes\/push-followups-precheck\.sql`[^\n]*"2026-10-20 - phone push follow-ups \(revision z\)"; applied: _to be filled at the record step_\.$/m.test(g43), "guide 4.3's revision z proof line (46 cases, the pre-check, the record; applied at the record step)");
+  ok(zBullet.startsWith("- **Phone push follow-ups (2026-10-20, revision z, report-first, applied 2026-10-22 04:33 UTC; `sql/migrations/2026-10-20-push-followups.sql`).**") && /never anon/.test(zBullet) && /never another account's row/.test(zBullet) && /no audit row for the replaced row/.test(zBullet) && /`notification_preferences\.shift_reminders_push`/.test(zBullet) && zBullet.includes("the third phone switch - live since 2026.10.20b, before the apply, falling back until it) and `daily-reminder` v10 (its push, deployed LAST - D16; not deployed yet): section 22.5.") && !/NOT applied/.test(zBullet), "guide 4.3 carries the revision z bullet (applied 2026-10-22 04:33 UTC; never anon; own rows only; silent; the column; the client first, the deploy pending)");
+  const zProof = (g43.match(/^Proof: `sql\/probes\/push-followups-probe\.sql` \(rolled back; 46 cases in its header[^\n]*/m) || [""])[0];
+  ok(/`sql\/probes\/push-followups-precheck\.sql`/.test(zProof) && zProof.includes("`scripts/verify-rls.sh` section 22 (the graded probe - its 46 AFTER strings, the count of 46 - its leftover count and the anon REST checks 22c-22e: the function refused, its five keys known to PostgREST, the column's anon GET `200 []`; added by the record step, a PROBE_SETUP or an anon 404 FAILs; not yet run live)") && zProof.includes("\"2026-10-20 - phone push follow-ups (revision z)\"; applied: 2026-10-22 04:33:15 UTC by Faraz (`apply-push-followups.sh`, its CLI in agent mode `AI_AGENT=1`; from the main clone at `cc4cecc`, the pins from `25ad475`; a `--dry-run` at 04:27Z applied nothing)") && zProof.includes("the pre-check gate `" + Z_GATE_BEFORE + "` before and `" + Z_GATE_AFTER + "` after (save `10c2561dbe84d22b116491deb92e95ad` unchanged, replace `966c4117d3e5a1e1d5224dcade3e63ad`)") && zProof.includes("probe BEFORE `PROBE_SETUP`, AFTER 46 / 46, leftovers 0, the Prompt 30 probe's 51 cases the same before and after; the migration file kept as it ran, its sha256 pinned. `daily-reminder` v10 is NOT deployed (22.5).") && !/_to be filled/.test(zProof) && !/\d+ \/ 0\b/.test(zProof), "guide 4.3's revision z proof line names verify-rls section 22 (not yet run live) and the apply (2026-10-22 04:33:15 UTC, the gate, the bodies, 46 / 46, leftovers 0, the file's sha256 pinned) - no verify-rls N / 0 figure; the deploy pending");
   ok(g43.indexOf("- **Phone push follow-ups (2026-10-20, revision z,") > g43.indexOf("- **Trade offers (2026-10-18, revision y,"), "the revision z bullet follows revision y's in guide 4.3");
+  // guide 22: the switch since the apply, the push with the deploy; the order as run (the client first)
+  const g22 = guide.slice(guide.indexOf("## 22."), guide.indexOf("\n## 23."));
+  const g22flat = g22.replace(/\s+/g, " ");
+  ok(g22flat.includes("Revision z (22.5 - its database half applied 2026-10-22 04:33 UTC, `daily-reminder` v10 not deployed yet) adds a third switch") && g22flat.includes("revision z's day-before shift reminder (22.5: its switch since the 2026-10-22 apply, its push with `daily-reminder` v10 - not deployed yet)") && g22.includes("### 22.5 Revision z - the push follow-ups (Faraz 10/20, \"finish the backlog\"; the database half APPLIED 2026-10-22 04:33:15Z, `daily-reminder` v10 PREPARED, NOT deployed)") && g22flat.includes("*As run: the client went first - 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date) shipped before the apply and fell back until it; the apply followed (2026-10-22 04:33:15Z, about 25 hours later") && !/PREPARED: its database half not applied|PREPARED, NOT applied or deployed|\(22\.5, PREPARED\)|Before the apply, or after a rollback, the plain save/.test(g22), "guide 22 reads revision z's database half applied 2026-10-22, daily-reminder v10 not deployed yet, and the order as run (the client first)");
+  // ONBOARDING (the record step plan): three switches live; the reminder push itself waits for the daily-reminder deploy
+  const onb = read(path.join(ROOT, "docs", "ONBOARDING.md"));
+  const onbFlat = onb.replace(/\s+/g, " ");
+  ok(onbFlat.includes("set under \"Which events reach your phones\" (three switches, independent of the e-mail ones;") && onbFlat.includes("The third, **Reminder the day before my call** (a follower's reads \"... their call\"), is in Settings since the evening of 2026-10-21 (Central time) and on for everyone") && onbFlat.includes("The reminder reaches the phones from the next `daily-reminder` update on, at the hour set under Email; until then it stays e-mail only.") && !onbFlat.includes("(two switches, independent of the e-mail ones;"), "ONBOARDING's phone section: three switches since 2026-10-22, the third on for everyone; the reminder push with the next daily-reminder update");
 }
 {
   // review 10/20: the apply script's steps read in ONE order in the four places that state them - the migration header (the file the
@@ -6735,9 +7137,11 @@ step("revision z: docs - SCHEMA-REVIEW.md's PREPARED section (followed only by r
   const zRec = efr.slice(efr.indexOf("### Deploy record - push reminders (revision z)"), efr.indexOf("\n### ", efr.indexOf("### Deploy record - push reminders (revision z)") + 10));
   zSeq("the README's deploy record step 1", flat(zRec), "1. The database first - `apply-push-followups.sh`", ["its steps in the order the migration header and `docs/SCHEMA-REVIEW.md` \"The order\" give them:"].concat(Z_STEPS_SHORT, ["then its record step"]));
 }
-ok(!/push-followups/.test(vr), "scripts/verify-rls.sh does not name revision z's files yet (its section, the graded probe and the anon checks, comes with the record step - as revision y's did)");
+// pin moved deliberately 10/22 (revision z's record step): verify-rls.sh runs revision z's probe in section 22 only (its sha256 is pinned in
+// revision y's step above, moved with it)
+ok(vr.indexOf('echo "== 22. ') > 0 && vr.indexOf("push-followups-probe.sql") > vr.indexOf('echo "== 22. ') && vr.indexOf("push-followups") > vr.indexOf('echo "== 22. '), "verify-rls.sh names revision z's files in section 22 only (the record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-push-followups.sh")) && !/bash scripts\/apply-/.test(zMig + zProbe + zPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-push-followups.sh, and no z file points at one");
-console.log("- revision z (2026-10-20): the push follow-ups migration (the B4 draft byte for byte + shift_reminders_push), its mirror, save's body untouched, the probe (46 cases, the vector hash recomputed), the pre-check, the docs (PREPARED, not applied) and verify-rls.sh untouched");
+console.log("- revision z (2026-10-20): the push follow-ups migration (the B4 draft byte for byte + shift_reminders_push), its mirror, save's body untouched, the probe (46 cases, the vector hash recomputed), the pre-check, the docs (APPLIED 2026-10-22 04:33:15Z; daily-reminder v10 not deployed), the trailer and verify-rls.sh section 22");
 
 /* ---------------------------------------------- revision aa (2026-10-21): the East reset backstop */
 // Faraz 10/20, "finish the backlog": every recommended decision D1-D10 of the private report REPORT-RESET-BACKSTOP-2026-10-20.md, which

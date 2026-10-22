@@ -681,6 +681,20 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     }
   };
   await check("pushDb.saveReplacing (revision z, D2): a well-formed 16-hex hash -> POST rpc/replace_push_subscription with exactly { p_endpoint, p_p256dh, p_auth, p_label, p_replaces }; the function missing (404 PGRST202 / 42883 - before the apply, after a rollback) -> the plain save_push_subscription; a refusal (PS007) is answered, never retried as a plain save; no / a malformed hash -> the plain save alone", saveReplacingCheck);
+  // revision z's record step (10/22): config.js's comments say the function and the column are applied (2026-10-22 04:33:15Z) - the plain
+  // save is the after-a-rollback path now, never "today's behaviour". Comments only (no behaviour change), but config.js is a runtime
+  // input, so the record step's merge is a client build (CI bumps APP_VERSION) - the record says so (docs/SCHEMA-REVIEW.md's as-run note)
+  const recordCommentsCheck = (S) => {
+    const cfg = S.config.replace(/\r\n/g, "\n");
+    assert.ok(cfg.includes("//                        function missing (after a rollback - revision z is applied since 2026-10-22 04:33:15Z): the plain save\n//                        above, the pre-z behaviour\n"), "pushDb's doc block: the plain save is the after-a-rollback path (revision z applied since 2026-10-22 04:33:15Z)");
+    assert.ok(cfg.includes("// ?select=shift_reminders_push&limit=1 -> \"ok\" / \"unavailable\" (400 42703 naming that column: revision z rolled back - it is\n// applied since 2026-10-22 04:33:15Z) / \"failed\"."), "reminderPushColumn's comment: 'unavailable' means revision z rolled back (applied since 2026-10-22 04:33:15Z)");
+    assert.ok(cfg.includes("    // hash equal to the new endpoint's, and without a flag (or after a rollback of revision z - applied 2026-10-22 04:33:15Z)\n    // this is the plain save\n"), "enable()'s save comment: the plain save without a flag or after a rollback");
+    assert.ok(!/before the apply, after a rollback\): the plain save above, today's behaviour|revision z not applied, or\n\/\/ rolled back|\(or before the apply\) this is the plain save/.test(cfg), "no config.js comment still reads revision z as not yet applied");
+  };
+  await check("config.js comments (revision z's record step): the wrapper and the column are applied since 2026-10-22 04:33:15Z - the plain save and a missing column are the after-a-rollback paths", recordCommentsCheck);
+  await mutant("config.js's saveReplacing comment back to 'before the apply ... today's behaviour'", "config",
+    "function missing (after a rollback - revision z is applied since 2026-10-22 04:33:15Z): the plain save\n//                        above, the pre-z behaviour",
+    "function missing (before the apply, after a rollback): the plain save above, today's behaviour", recordCommentsCheck);
   const enableCheck = async (S) => {
     const b = mkBrowser({ permission: "default", answer: "granted" });
     const c = loadClient(S, b);

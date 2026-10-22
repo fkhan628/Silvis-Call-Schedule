@@ -259,9 +259,12 @@ Everyone turns it on **once per device**: Settings > **Notification settings** >
 **Send test** (a real notification to that person's own devices). **Turn off** stops it on that device; **Reset
 subscription** starts that device over (then close and reopen the app - or reload the page in a browser - and tap **Enable
 phone notifications**); **Diagnose** says, in one line, what the device and the server hold. Which events reach the phones is
-set under "Which events reach your phones" (two switches, independent of the e-mail ones; they cover every device the person
-turned on, so they stay editable even on a device that is blocked). The **Pop-ups on this device** box below is a different
-thing (pop-ups while the app is open): its buttons read **Allow pop-ups** and **Show a test pop-up**. To check that e-mail
+set under "Which events reach your phones" (three switches, independent of the e-mail ones; they cover every device the person
+turned on, so they stay editable even on a device that is blocked). The third, **Reminder the day before my call** (a follower's
+reads "... their call"), is in Settings since the evening of 2026-10-21 (Central time) and on for everyone - turn it off to keep
+the day-before shift reminder off your phones (the e-mail reminder has its own switch under Email). The reminder reaches the phones
+from the next `daily-reminder` update on, at the hour set under Email; until then it stays e-mail only. The **Pop-ups on this
+device** box below is a different thing (pop-ups while the app is open): its buttons read **Allow pop-ups** and **Show a test pop-up**. To check that e-mail
 reaches you, use **Send a test e-mail** in the Email box (surgeons linked to the roster).
 
 **Three lines to send (iPhone / iPad - iOS 16.4 or later):**

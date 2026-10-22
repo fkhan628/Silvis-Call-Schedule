@@ -1,9 +1,18 @@
 -- ============================================================================
 -- Silvis Call Schedule - phone push follow-ups PRE-CHECK (2026-10-20, revision z; sql/migrations/2026-10-20-push-followups.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
+-- REPORT-FIRST; APPLIED 2026-10-22 04:33:15Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both): rows 1-5 are the gate, rows 6-8 are facts for the record. It runs
 -- before the migration, so it never names the new function or column outside catalog lookups (to_regprocedure, pg_proc, pg_attribute)
 -- and the query_to_xml text of row 6, which runs only when the column exists.
+-- As run (2026-10-22): before the apply the gate read replace_fn=no reminder_col=no save_fn=yes sha256=yes and right after it
+-- replace_fn=yes reminder_col=yes save_fn=yes sha256=yes; row 2 save=10c2561dbe84d22b116491deb92e95ad replace=none before and
+-- save=10c2561dbe84d22b116491deb92e95ad replace=966c4117d3e5a1e1d5224dcade3e63ad after (save's the applied Prompt 30 body both times);
+-- row 3 save=definer/volatile replace=none paths=1 before and save=definer/volatile replace=definer/volatile paths=2 after; row 4
+-- save=f/t/f replace=none before and save=f/t/f replace=f/t/f after; row 5 subs_force=f audit_force=f owner_match=yes both times; row 6
+-- rows=2 person=2 profile=0 reminder_push=absent before and rows=2 person=2 profile=0 reminder_push_on=2 reminder_push_off=0 after (every
+-- existing row on); rows 7 devices=3 accounts=1 most_on_one_account=3 failing=0 never_delivered=0 label_pairs_seen_twice=1 and 8
+-- push_rows=3 added_30d=3 moved_30d=0 both times - docs/SCHEMA-REVIEW.md "2026-10-20 - phone push follow-ups (revision z)" quotes them.
+-- This header was kept byte for byte as reviewed until the apply (the apply script pinned its sha256); the record step turned it APPLIED.
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/push-followups-precheck.sql
 --

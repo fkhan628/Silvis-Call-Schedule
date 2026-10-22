@@ -409,8 +409,8 @@ const db = {
 // "ok" (PostgREST knows both columns; RLS may answer [] - a 200 is the proof), "unavailable" (400 42703: the migration is
 // not applied - the phone switches stay hidden and no save names them), "failed" (anything else). Never throws.
 // Revision z (the day-before reminder as push, Faraz 10/20 D15): reminderPushColumn() is a probe of its OWN - GET
-// ?select=shift_reminders_push&limit=1 -> "ok" / "unavailable" (400 42703 naming that column: revision z not applied, or
-// rolled back) / "failed". It never widens pushColumns(), so a missing new column hides only the third phone switch, never
+// ?select=shift_reminders_push&limit=1 -> "ok" / "unavailable" (400 42703 naming that column: revision z rolled back - it is
+// applied since 2026-10-22 04:33:15Z) / "failed". It never widens pushColumns(), so a missing new column hides only the third phone switch, never
 // the two live ones; save(owner, cur, { reminderPush: true }) names shift_reminders_push only after it read "ok".
 const notifPrefsDb = {
   async save(owner, cur, opts) {
@@ -466,7 +466,8 @@ const notifPrefsDb = {
 //   pushDb.saveReplacing(..., replaces)  POST rpc/replace_push_subscription { p_endpoint, p_p256dh, p_auth, p_label, p_replaces }
 //                        (revision z): the same save, plus this account's earlier row for THIS device removed in the same
 //                        transaction - the row whose endpoint hashes to `replaces` (the flag's ep). No well-formed hash, or the
-//                        function missing (before the apply, after a rollback): the plain save above, today's behaviour
+//                        function missing (after a rollback - revision z is applied since 2026-10-22 04:33:15Z): the plain save
+//                        above, the pre-z behaviour
 //   pushDb.remove(ep)    POST rpc/delete_push_subscription { p_endpoint }
 //   pushDb.status(ep)    POST rpc/push_subscription_status { p_endpoint } -> { state: "ok", saved, devices } | { state: "unavailable" } | { state: "failed" }
 //   pushDb.sendTest()    POST <functions>/send-notification?push=test (the caller's own devices; every signed-in role)
@@ -712,7 +713,8 @@ const pushDevice = {
     }
     // (6) save - a refusal unsubscribes what (5) made and writes no flag. Revision z (D4): this account's own flag on this
     // device names its earlier row (a failed silent re-arm ends here) - replaced in the same transaction; the server skips a
-    // hash equal to the new endpoint's, and without a flag (or before the apply) this is the plain save
+    // hash equal to the new endpoint's, and without a flag (or after a rollback of revision z - applied 2026-10-22 04:33:15Z)
+    // this is the plain save
     const own = pushDevice._readFlag(profileId);
     const saved = await pushDb.saveReplacing(k.endpoint, k.p256dh, k.auth, label || null, own && own.ep);
     if (!saved.ok) {

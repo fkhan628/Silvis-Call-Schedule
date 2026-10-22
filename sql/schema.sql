@@ -156,7 +156,7 @@
 -- trade_update_guard() are their revision p / n bodies plus the stamp lines. No policy, grant, index, other function or anon surface
 -- changes. Letter u stays taken by the weekend pair claim; x was the last applied before it (2026-10-19 22:53:18Z; independent - either apply order on the database, but this
 -- file's apply script ran after Part A's, whose step 0 pinned scripts/verify-rls.sh until x's record step).
--- Revision 2026-10-20 z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql, report-first, NOT yet applied): Faraz 10/20 -
+-- Revision 2026-10-20 z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql, applied 2026-10-22 04:33:15Z after the probe): Faraz 10/20 -
 -- "finish the backlog" with every recommended decision of the push follow-ups report (B: D2 the wrapper, D3 silent, D4-D7; C: D8 (a),
 -- D10 default on, D11 one hour, D12 independent, D13 followers; D17 one migration). One NEW function replace_push_subscription(p_endpoint,
 -- p_p256dh, p_auth, p_label, p_replaces) (security definer, volatile, search_path public, pg_temp; EXECUTE for authenticated, never anon):
@@ -1848,7 +1848,7 @@ alter table public.notification_preferences add column if not exists trade_updat
 alter table public.notification_preferences add column if not exists schedule_updates_push boolean not null default true;
 comment on column public.notification_preferences.trade_updates_push is 'Prompt 30: phone notifications for trade proposed / accepted / declined / applied (a give included). Default on; only an explicit false opts out. Independent of trade_updates_email.';
 comment on column public.notification_preferences.schedule_updates_push is 'Prompt 30: phone notifications for schedule published, manual edit, open shifts, shift taken, vacation logged, offers heads-up / frozen. Default on; only an explicit false opts out. Independent of schedule_updates_email.';
--- revision z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql - report-first, NOT yet applied): the day-before shift
+-- revision z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql - report-first; applied 2026-10-22 04:33:15Z): the day-before shift
 -- reminder's phone switch on an EXISTING table (a constant default: no rewrite; every existing row - a surgeon's or a follower's - reads
 -- on). prefs_own covers it; the daily-reminder edge function reads it with the service role once its push fan-out is deployed.
 alter table public.notification_preferences add column if not exists shift_reminders_push boolean not null default true;
@@ -2376,7 +2376,7 @@ revoke all on function public.push_subscription_status(text) from anon;
 grant execute on function public.push_subscription_status(text) to authenticated;
 comment on function public.push_subscription_status(text) is 'Prompt 30: whether THIS endpoint is saved for the caller, and how many devices the caller has (Settings > Diagnose, the start-up ownership check). Volatile on purpose: PostgREST refuses GET, so the endpoint never lands in a URL. PS001 PUSH_NOT_SIGNED_IN.';
 
--- ---------- phone push follow-ups (revision z; sql/migrations/2026-10-20-push-followups.sql - report-first, NOT yet applied)
+-- ---------- phone push follow-ups (revision z; sql/migrations/2026-10-20-push-followups.sql - report-first; applied 2026-10-22 04:33:15Z)
 -- Faraz 10/20 (D2 the wrapper, D3 silent): the re-arm save. A re-armed device (a new endpoint, or a registration Davenport's update
 -- reset wiped) saved a NEW row and left its old one until the next 404 / 410 or a Send test. The device keeps only the first 16 hex of
 -- SHA-256(endpoint) - its flag, never the endpoint - so the server deletes the caller's own earlier row by that hash, then runs

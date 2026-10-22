@@ -1,11 +1,15 @@
 -- ============================================================================
--- Silvis Call Schedule - phone push follow-ups PROBE (2026-10-20, revision z; sql/migrations/2026-10-20-push-followups.sql, REPORT-FIRST, NOT APPLIED).
+-- Silvis Call Schedule - phone push follow-ups PROBE (2026-10-20, revision z; sql/migrations/2026-10-20-push-followups.sql, REPORT-FIRST; APPLIED 2026-10-22 04:33:15Z).
 -- Proves replace_push_subscription() (the re-arm save) and notification_preferences.shift_reminders_push on the LIVE database
 -- WITHOUT PERSISTING ANYTHING. Same mechanism as the other probes: ONE batch through the linked CLI (one implicit transaction, no
 -- BEGIN/COMMIT); every case records into probe_results; the LAST statement raises 'PROBE_RESULTS K=...;END', so everything - users,
 -- profiles, devices, prefs rows, audit rows - rolls back. A batch ending in RAISE persists nothing.
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/push-followups-probe.sql
---   (graded by the private apply-push-followups.sh, value for value against the header lines below)
+--   (graded by the private apply-push-followups.sh and, since the record step, by scripts/verify-rls.sh section 22, value for value against the header lines below)
+-- As run: the migration was applied 2026-10-22 04:33:15Z (schema.sql revision z); the probe read PROBE_SETUP (replace_push_subscription is
+-- absent) before it and all 46 cases below as listed after it, leftover count 0 (apply-push-followups.sh steps 2 and 6). Since the record
+-- step verify-rls section 22 runs it on every run, grades each case against its line below and counts the leftovers it could leave; it FAILs
+-- a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel - there was never a not-applied grading.
 -- Run nothing else that saves a phone subscription at the same time: the probe holds the push_subscriptions:save advisory lock (the
 -- one save_push_subscription takes) for the length of the batch - well under a second.
 -- Identity: users probe-pushz-<uuid>@example.test whose user_profiles rows handle_new_auth_user creates; postgres then sets them: U1 a

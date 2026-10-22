@@ -94,10 +94,12 @@ record, section 4); where a sentence below counts four, it speaks of the four 9/
 **Revision z (2026-10-20): `daily-reminder` v10 is PREPARED, NOT deployed (section 3's "Deploy record - push reminders (revision z)").**
 The day-before shift reminder goes to the phones too (the push follow-ups report, decisions D8-D16): the person on call
 tomorrow at his reminder hour and every follower of that surgeon at his own hour, on the one switch `shift_reminders_push`
-(revision z's new column; only an explicit false is off), whatever the e-mail switch or address. The push code is
+(revision z's new column, applied 2026-10-22 04:33:15Z; only an explicit false is off), whatever the e-mail switch or address. The push code is
 send-notification's own (`@webPush` / `@pushPlan` and the device glue, copied byte for byte and pinned identical by
-`test/edge-functions.test.js`); `send-notification` itself does not change and is not redeployed. The order is the
-database apply, the client (its third phone switch), this deploy LAST, the dryRun; the rollback runs in reverse (section 7).
+`test/edge-functions.test.js`); `send-notification` itself does not change and is not redeployed. D16 ordered the
+database apply, the client (its third phone switch), this deploy LAST, the dryRun; as run, the client shipped first (2026.10.20b,
+built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date; falling back until the apply), the apply followed at
+2026-10-22 04:33:15Z, and this deploy and its dryRun are still to come, LAST; the rollback runs in reverse (section 7).
 
 **Deploy record.** All four functions were deployed 2026-09-22 from the CLI with
 `--no-verify-jwt` (verify_jwt OFF on each: `calendar-sync` answered a live
@@ -234,8 +236,9 @@ of passing it on the uploaded one.
 
 ### Deploy record - push reminders (revision z) - PREPARED, NOT deployed
 
-*Prepared 2026-10-20 (Claude Code, from the push follow-ups report's decisions D8-D17; Faraz's go "finish the backlog"). Nothing
-is deployed, applied or set; this record is the plan, to be filled in by the record step after Faraz runs it.*
+*Prepared 2026-10-20 (Claude Code, from the push follow-ups report's decisions D8-D17; Faraz's go "finish the backlog"). The
+database half is applied - step 1, 2026-10-22 04:33:15Z, recorded; nothing is deployed or set: steps 3-5 are the plan, to be filled in
+by the deploy's record step after Faraz runs them.*
 
 Source `edge-functions/daily-reminder/index.ts` (its header's "PHONE PUSH" paragraph says what changes). One function changes:
 `daily-reminder`, listed v9 since the 10/3 key rotation - the Prompt 26 code deployed 2026-10-01 04:11:46 UTC from `325b1e1`, the
@@ -268,10 +271,18 @@ ORDER (D16, Faraz's, one step at a time - the expected result in brackets):
    the paste-back - then its record step (`docs/SCHEMA-REVIEW.md` "2026-10-20 - phone push follow-ups (revision z)"). On its own
    the apply changes nothing for anyone: today's client never names the function or the column, and v9 never pushes. The new client reads a missing function / column as
    "unavailable" (either order is safe for it); v10 does NOT - it reads a missing key as on - so this deploy never goes before the apply.
-2. Then the client, on Faraz's go: its own probe reads the column, and the third phone switch "Reminder the day before my call" (a
-   follower: "... their call") appears beside the two live ones - so everyone can turn the reminder push off BEFORE the first one goes
-   out. D10's consequence: the column defaults to on, so from this deploy every on-call person with phone notifications on gets the
-   reminder at his hour - tell the group first.
+   Done: applied 2026-10-22 04:33:15Z (log `apply-push-followups-20261022T043032Z.log`, `APPLIED AND VERIFIED`, after a `--dry-run` at
+   04:27Z that applied nothing) and recorded (`docs/SCHEMA-REVIEW.md` "2026-10-20 - phone push follow-ups (revision z)") - the function and
+   the column exist since, every existing prefs row reads on (2 of 2), probe AFTER 46 / 46, leftover 0, the Prompt 30 probe's 51 cases
+   the same before and after. As run, the client had shipped first (step 2), so the apply turned its half on: the re-arm and Enable
+   save through the wrapper, and the third switch shows on the client's next read of the column (not observed in the app by the record
+   step); v9 still never pushes.
+2. The client - shipped first: live since 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date),
+   about 25 hours before the apply, and it fell back until the apply (the missing
+   function and column read as "unavailable": the plain save, no third switch). Since the apply its own probe reads the column, and the
+   third phone switch "Reminder the day before my call" (a follower: "... their call") appears beside the two live ones - so everyone
+   can turn the reminder push off BEFORE the first one goes out. D10's consequence: the column defaults to on, so from step 3's deploy
+   every on-call person with phone notifications on gets the reminder at his hour - tell the group first (Faraz's next step).
 3. THIS deploy, LAST (D16): the hourly job `silvis-daily-reminder-hourly` (`0 * * * *`) sends the first push within the hour that
    matches someone's reminder hour. Windows PowerShell, one line at a time, each line complete on its own (no `$wd`), every supabase
    line with the Silvis-linked `supa-silvis` workdir on it (a line without `--workdir` walks up to the Davenport-linked folder); the
@@ -314,9 +325,11 @@ ORDER (D16, Faraz's, one step at a time - the expected result in brackets):
    -- pg_net answers asynchronously: wait 20-30 s, then
    select status_code, created, content::jsonb -> 'push' as push from net._http_response where content::text like '{"date_tomorrow":"%","current_hour":%,"dry_run":true,%' order by created desc limit 1;
    ```
-   [`200` and `push` `{"dry_run": true, ..., "error": null, ...}` with the two tags `silvis-reminder-<tomorrow>-primary` / `-backup`:
-   the dryRun always imports the VAPID pair, so `error` null says push is configured at any hour; `"error": "push not configured"` -
-   the secrets are missing or malformed (settle it first). Run at a reminder hour (17:00 Central, the default) it also lists who would
+   [`200` and `push` `{"tags": ["silvis-reminder-<yyyymmdd>-primary", "silvis-reminder-<yyyymmdd>-backup"], "error": null, "dry_run": true, ...}`
+   - jsonb's own key order (shorter keys first, so `tags` and `error` print before `dry_run`), one tag per role on call tomorrow
+   (`<yyyymmdd>` = the answer's `date_tomorrow` without its dashes; primary first; a day with one role filled has that role's tag alone):
+   the dryRun always imports the VAPID pair, so `error` null says push is configured at any hour; `"error": "push not configured"` (and
+   no `tags`) - the secrets are missing or malformed (settle it first). Run at a reminder hour (17:00 Central, the default) it also lists who would
    be pushed (`dry_run_composed`) and `devices_found`. The filter is the dryRun's own answer - its first three keys `date_tomorrow`,
    `current_hour`, `dry_run` with `"dry_run":true`; the hourly job's live answers (`"dry_run":false`) never match, so a :00 run inside
    the wait never stands in for it. No row: the answer has not landed yet (wait and re-run the read), or tomorrow has no
@@ -535,7 +548,7 @@ a `--rotate` drops its old subscription (config.js), whose endpoint then answers
 re-arm after another app's update reset saves a new row beside the dead one (the client holds only a hash); the dead row
 goes on the account's next send (404 / 410), and Send test clears it at once. Replacing the row in
 `save_push_subscription` itself is a follow-up (a migration change). *(Built 2026-10-20 as revision z's wrapper
-`replace_push_subscription` - PREPARED, NOT applied; the re-arm and Enable replace the device's earlier row by its flag's hash, the
+`replace_push_subscription` - applied 2026-10-22 04:33:15Z; the re-arm and Enable replace the device's earlier row by its flag's hash, the
 plain save while the function is missing - guide section 22.3.)*
 The answer gains `push` (counts for every caller; the per-recipient lists `results` / `followers` for an admin / scheduler
 only; `push: null` for `test` / `shift_reminder`). Two routes: `GET ?vapid=public` (no auth, the public key only) and

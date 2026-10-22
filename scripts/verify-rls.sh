@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -1931,6 +1931,179 @@ if linked; then
 else
   echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"
 fi
+
+echo "== 22. phone push follow-ups (2026-10-20, revision z): replace_push_subscription + notification_preferences.shift_reminders_push - anon refused, rolled-back probe =="
+# Section 22 (17 = the weekend pair claim, taken on its own branch; 21 = revision y's trade offers, the section above).
+# sql/migrations/2026-10-20-push-followups.sql (report-first; applied 2026-10-22 04:33:15Z, revision z): replace_push_subscription (security
+# definer, volatile - POST only; EXECUTE for authenticated, never anon) deletes the caller's own earlier row for the device - the row whose
+# endpoint's first 16 hex of SHA-256 equal the flag's hash, never another account's row, never the endpoint being saved - then runs the
+# unchanged save_push_subscription in the same transaction (no audit row for the replaced row); notification_preferences.shift_reminders_push
+# (boolean not null default true) is the day-before reminder's phone switch. Section 19 re-runs the Prompt 30 probe, unchanged (the apply
+# script read its 51 cases the same before and after the apply). 22a runs sql/probes/push-followups-probe.sql through the linked CLI (rolls itself
+# back; 46 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their names, must
+# be exactly 46, so with the 46 graded names the set is exactly its header's). The function and the column exist since the apply, so the
+# probe's PROBE_SETUP (replace_push_subscription is absent) is a FAIL - strict from the start: the record step added this section after the
+# apply, with no flag; its partly-applied raise (the column absent), its collision guard (live rows already carry the probe identity) and
+# its profile-rows check are FAILs too. 22b counts the probe's leftovers either way, by the probe's own identity, in three columns: tagged =
+# rows only the probe writes, each with its DELETE - its auth users (probe-pushz-<uuid>@example.test; their profiles, a follower's prefs row
+# and their push rows cascade) and push_subscriptions rows holding its endpoints (https://fcm.googleapis.com/fcm/send/probe-pushz-..., the
+# fixed vector included); person = user_profiles / notification_preferences rows of person s9pushz - the collision guard's two person-id
+# reads, which carry no tag of their own (a roster id is no tag); audit = push.% audit rows whose summary is 'probe pushz ...' (its display
+# names). The collision guard refuses to start while such a person row exists, so after a run that wrote its fixtures (PROBE_RESULTS) a
+# person row can only be the probe's - a FAIL. Every PROBE_SETUP raise of its setup block (the collision guard, the absent, the
+# partly-applied and the profile-rows check) comes before its first write of person s9pushz (the user_profiles update), so after one they
+# are rows this run never wrote - real rows, or an earlier run's leak (see any tagged rows); act()'s no-probe-user raise is caught by its
+# case and lands in PROBE_RESULTS, so 22a too reads a PROBE_SETUP as the run's end only when no PROBE_RESULTS came back. After a run that
+# reported neither (a setup error or cut-off output) nobody can tell. Those two are listed for review, never counted as a leftover and
+# never given a DELETE. The guard never reads audit_log, and an account's audit rows outlive it, so an audit row may predate the run (an
+# earlier leak whose users were since removed): listed for review, never a FAIL on its own - a leak of this run would leave its tagged
+# rows behind too. 22c-22e (the review of the record step, 10/22 - the plan's anon checks) go over REST as anon, with or without the CLI,
+# and write nothing: 22c POSTs rpc/replace_push_subscription with exactly its five keys - 401/403 = refused (anon holds no EXECUTE);
+# a 404, a 200 or a 400 is a FAIL (a 200 or a 400 means anon reached the body, which would refuse it PS001 anyway). 22d reads that
+# answer's body: the database's 42501 naming the function proves PostgREST's schema cache resolved the five keys - a 404 PGRST202 means
+# it does not know them, and the live client then falls back to the plain save without a word (config.js saveReplacing), so the re-arm
+# and Enable would leave the old rows again. 22e GETs notification_preferences?select=shift_reminders_push: 200 [] = PostgREST knows
+# the column and anon reads no row; a row is a FAIL; a 400 42703 = the column unknown (the client's own probe then hides the third
+# phone switch). The probe's N1 / F7 read the same privileges inside the database; only 22c-22e see PostgREST.
+if linked; then
+  # 22a. the graded probe
+  PROBE22="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/push-followups-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE22" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: replace_push_subscription is absent'; then
+    bad "push follow-ups probe: PROBE_SETUP - replace_push_subscription is absent (the function and the column exist since the 2026-10-22 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "push follow-ups probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, a fixture collision or the profile rows - ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "push follow-ups probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    # no trailing-whitespace trim (the review of the record step, 10/22): the ;END cut already drops everything the CLI adds after the
+    # raised text, so a trim could only reach the last case's value (R7) - graded value for value like the other 45
+    results22=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')
+    echo "$results22" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE (no AFTER string carries < > & or a double quote, a wrong value may); the
+    # graders then read a case in plain bash (no process per case - 46 of them)
+    lines22=$(echo "$results22" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val22()   { CV22=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV22="${l#"$1="}"; return 0;; esac; done <<< "$lines22"; }
+    expect_eq22()  { case_val22 "$1"; v="$CV22"; [ "$v" = "$2" ] && ok "push follow-ups probe $1: $3" || bad "push follow-ups probe $1: $3 (got '$v', expected '$2')"; }
+    n22=$(echo "$lines22" | grep -c .)
+    [ "$n22" = "46" ] && ok "push follow-ups probe: 46 cases reported (with the 46 graded below, exactly its header's P1-P3 H1 R1 R1s R1a K1 R2-R7 O1 O2 M1 M1s M2 M2s M2a B1-B4 C1-C6s N1-N3 F1-F7)" || bad "push follow-ups probe: $n22 cases reported, not the 46 of its header (P1-P3 H1 R1 R1s R1a K1 R2-R7 O1 O2 M1 M1s M2 M2s M2a B1-B4 C1-C6s N1-N3 F1-F7 - a case lost, doubled or added without a grade here)"
+    expect_eq22 P1  "replace=definer/volatile path=yes args=p_endpoint text, p_p256dh text, p_auth text, p_label text, p_replaces text result=jsonb public_exec=f anon_exec=f auth_exec=t" "replace_push_subscription: security definer, volatile (POST only), search_path public, pg_temp, the five text arguments, jsonb; EXECUTE for authenticated, never PUBLIC or anon"
+    expect_eq22 P2  "save=definer/volatile args=p_endpoint text, p_p256dh text, p_auth text, p_label text DEFAULT NULL::text anon_exec=f auth_exec=t" "save_push_subscription as Prompt 30 left it (the wrapper changes nothing in it)"
+    expect_eq22 P3  "shift_reminders_push=boolean/not_null/true comment=yes" "notification_preferences.shift_reminders_push: boolean not null default true, with its comment"
+    expect_eq22 H1  "ok action=added devices=1 audit=true replaced=1 ev=none e1=U1" "the fixed vector's hash, the client's reading (30f005d396c75892), replaces the vector's row - the function reads the client's hash"
+    expect_eq22 R1  "ok action=added devices=1 audit=true replaced=1" "a re-arm: a new endpoint replaces the surgeon's own old row for the device"
+    expect_eq22 R1s "e1=none e2=U1 u1=1" "... the old endpoint is gone, the new one his, one row in all"
+    expect_eq22 R1a "save=3 delete=0 sums=probe pushz surgeon: phone notifications on (iPhone) batch_rows=3" "no audit row of any kind for a replaced row (D3): the saves' push.save rows only, every audit row the batch wrote counted"
+    expect_eq22 K1  "keys=action,audit,devices,ok,replaced action=kept replaced=0" "the answer's keys are save's plus replaced; a well-formed hash that names no row replaces nothing"
+    expect_eq22 R2  "ok action=kept devices=1 audit=false replaced=0 e2=U1" "the hash of the endpoint being saved deletes nothing (a plain save)"
+    expect_eq22 R3  "ok action=added devices=2 audit=true" "a second device through the plain save"
+    expect_eq22 R4  "ok action=kept devices=2 audit=false replaced=0 e3=U1" "a 17-character hash deletes nothing"
+    expect_eq22 R5  "ok action=kept devices=2 audit=false replaced=0 e3=U1" "a 15-character hash deletes nothing"
+    expect_eq22 R6  "ok action=kept devices=2 audit=false replaced=0 e3=U1" "a null hash deletes nothing"
+    expect_eq22 R7  "ok action=kept devices=2 audit=false replaced=0 e3=U1" "an empty hash deletes nothing"
+    expect_eq22 O1  "ok action=added devices=1 audit=true" "another account saves its own device"
+    expect_eq22 O2  "ok action=added devices=3 audit=true replaced=0 e5=U2" "another account's row's hash replaces nothing - its row stays its own"
+    expect_eq22 M1  "ERR PS006 PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)" "a move without the held keys is refused (PS006)"
+    expect_eq22 M1s "e5=U2 e6=U1 u2=1" "... and the refusal rolled the caller's own delete back"
+    expect_eq22 M2  "ok action=moved devices=1 audit=true replaced=1" "with the held keys the endpoint moves, as save makes it, and the caller's old row goes"
+    expect_eq22 M2s "e5=none e6=U2 u1=2 u2=1" "... the moved endpoint is the caller's, his old one gone"
+    expect_eq22 M2a "sum=probe pushz viewer two: phone notifications on (Chrome) - moved from another account delete=0" "... with save's moved push.save row and no push.delete row"
+    expect_eq22 B1  "ERR PS003 PUSH_BAD_ENDPOINT: this browser's push address is not one the app sends to - nothing was saved" "an endpoint off the push services is refused (PS003)"
+    expect_eq22 B2  "ERR PS004 PUSH_BAD_KEYS: this browser's push keys are malformed - tap Reset subscription, then Enable (nothing was saved)" "malformed keys are refused (PS004)"
+    expect_eq22 B3  "ERR PS005 PUSH_BAD_LABEL: a device name is 1-40 letters, digits, spaces or . ( ) / - (nothing was saved)" "a label with markup is refused (PS005)"
+    expect_eq22 B4  "e3=U1 e7=none u1=2" "... each refusal rolled its delete back"
+    expect_eq22 C1  "ok devices=10" "ten devices on one account"
+    expect_eq22 C2  "ok action=added devices=10 audit=true replaced=1" "at the cap, a re-arm that replaces one of the ten is no longer PS007 (the delete comes before the cap)"
+    expect_eq22 C2s "e10=none e20=U3 u3=10" "... still ten rows"
+    expect_eq22 C3  "ERR PS007 PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)" "at the cap, a hash naming another account's row replaces nothing - PS007"
+    expect_eq22 C3s "e2=U1 e21=none u3=10" "... the other account's row untouched"
+    expect_eq22 C4  "ok action=moved devices=10 audit=true replaced=1" "a move onto a full account with its own row replaced first"
+    expect_eq22 C4s "e2=U3 e11=none u1=1 u3=10" "... still ten rows"
+    expect_eq22 C5  "ERR PS007 PUSH_TOO_MANY: this account has phone notifications on 10 devices already - turn one off first (nothing was saved)" "a move onto a full account with no row of its own replaced - PS007"
+    expect_eq22 C5s "e3=U1 u3=10" "... nothing moved"
+    expect_eq22 C6  "ERR PS006 PUSH_HELD: this browser's push address is registered to another account - tap Reset subscription, then Enable (nothing was saved)" "its own row deleted, then the held endpoint with other keys - PS006"
+    expect_eq22 C6s "e3=U1 e12=U3 u3=10" "... the delete rolled back"
+    expect_eq22 N1  "ERR 42501 permission denied for function replace_push_subscription" "anon cannot execute replace_push_subscription"
+    expect_eq22 N2  "ERR PS001 PUSH_NOT_SIGNED_IN: sign in first - phone notifications belong to an account" "a session with no signed-in user is refused (PS001)"
+    expect_eq22 N3  "e3=U1 e21=none" "... neither wrote or deleted anything"
+    expect_eq22 F1  "shift_reminders_push=true shift_reminders_email=true trade_updates_push=true schedule_updates_push=true" "a new prefs row naming no push key reads the reminder switch on (D10)"
+    expect_eq22 F2  "updated=1 shift_reminders_push=false shift_reminders_email=true" "a surgeon turns the reminder's phone switch off through prefs_own (the e-mail switch apart - D12)"
+    expect_eq22 F3  "shift_reminders_push=false shift_reminders_email=false" "an upsert naming the e-mail switch only (the pre-z client's save) keeps the stored phone switch"
+    expect_eq22 F4  "ok shift_reminders_push=true" "a follower's own row (keyed by profile_id) reads it on (D13)"
+    expect_eq22 F5  "updated=1 shift_reminders_push=false" "a follower turns it off on her own row"
+    expect_eq22 F6  "updated=0" "a follower cannot change a surgeon's switch"
+    expect_eq22 F7  "rows=0" "anon reads no prefs row through the column"
+  fi
+  # 22b. leftovers, by the probe's own identity: tagged (its users and endpoints), person (rows of person s9pushz) and audit (push.% rows
+  # with its display names)
+  LEFTOVER22_SQL="select ((select count(*) from auth.users where email like 'probe-pushz-%@example.test') + (select count(*) from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%'))::int as tagged, ((select count(*) from public.user_profiles where person_id = 's9pushz') + (select count(*) from public.notification_preferences where person_id = 's9pushz'))::int as person, (select count(*) from public.audit_log where action like 'push.%' and detail ->> 'summary' like 'probe pushz %')::int as audit"
+  r=$(q "$LEFTOVER22_SQL")
+  rflat22=$(echo "$r" | tr -d ' \n')
+  tagged22=$(echo "$rflat22" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  per22=$(echo "$rflat22" | grep -oE '"person":"?[0-9]+' | head -1 | tr -cd '0-9')
+  aud22=$(echo "$rflat22" | grep -oE '"audit":"?[0-9]+' | head -1 | tr -cd '0-9')
+  # how 22a ended: results = the sentinel (the probe wrote its fixtures); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first write of person s9pushz); none = neither (a setup error or cut-off output - nobody can tell)
+  end22=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end22=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end22=setup; fi
+  if [ -z "$tagged22" ] || [ -z "$per22" ] || [ -z "$aud22" ]; then
+    bad "push follow-ups probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  else
+    if [ "$tagged22" = "0" ] && [ "$per22" = "0" ]; then
+      ok "push follow-ups probe persisted nothing (leftover count 0: auth.users probe-pushz-* / push_subscriptions with a probe-pushz- endpoint / user_profiles and notification_preferences rows of person s9pushz)"
+    fi
+    if [ "$tagged22" != "0" ]; then
+      bad "push follow-ups probe LEFT ROWS BEHIND (tagged=$tagged22 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.push_subscriptions where endpoint like 'https://fcm.googleapis.com/fcm/send/probe-pushz-%';"
+      echo "      delete from auth.users where email like 'probe-pushz-%@example.test';   -- profiles, a follower's prefs row and their push rows cascade"
+    fi
+    if [ "$per22" != "0" ]; then
+      if [ "$end22" = "results" ]; then
+        bad "push follow-ups probe LEFT ROWS BEHIND (person=$per22 - user_profiles / notification_preferences rows of person s9pushz after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (a roster id is no tag of its own), then report:"
+      elif [ "$end22" = "setup" ]; then
+        echo "   22b: $per22 user_profiles / notification_preferences row(s) of person s9pushz - the probe stopped at a PROBE_SETUP raise before writing any row of s9pushz (22a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+      else
+        echo "   22b: $per22 user_profiles / notification_preferences row(s) of person s9pushz - the run reported neither PROBE_RESULTS nor PROBE_SETUP (22a), so whether the probe wrote them is unknown; review them before removing anything:"
+      fi
+      echo "      select id, role, person_id, display_name from public.user_profiles where person_id = 's9pushz';"
+      echo "      select * from public.notification_preferences where person_id = 's9pushz';"
+    fi
+    if [ "$aud22" != "0" ]; then
+      echo "   22b: $aud22 push.% audit row(s) carry a 'probe pushz' summary - the collision guard does not read audit_log and an account's audit rows outlive it, so they may predate this run (an earlier leak whose users were since removed); review them, never delete audit history blindly:"
+      echo "      select * from public.audit_log where action like 'push.%' and detail ->> 'summary' like 'probe pushz %';"
+    fi
+  fi
+else
+  echo "   SKIP 22a/22b (supabase CLI not linked at $WORKDIR)"
+fi
+# 22c. anon may not execute replace_push_subscription (POST with exactly its five keys; the endpoint travels in the body, never in a URL)
+line=$(curl -s -o $T/vr22c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/replace_push_subscription" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_endpoint":"https://fcm.googleapis.com/fcm/send/verify-rls","p_p256dh":"BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","p_auth":"AAAAAAAAAAAAAAAAAAAAAA","p_label":null,"p_replaces":"0000000000000000"}')
+echo "   22c anon rpc replace_push_subscription: $line  body: $(head -c 160 $T/vr22c.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc replace_push_subscription refused ($line - the function exists, execute revoked from anon)";;
+  "HTTP 404") bad "anon rpc replace_push_subscription: HTTP 404 (the function exists since the 2026-10-22 apply - or the schema cache is stale)";;
+  *) bad "anon rpc replace_push_subscription: $line (expected 401/403; anything else - a 200 or a 400 included - means anon reached the body)";;
+esac
+# 22d. PostgREST knows the five keys: the refusal is the database's 42501 for the function (the call got past the schema cache)
+if grep -q '"code": *"42501"' $T/vr22c.json 2>/dev/null && grep -qF 'permission denied for function replace_push_subscription' $T/vr22c.json 2>/dev/null; then
+  ok "PostgREST knows replace_push_subscription's five keys (the anon call reached the database, which refused it 42501): the live client's re-arm and Enable save through the wrapper"
+elif grep -q 'PGRST202' $T/vr22c.json 2>/dev/null; then
+  bad "anon rpc replace_push_subscription: PGRST202 - PostgREST's schema cache does not know the function or its five keys (they exist since the 2026-10-22 apply): the live client falls back to the plain save without a word"
+else
+  bad "anon rpc replace_push_subscription: no 42501 for the function in the answer ($line: $(head -c 160 $T/vr22c.json)) - the call never reached the database through the five keys"
+fi
+# 22e. PostgREST knows notification_preferences.shift_reminders_push (anon reads it: 200 with no row - prefs_own gives anon nothing)
+line=$(curl -s -o $T/vr22e.json -w 'HTTP %{http_code}' "$URL/rest/v1/notification_preferences?select=shift_reminders_push&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+body22e=$(tr -d ' \r\n' < $T/vr22e.json)
+echo "   22e anon GET notification_preferences (shift_reminders_push): $line  body: $(head -c 160 $T/vr22e.json)"
+case "$line" in
+  "HTTP 200") if [ "$body22e" = "[]" ]; then ok "PostgREST knows notification_preferences.shift_reminders_push (anon 200 [] - no row for anon): the client's own probe reads it, so the third phone switch shows"; else bad "anon GET notification_preferences: HTTP 200 WITH ROWS - anon must never read a prefs row (got $(head -c 120 $T/vr22e.json))"; fi;;
+  "HTTP 400") if grep -q '42703' $T/vr22e.json; then
+                bad "anon GET notification_preferences shift_reminders_push: HTTP 400 42703 (the column exists since the 2026-10-22 apply - or the schema cache is stale; the client hides the third phone switch)"
+              else bad "anon GET notification_preferences shift_reminders_push: HTTP 400 without 42703 ($(head -c 160 $T/vr22e.json))"; fi;;
+  *) bad "anon GET notification_preferences shift_reminders_push: $line (expected 200 [])";;
+esac
 
 echo
 echo "RESULT: $pass passed, $fail failed"
